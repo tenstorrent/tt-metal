@@ -92,7 +92,6 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_kernel_args = {
-        1, // per_core_block_size
     };
 
     auto eltwise_binary_kernel_id = tt_metal::CreateComputeKernel(
@@ -119,7 +118,7 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
         eltwise_binary_kernel_id,
         core,
         {
-            num_tiles, // per_core_block_cnt
+            num_tiles, 1
         }
     );
 

@@ -99,6 +99,17 @@ inline int find_max_divisor(uint32_t val, uint32_t start_max_div) {
     return result;
 }
 
+inline int find_max_block_size(uint32_t val, uint32_t max_block_size=8) {
+    int result = 1;
+    for (int find_divisor = max_block_size; find_divisor >= 1; find_divisor--) {
+        if (val % find_divisor == 0) {
+            result = find_divisor;
+            break;
+        }
+    }
+    return result;
+}
+
 inline std::set<CoreRange> num_cores_to_corerange_set(uint32_t target_num_cores, CoreCoord grid_size, bool row_wise = false) {
 	uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;

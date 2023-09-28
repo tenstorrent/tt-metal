@@ -120,7 +120,6 @@ int main(int argc, char** argv) {
                 tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
             vector<uint32_t> compute_kernel_args = {
-                1,     // per_core_block_size
             };
 
             bool fp32_dest_acc_en = false;
@@ -139,7 +138,7 @@ int main(int argc, char** argv) {
                 program,
                 eltwise_binary_kernel,
                 core,
-                {2048} // per_core_block_cnt
+                {2048, 1}
             );
 
             ////////////////////////////////////////////////////////////////////////////

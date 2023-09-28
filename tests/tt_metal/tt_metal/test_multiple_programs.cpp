@@ -67,7 +67,6 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> setup_prog
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
-        1 // per_core_block_size
     };
     std::map<string, string> binary_defines = get_defines(BinaryOpType::ADD);
     binary_defines["ELTWISE_OP"] = "add_tiles";
@@ -82,7 +81,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> setup_prog
         program,
         eltwise_binary_kernel,
         core,
-        {1} // per_core_block_cnt
+        {1, 1}
     );
 
     return {std::move(program), binary_reader_kernel, unary_writer_kernel};

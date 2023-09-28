@@ -22,6 +22,7 @@ std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<s
     std::map<string, string> defines;
     string op_name = "sub_tiles";
     string op_code = "1";
+    string idst = "i";
     switch (op_type) {
         case BinaryOpType::ADD:
             op_name = "add_tiles";
@@ -35,57 +36,57 @@ std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<s
             op_name = "mul_tiles";
             op_code = "2";
             break;
-        case BinaryOpType::GT: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GTZ)); break;
-        case BinaryOpType::LT: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LTZ)); break;
-        case BinaryOpType::GTE: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GEZ)); break;
-        case BinaryOpType::LTE: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LEZ)); break;
-        case BinaryOpType::EQ: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EQZ)); break;
-        case BinaryOpType::NE: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ)); break;
-        case BinaryOpType::SQUARED_DIFFERENCE: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::SQUARE)); break;
+        case BinaryOpType::GT: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst)); break;
+        case BinaryOpType::LT: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst)); break;
+        case BinaryOpType::GTE: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst)); break;
+        case BinaryOpType::LTE: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst)); break;
+        case BinaryOpType::EQ: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst)); break;
+        case BinaryOpType::NE: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst)); break;
+        case BinaryOpType::SQUARED_DIFFERENCE: defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::SQUARE, std::nullopt, "0", idst)); break;
         case BinaryOpType::LOGICAL_AND:
             op_name = "mul_tiles";
             op_code = "2";
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));
             break;
         case BinaryOpType::BIAS_GELU:
             op_name = "add_tiles";
             op_code = "0";
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GELU, 0));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GELU, 0, "0", idst));
             break;
         case BinaryOpType::LOGADDEXP:
             // PRE_IN0_0 ===> Applies prescaling for first input
             // PRE_IN1_0 ====> Applies prescaling for second input
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, {}, "PRE_IN0_0"));
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, {}, "PRE_IN1_0"));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, std::nullopt, "PRE_IN0_0"));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP, std::nullopt, "PRE_IN1_0"));
             op_name = "add_tiles";
             op_code = "0";
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG, std::nullopt, "0", idst));
             break;
         case BinaryOpType::LOGICAL_OR:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, {}, "PRE_IN0_0"));
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, {}, "PRE_IN1_0"));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0"));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0"));
             op_name = "add_tiles";
             op_code = "0";
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GTZ));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst));
 	    break;
         case BinaryOpType::LDEXP:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, {}, "PRE_IN1_0"));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
             op_name = "mul_tiles";
             op_code = "2";
             break;
         case BinaryOpType::LOGADDEXP2:
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, {}, "PRE_IN0_0"));
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, {}, "PRE_IN1_0"));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN0_0"));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
             op_name = "add_tiles";
             op_code = "0";
-            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG2));
+            defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::LOG2, std::nullopt, "0", idst));
             break;
         default: TT_ASSERT(false && "Undefined op type");
     }
     defines["ELTWISE_OP"] = op_name.c_str();
     defines["ELTWISE_OP_CODE"] = op_code.c_str();
     if (fused_activations.has_value()) {
-        defines.merge(eltwise_unary_op_utils::get_block_defines(fused_activations.value()));
+        defines.merge(eltwise_unary_op_utils::get_block_defines(fused_activations.value(), "0", idst));
     }
     return defines;
 }
@@ -190,8 +191,9 @@ operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<
 
 BinaryOpParallelizationStrategy EltwiseBinary::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(0);
     uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
-    if(num_tiles > 1){
+    if(num_tiles > 1 || input_tensor_a.memory_config().is_sharded() || input_tensor_b.memory_config().is_sharded() || this->output_mem_config.is_sharded()){
         return BinaryOpParallelizationStrategy::MULTI_CORE;
     }
     else{
@@ -217,7 +219,8 @@ const operation::Hash EltwiseBinary::compute_program_hash(
         input_tensors.at(0).memory_config(),
         input_tensors.at(0).dtype(),
         input_tensors.at(1).memory_config(),
-        input_tensors.at(1).dtype()
+        input_tensors.at(1).dtype(),
+        this->output_mem_config
     );
 }
 

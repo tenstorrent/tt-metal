@@ -92,7 +92,6 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {
-        1                                 // per_core_block_cnt
     };
     std::map<string, string> defines = {
         {"ELTWISE_OP_CODE", binary_op_name_to_op_code.at(test_config.binary_op)},
@@ -107,7 +106,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         program,
         binary_kernel,
         test_config.core,
-        {uint32_t(test_config.num_tiles),} // per_core_block_cnt
+        {uint32_t(test_config.num_tiles), 1}
     );
 
     ////////////////////////////////////////////////////////////////////////////
