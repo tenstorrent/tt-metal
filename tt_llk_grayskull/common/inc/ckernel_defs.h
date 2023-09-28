@@ -71,6 +71,11 @@ enum PackSelMask
 #define DATUMS_PER_ROW (16)
 #define TILE_HEADER_SIZE (1)
 
+constexpr std::uint32_t FACE_R_DIM = FACE_HEIGHT;
+constexpr std::uint32_t FACE_C_DIM = FACE_WIDTH ;
+
+constexpr std::uint32_t TILE_R_DIM = TILE_HEIGHT;
+constexpr std::uint32_t TILE_C_DIM = TILE_WIDTH ;
 
 // For instructions that address lower/upper 16 bits of a register
 #define LO_16(REG) (2 * (REG))

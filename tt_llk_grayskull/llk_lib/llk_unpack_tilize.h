@@ -26,36 +26,47 @@ inline void llk_unpack_tilize_hw_configure(const llk_unpack_tilize_params_t *unp
     configure_unpack_AB(
         get_operand_id(unpack_tilize_params->unpA_operand), get_operand_id(unpack_tilize_params->unpA_operand));
 
+}
+
+template <bool is_fp32_dest_acc_en = false /* unused */>
+inline void llk_unpack_tilize_hw_configure_disaggregated(
+    const std::uint32_t unpA_operand) {
+    TT_LLK_DUMP("llk_unpack_tilize_hw_configure_disaggregated<{}>({})", is_fp32_dest_acc_en, unpA_operand);
+    const llk_unpack_A_params_t unpack_tilize_params = {
+        .unpA_operand = unpA_operand,
+    };
+    llk_unpack_tilize_hw_configure(&unpack_tilize_params);
+}
+
+inline void llk_unpack_tilize_init(const std::uint32_t operand=0, const std::uint32_t ct_dim=0) {
+    TT_LLK_DUMP("llk_unpack_tilize_init()");
+
+    const std::uint32_t block_c_dim = ct_dim * TILE_C_DIM;
+
+    // Save state of unpacker config for quick restore
+    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_TILIZER_STATE_0, THCON_SEC0_REG2_Out_data_format_ADDR32); // Save unpack config[0]
+    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_TILIZER_STATE_1, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32); // Save tile x dim per context
+
     // Override default settings
-    std::uint32_t input = get_operand_id(unpack_tilize_params->unpA_operand);
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+    std::uint32_t input = get_operand_id(operand);
     unpack_config_u config = {0};
 
     config.f.out_data_format = (uint)unpack_dst_format[input];
     config.f.throttle_mode = 2;
     config.f.tileize_mode = 1;
-    config.f.shift_amount = (SCALE_DATUM_SIZE((uint)unpack_src_format[input], unpack_tilize_params->unpA_block_c_dim)) >> 4;
+    config.f.shift_amount = (SCALE_DATUM_SIZE((uint)unpack_src_format[input], block_c_dim)) >> 4;
 
-    wait_for_idle();
+    TT_SETDMAREG(0, LOWER_HALFWORD(config.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG2_Out_data_format_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0); // Load unpack config[0] 
+    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16); //GPR preloaded with  16 | (16 << 16)
 
-    cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 0] = config.val[0];
-    cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = 16 | (16 << 16);
-}
-
-template <bool is_fp32_dest_acc_en = false /* unused */>
-inline void llk_unpack_tilize_hw_configure_disaggregated(
-    const std::uint32_t unpA_operand, const std::uint32_t unpA_block_ct_dim) {
-    TT_LLK_DUMP("llk_unpack_tilize_hw_configure_disaggregated<{}>({}, {})", is_fp32_dest_acc_en, unpA_operand, unpA_block_ct_dim);
-    const llk_unpack_tilize_params_t unpack_tilize_params = {
-        .unpA_operand = unpA_operand,
-        .unpA_block_c_dim = unpA_block_ct_dim*TILE_WIDTH,
-    };
-    llk_unpack_tilize_hw_configure(&unpack_tilize_params);
-}
-
-inline void llk_unpack_tilize_init(const std::uint32_t operand=0 /* unused */) {
-    TT_LLK_DUMP("llk_unpack_tilize_init()");
     llk_unpack_tilize_mop_config(); 
+}
+
+inline void llk_unpack_tilize_uninit(const std::uint32_t face_r_dim = FACE_R_DIM /* not used*/) {
+    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG2_Out_data_format_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::SR_UNPACK_TILIZER_STATE_0); // Restore unpack config[0]
+    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32,  p_gpr_unpack::SR_UNPACK_TILIZER_STATE_1); // Restore tile x dim per context
 }
 
 inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t block_ct_dim) {
@@ -91,9 +102,6 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
         } else {
             cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
         }
-
-        // Stall unpacker until pending CFG writes from Trisc have completed
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
         // Run MOP
         mop_run(0, 2);
