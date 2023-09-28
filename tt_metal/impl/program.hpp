@@ -33,13 +33,16 @@ namespace detail{
 }
 
 struct KernelGroup {
+    CoreRangeSet core_ranges;
     std::optional<KernelID> compute_id = std::nullopt;
     std::optional<KernelID> riscv0_id = std::nullopt;
     std::optional<KernelID> riscv1_id = std::nullopt;
     launch_msg_t launch_msg;
 
     KernelGroup();
-    void update(const Kernel *kernel);
+    KernelGroup(std::optional<KernelID> brisc_id,
+                std::optional<KernelID> ncrisc_id,
+                std::optional<KernelID> trisc_id);
 };
 
 class Program {
@@ -66,7 +69,7 @@ class Program {
 
     KernelGroup * kernels_on_core(const CoreCoord &core);
 
-    std::map<CoreCoord, KernelGroup>& core_to_kernel_group();
+    void update_kernel_groups();
 
     const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord &core) const;
 
@@ -122,6 +125,7 @@ class Program {
     static std::atomic<u64> program_counter;
     std::vector<KernelID> kernel_ids_;
     std::unordered_map<KernelID, Kernel *> kernel_by_id_;
+    CoreCoord grid_extent_;
 
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_;
     std::unordered_map<CircularBufferID,  std::shared_ptr<CircularBuffer>> circular_buffer_by_id_;
@@ -132,7 +136,10 @@ class Program {
     CoreRangeSet worker_crs_;
     bool compile_needed_;
     bool circular_buffer_allocation_needed_;
-    std::map<CoreCoord, KernelGroup> core_to_kernel_group_;
+
+    static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
+    std::vector<KernelGroup> kernel_groups_;
+    std::vector<uint8_t> core_to_kernel_group_index_table_;
 
     friend CircularBufferID CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CircularBufferID id);
