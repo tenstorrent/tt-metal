@@ -43,6 +43,7 @@ int main(int argc, char** argv) {
   uint32_t num_cores_r;
   uint32_t num_cores_c;
   uint32_t num_core_groups;
+  bool bypass_check;
   try {
     std::tie(num_cores_r, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args,
@@ -54,6 +55,12 @@ int main(int argc, char** argv) {
     std::tie(num_core_groups, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
             input_args, "--core-groups", 4);
+
+    std::tie(bypass_check, input_args) =
+        test_args::has_command_option_and_remaining_args(input_args,
+                                                         "--bypass-check");
+
+    test_args::validate_remaining_args(input_args);
   } catch (const std::exception& e) {
     log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
   }
@@ -179,7 +186,7 @@ int main(int argc, char** argv) {
   }
 
   // Determine if it passes performance goal
-  if (pass) {
+  if (pass && bypass_check == false) {
     // goal is under 10us
     long target_us = 10;
 

@@ -30,6 +30,7 @@ using std::chrono::microseconds;
 
 int main(int argc, char** argv) {
   bool pass = true;
+  bool bypass_check;
   double h2d_bandwidth = 0;
   double d2h_bandwidth = 0;
 
@@ -43,9 +44,16 @@ int main(int argc, char** argv) {
       std::tie(buffer_type, input_args) =
           test_args::get_command_option_int32_and_remaining_args(
               input_args, "--buffer-type", 0);
+
       std::tie(transfer_size, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(
               input_args, "--transfer-size", 512 * 1024 * 1024);
+
+      std::tie(bypass_check, input_args) =
+          test_args::has_command_option_and_remaining_args(input_args,
+                                                           "--bypass-check");
+
+      test_args::validate_remaining_args(input_args);
     } catch (const std::exception& e) {
       log_fatal(tt::LogTest, "Command line arguments found exception",
                 e.what());
@@ -109,7 +117,7 @@ int main(int argc, char** argv) {
   }
 
   // Determine if it passes performance goal
-  if (pass) {
+  if (pass && bypass_check == false) {
     // goal is 70% of PCI-e Gen3 x16 for grayskull
     // TODO: check the theoritical peak of wormhole
     double target_bandwidth = 16.0 * 0.7;

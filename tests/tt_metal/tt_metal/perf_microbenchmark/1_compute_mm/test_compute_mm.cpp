@@ -116,6 +116,7 @@ int get_tt_npu_clock(tt_metal::Device* device);
 ////////////////////////////////////////////////////////////////////////////
 int main(int argc, char** argv) {
   bool pass = true;
+  bool bypass_check;
   try {
     ////////////////////////////////////////////////////////////////////////////
     //                      Initial Runtime Args Parse
@@ -138,6 +139,12 @@ int main(int argc, char** argv) {
       std::tie(slow_dispatch_mode, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(
               input_args, "--slow-dispatch-mode", 1);
+
+      std::tie(bypass_check, input_args) =
+          test_args::has_command_option_and_remaining_args(input_args,
+                                                           "--bypass-check");
+
+      test_args::validate_remaining_args(input_args);
     } catch (const std::exception& e) {
       log_fatal(LogTest, "Command line arguments found exception", e.what());
     }
@@ -282,7 +289,7 @@ int main(int argc, char** argv) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown
     ////////////////////////////////////////////////////////////////////////////
-    if (!performance_result) {
+    if (performance_result == false && bypass_check == false) {
       log_error(LogTest,
                 "The compute performance does not meet the criteria. "
                 "Current: Rmax / Rpeak = {:.2f}%, goal: > 90%",

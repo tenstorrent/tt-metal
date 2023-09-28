@@ -53,6 +53,7 @@ int main(int argc, char** argv) {
   uint32_t noc_direction;
   uint32_t access_type;
   uint32_t tiles_per_transfer;
+  bool bypass_check;
   try {
     std::tie(num_cores_r, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args,
@@ -80,6 +81,10 @@ int main(int argc, char** argv) {
     std::tie(access_type, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
             input_args, "--access-type", 0);
+
+    std::tie(bypass_check, input_args) =
+        test_args::has_command_option_and_remaining_args(input_args,
+                                                         "--bypass-check");
 
     test_args::validate_remaining_args(input_args);
   } catch (const std::exception& e) {
@@ -208,7 +213,7 @@ int main(int argc, char** argv) {
   }
 
   // Determine if it passes performance goal
-  if (pass) {
+  if (pass && bypass_check == false) {
     // goal is 95% of theoretical peak using a single NOC channel
     // theoretical peak: 32bytes per clock cycle
     double target_bandwidth = 32 * 0.9;
