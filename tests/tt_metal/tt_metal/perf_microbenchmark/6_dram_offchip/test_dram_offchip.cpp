@@ -22,21 +22,22 @@ using std::chrono::duration_cast;
 using std::chrono::microseconds;
 
 ////////////////////////////////////////////////////////////////////////////////
-// This test measures DRAM bandwidth performance. It creates a bfloat16 format
-// DRAM buffer of a given input size and all Tensix cores read or write the
-// buffer in a size by split_work_to_cores function.
+// This test measures the bandwidth of DRAM accesses of Tensix cores. It creates
+// a bfloat16 format DRAM buffer of a given input size. Every Tensix cores read
+// from or write to the buffer whrere the amount of each core accesses is
+// determined by split_work_to_cores function.
 //
-// Disclaimer
-// - This benchmark is designed to support an input size larger than 4GB. But
-// current tt-metal does not seem to support buffer allocation larger than 4GB
-// yet.
-// - Also, ReadFromBuffer API used in DRAM write test may take a long time if
-// the input size is large.
+// Disclaimer:
+//   - This benchmark is designed to support an input size larger than 4GB. But
+//   current tt-metal does not seem to support buffer allocation larger than 4GB
+//   yet.
+//   - Also, ReadFromBuffer API used in DRAM write test may take a long time if
+//   the input size is large.
 //
 // Usage example:
-//   ./test_dram_offchip --input-size <size in bytes> --access-type <0 for read
-//   access, 1 for write access>
-//
+//   ./test_dram_offchip
+//     --input-size <size in bytes>
+//     --access-type <0 for read access, 1 for write access>
 ////////////////////////////////////////////////////////////////////////////////
 
 inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
