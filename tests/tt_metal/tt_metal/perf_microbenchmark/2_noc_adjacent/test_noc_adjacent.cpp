@@ -10,6 +10,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util_device_profiler.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -32,6 +33,8 @@ using std::chrono::microseconds;
 //     --noc-direction <direction of data transfer:
 //                      0 for +x, 1 for -y, 2 for -x, and 3 for +y>
 //     --access-type <0 for read access, 1 for write access>
+//     --use-device-profiler (set to use device profiler for measurement)
+//     --bypass-check (set to bypass checking performance criteria fulfillment)
 ////////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char** argv) {
@@ -53,6 +56,7 @@ int main(int argc, char** argv) {
   uint32_t noc_direction;
   uint32_t access_type;
   uint32_t tiles_per_transfer;
+  bool use_device_profiler;
   bool bypass_check;
   try {
     std::tie(num_cores_r, input_args) =
@@ -82,6 +86,10 @@ int main(int argc, char** argv) {
         test_args::get_command_option_uint32_and_remaining_args(
             input_args, "--access-type", 0);
 
+    std::tie(use_device_profiler, input_args) =
+        test_args::has_command_option_and_remaining_args(
+            input_args, "--use-device-profiler");
+
     std::tie(bypass_check, input_args) =
         test_args::has_command_option_and_remaining_args(input_args,
                                                          "--bypass-check");
@@ -93,17 +101,26 @@ int main(int argc, char** argv) {
 
   if (num_tiles % tiles_per_transfer != 0) {
     log_fatal(
-        tt::LogTest,
+        LogTest,
         "Total number of tiles each core transfers ({}) must be the multiple "
         "of number of tiles for each transfer ({})",
         num_tiles, tiles_per_transfer);
   }
 
   if (num_tiles < tiles_per_transfer) {
-    log_fatal(tt::LogTest,
+    log_fatal(LogTest,
               "Total number of tiles each core transfers ({}) must be bigger "
               "than or equal to the number of tiles for each transfer ({})",
               num_tiles, tiles_per_transfer);
+  }
+
+  if (use_device_profiler) {
+#if !defined(PROFILER)
+    log_fatal(LogTest,
+              "Metal library and test code should be build with "
+              "'ENABLE_PROFILER=1' to use device profiler");
+#endif
+    setenv("TT_METAL_DEVICE_PROFILER", "1", true);
   }
 
   try {
@@ -114,8 +131,7 @@ int main(int argc, char** argv) {
     tt_metal::Device* device = tt_metal::CreateDevice(device_id);
     CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
-    tt_cluster* cluster = device->cluster();
-    int clock_freq_mhz = cluster->get_device_aiclk(0);
+    int clock_freq_mhz = get_tt_npu_clock(device);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -198,6 +214,12 @@ int main(int argc, char** argv) {
 
     log_info(LogTest, "Time elapsed for NOC transfers: {}us ({}cycles)",
              elapsed_us, elapsed_cc);
+
+    if (use_device_profiler) {
+      elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, program);
+      log_info(LogTest, "Clock cycles with device profiler: {}cycles",
+               elapsed_cc);
+    }
 
     // total transfer amount per core = tile size * number of tiles
     // NOC bandwidth = total transfer amount per core / elapsed clock cycle
