@@ -243,6 +243,10 @@ namespace ckernel::unpacker
       const uint Tile_x_dim = 256;
       cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = Tile_x_dim | (Tile_x_dim << 16);
 
+      // Store config used by tilizer
+      regfile[p_gpr_unpack::FACE_DIM_1x16] = (Tile_x_dim/16) | ((Tile_x_dim/16)<<16);
+      sync_regfile_write(p_gpr_unpack::FACE_DIM_1x16);
+
       if (!skip_alu_format_set) {
          wait_for_pack_config_done();
          gl_alu_format_spec_reg = cfg[ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32];

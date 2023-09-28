@@ -22,7 +22,7 @@ inline void llk_unpack_tilize_mop_config() {
     tmp.program(instrn_buffer);
 }
 
-inline void llk_unpack_tilize_hw_configure(const llk_unpack_tilize_params_t *unpack_tilize_params) {
+inline void llk_unpack_tilize_hw_configure(const llk_unpack_A_params_t *unpack_tilize_params) {
     configure_unpack_AB(
         get_operand_id(unpack_tilize_params->unpA_operand), get_operand_id(unpack_tilize_params->unpA_operand));
 
@@ -79,7 +79,7 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
                                                    // Datum count = tile_index*16 (/16 to get word count)
 
     std::uint32_t bot_face_offset_address =
-        SCALE_DATUM_SIZE((uint)unpack_src_format[input], block_ct_dim*TILE_WIDTH);  //*16 rows / 16 to get 16B word aligned address
+        SCALE_DATUM_SIZE((uint)unpack_src_format[input], block_ct_dim*TILE_C_DIM);  //*16 rows / 16 to get 16B word aligned address
 
     // Program srcA and srcB base addresses
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
