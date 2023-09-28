@@ -15,7 +15,10 @@ static uint32_t deassert_packet __attribute__((section("l1_data"))) __attribute_
 
 // TODO(pgk) move all this to host/device interface
 static launch_msg_t launch_msg __attribute__((section("l1_data"))) __attribute__((aligned(16))) = {
-    .fw_size = 0,
+    .kernel_group_id = 0,
+    .ncrisc_fw_size = 0,
+    .mode = DISPATCH_MODE_DEV,
+    .enable_brisc = true,
     .enable_ncrisc = true,
     .enable_triscs = true,
     .run = RUN_MSG_GO

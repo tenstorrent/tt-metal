@@ -630,12 +630,9 @@ void send_dispatch_kernel_to_device(Device* device) {
     tt::tt_metal::detail::WriteToDeviceL1(device, dispatch_logical_core, CQ_READ_TOGGLE, toggle_start_vector);
     tt::tt_metal::detail::WriteToDeviceL1(device, dispatch_logical_core, CQ_WRITE_TOGGLE, toggle_start_vector);
 
-    // XXXX move this to llrt
     CoreCoord dpc = device->worker_core_from_logical_core(dispatch_logical_core);
-    tt::llrt::disable_ncrisc(device->cluster(), device->id(), dpc);
-    tt::llrt::disable_triscs(device->cluster(), device->id(), dpc);
-    std::vector<uint32_t> run_mailbox_go_val = {RUN_MSG_GO};
-    tt::llrt::write_hex_vec_to_core(device->cluster(), device->id(), dpc, run_mailbox_go_val, GET_MAILBOX_ADDRESS_HOST(launch.run));
+    launch_msg_t *msg = &dispatch_program.kernels_on_core(dispatch_logical_core)->launch_msg;
+    tt::llrt::write_launch_msg_to_core(device->cluster(), device->id(), dpc, msg);
 }
 
 // CommandQueue section

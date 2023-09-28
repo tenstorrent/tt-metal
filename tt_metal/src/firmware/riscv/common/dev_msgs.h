@@ -33,10 +33,18 @@ struct ncrisc_halt_msg_t {
     volatile uint32_t stack_save;
 };
 
+enum dispatch_mode {
+    DISPATCH_MODE_DEV,
+    DISPATCH_MODE_HOST,
+};
+
 struct launch_msg_t {  // must be cacheline aligned
-    volatile uint32_t fw_size;
-    volatile uint32_t enable_ncrisc;
-    volatile uint32_t enable_triscs;
+    volatile uint32_t kernel_group_id;
+    volatile uint32_t ncrisc_fw_size;
+    volatile uint8_t mode;
+    volatile uint8_t enable_brisc;
+    volatile uint8_t enable_ncrisc;
+    volatile uint8_t enable_triscs;
     volatile uint32_t run;  // must be in last cacheline of this msg
 };
 

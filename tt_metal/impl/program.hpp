@@ -17,6 +17,9 @@
 #include "common/tt_backend_api_types.hpp"
 #include "hostdevcommon/common_values.hpp"
 
+// XXXX TODO(PGK): fix include paths so device can export interfaces
+#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
+
 namespace tt {
 
 namespace tt_metal {
@@ -33,6 +36,10 @@ struct KernelGroup {
     std::optional<KernelID> compute_id = std::nullopt;
     std::optional<KernelID> riscv0_id = std::nullopt;
     std::optional<KernelID> riscv1_id = std::nullopt;
+    launch_msg_t launch_msg;
+
+    KernelGroup();
+    void update(const Kernel *kernel);
 };
 
 class Program {
@@ -57,9 +64,9 @@ class Program {
 
     const std::vector< Semaphore > & semaphores() const { return semaphores_; }
 
-    const KernelGroup * kernels_on_core(const CoreCoord &core);
+    KernelGroup * kernels_on_core(const CoreCoord &core);
 
-    const std::map<CoreCoord, KernelGroup>& core_to_kernel_group();
+    std::map<CoreCoord, KernelGroup>& core_to_kernel_group();
 
     const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord &core) const;
 

@@ -132,29 +132,42 @@ Kernel *Program::get_kernel(KernelID kernel_id) const {
     return this->kernel_by_id_.at(kernel_id);
 }
 
-void populate_kernel_group(KernelGroup &kernel_group, Kernel *kernel) {
+KernelGroup::KernelGroup() {
+    launch_msg.run = RUN_MSG_GO;
+}
+
+void KernelGroup::update(const Kernel *kernel) {
     RISCV riscv_processor = kernel->processor();
     switch (riscv_processor) {
-        case RISCV::BRISC: kernel_group.riscv0_id = kernel->id(); break;
-        case RISCV::NCRISC: kernel_group.riscv1_id = kernel->id(); break;
-        case RISCV::COMPUTE: kernel_group.compute_id = kernel->id(); break;
+        case RISCV::BRISC:
+            this->riscv0_id = kernel->id();
+            this->launch_msg.enable_brisc = true;
+            break;
+        case RISCV::NCRISC:
+            this->riscv1_id = kernel->id();
+            this->launch_msg.enable_ncrisc = true;
+            break;
+        case RISCV::COMPUTE:
+            this->compute_id = kernel->id();
+            this->launch_msg.enable_triscs = true;
+            break;
         default:
             TT_ASSERT(false, "Unsupported kernel processor!");
     }
 }
 
-const KernelGroup * Program::kernels_on_core(const CoreCoord &core) {
-    const std::map<CoreCoord, KernelGroup>& kernel_groups = core_to_kernel_group();
+KernelGroup * Program::kernels_on_core(const CoreCoord &core) {
+    std::map<CoreCoord, KernelGroup>& kernel_groups = core_to_kernel_group();
     auto result = kernel_groups.find(core);
     return (result == kernel_groups.end()) ? nullptr : &result->second;
 }
 
-const std::map<CoreCoord, KernelGroup>& Program::core_to_kernel_group() {
+std::map<CoreCoord, KernelGroup>& Program::core_to_kernel_group() {
     if (core_to_kernel_group_.size() == 0) {
         for (auto &[kernel_id, kernel] : this->kernel_by_id_) {
             for (auto core : kernel->logical_cores()) {
                 KernelGroup &kernel_group = core_to_kernel_group_[core];
-                populate_kernel_group(kernel_group, kernel);
+                kernel_group.update(kernel);
             }
         }
     }

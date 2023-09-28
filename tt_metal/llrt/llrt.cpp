@@ -104,6 +104,11 @@ std::vector<std::uint32_t> read_hex_vec_from_core(
     return read_hex_vec;
 }
 
+void write_launch_msg_to_core(tt_cluster *cluster, int chip, CoreCoord core, launch_msg_t *msg) {
+    msg->mode = DISPATCH_MODE_HOST;
+    cluster->write_dram_vec((uint32_t *)msg, sizeof(launch_msg_t) / sizeof(uint32_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
+}
+
 void print_worker_cores(tt_cluster *cluster, chip_id_t chip_id) {
     std::cout << std::endl << "worker cores: " << std::endl;
     for (const CoreCoord &core : cluster->get_soc_desc(chip_id).physical_workers) {
@@ -260,31 +265,6 @@ bool test_load_write_read_trisc_binary(
 
     assert(triscv_id >= 0 and triscv_id <= 2);
     return test_load_write_read_risc_binary(cluster, mem, chip_id, core, triscv_id + 2);
-}
-
-void disable_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
-    // disable NCRISC
-    uint64_t use_ncrisc_addr = GET_MAILBOX_ADDRESS_HOST(launch.enable_ncrisc);
-    write_hex_vec_to_core(cluster, chip_id, core, {0}, use_ncrisc_addr);
-    log_debug(tt::LogLLRuntime, "disabled ncrisc");
-}
-
-void enable_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
-    uint64_t use_ncrisc_addr = GET_MAILBOX_ADDRESS_HOST(launch.enable_ncrisc);
-    write_hex_vec_to_core(cluster, chip_id, core, {1}, use_ncrisc_addr);
-    log_debug(tt::LogLLRuntime, "enabled ncrisc");
-}
-
-void enable_triscs(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
-    uint64_t use_triscs_addr = GET_MAILBOX_ADDRESS_HOST(launch.enable_triscs);
-    write_hex_vec_to_core(cluster, chip_id, core, {1}, use_triscs_addr);
-    log_debug(tt::LogLLRuntime, "enabled triscs");
-}
-
-void disable_triscs(tt_cluster *cluster, int chip_id, const CoreCoord &core) {
-    uint64_t use_triscs_addr = GET_MAILBOX_ADDRESS_HOST(launch.enable_triscs);
-    write_hex_vec_to_core(cluster, chip_id, core, {0}, use_triscs_addr);
-    log_debug(tt::LogLLRuntime, "disabled triscs");
 }
 
 CoreCoord get_core_for_dram_channel(tt_cluster *cluster, int dram_channel_id, chip_id_t chip_id) {

@@ -20,6 +20,8 @@
 #include "llrt/tt_memory.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
+// XXXX TODO(PGK): fix include paths so device can export interfaces
+#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
 
 namespace tt {
 
@@ -87,6 +89,8 @@ void write_hex_vec_to_core(
 std::vector<std::uint32_t> read_hex_vec_from_core(
     tt_cluster *cluster, int chip, const CoreCoord &core, uint64_t addr, uint32_t size);
 
+void write_launch_msg_to_core(tt_cluster *cluster, int chip, CoreCoord core, launch_msg_t *msg);
+
 void print_worker_cores(tt_cluster *cluster, chip_id_t chip_id = 0);
 
 bool is_worker_core(tt_cluster *cluster, const CoreCoord &core, chip_id_t chip_id = 0);
@@ -124,14 +128,6 @@ bool test_load_write_read_trisc_binary(
 
 bool test_load_write_read_trisc_binary(
     tt_cluster *cluster, ll_api::memory &mem, int chip_id, const CoreCoord &core, int triscv_id);
-
-void disable_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord &core);
-
-void enable_ncrisc(tt_cluster *cluster, int chip_id, const CoreCoord &core);
-
-void enable_triscs(tt_cluster *cluster, int chip_id, const CoreCoord &core);
-
-void disable_triscs(tt_cluster *cluster, int chip_id, const CoreCoord &core);
 
 // subchannel hard-coded to 0 for now
 CoreCoord get_core_for_dram_channel(tt_cluster *cluster, int dram_channel_id, chip_id_t chip_id = 0);

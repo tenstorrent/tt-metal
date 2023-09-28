@@ -255,7 +255,6 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
         break;
         case (DataMovementProcessor::RISCV_1): {
             riscv_id = 1;
-            tt::llrt::enable_ncrisc(cluster, device_id, worker_core);
         }
         break;
         default:
@@ -284,7 +283,6 @@ bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) con
             worker_core,
             trisc_id);
     }
-    tt::llrt::enable_triscs(cluster, device_id, worker_core);
 
     return pass;
 }

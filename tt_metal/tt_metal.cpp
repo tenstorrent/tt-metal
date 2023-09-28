@@ -89,10 +89,6 @@ namespace detail {
             // CircularBufferConfigVec -- common across all kernels, so written once to the core
             llrt::CircularBufferConfigVec circular_buffer_config_vec = llrt::create_circular_buffer_config_vector();
 
-            // Load firmware into L1 of worker core
-            llrt::disable_ncrisc(cluster, device_id, worker_core);     // PROF_BEGIN("CONF_DISABLE_NCTR")
-            llrt::disable_triscs(cluster, device_id, worker_core);     // PROF_END("CONF_DISABLE_NCTR")
-
             ConfigureKernelGroup(program, kernel_group, device, logical_core); // PROF_BEGIN("CONF_KERN") PROF_END("CONF_KERN")
 
             auto cbs_on_core = program.circular_buffers_on_core(logical_core);         // PROF_BEGIN("CBS")
@@ -425,11 +421,10 @@ void LaunchProgram(Device *device, Program &program) {
     cluster->l1_barrier(device->id());
 
     std::vector<CoreCoord> logical_cores_used_in_program = program.logical_cores();
-    std::vector<uint32_t> run_mailbox_go_val = {RUN_MSG_GO};
     for (const auto &logical_core : logical_cores_used_in_program) {
-        // XXXX move this to llrt
+        launch_msg_t *msg = &program.kernels_on_core(logical_core)->launch_msg;
         auto worker_core = device->worker_core_from_logical_core(logical_core);
-        tt::llrt::write_hex_vec_to_core(cluster, device_id, worker_core, run_mailbox_go_val, GET_MAILBOX_ADDRESS_HOST(launch.run));
+        tt::llrt::write_launch_msg_to_core(cluster, device->id(), worker_core, msg);
     }
 
     // Wait for all cores to be done
