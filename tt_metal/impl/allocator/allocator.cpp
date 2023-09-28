@@ -43,6 +43,15 @@ u32 BankManager::num_banks() const {
     return this->bank_id_to_bank_offset_.size();
 }
 
+u32 BankManager::bank_size() const {
+    uint64_t max_size_bytes_u64 = this->allocator_->max_size_bytes();
+    if (max_size_bytes_u64 > std::numeric_limits<uint32_t>::max()) {
+        tt::log_fatal(tt::LogMetal, "Bank size {} overflows uint32_t", max_size_bytes_u64);
+    }
+    uint32_t max_size_bytes = (uint32_t)max_size_bytes_u64;
+    return max_size_bytes;
+}
+
 i64 BankManager::bank_offset(u32 bank_id) const {
     this->validate_bank_id(bank_id);
     return this->bank_id_to_bank_offset_.at(bank_id);
@@ -138,6 +147,17 @@ u32 num_banks(const Allocator &allocator, const BufferType &buffer_type) {
         case BufferType::L1: return allocator.l1_manager.num_banks();
         default: {
             TT_ASSERT(false && "Unsupported buffer type!");
+        }
+    }
+    return 0;
+}
+
+u32 bank_size(const Allocator &allocator, const BufferType &buffer_type) {
+    switch (buffer_type) {
+        case BufferType::DRAM: return allocator.dram_manager.bank_size();
+        case BufferType::L1: return allocator.l1_manager.bank_size();
+        default: {
+            log_fatal(tt::LogMetal, "Unsupported buffer type!");
         }
     }
     return 0;

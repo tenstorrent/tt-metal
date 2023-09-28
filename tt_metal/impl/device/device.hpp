@@ -30,7 +30,7 @@ class Device {
     static size_t detect_num_available_devices();
     friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
-    Device(int device_id, const std::vector<uint32_t>& l1_bank_remap = {});
+    Device(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap = {});
 
     ~Device();
 
@@ -43,16 +43,14 @@ class Device {
 
     tt::ARCH arch() const;
 
-    int id() const { return id_; }
-
-    const Cluster *cluster() const;  // Need to access cluster in llrt APIs
+    chip_id_t id() const { return id_; }
 
     bool is_initialized() const { return this->initialized_; }
 
     int num_dram_channels() const;
 
     uint32_t l1_size() const;
-    uint32_t dram_bank_size() const;
+    uint32_t dram_size() const;
 
     CoreCoord logical_grid_size() const;
 
@@ -63,6 +61,7 @@ class Device {
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores);
 
     uint32_t num_banks(const BufferType &buffer_type) const;
+    uint32_t bank_size(const BufferType &buffer_type) const;
 
     uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
 
@@ -114,16 +113,11 @@ class Device {
     friend class Buffer;
     friend class Program;
 
-#ifdef TT_METAL_VERSIM_DISABLED
-    static constexpr TargetDevice target_type_ = TargetDevice::Silicon;
-#else
-    static constexpr TargetDevice target_type_ = TargetDevice::Versim;
-#endif
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
     static std::vector<enum ActiveState>active_devices_;
     bool activate_device_in_list();
     std::mutex active_devices_lock_;
-    int id_;
+    chip_id_t id_;
     std::unique_ptr<Allocator> allocator_ = nullptr;
     bool initialized_ = false;
 

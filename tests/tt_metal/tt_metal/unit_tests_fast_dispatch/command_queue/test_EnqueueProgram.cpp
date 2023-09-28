@@ -65,7 +65,7 @@ bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, const 
 
     cb_addr = program_config.first_cb_start;
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
-        CoresInCoreRangeGenerator core_range_generator(core_range, device->cluster()->get_soc_desc(0).worker_grid_size);
+        CoresInCoreRangeGenerator core_range_generator(core_range, device->logical_grid_size());
 
         bool terminate;
         do {
@@ -107,7 +107,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
     u32 sem_buffer_size = program_config.num_sems * SEMAPHORE_ALIGNMENT;
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
-        CoresInCoreRangeGenerator core_range_generator(core_range, device->cluster()->get_soc_desc(0).worker_grid_size);
+        CoresInCoreRangeGenerator core_range_generator(core_range, device->logical_grid_size());
 
         bool terminate;
         do {
@@ -256,7 +256,7 @@ TEST_F(CommandQueueFixture, ComputeRuntimeArgs) {
 
 namespace multicore_tests {
 TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentMultiCore) {
-    CoreCoord worker_grid_size = this->device_->cluster()->get_soc_desc(0).worker_grid_size;
+    CoreCoord worker_grid_size = this->device_->logical_grid_size();
 
     CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 2}};
     CoreRangeSet cr_set({cr});
@@ -270,7 +270,7 @@ TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentMultiCore) {
 }
 
 TEST_F(CommandQueueFixture, TestAllSemConfigsCorrectlySentMultiCore) {
-    CoreCoord worker_grid_size = this->device_->cluster()->get_soc_desc(0).worker_grid_size;
+    CoreCoord worker_grid_size = this->device_->logical_grid_size();
 
     CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 2}};
     CoreRangeSet cr_set({cr});

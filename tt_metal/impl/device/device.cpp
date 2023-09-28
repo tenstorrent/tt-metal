@@ -20,7 +20,7 @@ namespace tt_metal {
 
 std::vector<enum Device::ActiveState>Device::active_devices_;
 
-Device::Device(int device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id)
+Device::Device(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id)
 {
     ZoneScoped;
     this->initialize(l1_bank_remap);
@@ -37,10 +37,11 @@ size_t Device::detect_num_available_devices() {
 void Device::initialize_cluster() {
     ZoneScoped;
     this->clear_l1_state();
-    if (this->target_type_ == tt::TargetDevice::Silicon) {
-        int ai_clk = tt::Cluster::inst().get_device_aiclk(this->id_);
-        log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
-    }
+
+#ifdef TT_METAL_VERSIM_DISABLED
+    int ai_clk = tt::Cluster::inst().get_device_aiclk(this->id_);
+    log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
+#endif
     tt::Cluster::inst().assert_risc_reset(this->id_);
     tt::Cluster::inst().initialize_dram_barrier(this->id_);
     tt::Cluster::inst().initialize_l1_barrier(this->id_);
@@ -234,10 +235,6 @@ Device::~Device() {
     }
 }
 
-const Cluster *Device::cluster() const {
-    return &tt::Cluster::inst();
-}
-
 tt::ARCH Device::arch() const {
     return tt::Cluster::inst().arch();
 }
@@ -249,7 +246,7 @@ int Device::num_dram_channels() const {
 uint32_t Device::l1_size() const {
     return tt::Cluster::inst().get_soc_desc(id_).worker_l1_size;
 }
-uint32_t Device::dram_bank_size() const {
+uint32_t Device::dram_size() const {
     return tt::Cluster::inst().get_soc_desc(id_).dram_bank_size;
 }
 
@@ -300,6 +297,11 @@ void Device::check_allocator_is_initialized() const {
 uint32_t Device::num_banks(const BufferType &buffer_type) const {
     this->check_allocator_is_initialized();
     return allocator::num_banks(*this->allocator_, buffer_type);
+}
+
+uint32_t Device::bank_size(const BufferType &buffer_type) const {
+    this->check_allocator_is_initialized();
+    return allocator::bank_size(*this->allocator_, buffer_type);
 }
 
 uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id) const {

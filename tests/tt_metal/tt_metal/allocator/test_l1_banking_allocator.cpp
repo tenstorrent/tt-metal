@@ -17,12 +17,6 @@
 using namespace tt;
 typedef std::vector<std::unique_ptr<tt_metal::Buffer>> BufferKeeper;
 
-std::vector<uint32_t> get_logical_compute_and_storage_core_bank_ids(tt_metal::Device *device) {
-    auto soc_desc = device->cluster()->get_soc_desc(device->id());
-    auto logical_core = get_core_coord_from_relative(soc_desc.compute_with_storage_cores.at(0), device->logical_grid_size());
-    return device->bank_ids_from_logical_core(logical_core);
-}
-
 bool test_l1_buffers_allocated_top_down(tt_metal::Device *device, BufferKeeper &buffers) {
     bool pass = true;
 
@@ -59,10 +53,7 @@ bool test_l1_buffers_allocated_top_down(tt_metal::Device *device, BufferKeeper &
 bool test_circular_buffers_allocated_bottom_up(tt_metal::Device *device, tt_metal::Program &program) {
     bool pass = true;
 
-    auto logical_compute_and_storage_bank_ids = get_logical_compute_and_storage_core_bank_ids(device);
-    TT_ASSERT(logical_compute_and_storage_bank_ids.size() == 1);
-    auto compute_and_storage_bank_id = logical_compute_and_storage_bank_ids.at(0);
-    auto logical_core = device->logical_core_from_bank_id(compute_and_storage_bank_id);
+    auto logical_core = CoreCoord(0, 0);
 
     uint32_t single_tile_size = 2 * 1024;
     constexpr uint32_t src0_cb_index = CB::c_in0;
@@ -124,10 +115,7 @@ bool test_l1_buffer_do_not_grow_beyond_512KB(tt_metal::Device *device) {
 bool test_circular_buffers_allowed_to_grow_past_512KB(tt_metal::Device *device, tt_metal::Program &program) {
     bool pass = true;
 
-    auto logical_compute_and_storage_bank_ids = get_logical_compute_and_storage_core_bank_ids(device);
-    TT_ASSERT(logical_compute_and_storage_bank_ids.size() == 1);
-    auto compute_and_storage_bank_id = logical_compute_and_storage_bank_ids.at(0);
-    auto logical_core = device->logical_core_from_bank_id(compute_and_storage_bank_id);
+    auto logical_core = CoreCoord(0, 0);
 
     uint32_t single_tile_size = 2 * 1024;
     constexpr uint32_t src0_cb_index = CB::c_in7;

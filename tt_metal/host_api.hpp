@@ -44,11 +44,11 @@ class CircularBuffer;
  *
  * Return value: Device *
  *
- * | Argument       | Description                                                      | Data type | Valid range                                         | required |
- * |----------------|------------------------------------------------------------------|-----------|-----------------------------------------------------|----------|
- * | device_id      | ID of device to target                                           | int       | 0 to (Device::detect_num_available_devices - 1)     | Yes      |
+ * | Argument       | Description                                                      | Data type       | Valid range                                         | required |
+ * |----------------|------------------------------------------------------------------|-----------------|-----------------------------------------------------|----------|
+ * | device_id      | ID of device to target                                           | chip_id_t (int) | 0 to (Device::detect_num_available_devices - 1)     | Yes      |
  * */
-Device *CreateDevice(int device_id, const std::vector<uint32_t>& l1_bank_remap = {});
+Device *CreateDevice(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap = {});
 
 /**
  * Resets device and closes device

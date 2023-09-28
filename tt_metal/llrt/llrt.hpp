@@ -57,16 +57,16 @@ using CircularBufferConfigVec = std::vector<uint32_t>;
 
 // made these free functions -- they're copy/paste of the member functions
 // TODO: clean-up epoch_loader / epoch_binary -- a bunch of functions there should not be member functions
-ll_api::memory get_risc_binary(string path, int chip_id, bool fw_build);
+ll_api::memory get_risc_binary(string path, chip_id_t chip_id, bool fw_build);
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
-void write_hex_vec_to_core(int chip, const CoreCoord &core, std::vector<uint32_t> hex_vec, uint64_t addr, bool small_access = false);
+void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, std::vector<uint32_t> hex_vec, uint64_t addr, bool small_access = false);
 
-std::vector<std::uint32_t> read_hex_vec_from_core(int chip, const CoreCoord &core, uint64_t addr, uint32_t size);
+std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t size);
 
 void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg);
 
@@ -84,29 +84,29 @@ void set_config_for_circular_buffer(
     uint32_t num_pages);
 
 void write_circular_buffer_config_vector_to_core(
-    int chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec);
+    chip_id_t chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec);
 
 void write_graph_interpreter_op_info_to_core(
-    int chip, const CoreCoord &core, op_info_t op_info, int op_idx);
+    chip_id_t chip, const CoreCoord &core, op_info_t op_info, int op_idx);
 
 
-void program_brisc_startup_addr(int chip_id, const CoreCoord &core);
+void program_brisc_startup_addr(chip_id_t chip_id, const CoreCoord &core);
 
 // for BRISC and NCRISC
 // hex_file_path is relative to the "kernels"/"firwmare" root
 bool test_load_write_read_risc_binary(
-    std::string hex_file_name, int chip_id, const CoreCoord &core, int riscv_id, bool fw_build = false);
+    std::string hex_file_name, chip_id_t chip_id, const CoreCoord &core, int riscv_id, bool fw_build = false);
 
 bool test_load_write_read_risc_binary(
-    ll_api::memory &mem, int chip_id, const CoreCoord &core, int riscv_id);
+    ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id);
 
 // for TRISCs
 // hex_file_path is relative to the "kernels"/"firwmare" root
 bool test_load_write_read_trisc_binary(
-    std::string hex_file_name, int chip_id, const CoreCoord &core, int triscv_id);
+    std::string hex_file_name, chip_id_t chip_id, const CoreCoord &core, int triscv_id);
 
 bool test_load_write_read_trisc_binary(
-    ll_api::memory &mem, int chip_id, const CoreCoord &core, int triscv_id);
+    ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int triscv_id);
 
 // subchannel hard-coded to 0 for now
 CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id = 0);
@@ -135,17 +135,17 @@ inline bool deduce_if_involves_ncrisc(const TensixRiscsOptions &riscs_options) {
 namespace internal_ {
 // This loads to briscs and ncriscs - we may want to add TensixRiscsOptions here
 void load_blank_kernel_to_cores(
-    int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> cores);
+    chip_id_t chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> cores);
 
 void load_blank_kernel_to_all_worker_cores_with_exceptions(
-    int chip_id, const TensixRiscsOptions &riscs_to_load, std::unordered_set<CoreCoord> exceptions);
+    chip_id_t chip_id, const TensixRiscsOptions &riscs_to_load, std::unordered_set<CoreCoord> exceptions);
 
-void assert_enable_core_mailbox_is_valid_for_core(int chip_id, const CoreCoord &core);
+void assert_enable_core_mailbox_is_valid_for_core(chip_id_t chip_id, const CoreCoord &core);
 
-bool check_if_riscs_on_specified_core_done(int chip_id, const CoreCoord &core);
+bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core);
 
 void dispatch(
-    int chip_id,
+    chip_id_t chip_id,
     const TensixRiscsOptions riscs_option,
     const std::vector<CoreCoord> &dispatch_cores,
     uint32_t dispatch_done_addr);

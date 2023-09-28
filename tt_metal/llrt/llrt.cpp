@@ -57,7 +57,7 @@ struct HexNameToMemVectorCache {
 
 // made these free functions -- they're copy/paste of the member functions
 // TODO: clean-up epoch_loader / epoch_binary -- a bunch of functions there should not be member functions
-ll_api::memory get_risc_binary(string path, int chip_id, bool fw_build) {
+ll_api::memory get_risc_binary(string path, chip_id_t chip_id, bool fw_build) {
 
     string path_to_bin = (fw_build ? get_firmware_compile_outpath(chip_id) : get_kernel_compile_outpath(chip_id)) + path;
     if (HexNameToMemVectorCache::inst().exists(path)) {
@@ -90,13 +90,13 @@ ll_api::memory get_risc_binary(string path, int chip_id, bool fw_build) {
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 
-void write_hex_vec_to_core(int chip, const CoreCoord &core, std::vector<uint32_t> hex_vec, uint64_t addr, bool small_access) {
+void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, std::vector<uint32_t> hex_vec, uint64_t addr, bool small_access) {
     // the API is named "write_dram_vec", and its overloaded variant is taking (chip, core) pair, ie. it can write to
     // core's L1
     tt::Cluster::inst().write_dram_vec(hex_vec, tt_cxy_pair(chip, core), addr, small_access);
 }
 
-std::vector<std::uint32_t> read_hex_vec_from_core(int chip, const CoreCoord &core, uint64_t addr, uint32_t size) {
+std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t size) {
     vector<std::uint32_t> read_hex_vec;
     tt::Cluster::inst().read_dram_vec(read_hex_vec, tt_cxy_pair(chip, core), addr, size);
     return read_hex_vec;
@@ -142,11 +142,11 @@ void set_config_for_circular_buffer(
     circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * circular_buffer_index + 3) = page_size >> 4;
 }
 
-void write_circular_buffer_config_vector_to_core(int chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec) {
+void write_circular_buffer_config_vector_to_core(chip_id_t chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec) {
     write_hex_vec_to_core(chip, core, circular_buffer_config_vec, CIRCULAR_BUFFER_CONFIG_BASE);
 }
 
-void write_graph_interpreter_op_info_to_core(int chip, const CoreCoord &core, op_info_t op_info, int op_idx) {
+void write_graph_interpreter_op_info_to_core(chip_id_t chip, const CoreCoord &core, op_info_t op_info, int op_idx) {
     vector<uint32_t> op_info_vec = {
         op_info.op_code,
         op_info.cb_in0_id,
@@ -160,7 +160,7 @@ void write_graph_interpreter_op_info_to_core(int chip, const CoreCoord &core, op
     write_hex_vec_to_core(chip, core, op_info_vec, OP_INFO_BASE_ADDR + offset);
 }
 
-ll_api::memory read_mem_from_core(int chip, const CoreCoord &core, const ll_api::memory& mem, uint64_t local_init_addr) {
+ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const ll_api::memory& mem, uint64_t local_init_addr) {
 
     ll_api::memory read_mem;
     read_mem.fill_from_mem_template(mem, [&](std::vector<uint32_t>::iterator mem_ptr, uint64_t addr, uint32_t len) {
@@ -170,7 +170,7 @@ ll_api::memory read_mem_from_core(int chip, const CoreCoord &core, const ll_api:
     return read_mem;
 }
 
-void program_brisc_startup_addr(int chip_id, const CoreCoord &core) {
+void program_brisc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
     // Options for handling brisc fw not starting at mem[0]:
     // 1) Program the register for the start address out of reset
     // 2) Encode a jump in crt0 for mem[0]
@@ -196,7 +196,7 @@ void program_brisc_startup_addr(int chip_id, const CoreCoord &core) {
     write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
 }
 
-static bool test_load_write_read_risc_binary_imp(ll_api::memory &mem, int chip_id, const CoreCoord &core, int riscv_id) {
+static bool test_load_write_read_risc_binary_imp(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id) {
 
     assert(is_worker_core(core, chip_id));
 
@@ -227,14 +227,14 @@ static bool test_load_write_read_risc_binary_imp(ll_api::memory &mem, int chip_i
     return true;
 }
 
-bool test_load_write_read_risc_binary(ll_api::memory &mem, int chip_id, const CoreCoord &core, int riscv_id) {
+bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id) {
 
     test_load_write_read_risc_binary_imp(mem, chip_id, core, riscv_id);
 
     return true;
 }
 
-bool test_load_write_read_risc_binary(std::string hex_file_name, int chip_id, const CoreCoord &core, int riscv_id, bool fw_build) {
+bool test_load_write_read_risc_binary(std::string hex_file_name, chip_id_t chip_id, const CoreCoord &core, int riscv_id, bool fw_build) {
 
     log_debug(tt::LogLLRuntime, "hex_file_path = {}", (fw_build ? get_firmware_compile_outpath(chip_id) : get_kernel_compile_outpath(chip_id)) + hex_file_name);
     ll_api::memory mem = get_risc_binary(hex_file_name, chip_id, fw_build);
@@ -244,13 +244,13 @@ bool test_load_write_read_risc_binary(std::string hex_file_name, int chip_id, co
 }
 
 // for TRISCs
-bool test_load_write_read_trisc_binary(std::string hex_file_name, int chip_id, const CoreCoord &core, int triscv_id) {
+bool test_load_write_read_trisc_binary(std::string hex_file_name, chip_id_t chip_id, const CoreCoord &core, int triscv_id) {
 
     assert(triscv_id >= 0 and triscv_id <= 2);
     return test_load_write_read_risc_binary(hex_file_name, chip_id, core, triscv_id + 2);
 }
 
-bool test_load_write_read_trisc_binary(ll_api::memory &mem, int chip_id, const CoreCoord &core, int triscv_id) {
+bool test_load_write_read_trisc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int triscv_id) {
 
     assert(triscv_id >= 0 and triscv_id <= 2);
     return test_load_write_read_risc_binary(mem, chip_id, core, triscv_id + 2);
@@ -262,7 +262,7 @@ CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
 
 namespace internal_ {
 // This loads to briscs and ncriscs - we may want to add TensixRiscsOptions here
-void load_blank_kernel_to_cores(int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> cores) {
+void load_blank_kernel_to_cores(chip_id_t chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> cores) {
     TT_ASSERT(riscs_to_load != TensixRiscsOptions::NONE, "You must specify a non-NONE RISC to load blank kernels to");
 
     for (const CoreCoord &core : cores) {
@@ -294,7 +294,7 @@ void load_blank_kernel_to_cores(int chip_id, const TensixRiscsOptions &riscs_to_
     }
 }
 
-void load_blank_kernel_to_all_worker_cores_with_exceptions(int chip_id, const TensixRiscsOptions &riscs_to_load, std::unordered_set<CoreCoord> exceptions) {
+void load_blank_kernel_to_all_worker_cores_with_exceptions(chip_id_t chip_id, const TensixRiscsOptions &riscs_to_load, std::unordered_set<CoreCoord> exceptions) {
     std::vector<CoreCoord> cores_to_load_with_blanks;  // PROF_BEGIN("set_diff")
 
     for (const CoreCoord &worker_core : tt::Cluster::inst().get_soc_desc(chip_id).physical_workers) {
@@ -311,7 +311,7 @@ void load_blank_kernel_to_all_worker_cores_with_exceptions(int chip_id, const Te
     load_blank_kernel_to_cores(chip_id, riscs_to_load, cores_to_load_with_blanks);
 }
 
-bool check_if_riscs_on_specified_core_done(int chip_id, const CoreCoord &core) {
+bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core) {
 
     std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address_) {
         constexpr int RUN_MAILBOX_BOGUS = 3;

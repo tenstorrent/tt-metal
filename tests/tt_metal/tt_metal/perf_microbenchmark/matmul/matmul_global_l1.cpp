@@ -1106,10 +1106,6 @@ int main(int argc, char** argv) {
     int device_id = 0;
     tt_metal::Device* device = tt_metal::CreateDevice(device_id);
 
-    if (dprint) {
-      tt_start_debug_print_server();
-    }
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Inputs Setup
     ////////////////////////////////////////////////////////////////////////////

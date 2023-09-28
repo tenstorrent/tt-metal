@@ -164,7 +164,7 @@ namespace detail {
     }
 }
 
-Device *CreateDevice(int device_id, const std::vector<uint32_t>& l1_bank_remap) {
+Device *CreateDevice(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) {
     Device * dev = new Device(device_id, l1_bank_remap);
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {

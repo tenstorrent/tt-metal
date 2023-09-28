@@ -198,8 +198,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
                 .defines = sfpu_defines});
 
         int chip_id = 0;
-        CoresInCoreRangeGenerator cores_in_core_range(
-            core_range, device->cluster()->get_soc_desc(chip_id).worker_grid_size);
+        CoresInCoreRangeGenerator cores_in_core_range(core_range, device->logical_grid_size());
 
         bool terminate;
 
@@ -407,8 +406,8 @@ TEST_F(SingleDeviceFixture, DISABLED_AllCoreSingleTileSfpuApproxCompute) {
     }
 
     int chip_id = 0;
-    const auto& sdesc = this->device_->cluster()->get_soc_desc(chip_id);
-    CoreRange core_range = {.start = {0, 0}, .end = {sdesc.worker_grid_size.x - 1, sdesc.worker_grid_size.y - 2}};
+    CoreCoord worker_grid_size = this->device_->logical_grid_size();
+    CoreRange core_range = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 2}};
 
     CoreRangeSet core_set({core_range});
     test_config.cores = core_set;
@@ -446,8 +445,8 @@ TEST_F(SingleDeviceFixture, DISABLED_AllCoreMultiTileSfpuApproxCompute) {
     }
 
     int chip_id = 0;
-    const auto& sdesc = this->device_->cluster()->get_soc_desc(chip_id);
-    CoreRange core_range = {.start = {0, 0}, .end = {sdesc.worker_grid_size.x - 1, sdesc.worker_grid_size.y - 2}};
+    CoreCoord worker_grid_size = this->device_->logical_grid_size();
+    CoreRange core_range = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 2}};
 
     CoreRangeSet core_set({core_range});
     test_config.cores = core_set;

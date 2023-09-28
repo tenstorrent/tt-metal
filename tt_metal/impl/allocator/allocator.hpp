@@ -35,6 +35,8 @@ class BankManager {
 
     u32 num_banks() const;
 
+    u32 bank_size() const;
+
     i64 bank_offset(u32 bank_id) const;
 
     u64 allocate_buffer(u32 size, u32 page_size, bool bottom_up);
@@ -72,6 +74,8 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
 void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_config);
 
 u32 num_banks(const Allocator &allocator, const BufferType &buffer_type);
+
+u32 bank_size(const Allocator &allocator, const BufferType &buffer_type);
 
 u32 dram_channel_from_bank_id(const Allocator &allocator, u32 bank_id);
 

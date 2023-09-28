@@ -146,7 +146,7 @@ TEST_F(CommandQueueFixture, WriteOneTileToDramBank0) {
 
 TEST_F(CommandQueueFixture, WriteOneTileToAllDramBanks) {
     BufferConfig config = {
-        .num_pages = u32(this->device_->cluster()->get_soc_desc(this->pcie_id).get_num_dram_channels()),
+        .num_pages = u32(this->device_->num_banks(BufferType::DRAM)),
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 
@@ -156,7 +156,7 @@ TEST_F(CommandQueueFixture, WriteOneTileToAllDramBanks) {
 TEST_F(CommandQueueFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
     constexpr u32 num_round_robins = 2;
     BufferConfig config = {
-        .num_pages = num_round_robins * (this->device_->cluster()->get_soc_desc(this->pcie_id).get_num_dram_channels()),
+        .num_pages = num_round_robins * (this->device_->num_banks(BufferType::DRAM)),
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 
