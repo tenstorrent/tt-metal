@@ -30,10 +30,12 @@ using std::chrono::microseconds;
 // interface
 //
 // Usage example:
-//   ./test_noc_rtor --cores-r <number of cores in a row> --cores-c <number
-//   of cores in a column> --num-tiles <number of tiles each core accesses>
-//   --noc-index <NOC index to use> --access-type <0 for read access, 1 for
-//   write access>
+//   ./test_noc_rtor
+//     --cores-r <number of cores in a row>
+//     --cores-c <number of cores in a column>
+//     --num-tiles <number of tiles each core accesses>
+//     --noc-index <NOC index to use>
+//     --access-type <0 for read access, 1 for write access>
 ////////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char** argv) {

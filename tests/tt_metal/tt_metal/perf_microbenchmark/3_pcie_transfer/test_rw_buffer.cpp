@@ -23,8 +23,9 @@ using std::chrono::microseconds;
 // (buffer) can be resident in DRAM or L1.
 //
 // Usage example:
-//   ./test_rw_buffer --buffer-type <0 for DRAM, 1 for L1> --transfer-size <size
-//   in bytes>
+//   ./test_rw_buffer
+//     --buffer-type <0 for DRAM, 1 for L1>
+//     --transfer-size <size in bytes>
 ////////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char** argv) {

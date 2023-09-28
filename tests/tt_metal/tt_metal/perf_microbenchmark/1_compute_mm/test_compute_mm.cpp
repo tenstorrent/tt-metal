@@ -42,10 +42,11 @@ using namespace tt;
 //   Otherwise, it may get inappropriate cycle value.
 //
 // Usage example:
-//   ./test_compute_mm --m <size in elements> --n <size in elements> --k <size
-//   in elements> --slow-dispatch-mode <0 for fast dispatch mode, 1 for slow
-//   dispatch mode>
-//
+//   ./test_compute_mm
+//     --m <size in elements>
+//     --n <size in elements>
+//     --k <size in elements>
+//     --slow-dispatch-mode <0 for fast dispatch mode, 1 for slow dispatch mode>
 ////////////////////////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////////////////////

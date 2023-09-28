@@ -21,9 +21,11 @@ using std::chrono::microseconds;
 // movement kernels and compute kernel.
 //
 // Usage example:
-//   ./test_kernel_launch --cores-r <number of cores in a row> --cores-c <number
-//   of cores in a column> --core-groups <number of core groups where each core
-//   group executes different kernel binaries>
+//   ./test_kernel_launch
+//     --cores-r <number of cores in a row>
+//     --cores-c <number of cores in a column>
+//     --core-groups <number of core groups where each core group executes
+//                    different kernel binaries>
 ////////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char** argv) {
