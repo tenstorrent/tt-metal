@@ -94,7 +94,9 @@ tt::stl::reflection::Attributes MorehSoftmax::attributes() const {
 }
 
 Tensor moreh_softmax(const Tensor& input_tensor, uint32_t dim, const MemoryConfig& output_mem_config) {
-    const CoreRange all_cores = {.start{0, 0}, .end = {11, 8}};
+    auto device = input_tensor.device();
+    auto grid_coord = device->compute_with_storage_grid_size();
+    const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y-1}};
 
     return operation::run(MorehSoftmax{.dim=dim, .output_mem_config=output_mem_config, .core_range=all_cores}, {input_tensor}, {}).at(0);
 }
