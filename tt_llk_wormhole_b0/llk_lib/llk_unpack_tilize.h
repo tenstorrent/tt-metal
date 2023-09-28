@@ -93,7 +93,7 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
 
-    std::uint32_t top_face_offset_address = ((SCALE_DATUM_SIZE((uint)unpack_src_format[operand_id], tile_index) * face_r_dim) >> 4) << (get_narrow_tile(operand_id) ? 0 : 1);  
+    std::uint32_t top_face_offset_address = SCALE_DATUM_SIZE((uint)unpack_src_format[operand_id], tile_index) << (get_narrow_tile(operand_id) ? 0 : 1);  
                                                     // Each iteration unpacks 2 face_r_dimx16 faces (1st 0,1 2nd 2,3 unless tile is <=16x32)
                                                     // For narrow tile we unpack 1 face in each iteration
                                                     // Offset address is in 16B words
@@ -106,7 +106,7 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
     // Program srcA and srcB base addresses
     std::uint32_t num_loops = get_narrow_tile(operand_id) ? 2 : num_faces/2;
 
-    for (std::uint32_t n = 0; n < 2; n++) {
+    for (std::uint32_t n = 0; n < num_loops; n++) {
         std::uint32_t address = base_address + top_face_offset_address + ((n == 1) ? bot_face_offset_address : 0);
 
         // Clear z/w start counters
