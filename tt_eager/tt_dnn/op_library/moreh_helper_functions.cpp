@@ -95,12 +95,10 @@ KernelID CreateReadKernel(
     const CoreRangeSet &core,
     const std::vector<uint32_t> &compile_args,
     std::map<string, string> defines) {
-    const string dir_path = "tt_metal/kernels/dataflow/";
-    string kernel_file = dir_path + file_name;
 
     return tt_metal::CreateDataMovementKernel(
         program,
-        kernel_file,
+        file_name,
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -115,12 +113,10 @@ KernelID CreateWriteKernel(
     const CoreRangeSet &core,
     const std::vector<uint32_t> &compile_args,
     std::map<string, string> defines) {
-    const string dir_path = "tt_metal/kernels/dataflow/";
-    string kernel_file = dir_path + file_name;
 
     return tt_metal::CreateDataMovementKernel(
         program,
-        kernel_file,
+        file_name,
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -137,15 +133,12 @@ void CreateComputeKernel(
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode) {
-    const string dir_path = "kernels/compute/";
-
-    auto full_path = dir_path + file_name;
 
     for (auto arg : args) {
         if (arg.num_tile_per_core_group > 0) {
             auto coumpute_kernel = CreateComputeKernel(
                 program,
-                full_path,
+                file_name,
                 arg.core_range,
                 tt_metal::ComputeConfig{
                     .math_fidelity = math_fidelity,

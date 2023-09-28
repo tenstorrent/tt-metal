@@ -87,14 +87,14 @@ operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, Tenso
     std::map<string, string> writer_defines;
 
     auto reader_kernel_id = CreateReadKernel(
-        program, "reader_moreh_softmax_h.cpp", all_cores, {src_is_dram}, reader_defines);
+        program, "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/reader_moreh_softmax_h.cpp", all_cores, {src_is_dram}, reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
-        program, "writer_moreh_softmax_h.cpp", all_cores, {dst_is_dram}, writer_defines);
+        program, "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/writer_moreh_softmax_h.cpp", all_cores, {dst_is_dram}, writer_defines);
 
     // create compute kernel
     CreateComputeKernel(
         program,
-        "moreh_softmax_h.cpp",
+        "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/moreh_softmax_h.cpp",
         {
             {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, Ht}},
             {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, Ht}},
