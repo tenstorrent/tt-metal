@@ -57,13 +57,13 @@ operation::ProgramWithCallbacks MorehSoftmaxBackward::create_program(
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
 
     switch (parallelization_strategy){
-        case MorehSoftmaxBackwardParallelizationStrategy::SMALL_W:
+        case MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W:
             return {moreh_softmax_backward_w_small(output, output_grad, input_grad, this->core_range)};
-        case MorehSoftmaxBackwardParallelizationStrategy::SMALL_H:
+        case MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H:
             return {moreh_softmax_backward_h_small(output, output_grad, input_grad, this->core_range)};
-        case MorehSoftmaxBackwardParallelizationStrategy::LARGE_W:
+        case MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_W:
             return {moreh_softmax_backward_w_large(output, output_grad, input_grad, this->core_range)};
-        case MorehSoftmaxBackwardParallelizationStrategy::LARGE_H:
+        case MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_H:
             return {moreh_softmax_backward_h_large(output, output_grad, input_grad, this->core_range)};
         // default:
         //     break;
@@ -72,23 +72,23 @@ operation::ProgramWithCallbacks MorehSoftmaxBackward::create_program(
     return {moreh_softmax_backward_h_large(output, output_grad, input_grad, this->core_range)};
 }
 
-MorehSoftmaxBackwardParallelizationStrategy MorehSoftmaxBackward::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackward::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     auto& output = input_tensors.at(0);
 
     if (is_moreh_softmax_backward_w_small_available(output) && this->dim == 3) {
         log_info(LogTest, "Small tensor algorithm selected");
-        return MorehSoftmaxBackwardParallelizationStrategy::SMALL_W;
+        return MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W;
     }
     if (is_moreh_softmax_backward_h_small_available(output) && this->dim == 2) {
         log_info(LogTest, "Small tensor algorithm selected");
-        return MorehSoftmaxBackwardParallelizationStrategy::SMALL_H;
+        return MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H;
     }
 
     log_info(LogTest, "Large tensor algorithm selected");
     if (this->dim == 3) {
-        return MorehSoftmaxBackwardParallelizationStrategy::LARGE_W;
+        return MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_W;
     } else {
-        return MorehSoftmaxBackwardParallelizationStrategy::LARGE_H;
+        return MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_H;
     }
 }
 
