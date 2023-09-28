@@ -16,7 +16,7 @@ namespace primary {
 
 using namespace tt_metal;
 
-enum class MorehSoftmaxParallelizationStrategy {
+enum class MorehSoftmaxOpParallelizationStrategy {
     SMALL_W = 0,
     SMALL_H = 1,
     LARGE_W = 2,
@@ -43,7 +43,7 @@ struct MorehSoftmax {
         const std::vector<Tensor>& input_tensors,
         std::vector<Tensor> &output_tensors
     ) const;
-    MorehSoftmaxParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
+    MorehSoftmaxOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
