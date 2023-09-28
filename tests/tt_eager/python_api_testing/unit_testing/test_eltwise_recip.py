@@ -20,59 +20,43 @@ import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
+from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_recip as tt_eltwise_recip
 
-def tensor_to_device(x, device, buffer_type):
-    if buffer_type == None:
-        return x
-
-    return x.to(device, buffer_type)
 
 def run_eltwise_recip_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
-    test_dims = (input_shape,)
 
-    input_mem_config = in_mem_config
     if in_mem_config == "SYSTEM_MEMORY":
-        input_mem_config = None
+        in_mem_config = None
 
-    for N, C, H, W in test_dims:
-        for nrepeat in range(0, 1):
-            x = torch.Tensor(size=(N, C, H, W)).uniform_(-100, 100)
-            x_ref = x.detach().clone()
 
-            t0 = ttl.tensor.Tensor(x, dtype)
-            t0 = t0.to(dlayout)
-            ttx = tensor_to_device(t0, device, input_mem_config)
+    x = torch.Tensor(size=input_shape).uniform_(-100, 100)
+    x_ref = x.detach().clone()
 
-            logger.info("Running Eltwise recip test")
-            ttz = ttl.tensor.recip(ttx, output_mem_config=out_mem_config)
-            logger.info("Done")
+    # get ref result
+    ref_value = pytorch_ops.recip(x_ref)
 
-            if in_mem_config != "SYSTEM_MEMORY":
-                assert ttx.memory_config().buffer_type == in_mem_config.buffer_type
-                logger.debug(f"ttx is on: {ttx.memory_config().buffer_type}")
-            else:
-                logger.debug(f"ttx is on: SYSTEM_MEMORY")
+    tt_result = tt_eltwise_recip(
+        x=x,
+        device=device,
+        device_id=0,
+        dtype=[dtype],
+        layout=[dlayout],
+        buffer_type=[in_mem_config],
+        output_mem_config=out_mem_config
+    )
 
-            assert ttz.memory_config().buffer_type == out_mem_config.buffer_type
-            logger.debug(f"ttz is on: {ttz.memory_config().buffer_type}")
+    # compare tt and golden outputs
+    success, pcc_value = comp_pcc(ref_value, tt_result)
+    logger.debug(pcc_value)
 
-            tt_result = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-
-            # get ref result
-            ref_value = pytorch_ops.recip(x_ref)
-
-            # compare tt and golden outputs
-            success, pcc_value = comp_pcc(ref_value, tt_result)
-            logger.debug(pcc_value)
-
-            assert success
+    assert success
 
 
 test_sweep_args=[
-    ((4, 11, 106, 232), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 19096254),
+    ((4, 11, 106, 232), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.BufferType.DRAM, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 19096254),
     ((2, 10, 160, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, "SYSTEM_MEMORY", ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 3074662),
-    ((1, 6, 256, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 16417740),
+    ((1, 6, 256, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.BufferType.DRAM, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 16417740),
     ((6, 7, 192, 224), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, "SYSTEM_MEMORY", ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 11178160),
 ]
 
