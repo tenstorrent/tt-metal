@@ -152,18 +152,6 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
     this->physical_routing_to_virtual_routing_y.size() == this->grid_size.y and this->physical_routing_to_virtual_routing_x.size() == this->grid_size.x);
 }
 
-// UMD initializes and owns tt_SocDescriptor
-// For architectures with translation tables enabled, UMD will remove the last x rows from the descriptors in tt_SocDescriptor (workers list and worker_log_to_routing_x/y maps)
-// This creates a virtual coordinate system, where translation tables are used to convert virtual core coordinates to the true harvesting state.
-// For architectures without translation tables enabled (Grayskull), UMD updates tt_SocDescriptor to contain the true harvesting state by removing the harvested physical coordiniates
-// Metal needs the true harvesting state so we generate physical descriptors from virtual coordinates
-// We also initialize additional lookup tables to translate physical coordinates to virtual coordinates because UMD APIs expect virtual coordinates.
-metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t harvesting_mask) : tt_SocDescriptor(other) {
-  this->trisc_sizes = {MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE};  // TODO: Read trisc size from yaml
-  this->generate_physical_descriptors_from_virtual(harvesting_mask);
-  this->load_dram_metadata_from_device_descriptor();
-}
-
 const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_noc_rows) {
   const static std::map<tt::ARCH, std::map<uint32_t, std::string> > product_name = {
       {tt::ARCH::GRAYSKULL, { {0, "E150"} } },
@@ -173,14 +161,23 @@ const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_noc_row
   return product_name.at(arch).at(num_harvested_noc_rows);
 }
 
-void load_dispatch_and_banking_config(metal_SocDescriptor &soc_descriptor, uint32_t num_harvested_noc_rows) {
-  YAML::Node device_descriptor_yaml = YAML::LoadFile(soc_descriptor.device_descriptor_file_path);
+void metal_SocDescriptor::load_dispatch_and_banking_config(uint32_t harvesting_mask) {
+  std::bitset<32> mask_bitset(harvesting_mask);
+  uint32_t num_harvested_noc_rows = mask_bitset.count();
 
+  if (num_harvested_noc_rows > 2) {
+    tt::log_fatal(tt::LogDevice, "At most two rows can be harvested, but detected {} harvested rows", num_harvested_noc_rows);
+  }
+  if (num_harvested_noc_rows > 0 and this->arch == tt::ARCH::GRAYSKULL) {
+    tt::log_fatal(tt::LogDevice, "Harvesting is not supported on Grayskull");
+  }
+
+  YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
   auto product_to_config  = device_descriptor_yaml["dispatch_and_banking"];
-  auto product_name = get_product_name(soc_descriptor.arch, num_harvested_noc_rows);
+  auto product_name = get_product_name(this->arch, num_harvested_noc_rows);
   auto config = product_to_config[product_name];
 
-  soc_descriptor.l1_bank_size = config["l1_bank_size"].as<int>();
+  this->l1_bank_size = config["l1_bank_size"].as<int>();
 
   // TODO: Add validation for compute_with_storage, storage only, and dispatch core specification
   auto compute_with_storage_start = config["compute_with_storage_grid_range"]["start"];
@@ -189,17 +186,17 @@ void load_dispatch_and_banking_config(metal_SocDescriptor &soc_descriptor, uint3
   TT_ASSERT(compute_with_storage_end[0].as<size_t>() >= compute_with_storage_start[0].as<size_t>());
   TT_ASSERT(compute_with_storage_end[1].as<size_t>() >= compute_with_storage_start[1].as<size_t>());
 
-  soc_descriptor.compute_with_storage_grid_size = CoreCoord({
+  this->compute_with_storage_grid_size = CoreCoord({
     .x = (compute_with_storage_end[0].as<size_t>() - compute_with_storage_start[0].as<size_t>()) + 1,
     .y = (compute_with_storage_end[1].as<size_t>() - compute_with_storage_start[1].as<size_t>()) + 1,
   });
 
   // compute_with_storage_cores are a subset of worker cores
   // they have already been parsed as CoreType::WORKER and saved into `cores` map when parsing `functional_workers`
-  for (auto x = 0; x < soc_descriptor.compute_with_storage_grid_size.x; x++) {
-    for (auto y = 0; y < soc_descriptor.compute_with_storage_grid_size.y; y++) {
+  for (auto x = 0; x < this->compute_with_storage_grid_size.x; x++) {
+    for (auto y = 0; y < this->compute_with_storage_grid_size.y; y++) {
         const auto relative_coord = RelativeCoreCoord({.x = x, .y = y});
-        soc_descriptor.compute_with_storage_cores.push_back(relative_coord);
+        this->compute_with_storage_cores.push_back(relative_coord);
     }
   }
 
@@ -213,7 +210,7 @@ void load_dispatch_and_banking_config(metal_SocDescriptor &soc_descriptor, uint3
     } else {
       tt::log_fatal ("Only logical relative coords supported for storage_cores cores");
     }
-    soc_descriptor.storage_cores.push_back(coord);
+    this->storage_cores.push_back(coord);
   }
 
   // dispatch_cores are a subset of worker cores
@@ -226,6 +223,19 @@ void load_dispatch_and_banking_config(metal_SocDescriptor &soc_descriptor, uint3
     } else {
       tt::log_fatal ("Only logical relative coords supported for dispatch_cores cores");
     }
-    soc_descriptor.dispatch_cores.push_back(coord);
+    this->dispatch_cores.push_back(coord);
   }
+}
+
+// UMD initializes and owns tt_SocDescriptor
+// For architectures with translation tables enabled, UMD will remove the last x rows from the descriptors in tt_SocDescriptor (workers list and worker_log_to_routing_x/y maps)
+// This creates a virtual coordinate system, where translation tables are used to convert virtual core coordinates to the true harvesting state.
+// For architectures without translation tables enabled (Grayskull), UMD updates tt_SocDescriptor to contain the true harvesting state by removing the harvested physical coordiniates
+// Metal needs the true harvesting state so we generate physical descriptors from virtual coordinates
+// We also initialize additional lookup tables to translate physical coordinates to virtual coordinates because UMD APIs expect virtual coordinates.
+metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t harvesting_mask) : tt_SocDescriptor(other) {
+  this->trisc_sizes = {MEM_TRISC0_SIZE, MEM_TRISC1_SIZE, MEM_TRISC2_SIZE};  // TODO: Read trisc size from yaml
+  this->generate_physical_descriptors_from_virtual(harvesting_mask);
+  this->load_dram_metadata_from_device_descriptor();
+  this->load_dispatch_and_banking_config(harvesting_mask);
 }

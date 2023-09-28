@@ -46,13 +46,12 @@ namespace watcher {
 
 class WatcherDevice {
   public:
-    tt_cluster *cluster_;
     int device_id_;
     std::function<CoreCoord ()>get_grid_size_;
     std::function<CoreCoord (CoreCoord)>worker_from_logical_;
     std::function<const std::set<CoreCoord> &()> storage_only_cores_;
 
-    WatcherDevice(tt_cluster *cluster, int device_id, std::function<CoreCoord ()>get_grid_size, std::function<CoreCoord (CoreCoord)>worker_from_logical, std::function<const std::set<CoreCoord> &()>storage_only_cores);
+    WatcherDevice(int device_id, std::function<CoreCoord ()>get_grid_size, std::function<CoreCoord (CoreCoord)>worker_from_logical, std::function<const std::set<CoreCoord> &()>storage_only_cores);
 };
 
 constexpr uint64_t DEBUG_SANITIZE_NOC_SENTINEL_OK_64 = 0xbadabadabadabada;
@@ -65,7 +64,7 @@ static std::unordered_map<void *, std::shared_ptr<WatcherDevice>> devices;
 static FILE *logfile = nullptr;
 static std::chrono::time_point start_time = std::chrono::system_clock::now();
 
-WatcherDevice::WatcherDevice(tt_cluster *cluster, int device_id, std::function<CoreCoord ()>get_grid_size, std::function<CoreCoord (CoreCoord)>worker_from_logical, std::function<const std::set<CoreCoord> &()> storage_only_cores) : cluster_(cluster), device_id_(device_id), get_grid_size_(get_grid_size), worker_from_logical_(worker_from_logical), storage_only_cores_(storage_only_cores) {
+WatcherDevice::WatcherDevice(int device_id, std::function<CoreCoord ()>get_grid_size, std::function<CoreCoord (CoreCoord)>worker_from_logical, std::function<const std::set<CoreCoord> &()> storage_only_cores) : device_id_(device_id), get_grid_size_(get_grid_size), worker_from_logical_(worker_from_logical), storage_only_cores_(storage_only_cores) {
 }
 
 static uint32_t get_elapsed_secs() {
@@ -113,7 +112,7 @@ static void dump_l1_status(FILE *f, WatcherDevice *wdev, CoreCoord core) {
 
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, MEM_L1_BASE, sizeof(uint32_t));
+    data = read_hex_vec_from_core(wdev->device_id_, core, MEM_L1_BASE, sizeof(uint32_t));
     // XXXX TODO(pgk): get this const from llrt (jump to fw insn)
     if (data[0] != 0x2010006f) {
         fprintf(f, "L1[0]=bad value 0x%08x ", data[0]);
@@ -252,11 +251,11 @@ static void dump_sync_regs(FILE *f, WatcherDevice *wdev, CoreCoord core) {
         uint32_t base = NOC_OVERLAY_START_ADDR + (OPERAND_START_STREAM + operand) * NOC_STREAM_REG_SPACE_SIZE;
 
         uint32_t rcvd_addr = base + STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t);
-        data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, rcvd_addr, sizeof(uint32_t));
+        data = read_hex_vec_from_core(wdev->device_id_, core, rcvd_addr, sizeof(uint32_t));
         uint32_t rcvd = data[0];
 
         uint32_t ackd_addr = base + STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t);
-        data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, ackd_addr, sizeof(uint32_t));
+        data = read_hex_vec_from_core(wdev->device_id_, core, ackd_addr, sizeof(uint32_t));
         uint32_t ackd = data[0];
 
         if (rcvd != ackd) {
@@ -271,7 +270,7 @@ static void dump_core(FILE *f, WatcherDevice *wdev, CoreCoord core, bool dump_al
     fprintf(f, "Core %s: \t", core.str().c_str());
 
     std::vector<uint32_t> data;
-    data = read_hex_vec_from_core(wdev->cluster_, wdev->device_id_, core, MEM_MAILBOX_BASE, sizeof(mailboxes_t));
+    data = read_hex_vec_from_core(wdev->device_id_, core, MEM_MAILBOX_BASE, sizeof(mailboxes_t));
     mailboxes_t *mbox_data = (mailboxes_t *)(&data[0]);
 
     if (watcher::enabled) {
@@ -345,8 +344,7 @@ static void watcher_loop(int sleep_usecs) {
 
 } // namespace watcher
 
-static void init_device(tt_cluster *cluster,
-                        int device_id,
+static void init_device(int device_id,
                         std::function<CoreCoord ()>get_grid_size,
                         std::function<CoreCoord (CoreCoord)>worker_from_logical) {
 
@@ -370,8 +368,8 @@ static void init_device(tt_cluster *cluster,
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
             CoreCoord worker_core = worker_from_logical(logical_core);
-            tt::llrt::write_hex_vec_to_core(cluster, device_id, worker_core, debug_status_init_val, GET_MAILBOX_ADDRESS_HOST(debug_status));
-            tt::llrt::write_hex_vec_to_core(cluster, device_id, worker_core, debug_sanity_init_val, GET_MAILBOX_ADDRESS_HOST(sanitize_noc));
+            tt::llrt::write_hex_vec_to_core(device_id, worker_core, debug_status_init_val, GET_MAILBOX_ADDRESS_HOST(debug_status));
+            tt::llrt::write_hex_vec_to_core(device_id, worker_core, debug_sanity_init_val, GET_MAILBOX_ADDRESS_HOST(sanitize_noc));
         }
     }
 }
@@ -439,7 +437,6 @@ static void watcher_sanitize_host_noc(const char* what,
 }
 
 void watcher_attach(void *dev,
-                    tt_cluster *cluster,
                     int device_id,
                     const std::function<CoreCoord ()>& get_grid_size,
                     const std::function<CoreCoord (CoreCoord)>& worker_from_logical,
@@ -464,12 +461,12 @@ void watcher_attach(void *dev,
     }
 
     if (watcher::enabled) {
-        init_device(cluster, device_id, get_grid_size, worker_from_logical);
+        init_device(device_id, get_grid_size, worker_from_logical);
     }
 
     // Always register the device w/ watcher, even if disabled
     // This allows dump() to be called from debugger
-    std::shared_ptr<watcher::WatcherDevice> wdev(new watcher::WatcherDevice(cluster, device_id, get_grid_size, worker_from_logical, storage_only_cores));
+    std::shared_ptr<watcher::WatcherDevice> wdev(new watcher::WatcherDevice(device_id, get_grid_size, worker_from_logical, storage_only_cores));
     watcher::devices.insert(pair<void *, std::shared_ptr<watcher::WatcherDevice>>(dev, wdev));
 }
 

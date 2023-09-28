@@ -17,13 +17,6 @@
 using namespace tt;
 typedef std::vector<std::unique_ptr<tt_metal::Buffer>> BufferKeeper;
 
-CoreCoord get_logical_coord_from_noc_coord(tt::tt_metal::Device *device, const CoreCoord &noc_coord) {
-    auto soc_desc = device->cluster()->get_soc_desc(device->id());
-    auto logical_coord_x = soc_desc.routing_x_to_worker_x.at(noc_coord.x);
-    auto logical_coord_y = soc_desc.routing_y_to_worker_y.at(noc_coord.y);
-    return CoreCoord(logical_coord_x, logical_coord_y);
-}
-
 std::vector<uint32_t> get_logical_compute_and_storage_core_bank_ids(tt_metal::Device *device) {
     auto soc_desc = device->cluster()->get_soc_desc(device->id());
     auto logical_core = get_core_coord_from_relative(soc_desc.compute_with_storage_cores.at(0), device->logical_grid_size());

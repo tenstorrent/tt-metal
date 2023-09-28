@@ -288,7 +288,7 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst_ad
     u32 available_l1 = MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR;
     u32 burst_size = (available_l1 / padded_page_size) * padded_page_size;
 
-    vector<CoreCoord> pcie_cores = this->device->cluster()->get_soc_desc(this->device->id()).pcie_cores;
+    vector<CoreCoord> pcie_cores = tt::Cluster::inst().get_soc_desc(this->device->id()).pcie_cores;
     TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
     const CoreCoord& pcie_core = pcie_cores.at(0);
 
@@ -350,7 +350,7 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(u32 src_a
     u32 available_l1 = MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR;
     u32 burst_size = (available_l1 / padded_page_size) * padded_page_size;
 
-    vector<CoreCoord> pcie_cores = this->device->cluster()->get_soc_desc(this->device->id()).pcie_cores;
+    vector<CoreCoord> pcie_cores = tt::Cluster::inst().get_soc_desc(this->device->id()).pcie_cores;
     TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
     const CoreCoord& pcie_core = pcie_cores.at(0);
 
@@ -493,7 +493,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 runtime_a
     }
 
     u32 device_id = 0;
-    vector<CoreCoord> pcie_cores = this->device->cluster()->get_soc_desc(device_id).pcie_cores;
+    vector<CoreCoord> pcie_cores = tt::Cluster::inst().get_soc_desc(device_id).pcie_cores;
     TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
     const CoreCoord& pcie_core = pcie_cores.at(0);
 
@@ -592,7 +592,7 @@ void send_dispatch_kernel_to_device(Device* device) {
 
     Program dispatch_program = Program();
     CoreCoord dispatch_logical_core = *device->dispatch_cores().begin();
-    vector<CoreCoord> pcie_cores = device->cluster()->get_soc_desc(device->id()).pcie_cores;
+    vector<CoreCoord> pcie_cores = tt::Cluster::inst().get_soc_desc(device->id()).pcie_cores;
     TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
 
     std::map<string, string> dispatch_defines = {
@@ -632,7 +632,7 @@ void send_dispatch_kernel_to_device(Device* device) {
 
     CoreCoord dpc = device->worker_core_from_logical_core(dispatch_logical_core);
     launch_msg_t *msg = &dispatch_program.kernels_on_core(dispatch_logical_core)->launch_msg;
-    tt::llrt::write_launch_msg_to_core(device->cluster(), device->id(), dpc, msg);
+    tt::llrt::write_launch_msg_to_core(device->id(), dpc, msg);
 }
 
 // CommandQueue section
@@ -640,7 +640,7 @@ CommandQueue::CommandQueue(Device* device) {
     vector<u32> pointers(CQ_START / sizeof(u32), 0);
     pointers[0] = CQ_START >> 4;  // rd ptr (96 >> 4 = 6)
 
-    device->cluster()->write_sysmem_vec(pointers, 0, 0);
+    tt::Cluster::inst().write_sysmem_vec(pointers, 0, 0);
 
     send_dispatch_kernel_to_device(device);
     this->device = device;
@@ -687,7 +687,7 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<u32>& dst, bool bl
     u32 padded_page_size = align(buffer.page_size(), 32);
     u32 data_size_in_bytes = padded_page_size * num_pages;
 
-    this->device->cluster()->read_sysmem_vec(dst, command->read_buffer_addr, data_size_in_bytes, 0);
+    tt::Cluster::inst().read_sysmem_vec(dst, command->read_buffer_addr, data_size_in_bytes, 0);
 
     // This vector is potentially padded due to alignment constraints, so need to now remove the padding
     if ((buffer.page_size() % 32) != 0) {
@@ -808,12 +808,12 @@ void CommandQueue::finish() {
     // We then poll to check that we're done.
     vector<u32> finish_vec;
     do {
-        this->device->cluster()->read_sysmem_vec(finish_vec, HOST_CQ_FINISH_PTR, 4, 0);
+        tt::Cluster::inst().read_sysmem_vec(finish_vec, HOST_CQ_FINISH_PTR, 4, 0);
     } while (finish_vec.at(0) != 1);
 
     // Reset this value to 0 before moving on
     finish_vec.at(0) = 0;
-    this->device->cluster()->write_sysmem_vec(finish_vec, HOST_CQ_FINISH_PTR, 0);
+    tt::Cluster::inst().write_sysmem_vec(finish_vec, HOST_CQ_FINISH_PTR, 0);
 }
 
 void CommandQueue::wrap() {

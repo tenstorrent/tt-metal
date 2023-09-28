@@ -15,8 +15,6 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/llrt/watcher.hpp"
-#include "tt_metal/third_party/umd/device/util.hpp"
-#include "tt_metal/third_party/umd/device/tt_device.h"
 
 using std::unique_lock;
 using std::mutex;
@@ -146,7 +144,7 @@ namespace tt::tt_metal{
         {
             bool pass = true;
             TT_ASSERT(address >= DRAM_UNRESERVED_BASE, "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!", DRAM_UNRESERVED_BASE);
-            device->cluster()->write_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
+            tt::Cluster::inst().write_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
             return pass;
         }
 
@@ -166,8 +164,8 @@ namespace tt::tt_metal{
         inline bool ReadFromDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
         {
             bool pass = true;
-            device->cluster()->dram_barrier(device->id());
-            device->cluster()->read_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address, size);
+            tt::Cluster::inst().dram_barrier(device->id());
+            tt::Cluster::inst().read_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address, size);
             return pass;
         }
 
@@ -186,21 +184,21 @@ namespace tt::tt_metal{
         inline bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer)
         {
             auto worker_core = device->worker_core_from_logical_core(logical_core);
-            llrt::write_hex_vec_to_core(device->cluster(), device->id(), worker_core, host_buffer, address);
+            llrt::write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
             return true;
         }
 
         inline bool WriteToDeviceL1(Device *device, const CoreCoord &core, op_info_t op_info, int op_idx)
         {
             auto worker_core = device->worker_core_from_logical_core(core);
-            llrt::write_graph_interpreter_op_info_to_core(device->cluster(), device->id(), worker_core, op_info, op_idx);
+            llrt::write_graph_interpreter_op_info_to_core(device->id(), worker_core, op_info, op_idx);
             return true;
         }
 
         inline bool WriteRegToDevice(Device *device, const CoreCoord &logical_core, uint32_t address, const uint32_t &regval)
         {
             auto worker_core = device->worker_core_from_logical_core(logical_core);
-            device->cluster()->write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
+            tt::Cluster::inst().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
             return true;
         }
 
@@ -220,17 +218,17 @@ namespace tt::tt_metal{
          */
         inline bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
         {
-            device->cluster()->l1_barrier(device->id());
+            tt::Cluster::inst().l1_barrier(device->id());
             auto worker_core = device->worker_core_from_logical_core(logical_core);
-            host_buffer = llrt::read_hex_vec_from_core(device->cluster(), device->id(), worker_core, address, size);
+            host_buffer = llrt::read_hex_vec_from_core(device->id(), worker_core, address, size);
             return true;
         }
 
         inline bool ReadRegFromDevice(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t &regval)
         {
-            device->cluster()->l1_barrier(device->id());
+            tt::Cluster::inst().l1_barrier(device->id());
             auto worker_core = device->worker_core_from_logical_core(logical_core);
-            device->cluster()->read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
+            tt::Cluster::inst().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
             return true;
         }
 
@@ -282,12 +280,12 @@ namespace tt::tt_metal{
                 l1_offset_per_bank
             );
 
-            metal_SocDescriptor& soc_d = device->cluster()->get_soc_desc(device->id());
+            const metal_SocDescriptor& soc_d = tt::Cluster::inst().get_soc_desc(device->id());
 
             // Determine which noc-coords are harvested
             // TODO(PGK/Almeet): fix this w/ new UMD
             vector<uint32_t> harvested_rows;
-            uint32_t harvested_noc_rows = device->cluster()->get_harvested_rows(device->id());
+            uint32_t harvested_noc_rows = tt::Cluster::inst().get_harvested_rows(device->id());
             for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
                 bool row_harvested = (harvested_noc_rows >> y) & 0x1;
                 if (row_harvested) {
@@ -375,90 +373,5 @@ namespace tt::tt_metal{
                 specified_core_spec
             );
         }
-
-        // TODO (abhullar): Remove this when tt_cluster and tt_metal::Device abstractions are redesigned
-        class ClusterWrapper {
-           public:
-            ClusterWrapper& operator=(const ClusterWrapper&) = delete;
-            ClusterWrapper& operator=(ClusterWrapper&& other) noexcept = delete;
-            ClusterWrapper(const ClusterWrapper&) = delete;
-            ClusterWrapper(ClusterWrapper&& other) noexcept = delete;
-
-            static const ClusterWrapper& inst() {
-                static ClusterWrapper inst;
-                return inst;
-            }
-
-            tt_cluster *cluster() const { return this->cluster_.get(); }
-
-            size_t number_of_chips() const { return this->cluster_desc_->get_number_of_chips(); }
-
-            tt::ARCH arch() const { return this->arch_; }
-
-           private:
-            ClusterWrapper() {
-                ZoneScoped;
-
-                TargetDevice target_type;
-#ifdef TT_METAL_VERSIM_DISABLED
-                target_type = TargetDevice::Silicon;
-                std::vector<chip_id_t> physical_mmio_device_ids = tt_SiliconDevice::detect_available_device_ids(true, false);
-                this->arch_ = detect_arch(physical_mmio_device_ids.at(0));
-                for (int dev_index = 1; dev_index < physical_mmio_device_ids.size(); dev_index++) {
-                    chip_id_t device_id = physical_mmio_device_ids.at(dev_index);
-                    tt::ARCH detected_arch = detect_arch(device_id);
-                    TT_ASSERT(this->arch_ == detected_arch, "Expected all devices to be {} but device {} is {}", get_arch_str(this->arch_), device_id, get_arch_str(detected_arch));
-                }
-#else
-                target_type = TargetDevice::Versim;
-                std::vector<chip_id_t> physical_mmio_device_ids = {0};
-                auto arch_env = getenv("ARCH_NAME");
-                TT_ASSERT(arch_env, "arch_env needs to be set for versim (ARCH_NAME=)");
-                this->arch_ = tt::get_arch_from_string(arch_env);
-#endif
-
-
-                const std::string sdesc_file = get_soc_description_file(this->arch_, target_type);
-                const std::string cluster_desc_path = (this->arch_ == tt::ARCH::WORMHOLE_B0) ? GetClusterDescYAML().string() : "";
-
-                std::set<chip_id_t> logical_device_ids;
-                if (cluster_desc_path == "") {
-                    // All Grayskull devices are MMIO mapped so physical_mmio_device_ids correspond to all available devices
-                    for (chip_id_t logical_mmio_device_id = 0; logical_mmio_device_id < physical_mmio_device_ids.size(); logical_mmio_device_id++) {
-                        logical_device_ids.insert(logical_mmio_device_id);
-                    }
-                    this->cluster_desc_ = tt_ClusterDescriptor::create_for_grayskull_cluster(logical_device_ids);
-                } else {
-                    this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(cluster_desc_path);
-                    for (chip_id_t logical_device_id = 0; logical_device_id < this->cluster_desc_->get_number_of_chips(); logical_device_id++) {
-                        logical_device_ids.insert(logical_device_id);
-                    }
-                }
-
-                // init UMD with all available device IDs
-                this->cluster_ = std::make_unique<tt_cluster>();
-                this->cluster_->open_device(this->arch_, target_type, logical_device_ids, sdesc_file, cluster_desc_path);
-
-                tt_device_params default_params;
-                if (getenv("TT_METAL_VERSIM_DUMP_CORES")) {
-                    std::string dump_cores_string = getenv("TT_METAL_VERSIM_DUMP_CORES");
-                    default_params.vcd_dump_cores = tt::utils::strsplit(dump_cores_string, ',');
-                }
-
-                this->cluster_->start_device(default_params);
-            }
-            ~ClusterWrapper() {
-                log_info(tt::LogMetal, "Closing device driver");
-                this->cluster_->close_device();
-            }
-
-            std::unique_ptr<tt_cluster> cluster_ = nullptr;
-            // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
-            // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped devices
-            std::unique_ptr<tt_ClusterDescriptor> cluster_desc_;
-            // `detect_arch` API expects physical device ID but there are no APIs to translate logical device ID to physical
-            // So we hold reference to arch after querying UMD for available physical MMIO device IDs
-            tt::ARCH arch_;
-        };
     }
 }

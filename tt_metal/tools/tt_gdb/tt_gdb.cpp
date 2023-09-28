@@ -118,7 +118,7 @@ inline string get_second_token(string &input) {
     return input.substr(start, end - start + 1);
 }
 
-void print_cmd(tt_cluster* cluster, uint32_t chip_id, CoreCoord core, string variable, string thread_type, string op) {
+void print_cmd(uint32_t chip_id, CoreCoord core, string variable, string thread_type, string op) {
     string debug_file_path = tt::get_kernel_compile_outpath(chip_id) + op + "/" + thread_type + "/" + thread_type + "_debug_dwarf_info.json";
     const string cmd = "python3 tt_metal/tools/tt_gdb/pydwarf2.py " + thread_type + " " + op;
     int ret = system(cmd.c_str());
@@ -156,17 +156,17 @@ void print_cmd(tt_cluster* cluster, uint32_t chip_id, CoreCoord core, string var
 
     std::uint32_t debug_addr = thread_type_to_sp_pointer_addr.at(thread_type);
 
-    uint32_t sp_pointer = tt::llrt::read_hex_vec_from_core(cluster, chip_id, core, debug_addr, sizeof(uint32_t)).at(0);
+    uint32_t sp_pointer = tt::llrt::read_hex_vec_from_core(chip_id, core, debug_addr, sizeof(uint32_t)).at(0);
 
-    uint32_t val = tt::llrt::read_hex_vec_from_core(cluster, chip_id, core, sp_pointer + offset_from_frame_pointer + variable_offset, sizeof(uint32_t)).at(0);
+    uint32_t val = tt::llrt::read_hex_vec_from_core(chip_id, core, sp_pointer + offset_from_frame_pointer + variable_offset, sizeof(uint32_t)).at(0);
     std::cout << val << std::endl;
 }
 
-void continue_cmd(tt_cluster* cluster, uint32_t chip_id, CoreCoord core, string thread_type) {
+void continue_cmd(uint32_t chip_id, CoreCoord core, string thread_type) {
 
     const vector<uint32_t> breakpoint_flag = {0};
 
-    tt::llrt::write_hex_vec_to_core(cluster, chip_id, core, breakpoint_flag, thread_type_to_bp_addr.at(thread_type));
+    tt::llrt::write_hex_vec_to_core(chip_id, core, breakpoint_flag, thread_type_to_bp_addr.at(thread_type));
     // std::cout << "Continue command issued for core " << core.x << ", " << core.y << " for thread " << thread_type << std::endl;
 }
 
@@ -276,16 +276,15 @@ string disaggregate_python_core_map_info(const PythonCoreMapInfo& info) {
 }
 
 
-void breakpoint_subroutine(
-    tt_cluster* cluster, int chip_id, const CoreCoord &core, string thread_type, string op) {
-    auto run_cmd = [&cluster, &chip_id, &core, &thread_type, &op](string input) {
+void breakpoint_subroutine(int chip_id, const CoreCoord &core, string thread_type, string op) {
+    auto run_cmd = [&chip_id, &core, &thread_type, &op](string input) {
         bool exit = false;
 
         if (is_print_command(input)) {
             string variable = get_second_token(input);
-            print_cmd(cluster, chip_id, core, variable, thread_type, op);
+            print_cmd(chip_id, core, variable, thread_type, op);
         } else if (is_continue_command(input)) {
-            continue_cmd(cluster, chip_id, core, thread_type);
+            continue_cmd(chip_id, core, thread_type);
             exit = true;
         } else if (is_quit_command(input)) {
             quit_cmd();
@@ -326,7 +325,7 @@ void launch_core_map(PythonCoreMapInfo info) {
     TT_ASSERT(ret == 0, "tt_gdb_table.py must have 0 exit code");
 }
 
-void tt_gdb_(tt_cluster *cluster, int chip_id, const vector<CoreCoord> cores, vector<string> ops) {
+void tt_gdb_(int chip_id, const vector<CoreCoord> cores, vector<string> ops) {
 
     const vector<std::tuple<string, uint32_t, uint32_t>> breakpoint_addresses = {
         std::tuple("ncrisc", NCRISC_BREAKPOINT, NCRISC_BP_LNUM),
@@ -363,11 +362,11 @@ void tt_gdb_(tt_cluster *cluster, int chip_id, const vector<CoreCoord> cores, ve
             bool at_least_one_breakpoint = false;
             map<string, int> breakpoint_lines_for_core;
             for (const auto& [calling_risc, breakpoint_address, breakpoint_line_address]: breakpoint_addresses) {
-                uint32_t breakpoint_flag = tt::llrt::read_hex_vec_from_core(cluster, chip_id, core, breakpoint_address, sizeof(uint32_t)).at(0);
+                uint32_t breakpoint_flag = tt::llrt::read_hex_vec_from_core(chip_id, core, breakpoint_address, sizeof(uint32_t)).at(0);
                 at_least_one_breakpoint |= (breakpoint_flag == 1);
 
                 if (breakpoint_flag == 1) {
-                    uint32_t breakpoint_line = tt::llrt::read_hex_vec_from_core(cluster, chip_id, core, breakpoint_line_address, sizeof(uint32_t)).at(0);
+                    uint32_t breakpoint_line = tt::llrt::read_hex_vec_from_core(chip_id, core, breakpoint_line_address, sizeof(uint32_t)).at(0);
                     breakpoint_lines_for_core.emplace(calling_risc, breakpoint_line);
                 }
             }
@@ -405,7 +404,6 @@ void tt_gdb_(tt_cluster *cluster, int chip_id, const vector<CoreCoord> cores, ve
             }
 
             breakpoint_subroutine(
-                cluster,
                 chip_id,
                 {
                     debug_data["current_core_x"],
@@ -420,10 +418,10 @@ void tt_gdb_(tt_cluster *cluster, int chip_id, const vector<CoreCoord> cores, ve
     }
 }
 
-void tt_gdb(tt_cluster *cluster, int chip_id, const vector<CoreCoord> worker_cores, vector<string> ops) {
+void tt_gdb(int chip_id, const vector<CoreCoord> worker_cores, vector<string> ops) {
     // Makes this thread completely independent from the rest of execution. Once the main thread finishes, the debugger's resources are freed
 
-    std::thread debug_server(tt_gdb_, cluster, chip_id, worker_cores, ops);
+    std::thread debug_server(tt_gdb_, chip_id, worker_cores, ops);
     debug_server.detach();
 }
 
@@ -439,7 +437,7 @@ void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> logical_cores, 
         worker_cores.push_back(device->worker_core_from_logical_core(logical_core));
     }
 
-    tt_gdb::tt_gdb(device->cluster(), chip_id, worker_cores, ops);
+    tt_gdb::tt_gdb(chip_id, worker_cores, ops);
 }
 
 } // end namespace tt_metal

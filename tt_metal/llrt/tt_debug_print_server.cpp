@@ -13,6 +13,7 @@
 #include "common/logger.hpp"
 
 #include "tt_debug_print_server.hpp"
+#include "tt_cluster.hpp"
 
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/debug_print_common.h"
@@ -36,32 +37,32 @@ static inline float bfloat16_to_float(uint16_t bfloat_val) {
 
 // TODO(AP): this shouldn't be necessary as the API itself should be thread-safe but otherwise currently the test fails
 // with DMA mode (non-MMIO version of api enabled via export TT_PCI_DMA_BUF_SIZE=1048576)
-std::vector<std::uint32_t> my_read_hex_vec_from_core(tt_cluster *cluster, int chip, const CoreCoord& core, uint64_t addr, uint32_t size) {
+std::vector<std::uint32_t> my_read_hex_vec_from_core(int chip, const CoreCoord& core, uint64_t addr, uint32_t size) {
     static std::mutex r_lock;
     r_lock.lock();
-    auto result = tt::llrt::read_hex_vec_from_core(cluster, chip, core, addr, size);
+    auto result = tt::llrt::read_hex_vec_from_core(chip, core, addr, size);
     r_lock.unlock();
     return result;
 }
 
 // TODO(AP): this shouldn't be necessary as the API itself should be thread-safe
-void my_write_hex_vec_to_core(tt_cluster *cluster, int chip, const CoreCoord& core, std::vector<uint32_t> hex_vec, uint64_t addr) {
+void my_write_hex_vec_to_core(int chip, const CoreCoord& core, std::vector<uint32_t> hex_vec, uint64_t addr) {
     static std::mutex w_lock;
     w_lock.lock();
-    tt::llrt::write_hex_vec_to_core(cluster, chip, core, hex_vec, addr);
+    tt::llrt::write_hex_vec_to_core(chip, core, hex_vec, addr);
     w_lock.unlock();
 }
 
 // Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
 // Used for debug print server startup sequence.
-void write_init_magic(tt_cluster* cluster, int chip_id, const CoreCoord& core, int hart_id, bool starting = true) {
+void write_init_magic(int chip_id, const CoreCoord& core, int hart_id, bool starting = true) {
     // compute the buffer address for the requested hart
     uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
 
     // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
     // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
     vector<uint32_t> initbuf = { uint32_t(starting ? DEBUG_PRINT_SERVER_STARTING_MAGIC : DEBUG_PRINT_SERVER_DISABLED_MAGIC) };
-    my_write_hex_vec_to_core(cluster, chip_id, core, initbuf, base_addr);
+    my_write_hex_vec_to_core(chip_id, core, initbuf, base_addr);
 } // write_init_magic
 
 
@@ -71,13 +72,11 @@ struct DebugPrintServerContext {
     static DebugPrintServerContext* inst;
     static bool ProfilerIsRunning;
 
-    DebugPrintServerContext(
-        tt_cluster* cluster, vector<int> chip_ids, const vector<CoreCoord>& cores, uint32_t hart_mask, const char* filename
+    DebugPrintServerContext(vector<int> chip_ids, const vector<CoreCoord>& cores, uint32_t hart_mask, const char* filename
     ) {
         TT_ASSERT(inst == nullptr);
         inst = this;
 
-        cluster_ = cluster;
         chip_ids_ = chip_ids;
         cores_ = cores;
         hart_mask_ = hart_mask;
@@ -95,7 +94,7 @@ struct DebugPrintServerContext {
                     if (hart_mask & (1<<hart_index)) {
                         // Cannot do this magic write inside the thread because of a possible race condition
                         // where the kernel subsequently both launches and terminates prior to magic write going through
-                        write_init_magic(cluster_, chip, core, hart_index);
+                        write_init_magic(chip, core, hart_index);
 
                         auto print_thread = new std::thread(
                             [this, chip, core, hart_index] { thread_poll(chip, core, hart_index); }
@@ -140,7 +139,6 @@ private:
     std::ostream* stream_ = nullptr; // either == outfile_ or is &cout
 
     // configuration of cores/harts to listen for
-    tt_cluster* cluster_;
     vector<int> chip_ids_;
     vector<CoreCoord> cores_;
     uint32_t hart_mask_;
@@ -205,12 +203,12 @@ done:
 // The assumption is that if our magic number was cleared,
 // it means there is a write in the queue and wpos/rpos are now valid
 // Note that this is not a bulletproof way to bootstrap the print server (TODO(AP))
-bool check_init_magic_cleared(tt_cluster* cluster, int chip_id, const CoreCoord& core, int hart_id) {
+bool check_init_magic_cleared(int chip_id, const CoreCoord& core, int hart_id) {
     // compute the buffer address for the requested hart
     uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
 
     vector<uint32_t> initbuf = { DEBUG_PRINT_SERVER_STARTING_MAGIC };
-    auto result = my_read_hex_vec_from_core(cluster, chip_id, core, base_addr, 4);
+    auto result = my_read_hex_vec_from_core(chip_id, core, base_addr, 4);
     return (result[0] != initbuf[0]);
 } // check_init_magic_cleared
 
@@ -242,7 +240,7 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
     // TODO(AP) - compare 8-bytes transfer and full buffer transfer latency
     // First probe only 8 bytes to see if there's anything to read
     constexpr int eightbytes = 8;
-    auto from_dev = my_read_hex_vec_from_core(cluster_, chip_id, core, base_addr, eightbytes);
+    auto from_dev = my_read_hex_vec_from_core(chip_id, core, base_addr, eightbytes);
     uint32_t wpos = from_dev[0], rpos = from_dev[1];
     uint32_t counter = 0;
     uint32_t sigval = 0;
@@ -251,7 +249,7 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
     ostream& stream = *stream_;
     if (rpos < wpos) {
         // Now read the entire buffer
-        from_dev = my_read_hex_vec_from_core(cluster_, chip_id, core, base_addr, PRINT_BUFFER_SIZE);
+        from_dev = my_read_hex_vec_from_core(chip_id, core, base_addr, PRINT_BUFFER_SIZE);
         // at this point rpos,wpos can be stale but not reset to 0 by the producer
         // it's ok for the consumer to be behind the latest wpos+rpos from producer
         // since the corresponding data in buffer for stale rpos+wpos will not be overwritten
@@ -410,7 +408,7 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
         vector<uint32_t> rposbuf;
         rposbuf.push_back(rpos);
         uint32_t offs = DebugPrintMemLayout().rpos_offs();
-        my_write_hex_vec_to_core(cluster_, chip_id, core, rposbuf, base_addr+offs);
+        my_write_hex_vec_to_core(chip_id, core, rposbuf, base_addr+offs);
     } // if (rpos < wpos)
 } // peek_one_hart_once_nonblocking
 
@@ -427,7 +425,7 @@ void DebugPrintServerContext::thread_poll(
 
         std::this_thread::sleep_for(std::chrono::milliseconds(1)); // sleep for a few ms
 
-        if (!check_init_magic_cleared(cluster_, chip_id, core, hart_index))
+        if (!check_init_magic_cleared(chip_id, core, hart_index))
             continue;
 
         peek_flush_one_hart_nonblocking(chip_id, core, hart_index);
@@ -439,18 +437,13 @@ bool DebugPrintServerContext::ProfilerIsRunning = false;
 
 } // anon namespace
 
-void tt_stop_debug_print_server(tt_cluster*)
+void tt_stop_debug_print_server()
 {
     // this can be called multiple times since we register it with atexit to make explicit call to stop optional
     if (DebugPrintServerContext::inst != nullptr) {
         delete DebugPrintServerContext::inst;
         DebugPrintServerContext::inst = nullptr;
     }
-}
-
-void tt_stop_debug_print_server_per_device(tt_cluster* cluster, int)
-{
-    tt_stop_debug_print_server(cluster);
 }
 
 void tt_set_profiler_state_for_debug_print(bool profile_device)
@@ -529,8 +522,8 @@ static vector<int> parse_chip_list_env(const char* envvar)
     return chips;
 }
 
-// The print server is not valid without alive tt_cluster and tt_device
-void tt_start_debug_print_server(tt_cluster* cluster)
+// The print server is not valid without alive Cluster and tt_device
+void tt_start_debug_print_server()
 {
     if (getenv("TT_METAL_DPRINT_CORES") != nullptr) {
         vector<CoreCoord> cores = parse_core_range_env("TT_METAL_DPRINT_CORES");
@@ -560,19 +553,11 @@ void tt_start_debug_print_server(tt_cluster* cluster)
         TT_ASSERT(DebugPrintServerContext::inst == nullptr, "Multiple print servers not allowed");
         TT_ASSERT(DebugPrintServerContext::ProfilerIsRunning == false, "Device side profiler is running, cannot start print server");
 
-        cluster->reset_debug_print_server_buffers();
+        tt::Cluster::inst().reset_debug_print_server_buffers();
 
         // Using an invalid core can hang the chip, sanitize
         // TODO(PGK)
 
-        DebugPrintServerContext* ctx = new DebugPrintServerContext(cluster, chip_ids, cores, riscv_mask, db_file);
-
-        // currently there's only one device per cluster
-        // in some tests close_device is not called but we still need to flush the debug prints
-        // in other tests, the device is destroyed before the cluster is destroyed.
-        // so by the time we get to cluster destructor the device is destroyed and in between the state is invalid
-        // so we add the callback to both paths since it doesn't hurt to call it twice
-        cluster->on_close_device(tt_stop_debug_print_server_per_device);
-        cluster->on_destroy(tt_stop_debug_print_server);
+        DebugPrintServerContext* ctx = new DebugPrintServerContext(chip_ids, cores, riscv_mask, db_file);
     }
 }

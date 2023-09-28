@@ -76,7 +76,6 @@ class Profiler {
 
         // Helper function for reading risc profile results
         void readRiscProfilerResults(
-                tt_cluster *cluster,
                 int device_id,
                 const CoreCoord &worker_core,
                 std::string risc_name,
@@ -105,7 +104,7 @@ class Profiler {
         void setOutputDir(const std::string& new_output_dir);
 
         //Traverse all cores on the device and dump the device profile results
-        void dumpDeviceResults(tt_cluster *cluster, int device_id, const vector<CoreCoord> &worker_cores);
+        void dumpDeviceResults(int device_id, const vector<CoreCoord> &worker_cores);
 };
 
 }  // namespace tt_metal

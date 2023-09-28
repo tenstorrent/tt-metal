@@ -34,10 +34,8 @@ inline void prompt(std::string &input);
 inline std::string get_second_token(std::string &input);
 
 // Commands
-void print_cmd(
-    tt_cluster* cluster, uint32_t chip_id, CoreCoord core,
-    std::string variable, std::string thread_type, std::string op);
-void continue_cmd(tt_cluster* cluster, uint32_t chip_id, CoreCoord core, std::string thread_type);
+void print_cmd(uint32_t chip_id, CoreCoord core, std::string variable, std::string thread_type, std::string op);
+void continue_cmd(uint32_t chip_id, CoreCoord core, std::string thread_type);
 void quit_cmd();
 void help_cmd();
 
@@ -52,11 +50,9 @@ void nicely_display_commands();
 
 // Debugger driver and python UI
 void launch_core_map(PythonCoreMapInfo info);
-void breakpoint_subroutine(
-    tt_cluster* cluster, int chip_id, const CoreCoord &core,
-    std::string thread_type, std::string op);
+void breakpoint_subroutine(int chip_id, const CoreCoord &core, std::string thread_type, std::string op);
 
-void tt_gdb(tt_cluster *cluster, int chip_id, const vector<CoreCoord> worker_cores, vector<string> ops);
+void tt_gdb(int chip_id, const vector<CoreCoord> worker_cores, vector<string> ops);
 } // end namespace tt_gdb
 
 namespace tt {

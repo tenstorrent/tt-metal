@@ -7,14 +7,14 @@
 u32 get_cq_rd_ptr(Device* device) {
     u32 chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
     vector<u32> recv;
-    device->cluster()->read_sysmem_vec(recv, HOST_CQ_READ_PTR, 4, chip_id);
+    tt::Cluster::inst().read_sysmem_vec(recv, HOST_CQ_READ_PTR, 4, chip_id);
     return recv.at(0);
 }
 
 u32 get_cq_rd_toggle(Device* device) {
     u32 chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
     vector<u32> recv;
-    device->cluster()->read_sysmem_vec(recv, HOST_CQ_READ_TOGGLE_PTR, 4, chip_id);
+    tt::Cluster::inst().read_sysmem_vec(recv, HOST_CQ_READ_TOGGLE_PTR, 4, chip_id);
     return recv.at(0);
 }
 
@@ -42,7 +42,7 @@ void SystemMemoryWriter::cq_reserve_back(Device* device, u32 cmd_size_B) {
 
 // Ideally, data should be an array or pointer, but vector for time-being
 void SystemMemoryWriter::cq_write(Device* device, vector<u32>& data, u32 write_ptr) {
-    device->cluster()->write_sysmem_vec(data, write_ptr, 0);
+    tt::Cluster::inst().write_sysmem_vec(data, write_ptr, 0);
 }
 
 void SystemMemoryWriter::send_write_ptr(Device* device) {
@@ -51,8 +51,7 @@ void SystemMemoryWriter::send_write_ptr(Device* device) {
 
     tt_driver_atomics::sfence();
 
-    tt::llrt::write_hex_vec_to_core(
-        device->cluster(), chip_id, dispatch_core, {this->cq_write_interface.fifo_wr_ptr}, CQ_WRITE_PTR, false);
+    tt::llrt::write_hex_vec_to_core(chip_id, dispatch_core, {this->cq_write_interface.fifo_wr_ptr}, CQ_WRITE_PTR, false);
 
     tt_driver_atomics::sfence();
 }
@@ -63,8 +62,7 @@ void SystemMemoryWriter::send_write_toggle(Device* device) {
 
     tt_driver_atomics::sfence();
 
-    tt::llrt::write_hex_vec_to_core(
-        device->cluster(), chip_id, dispatch_core, {this->cq_write_interface.fifo_wr_toggle}, CQ_WRITE_TOGGLE, true);
+    tt::llrt::write_hex_vec_to_core(chip_id, dispatch_core, {this->cq_write_interface.fifo_wr_toggle}, CQ_WRITE_TOGGLE, true);
 
     tt_driver_atomics::sfence();
 }

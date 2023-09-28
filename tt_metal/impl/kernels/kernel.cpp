@@ -242,7 +242,6 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core " + logical_core.str());
     }
-    auto cluster = device->cluster();
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     ll_api::memory binary_mem = this->binaries().at(0);
@@ -261,7 +260,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
             TT_ASSERT(false, "Unsupported data movement processor!");
     }
 
-    pass &= tt::llrt::test_load_write_read_risc_binary(cluster, binary_mem, device_id, worker_core, riscv_id);
+    pass &= tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, worker_core, riscv_id);
     return pass;
 }
 
@@ -270,14 +269,12 @@ bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) con
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core " + logical_core.str());
     }
-    auto cluster = device->cluster();
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     std::vector<ll_api::memory> binaries = this->binaries();
 
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         pass &= tt::llrt::test_load_write_read_trisc_binary(
-            cluster,
             binaries.at(trisc_id),
             device_id,
             worker_core,

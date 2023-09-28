@@ -84,7 +84,7 @@ CoreCoord Buffer::noc_coordinates(u32 bank_id) const {
     switch (this->buffer_type_) {
         case BufferType::DRAM: {
             auto dram_channel = this->dram_channel_from_bank_id(bank_id);
-            return llrt::get_core_for_dram_channel(this->device_->cluster(), dram_channel, this->device_->id());
+            return llrt::get_core_for_dram_channel(dram_channel, this->device_->id());
         }
         case BufferType::L1: {
             auto logical_core = this->logical_core_from_bank_id(bank_id);
@@ -109,7 +109,7 @@ u64 Buffer::page_address(u32 bank_id, u32 page_index) const {
     auto num_banks = this->device_->num_banks(this->buffer_type_);
     TT_ASSERT(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
 
-    // DRAM readers and writers in tt_cluster add DRAM bank offset before doing a read but L1 readers and writers do not
+    // DRAM readers and writers in Cluster add DRAM bank offset before doing a read but L1 readers and writers do not
     u64 base_page_address = this->buffer_type_ == BufferType::DRAM ?
         this->address_ :
         this->address_ + this->device_->l1_bank_offset_from_bank_id(bank_id);

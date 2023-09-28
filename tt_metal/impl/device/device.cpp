@@ -28,7 +28,7 @@ Device::Device(int device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(
 
 size_t Device::detect_num_available_devices() {
 #ifdef TT_METAL_VERSIM_DISABLED
-    return detail::ClusterWrapper::inst().number_of_chips();
+    return tt::Cluster::inst().number_of_devices();
 #else
     return 1;
 #endif
@@ -37,51 +37,18 @@ size_t Device::detect_num_available_devices() {
 void Device::initialize_cluster() {
     ZoneScoped;
     this->clear_l1_state();
-    llrt::utils::log_current_ai_clk(this->cluster(), this->id_);
-    this->cluster()->assert_risc_reset(this->id_);
-    this->cluster()->initialize_dram_barrier(this->id_);
-    this->cluster()->initialize_l1_barrier(this->id_);
-}
-
-void Device::initialize_dispatch_and_banking_information() {
-    ZoneScoped;
-    if (not cluster_is_initialized()) {
-        tt::log_fatal("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
-    auto &soc_desc = this->cluster()->get_soc_desc(this->id_);
-    uint32_t harvested_noc_rows = 0;
     if (this->target_type_ == tt::TargetDevice::Silicon) {
-        harvested_noc_rows = this->cluster()->get_harvested_rows(this->id_);
+        int ai_clk = tt::Cluster::inst().get_device_aiclk(this->id_);
+        log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
     }
-
-    // Determine which noc-coords are harvested
-    uint32_t num_harvested_rows = 0;
-    for (unsigned int r = 0; r < soc_desc.grid_size.y; r++) {
-        bool row_harvested = (harvested_noc_rows>>r)&0x1;
-        num_harvested_rows += row_harvested;
-    }
-
-    load_dispatch_and_banking_config(soc_desc, num_harvested_rows);
-
-    tt::log_assert(
-        num_harvested_rows <= 2,
-        tt::LogDevice,
-        "this->id={} has this->num_harvested_rows_={}>2",
-        this->id_,
-        num_harvested_rows);
-    tt::log_assert(
-        (num_harvested_rows == 0) or (this->arch() == tt::ARCH::WORMHOLE_B0),
-        tt::LogDevice,
-        "Harvested Rows={} -- Harvesting is only supported on WORMHOLE_B0",
-        num_harvested_rows);
+    tt::Cluster::inst().assert_risc_reset(this->id_);
+    tt::Cluster::inst().initialize_dram_barrier(this->id_);
+    tt::Cluster::inst().initialize_l1_barrier(this->id_);
 }
 
 void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
     ZoneScoped;
-    TT_ASSERT(cluster_is_initialized() && "Cluster needs to be initialized!");
-
-    this->initialize_dispatch_and_banking_information();
-    metal_SocDescriptor soc_desc = this->cluster()->get_soc_desc(this->id_);
+    const metal_SocDescriptor &soc_desc = tt::Cluster::inst().get_soc_desc(this->id_);
     // Construct allocator config from soc_desc
     AllocatorConfig config({
         .num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
@@ -145,14 +112,14 @@ void Device::initialize_firmware(CoreCoord phys_core) {
         switch (riscv_id) {
         case 0:
             fname = "brisc/brisc.hex";
-            llrt::program_brisc_startup_addr(this->cluster(), this->id(), phys_core);
+            llrt::program_brisc_startup_addr(this->id(), phys_core);
             break;
         case 1: fname = "ncrisc/ncrisc.hex"; break;
         case 2: fname = "tensix_thread0/tensix_thread0.hex"; break;
         case 3: fname = "tensix_thread1/tensix_thread1.hex"; break;
         case 4: fname = "tensix_thread2/tensix_thread2.hex"; break;
         }
-        llrt::test_load_write_read_risc_binary(this->cluster(), fname, this->id(), phys_core, riscv_id, true);
+        llrt::test_load_write_read_risc_binary(fname, this->id(), phys_core, riscv_id, true);
     }
 }
 
@@ -160,7 +127,6 @@ void Device::initialize_hardware() {
     ZoneScoped;
 
     // Download to worker cores
-    tt_cluster *cluster = this->cluster();
     std::vector<uint32_t> run_mailbox_init_val = {RUN_MSG_INIT};
     CoreCoord grid_size = this->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
@@ -170,13 +136,13 @@ void Device::initialize_hardware() {
 
             if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
                 this->initialize_firmware(worker_core);
-                llrt::write_hex_vec_to_core(cluster, this->id(), worker_core, run_mailbox_init_val, GET_MAILBOX_ADDRESS_HOST(launch.run));
+                llrt::write_hex_vec_to_core(this->id(), worker_core, run_mailbox_init_val, GET_MAILBOX_ADDRESS_HOST(launch.run));
             }
         }
     }
 
     // Barrier between L1 writes above and deassert below
-    cluster->l1_barrier(this->id());
+    tt::Cluster::inst().l1_barrier(this->id());
 
     // Deassert worker cores
     for (uint32_t y = 0; y < grid_size.y; y++) {
@@ -185,7 +151,7 @@ void Device::initialize_hardware() {
             CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
 
             if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
-                cluster->deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
+                tt::Cluster::inst().deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
             }
         }
     }
@@ -230,8 +196,8 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
         this->initialize_build();
     }
     this->initialize_hardware();
-    tt_start_debug_print_server(this->cluster());
-    llrt::watcher_attach(this, this->cluster(), this->id(),
+    tt_start_debug_print_server();
+    llrt::watcher_attach(this, this->id(),
                          [&, this]() { return this->logical_grid_size(); },
                          [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); },
                          [&, this]() -> const std::set<CoreCoord>& { return this->storage_only_cores(); },
@@ -249,10 +215,10 @@ bool Device::close() {
     }
     this->deallocate_buffers();
     llrt::watcher_detach(this);
-    tt_stop_debug_print_server(this->cluster());
-    this->cluster()->assert_risc_reset(id_);
+    tt_stop_debug_print_server();
+    tt::Cluster::inst().assert_risc_reset(id_);
     this->clear_l1_state();
-    this->cluster()->l1_barrier(id_);
+    tt::Cluster::inst().l1_barrier(id_);
     allocator::clear(*this->allocator_);
 
     const std::lock_guard<std::mutex> lock(active_devices_lock_);
@@ -268,64 +234,39 @@ Device::~Device() {
     }
 }
 
-bool Device::cluster_is_initialized() const {
-    return detail::ClusterWrapper::inst().cluster() != nullptr;
-}
-
-tt_cluster *Device::cluster() const {
-    if (not this->cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
-    return detail::ClusterWrapper::inst().cluster();
+const Cluster *Device::cluster() const {
+    return &tt::Cluster::inst();
 }
 
 tt::ARCH Device::arch() const {
-    return detail::ClusterWrapper::inst().arch();
+    return tt::Cluster::inst().arch();
 }
 
 int Device::num_dram_channels() const {
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
-    return this->cluster()->get_soc_desc(id_).get_num_dram_channels();
+    return tt::Cluster::inst().get_soc_desc(id_).get_num_dram_channels();
 }
 
 uint32_t Device::l1_size() const {
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
-    return this->cluster()->get_soc_desc(id_).worker_l1_size;
+    return tt::Cluster::inst().get_soc_desc(id_).worker_l1_size;
 }
 uint32_t Device::dram_bank_size() const {
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
-    return this->cluster()->get_soc_desc(id_).dram_bank_size;
+    return tt::Cluster::inst().get_soc_desc(id_).dram_bank_size;
 }
 
 CoreCoord Device::logical_grid_size() const {
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
-    return this->cluster()->get_soc_desc(id_).worker_grid_size;
+    return tt::Cluster::inst().get_soc_desc(id_).worker_grid_size;
 }
 
 CoreCoord Device::compute_with_storage_grid_size() const {
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
     const char *TT_METAL_SINGLE_CORE_MODE = std::getenv("TT_METAL_SINGLE_CORE_MODE");
     if (TT_METAL_SINGLE_CORE_MODE == nullptr) {
-        return this->cluster()->get_soc_desc(id_).compute_with_storage_grid_size;
+        return tt::Cluster::inst().get_soc_desc(id_).compute_with_storage_grid_size;
     } else {
         return {1, 1};
     }
 }
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
     CoreCoord logical_grid_size = this->logical_grid_size();
     TT_ASSERT(
         (logical_core.x < logical_grid_size.x) and
@@ -334,7 +275,7 @@ CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) c
         logical_core.str(),
         logical_grid_size.str()
     );
-    metal_SocDescriptor &soc_desc = this->cluster()->get_soc_desc(this->id_);
+    const metal_SocDescriptor &soc_desc = tt::Cluster::inst().get_soc_desc(this->id_);
     CoreCoord worker_core({
             .x = static_cast<size_t>(soc_desc.worker_log_to_physical_routing_x.at(logical_core.x)),
             .y = static_cast<size_t>(soc_desc.worker_log_to_physical_routing_y.at(logical_core.y)),
@@ -367,16 +308,13 @@ uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id) const {
 }
 
 CoreCoord Device::core_from_dram_channel(uint32_t dram_channel) const {
-    if (not cluster_is_initialized()) {
-        TT_THROW("Device has not been initialized, did you forget to call InitializeDevice?");
-    }
     log_assert(
         dram_channel < this->num_dram_channels(),
         "Bounds-Error -- dram_channel={} is outside of num_dram_channels={}",
         dram_channel,
         this->num_dram_channels()
     );
-    return this->cluster()->get_soc_desc(id_).get_preferred_worker_core_for_dram_channel(dram_channel);
+    return tt::Cluster::inst().get_soc_desc(id_).get_preferred_worker_core_for_dram_channel(dram_channel);
 }
 
 int32_t Device::l1_bank_offset_from_bank_id(uint32_t bank_id) const {

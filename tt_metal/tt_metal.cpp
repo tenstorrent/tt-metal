@@ -76,7 +76,6 @@ namespace detail {
         program.allocate_circular_buffers();
 
         std::unordered_set<CoreCoord> worker_cores;
-        auto cluster = device->cluster();
         auto device_id = device->id();
 
         for (auto &[logical_core, kernel_group] : program.core_to_kernel_group()) {
@@ -105,7 +104,6 @@ namespace detail {
 
             if (cbs_on_core.size()) {
                 llrt::write_circular_buffer_config_vector_to_core(
-                    cluster,
                     device_id,
                     worker_core,
                     circular_buffer_config_vec);  // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
@@ -122,14 +120,13 @@ namespace detail {
         // Load blank kernel to all riscs of all cores excluding those in worker_cores
         const llrt::TensixRiscsOptions riscs_options = llrt::TensixRiscsOptions::ALL_RISCS;  // PROF_BEGIN("LOAD_BLANK")
         llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(
-            cluster, device_id, riscs_options, worker_cores);                                // PROF_END("LOAD_BLANK")
+            device_id, riscs_options, worker_cores);                                // PROF_END("LOAD_BLANK")
 
         return pass;
     }
 
     void WriteRuntimeArgsToDevice(Device *device, const Program &program) {
         ZoneScoped;
-        auto cluster = device->cluster();
         auto device_id = device->id();
         detail::DispatchStateCheck( false );
 
@@ -156,7 +153,7 @@ namespace detail {
             auto processor = kernel->processor();
             for (const auto &[logical_core, rt_args] : kernel->runtime_args()) {
                 auto worker_core = device->worker_core_from_logical_core(logical_core);
-                tt::llrt::write_hex_vec_to_core(cluster, device_id, worker_core, rt_args, get_l1_arg_base_addr(processor));
+                tt::llrt::write_hex_vec_to_core(device_id, worker_core, rt_args, get_l1_arg_base_addr(processor));
             }
         }
     }
@@ -274,13 +271,11 @@ void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
         switch (buffer.buffer_type()) {
             case BufferType::DRAM: {
                 auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
-                device->cluster()->write_dram_vec(
-                    page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
+                tt::Cluster::inst().write_dram_vec(page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
             } break;
             case BufferType::L1: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
-                llrt::write_hex_vec_to_core(
-                    device->cluster(), device->id(), noc_coordinates, page, absolute_address);
+                llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
             } break;
             default: TT_ASSERT(false && "Unsupported buffer type to write to device!");
         }
@@ -322,13 +317,11 @@ void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
         switch (buffer.buffer_type()) {
             case BufferType::DRAM: {
                 auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
-                device->cluster()->read_dram_vec(
-                    page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address, page_size);
+                tt::Cluster::inst().read_dram_vec(page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address, page_size);
             } break;
             case BufferType::L1: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
-                page = llrt::read_hex_vec_from_core(
-                    device->cluster(), device->id(), noc_coordinates, absolute_address, page_size);
+                page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
             } break;
             default: TT_ASSERT(false && "Unsupported buffer type to write to device!");
         }
@@ -345,11 +338,14 @@ void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
 
 void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
     Device *device = buffer.device();
-    tt_cluster *cluster = buffer.device()->cluster();
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:
         case BufferType::L1: {
-            if (buffer.buffer_type() == BufferType::DRAM) cluster->dram_barrier(device->id()); else cluster->l1_barrier(device->id());
+            if (buffer.buffer_type() == BufferType::DRAM) {
+                tt::Cluster::inst().dram_barrier(device->id());
+            } else {
+                tt::Cluster::inst().l1_barrier(device->id());
+            }
             ReadFromDevice(buffer, host_buffer);
         } break;
         case BufferType::SYSTEM_MEMORY: {
@@ -411,20 +407,19 @@ void LaunchProgram(Device *device, Program &program) {
     detail::CompileProgram(device, program);
     detail::WriteRuntimeArgsToDevice(device, program);
     detail::ConfigureDeviceWithProgram(device, program);
-    auto cluster = device->cluster();
     auto device_id = device->id();
 
-    cluster->dram_barrier(device_id);
+    tt::Cluster::inst().dram_barrier(device_id);
 
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox (eg, storage cores) have all landed
-    cluster->l1_barrier(device->id());
+    tt::Cluster::inst().l1_barrier(device->id());
 
     std::vector<CoreCoord> logical_cores_used_in_program = program.logical_cores();
     for (const auto &logical_core : logical_cores_used_in_program) {
         launch_msg_t *msg = &program.kernels_on_core(logical_core)->launch_msg;
         auto worker_core = device->worker_core_from_logical_core(logical_core);
-        tt::llrt::write_launch_msg_to_core(cluster, device->id(), worker_core, msg);
+        tt::llrt::write_launch_msg_to_core(device->id(), worker_core, msg);
     }
 
     // Wait for all cores to be done
@@ -447,7 +442,7 @@ void LaunchProgram(Device *device, Program &program) {
 
             auto worker_core = device->worker_core_from_logical_core(logical_core);
 
-            bool is_done = llrt::internal_::check_if_riscs_on_specified_core_done(cluster, device_id, worker_core);
+            bool is_done = llrt::internal_::check_if_riscs_on_specified_core_done(device_id, worker_core);
 
             if (is_done) {
                 log_debug(tt::LogMetal, "Logical core just done: {}", logical_core.str());

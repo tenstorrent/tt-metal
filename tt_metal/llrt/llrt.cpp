@@ -90,37 +90,34 @@ ll_api::memory get_risc_binary(string path, int chip_id, bool fw_build) {
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 
-void write_hex_vec_to_core(
-    tt_cluster *cluster, int chip, const CoreCoord &core, std::vector<uint32_t> hex_vec, uint64_t addr, bool small_access) {
+void write_hex_vec_to_core(int chip, const CoreCoord &core, std::vector<uint32_t> hex_vec, uint64_t addr, bool small_access) {
     // the API is named "write_dram_vec", and its overloaded variant is taking (chip, core) pair, ie. it can write to
     // core's L1
-    cluster->write_dram_vec(hex_vec, tt_cxy_pair(chip, core), addr, small_access);
+    tt::Cluster::inst().write_dram_vec(hex_vec, tt_cxy_pair(chip, core), addr, small_access);
 }
 
-std::vector<std::uint32_t> read_hex_vec_from_core(
-    tt_cluster *cluster, int chip, const CoreCoord &core, uint64_t addr, uint32_t size) {
+std::vector<std::uint32_t> read_hex_vec_from_core(int chip, const CoreCoord &core, uint64_t addr, uint32_t size) {
     vector<std::uint32_t> read_hex_vec;
-    cluster->read_dram_vec(read_hex_vec, tt_cxy_pair(chip, core), addr, size);
+    tt::Cluster::inst().read_dram_vec(read_hex_vec, tt_cxy_pair(chip, core), addr, size);
     return read_hex_vec;
 }
 
-void write_launch_msg_to_core(tt_cluster *cluster, int chip, CoreCoord core, launch_msg_t *msg) {
+void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg) {
     msg->mode = DISPATCH_MODE_HOST;
-    cluster->write_dram_vec((uint32_t *)msg, sizeof(launch_msg_t) / sizeof(uint32_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
+    tt::Cluster::instance().write_dram_vec((uint32_t *)msg, sizeof(launch_msg_t) / sizeof(uint32_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
 }
 
-void print_worker_cores(tt_cluster *cluster, chip_id_t chip_id) {
+void print_worker_cores(chip_id_t chip_id) {
     std::cout << std::endl << "worker cores: " << std::endl;
-    for (const CoreCoord &core : cluster->get_soc_desc(chip_id).physical_workers) {
+    for (const CoreCoord &core : tt::Cluster::inst().get_soc_desc(chip_id).physical_workers) {
         std::cout << core.str() << " ";
     }
     std::cout << std::endl << std::endl;
 }
 
-bool is_worker_core(tt_cluster *cluster, const CoreCoord &core, chip_id_t chip_id) {
-    return std::find(
-               cluster->get_soc_desc(chip_id).physical_workers.begin(), cluster->get_soc_desc(chip_id).physical_workers.end(), core) !=
-           cluster->get_soc_desc(chip_id).physical_workers.end();
+bool is_worker_core(const CoreCoord &core, chip_id_t chip_id) {
+    const metal_SocDescriptor &soc_desc = tt::Cluster::inst().get_soc_desc(chip_id);
+    return std::find(soc_desc.physical_workers.begin(), soc_desc.physical_workers.end(), core) != soc_desc.physical_workers.end();
 }
 
 CircularBufferConfigVec create_circular_buffer_config_vector() {
@@ -145,13 +142,11 @@ void set_config_for_circular_buffer(
     circular_buffer_config_vec.at(UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * circular_buffer_index + 3) = page_size >> 4;
 }
 
-void write_circular_buffer_config_vector_to_core(
-    tt_cluster *cluster, int chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec) {
-    write_hex_vec_to_core(cluster, chip, core, circular_buffer_config_vec, CIRCULAR_BUFFER_CONFIG_BASE);
+void write_circular_buffer_config_vector_to_core(int chip, const CoreCoord &core, CircularBufferConfigVec circular_buffer_config_vec) {
+    write_hex_vec_to_core(chip, core, circular_buffer_config_vec, CIRCULAR_BUFFER_CONFIG_BASE);
 }
 
-void write_graph_interpreter_op_info_to_core(
-    tt_cluster *cluster, int chip, const CoreCoord &core, op_info_t op_info, int op_idx) {
+void write_graph_interpreter_op_info_to_core(int chip, const CoreCoord &core, op_info_t op_info, int op_idx) {
     vector<uint32_t> op_info_vec = {
         op_info.op_code,
         op_info.cb_in0_id,
@@ -162,21 +157,20 @@ void write_graph_interpreter_op_info_to_core(
         op_info.unary};
     uint32_t offset = op_info_vec.size() * sizeof(uint32_t) * op_idx;
 
-    write_hex_vec_to_core(cluster, chip, core, op_info_vec, OP_INFO_BASE_ADDR + offset);
+    write_hex_vec_to_core(chip, core, op_info_vec, OP_INFO_BASE_ADDR + offset);
 }
 
-ll_api::memory read_mem_from_core(
-    tt_cluster *cluster, int chip, const CoreCoord &core, const ll_api::memory& mem, uint64_t local_init_addr) {
+ll_api::memory read_mem_from_core(int chip, const CoreCoord &core, const ll_api::memory& mem, uint64_t local_init_addr) {
 
     ll_api::memory read_mem;
     read_mem.fill_from_mem_template(mem, [&](std::vector<uint32_t>::iterator mem_ptr, uint64_t addr, uint32_t len) {
         uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
-        cluster->read_dram_vec(&*mem_ptr, tt_cxy_pair(chip, core), relo_addr, len * sizeof(uint32_t));
+        tt::Cluster::inst().read_dram_vec(&*mem_ptr, tt_cxy_pair(chip, core), relo_addr, len * sizeof(uint32_t));
     });
     return read_mem;
 }
 
-void program_brisc_startup_addr(tt_cluster* cluster, int chip_id, const CoreCoord &core) {
+void program_brisc_startup_addr(int chip_id, const CoreCoord &core) {
     // Options for handling brisc fw not starting at mem[0]:
     // 1) Program the register for the start address out of reset
     // 2) Encode a jump in crt0 for mem[0]
@@ -199,13 +193,12 @@ void program_brisc_startup_addr(tt_cluster* cluster, int chip_id, const CoreCoor
         jal_offset_bit_11 |
         jal_offset_bits_19_to_12;
     jump_to_fw.push_back(jal_offset | opcode);
-    write_hex_vec_to_core(cluster, chip_id, core, jump_to_fw, 0);
+    write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
 }
 
-static bool test_load_write_read_risc_binary_imp(
-    tt_cluster *cluster, ll_api::memory &mem, int chip_id, const CoreCoord &core, int riscv_id) {
+static bool test_load_write_read_risc_binary_imp(ll_api::memory &mem, int chip_id, const CoreCoord &core, int riscv_id) {
 
-    assert(is_worker_core(cluster, core, chip_id));
+    assert(is_worker_core(core, chip_id));
 
     uint64_t local_init_addr;
     switch (riscv_id) {
@@ -220,13 +213,13 @@ static bool test_load_write_read_risc_binary_imp(
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len) {
         uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
 
-        cluster->write_dram_vec(&*mem_ptr, len, tt_cxy_pair(chip_id, core), relo_addr);
+        tt::Cluster::inst().write_dram_vec(&*mem_ptr, len, tt_cxy_pair(chip_id, core), relo_addr);
     });
 
     log_debug(tt::LogLLRuntime, "wrote hex to core {}", core.str().c_str());
 
     if (std::getenv("TT_METAL_KERNEL_READBACK_ENABLE") != nullptr) {
-        ll_api::memory read_mem = read_mem_from_core(cluster, chip_id, core, mem, local_init_addr);
+        ll_api::memory read_mem = read_mem_from_core(chip_id, core, mem, local_init_addr);
         log_debug(tt::LogLLRuntime, "read hex back from the core");
         return mem == read_mem;
     }
@@ -234,70 +227,56 @@ static bool test_load_write_read_risc_binary_imp(
     return true;
 }
 
-bool test_load_write_read_risc_binary(
-    tt_cluster *cluster, ll_api::memory &mem, int chip_id, const CoreCoord &core, int riscv_id) {
+bool test_load_write_read_risc_binary(ll_api::memory &mem, int chip_id, const CoreCoord &core, int riscv_id) {
 
-    test_load_write_read_risc_binary_imp(cluster, mem, chip_id, core, riscv_id);
+    test_load_write_read_risc_binary_imp(mem, chip_id, core, riscv_id);
 
     return true;
 }
 
-bool test_load_write_read_risc_binary(
-    tt_cluster *cluster, std::string hex_file_name, int chip_id, const CoreCoord &core, int riscv_id, bool fw_build) {
+bool test_load_write_read_risc_binary(std::string hex_file_name, int chip_id, const CoreCoord &core, int riscv_id, bool fw_build) {
 
     log_debug(tt::LogLLRuntime, "hex_file_path = {}", (fw_build ? get_firmware_compile_outpath(chip_id) : get_kernel_compile_outpath(chip_id)) + hex_file_name);
     ll_api::memory mem = get_risc_binary(hex_file_name, chip_id, fw_build);
-    test_load_write_read_risc_binary_imp(cluster, mem, chip_id, core, riscv_id);
+    test_load_write_read_risc_binary_imp(mem, chip_id, core, riscv_id);
 
     return true;
 }
 
 // for TRISCs
-bool test_load_write_read_trisc_binary(
-    tt_cluster *cluster, std::string hex_file_name, int chip_id, const CoreCoord &core, int triscv_id) {
+bool test_load_write_read_trisc_binary(std::string hex_file_name, int chip_id, const CoreCoord &core, int triscv_id) {
 
     assert(triscv_id >= 0 and triscv_id <= 2);
-    return test_load_write_read_risc_binary(cluster, hex_file_name, chip_id, core, triscv_id + 2);
+    return test_load_write_read_risc_binary(hex_file_name, chip_id, core, triscv_id + 2);
 }
 
-bool test_load_write_read_trisc_binary(
-    tt_cluster *cluster, ll_api::memory &mem, int chip_id, const CoreCoord &core, int triscv_id) {
+bool test_load_write_read_trisc_binary(ll_api::memory &mem, int chip_id, const CoreCoord &core, int triscv_id) {
 
     assert(triscv_id >= 0 and triscv_id <= 2);
-    return test_load_write_read_risc_binary(cluster, mem, chip_id, core, triscv_id + 2);
+    return test_load_write_read_risc_binary(mem, chip_id, core, triscv_id + 2);
 }
 
-CoreCoord get_core_for_dram_channel(tt_cluster *cluster, int dram_channel_id, chip_id_t chip_id) {
-    return cluster->get_soc_desc(chip_id).get_preferred_worker_core_for_dram_channel(dram_channel_id);
+CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
+    return tt::Cluster::instance().get_soc_desc(chip_id).get_preferred_worker_core_for_dram_channel(dram_channel_id);
 }
-
-namespace utils {
-void log_current_ai_clk(tt_cluster *cluster, chip_id_t chip_id) {
-    if (cluster->type == tt::TargetDevice::Silicon) {
-        int ai_clk = cluster->get_device_aiclk(chip_id);
-        log_info(tt::LogLLRuntime, "AI CLK for device {} is:   {} MHz", chip_id, ai_clk);
-    }
-}
-}  // namespace utils
 
 namespace internal_ {
 // This loads to briscs and ncriscs - we may want to add TensixRiscsOptions here
-void load_blank_kernel_to_cores(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> cores) {
+void load_blank_kernel_to_cores(int chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> cores) {
     TT_ASSERT(riscs_to_load != TensixRiscsOptions::NONE, "You must specify a non-NONE RISC to load blank kernels to");
 
     for (const CoreCoord &core : cores) {
         bool pass = true;
 
         // PROF_BEGIN("write_brisc")
-        pass = test_load_write_read_risc_binary(cluster, "blank_op/brisc/brisc.hex", chip_id, core, 0);
+        pass = test_load_write_read_risc_binary("blank_op/brisc/brisc.hex", chip_id, core, 0);
         if (!pass) {
             throw std::runtime_error("Initial testing read/write of brisc to core failed");
         }  // PROF_END("write_brisc")
 
         if (deduce_if_involves_ncrisc(riscs_to_load)) {  // PROF_BEGIN("ncrisc")
             pass =
-                test_load_write_read_risc_binary(cluster, "blank_op/ncrisc/ncrisc.hex", chip_id, core, 1);
+                test_load_write_read_risc_binary("blank_op/ncrisc/ncrisc.hex", chip_id, core, 1);
             if (!pass) {
                 throw std::runtime_error("Initial testing read/write of ncrisc to core failed");
             }
@@ -305,12 +284,9 @@ void load_blank_kernel_to_cores(
 
         if (deduce_if_involves_triscs(riscs_to_load)) {  // PROF_BEGIN("trisc")
             string op_path = "blank_op";
-            pass &= test_load_write_read_trisc_binary(
-                cluster, op_path + "/tensix_thread0/tensix_thread0.hex", chip_id, core, 0);
-            pass &= test_load_write_read_trisc_binary(
-                cluster, op_path + "/tensix_thread1/tensix_thread1.hex", chip_id, core, 1);
-            pass &= test_load_write_read_trisc_binary(
-                cluster, op_path + "/tensix_thread2/tensix_thread2.hex", chip_id, core, 2);
+            pass &= test_load_write_read_trisc_binary(op_path + "/tensix_thread0/tensix_thread0.hex", chip_id, core, 0);
+            pass &= test_load_write_read_trisc_binary(op_path + "/tensix_thread1/tensix_thread1.hex", chip_id, core, 1);
+            pass &= test_load_write_read_trisc_binary(op_path + "/tensix_thread2/tensix_thread2.hex", chip_id, core, 2);
             if (!pass) {
                 throw std::runtime_error("Initial testing read/write of blank to trisc to core failed");
             }
@@ -318,11 +294,10 @@ void load_blank_kernel_to_cores(
     }
 }
 
-void load_blank_kernel_to_all_worker_cores_with_exceptions(
-    tt_cluster *cluster, int chip_id, const TensixRiscsOptions &riscs_to_load, std::unordered_set<CoreCoord> exceptions) {
+void load_blank_kernel_to_all_worker_cores_with_exceptions(int chip_id, const TensixRiscsOptions &riscs_to_load, std::unordered_set<CoreCoord> exceptions) {
     std::vector<CoreCoord> cores_to_load_with_blanks;  // PROF_BEGIN("set_diff")
 
-    for (const CoreCoord &worker_core : cluster->get_soc_desc(chip_id).physical_workers) {
+    for (const CoreCoord &worker_core : tt::Cluster::inst().get_soc_desc(chip_id).physical_workers) {
         if (exceptions.find(worker_core) == exceptions.end()) {
             cores_to_load_with_blanks.push_back(worker_core);
         }
@@ -333,17 +308,15 @@ void load_blank_kernel_to_all_worker_cores_with_exceptions(
         log_debug(tt::LogLLRuntime, "loading blank to core - {}", core.str());
     }  // PROF_END("log_blank")
 
-    load_blank_kernel_to_cores(cluster, chip_id, riscs_to_load, cores_to_load_with_blanks);
+    load_blank_kernel_to_cores(chip_id, riscs_to_load, cores_to_load_with_blanks);
 }
 
-bool check_if_riscs_on_specified_core_done(
-    tt_cluster *cluster, int chip_id, const CoreCoord &core) {
+bool check_if_riscs_on_specified_core_done(int chip_id, const CoreCoord &core) {
 
     std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address_) {
         constexpr int RUN_MAILBOX_BOGUS = 3;
         std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
-        run_mailbox_read_val = read_hex_vec_from_core(
-            cluster, chip_id, core, run_mailbox_address_, sizeof(uint32_t));  // read a single uint32_t
+        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address_, sizeof(uint32_t));  // read a single uint32_t
 
         if (run_mailbox_read_val[0] != RUN_MSG_GO && run_mailbox_read_val[0] != RUN_MSG_DONE) {
             fprintf(stderr, "Read unexpected run_mailbox value: 0x%x (expected %x or %x)\n", run_mailbox_read_val[0], RUN_MSG_GO, RUN_MSG_DONE);

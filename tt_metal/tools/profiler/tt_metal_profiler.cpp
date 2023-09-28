@@ -30,10 +30,9 @@ void DumpDeviceProfileResults(Device *device, const Program &program) {
         TT_ASSERT(tt_is_print_server_running() == false, "Debug print server is running, cannot dump device profiler data");
         auto worker_cores_used_in_program =\
             device->worker_cores_from_logical_cores(program.logical_cores());
-        auto cluster = device->cluster();
         auto device_id = device->id();
         tt_metal_profiler.setDeviceArchitecture(device->arch());
-        tt_metal_profiler.dumpDeviceResults(cluster, device_id, worker_cores_used_in_program);
+        tt_metal_profiler.dumpDeviceResults(device_id, worker_cores_used_in_program);
     }
 #endif
 }

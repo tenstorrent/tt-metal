@@ -45,7 +45,7 @@ class Device {
 
     int id() const { return id_; }
 
-    tt_cluster *cluster() const;  // Need to access cluster in llrt APIs
+    const Cluster *cluster() const;  // Need to access cluster in llrt APIs
 
     bool is_initialized() const { return this->initialized_; }
 
@@ -77,7 +77,6 @@ class Device {
     std::vector<uint32_t> bank_ids_from_dram_channel(uint32_t dram_channel) const;
 
     std::vector<uint32_t> bank_ids_from_logical_core(const CoreCoord &logical_core) const;
-    bool cluster_is_initialized() const;
 
     allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const;
 
@@ -103,7 +102,6 @@ class Device {
     bool initialize(const std::vector<uint32_t>& l1_bank_remap = {});
     void initialize_cluster();
     void initialize_allocator(const std::vector<uint32_t>& l1_bank_remap = {});
-    void initialize_dispatch_and_banking_information();
     void initialize_build();
     void initialize_firmware(CoreCoord phys_core);
     void initialize_hardware();

@@ -78,7 +78,6 @@ void Profiler::dumpHostResults(const std::string& timer_name, const std::vector<
 }
 
 void Profiler::readRiscProfilerResults(
-        tt_cluster *cluster,
         int device_id,
         const CoreCoord &worker_core,
         std::string risc_name,
@@ -89,7 +88,6 @@ void Profiler::readRiscProfilerResults(
     uint32_t dropped_marker_counter;
 
     profile_buffer = tt::llrt::read_hex_vec_from_core(
-            cluster,
             device_id,
             worker_core,
             risc_print_buffer_addr,
@@ -216,38 +214,32 @@ void Profiler::setDeviceArchitecture(tt::ARCH device_arch)
 }
 
 void Profiler::dumpDeviceResults (
-        tt_cluster *cluster,
         int device_id,
         const vector<CoreCoord> &worker_cores){
 #if defined(PROFILER)
-    device_core_frequency = cluster -> get_device_aiclk(device_id);
+    device_core_frequency = tt::Cluster::inst().get_device_aiclk(device_id);
     for (const auto &worker_core : worker_cores) {
         readRiscProfilerResults(
-            cluster,
             device_id,
             worker_core,
             "NCRISC",
             PRINT_BUFFER_NC);
         readRiscProfilerResults(
-            cluster,
             device_id,
             worker_core,
             "BRISC",
             PRINT_BUFFER_BR);
         readRiscProfilerResults(
-            cluster,
             device_id,
             worker_core,
             "TRISC_0",
             PRINT_BUFFER_T0);
 	readRiscProfilerResults(
-	    cluster,
 	    device_id,
 	    worker_core,
 	    "TRISC_1",
 	    PRINT_BUFFER_T1);
 	readRiscProfilerResults(
-	    cluster,
 	    device_id,
 	    worker_core,
 	    "TRISC_2",

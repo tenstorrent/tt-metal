@@ -82,8 +82,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
 
     #if DEBUG_SERVER == 1
         // start debug server
-        auto debug_core = CoreCoord(1, 1);
-        tt_start_debug_print_server(device->cluster(), {0}, {debug_core});
+        tt_start_debug_print_server();
     #endif
 
     // NOTE: input is assumed to be in {N, 1, H * W, C }
