@@ -7,6 +7,7 @@
 #pragma once
 
 #include <optional>
+#include <variant>
 
 #include "tensor/tensor.hpp"
 #include "tt_metal/host_api.hpp"
@@ -30,19 +31,19 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 KernelID CreateReadKernel(
     Program &program,
     const std::string &file_name,
-    const CoreRangeSet &core,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::vector<uint32_t> &compile_args,
     std::map<string, string> defines);
 
 KernelID CreateWriteKernel(
     Program &program,
     const std::string &file_name,
-    const CoreRangeSet &core,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::vector<uint32_t> &compile_args,
     std::map<string, string> defines);
 
 struct ComputeKernelArg {
-    CoreRangeSet core_range;
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec;
     uint32_t num_tile_per_core_group;
     const std::vector<uint32_t> &compile_args;
 };
