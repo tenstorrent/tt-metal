@@ -89,19 +89,13 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
-    // TODO(AP): add dimensions and op params
-    vector<uint32_t> compute_kernel_args = {
-        NC, // B
-        Ht, // Ht
-        Wt  // Wt
-    };
     const char* compute_name = bcast_op_utils::get_compute_name(bcast_dim);
     std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(bcast_dim, bcast_math);
     auto bcast_kernel_id = tt_metal::CreateComputeKernel(
         program,
         compute_name,
         core,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = bcast_defines}
+        tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines}
     );
 
     uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;
@@ -121,6 +115,18 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
         }
     );
 
+
+    tt_metal::SetRuntimeArgs(
+        program,
+        bcast_kernel_id,
+        core,
+        {
+            NC, // B
+            Ht, // Ht
+            Wt  // Wt
+        }
+    );
+
     tt_metal::SetRuntimeArgs(
         program,
         unary_writer_kernel_id,
@@ -131,39 +137,82 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
         }
     );
 
-    auto override_runtime_args_callback = [
+    auto override_runtime_arguments_callback = [
             binary_reader_kernel_id,
-            unary_writer_kernel_id
+            unary_writer_kernel_id,
+            bcast_kernel_id
         ]
     (
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+        const void* operation,
+        const Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>& output_tensors
     ) {
 
-        auto src_dram_buffer_a = input_buffers.at(0);
+        auto src_dram_buffer_a = input_tensors.at(0).buffer();
+        auto src_dram_buffer_b = input_tensors.at(1).buffer();
 
-        auto src_dram_buffer_b = input_buffers.at(1);
+        auto dst_dram_buffer = output_tensors.at(0).buffer();
 
-        auto dst_dram_buffer = output_buffers.at(0);
+        const auto ashape = input_tensors.at(0).shape();
+        const auto bshape = input_tensors.at(1).shape();
+        uint32_t N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
+        uint32_t bN = bshape[0], bC = bshape[1], bH = bshape[2], bW = bshape[3];
+        uint32_t NC = N*C;
+        uint32_t HW = H*W;
+
+        uint32_t Wt = W/TILE_WIDTH;
+        uint32_t Ht = H/TILE_HEIGHT;
+
+        uint32_t num_tensor_tiles = NC*Ht*Wt;
+        uint32_t num_btensor_tiles = NC*bH*bW / TILE_HW;
+
+        uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;
 
         CoreCoord core = {0, 0};
 
-        {
-            auto runtime_args = GetRuntimeArgs(program, binary_reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer_a->address();
-            runtime_args[4] = src_dram_buffer_b->address();
-            SetRuntimeArgs(program, binary_reader_kernel_id, core, runtime_args);
-        }
+        tt_metal::SetRuntimeArgs(
+            program,
+            binary_reader_kernel_id,
+            core,
+            {
+                src_dram_buffer_a->address(), // 0
+                0, // 1
+                0, // 2
+                num_tensor_tiles, // 3
+                src_dram_buffer_b->address(), // 4
+                0, // 5
+                0, // 6
+                num_btensor_tiles, NC*Ht*Wt, NC, Ht, Wt, bnc1  // 7 8 9 10 11 12
+            }
+        );
 
-        {
-            auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
-        }
+
+        tt_metal::SetRuntimeArgs(
+            program,
+            bcast_kernel_id,
+            core,
+            {
+                NC, // B
+                Ht, // Ht
+                Wt  // Wt
+            }
+        );
+
+        tt_metal::SetRuntimeArgs(
+            program,
+            unary_writer_kernel_id,
+            core,
+            {
+                dst_dram_buffer->address(),
+                num_tensor_tiles,
+                0
+            }
+        );
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 }  // namespace tt_metal

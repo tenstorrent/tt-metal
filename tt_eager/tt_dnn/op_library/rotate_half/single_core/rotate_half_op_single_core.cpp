@@ -98,19 +98,11 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
 		{"BCAST_SCALAR", "1"}
 	};
 
-	// TODO(AP): add dimensions and op params
-	// Ignore Ht and just read num_tiles_per_core
-	vector<uint32_t> compute_kernel_args = {
-		1, // B
-		1, // Ht
-		num_tiles / 2  // Wt
-	};
-
 	auto bcast_kernel_group_1_id = tt_metal::CreateComputeKernel(
 		program,
 		"tt_metal/kernels/compute/bcast_hw.cpp",
 		core,
-		tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = bcast_compute_defines}
+		tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_compute_defines}
 	);
 
     SetRuntimeArgs(
@@ -122,6 +114,17 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
             num_rows,
             half_row_size,
             0
+        }
+    );
+
+    SetRuntimeArgs(
+        program,
+        bcast_kernel_group_1_id,
+        core,
+        {
+            1, // B
+            1, // Ht
+            num_tiles / 2  // Wt
         }
     );
 

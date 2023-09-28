@@ -9,9 +9,9 @@
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t onetile = 1;
-    uint32_t B = get_compile_time_arg_val(0);
-    uint32_t Ht = get_compile_time_arg_val(1);
-    uint32_t Wt = get_compile_time_arg_val(2);
+    uint32_t B = get_arg_val<uint32_t>(0);
+    uint32_t Ht = get_arg_val<uint32_t>(1);
+    uint32_t Wt = get_arg_val<uint32_t>(2);
     init_bcast<BCAST_LLKOP, BCAST_DIM>(tt::CB::c_in0, tt::CB::c_in1);
 
     #ifdef BCAST_SCALAR

@@ -242,12 +242,6 @@ int main(int argc, char **argv) {
             (std::uint32_t)dram_dst_noc_xy.y,
             num_tensor_tiles});
 
-        vector<uint32_t> compute_kernel_args = {
-            uint(NC),
-            uint(Ht),
-            uint(Wt)
-        };
-
         std::map<string, string> compute_defines = {
             {"BCAST_DIM", bdim_to_llkdim_define[bcast_dim]},
             {"BCAST_OP", op_id_to_op_define[bcast_op]},
@@ -257,8 +251,18 @@ int main(int argc, char **argv) {
             program,
             get_compute_name(bcast_dim),
             core,
-            tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = compute_defines}
+            tt_metal::ComputeConfig{.compile_args = {}, .defines = compute_defines}
         );
+
+        tt_metal::SetRuntimeArgs(
+            program,
+            eltwise_binary_kernel,
+            core,
+            {
+                uint(NC),
+                uint(Ht),
+                uint(Wt)
+            });
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
