@@ -96,8 +96,9 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
         Buffer out(device, NUM_TILES * 2048, 2048, BufferType::DRAM);
 
         // Absolutely disgusting way to query for the kernel I want to set runtime args for... needs to be cleaned up
-        SetRuntimeArgs(program, program.kernels_on_core(worker_core).riscv0_id.value(), worker_core, {out.address(), 0, 0, NUM_TILES});
-        SetRuntimeArgs(program, program.kernels_on_core(worker_core).riscv1_id.value(), worker_core, {buf.address(), 0, 0, NUM_TILES});
+        const KernelGroup *kernel_group = program.kernels_on_core(worker_core);
+        SetRuntimeArgs(program, kernel_group->riscv0_id.value(), worker_core, {out.address(), 0, 0, NUM_TILES});
+        SetRuntimeArgs(program, kernel_group->riscv1_id.value(), worker_core, {buf.address(), 0, 0, NUM_TILES});
 
         EnqueueWriteBuffer(cq, buf, inp, false);
         EnqueueProgram(cq, program, false);

@@ -311,7 +311,7 @@ namespace tt::tt_metal{
                 {dispatch_logical_core});
         }
 
-        inline DataMovementConfig GetDataMovementConfig(const Program &program, const std::string &file_name, const CoreRangeSet &core_ranges, const std::optional<DataMovementConfig> &dm_config) {
+        inline DataMovementConfig GetDataMovementConfig(Program &program, const std::string &file_name, const CoreRangeSet &core_ranges, const std::optional<DataMovementConfig> &dm_config) {
             bool riscv0_in_use = false; bool riscv1_in_use = false;
             bool noc0_in_use = false; bool noc1_in_use = false;
 
@@ -326,18 +326,20 @@ namespace tt::tt_metal{
             for (const auto &core_range : core_ranges.ranges()) {
                 for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
                     for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
-                        auto kernel_group = program.kernels_on_core(CoreCoord(x, y));
-                        bool local_noc0_in_use = false; bool local_noc1_in_use = false;
-                        if (kernel_group.riscv0_id.has_value()) {
-                            riscv0_in_use = true;
-                            set_global_and_local_noc_usage(kernel_group.riscv0_id.value(), local_noc0_in_use, local_noc1_in_use);
-                        }
-                        if (kernel_group.riscv1_id.has_value()) {
-                            riscv1_in_use = true;
-                            set_global_and_local_noc_usage(kernel_group.riscv1_id.value(), local_noc0_in_use, local_noc1_in_use);
-                        }
-                        if (kernel_group.riscv0_id.has_value() and kernel_group.riscv1_id.has_value()) {
-                            TT_ASSERT(local_noc0_in_use and local_noc1_in_use, "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, doing so results in hangs!");
+                        const KernelGroup * kernel_group = program.kernels_on_core(CoreCoord(x, y));
+                        if (kernel_group != nullptr) {
+                            bool local_noc0_in_use = false; bool local_noc1_in_use = false;
+                            if (kernel_group->riscv0_id.has_value()) {
+                                riscv0_in_use = true;
+                                set_global_and_local_noc_usage(kernel_group->riscv0_id.value(), local_noc0_in_use, local_noc1_in_use);
+                            }
+                            if (kernel_group->riscv1_id.has_value()) {
+                                riscv1_in_use = true;
+                                set_global_and_local_noc_usage(kernel_group->riscv1_id.value(), local_noc0_in_use, local_noc1_in_use);
+                            }
+                            if (kernel_group->riscv0_id.has_value() and kernel_group->riscv1_id.has_value()) {
+                                TT_ASSERT(local_noc0_in_use and local_noc1_in_use, "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, doing so results in hangs!", CoreCoord(x, y).str());
+                            }
                         }
                     }
                 }

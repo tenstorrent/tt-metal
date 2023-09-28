@@ -123,6 +123,7 @@ Program::Program(): id(program_counter++),worker_crs_({}), compile_needed_(false
 void Program::add_kernel(Kernel *kernel) {
     this->invalidate_compile();
     kernel_ids_.push_back(kernel->id());
+    core_to_kernel_group_.clear();
     kernel_by_id_[kernel->id()] = kernel;
 }
 
@@ -142,28 +143,23 @@ void populate_kernel_group(KernelGroup &kernel_group, Kernel *kernel) {
     }
 }
 
-KernelGroup Program::kernels_on_core(const CoreCoord &core) const {
-    KernelGroup kernel_group;
-    for (auto &[kernel_id, kernel] : this->kernel_by_id_) {
-        auto cores = kernel->logical_cores();
-        if (std::find(cores.begin(), cores.end(), core) != cores.end()) {
-            populate_kernel_group(kernel_group, kernel);
-        }
-    }
-    return kernel_group;
+const KernelGroup * Program::kernels_on_core(const CoreCoord &core) {
+    const std::map<CoreCoord, KernelGroup>& kernel_groups = core_to_kernel_group();
+    auto result = kernel_groups.find(core);
+    return (result == kernel_groups.end()) ? nullptr : &result->second;
 }
 
-std::map<CoreCoord, KernelGroup> Program::core_to_kernel_group() const {
-    std::map<CoreCoord, KernelGroup> core_to_kernel_group;
-
-    for (auto &[kernel_id, kernel] : this->kernel_by_id_) {
-        for (auto core : kernel->logical_cores()) {
-            KernelGroup &kernel_group = core_to_kernel_group[core];
-            populate_kernel_group(kernel_group, kernel);
+const std::map<CoreCoord, KernelGroup>& Program::core_to_kernel_group() {
+    if (core_to_kernel_group_.size() == 0) {
+        for (auto &[kernel_id, kernel] : this->kernel_by_id_) {
+            for (auto core : kernel->logical_cores()) {
+                KernelGroup &kernel_group = core_to_kernel_group_[core];
+                populate_kernel_group(kernel_group, kernel);
+            }
         }
     }
 
-    return core_to_kernel_group;
+    return core_to_kernel_group_;
 }
 
 std::vector<std::string> Program::cores_to_ops() const {

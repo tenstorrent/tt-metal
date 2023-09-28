@@ -57,9 +57,9 @@ class Program {
 
     const std::vector< Semaphore > & semaphores() const { return semaphores_; }
 
-    KernelGroup kernels_on_core(const CoreCoord &core) const;
+    const KernelGroup * kernels_on_core(const CoreCoord &core);
 
-    std::map<CoreCoord, KernelGroup> core_to_kernel_group() const;
+    const std::map<CoreCoord, KernelGroup>& core_to_kernel_group();
 
     const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord &core) const;
 
@@ -125,6 +125,7 @@ class Program {
     CoreRangeSet worker_crs_;
     bool compile_needed_;
     bool circular_buffer_allocation_needed_;
+    std::map<CoreCoord, KernelGroup> core_to_kernel_group_;
 
     friend CircularBufferID CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CircularBufferID id);
