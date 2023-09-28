@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
 
     std::tie(num_tiles, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
-            input_args, "--num-tiles", 256);
+            input_args, "--num-tiles", 204800);
 
     std::tie(noc_index, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
@@ -115,7 +115,10 @@ int main(int argc, char** argv) {
 
     uint32_t single_tile_size = 2 * 1024;
     uint32_t page_size = single_tile_size;
-    uint32_t l1_buffer_size = num_cores_r * num_cores_c * num_tiles * page_size;
+
+    // limit size of the L1 buffer to do not exceed global L1 size
+    uint32_t l1_buffer_size = num_cores_r * num_cores_c *
+                              (num_tiles > 256 ? 256 : num_tiles) * page_size;
     auto l1_buffer = tt_metal::Buffer(device, l1_buffer_size, page_size,
                                       tt_metal::BufferType::L1);
 
