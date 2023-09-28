@@ -67,7 +67,9 @@ void kernel_launch() {
 
     noc_init(loading_noc);
 
+    kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
     kernel_main();
+    kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
 
     // FW needs to notify device dispatcher when we are done
     // Some information needed is known here, pass it back

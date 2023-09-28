@@ -327,9 +327,7 @@ int main() {
 
         // Run the BRISC kernel
         DEBUG_STATUS('R');
-        kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
         kernel_init();
-        kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
         DEBUG_STATUS('D');
 
         wait_ncrisc_trisc();

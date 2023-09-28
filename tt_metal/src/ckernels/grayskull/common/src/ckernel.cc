@@ -81,9 +81,7 @@ int main(int argc, char *argv[])
         kernel_profiler::mark_time(CC_MAIN_START);
 
         DEBUG_STATUS('R');
-        kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
         kernel_init();
-        kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
         DEBUG_STATUS('D');
 
         // Signal completion

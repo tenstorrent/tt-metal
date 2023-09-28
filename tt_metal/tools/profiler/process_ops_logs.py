@@ -40,9 +40,15 @@ OPS_CSV_HEADER = [
     "HOST START TS",
     "HOST END TS",
     "HOST DURATION [ns]",
-    "DEVICE START CYCLE",
-    "DEVICE END CYCLE",
-    "DEVICE DURATION [ns]",
+    "DEVICE FW START CYCLE",
+    "DEVICE FW END CYCLE",
+    "DEVICE FW DURATION [ns]",
+    "DEVICE KERNEL DURATION [ns]",
+    "DEVICE BRISC KERNEL DURATION [ns]",
+    "DEVICE NCRISC KERNEL DURATION [ns]",
+    "DEVICE TRISC0 KERNEL DURATION [ns]",
+    "DEVICE TRISC1 KERNEL DURATION [ns]",
+    "DEVICE TRISC2 KERNEL DURATION [ns]",
     # "CALL COUNT",
     "INPUTS",
     "OUTPUTS",
@@ -94,12 +100,56 @@ def append_detail_host_time_data(opCandidatePath, call_count, timeDataDict):
                 timeDataDict[functionKey] = int(calls["stats"][stat])
 
 
-def append_device_time_data(opCandidatePath, call_count, timeDataDict):
-    deviceLogPath = os.path.join(opCandidatePath, f"{call_count}", DEVICE_SIDE_LOG)
+def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLogPath = None):
+    if not deviceLogPath:
+        deviceLogPath = os.path.join(opCandidatePath, f"{call_count}", DEVICE_SIDE_LOG)
     if os.path.isfile(deviceLogPath):
         setup = plot_setup.default_setup()
         setup.deviceInputLog = deviceLogPath
-        setup.timerAnalysis = {}
+        setup.timerAnalysis = {
+            "FW_START->FW_END": {
+                "across": "device",
+                "type": "session_first_last",
+                "start": {"core": "ANY", "risc": "ANY", "timerID": 1},
+                "end": {"core": "ANY", "risc": "ANY", "timerID": 4},
+            },
+            "KERNEL_START->KERNEL_END": {
+                "across": "device",
+                "type": "session_first_last",
+                "start": {"core": "ANY", "risc": "ANY", "timerID": 2},
+                "end": {"core": "ANY", "risc": "ANY", "timerID": 3},
+            },
+            "BR_KERNEL_START->BR_KERNEL_END": {
+                "across": "device",
+                "type": "session_first_last",
+                "start": {"core": "ANY", "risc": "BRISC", "timerID": 2},
+                "end": {"core": "ANY", "risc": "BRISC", "timerID": 3},
+            },
+            "NC_KERNEL_START->NC_KERNEL_END": {
+                "across": "device",
+                "type": "session_first_last",
+                "start": {"core": "ANY", "risc": "NCRISC", "timerID": 2},
+                "end": {"core": "ANY", "risc": "NCRISC", "timerID": 3},
+            },
+            "T0_KERNEL_START->T0_KERNEL_END": {
+                "across": "device",
+                "type": "session_first_last",
+                "start": {"core": "ANY", "risc": "TRISC_0", "timerID": 2},
+                "end": {"core": "ANY", "risc": "TRISC_0", "timerID": 3},
+            },
+            "T1_KERNEL_START->T1_KERNEL_END": {
+                "across": "device",
+                "type": "session_first_last",
+                "start": {"core": "ANY", "risc": "TRISC_1", "timerID": 2},
+                "end": {"core": "ANY", "risc": "TRISC_1", "timerID": 3},
+            },
+            "T2_KERNEL_START->T2_KERNEL_END": {
+                "across": "device",
+                "type": "session_first_last",
+                "start": {"core": "ANY", "risc": "TRISC_2", "timerID": 2},
+                "end": {"core": "ANY", "risc": "TRISC_2", "timerID": 3},
+            },
+        }
 
         devicesData = import_log_run_stats(setup)
         deviceID = list(devicesData["devices"].keys())[0]  # Assume there is only one device
@@ -111,17 +161,39 @@ def append_device_time_data(opCandidatePath, call_count, timeDataDict):
         cores = list(devicesData["devices"][deviceID]["cores"].keys())
         cores.remove("DEVICE")
 
-        delta_time = end_ts - start_ts
-        delta_time_ns = delta_time * 1000 / devicesData["deviceInfo"]["freq"]
+        freq = devicesData["deviceInfo"]["freq"]
+        deviceLevelStats = devicesData["devices"][deviceID]["cores"]["DEVICE"]['analysis']
 
-        timeDataDict["DEVICE START CYCLE"] = start_ts
-        timeDataDict["DEVICE END CYCLE"] = end_ts
-        timeDataDict["DEVICE DURATION [ns]"] = round(delta_time_ns)
+        fw_delta_time_ns = deviceLevelStats['FW_START->FW_END']['stats']['Average']* 1000 / freq
+        kernel_delta_time_ns = deviceLevelStats['KERNEL_START->KERNEL_END']['stats']['Average']* 1000 / freq
+
+        br_kernel_delta_time_ns = deviceLevelStats['BR_KERNEL_START->BR_KERNEL_END']['stats']['Average']* 1000 / freq
+        nc_kernel_delta_time_ns = deviceLevelStats['NC_KERNEL_START->NC_KERNEL_END']['stats']['Average']* 1000 / freq
+        t0_kernel_delta_time_ns = deviceLevelStats['T0_KERNEL_START->T0_KERNEL_END']['stats']['Average']* 1000 / freq
+        t1_kernel_delta_time_ns = deviceLevelStats['T1_KERNEL_START->T1_KERNEL_END']['stats']['Average']* 1000 / freq
+        t2_kernel_delta_time_ns = deviceLevelStats['T2_KERNEL_START->T2_KERNEL_END']['stats']['Average']* 1000 / freq
+
+        timeDataDict["DEVICE FW START CYCLE"] = start_ts
+        timeDataDict["DEVICE FW END CYCLE"] = end_ts
+        timeDataDict["DEVICE FW DURATION [ns]"] = round(fw_delta_time_ns)
+        timeDataDict["DEVICE KERNEL DURATION [ns]"] = round(kernel_delta_time_ns)
+        timeDataDict["DEVICE BRISC KERNEL DURATION [ns]"] = round(br_kernel_delta_time_ns)
+        timeDataDict["DEVICE NCRISC KERNEL DURATION [ns]"] = round(nc_kernel_delta_time_ns)
+        timeDataDict["DEVICE TRISC0 KERNEL DURATION [ns]"] = round(t0_kernel_delta_time_ns)
+        timeDataDict["DEVICE TRISC1 KERNEL DURATION [ns]"] = round(t1_kernel_delta_time_ns)
+        timeDataDict["DEVICE TRISC2 KERNEL DURATION [ns]"] = round(t2_kernel_delta_time_ns)
         timeDataDict["CORE COUNT"] = len(cores)
+
     else:
-        timeDataDict["DEVICE START CYCLE"] = "-"
-        timeDataDict["DEVICE END CYCLE"] = "-"
-        timeDataDict["DEVICE DURATION [ns]"] = "-"
+        timeDataDict["DEVICE FW START CYCLE"] = "-"
+        timeDataDict["DEVICE FW END CYCLE"] = "-"
+        timeDataDict["DEVICE FW DURATION [ns]"] = "-"
+        timeDataDict["DEVICE KERNEL DURATION [ns]"] = "-"
+        timeDataDict["DEVICE BRISC KERNEL DURATION [ns]"] = "-"
+        timeDataDict["DEVICE NCRISC KERNEL DURATION [ns]"] = "-"
+        timeDataDict["DEVICE TRISC0 KERNEL DURATION [ns]"] = "-"
+        timeDataDict["DEVICE TRISC1 KERNEL DURATION [ns]"] = "-"
+        timeDataDict["DEVICE TRISC2 KERNEL DURATION [ns]"] = "-"
         timeDataDict["CORE COUNT"] = "-"
 
 
