@@ -78,7 +78,9 @@ int main(int argc, char **argv) {
   if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
     log_fatal("Test not supported w/ slow dispatch, exiting");
   }
+
   bool pass = true;
+  bool bypass_check;
   double dram_bandwidth = 0.0f;
   tt::ARCH arch;
 
@@ -96,6 +98,11 @@ int main(int argc, char **argv) {
       std::tie(access_type, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(
               input_args, "--access-type", 0);
+      std::tie(bypass_check, input_args) =
+          test_args::has_command_option_and_remaining_args(input_args,
+                                                           "--bypass-check");
+
+      test_args::validate_remaining_args(input_args);
     } catch (const std::exception &e) {
       log_fatal(tt::LogTest, "Command line arguments found exception",
                 e.what());
@@ -218,7 +225,7 @@ int main(int argc, char **argv) {
   }
 
   // Determine if it passes performance goal
-  if (pass) {
+  if (pass && bypass_check == false) {
     // goal is 90% of peak DRAM bandwidth performance
     double target_bandwidth =
         static_cast<double>(get_dram_bandwidth(arch)) * 0.9;
