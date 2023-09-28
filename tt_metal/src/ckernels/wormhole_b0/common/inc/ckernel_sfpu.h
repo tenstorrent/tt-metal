@@ -909,6 +909,43 @@ inline void calculate_heaviside(uint value)
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_bitwise_or(uint value)
+{
+    // SFPU microcode
+
+    // Approach 1
+    Converter c_value;
+    c_value.u = value;
+    vFloat s = c_value.f;
+    vInt other = reinterpret<vInt>(s);
+
+    // #pragma GCC unroll 0
+    // for (int d = 0; d < ITERATIONS; d++) {
+    //     vFloat v = dst_reg[0];
+    //     vUInt vc = reinterpret<vUInt>(v);
+    //     vUInt result = vc|other;
+    //     dst_reg[0] = reinterpret<vFloat>(result);//result;
+    //     dst_reg++;
+    // }
+
+    // Approach 2
+    // #pragma GCC unroll 0
+    // for (int d = 0; d < ITERATIONS; d++) {
+    //     vFloat v = dst_reg[0];
+    //     vUInt vc = reinterpret<vUInt>(v);
+    //     vUInt result = vc|value;
+    //     dst_reg[0] = reinterpret<vFloat>(result);//result;
+    //     dst_reg++;
+    // }
+     for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0];
+        vInt val = 5;
+        vInt res =  reinterpret<vInt>(v) | other;
+        dst_reg[0] = reinterpret<vFloat>(res);
+        dst_reg++;
+    }
+}
 template <SfpuType operation, bool APPROXIMATION_MODE, int SfpuType_PARAM=0, int ITERATIONS=8>
 inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0)
 {
@@ -996,6 +1033,9 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::atan) {
         calculate_atan<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::bitwise_or) {
+        calculate_bitwise_or<APPROXIMATION_MODE, ITERATIONS>(param0);
     }
 }
 

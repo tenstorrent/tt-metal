@@ -373,4 +373,15 @@ inline void llk_math_eltwise_unary_sfpu_acos_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::acos, APPROXIMATE>();
 }
 
+//BITWISE OR
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_bitwise_or(uint dst_index,uint param0) {
+    llk_math_eltwise_unary_sfpu<SfpuType::bitwise_or, APPROXIMATE, dst_sync>(dst_index,param0);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_bitwise_or_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::bitwise_or, APPROXIMATE>();
+}
+
 }
