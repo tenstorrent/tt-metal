@@ -91,14 +91,14 @@ operation::ProgramWithCallbacks moreh_softmax_backward_w_small(const Tensor &out
     std::map<string, string> writer_defines;
 
     auto reader_kernel_id = CreateReadKernel(
-        program, "reader_moreh_softmax_backward_w.cpp", all_cores, {y_is_dram, dy_is_dram}, reader_defines);
+        program, "tt_eager/tt_dnn/op_library/moreh_softmax_backward/kernels/reader_moreh_softmax_backward_w.cpp", all_cores, {y_is_dram, dy_is_dram}, reader_defines);
     auto writer_kernel_id = CreateWriteKernel(
-        program, "writer_moreh_softmax_w.cpp", all_cores, {dx_is_dram}, writer_defines);
+        program, "tt_eager/tt_dnn/op_library/moreh_softmax_backward/kernels/writer_moreh_softmax_w.cpp", all_cores, {dx_is_dram}, writer_defines);
 
     // create compute kernel
     CreateComputeKernel(
         program,
-        "moreh_softmax_backward_w.cpp",
+        "tt_eager/tt_dnn/op_library/moreh_softmax_backward/kernels/moreh_softmax_backward_w.cpp",
         {
             {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, Wt}},
             {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, Wt}},
