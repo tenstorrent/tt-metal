@@ -14,7 +14,7 @@ sys.path.append(f"{f}/../../../../..")
 
 import pytest
 import torch
-
+import random
 import tt_lib as ttl
 
 from tt_lib.utils import (
@@ -28,21 +28,11 @@ from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0,
 
 
 # This ref implementation is only here for debugging
-def ref_eltwise_where(x, y, z):
-    return torch.where(x, y, z)
+def ref_eltwise_addcmul(x, y, z, scalar):
+    result = torch.addcmul(x, y, z, value=scalar)
+    return result
 
-def gen_bin(size, probabilityones=0.5):
-    element_count = 1
-    for i in size:
-        element_count = element_count * i
-    raw = torch.zeros(element_count)
-    raw[: int(probabilityones * element_count)] = 1
-    ridx = torch.randperm(element_count)  # a random permutation of the entries
-    mask = torch.reshape(raw[ridx], size)
-    return mask
-
-
-def run_eltwise_where_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
+def run_eltwise_addcmul_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
 
     # Initialize the device
@@ -53,7 +43,7 @@ def run_eltwise_where_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_
 
     for N, C, H, W in test_dims:
         for nrepeat in range(0, 100):
-            x = gen_bin(size=(N, C, H, W), probabilityones=0.7)
+            x = torch.Tensor(size=(N, C, H, W)).uniform_(-100, 100)
             x_ref = x
 
             if dlayout == ttl.tensor.Layout.TILE:
@@ -80,7 +70,7 @@ def run_eltwise_where_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_
                 )
 
 
-            y = gen_bin(size=(N, C, H, W), probabilityones=0.5)
+            y = torch.Tensor(size=(N, C, H, W)).uniform_(-100, 100)
             y_ref = y
 
             if dlayout == ttl.tensor.Layout.TILE:
@@ -107,8 +97,7 @@ def run_eltwise_where_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_
                 )
 
 
-            z = gen_bin(size=(N, C, H, W), probabilityones=0.5)
-
+            z = torch.Tensor(size=(N, C, H, W)).uniform_(-100, 100)
             z_ref = z
 
             if dlayout == ttl.tensor.Layout.TILE:
@@ -134,8 +123,11 @@ def run_eltwise_where_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_
                     in_mem_config,
                 )
 
-            logger.info("Running Eltwise where test")
-            ttw = tensor.where(ttx, tty, ttz, output_mem_config=out_mem_config)
+
+            scalar = random.uniform(1.0,100.0)
+
+            logger.info("Running Eltwise addcmul test")
+            ttw = tensor.addcmul(ttx, tty, ttz, scalar, output_mem_config=out_mem_config)
 
             logger.info("Done")
 
@@ -170,7 +162,7 @@ def run_eltwise_where_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_
                 tt_got_back = untilize(tt_got_back)
 
             # get referent value
-            ref_value = ref_eltwise_where(torch.gt(x_ref,0), y_ref, z_ref)
+            ref_value = ref_eltwise_addcmul(x_ref, y_ref, z_ref, scalar)
 
             # compare tt and golden outputs
             success, pcc_value = comp_pcc(tt_got_back, ref_value)
@@ -194,7 +186,7 @@ test_sweep_args=[
     ),
 )
 
-def test_eltwise_where_test(
+def test_eltwise_addcmul_test(
     input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
 ):
-    run_eltwise_where_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
+    run_eltwise_addcmul_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
