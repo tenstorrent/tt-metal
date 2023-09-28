@@ -46,7 +46,7 @@ using namespace tt;
 //     --m <size in elements>
 //     --n <size in elements>
 //     --k <size in elements>
-//     --slow-dispatch-mode <0 for fast dispatch mode, 1 for slow dispatch mode>
+//     --fast-dispatch (set to use fast dispatch mode)
 //     --bypass-check (set to bypass checking performance criteria fulfillment)
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -124,7 +124,7 @@ int main(int argc, char** argv) {
     uint32_t M;
     uint32_t N;
     uint32_t K;
-    uint32_t slow_dispatch_mode;
+    bool fast_dispatch_mode;
     try {
       std::tie(M, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(input_args,
@@ -135,9 +135,9 @@ int main(int argc, char** argv) {
       std::tie(K, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(input_args,
                                                                   "--k", 768);
-      std::tie(slow_dispatch_mode, input_args) =
-          test_args::get_command_option_uint32_and_remaining_args(
-              input_args, "--slow-dispatch-mode", 1);
+      std::tie(fast_dispatch_mode, input_args) =
+          test_args::has_command_option_and_remaining_args(input_args,
+                                                           "--fast-dispatch");
 
       std::tie(bypass_check, input_args) =
           test_args::has_command_option_and_remaining_args(input_args,
@@ -151,17 +151,15 @@ int main(int argc, char** argv) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Env and Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    if (slow_dispatch_mode) {
+    if (fast_dispatch_mode == false) {
       setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", true);
       setenv("TT_METAL_DEVICE_PROFILER", "1", true);
 
 #if !defined(PROFILER)
       log_error(
-          "In the slow dispatch mode, device profiler is used to get the "
-          "performance");
-      log_error(
-          "Build the tt_metal project with the profiler build flag "
-          "(ENABLE_PROFILER=1)");
+          "In the slow dispatch mode, device profiler is used to measure the "
+          "performance. Build the Metal library and test code with "
+          "'ENABLE_PROFILER=1'");
       TT_ASSERT(false);
 #endif
     }
@@ -248,7 +246,7 @@ int main(int argc, char** argv) {
         (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);
     log_debug(LogTest, "number of matmul ops: {}", num_of_matmul_ops);
 
-    if (slow_dispatch_mode) {
+    if (fast_dispatch_mode == false) {
       log_debug(LogTest, "calling LaunchProgram");
       LaunchProgram(device, program);
       log_debug(LogTest, "LaunchProgram done");

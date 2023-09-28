@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
   uint32_t access_type;
   uint32_t tiles_per_transfer;
   bool use_device_profiler;
-  bool bypass_check = false;
+  bool bypass_check;
   try {
     std::tie(num_cores_r, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args,

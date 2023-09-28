@@ -84,7 +84,7 @@ int main(int argc, char **argv) {
 
   bool pass = true;
   bool use_device_profiler;
-  bool bypass_check = false;
+  bool bypass_check;
   double dram_bandwidth = 0.0f;
   tt::ARCH arch;
 

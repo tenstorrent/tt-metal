@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
   uint32_t num_cores_r;
   uint32_t num_cores_c;
   uint32_t num_core_groups;
-  bool bypass_check = false;
+  bool bypass_check;
   try {
     std::tie(num_cores_r, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args,
