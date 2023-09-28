@@ -20,7 +20,11 @@ fi
 cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 
-./tests/scripts/run_python_api_unit_tests.sh
+if [ "$ARCH_NAME" == "grayskull" ]; then
+  ./tests/scripts/run_python_api_unit_tests.sh
+else
+  ./tests/scripts/run_python_api_unit_tests_wormhole_b0.sh
+fi
 
 env python tests/scripts/run_tt_metal.py --dispatch-mode slow
 env python tests/scripts/run_tt_eager.py --dispatch-mode slow
