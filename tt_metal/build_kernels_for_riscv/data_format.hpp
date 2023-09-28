@@ -30,6 +30,7 @@ static const std::map<DataFormat, std::vector<DataFormat>> ALL_INVALID_FORMAT_CO
     {DataFormat::Tf32,      {DataFormat::Invalid }}, // for TF 32, math dest must in fp32, hence output can be anything
     {DataFormat::RawUInt32, {DataFormat::Invalid }},
     {DataFormat::RawUInt16, {DataFormat::Invalid }},
+    {DataFormat::UInt32,    {DataFormat::Invalid }},
 };
 
 enum class ExpPrecision : uint8_t
