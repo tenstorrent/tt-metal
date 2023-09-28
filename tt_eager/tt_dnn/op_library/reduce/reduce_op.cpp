@@ -153,7 +153,7 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim 
         }
         auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape());
         auto formatted_input_tensor = input_tensor;
-        if (AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
+        if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
         }
         const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, 1.0, output_mem_config}, {formatted_input_tensor}).at(0);
@@ -202,7 +202,7 @@ Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_
         out_shape[1] = 1;
 
         auto formatted_input_tensor = input_tensor;
-        if (AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
+        if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0.0, Layout::TILE);
         }
         Tensor output = transpose_hc(formatted_input_tensor, output_mem_config);
@@ -216,7 +216,7 @@ Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_
         out_shape[0] = 1;
 
         auto formatted_input_tensor = input_tensor;
-        if (AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
+        if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, 0.0, Layout::TILE);
         }
         Tensor output = transpose_nh(input_tensor, output_mem_config);

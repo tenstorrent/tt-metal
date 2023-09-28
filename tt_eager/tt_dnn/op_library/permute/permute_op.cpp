@@ -38,7 +38,7 @@ Tensor permute_(const Tensor &a, uint32_t N, uint32_t C, uint32_t H, uint32_t W,
     out_shape = {out_shape[N], out_shape[C], out_shape[H], out_shape[W]};
 
     auto formatted_input_tensor = a;
-    if (AutoFormat::check_input_tensor_format(a, a_pad_shape)) {
+    if (!AutoFormat::check_input_tensor_format(a, a_pad_shape)) {
         formatted_input_tensor = AutoFormat::format_input_tensor(a, device, a_pad_shape, 0.0, Layout::TILE);
     }
     auto output = formatted_input_tensor;
