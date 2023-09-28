@@ -4,87 +4,7 @@
 
 #include "dataflow_api.h"
 
-void generate_bcast_scaler() {
-    constexpr uint32_t cb_in_2 = tt::CB::c_in2;
-    uint32_t scaler = get_arg_val<uint32_t>(5);
-    union { float f; uint32_t u; } u; u.u = scaler;
-    cb_reserve_back(cb_in_2, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_in_2));
-
-    for (int j = 0; j < 1024; j++)
-        ptr[j] = uint16_t(0);
-
-    for (int k = 0; k < 4; k++)
-    for (int j = 0; j < 16; j++)
-        ptr[k*256 + j] = uint16_t(u.u>>16);
-    cb_push_back(cb_in_2, 1);
-}
-
-void generate_mask() {
-    constexpr uint32_t cb_mask = tt::CB::c_in1;
-    int mask_h = static_cast<int>(get_arg_val<uint32_t>(6));
-    union { float f; uint32_t u; } one; one.f = 1.0f;
-    union { float f; uint32_t u; } zero; zero.f = 0.0f;
-
-    cb_reserve_back(cb_mask, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask));
-
-    for(int w = 0; w < 16; w++) {
-        // sub tile 0
-        {
-            int mask_h_0 = mask_h;
-            if (mask_h_0 >= 16) mask_h_0 = 16;
-            int h = 0;
-            for(; h < mask_h_0; h++){
-                ptr[h * 16 + w] = uint16_t(one.u >> 16);
-            }
-            for(; h < 16; h++){
-                ptr[h * 16 + w] = uint16_t(zero.u >> 16);
-            }
-        }
-
-        // sub tile 1
-        {
-            int mask_h_0 = mask_h;
-            if (mask_h_0 >= 16) mask_h_0 = 16;
-            int h = 0;
-            for(; h < mask_h_0; h++){
-                ptr[h * 16 + w + 256] = uint16_t(one.u >> 16);
-            }
-            for(; h < 16; h++){
-                ptr[h * 16 + w + 256] = uint16_t(zero.u >> 16);
-            }
-        }
-
-        // sub tile 2
-        {
-            int mask_h_1 = mask_h - 16;
-            if (mask_h_1 < 0) mask_h_1 = 0;
-            int h = 0;
-            for(; h < mask_h_1; h++){
-                ptr[h * 16 + w + 512] = uint16_t(one.u >> 16);
-            }
-            for(; h < 16; h++){
-                ptr[h * 16 + w + 512] = uint16_t(zero.u >> 16);
-            }
-        }
-
-        // sub tile 3
-        {
-            int mask_h_1 = mask_h - 16;
-            if (mask_h_1 < 0) mask_h_1 = 0;
-            int h = 0;
-            for(; h < mask_h_1; h++){
-                ptr[h * 16 + w + 768] = uint16_t(one.u >> 16);
-            }
-            for(; h < 16; h++){
-                ptr[h * 16 + w + 768] = uint16_t(zero.u >> 16);
-            }
-        }
-    }
-
-    cb_push_back(cb_mask, 1);
-}
+#include "tt_eager/tt_dnn/op_library/moreh_softmax_backward/kernels/common.hpp"
 
 void kernel_main() {
 
@@ -93,8 +13,12 @@ void kernel_main() {
     uint32_t tile_offset = get_arg_val<uint32_t>(2);
     uint32_t Ht = get_arg_val<uint32_t>(3);
     uint32_t Wt = get_arg_val<uint32_t>(4);
+    uint32_t scaler = get_arg_val<uint32_t>(5);
+    uint32_t mask_h = get_arg_val<uint32_t>(6);
 
-    constexpr uint32_t cb_in = tt::CB::c_in0;
+    constexpr auto cb_in = tt::CB::c_in0;
+    constexpr auto cb_mask = tt::CB::c_in1;
+    constexpr auto cb_scaler = tt::CB::c_in2;
 
     uint32_t l1_write_addr_in;
 
@@ -112,8 +36,8 @@ void kernel_main() {
     };
 
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
-    generate_bcast_scaler();
-    generate_mask();
+    generate_bcast_scaler(cb_scaler, scaler);
+    generate_mask_h(cb_mask, mask_h);
 
     // read ublocks from src0 to CB0, then push ublocks to compute (unpacker)
     uint32_t curr_tile = tile_offset;
