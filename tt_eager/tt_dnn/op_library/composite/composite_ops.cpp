@@ -840,9 +840,7 @@ Tensor _polygamma(const Tensor &input_a, uint32_t k, const MemoryConfig& output_
         z1 = recip(power(add_unary(input_a, 10.0f, output_mem_config), k_der, output_mem_config), output_mem_config);
         temp = add(temp, z1, std::nullopt, output_mem_config);
     }
-    if ( pos_neg < 0 ) {
-           return neg(mul_unary(temp, fact_val, output_mem_config), output_mem_config);
-    }
+    fact_val *= pos_neg;
     return mul_unary(temp, fact_val, output_mem_config);
 }
 Tensor polygamma(const Tensor& input_a, uint32_t value, const MemoryConfig& output_mem_config)
