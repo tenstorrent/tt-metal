@@ -26,14 +26,14 @@ namespace tt_metal {
 
 namespace {
 
-void ConfigureKernelGroup(const Program &program, const KernelGroup &kernel_group, Device *device, const CoreCoord &logical_core) {
-    if (kernel_group.compute_id.has_value()) {
-        detail::GetKernel(program, kernel_group.compute_id.value())->configure(device, logical_core);
+void ConfigureKernelGroup(const Program &program, const KernelGroup *kernel_group, Device *device, const CoreCoord &logical_core) {
+    if (kernel_group->compute_id.has_value()) {
+        detail::GetKernel(program, kernel_group->compute_id.value())->configure(device, logical_core);
     }
-    if (kernel_group.riscv1_id.has_value()) {
-        detail::GetKernel(program, kernel_group.riscv1_id.value())->configure(device, logical_core);
+    if (kernel_group->riscv1_id.has_value()) {
+        detail::GetKernel(program, kernel_group->riscv1_id.value())->configure(device, logical_core);
     }
-    detail::GetKernel(program, kernel_group.riscv0_id.value())->configure(device, logical_core);
+    detail::GetKernel(program, kernel_group->riscv0_id.value())->configure(device, logical_core);
 }
 
 std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
@@ -78,7 +78,9 @@ namespace detail {
         std::unordered_set<CoreCoord> worker_cores;
         auto device_id = device->id();
 
-        for (auto &[logical_core, kernel_group] : program.core_to_kernel_group()) {
+        std::vector<CoreCoord> logical_cores_used_in_program = program.logical_cores();
+        for (const auto &logical_core : logical_cores_used_in_program) {
+            KernelGroup *kernel_group = program.kernels_on_core(logical_core);
             auto worker_core = device->worker_core_from_logical_core(logical_core);
             worker_cores.insert(worker_core);
 

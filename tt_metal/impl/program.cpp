@@ -123,7 +123,8 @@ Program::Program(): id(program_counter++),worker_crs_({}), compile_needed_(false
 void Program::add_kernel(Kernel *kernel) {
     this->invalidate_compile();
     kernel_ids_.push_back(kernel->id());
-    core_to_kernel_group_.clear();
+    kernel_groups_.resize(0);
+    core_to_kernel_group_index_table_.clear();
     kernel_by_id_[kernel->id()] = kernel;
 }
 
@@ -132,47 +133,141 @@ Kernel *Program::get_kernel(KernelID kernel_id) const {
     return this->kernel_by_id_.at(kernel_id);
 }
 
-KernelGroup::KernelGroup() {
+KernelGroup::KernelGroup() : core_ranges({}) {
+}
+
+KernelGroup::KernelGroup(std::optional<KernelID> brisc_id,
+                         std::optional<KernelID> ncrisc_id,
+                         std::optional<KernelID> trisc_id) : core_ranges({}) {
+
+    this->riscv0_id = brisc_id;
+    this->riscv1_id = ncrisc_id;
+    this->compute_id = trisc_id;
+
+    if (brisc_id) {
+        this->launch_msg.enable_brisc = true;
+    }
+    if (ncrisc_id) {
+        this->launch_msg.enable_ncrisc = true;
+    }
+    if (trisc_id) {
+        this->launch_msg.enable_triscs = true;
+    }
     launch_msg.run = RUN_MSG_GO;
 }
 
-void KernelGroup::update(const Kernel *kernel) {
-    RISCV riscv_processor = kernel->processor();
-    switch (riscv_processor) {
+KernelGroup * Program::kernels_on_core(const CoreCoord &core) {
+    update_kernel_groups();
+    if (core.x >= grid_extent_.x || core.y >= grid_extent_.y) return nullptr;
+    uint8_t index = core_to_kernel_group_index_table_[core.y * grid_extent_.x + core.x];
+    return (index == core_to_kernel_group_invalid_index) ? nullptr : &kernel_groups_[index];
+}
+
+struct KernelGroupInt {
+    bool valid;
+    std::optional<KernelID> trisc_id = std::nullopt;
+    std::optional<KernelID> brisc_id = std::nullopt;
+    std::optional<KernelID> ncrisc_id = std::nullopt;
+
+    bool operator==(const KernelGroupInt& b) const;
+    void update(const Kernel *kernel) {
+        RISCV riscv_processor = kernel->processor();
+        switch (riscv_processor) {
         case RISCV::BRISC:
-            this->riscv0_id = kernel->id();
-            this->launch_msg.enable_brisc = true;
+            this->brisc_id = kernel->id();
             break;
         case RISCV::NCRISC:
-            this->riscv1_id = kernel->id();
-            this->launch_msg.enable_ncrisc = true;
+            this->ncrisc_id = kernel->id();
             break;
         case RISCV::COMPUTE:
-            this->compute_id = kernel->id();
-            this->launch_msg.enable_triscs = true;
+            this->trisc_id = kernel->id();
             break;
         default:
             TT_ASSERT(false, "Unsupported kernel processor!");
-    }
-}
-
-KernelGroup * Program::kernels_on_core(const CoreCoord &core) {
-    std::map<CoreCoord, KernelGroup>& kernel_groups = core_to_kernel_group();
-    auto result = kernel_groups.find(core);
-    return (result == kernel_groups.end()) ? nullptr : &result->second;
-}
-
-std::map<CoreCoord, KernelGroup>& Program::core_to_kernel_group() {
-    if (core_to_kernel_group_.size() == 0) {
-        for (auto &[kernel_id, kernel] : this->kernel_by_id_) {
-            for (auto core : kernel->logical_cores()) {
-                KernelGroup &kernel_group = core_to_kernel_group_[core];
-                kernel_group.update(kernel);
-            }
         }
     }
+};
 
-    return core_to_kernel_group_;
+bool KernelGroupInt::operator==(const KernelGroupInt& b) const {
+    return
+        trisc_id == b.trisc_id &&
+        brisc_id == b.brisc_id &&
+        ncrisc_id == b.ncrisc_id;
+}
+
+struct KernelGroupIntHasher {
+    std::size_t operator()(const KernelGroupInt& x) const {
+        return
+            (x.trisc_id.value_or(0) << 0) |
+            (x.brisc_id.value_or(0) << 16) |
+            (x.ncrisc_id.value_or(0) << 32);
+    }
+};
+
+void Program::update_kernel_groups() {
+    if (core_to_kernel_group_index_table_.size() == 0) {
+
+        // Get the extent of the kernels in x, y
+        CoreCoord base = {std::numeric_limits<decltype(base.x)>::max(),
+                          std::numeric_limits<decltype(base.y)>::max()};
+        grid_extent_ = {0, 0};
+        for (auto &[kernel_id, kernel] : this->kernel_by_id_) {
+            for (auto core : kernel->logical_cores()) {
+                if (core.x > grid_extent_.x) grid_extent_.x = core.x;
+                if (core.y > grid_extent_.y) grid_extent_.y = core.y;
+                if (core.x < base.x) base.x = core.x;
+                if (core.y < base.y) base.y = core.y;
+            }
+        }
+        grid_extent_.x++;
+        grid_extent_.y++;
+
+        // grid maps cores to sets-of-kernels running on that core
+        std::vector<KernelGroupInt> grid;
+        grid.resize(grid_extent_.x * grid_extent_.y);
+        for (auto &[kernel_id, kernel] : this->kernel_by_id_) {
+            for (auto core : kernel->logical_cores()) {
+                int core_index = core.y * grid_extent_.x + core.x;
+                grid[core_index].valid = true;
+                grid[core_index].update(kernel);
+            }
+        }
+
+        // Flip the mapping to get sets-of-kernels to cores
+        std::unordered_map<KernelGroupInt, std::set<CoreRange>, KernelGroupIntHasher> map;
+        for (auto y = base.y; y < grid_extent_.y; y++) {
+            for (auto x = base.x; x < grid_extent_.x; x++) {
+                int index = y * grid_extent_.x + x;
+                if (grid[index].valid) {
+                    std::set<CoreRange>& set = map[grid[index]];
+                    set.insert(CoreRange({x, y}, {x, y}));
+                }
+            }
+        }
+
+        // Build the list of KernelGroups with merged core range sets from the
+        // mapping of sets-of-kernels to cores
+        TT_ASSERT(map.size() < core_to_kernel_group_invalid_index);
+        kernel_groups_.reserve(map.size());
+        int index = 0;
+        core_to_kernel_group_index_table_.resize(grid_extent_.x * grid_extent_.y, core_to_kernel_group_invalid_index);
+        for (auto& kg_to_cores : map) {
+            kernel_groups_.push_back(KernelGroup(kg_to_cores.first.brisc_id,
+                                                 kg_to_cores.first.ncrisc_id,
+                                                 kg_to_cores.first.trisc_id));
+            kernel_groups_.back().core_ranges.merge(kg_to_cores.second);
+
+            // Map from core X,Y back to the unique KernelGroup
+            for (CoreRange range : kg_to_cores.second) {
+                for (auto y = range.start.y; y <= range.end.y; y++) {
+                    for (auto x = range.start.x; x <= range.end.x; x++) {
+                        core_to_kernel_group_index_table_[y * grid_extent_.x + x] = index;
+                    }
+                }
+            }
+            index++;
+        }
+    }
 }
 
 std::vector<std::string> Program::cores_to_ops() const {
@@ -445,39 +540,38 @@ void Program::add_blank_kernels(Device *device) {
     ZoneScoped;
 
     // This can be smarter by combining core ranges into maximal rectangles but this code can be removed once we load BRISC FW separately from the kernel binary
-    std::set<CoreRange> unique_core_ranges_without_brisc_kernel,
-                        unique_core_ranges_without_ncrisc_kernel,
-                        unique_core_ranges_without_compute_kernel ;
+    this->update_kernel_groups();
+
+    CoreRangeSet unique_core_ranges_without_brisc_kernel({}),
+        unique_core_ranges_without_ncrisc_kernel({}),
+        unique_core_ranges_without_compute_kernel({}) ;
+
     vector<KernelID> blank_ids;
-    for (auto &[logical_core, kernel_group] : this->core_to_kernel_group()) {
-        CoreRange core_range = {.start = logical_core, .end = logical_core};
+    for (auto& kernel_group : this->kernel_groups_) {
         if (not kernel_group.riscv0_id.has_value())
-            unique_core_ranges_without_brisc_kernel.insert(core_range);
+            unique_core_ranges_without_brisc_kernel.merge(kernel_group.core_ranges.ranges());
         if (not kernel_group.riscv1_id.has_value())
-            unique_core_ranges_without_ncrisc_kernel.insert(core_range);
+            unique_core_ranges_without_ncrisc_kernel.merge(kernel_group.core_ranges.ranges());
         if (not kernel_group.compute_id.has_value())
-            unique_core_ranges_without_compute_kernel.insert(core_range);
+            unique_core_ranges_without_compute_kernel.merge(kernel_group.core_ranges.ranges());
     }
 
-    if (not unique_core_ranges_without_brisc_kernel.empty()) {
-        CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_brisc_kernel);
+    if (not unique_core_ranges_without_brisc_kernel.ranges().empty()) {
         KernelID blank_kernel_id = CreateDataMovementKernel(
-            *this, "tt_metal/kernels/dataflow/blank.cpp", core_range_set,
+            *this, "tt_metal/kernels/dataflow/blank.cpp", unique_core_ranges_without_brisc_kernel,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
         blank_ids.push_back(blank_kernel_id);
     }
 
-    if (not unique_core_ranges_without_ncrisc_kernel.empty()) {
-        CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_ncrisc_kernel);
+    if (not unique_core_ranges_without_ncrisc_kernel.ranges().empty()) {
         KernelID blank_kernel_id = CreateDataMovementKernel(
-            *this, "tt_metal/kernels/dataflow/blank.cpp", core_range_set,
+            *this, "tt_metal/kernels/dataflow/blank.cpp", unique_core_ranges_without_ncrisc_kernel,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
         blank_ids.push_back(blank_kernel_id);
     }
 
-    if (not unique_core_ranges_without_compute_kernel.empty()) {
-        CoreRangeSet core_range_set = CoreRangeSet(unique_core_ranges_without_compute_kernel);
-        KernelID blank_kernel_id = CreateComputeKernel(*this, "tt_metal/kernels/compute/blank.cpp", core_range_set);
+    if (not unique_core_ranges_without_compute_kernel.ranges().empty()) {
+        KernelID blank_kernel_id = CreateComputeKernel(*this, "tt_metal/kernels/compute/blank.cpp", unique_core_ranges_without_compute_kernel);
         blank_ids.push_back(blank_kernel_id);
     }
 }
@@ -573,5 +667,4 @@ Program::~Program() {
         delete kernel;
     }
 }
-
 }  // namespace tt::tt_metal
