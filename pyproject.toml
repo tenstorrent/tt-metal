@@ -38,3 +38,6 @@ dependencies = [
 requires-python = ">=3.8,<3.9"
 description = "General compute framework for Tenstorrent devices"
 dynamic = ["version"]
+
+[tool.black]
+line-length = 120
