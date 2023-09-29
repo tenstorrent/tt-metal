@@ -107,16 +107,16 @@ void MAIN {
         // step 2, compute 1/sum(exp(x))
         ACQ();
         cb_reserve_back(cb_recipsumexps, onetile);
-        reduce_init_delta_v2<false>(REDUCE_OP, REDUCE_DIM);
+        reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
 
         cb_wait_front(cb_add, onetile);
 
         constexpr uint32_t bcast_scaler0 = 0;
-        reduce_tile_v2(REDUCE_OP, REDUCE_DIM, cb_add, cb_bcast_scaler, 0, bcast_scaler0, dst0);
+        reduce_tile(REDUCE_OP, REDUCE_DIM, cb_add, cb_bcast_scaler, 0, bcast_scaler0, dst0);
 
         cb_pop_front(cb_add, onetile);
 
-        reduce_revert_delta_v2();
+        reduce_revert_delta();
         recip_tile_init();
         recip_tile(dst0);
 
