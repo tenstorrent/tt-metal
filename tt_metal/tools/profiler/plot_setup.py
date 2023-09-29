@@ -195,3 +195,23 @@ class test_full_buffer(default_setup):
             "end": {"risc": "ANY", "timerID": 5},
         }
     }
+
+class test_noc(default_setup):
+    timerAnalysis = {
+        "NoC For Loop": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"risc": "NCRISC", "timerID": 5},
+            "end": {"risc": "NCRISC", "timerID": 6},
+        }
+    }
+
+class test_matmul_global(default_setup):
+    timerAnalysis = {
+        "Matmul Read In Write Out": {
+            "across": "device",
+            "type": "session_first_last",
+            "start": {"core": "ANY", "risc": "ANY", "timerID": 5},
+            "end": {"core": "ANY", "risc": "ANY", "timerID": 8},
+        }
+    }

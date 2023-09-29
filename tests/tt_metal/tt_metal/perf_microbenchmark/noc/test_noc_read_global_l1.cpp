@@ -17,6 +17,9 @@
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 
 using namespace tt;
+using std::chrono::duration_cast;
+using std::chrono::microseconds;
+using std::chrono::steady_clock;
 
 template <typename T>
 std::vector<T> slice(std::vector<T> const &v, int m, int n) {
@@ -268,9 +271,16 @@ int main(int argc, char **argv) {
     }
 
     log_info(LogTest, "Running {} core test", num_cores_r * num_cores_c);
+    auto begin = std::chrono::steady_clock::now();
     EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
     Finish(*::detail::GLOBAL_CQ);
-    op_profiler::dump_device_profiler_results(device, program);
+    auto end = std::chrono::steady_clock::now();
+    auto elapsed_us = duration_cast<microseconds>(end - begin).count();
+    auto bw = (total_tiles_size_bytes / 1024.0 / 1024.0 / 1024.0) /
+              (elapsed_us / 1000.0 / 1000.0);
+    log_info(LogTest, "Total bytes transfered: {} Bytes", total_tiles_size_bytes);
+    log_info(LogTest, "Read global to L1: {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
+    tt_metal::detail::DumpDeviceProfileResults(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown
