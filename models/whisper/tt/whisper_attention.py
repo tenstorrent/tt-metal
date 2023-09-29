@@ -124,7 +124,7 @@ class TtWhisperAttention(nn.Module):
         if q_proj_shape == self.cached_q_proj_shape:
             q_proj_mul_const = self.q_proj_mul_const
         else:
-            self.q_proj_mul_const = fallback_ops.full(q_proj_shape, self.scaling)
+            self.q_proj_mul_const = tt_lib.tensor.full(q_proj_shape, self.scaling)
             self.cached_q_proj_shape = q_proj_shape
             q_proj_mul_const = self.q_proj_mul_const
 

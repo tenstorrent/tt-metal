@@ -82,7 +82,7 @@ class TtMultiHeadSelfAttention(nn.Module):
         self.attention_head_size = self.dim // self.n_heads
 
     def const_tensor(self, shape: List[int], value: int) -> tt_lib.tensor.Tensor:
-        return fallback_ops.full(shape, value)
+        return tt_lib.tensor.full(shape, value)
 
     def get_min(self, tensor: tt_lib.tensor.Tensor):
         tensor = tt_to_torch_tensor(tensor)

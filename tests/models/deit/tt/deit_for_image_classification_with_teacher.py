@@ -116,7 +116,7 @@ class TtDeiTForImageClassificationWithTeacher(nn.Module):
 
         # during inference, return the average of both classifier predictions
         logits = tt_lib.tensor.add(cls_logits, distillation_logits)
-        half = fallback_ops.full(logits.shape(), 0.5)
+        half = tt_lib.tensor.full(logits.shape(), 0.5)
         logits = tt_lib.tensor.mul(logits, half)
 
         # if not return_dict:

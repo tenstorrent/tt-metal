@@ -48,7 +48,7 @@ class TtWhisperForAudioClassification(nn.Module):
             # Not using this parameter for now
             N, C, H, W = 1, 1, 1, num_layers
             weight_init_const = 1.0 / num_layers
-            self.layer_weights = fallback_ops.full(
+            self.layer_weights = tt_lib.tensor.full(
                 (1, 1, 1, num_layers), weight_init_const
             )
 

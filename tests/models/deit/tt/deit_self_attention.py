@@ -99,7 +99,7 @@ class TtDeiTSelfAttention(nn.Module):
 
         attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_transposed)
 
-        attention_head_size_tt = fallback_ops.full(
+        attention_head_size_tt = tt_lib.tensor.full(
             attention_scores.shape(), self.attention_head_size
         )
         attention_head_size_tt = tt_lib.tensor.sqrt(attention_head_size_tt)

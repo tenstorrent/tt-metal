@@ -58,7 +58,7 @@ class TtSwinEmbeddings(nn.Module):
         )
 
     def const_tensor(self, shape, value):
-        return fallback_ops.full(shape, value)
+        return tt_lib.tensor.full(shape, value)
 
     def forward(
         self,

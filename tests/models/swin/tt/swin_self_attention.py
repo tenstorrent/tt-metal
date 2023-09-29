@@ -85,7 +85,7 @@ class TtSwinSelfAttention(nn.Module):
         )
 
     def const_tensor(self, shape, value):
-        return fallback_ops.full(shape, value)
+        return tt_lib.tensor.full(shape, value)
 
     def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         # x must be 4d originaly
