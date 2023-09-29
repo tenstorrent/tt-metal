@@ -28,9 +28,6 @@ def tensor_to_device(x, device, buffer_type):
 
     return x.to(device, buffer_type)
 
-# This ref implementation is only here for debugging
-def ref_eltwise_log_sigmoid(x):
-    return torch.nn.functional.logsigmoid(x)
 
 def run_arange_tests(input_shape, dtype, dlayout, buffer_type, output_mem_config, data_seed, start, end, step, device):
 
