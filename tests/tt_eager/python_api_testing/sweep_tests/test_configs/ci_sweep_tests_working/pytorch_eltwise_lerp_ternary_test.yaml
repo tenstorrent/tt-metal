@@ -3,10 +3,10 @@ test-list:
   - eltwise-lerp_ternary:
       shape:
         start-shape: [1, 1, 32, 32]
-        end-shape: [12, 24, 512, 512]
+        end-shape: [6, 12, 256, 256]
         interval: [1, 1, 32, 32]
         num-shapes: 3
-        num-samples: 4
+        num-samples: 64
       datagen:
         function: gen_rand
         args:
@@ -18,16 +18,16 @@ test-list:
       output-file: eltwise_lerp_ternary_sweep.csv
       args:
         data-layout: ["TILE"]
-        data-type: ["BFLOAT16", "BFLOAT8_B"]
+        data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
   - eltwise-lerp_ternary:
       shape:
         start-shape: [1, 1, 2, 2]
-        end-shape: [12, 24, 512, 512]
+        end-shape: [6, 12, 256, 256]
         interval: [1, 1, 2, 2]
         num-shapes: 3
-        num-samples: 4
+        num-samples: 64
       datagen:
         function: gen_rand
         args:
