@@ -14,7 +14,7 @@ sys.path.append(f"{f}/../../../../..")
 
 import pytest
 import torch
-import random
+
 import tt_lib as ttl
 
 from tt_lib.utils import (
@@ -28,11 +28,12 @@ from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0,
 
 
 # This ref implementation is only here for debugging
-def ref_eltwise_addcmul(x, y, z, scalar):
-    result = torch.addcmul(x, y, z, value=scalar)
-    return result
 
-def run_eltwise_addcmul_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
+def ref_eltwise_lerp_ternary(x, y, z):
+    return torch.lerp(x, y, z)
+
+
+def run_eltwise_lerp_ternary_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
 
     # Initialize the device
@@ -123,11 +124,8 @@ def run_eltwise_addcmul_tests(input_shape, dtype, dlayout, in_mem_config, out_me
                     in_mem_config,
                 )
 
-
-            scalar = random.uniform(1.0,100.0)
-
-            logger.info("Running Eltwise addcmul test")
-            ttw = tensor.addcmul(ttx, tty, ttz, scalar, output_mem_config=out_mem_config)
+            logger.info("Running Eltwise lerp ternary test")
+            ttw = tensor.lerp(ttx, tty, ttz, output_mem_config=out_mem_config)
 
             logger.info("Done")
 
@@ -162,7 +160,7 @@ def run_eltwise_addcmul_tests(input_shape, dtype, dlayout, in_mem_config, out_me
                 tt_got_back = untilize(tt_got_back)
 
             # get referent value
-            ref_value = ref_eltwise_addcmul(x_ref, y_ref, z_ref, scalar)
+            ref_value = ref_eltwise_lerp_ternary(x_ref, y_ref, z_ref)
 
             # compare tt and golden outputs
             success, pcc_value = comp_pcc(tt_got_back, ref_value)
@@ -172,8 +170,8 @@ def run_eltwise_addcmul_tests(input_shape, dtype, dlayout, in_mem_config, out_me
 
 
 test_sweep_args=[
-    ((4, 11, 106, 232), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1), 19096254),
-    ((2, 10, 160, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, "SYSTEM_MEMORY", ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 3074662),
+    ((4, 11, 106, 232), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 19096254),
+    ((2, 10, 160, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, "SYSTEM_MEMORY", ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1), 3074662),
     ((1, 6, 256, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 16417740),
     ((6, 7, 192, 224), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, "SYSTEM_MEMORY", ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 11178160),
 ]
@@ -186,7 +184,7 @@ test_sweep_args=[
     ),
 )
 
-def test_eltwise_addcmul_test(
+def test_eltwise_lerp_ternary_test(
     input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
 ):
-    run_eltwise_addcmul_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
+    run_eltwise_lerp_ternary_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
