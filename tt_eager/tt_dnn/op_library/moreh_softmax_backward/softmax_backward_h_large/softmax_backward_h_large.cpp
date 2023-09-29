@@ -44,7 +44,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &out
     // create circular buffers
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input_grad.dtype());
 
-    CreateCircularBuffers(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
