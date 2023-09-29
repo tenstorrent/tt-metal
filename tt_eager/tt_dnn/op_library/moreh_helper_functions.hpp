@@ -72,12 +72,11 @@ struct CircularBufferArg {
     }
 };
 
-void CreateCircularBuffers(
+void CreateCircularBuffer(
     Program &program,
     const CoreRangeSet &core_range,
     tt::DataFormat data_format,
-    std::vector<CircularBufferArg> args,
-    std::optional<uint32_t> l1_address = std::nullopt);
+    std::vector<CircularBufferArg> args);
 
 }  // namespace primary
 }  // namespace operations
