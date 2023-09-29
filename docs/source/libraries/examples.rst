@@ -54,11 +54,11 @@ Run `TT-DNN` and PyTorch OPs
 In this code example we build on previous example and after ``relu`` also execute ``pow``, ``silu``, and ``exp``.
 
 Since ``pow`` is not supported in `TT-DNN` library, we need to move TT Tensor produced by ``relu`` to host machine,
-convert it to PyTorch tensor, execut ``pow`` from PyTorch, and then convert the outpout of ``pow`` back to TT Tensor.
+convert it to PyTorch tensor, execute ``pow`` from PyTorch, and then convert the outpout of ``pow`` back to TT Tensor for ``silu`` to be executed on device.
 
-After ``pow``, ``silu`` is executed as a fallback op; this means that the operation will actully execute as a PyTorch operation
-on host machine. But since ``silu`` is supported as fallback operation in `TT-DNN` library, we can treat it as any other op from `TT-DNN` library and
-supply is with TT Tensor as input.
+After ``pow`` is executed as a fallback op; this means that the operation will actully execute as a PyTorch operation
+on host machine. But since ``silu`` is supported as on-device operation in `TT-DNN` library we can
+supply it with TT Tensor as input.
 
 Lastly, we run ``exp`` on TT Accelerator device (suppling it with output from ``silu`` without any conversion).
 
@@ -107,7 +107,7 @@ Lastly, we run ``exp`` on TT Accelerator device (suppling it with output from ``
         # Run silu on TT Tensor tt_pow_out
         # This is a fallback op and it will behave like regular ops on TT accelerator device,
         # even though under the hood this op is executed on host.
-        tt_silu_out = fallback_ops.silu(tt_pow_out)
+        tt_silu_out = tt_lib.tensor.silu(tt_pow_out)
 
         # Run exp on TT accelerator device
         tt_exp_out = tt_lib.tensor.exp(tt_silu_out)

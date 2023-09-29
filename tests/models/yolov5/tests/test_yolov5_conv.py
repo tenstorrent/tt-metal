@@ -110,8 +110,7 @@ def test_Yolov5_Silu(device):
     pt_out = refence_module(test_input)
 
     test_input = torch2tt_tensor(test_input, device)
-    tt_out = fallback_ops.silu(test_input)
-
+    tt_out = tt_lib.tensor.silu(test_input)
     tt_out = tt2torch_tensor(tt_out)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)

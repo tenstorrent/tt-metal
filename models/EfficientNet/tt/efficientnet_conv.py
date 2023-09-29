@@ -227,7 +227,6 @@ class TtEfficientnetConv2dNormActivation(torch.nn.Module):
                 # Lite variant has ReLU6 instead of silu
                 x = tt_lib.tensor.relu6(x)
             else:
-                x = fallback_ops.silu(x)
-                # x = tt_lib.tensor.silu(x)
+                x = tt_lib.tensor.silu(x)
 
         return x

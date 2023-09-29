@@ -13,7 +13,6 @@ from tests.models.yolov3.tt.yolov3_conv2d import TtConv2D
 from tests.models.yolov3.reference.models.common import autopad
 from tests.models.yolov3.reference.models.yolo import Conv, Model
 import tt_lib
-from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
@@ -59,9 +58,9 @@ class TtConv(nn.Module):
         self.act = act
         if self.act != True:
             logger.warning(
-                f"Configuration for activation function {self.act} not supported. Using fallback.SiLU act function"
+                f"Configuration for activation function {self.act} not supported. Using tt_lib.tensor.SiLU act function"
             )
             raise NotImplementedError
 
     def forward(self, x):
-        return fallback_ops.silu(self.conv(x))
+        return tt_lib.tensor.silu(self.conv(x))
