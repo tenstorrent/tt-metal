@@ -81,10 +81,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* weights_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(weights_mcast_sender_semaphore_addr);
 
     uint64_t weights_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-    weights_mcast_dest_noc_end_x,
-    weights_mcast_dest_noc_end_y,
     weights_mcast_dest_noc_start_x,
     weights_mcast_dest_noc_start_y,
+    weights_mcast_dest_noc_end_x,
+    weights_mcast_dest_noc_end_y,
     weights_mcast_receiver_semaphore_addr);
     #endif
 
@@ -193,10 +193,10 @@ void kernel_main() {
 
             // Now we have the block in the CB address, we can mcast to dests!
             uint64_t weights_multicast_data_addr = get_noc_multicast_addr(
-            weights_mcast_dest_noc_end_x,
-            weights_mcast_dest_noc_end_y,
             weights_mcast_dest_noc_start_x,
             weights_mcast_dest_noc_start_y,
+            weights_mcast_dest_noc_end_x,
+            weights_mcast_dest_noc_end_y,
             weights_start_address);
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_async_write_multicast(weights_start_address, weights_multicast_data_addr, weights_block_size_bytes, weights_mcast_num_cores);
@@ -238,10 +238,10 @@ void kernel_main() {
 
             // Now we have the block in the CB address, we can mcast to dests!
             uint64_t bias_multicast_data_addr = get_noc_multicast_addr(
-            weights_mcast_dest_noc_end_x,
-            weights_mcast_dest_noc_end_y,
             weights_mcast_dest_noc_start_x,
             weights_mcast_dest_noc_start_y,
+            weights_mcast_dest_noc_end_x,
+            weights_mcast_dest_noc_end_y,
             bias_start_address);
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_async_write_multicast(bias_start_address, bias_multicast_data_addr, bias_block_size_bytes, weights_mcast_num_cores);

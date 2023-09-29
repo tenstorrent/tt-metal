@@ -642,13 +642,15 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
         bias_ntiles_per_core
     };
 
+    auto writer_mcast_noc = NOC::NOC_0;
+    auto reader_noc = writer_mcast_noc == NOC::NOC_0 ? NOC::NOC_1 : NOC::NOC_0;
     auto writer_mcast_sender_id = CreateDataMovementKernel(
     program,
     writer_mcast_sender_kernel,
     mcast_sender_cores,
     DataMovementConfig{
         .processor = DataMovementProcessor::RISCV_0,
-        .noc = NOC::RISCV_0_default,
+        .noc = writer_mcast_noc,
         .compile_args = writer_compile_time_args,
         .defines = writer_mcast_sender_defines});
 
@@ -660,7 +662,7 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
         mcast_receiver_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+            .noc = writer_mcast_noc,
             .compile_args = writer_compile_time_args,
             .defines = writer_defines});
     }
@@ -672,7 +674,7 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
+            .noc = reader_noc,
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
@@ -861,10 +863,18 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
             auto right_core_physical = device->worker_core_from_logical_core(right_core);
             // sender
             if (core_x_i == 0) {
-                writer_rt_args.push_back(bottom_right_core_physical.x); // weights_mcast_dest_noc_start_x
-                writer_rt_args.push_back(right_core_physical.y); // weights_mcast_dest_noc_start_y
-                writer_rt_args.push_back(top_left_core_plus_one_physical.x); // weights_mcast_dest_noc_end_x
-                writer_rt_args.push_back(right_core_physical.y); // weights_mcast_dest_noc_end_y
+                if (writer_mcast_noc == NOC::NOC_0) {
+                    writer_rt_args.push_back(top_left_core_plus_one_physical.x); // weights_mcast_dest_noc_start_x
+                    writer_rt_args.push_back(right_core_physical.y); // weights_mcast_dest_noc_start_y
+                    writer_rt_args.push_back(bottom_right_core_physical.x); // weights_mcast_dest_noc_end_x
+                    writer_rt_args.push_back(right_core_physical.y); // weights_mcast_dest_noc_end_y
+                } else {
+                    writer_rt_args.push_back(bottom_right_core_physical.x); // weights_mcast_dest_noc_start_x
+                    writer_rt_args.push_back(right_core_physical.y); // weights_mcast_dest_noc_start_y
+                    writer_rt_args.push_back(top_left_core_plus_one_physical.x); // weights_mcast_dest_noc_end_x
+                    writer_rt_args.push_back(right_core_physical.y); // weights_mcast_dest_noc_end_y
+                }
+
                 writer_rt_args.push_back(num_cores_x - 1); // weights_mcast_num_dests
                 writer_rt_args.push_back(num_cores_x - 1); // weights_mcast_num_cores
                 writer_rt_args.push_back(weights_mcast_sender_semaphore);
@@ -877,8 +887,8 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
                 writer_ids.push_back(writer_mcast_sender_id);
             // receiver
             } else {
-                writer_rt_args.push_back(top_left_core_physical.x); // weights_mcast_dest_noc_end_x
-                writer_rt_args.push_back(right_core_physical.y); // weights_mcast_dest_noc_end_y
+                writer_rt_args.push_back(top_left_core_physical.x); // weights_mcast_sender_noc_x
+                writer_rt_args.push_back(right_core_physical.y); // weights_mcast_sender_noc_y
                 writer_rt_args.push_back(weights_mcast_sender_semaphore);
                 writer_rt_args.push_back(weights_mcast_receiver_semaphore);
 
@@ -892,10 +902,17 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
         } else {
             // sender
             if (core_x_i == 0 and core_y_i == 0) {
-                writer_rt_args.push_back(bottom_right_core_physical.x); // weights_mcast_dest_noc_start_x
-                writer_rt_args.push_back(bottom_right_core_physical.y); // weights_mcast_dest_noc_start_y
-                writer_rt_args.push_back(top_left_core_physical.x); // weights_mcast_dest_noc_end_x
-                writer_rt_args.push_back(top_left_core_physical.y); // weights_mcast_dest_noc_end_y
+                if (writer_mcast_noc == NOC::NOC_0) {
+                    writer_rt_args.push_back(top_left_core_physical.x); // weights_mcast_dest_noc_start_x
+                    writer_rt_args.push_back(top_left_core_physical.y); // weights_mcast_dest_noc_start_y
+                    writer_rt_args.push_back(bottom_right_core_physical.x); // weights_mcast_dest_noc_end_x
+                    writer_rt_args.push_back(bottom_right_core_physical.y); // weights_mcast_dest_noc_end_y
+                } else {
+                    writer_rt_args.push_back(bottom_right_core_physical.x); // weights_mcast_dest_noc_start_x
+                    writer_rt_args.push_back(bottom_right_core_physical.y); // weights_mcast_dest_noc_start_y
+                    writer_rt_args.push_back(top_left_core_physical.x); // weights_mcast_dest_noc_end_x
+                    writer_rt_args.push_back(top_left_core_physical.y); // weights_mcast_dest_noc_end_y
+                }
                 writer_rt_args.push_back(total_active_num_cores - 1); // weights_mcast_num_dests
                 writer_rt_args.push_back(total_num_cores - 1); // weights_mcast_num_cores
                 writer_rt_args.push_back(weights_mcast_sender_semaphore);
@@ -908,8 +925,8 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
                 writer_ids.push_back(writer_mcast_sender_id);
             // receiver
             } else {
-                writer_rt_args.push_back(top_left_core_physical.x); // weights_mcast_dest_noc_end_x
-                writer_rt_args.push_back(top_left_core_physical.y); // weights_mcast_dest_noc_end_y
+                writer_rt_args.push_back(top_left_core_physical.x); // weights_mcast_sender_noc_x
+                writer_rt_args.push_back(top_left_core_physical.y); // weights_mcast_sender_noc_y
                 writer_rt_args.push_back(weights_mcast_sender_semaphore);
                 writer_rt_args.push_back(weights_mcast_receiver_semaphore);
 
