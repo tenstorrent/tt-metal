@@ -70,20 +70,21 @@ struct CoreGridDesc {
 // Returns the number of cores as well as the number of tiles per core
 
 inline std::tuple<uint32_t, uint32_t> get_max_cores_divisible_by_tiles_per_core_tiles(
-    const uint32_t &num_tiles, const uint32_t &num_cores_max) {
-
+    const uint32_t &num_tiles, const uint32_t &num_cores_max, bool request_even = false) {
     uint32_t num_cores = 1;
     for (int i = 2; i <= num_cores_max; i++) {
         if ((num_tiles % i) == 0) {
             num_cores = i;
         }
     }
+    if (request_even) {
+        num_cores = num_cores - num_cores % 2;
+    }
     uint32_t per_core_tiles_dim = num_tiles / num_cores;
     if (num_tiles % num_cores != 0)
         per_core_tiles_dim++;
     return {num_cores, per_core_tiles_dim};
 }
-
 
 // Finds the maximum even divisor of val starting at start_max_div and below
 inline int find_max_divisor(uint32_t val, uint32_t start_max_div) {

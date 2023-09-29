@@ -59,7 +59,7 @@ void setup_runtime(
             for(int id_c_outer = 0; id_c_outer < idc_outer_limit; id_c_outer++){
                 for (int id_c_inner = 0; id_c_inner < idc_inner_limit; id_c_inner++) {
                     uint32_t id_c = id_c_outer*idc_inner_limit + id_c_inner;
-                    CoreCoord core = {(std::size_t)start_core_x + id_c, (std::size_t)start_core_y + id_r};
+                    CoreCoord core = {(std::size_t)start_core_x + id_r, (std::size_t)start_core_y + id_c};
 
                     uint32_t reader_core_id = id_c*per_core_tiles_y;
                     reader_core_id += id_r_reader;
@@ -140,7 +140,8 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     auto num_cores_z = z;
 
     // parallelize y
-    auto [num_cores_y, per_core_tiles_y] = get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_dim_3, num_cores_y_limit);
+    auto [num_cores_y, per_core_tiles_y] =
+        get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_dim_3, num_cores_y_limit, /*request_even=*/true);
 
     // parallelize x
     auto [num_cores_x, per_core_tiles_x] = get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_dim_2,
@@ -154,11 +155,9 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     uint32_t num_cores_c = num_cores_y;
     uint32_t num_cores_r = num_cores_x * num_cores_z;
 
-
-
     CoreRange all_cores{
         .start = {(std::size_t)start_core_x, (std::size_t)start_core_y},
-        .end = {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1},
+        .end = {(std::size_t)start_core_x + num_cores_r - 1, (std::size_t)start_core_y + num_cores_c - 1},
     };
 
     bool tile_dtype_is_bfloat16 = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16;
@@ -251,8 +250,8 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
             auto dst_0_dram_buffer = output_buffers.at(0);
             auto dst_1_dram_buffer = output_buffers.at(0);
 
-            for (int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-                for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+            for (int core_idx_y = 0; core_idx_y < num_cores_c; core_idx_y++) {
+                for (int core_idx_x = 0; core_idx_x < num_cores_r; core_idx_x++) {
                     CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
 
                     {
