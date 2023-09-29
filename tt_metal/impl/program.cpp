@@ -330,8 +330,8 @@ void Program::validate_circular_buffer_region(const Device *device, std::optiona
     };
 
     auto validate_cb_space_and_l1_buffer_space_disjoint = [&](const CoreCoord &core, const std::pair<u64, u64> &cb_space) {
-        if (cb_space.second > device->l1_size()) {
-            log_fatal(tt::LogMetal, "Local buffers on core {} grow to {} B which is beyond max L1 size of {} B", core.str(), cb_space.second, device->l1_size());
+        if (cb_space.second > device->l1_size_per_core()) {
+            log_fatal(tt::LogMetal, "Local buffers on core {} grow to {} B which is beyond max L1 size of {} B", core.str(), cb_space.second, device->l1_size_per_core());
         }
 
         auto bank_ids = device->bank_ids_from_logical_core(core);

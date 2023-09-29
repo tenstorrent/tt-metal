@@ -150,7 +150,7 @@ TEST_F(MultiDeviceFixture, PingAllLegalDramChannels) {
                 device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
         }
         {
-            size_t start_byte_address = device_->dram_size() - 32 * 1024;
+            size_t start_byte_address = device_->dram_size_per_channel() - 32 * 1024;
             ASSERT_TRUE(
                 unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
             ASSERT_TRUE(
@@ -195,7 +195,7 @@ TEST_F(MultiDeviceFixture, PingAllLegalL1Cores) {
                 device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
         }
         {
-            size_t start_byte_address = device_->l1_size() - 32 * 1024;
+            size_t start_byte_address = device_->l1_size_per_core() - 32 * 1024;
             ASSERT_TRUE(
                 unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
             ASSERT_TRUE(
@@ -290,7 +290,7 @@ TEST_F(SingleDeviceFixture, PingAllLegalDramChannels) {
             unit_tests::basic::device::dram_ping(device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
     }
     {
-        size_t start_byte_address = device_->dram_size() - 32 * 1024;
+        size_t start_byte_address = device_->dram_size_per_channel() - 32 * 1024;
         ASSERT_TRUE(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
         ASSERT_TRUE(
             unit_tests::basic::device::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
@@ -325,7 +325,7 @@ TEST_F(SingleDeviceFixture, PingAllLegalL1Cores) {
             unit_tests::basic::device::l1_ping(device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
     }
     {
-        size_t start_byte_address = device_->l1_size() - 32 * 1024;
+        size_t start_byte_address = device_->l1_size_per_core() - 32 * 1024;
         ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
         ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
         ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
@@ -398,7 +398,7 @@ TEST_F(SingleDeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
     uint32_t num_l1_banks = this->device_->num_banks(BufferType::L1);
     std::vector<uint32_t> host_input(1);
     std::map<uint32_t, uint32_t> bank_id_to_value;
-    uint32_t l1_address = this->device_->l1_size() - 2048;
+    uint32_t l1_address = this->device_->l1_size_per_core() - 2048;
     for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
         host_input[0] = bank_id + 1;
         bank_id_to_value[bank_id] = host_input.at(0);

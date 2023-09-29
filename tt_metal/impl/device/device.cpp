@@ -160,8 +160,8 @@ void Device::initialize_hardware() {
 
 void Device::clear_l1_state() {
     CoreCoord logical_grid_size = this->logical_grid_size();
-    TT_ASSERT(this->l1_size() % sizeof(uint32_t) == 0);
-    std::vector<uint32_t> zero_vec(this->l1_size() / sizeof(uint32_t), 0);
+    TT_ASSERT(this->l1_size_per_core() % sizeof(uint32_t) == 0);
+    std::vector<uint32_t> zero_vec(this->l1_size_per_core() / sizeof(uint32_t), 0);
     constexpr uint32_t start_address = 0;
     for (uint32_t x = 0; x < logical_grid_size.x; x++) {
         for (uint32_t y = 0; y < logical_grid_size.y; y++) {
@@ -243,10 +243,10 @@ int Device::num_dram_channels() const {
     return tt::Cluster::instance().get_soc_desc(id_).get_num_dram_channels();
 }
 
-uint32_t Device::l1_size() const {
+uint32_t Device::l1_size_per_core() const {
     return tt::Cluster::instance().get_soc_desc(id_).worker_l1_size;
 }
-uint32_t Device::dram_size() const {
+uint32_t Device::dram_size_per_channel() const {
     return tt::Cluster::instance().get_soc_desc(id_).dram_bank_size;
 }
 

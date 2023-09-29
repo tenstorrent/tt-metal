@@ -56,7 +56,7 @@ TEST_F(SingleDeviceFixture, TestSimpleDramBufferReadOnlyLo) {
     ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 16*1024));
 }
 TEST_F(SingleDeviceFixture, TestSimpleDramBufferReadOnlyHi) {
-    size_t hi_address = this->device_->dram_size() - (16*1024);
+    size_t hi_address = this->device_->dram_size_per_channel() - (16*1024);
     ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 4));
     ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 8));
     ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 16));
@@ -74,7 +74,7 @@ TEST_F(SingleDeviceFixture, TestSimpleDramBufferWriteOnlyLo) {
     ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 16*1024));
 }
 TEST_F(SingleDeviceFixture, TestSimpleDramBufferWriteOnlyHi) {
-    size_t hi_address = this->device_->dram_size() - (16*1024);
+    size_t hi_address = this->device_->dram_size_per_channel() - (16*1024);
     ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 4));
     ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 8));
     ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 16));

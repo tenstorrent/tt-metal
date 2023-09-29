@@ -112,7 +112,7 @@ namespace tt::test::buffer::detail {
 }
 
 TEST_F(SingleDeviceFixture, TestSimpleL1BufferReadOnlyLo) {
-    size_t lo_address = this->device_->l1_size() - this->device_->bank_size(tt::tt_metal::BufferType::L1);
+    size_t lo_address = this->device_->l1_size_per_core() - this->device_->bank_size(tt::tt_metal::BufferType::L1);
     ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 4));
     ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 8));
     ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 16));
@@ -121,7 +121,7 @@ TEST_F(SingleDeviceFixture, TestSimpleL1BufferReadOnlyLo) {
     ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 16*1024));
 }
 TEST_F(SingleDeviceFixture, TestSimpleL1BufferReadOnlyHi) {
-    size_t hi_address = this->device_->l1_size() - (16*1024);
+    size_t hi_address = this->device_->l1_size_per_core() - (16*1024);
     ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 4));
     ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 8));
     ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 16));
@@ -130,7 +130,7 @@ TEST_F(SingleDeviceFixture, TestSimpleL1BufferReadOnlyHi) {
     ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 16*1024));
 }
 TEST_F(SingleDeviceFixture, TestSimpleL1BufferWriteOnlyLo) {
-    size_t lo_address = this->device_->l1_size() - this->device_->bank_size(tt::tt_metal::BufferType::L1);
+    size_t lo_address = this->device_->l1_size_per_core() - this->device_->bank_size(tt::tt_metal::BufferType::L1);
     ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 4));
     ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 8));
     ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 16));
@@ -140,7 +140,7 @@ TEST_F(SingleDeviceFixture, TestSimpleL1BufferWriteOnlyLo) {
 }
 
 TEST_F(SingleDeviceFixture, TestSimpleL1BufferWriteOnlyHi) {
-    size_t hi_address = this->device_->l1_size() - (16*1024);
+    size_t hi_address = this->device_->l1_size_per_core() - (16*1024);
     ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 4));
     ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 8));
     ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 16));
@@ -157,7 +157,7 @@ TEST_F(SingleDeviceFixture, TestSimpleL1ReadWriteTileLo) {
 }
 
 TEST_F(SingleDeviceFixture, TestSimpleL1ReadWriteTileHi) {
-    size_t hi_address = this->device_->l1_size() - (24*1024);
+    size_t hi_address = this->device_->l1_size_per_core() - (24*1024);
     ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, hi_address + 8*1024, hi_address + 16*1024, 2*1024));
     ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, hi_address + 8*1024, hi_address + 16*1024, 4*1024));
     ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, hi_address + 8*1024, hi_address + 16*1024, 6*1024));
@@ -171,7 +171,7 @@ TEST_F(SingleDeviceFixture, TestSimpleL1ReadWritex2y2TileLo) {
 }
 
 TEST_F(SingleDeviceFixture, TestSimpleL1ReadWritex2y2TileHi) {
-    size_t hi_address = this->device_->l1_size() - (24*1024);
+    size_t hi_address = this->device_->l1_size_per_core() - (24*1024);
     ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, hi_address + 16*1024, 2*1024));
     ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, hi_address + 16*1024, 4*1024));
     ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, hi_address + 16*1024, 6*1024));
@@ -185,7 +185,7 @@ TEST_F(SingleDeviceFixture, TestBufferL1ReadWriteTileLo) {
 }
 
 TEST_F(SingleDeviceFixture, TestBufferL1ReadWriteTileHi) {
-    size_t hi_address = this->device_->l1_size() - (24*1024);
+    size_t hi_address = this->device_->l1_size_per_core() - (24*1024);
     ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, hi_address + 16*1024, 2*1024));
     ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, hi_address + 16*1024, 4*1024));
     ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, hi_address + 16*1024, 6*1024));
