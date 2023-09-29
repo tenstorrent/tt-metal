@@ -10,12 +10,9 @@ from functools import partial
 from math import pi
 import copy
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
+#ttl.profiler.set_profiler_location(
+#        f"tt_metal/tools/profiler/logs/BERT_large_post_softmax_bmm_{request.node.callspec.id}"
+#    )
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
