@@ -907,25 +907,17 @@ inline void calculate_heaviside(uint value)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_silu()
+inline void calculate_mask()
 {
-    // SFPU microcode
-    for (int d = 0; d < ITERATIONS; d++) {
-        vFloat val = dst_reg[0];
-        v_if ( val < 0.0f ) {
-            val = -val;
+    bool exponent_size_8 = true;
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat mask = dst_reg[32];
+        v_if(sfpu_is_fp16_zero(mask, exponent_size_8)) {
+            dst_reg[0] = 0;
         }
         v_endif;
 
-	    vFloat result = sigmoid_piecewise_linear_positive(val);
-
-	    val = dst_reg[0];
-        v_if ( val < 0.0f ) {
-            result = 1.0f - result;
-        }
-        v_endif;
-        result = val * result;
-        dst_reg[0] = result;
         dst_reg++;
     }
 }
@@ -1017,6 +1009,9 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::atan) {
         calculate_atan<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::mask) {
+        calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::negative) {
         calculate_negative<APPROXIMATION_MODE, ITERATIONS>();
