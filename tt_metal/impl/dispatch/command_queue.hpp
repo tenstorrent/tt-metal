@@ -162,12 +162,13 @@ class EnqueueProgramCommand : public Command {
     Buffer& buffer;
     ProgramSrcToDstAddrMap& program_to_dev_map;
     const RuntimeArgs runtime_args;
+    const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers;
     SystemMemoryWriter& writer;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_PROGRAM;
 
    public:
     static map<const Program*, DeviceCommand> command_cache;
-    EnqueueProgramCommand(Device*, Buffer&, ProgramSrcToDstAddrMap&, SystemMemoryWriter&, const RuntimeArgs&);
+    EnqueueProgramCommand(Device*, Buffer&, ProgramSrcToDstAddrMap&, SystemMemoryWriter&, const RuntimeArgs&, const std::vector<std::shared_ptr<CircularBuffer>> &circular_buffers);
 
     const DeviceCommand assemble_device_command(u32);
 
