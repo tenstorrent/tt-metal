@@ -27,6 +27,7 @@ FORCE_INLINE void read_bias(uint32_t bias_addr,
         s_bias.noc_async_read_page(bias_tile, bias_l1_addr);
         bias_l1_addr += bias_pagesize;
     }
+    noc_async_read_barrier();
     cb_push_back(bias_cb_id, bias_ntiles);
 } // read_bias()
 
@@ -48,5 +49,6 @@ FORCE_INLINE void read_bias_with_offset(uint32_t bias_addr,
         s_bias.noc_async_read_page(bias_tile, bias_l1_addr);
         bias_l1_addr += bias_pagesize;
     }
+    noc_async_read_barrier();
     cb_push_back(bias_cb_id, bias_ntiles);
 } // read_bias()
