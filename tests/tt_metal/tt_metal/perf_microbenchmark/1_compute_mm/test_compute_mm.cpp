@@ -539,14 +539,16 @@ tt_metal::Program create_program(
 
   // Create circular buffers
   uint32_t src0_cb_index = 0;
-  auto cb_src0 = tt_metal::CreateCircularBuffers(
-      program, src0_cb_index, all_cores, in0_CB_tiles, in0_CB_size,
-      cb_data_format, in0_cb_addr);
+  tt_metal::CircularBufferConfig cb_src0_config =
+      tt_metal::CircularBufferConfig(in0_CB_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
+          .set_page_size(src0_cb_index, single_tile_size);
+  auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
   uint32_t src1_cb_index = 1;
-  auto cb_src1 = tt_metal::CreateCircularBuffers(
-      program, src1_cb_index, all_cores, in1_CB_tiles, in1_CB_size,
-      cb_data_format, in1_cb_addr);
+  tt_metal::CircularBufferConfig cb_src1_config =
+      tt_metal::CircularBufferConfig(in1_CB_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
+          .set_page_size(src1_cb_index, single_tile_size);
+  auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
   // Dummy cb to store one tile of zeros for padding
   uint32_t in2_CB_tiles = 1;  // No double buffer
@@ -554,15 +556,21 @@ tt_metal::Program create_program(
   // NOTE: For first core, initialize cb to the larger tile size to prevent
   // accidentally writing 0 to L1 space during cb init in the kernels
   uint32_t src2_cb_index = 2;
-  auto in0_in1_sender_cb_src2 = tt_metal::CreateCircularBuffers(
-      program, src2_cb_index, all_cores, in2_CB_tiles,
-      in2_CB_tiles * single_tile_size, cb_data_format, zero_cb_addr);
+  tt_metal::CircularBufferConfig cb_src2_config =
+      tt_metal::CircularBufferConfig(in2_CB_tiles * single_tile_size, {{src2_cb_index, cb_data_format}})
+          .set_page_size(src2_cb_index, single_tile_size);
+  auto in0_in1_sender_cb_src2 = tt_metal::CreateCircularBuffer(
+      program, all_cores, cb_src2_config);
 
-  uint32_t output_cb_index = 16;  // output operands start at index 16
+  uint32_t out_cb_index = 16;  // output operands start at index 16
   uint32_t interm0_cb_index = 24;
-  auto cb_output = tt_metal::CreateCircularBuffers(
-      program, {output_cb_index, interm0_cb_index}, CoreRangeSet({all_cores}),
-      out_CB_tiles, out_CB_size, cb_data_format, out_cb_addr);
+  std::map<uint8_t, tt::DataFormat> partials_and_out_data_format_spec = {
+      {out_cb_index, cb_data_format}, {interm0_cb_index, cb_data_format}};
+  tt_metal::CircularBufferConfig cb_out_config =
+      tt_metal::CircularBufferConfig(out_CB_size, partials_and_out_data_format_spec)
+          .set_page_size(out_cb_index, single_tile_size)
+          .set_page_size(interm0_cb_index, single_tile_size);
+  auto cb_out = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_out_config);
 
   // Create reader and writer kernels per core
   auto mm_in0_reader_kernel_id = tt_metal::CreateDataMovementKernel(
