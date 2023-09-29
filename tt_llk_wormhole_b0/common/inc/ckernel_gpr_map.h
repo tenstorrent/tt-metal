@@ -47,6 +47,10 @@ struct p_gpr_unpack
                                                     // before/after unpacking directly to dest
     constexpr static uint SR_UNPACK_TILIZER_STATE_0 = 54;  // Save unpack state before tilizer is enabled for quick restore 
     constexpr static uint SR_UNPACK_TILIZER_STATE_1 = 55;  
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_0 = 56;  // Save unpack state before tilizer is enabled for quick restore 
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_1 = 57;  
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_2 = 58;  
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_3 = 59;  
                                                     
 };
 
