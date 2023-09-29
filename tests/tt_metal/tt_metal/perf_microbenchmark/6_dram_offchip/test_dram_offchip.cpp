@@ -319,9 +319,11 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, uint32_t> create_program(
 
   uint32_t cb_index = 0;
   uint32_t cb_tiles = num_reqs_at_a_time;
-  auto cb =
-      tt_metal::CreateCircularBuffers(program, cb_index, all_cores, cb_tiles,
-                                      cb_tiles * single_tile_size, tile_format);
+  uint32_t cb_addr = L1_UNRESERVED_BASE;
+  tt_metal::CircularBufferConfig cb_config =
+      tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_index, tile_format}}, cb_addr)
+          .set_page_size(cb_index, single_tile_size);
+  auto cb = tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
   auto reader_kernel = tt_metal::CreateDataMovementKernel(
       program,
@@ -336,7 +338,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, uint32_t> create_program(
                            : tt_metal::DataMovementProcessor::RISCV_0,
           .noc = (access_type == 0) ? tt_metal::NOC::RISCV_1_default
                                     : tt_metal::NOC::RISCV_0_default});
-  return {std::move(program), reader_kernel, cb.address()};
+  return {std::move(program), reader_kernel, cb_addr};
 }
 
 bool assign_runtime_args_to_program(

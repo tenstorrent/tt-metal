@@ -148,13 +148,20 @@ int main(int argc, char** argv) {
 
     uint32_t cb_tiles = 32;
     uint32_t single_tile_size = 2 * 1024;
-    auto cb_src0 = tt_metal::CreateCircularBuffers(
-        program, 0, all_cores, cb_tiles, cb_tiles * single_tile_size,
-        tt::DataFormat::Float16_b);
 
-    auto cb_src1 = tt_metal::CreateCircularBuffers(
-        program, 1, all_cores, cb_tiles, cb_tiles * single_tile_size,
-        tt::DataFormat::Float16_b);
+    uint32_t cb_src0_index = 0;
+    uint32_t cb_src0_addr = L1_UNRESERVED_BASE;
+    tt_metal::CircularBufferConfig cb_src0_config =
+        tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_src0_index, tt::DataFormat::Float16_b}}, cb_src0_addr)
+            .set_page_size(cb_src0_index, single_tile_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+    uint32_t cb_src1_index = 1;
+    uint32_t cb_src1_addr = cb_src0_addr + cb_tiles * single_tile_size;
+    tt_metal::CircularBufferConfig cb_src1_config =
+        tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_src1_index, tt::DataFormat::Float16_b}}, cb_src1_addr)
+            .set_page_size(cb_src1_index, single_tile_size);
+    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     auto noc_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -196,7 +203,7 @@ int main(int argc, char** argv) {
 
         vector<uint32_t> noc_runtime_args = {
             (uint32_t)adjacent_core_noc.x, (uint32_t)adjacent_core_noc.y,
-            cb_src1.address(), num_tiles / tiles_per_transfer,
+            cb_src1_addr, num_tiles / tiles_per_transfer,
             tiles_per_transfer};
         SetRuntimeArgs(program, noc_kernel, logical_core, noc_runtime_args);
       }

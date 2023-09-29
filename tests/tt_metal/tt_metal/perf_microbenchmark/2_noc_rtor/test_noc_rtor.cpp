@@ -139,12 +139,12 @@ int main(int argc, char** argv) {
       for (int j = 0; j < num_cores_c; j++) {
         int core_index = i * num_cores_c + j;
         CoreCoord core = {(std::size_t)j, (std::size_t)i};
-
         uint32_t cb_index = 0;
         uint32_t cb_tiles = 32;
-        auto cb_src0 = tt_metal::CreateCircularBuffer(
-            program, cb_index, core, cb_tiles, cb_tiles * single_tile_size,
-            tt::DataFormat::Float16_b);
+        tt_metal::CircularBufferConfig cb_src0_config =
+            tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(cb_index, single_tile_size);
+        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
       }
     }
 
