@@ -48,10 +48,10 @@ int main(int argc, char** argv) {
   try {
     std::tie(num_cores_r, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args,
-                                                                "--cores-r", 9);
+                                                                "--cores-r", 0);
     std::tie(num_cores_c, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
-            input_args, "--cores-c", 12);
+            input_args, "--cores-c", 0);
 
     std::tie(num_core_groups, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
@@ -80,6 +80,10 @@ int main(int argc, char** argv) {
   int device_id = 0;
   tt_metal::Device* device = tt_metal::CreateDevice(device_id);
   CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
+
+  auto grid_coord = device->compute_with_storage_grid_size();
+  num_cores_c = (num_cores_c == 0) ? grid_coord.x : num_cores_c;
+  num_cores_r = (num_cores_r == 0) ? grid_coord.y : num_cores_r;
 
   try {
     ////////////////////////////////////////////////////////////////////////////

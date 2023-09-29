@@ -64,10 +64,10 @@ int main(int argc, char** argv) {
   try {
     std::tie(num_cores_r, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args,
-                                                                "--cores-r", 9);
+                                                                "--cores-r", 0);
     std::tie(num_cores_c, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
-            input_args, "--cores-c", 12);
+            input_args, "--cores-c", 0);
 
     std::tie(num_tiles, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
@@ -112,6 +112,9 @@ int main(int argc, char** argv) {
     CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
     int clock_freq_mhz = get_tt_npu_clock(device);
+    auto grid_coord = device->compute_with_storage_grid_size();
+    num_cores_c = (num_cores_c == 0) ? grid_coord.x : num_cores_c;
+    num_cores_r = (num_cores_r == 0) ? grid_coord.y : num_cores_r;
 
     uint32_t single_tile_size = 2 * 1024;
     uint32_t page_size = single_tile_size;
