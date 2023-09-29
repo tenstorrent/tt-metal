@@ -74,16 +74,16 @@ void MAIN {
         // step 2, compute sum(y * dy)
         ACQ();
         cb_reserve_back(cb_sum, onetile);
-        reduce_init_delta_v2<false>(REDUCE_OP, REDUCE_DIM);
+        reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
         for(uint32_t w = 0; w < Wt; ++w) {
             cb_wait_front(cb_ydy, w + 1); // must be a cumulative wait for correctness
 
             constexpr uint32_t bcast_scaler0 = 0; // 0th index from bcast_scaler CB
-            reduce_tile_v2(REDUCE_OP, REDUCE_DIM, cb_ydy, cb_bcast_scaler, w, bcast_scaler0, dst0);
+            reduce_tile(REDUCE_OP, REDUCE_DIM, cb_ydy, cb_bcast_scaler, w, bcast_scaler0, dst0);
         }
         cb_pop_front(cb_ydy, Wt);
 
-        reduce_revert_delta_v2();
+        reduce_revert_delta();
         pack_tile(dst0, cb_sum);
         cb_push_back(cb_sum, onetile);
         REL();
