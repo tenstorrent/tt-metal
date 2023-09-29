@@ -907,6 +907,7 @@ inline void calculate_heaviside(uint value)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
+<<<<<<< HEAD:tt_metal/hw/ckernels/wormhole_b0/common/inc/ckernel_sfpu.h
 inline void calculate_silu()
 {
     // SFPU microcode
@@ -926,6 +927,19 @@ inline void calculate_silu()
         v_endif;
         result = val * result;
         dst_reg[0] = result;
+=======
+inline void calculate_mask()
+{
+    bool exponent_size_8 = true;
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat mask = dst_reg[32];
+        v_if(sfpu_is_fp16_zero(mask, exponent_size_8)) {
+            dst_reg[0] = 0;
+        }
+        v_endif;
+
+>>>>>>> #2788: Support mask_tile for Wormhole B0:tt_metal/src/ckernels/wormhole_b0/common/inc/ckernel_sfpu.h
         dst_reg++;
     }
 }
@@ -1023,6 +1037,9 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::silu) {
         calculate_silu<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::mask) {
+        calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
     }
     else if constexpr (operation == SfpuType::negative) {
         calculate_negative<APPROXIMATION_MODE, ITERATIONS>();
