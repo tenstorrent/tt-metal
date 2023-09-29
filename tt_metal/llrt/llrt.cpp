@@ -93,12 +93,12 @@ ll_api::memory get_risc_binary(string path, chip_id_t chip_id, bool fw_build) {
 void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, std::vector<uint32_t> hex_vec, uint64_t addr, bool small_access) {
     // the API is named "write_dram_vec", and its overloaded variant is taking (chip, core) pair, ie. it can write to
     // core's L1
-    tt::Cluster::inst().write_dram_vec(hex_vec, tt_cxy_pair(chip, core), addr, small_access);
+    tt::Cluster::instance().write_dram_vec(hex_vec, tt_cxy_pair(chip, core), addr, small_access);
 }
 
 std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t size) {
     vector<std::uint32_t> read_hex_vec;
-    tt::Cluster::inst().read_dram_vec(read_hex_vec, tt_cxy_pair(chip, core), addr, size);
+    tt::Cluster::instance().read_dram_vec(read_hex_vec, tt_cxy_pair(chip, core), addr, size);
     return read_hex_vec;
 }
 
@@ -109,14 +109,14 @@ void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg)
 
 void print_worker_cores(chip_id_t chip_id) {
     std::cout << std::endl << "worker cores: " << std::endl;
-    for (const CoreCoord &core : tt::Cluster::inst().get_soc_desc(chip_id).physical_workers) {
+    for (const CoreCoord &core : tt::Cluster::instance().get_soc_desc(chip_id).physical_workers) {
         std::cout << core.str() << " ";
     }
     std::cout << std::endl << std::endl;
 }
 
 bool is_worker_core(const CoreCoord &core, chip_id_t chip_id) {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::inst().get_soc_desc(chip_id);
+    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
     return std::find(soc_desc.physical_workers.begin(), soc_desc.physical_workers.end(), core) != soc_desc.physical_workers.end();
 }
 
@@ -165,7 +165,7 @@ ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const l
     ll_api::memory read_mem;
     read_mem.fill_from_mem_template(mem, [&](std::vector<uint32_t>::iterator mem_ptr, uint64_t addr, uint32_t len) {
         uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
-        tt::Cluster::inst().read_dram_vec(&*mem_ptr, tt_cxy_pair(chip, core), relo_addr, len * sizeof(uint32_t));
+        tt::Cluster::instance().read_dram_vec(&*mem_ptr, tt_cxy_pair(chip, core), relo_addr, len * sizeof(uint32_t));
     });
     return read_mem;
 }
@@ -213,7 +213,7 @@ static bool test_load_write_read_risc_binary_imp(ll_api::memory &mem, chip_id_t 
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len) {
         uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
 
-        tt::Cluster::inst().write_dram_vec(&*mem_ptr, len, tt_cxy_pair(chip_id, core), relo_addr);
+        tt::Cluster::instance().write_dram_vec(&*mem_ptr, len, tt_cxy_pair(chip_id, core), relo_addr);
     });
 
     log_debug(tt::LogLLRuntime, "wrote hex to core {}", core.str().c_str());
@@ -297,7 +297,7 @@ void load_blank_kernel_to_cores(chip_id_t chip_id, const TensixRiscsOptions &ris
 void load_blank_kernel_to_all_worker_cores_with_exceptions(chip_id_t chip_id, const TensixRiscsOptions &riscs_to_load, std::unordered_set<CoreCoord> exceptions) {
     std::vector<CoreCoord> cores_to_load_with_blanks;  // PROF_BEGIN("set_diff")
 
-    for (const CoreCoord &worker_core : tt::Cluster::inst().get_soc_desc(chip_id).physical_workers) {
+    for (const CoreCoord &worker_core : tt::Cluster::instance().get_soc_desc(chip_id).physical_workers) {
         if (exceptions.find(worker_core) == exceptions.end()) {
             cores_to_load_with_blanks.push_back(worker_core);
         }

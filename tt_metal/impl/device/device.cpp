@@ -28,7 +28,7 @@ Device::Device(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) 
 
 size_t Device::detect_num_available_devices() {
 #ifdef TT_METAL_VERSIM_DISABLED
-    return tt::Cluster::inst().number_of_devices();
+    return tt::Cluster::instance().number_of_devices();
 #else
     return 1;
 #endif
@@ -39,17 +39,17 @@ void Device::initialize_cluster() {
     this->clear_l1_state();
 
 #ifdef TT_METAL_VERSIM_DISABLED
-    int ai_clk = tt::Cluster::inst().get_device_aiclk(this->id_);
+    int ai_clk = tt::Cluster::instance().get_device_aiclk(this->id_);
     log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
 #endif
-    tt::Cluster::inst().assert_risc_reset(this->id_);
-    tt::Cluster::inst().initialize_dram_barrier(this->id_);
-    tt::Cluster::inst().initialize_l1_barrier(this->id_);
+    tt::Cluster::instance().assert_risc_reset(this->id_);
+    tt::Cluster::instance().initialize_dram_barrier(this->id_);
+    tt::Cluster::instance().initialize_l1_barrier(this->id_);
 }
 
 void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
     ZoneScoped;
-    const metal_SocDescriptor &soc_desc = tt::Cluster::inst().get_soc_desc(this->id_);
+    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     // Construct allocator config from soc_desc
     AllocatorConfig config({
         .num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
@@ -143,7 +143,7 @@ void Device::initialize_hardware() {
     }
 
     // Barrier between L1 writes above and deassert below
-    tt::Cluster::inst().l1_barrier(this->id());
+    tt::Cluster::instance().l1_barrier(this->id());
 
     // Deassert worker cores
     for (uint32_t y = 0; y < grid_size.y; y++) {
@@ -152,7 +152,7 @@ void Device::initialize_hardware() {
             CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
 
             if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
-                tt::Cluster::inst().deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
+                tt::Cluster::instance().deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
             }
         }
     }
@@ -217,9 +217,9 @@ bool Device::close() {
     this->deallocate_buffers();
     llrt::watcher_detach(this);
     tt_stop_debug_print_server();
-    tt::Cluster::inst().assert_risc_reset(id_);
+    tt::Cluster::instance().assert_risc_reset(id_);
     this->clear_l1_state();
-    tt::Cluster::inst().l1_barrier(id_);
+    tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
 
     const std::lock_guard<std::mutex> lock(active_devices_lock_);
@@ -236,28 +236,28 @@ Device::~Device() {
 }
 
 tt::ARCH Device::arch() const {
-    return tt::Cluster::inst().arch();
+    return tt::Cluster::instance().arch();
 }
 
 int Device::num_dram_channels() const {
-    return tt::Cluster::inst().get_soc_desc(id_).get_num_dram_channels();
+    return tt::Cluster::instance().get_soc_desc(id_).get_num_dram_channels();
 }
 
 uint32_t Device::l1_size() const {
-    return tt::Cluster::inst().get_soc_desc(id_).worker_l1_size;
+    return tt::Cluster::instance().get_soc_desc(id_).worker_l1_size;
 }
 uint32_t Device::dram_size() const {
-    return tt::Cluster::inst().get_soc_desc(id_).dram_bank_size;
+    return tt::Cluster::instance().get_soc_desc(id_).dram_bank_size;
 }
 
 CoreCoord Device::logical_grid_size() const {
-    return tt::Cluster::inst().get_soc_desc(id_).worker_grid_size;
+    return tt::Cluster::instance().get_soc_desc(id_).worker_grid_size;
 }
 
 CoreCoord Device::compute_with_storage_grid_size() const {
     const char *TT_METAL_SINGLE_CORE_MODE = std::getenv("TT_METAL_SINGLE_CORE_MODE");
     if (TT_METAL_SINGLE_CORE_MODE == nullptr) {
-        return tt::Cluster::inst().get_soc_desc(id_).compute_with_storage_grid_size;
+        return tt::Cluster::instance().get_soc_desc(id_).compute_with_storage_grid_size;
     } else {
         return {1, 1};
     }
@@ -272,7 +272,7 @@ CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) c
         logical_core.str(),
         logical_grid_size.str()
     );
-    const metal_SocDescriptor &soc_desc = tt::Cluster::inst().get_soc_desc(this->id_);
+    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     CoreCoord worker_core({
             .x = static_cast<size_t>(soc_desc.worker_log_to_physical_routing_x.at(logical_core.x)),
             .y = static_cast<size_t>(soc_desc.worker_log_to_physical_routing_y.at(logical_core.y)),
@@ -316,7 +316,7 @@ CoreCoord Device::core_from_dram_channel(uint32_t dram_channel) const {
         dram_channel,
         this->num_dram_channels()
     );
-    return tt::Cluster::inst().get_soc_desc(id_).get_preferred_worker_core_for_dram_channel(dram_channel);
+    return tt::Cluster::instance().get_soc_desc(id_).get_preferred_worker_core_for_dram_channel(dram_channel);
 }
 
 int32_t Device::l1_bank_offset_from_bank_id(uint32_t bank_id) const {

@@ -357,7 +357,7 @@ TEST_F(BasicFixture, ValidateLogicalToPhysicalCoreCoordHostMapping) {
     num_devices = (arch == tt::ARCH::GRAYSKULL) ? 1 : num_devices;
     for (int device_id = 0; device_id < num_devices; device_id++) {
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
-        uint32_t harvested_rows_mask = tt::Cluster::inst().get_harvested_rows(device_id);
+        uint32_t harvested_rows_mask = tt::Cluster::instance().get_harvested_rows(device_id);
         log_info(LogTest, "Device {} harvesting mask {}", device_id, harvested_rows_mask);
         std::unordered_set<int> harvested_rows;
         int row_coordinate = 0;

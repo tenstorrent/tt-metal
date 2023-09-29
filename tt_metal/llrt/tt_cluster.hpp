@@ -40,7 +40,7 @@ class Cluster {
     Cluster(const Cluster &) = delete;
     Cluster(Cluster &&other) noexcept = delete;
 
-    static const Cluster &inst();
+    static const Cluster &instance();
 
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
 

@@ -271,7 +271,7 @@ void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
         switch (buffer.buffer_type()) {
             case BufferType::DRAM: {
                 auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
-                tt::Cluster::inst().write_dram_vec(page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
+                tt::Cluster::instance().write_dram_vec(page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
             } break;
             case BufferType::L1: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
@@ -317,7 +317,7 @@ void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
         switch (buffer.buffer_type()) {
             case BufferType::DRAM: {
                 auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
-                tt::Cluster::inst().read_dram_vec(page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address, page_size);
+                tt::Cluster::instance().read_dram_vec(page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address, page_size);
             } break;
             case BufferType::L1: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
@@ -342,9 +342,9 @@ void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
         case BufferType::DRAM:
         case BufferType::L1: {
             if (buffer.buffer_type() == BufferType::DRAM) {
-                tt::Cluster::inst().dram_barrier(device->id());
+                tt::Cluster::instance().dram_barrier(device->id());
             } else {
-                tt::Cluster::inst().l1_barrier(device->id());
+                tt::Cluster::instance().l1_barrier(device->id());
             }
             ReadFromDevice(buffer, host_buffer);
         } break;
@@ -409,11 +409,11 @@ void LaunchProgram(Device *device, Program &program) {
     detail::ConfigureDeviceWithProgram(device, program);
     auto device_id = device->id();
 
-    tt::Cluster::inst().dram_barrier(device_id);
+    tt::Cluster::instance().dram_barrier(device_id);
 
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox (eg, storage cores) have all landed
-    tt::Cluster::inst().l1_barrier(device->id());
+    tt::Cluster::instance().l1_barrier(device->id());
 
     std::vector<CoreCoord> logical_cores_used_in_program = program.logical_cores();
     for (const auto &logical_core : logical_cores_used_in_program) {

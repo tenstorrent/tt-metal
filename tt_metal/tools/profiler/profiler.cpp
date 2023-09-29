@@ -217,7 +217,7 @@ void Profiler::dumpDeviceResults (
         int device_id,
         const vector<CoreCoord> &worker_cores){
 #if defined(PROFILER)
-    device_core_frequency = tt::Cluster::inst().get_device_aiclk(device_id);
+    device_core_frequency = tt::Cluster::instance().get_device_aiclk(device_id);
     for (const auto &worker_core : worker_cores) {
         readRiscProfilerResults(
             device_id,

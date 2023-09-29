@@ -144,7 +144,7 @@ namespace tt::tt_metal{
         {
             bool pass = true;
             TT_ASSERT(address >= DRAM_UNRESERVED_BASE, "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!", DRAM_UNRESERVED_BASE);
-            tt::Cluster::inst().write_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
+            tt::Cluster::instance().write_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
             return pass;
         }
 
@@ -164,8 +164,8 @@ namespace tt::tt_metal{
         inline bool ReadFromDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
         {
             bool pass = true;
-            tt::Cluster::inst().dram_barrier(device->id());
-            tt::Cluster::inst().read_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address, size);
+            tt::Cluster::instance().dram_barrier(device->id());
+            tt::Cluster::instance().read_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address, size);
             return pass;
         }
 
@@ -198,7 +198,7 @@ namespace tt::tt_metal{
         inline bool WriteRegToDevice(Device *device, const CoreCoord &logical_core, uint32_t address, const uint32_t &regval)
         {
             auto worker_core = device->worker_core_from_logical_core(logical_core);
-            tt::Cluster::inst().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
+            tt::Cluster::instance().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
             return true;
         }
 
@@ -218,7 +218,7 @@ namespace tt::tt_metal{
          */
         inline bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
         {
-            tt::Cluster::inst().l1_barrier(device->id());
+            tt::Cluster::instance().l1_barrier(device->id());
             auto worker_core = device->worker_core_from_logical_core(logical_core);
             host_buffer = llrt::read_hex_vec_from_core(device->id(), worker_core, address, size);
             return true;
@@ -226,9 +226,9 @@ namespace tt::tt_metal{
 
         inline bool ReadRegFromDevice(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t &regval)
         {
-            tt::Cluster::inst().l1_barrier(device->id());
+            tt::Cluster::instance().l1_barrier(device->id());
             auto worker_core = device->worker_core_from_logical_core(logical_core);
-            tt::Cluster::inst().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
+            tt::Cluster::instance().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
             return true;
         }
 
@@ -280,12 +280,12 @@ namespace tt::tt_metal{
                 l1_offset_per_bank
             );
 
-            const metal_SocDescriptor& soc_d = tt::Cluster::inst().get_soc_desc(device->id());
+            const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
 
             // Determine which noc-coords are harvested
             // TODO(PGK/Almeet): fix this w/ new UMD
             vector<uint32_t> harvested_rows;
-            uint32_t harvested_noc_rows = tt::Cluster::inst().get_harvested_rows(device->id());
+            uint32_t harvested_noc_rows = tt::Cluster::instance().get_harvested_rows(device->id());
             for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
                 bool row_harvested = (harvested_noc_rows >> y) & 0x1;
                 if (row_harvested) {

@@ -38,7 +38,7 @@ static constexpr uint32_t DYNAMIC_TLB_BASE_INDEX = DEVICE_DATA.MEM_LARGE_READ_TL
 
 namespace tt {
 
-const Cluster &Cluster::inst() {
+const Cluster &Cluster::instance() {
     static Cluster inst;
     return inst;
 }
