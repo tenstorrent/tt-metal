@@ -65,31 +65,48 @@ int main(int argc, char** argv) {
                                                     : tt_metal::BufferType::L1);
 
     // Execute Application
+    int iter=1000;
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         buffer_size, 100,
         std::chrono::system_clock::now().time_since_epoch().count());
     {
       auto begin = std::chrono::steady_clock::now();
-      EnqueueWriteBuffer(cq, buffer, src_vec, false);
-      Finish(cq);
       auto end = std::chrono::steady_clock::now();
-      auto elapsed_us = duration_cast<microseconds>(end - begin).count();
+      auto elapsed_sum = end - begin;
+
+      for (int i=0; i<iter; i++) {
+        begin = std::chrono::steady_clock::now();
+        EnqueueWriteBuffer(cq, buffer, src_vec, false);
+        Finish(cq);
+        end = std::chrono::steady_clock::now();
+        elapsed_sum += end - begin;
+      }
+
+      auto elapsed_us = duration_cast<microseconds>(elapsed_sum / iter).count();
       auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) /
-                (elapsed_us / 1000.0 / 1000.0);
+                  (elapsed_us / 1000.0 / 1000.0);
       log_info(LogTest, "EnqueueWriteBuffer to {}: {:.3f}ms, {:.3f}GB/s",
-               buffer_type == 0 ? "DRAM" : "L1", elapsed_us / 1000.0, bw);
+                buffer_type == 0 ? "DRAM" : "L1", elapsed_us / 1000.0, bw);
     }
 
     std::vector<uint32_t> result_vec;
     {
       auto begin = std::chrono::steady_clock::now();
-      EnqueueReadBuffer(cq, buffer, result_vec, true);
       auto end = std::chrono::steady_clock::now();
-      auto elapsed_us = duration_cast<microseconds>(end - begin).count();
+      auto elapsed_sum = end - begin;
+
+      for (int i=0; i<iter; i++) {
+        begin = std::chrono::steady_clock::now();
+        EnqueueReadBuffer(cq, buffer, result_vec, true);
+        end = std::chrono::steady_clock::now();
+        elapsed_sum += end - begin;
+      }
+
+      auto elapsed_us = duration_cast<microseconds>(elapsed_sum / iter).count();
       auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) /
-                (elapsed_us / 1000.0 / 1000.0);
+                  (elapsed_us / 1000.0 / 1000.0);
       log_info(LogTest, "EnqueueReadBuffer from {}: {:.3f}ms, {:.3f}GB/s",
-               buffer_type == 0 ? "DRAM" : "L1", elapsed_us / 1000.0, bw);
+                buffer_type == 0 ? "DRAM" : "L1", elapsed_us / 1000.0, bw);
     }
 
     // Validation & Teardown

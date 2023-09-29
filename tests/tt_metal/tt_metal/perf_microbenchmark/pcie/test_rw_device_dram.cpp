@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
 
     // Application Setup
     srand(time(0));
-    uint32_t dram_addr = 0;
+    uint32_t dram_addr = 64;
     uint32_t dram_channel = rand() % 8;
     log_info(LogTest, "Target DRAM channel = {}", dram_channel);
 
