@@ -30,191 +30,189 @@ using std::chrono::microseconds;
 ////////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char** argv) {
-  if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-    log_fatal("Test not supported w/ slow dispatch, exiting");
-  }
+    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+        log_fatal("Test not supported w/ slow dispatch, exiting");
+    }
 
-  bool pass = true;
-  unsigned long elapsed_us;
+    bool pass = true;
+    unsigned long elapsed_us;
 
-  ////////////////////////////////////////////////////////////////////////////
-  //                      Initial Runtime Args Parse
-  ////////////////////////////////////////////////////////////////////////////
-  std::vector<std::string> input_args(argv, argv + argc);
-  uint32_t num_cores_r;
-  uint32_t num_cores_c;
-  uint32_t num_core_groups;
-  bool bypass_check;
-  try {
-    std::tie(num_cores_r, input_args) =
-        test_args::get_command_option_uint32_and_remaining_args(input_args,
-                                                                "--cores-r", 0);
-    std::tie(num_cores_c, input_args) =
-        test_args::get_command_option_uint32_and_remaining_args(input_args,
-                                                                "--cores-c", 0);
-
-    std::tie(num_core_groups, input_args) =
-        test_args::get_command_option_uint32_and_remaining_args(
-            input_args, "--core-groups", 4);
-
-    std::tie(bypass_check, input_args) =
-        test_args::has_command_option_and_remaining_args(input_args,
-                                                         "--bypass-check");
-
-    test_args::validate_remaining_args(input_args);
-  } catch (const std::exception& e) {
-    log_fatal(LogTest, "Command line arguments found exception", e.what());
-  }
-
-  ////////////////////////////////////////////////////////////////////////////
-  //                      Device Setup
-  ////////////////////////////////////////////////////////////////////////////
-  int device_id = 0;
-  tt_metal::Device* device = tt_metal::CreateDevice(device_id);
-  CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
-
-  auto grid_coord = device->compute_with_storage_grid_size();
-  num_cores_c = (num_cores_c == 0) ? grid_coord.x : num_cores_c;
-  num_cores_r = (num_cores_r == 0) ? grid_coord.y : num_cores_r;
-
-  if (num_cores_r < num_core_groups) {
-    log_fatal(
-        LogTest,
-        "The number of cores in a row ({}) must be bigger than or equal than "
-        "the number of core groups ({})",
-        num_cores_r, num_core_groups);
-  }
-
-  try {
     ////////////////////////////////////////////////////////////////////////////
-    //                      Application Setup
+    //                      Initial Runtime Args Parse
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::Program();
-    uint32_t single_tile_size = 2 * 1024;
+    std::vector<std::string> input_args(argv, argv + argc);
+    uint32_t num_cores_r;
+    uint32_t num_cores_c;
+    uint32_t num_core_groups;
+    bool bypass_check;
+    try {
+        std::tie(num_cores_r, input_args) =
+            test_args::get_command_option_uint32_and_remaining_args(input_args, "--cores-r", 0);
+        std::tie(num_cores_c, input_args) =
+            test_args::get_command_option_uint32_and_remaining_args(input_args, "--cores-c", 0);
 
-    for (int core_group_idx = 0; core_group_idx < num_core_groups;
-         ++core_group_idx) {
-      CoreCoord start_core = {0,
-                              (num_cores_r / num_core_groups) * core_group_idx};
-      CoreCoord end_core = {
-          (std::size_t)num_cores_c - 1,
-          (core_group_idx == num_core_groups - 1)
-              ? (std::size_t)num_cores_r - 1
-              : (num_cores_r / num_core_groups) * (core_group_idx + 1) - 1};
-      CoreRange group_of_cores{.start = start_core, .end = end_core};
+        std::tie(num_core_groups, input_args) =
+            test_args::get_command_option_uint32_and_remaining_args(input_args, "--core-groups", 4);
 
-      log_info(
-          LogTest, "Setting kernels for core group {}, cores ({},{}) ~ ({},{})",
-          core_group_idx, start_core.x, start_core.y, end_core.x, end_core.y);
+        std::tie(bypass_check, input_args) =
+            test_args::has_command_option_and_remaining_args(input_args, "--bypass-check");
 
-      for (int i = start_core.y; i <= end_core.y; i++) {
-        for (int j = start_core.x; j <= end_core.x; j++) {
-          CoreCoord core = {(std::size_t)j, (std::size_t)i};
-          uint32_t cb_index = 0;
-          uint32_t cb_tiles = 8;
-          tt_metal::CircularBufferConfig cb_config =
-              tt_metal::CircularBufferConfig(
-                  cb_tiles * single_tile_size,
-                  {{cb_index, tt::DataFormat::Float16_b}})
-                  .set_page_size(cb_index, single_tile_size);
-          auto cb_src0 =
-              tt_metal::CreateCircularBuffer(program, core, cb_config);
-        }
-      }
-
-      vector<uint32_t> reader_compile_args = {uint32_t(core_group_idx)};
-      auto reader_kernel = tt_metal::CreateDataMovementKernel(
-          program,
-          "tests/tt_metal/tt_metal/perf_microbenchmark/7_kernel_launch/"
-          "kernels/"
-          "reader.cpp",
-          group_of_cores,
-          tt_metal::DataMovementConfig{
-              .processor = tt_metal::DataMovementProcessor::RISCV_1,
-              .noc = tt_metal::NOC::RISCV_1_default,
-              .compile_args = reader_compile_args});
-
-      vector<uint32_t> writer_compile_args = {uint32_t(core_group_idx)};
-      auto writer_kernel = tt_metal::CreateDataMovementKernel(
-          program,
-          "tests/tt_metal/tt_metal/perf_microbenchmark/7_kernel_launch/"
-          "kernels/"
-          "writer.cpp",
-          group_of_cores,
-          tt_metal::DataMovementConfig{
-              .processor = tt_metal::DataMovementProcessor::RISCV_0,
-              .noc = tt_metal::NOC::RISCV_0_default,
-              .compile_args = writer_compile_args});
-
-      vector<uint32_t> compute_compile_args = {uint32_t(core_group_idx)};
-      auto compute_kernel = tt_metal::CreateComputeKernel(
-          program,
-          "tests/tt_metal/tt_metal/perf_microbenchmark/7_kernel_launch/"
-          "kernels/"
-          "compute.cpp",
-          group_of_cores,
-          tt_metal::ComputeConfig{.compile_args = compute_compile_args});
-
-      for (int i = start_core.y; i <= end_core.y; i++) {
-        for (int j = start_core.x; j <= end_core.x; j++) {
-          CoreCoord core = {(std::size_t)j, (std::size_t)i};
-          int core_index = i * num_cores_c + j;
-
-          vector<uint32_t> reader_runtime_args;
-          vector<uint32_t> writer_runtime_args;
-          for (uint32_t k = 0; k < 255; ++k) {
-            reader_runtime_args.push_back(core_index + k);
-            writer_runtime_args.push_back(core_index + k);
-          }
-
-          SetRuntimeArgs(program, writer_kernel, core, writer_runtime_args);
-          SetRuntimeArgs(program, reader_kernel, core, reader_runtime_args);
-        }
-      }
+        test_args::validate_remaining_args(input_args);
+    } catch (const std::exception& e) {
+        log_fatal(LogTest, "Command line arguments found exception", e.what());
     }
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
+    //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::detail::CompileProgram(device, program);
+    int device_id = 0;
+    tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+    CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
-    auto t_begin = std::chrono::steady_clock::now();
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
-    auto t_end = std::chrono::steady_clock::now();
-    elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
+    auto grid_coord = device->compute_with_storage_grid_size();
+    num_cores_c = (num_cores_c == 0) ? grid_coord.x : num_cores_c;
+    num_cores_r = (num_cores_r == 0) ? grid_coord.y : num_cores_r;
 
-    log_info(LogTest, "Time elapsed for executing empty kernels: {}us",
-             elapsed_us);
+    if (num_cores_r < num_core_groups) {
+        log_fatal(
+            LogTest,
+            "The number of cores in a row ({}) must be bigger than or equal than "
+            "the number of core groups ({})",
+            num_cores_r,
+            num_core_groups);
+    }
 
-    pass &= tt_metal::CloseDevice(device);
-  } catch (const std::exception& e) {
-    pass = false;
-    log_error(LogTest, "{}", e.what());
-    log_error(LogTest, "System error message: {}", std::strerror(errno));
-  }
+    try {
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Application Setup
+        ////////////////////////////////////////////////////////////////////////////
+        tt_metal::Program program = tt_metal::Program();
+        uint32_t single_tile_size = 2 * 1024;
 
-  // Determine if it passes performance goal
-  if (pass && bypass_check == false) {
-    // goal is under 10us
-    long target_us = 10;
+        for (int core_group_idx = 0; core_group_idx < num_core_groups; ++core_group_idx) {
+            CoreCoord start_core = {0, (num_cores_r / num_core_groups) * core_group_idx};
+            CoreCoord end_core = {
+                (std::size_t)num_cores_c - 1,
+                (core_group_idx == num_core_groups - 1) ? (std::size_t)num_cores_r - 1
+                                                        : (num_cores_r / num_core_groups) * (core_group_idx + 1) - 1};
+            CoreRange group_of_cores{.start = start_core, .end = end_core};
 
-    if (elapsed_us > target_us) {
-      pass = false;
-      log_error(LogTest,
+            log_info(
+                LogTest,
+                "Setting kernels for core group {}, cores ({},{}) ~ ({},{})",
+                core_group_idx,
+                start_core.x,
+                start_core.y,
+                end_core.x,
+                end_core.y);
+
+            for (int i = start_core.y; i <= end_core.y; i++) {
+                for (int j = start_core.x; j <= end_core.x; j++) {
+                    CoreCoord core = {(std::size_t)j, (std::size_t)i};
+                    uint32_t cb_index = 0;
+                    uint32_t cb_tiles = 8;
+                    tt_metal::CircularBufferConfig cb_config =
+                        tt_metal::CircularBufferConfig(
+                            cb_tiles * single_tile_size, {{cb_index, tt::DataFormat::Float16_b}})
+                            .set_page_size(cb_index, single_tile_size);
+                    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_config);
+                }
+            }
+
+            vector<uint32_t> reader_compile_args = {uint32_t(core_group_idx)};
+            auto reader_kernel = tt_metal::CreateDataMovementKernel(
+                program,
+                "tests/tt_metal/tt_metal/perf_microbenchmark/7_kernel_launch/"
+                "kernels/"
+                "reader.cpp",
+                group_of_cores,
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                    .compile_args = reader_compile_args});
+
+            vector<uint32_t> writer_compile_args = {uint32_t(core_group_idx)};
+            auto writer_kernel = tt_metal::CreateDataMovementKernel(
+                program,
+                "tests/tt_metal/tt_metal/perf_microbenchmark/7_kernel_launch/"
+                "kernels/"
+                "writer.cpp",
+                group_of_cores,
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = writer_compile_args});
+
+            vector<uint32_t> compute_compile_args = {uint32_t(core_group_idx)};
+            auto compute_kernel = tt_metal::CreateComputeKernel(
+                program,
+                "tests/tt_metal/tt_metal/perf_microbenchmark/7_kernel_launch/"
+                "kernels/"
+                "compute.cpp",
+                group_of_cores,
+                tt_metal::ComputeConfig{.compile_args = compute_compile_args});
+
+            for (int i = start_core.y; i <= end_core.y; i++) {
+                for (int j = start_core.x; j <= end_core.x; j++) {
+                    CoreCoord core = {(std::size_t)j, (std::size_t)i};
+                    int core_index = i * num_cores_c + j;
+
+                    vector<uint32_t> reader_runtime_args;
+                    vector<uint32_t> writer_runtime_args;
+                    for (uint32_t k = 0; k < 255; ++k) {
+                        reader_runtime_args.push_back(core_index + k);
+                        writer_runtime_args.push_back(core_index + k);
+                    }
+
+                    SetRuntimeArgs(program, writer_kernel, core, writer_runtime_args);
+                    SetRuntimeArgs(program, reader_kernel, core, reader_runtime_args);
+                }
+            }
+        }
+
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Execute Application
+        ////////////////////////////////////////////////////////////////////////////
+        tt_metal::detail::CompileProgram(device, program);
+
+        auto t_begin = std::chrono::steady_clock::now();
+        EnqueueProgram(cq, program, false);
+        Finish(cq);
+        auto t_end = std::chrono::steady_clock::now();
+        elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
+
+        log_info(LogTest, "Time elapsed for executing empty kernels: {}us", elapsed_us);
+
+        pass &= tt_metal::CloseDevice(device);
+    } catch (const std::exception& e) {
+        pass = false;
+        log_error(LogTest, "{}", e.what());
+        log_error(LogTest, "System error message: {}", std::strerror(errno));
+    }
+
+    // Determine if it passes performance goal
+    if (pass && bypass_check == false) {
+        // goal is under 10us
+        long target_us = 10;
+
+        if (elapsed_us > target_us) {
+            pass = false;
+            log_error(
+                LogTest,
                 "The kernel launch overhead does not meet the criteria. "
                 "Current: {}us, goal: <{}us",
-                elapsed_us, target_us);
+                elapsed_us,
+                target_us);
+        }
     }
-  }
 
-  if (pass) {
-    log_info(LogTest, "Test Passed");
-  } else {
-    log_fatal(LogTest, "Test Failed");
-  }
+    if (pass) {
+        log_info(LogTest, "Test Passed");
+    } else {
+        log_fatal(LogTest, "Test Failed");
+    }
 
-  TT_ASSERT(pass);
+    TT_ASSERT(pass);
 
-  return 0;
+    return 0;
 }
