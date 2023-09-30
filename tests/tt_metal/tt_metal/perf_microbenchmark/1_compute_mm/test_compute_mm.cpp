@@ -112,11 +112,9 @@ tt_metal::Program create_program(
     bool fp32_dest_acc_en,
     uint32_t single_tile_size,
     CoreCoord core_range,
-    uint32_t B,
     uint32_t Mt,
     uint32_t Nt,
     uint32_t Kt,
-    bool bcast_batch,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
@@ -129,14 +127,6 @@ tt_metal::Program create_program(
     uint32_t in0_addr,
     uint32_t in1_addr,
     uint32_t out_addr);
-
-inline vector<float> gold_mm(
-    const vector<uint32_t> shapeA,
-    const vector<float>& A,
-    const vector<uint32_t>& shapeB,
-    const vector<float>& B,
-    const uint32_t& num_blocks,
-    bool acc16);
 
 bool validation(
     tt_metal::Device* device,
@@ -258,11 +248,9 @@ int main(int argc, char** argv) {
             fp32_dest_acc_en,
             single_tile_size,
             core_range,
-            1,
             Mt,
             Nt,
             Kt,
-            false,
             in0_block_w,
             out_subblock_h,
             out_subblock_w,
@@ -552,11 +540,9 @@ tt_metal::Program create_program(
     bool fp32_dest_acc_en,
     uint32_t single_tile_size,
     CoreCoord core_range,
-    uint32_t B,
     uint32_t Mt,
     uint32_t Nt,
     uint32_t Kt,
-    bool bcast_batch,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
@@ -610,7 +596,7 @@ tt_metal::Program create_program(
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        B                        // batch
+        1                        // batch
     };
 
     CoreRange all_cores{
