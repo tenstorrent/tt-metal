@@ -50,8 +50,8 @@ int main(int argc, char** argv) {
         test_args::get_command_option_uint32_and_remaining_args(input_args,
                                                                 "--cores-r", 0);
     std::tie(num_cores_c, input_args) =
-        test_args::get_command_option_uint32_and_remaining_args(
-            input_args, "--cores-c", 0);
+        test_args::get_command_option_uint32_and_remaining_args(input_args,
+                                                                "--cores-c", 0);
 
     std::tie(num_core_groups, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(
@@ -63,15 +63,7 @@ int main(int argc, char** argv) {
 
     test_args::validate_remaining_args(input_args);
   } catch (const std::exception& e) {
-    log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
-  }
-
-  if (num_cores_r < num_core_groups) {
-    log_fatal(
-        tt::LogTest,
-        "The number of cores in a row ({}) must be bigger than or equal than "
-        "the number of core groups ({})",
-        num_cores_r, num_core_groups);
+    log_fatal(LogTest, "Command line arguments found exception", e.what());
   }
 
   ////////////////////////////////////////////////////////////////////////////
@@ -84,6 +76,14 @@ int main(int argc, char** argv) {
   auto grid_coord = device->compute_with_storage_grid_size();
   num_cores_c = (num_cores_c == 0) ? grid_coord.x : num_cores_c;
   num_cores_r = (num_cores_r == 0) ? grid_coord.y : num_cores_r;
+
+  if (num_cores_r < num_core_groups) {
+    log_fatal(
+        LogTest,
+        "The number of cores in a row ({}) must be bigger than or equal than "
+        "the number of core groups ({})",
+        num_cores_r, num_core_groups);
+  }
 
   try {
     ////////////////////////////////////////////////////////////////////////////
@@ -113,9 +113,12 @@ int main(int argc, char** argv) {
           uint32_t cb_index = 0;
           uint32_t cb_tiles = 8;
           tt_metal::CircularBufferConfig cb_config =
-              tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_index, tt::DataFormat::Float16_b}})
+              tt_metal::CircularBufferConfig(
+                  cb_tiles * single_tile_size,
+                  {{cb_index, tt::DataFormat::Float16_b}})
                   .set_page_size(cb_index, single_tile_size);
-          auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_config);
+          auto cb_src0 =
+              tt_metal::CreateCircularBuffer(program, core, cb_config);
         }
       }
 
