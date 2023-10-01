@@ -18,10 +18,6 @@
 #include "tt_metal/third_party/umd/device/util.hpp"
 #include "watcher.hpp"
 
-using std::cout;
-using std::endl;
-using std::to_string;
-
 #ifdef ARCH_GRAYSKULL
 static constexpr uint32_t DYNAMIC_TLB_COUNT = 16;
 static constexpr unsigned int MEM_SMALL_READ_WRITE_TLB = DEVICE_DATA.TLB_BASE_INDEX_2M + 1;
@@ -35,7 +31,7 @@ static constexpr uint32_t DYNAMIC_TLB_BASE_INDEX = DEVICE_DATA.MEM_LARGE_READ_TL
 
 namespace tt {
 
-const Cluster &Cluster::instance() {
+Cluster &Cluster::instance() {
     static Cluster inst;
     return inst;
 }
@@ -62,7 +58,6 @@ Cluster::Cluster() {
     const std::string cluster_desc_path = (this->arch_ == tt::ARCH::WORMHOLE_B0) ? GetClusterDescYAML().string() : "";
 #else
     this->target_type_ = TargetDevice::Versim;
-    std::vector<chip_id_t> physical_mmio_device_ids = {0};
     auto arch_env = getenv("ARCH_NAME");
     TT_ASSERT(arch_env, "arch_env needs to be set for versim (ARCH_NAME=)");
     this->arch_ = tt::get_arch_from_string(arch_env);
@@ -71,43 +66,55 @@ Cluster::Cluster() {
 #endif
 
 
-    if (cluster_desc_path == "") {
-        // All Grayskull devices are MMIO mapped so physical_mmio_device_ids correspond to all available devices
+    // TODO ALMEET: put mutex around generating cluster desc!
+
+    if (this->arch_ == tt::ARCH::GRAYSKULL) {
+        // Cannot use tt_SiliconDevice::detect_available_device_ids because that returns physical device IDs
+        std::set<chip_id_t> logical_mmio_device_ids;
         for (chip_id_t logical_mmio_device_id = 0; logical_mmio_device_id < physical_mmio_device_ids.size(); logical_mmio_device_id++) {
-            this->target_device_ids_.insert(logical_mmio_device_id);
+            logical_mmio_device_ids.insert(logical_mmio_device_id);
         }
-        this->cluster_desc_ = tt_ClusterDescriptor::create_for_grayskull_cluster(this->target_device_ids_);
+        this->cluster_desc_ = tt_ClusterDescriptor::create_for_grayskull_cluster(logical_mmio_device_ids);
     } else {
-        this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(cluster_desc_path);
-        for (chip_id_t logical_device_id = 0; logical_device_id < this->cluster_desc_->get_number_of_chips();
-             logical_device_id++) {
-            this->target_device_ids_.insert(logical_device_id);
-        }
+        this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(this->cluster_desc_path_);
     }
 
-    this->open_device(sdesc_file, cluster_desc_path);
+    // Map MMIO device id to all devices on the same card (including the MMIO device)
+    if (this->target_type_ == TargetDevice::Versim) {
+        std::set<chip_id_t> dummy_versim_card = {0};
+        this->device_ids_per_card_[0] = dummy_versim_card;
+        this->device_to_closest_mmio_device_[0] = 0;
+    } else {
+        for (chip_id_t device_id : this->cluster_desc_->get_all_chips()) {
+            chip_id_t closest_mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(device_id);
+            std::set<chip_id_t> &device_ids = this->device_ids_per_card_[closest_mmio_device_id];
+            device_ids.insert(device_id);
+            this->device_to_closest_mmio_device_[device_id] = closest_mmio_device_id;
+        }
+    }
+}
+
+void Cluster::initialize_device_driver(chip_id_t device_id) {
+    this->open_device(device_id);
 
     tt_device_params default_params;
     if (getenv("TT_METAL_VERSIM_DUMP_CORES")) {
         std::string dump_cores_string = getenv("TT_METAL_VERSIM_DUMP_CORES");
         default_params.vcd_dump_cores = tt::utils::strsplit(dump_cores_string, ',');
     }
-    this->start_device(default_params);
+    this->start_device(device_id, default_params);
 }
 
-std::unordered_map<chip_id_t, metal_SocDescriptor> get_metal_desc_from_tt_desc(
+void Cluster::get_metal_desc_from_tt_desc(
     const std::unordered_map<chip_id_t, tt_SocDescriptor> &input,
     const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks) {
-    std::unordered_map<chip_id_t, metal_SocDescriptor> rval = {};
     for (const auto it : input) {
         chip_id_t id = it.first;
-        rval.emplace(id, metal_SocDescriptor(it.second, per_chip_id_harvesting_masks.at(id)));
+        this->sdesc_per_chip_.emplace(id, metal_SocDescriptor(it.second, per_chip_id_harvesting_masks.at(id)));
     }
-    return rval;
 }
 
-void Cluster::open_device(
-    const std::string &sdesc_path, const std::string &ndesc_path, const bool &skip_driver_allocs) {
+void Cluster::open_device(chip_id_t device_id, const bool &skip_driver_allocs) {
 #ifdef ARCH_GRAYSKULL
     tt::log_assert(
         this->arch_ == tt::ARCH::GRAYSKULL,
@@ -121,7 +128,17 @@ void Cluster::open_device(
         get_string(this->arch_));
 #endif
     TT_ASSERT(this->target_type_ == TargetDevice::Versim or this->target_type_ == TargetDevice::Silicon);
+    if (this->target_type_ == TargetDevice::Versim and device_id != 0) {
+        log_fatal(LogLLRuntime, "Versim can only target device 0");
+    }
 
+    chip_id_t closest_mmio_device_id = this->device_to_closest_mmio_device_.at(device_id);
+    std::set<chip_id_t> device_ids = this->device_ids_per_card_.at(closest_mmio_device_id);
+    this->target_device_ids_.insert(device_ids.begin(), device_ids.end());
+
+    const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
+
+    std::unique_ptr<tt_device> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
         // This is the target/desired number of mem channels per arch/device. Silicon driver will attempt to open
         // this many hugepages as channels, and assert if workload uses more than available.
@@ -131,26 +148,25 @@ void Cluster::open_device(
         // This will remove harvested rows from the soc descriptor
         const bool perform_harvesting = true;
 
-        this->device_ = std::make_unique<tt_SiliconDevice>(
+        device_driver = std::make_unique<tt_SiliconDevice>(
             sdesc_path,
-            ndesc_path,
-            this->target_device_ids_,
+            this->cluster_desc_path_,
+            device_ids,
             num_host_mem_ch_per_mmio_device,
             dynamic_tlb_config,
             skip_driver_allocs,
             perform_harvesting);
 
-        this->device_->clean_system_resources();
-        this->device_->set_driver_host_address_params(host_address_params);
-        this->device_->set_driver_eth_interface_params(eth_interface_params);
+        device_driver->set_driver_host_address_params(host_address_params);
+        device_driver->set_driver_eth_interface_params(eth_interface_params);
     } else if (this->target_type_ == TargetDevice::Versim) {
-        this->device_ = std::make_unique<tt_VersimDevice>(sdesc_path, ndesc_path);
+        device_driver = std::make_unique<tt_VersimDevice>(sdesc_path, this->cluster_desc_path_);
     }
-    this->device_->set_device_dram_address_params(dram_address_params);
-    this->device_->set_device_l1_address_params(l1_address_params);
+    device_driver->set_device_dram_address_params(dram_address_params);
+    device_driver->set_device_l1_address_params(l1_address_params);
 
-    this->sdesc_per_chip_ = get_metal_desc_from_tt_desc(
-        this->device_->get_virtual_soc_descriptors(), this->device_->get_harvesting_masks_for_soc_descriptors());
+    this->get_metal_desc_from_tt_desc(device_driver->get_virtual_soc_descriptors(), device_driver->get_harvesting_masks_for_soc_descriptors());
+    this->mmio_device_id_to_driver_[closest_mmio_device_id] = std::move(device_driver);
 }
 
 #ifdef ARCH_WORMHOLE
@@ -226,8 +242,8 @@ std::int32_t get_static_tlb_index(CoreCoord target) {
 }
 #endif
 
-void Cluster::configure_static_tlbs(const std::uint32_t &chip) {
-    auto sdesc = get_soc_desc(chip);
+void Cluster::configure_static_tlbs(chip_id_t mmio_device_id) {
+    auto sdesc = get_soc_desc(mmio_device_id);
     auto statically_mapped_cores = sdesc.workers;
     statically_mapped_cores.insert(
         statically_mapped_cores.end(), sdesc.ethernet_cores.begin(), sdesc.ethernet_cores.end());
@@ -236,61 +252,102 @@ void Cluster::configure_static_tlbs(const std::uint32_t &chip) {
     // Setup static TLBs for all worker cores
     for (auto &core : statically_mapped_cores) {
         auto tlb_index = get_static_tlb_index(core);
-        this->device_->configure_tlb(chip, core, tlb_index, address);
+        this->get_driver(mmio_device_id).configure_tlb(mmio_device_id, core, tlb_index, address);
     }
     // Setup static TLBs for MMIO mapped data space
     uint64_t peer_dram_offset = DEVICE_DATA.DRAM_CHANNEL_0_PEER2PEER_REGION_START;
     for (uint32_t tlb_id = DYNAMIC_TLB_BASE_INDEX; tlb_id < DYNAMIC_TLB_BASE_INDEX + DYNAMIC_TLB_COUNT; tlb_id++) {
-        this->device_->configure_tlb(
-            chip, CoreCoord(DEVICE_DATA.DRAM_CHANNEL_0_X, DEVICE_DATA.DRAM_CHANNEL_0_Y), tlb_id, peer_dram_offset);
+        this->get_driver(mmio_device_id).configure_tlb(
+            mmio_device_id, CoreCoord(DEVICE_DATA.DRAM_CHANNEL_0_X, DEVICE_DATA.DRAM_CHANNEL_0_Y), tlb_id, peer_dram_offset);
         // Align address space of 16MB TLB to 16MB boundary
         peer_dram_offset += DEVICE_DATA.DYNAMIC_TLB_16M_SIZE;
     }
-    this->device_->setup_core_to_tlb_map([](CoreCoord core) { return get_static_tlb_index(core); });
+    this->get_driver(mmio_device_id).setup_core_to_tlb_map([](CoreCoord core) { return get_static_tlb_index(core); });
 }
 
-void Cluster::start_device(const tt_device_params &device_params) {
+void Cluster::start_device(chip_id_t device_id, tt_device_params &device_params) {
+    chip_id_t mmio_device_id = this->device_to_closest_mmio_device_.at(device_id);
+
+    // if shared semaphore vec value at mmio_device_id is 0 then init device, otherwise increase sem
+    // should this whole thing should be protected under mutex...?
+    device_params.init_device = true;
+
     TT_ASSERT(this->sdesc_per_chip_.size(), "Descriptor must be loaded. Try open_device()");
-    TT_ASSERT(this->device_ != nullptr, "Device not initialized, make sure compile is done before running!");
 
     if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
-        for (auto &device_id : this->device_->get_target_mmio_device_ids()) {
-            configure_static_tlbs(device_id);
-        }
-        // tt::tlb_config::activate_static_tlbs(device);
+        configure_static_tlbs(mmio_device_id);
     }
 
-    this->device_->start_device(device_params);
+    this->mmio_device_id_to_driver_.at(mmio_device_id)->start_device(device_params);
 }
 
-void Cluster::close_device() {
+void Cluster::close_device_driver(chip_id_t device_id) {
     log_info(tt::LogDevice, "Closing device driver");
-    if (this->device_) {
-        this->device_->close_device();
-        this->device_.reset();
+
+    chip_id_t mmio_device_id = this->device_to_closest_mmio_device_.at(device_id);
+    bool is_mmio_device = (device_id == mmio_device_id);
+
+    // There is one device driver per MMIO device.
+    // Driver needs to remain open if any remote device is still open
+    if (is_mmio_device) {
+        bool all_devices_on_card_closed = true;
+        for (const chip_id_t &device_id_on_card : this->device_ids_per_card_.at(mmio_device_id)) {
+            if (device_id_on_card == mmio_device_id) { continue; }
+            if (this->target_device_ids_.find(device_id_on_card) != this->target_device_ids_.end()) {
+                all_devices_on_card_closed = false;
+                break;
+            }
+        }
+
+        if (all_devices_on_card_closed) {
+            // TODO: ALMEET then get mutex and decrement sem vector (if 0 then close driver) + reset own ptr
+            this->get_driver(mmio_device_id).close_device();
+            this->mmio_device_id_to_driver_.at(mmio_device_id).reset();
+        }
+    }
+
+    // For both MMIO and remote devices we remove it from sdesc map and target device IDs collection to indicate that device has been closed
+    this->sdesc_per_chip_.erase(device_id);
+    this->target_device_ids_.erase(device_id);
+}
+
+Cluster::~Cluster() {
+    for (chip_id_t device_id : this->target_device_ids_) {
+        this->close_device_driver(device_id);
     }
     this->sdesc_per_chip_.clear();
 }
 
-Cluster::~Cluster() { this->close_device(); }
+tt_device &Cluster::get_driver(chip_id_t device_id) const {
+    if (this->target_device_ids_.find(device_id) == this->target_device_ids_.end()) {
+        log_fatal(LogLLRuntime, "Cannot access driver for device ID {} before it is initialized! Call initialize_device_driver({}) first", device_id, device_id);
+    }
+    chip_id_t mmio_device_id = this->device_to_closest_mmio_device_.at(device_id);
+    return *(this->mmio_device_id_to_driver_.at(mmio_device_id));
+}
+
+const metal_SocDescriptor &Cluster::get_soc_desc(chip_id_t chip) const {
+    if (this->sdesc_per_chip_.find(chip) == this->sdesc_per_chip_.end()) {
+        log_fatal(LogLLRuntime, "Cannot access soc descriptor for {} before device driver is initialized! Call initialize_device_driver({}) first", chip, chip);
+    }
+    return this->sdesc_per_chip_.at(chip);
+}
 
 uint32_t Cluster::get_harvested_rows(chip_id_t chip) const {
     if (this->target_type_ == TargetDevice::Versim) {
         return 0;
     } else {
-        return this->device_->harvested_rows_per_target.at(chip);
+        return this->get_driver(chip).harvested_rows_per_target.at(chip);
     }
 }
 
 // clean up bad system resource state that may be carried over
-void Cluster::clean_system_resources() const {
-    TT_ASSERT(this->device_ != nullptr, "Device not initialized, make sure compile is done before running!");
-    this->device_->clean_system_resources();
+void Cluster::clean_system_resources(chip_id_t device_id) const {
+    this->get_driver(device_id).clean_system_resources();
 }
 
 void Cluster::verify_eth_fw() const {
-    const std::unordered_set<chip_id_t> &all_chips = this->device_->get_all_chips_in_cluster();
-    for (const chip_id_t &chip : all_chips) {
+    for (const chip_id_t &chip : this->target_device_ids_) {
         std::vector<uint32_t> mem_vector;
         std::vector<uint32_t> fw_versions;
 
@@ -304,8 +361,10 @@ void Cluster::verify_eth_fw() const {
 
 int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
     if (this->target_device_ids_.find(chip_id) != this->target_device_ids_.end()) {
-        chip_id_t mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(chip_id);
-        return this->device_->get_clocks().at(mmio_device_id);
+        // get_clocks returns MMIO device ID -> clock frequency
+        // There is one driver per MMIO device, so we use that to index returned map
+        chip_id_t mmio_device_id = this->device_to_closest_mmio_device_.at(chip_id);
+        return this->get_driver(chip_id).get_clocks().at(mmio_device_id);
     }
     log_fatal(LogLLRuntime, "Cannot get frequency for device {} that is not initialized!", chip_id);
     return 0;
@@ -335,22 +394,22 @@ void Cluster::reset_debug_print_server_buffers() const {
     }
 }
 
-void Cluster::assert_risc_reset(const chip_id_t &chip) const { this->device_->assert_risc_reset(chip); }
+void Cluster::assert_risc_reset(const chip_id_t &chip) const {  this->get_driver(chip).assert_risc_reset(chip); }
 
 void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(physical_chip_coord.chip);
     tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(physical_chip_coord);
-    this->device_->deassert_risc_reset_at_core(virtual_chip_coord);
+    this->get_driver(virtual_chip_coord.chip).deassert_risc_reset_at_core(virtual_chip_coord);
 }
 
 void Cluster::deassert_risc_reset(const chip_id_t &target_device_id, bool start_stagger) const {
     if (this->target_type_ == TargetDevice::Versim) {
         // Not running silicon multichip test
-        this->device_->deassert_risc_reset(*this->target_device_ids_.begin());
+        this->get_driver(target_device_id).deassert_risc_reset(*this->target_device_ids_.begin());
     } else if (this->target_type_ == TargetDevice::Silicon) {
         log_debug(tt::LogLLRuntime, "Stagger start : {}", start_stagger);
         TT_ASSERT(not start_stagger, "UMD currently does not support staggered deassert of RISC reset");
-        this->device_->deassert_risc_reset(target_device_id);
+        this->get_driver(target_device_id).deassert_risc_reset(target_device_id);
     }
 }
 
@@ -405,18 +464,18 @@ void Cluster::read_dram_vec(
 
 void Cluster::write_dram_vec(
     const std::uint32_t *mem_ptr, uint32_t len, tt_cxy_pair dram_core, uint64_t addr, bool small_access) const {
-    int chip_id = dram_core.chip;
+    chip_id_t chip_id = dram_core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         tt::llrt::watcher_sanitize_host_noc_write(
             soc_desc, {dram_core.x, dram_core.y}, addr, len * sizeof(uint32_t));
     }
     tt_cxy_pair virtual_dram_core = soc_desc.convert_to_umd_coordinates(dram_core);
-    this->device_->write_to_device(mem_ptr, len, virtual_dram_core, addr, "LARGE_WRITE_TLB");
-    if (this->device_->get_target_remote_device_ids().find(virtual_dram_core.chip) !=
-        this->device_->get_target_remote_device_ids().end()) {
-            this->device_->wait_for_non_mmio_flush();
-        }
+    this->get_driver(chip_id).write_to_device(mem_ptr, len, virtual_dram_core, addr, "LARGE_WRITE_TLB");
+    if (this->get_driver(chip_id).get_target_remote_device_ids().find(chip_id) !=
+        this->get_driver(chip_id).get_target_remote_device_ids().end()) {
+        this->get_driver(chip_id).wait_for_non_mmio_flush();
+    }
 }
 
 void Cluster::write_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uint64_t addr, bool small_access) const {
@@ -432,9 +491,8 @@ void Cluster::read_dram_vec(
         tt::llrt::watcher_sanitize_host_noc_read(
             soc_desc, {dram_core.x, dram_core.y}, addr, size_in_bytes);
     }
-
     tt_cxy_pair virtual_dram_core = soc_desc.convert_to_umd_coordinates(dram_core);
-    this->device_->read_from_device(mem_ptr, virtual_dram_core, addr, size_in_bytes, "LARGE_READ_TLB");
+    this->get_driver(chip_id).read_from_device(mem_ptr, virtual_dram_core, addr, size_in_bytes, "LARGE_READ_TLB");
 }
 
 void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const {
@@ -447,10 +505,10 @@ void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64
         tt::llrt::watcher_sanitize_host_noc_write(soc_desc, {target.x, target.y}, addr, size_in_bytes);
     }
     tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);
-    this->device_->write_to_device(mem_ptr, len, virtual_target, addr, "REG_TLB");
-    if (this->device_->get_target_remote_device_ids().find(virtual_target.chip) !=
-        this->device_->get_target_remote_device_ids().end()) {
-        this->device_->wait_for_non_mmio_flush();
+    this->get_driver(chip_id).write_to_device(mem_ptr, len, virtual_target, addr, "REG_TLB");
+    if (this->get_driver(chip_id).get_target_remote_device_ids().find(virtual_target.chip) !=
+        this->get_driver(chip_id).get_target_remote_device_ids().end()) {
+        this->get_driver(chip_id).wait_for_non_mmio_flush();
     }
 }
 
@@ -464,7 +522,7 @@ void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr
         tt::llrt::watcher_sanitize_host_noc_read(soc_desc, {target.x, target.y}, addr, size_in_bytes);
     }
     tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);
-    this->device_->read_from_device(mem_ptr, virtual_target, addr, size_in_bytes, "REG_TLB");
+    this->get_driver(chip_id).read_from_device(mem_ptr, virtual_target, addr, size_in_bytes, "REG_TLB");
 }
 
 void Cluster::read_dram_vec(
@@ -475,7 +533,7 @@ void Cluster::read_dram_vec(
 
 void Cluster::write_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, chip_id_t src_device_id) const {
     constexpr uint16_t channel = 0;
-    this->device_->write_to_sysmem(vec, addr, channel, src_device_id);
+    this->get_driver(src_device_id).write_to_sysmem(vec, addr, channel, src_device_id);
 }
 
 void Cluster::write_sysmem_vec(const uint32_t* vec, uint32_t size, uint64_t addr, chip_id_t src_device_id) const {
@@ -486,7 +544,7 @@ void Cluster::write_sysmem_vec(const uint32_t* vec, uint32_t size, uint64_t addr
 void Cluster::read_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, uint32_t size, chip_id_t src_device_id) const {
     // TODO: Uplift
     constexpr uint16_t channel = 0;
-    this->device_->read_from_sysmem(vec, addr, channel, size, src_device_id);
+    this->get_driver(src_device_id).read_from_sysmem(vec, addr, channel, size, src_device_id);
 }
 
 void Cluster::verify_sw_fw_versions(

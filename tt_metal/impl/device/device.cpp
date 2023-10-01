@@ -76,6 +76,7 @@ size_t Device::detect_num_pci_devices() {
 
 void Device::initialize_cluster() {
     ZoneScoped;
+    tt::Cluster::instance().initialize_device_driver(this->id_);
     this->clear_l1_state();
 #ifdef TT_METAL_VERSIM_DISABLED
     int ai_clk = tt::Cluster::instance().get_device_aiclk(this->id_);
@@ -275,6 +276,7 @@ bool Device::close() {
     this->clear_l1_state();
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
+    tt::Cluster::instance().close_device_driver(this->id_);
 
     this->active_devices_.deactivate_device(this->id_);
 

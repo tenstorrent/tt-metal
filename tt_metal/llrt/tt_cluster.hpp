@@ -43,18 +43,21 @@ class Cluster {
     Cluster(const Cluster &) = delete;
     Cluster(Cluster &&other) noexcept = delete;
 
-    static const Cluster &instance();
+    static Cluster &instance();
 
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
     size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
 
     ARCH arch() const { return this->arch_; }
 
-    const metal_SocDescriptor &get_soc_desc(chip_id_t chip) const { return this->sdesc_per_chip_.at(chip); }
+    void initialize_device_driver(chip_id_t device_id);
+    void close_device_driver(chip_id_t device_id);
+
+    const metal_SocDescriptor &get_soc_desc(chip_id_t chip) const;
     uint32_t get_harvested_rows(chip_id_t chip) const;
 
     //! device driver and misc apis
-    void clean_system_resources() const;
+    void clean_system_resources(chip_id_t device_id) const;
 
     void verify_eth_fw() const;
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const;
@@ -115,24 +118,33 @@ class Cluster {
     Cluster();
     ~Cluster();
 
-    void open_device(
-        const std::string &sdesc_path = "", const std::string &ndesc_path = "", const bool &skip_driver_allocs = false);
-    void start_device(const tt_device_params &device_params);
-    void close_device();
+    void open_device(chip_id_t device_id, const bool &skip_driver_allocs = false);
+    void start_device(chip_id_t device_id, tt_device_params &device_params);
 
+    tt_device &get_driver(chip_id_t device_id) const;
+    void get_metal_desc_from_tt_desc(const std::unordered_map<chip_id_t, tt_SocDescriptor> &input, const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks);
     tt_cxy_pair convert_physical_cxy_to_virtual(const tt_cxy_pair &physical_cxy) const;
-    void configure_static_tlbs(const std::uint32_t &chip);
+    void configure_static_tlbs(chip_id_t mmio_device_id);
 
     ARCH arch_;
     TargetDevice target_type_;
 
-    std::unique_ptr<tt_device> device_;
+    // There is one device driver per PCIe card. This map points id of the MMIO device points to the associated device driver
+    std::unordered_map<chip_id_t, std::unique_ptr<tt_device>> mmio_device_id_to_driver_;
+
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
+    std::string cluster_desc_path_;
     std::unique_ptr<tt_ClusterDescriptor> cluster_desc_;
+    // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
 
+    // Maps MMIO device id to set of device ids on the same PCIe card (including the MMIO device)
+    std::unordered_map<chip_id_t, std::set<chip_id_t>> device_ids_per_card_;
+    // Save mapping of device id to closet MMIO device id for fast lookup
+    std::unordered_map<chip_id_t, chip_id_t> device_to_closest_mmio_device_;
+    // Holds collection of devices (MMIO and remote) that can be targeted
     std::set<chip_id_t> target_device_ids_;
 
     tt_device_dram_address_params dram_address_params = {
