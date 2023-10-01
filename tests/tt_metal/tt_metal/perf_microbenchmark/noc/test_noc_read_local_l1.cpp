@@ -273,7 +273,7 @@ int main(int argc, char **argv) {
       }
     }
 
-    pass &= tt_metal::CloseDevice(device);
+    tt_metal::CloseDevice(device);
 
   } catch (const std::exception &e) {
     pass = false;

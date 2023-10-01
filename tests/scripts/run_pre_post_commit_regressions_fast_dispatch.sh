@@ -25,6 +25,7 @@ export PYTHONPATH=$TT_METAL_HOME
 env python tests/scripts/run_tt_metal.py --dispatch-mode fast
 env python tests/scripts/run_tt_eager.py --dispatch-mode fast
 ./build/test/tt_metal/unit_tests_fast_dispatch
+./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter=ConcurrentCommandQueueFixture.* --gtest_repeat=10
 
 
 echo "Checking docs build..."

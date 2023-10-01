@@ -93,7 +93,7 @@ TEST_F(BasicFixture, VerifyNocNodeIDs) {
             EXPECT_EQ(my_y, worker_core.y);
         }
     }
-    ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+    EXPECT_NO_THROW(tt::tt_metal::CloseDevice(device));
 }
 TEST_F(BasicFixture, VerifyNocIdentityTranslationTable) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
@@ -125,5 +125,5 @@ TEST_F(BasicFixture, VerifyNocIdentityTranslationTable) {
             ASSERT_FALSE(core_has_translation_error);
         }
     }
-    ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+    EXPECT_NO_THROW(tt::tt_metal::CloseDevice(device));
 }

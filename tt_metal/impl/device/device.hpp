@@ -9,8 +9,7 @@
 #include <memory>
 
 #include "hostdevcommon/common_values.hpp"
-#include "tt_metal/impl/allocator/basic_allocator.hpp"
-#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
 
@@ -58,7 +57,6 @@ class Device {
 
     ~Device();
 
-    // TODO: Add copy/move semantics
     Device(const Device &other) { }
     Device& operator=(const Device &other) { return *this; }
 
@@ -147,16 +145,16 @@ class Device {
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    bool initialize(const std::vector<uint32_t>& l1_bank_remap = {});
+    void initialize(const std::vector<uint32_t>& l1_bank_remap = {});
     void initialize_cluster();
     void initialize_allocator(const std::vector<uint32_t>& l1_bank_remap = {});
     void initialize_build();
     void initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg);
     void initialize_and_launch_firmware();
-    void clear_l1_state();
+
     // Puts device into reset
-    bool close();
-    friend bool CloseDevice(Device *device);
+    void close();
+    friend void CloseDevice(Device *device);
 
     // TODO: Uplift usage of friends. Buffer and Program just need access to allocator
     friend class Buffer;

@@ -2,12 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/interprocess/managed_shared_memory.hpp>
+
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "llrt/tt_debug_print_server.hpp"
 #include "tt_metal/third_party/umd/device/util.hpp"
+#include "tt_metal/common/concurrency_interface.hpp"
 
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
@@ -77,12 +80,11 @@ size_t Device::detect_num_pci_devices() {
 void Device::initialize_cluster() {
     ZoneScoped;
     tt::Cluster::instance().initialize_device_driver(this->id_);
-    this->clear_l1_state();
+
 #ifdef TT_METAL_VERSIM_DISABLED
     int ai_clk = tt::Cluster::instance().get_device_aiclk(this->id_);
     log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
 #endif
-    tt::Cluster::instance().assert_risc_reset(this->id_);
 }
 
 void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
@@ -100,7 +102,9 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
         .worker_log_to_physical_routing_x=soc_desc.worker_log_to_physical_routing_x,
         .worker_log_to_physical_routing_y=soc_desc.worker_log_to_physical_routing_y,
         .l1_bank_remap = l1_bank_remap,
+        .device_id = this->id_
     });
+
     // Initialize dram_offsets from soc_descriptor
     for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
@@ -133,7 +137,7 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
     // L1_BANKING scheme creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
     // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
     static_assert(this->allocator_scheme_ == MemoryAllocator::L1_BANKING);
-    this->allocator_ = std::make_unique<L1BankingAllocator>(config);
+    this->allocator_ = std::make_unique<Allocator>(config, allocator::generate_allocator_descriptor(this->allocator_scheme_));
 }
 
 void Device::initialize_build() {
@@ -229,26 +233,25 @@ void Device::initialize_and_launch_firmware() {
     log_debug("Firmware init complete");
 }
 
-void Device::clear_l1_state() {
-    CoreCoord logical_grid_size = this->logical_grid_size();
-    TT_ASSERT(this->l1_size_per_core() % sizeof(uint32_t) == 0);
-    std::vector<uint32_t> zero_vec(this->l1_size_per_core() / sizeof(uint32_t), 0);
-    constexpr uint32_t start_address = 0;
-    for (uint32_t x = 0; x < logical_grid_size.x; x++) {
-        for (uint32_t y = 0; y < logical_grid_size.y; y++) {
-            CoreCoord logical_core(x, y);
-            detail::WriteToDeviceL1(this, logical_core, start_address, zero_vec);
-        }
-    }
-}
-
-bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
+void Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}", this->id_);
     bool already_initialized = this->active_devices_.activate_device(this->id_);
     this->initialize_cluster();
+    concurrent::device_state_and_lock_pair_t device_state_and_lock = concurrent::get_device_state_controller(this->id_);
+    concurrent::device_state_t *device_state = device_state_and_lock.first;
+    // Lock this device for the duration of a process
+    concurrent::get_device_lock(this->id_).lock();
+    {
+        boost::interprocess::scoped_lock<boost::interprocess::named_mutex> lock(device_state_and_lock.second);
+        if (device_state->num_initializations == 0) {
+            tt::Cluster::instance().assert_risc_reset(this->id_);
+        }
+        device_state->num_initializations++;
+    }
     this->initialize_allocator(l1_bank_remap);
-    if (!already_initialized) {
+    // Only one thread needs to compile firmware.
+    if (not already_initialized) {
         this->initialize_build();
     }
     tt_start_debug_print_server();
@@ -261,10 +264,9 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     this->initialize_and_launch_firmware();
 
     this->initialized_ = true;
-    return true;
 }
 
-bool Device::close() {
+void Device::close() {
     log_info(tt::LogMetal, "Closing device {}", this->id_);
     if (not this->initialized_) {
         log_fatal("Cannot close device {} that has not been initialized!", this->id_);
@@ -272,16 +274,21 @@ bool Device::close() {
     this->deallocate_buffers();
     llrt::watcher_detach(this);
     tt_stop_debug_print_server();
-    tt::Cluster::instance().assert_risc_reset(id_);
-    this->clear_l1_state();
     tt::Cluster::instance().l1_barrier(id_);
-    allocator::clear(*this->allocator_);
-    tt::Cluster::instance().close_device_driver(this->id_);
 
     this->active_devices_.deactivate_device(this->id_);
-
+    concurrent::device_state_and_lock_pair_t device_state_and_lock = concurrent::get_device_state_controller(this->id_);
+    concurrent::device_state_t *device_state = device_state_and_lock.first;
+    {
+        boost::interprocess::scoped_lock<boost::interprocess::named_mutex> lock(device_state_and_lock.second);
+        device_state->num_initializations--;
+        if (device_state->num_initializations == 0) {
+            tt::Cluster::instance().assert_risc_reset(this->id_);
+        }
+    }
     this->initialized_ = false;
-    return true;
+    tt::Cluster::instance().close_device_driver(this->id_);
+    concurrent::get_device_lock(this->id_).unlock();
 }
 
 Device::~Device() {
@@ -291,7 +298,7 @@ Device::~Device() {
 }
 
 tt::ARCH Device::arch() const {
-    return tt::Cluster::instance().arch();
+    return tt::Cluster::instance().get_arch();
 }
 
 int Device::num_dram_channels() const {

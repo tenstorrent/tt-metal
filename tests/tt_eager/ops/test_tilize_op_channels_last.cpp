@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
         auto golden_vec = owned_buffer::get_as<bfloat16>(golden);
         auto result_vec = owned_buffer::get_as<bfloat16>(c);
         pass &= (result_vec == golden_vec);
-        pass &= tt_metal::CloseDevice(device);;
+        tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

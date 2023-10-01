@@ -304,7 +304,7 @@ bool run_chained_sfpu_test(int chain_length) {
         DeallocateBuffer(src_dram_buffer);
         DeallocateBuffer(dst_dram_buffer);
 
-        pass &= tt_metal::CloseDevice(device);
+        tt_metal::CloseDevice(device);
         delete device;
 
 
@@ -526,7 +526,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles);
         }
 
-        pass &= tt_metal::CloseDevice(device);
+        tt_metal::CloseDevice(device);
         delete device;
 
 
@@ -1004,7 +1004,7 @@ bool run_forked_binary_test() {
             print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles);
         }
 
-        pass &= tt_metal::CloseDevice(device);
+        tt_metal::CloseDevice(device);
         delete device;
 
 

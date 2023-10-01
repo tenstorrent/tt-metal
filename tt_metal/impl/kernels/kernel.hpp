@@ -67,7 +67,7 @@ class Kernel {
     inline uint16_t get_binary_size16() const { return binary_size16_; }
     void set_binary_path ( const std::string & binary_path) { binary_path_ = binary_path; }
     void set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&binaries);
-    virtual void read_binaries(chip_id_t device_id) = 0;
+    virtual void read_binaries(size_t kernel_hash, int device_id) = 0;
 
     void set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
 
@@ -106,7 +106,7 @@ class DataMovementKernel : public Kernel {
 
     void set_build_options(build_kernel_for_riscv_options_t &build_options) const;
     void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
-    void read_binaries(chip_id_t device_id);
+    void read_binaries(size_t kernel_hash, int device_id);
 
     bool configure(Device *device, const CoreCoord &logical_core) const;
 
@@ -132,7 +132,7 @@ class EthernetKernel : public Kernel {
 
     void set_build_options(build_kernel_for_riscv_options_t &build_options) const;
     void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
-    void read_binaries(int device_id);
+    void read_binaries(size_t kernel_hash, int device_id);
 
     bool configure(Device *device, const CoreCoord &logical_core) const;
 
@@ -158,7 +158,7 @@ class ComputeKernel : public Kernel {
 
     void set_build_options(build_kernel_for_riscv_options_t &build_options) const;
     void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
-    void read_binaries(chip_id_t device_id);
+    void read_binaries(size_t kernel_hash, int device_id);
 
     bool configure(Device *device, const CoreCoord &logical_core) const;
 

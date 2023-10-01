@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "command_queue_fixture.hpp"
+#include "concurrent_command_queue_fixture.hpp"
 #include "command_queue_test_utils.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests/concurrency/concurrent_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/host_api.hpp"
@@ -566,3 +568,38 @@ namespace stress_tests {
 TEST_F(CommandQueueFixture, DISABLED_TestSendMaxNumberOfRuntimeArgs) {}
 
 }  // namespace stress_tests
+
+namespace concurrent_tests {
+
+TEST_F(ConcurrentCommandQueueFixture, TestMultiThreadEnqueueProgram) {
+    const chip_id_t device_id = 0;
+    Device *device = CreateDevice(device_id);
+
+    concurrent_tests::DatacopyProgramConfig test_config;
+    uint32_t num_banks = device->num_banks(BufferType::L1);
+    test_config.fast_dispatch = true;
+    test_config.num_tiles = num_banks * 2;
+    test_config.output_buffer_type = BufferType::L1;
+
+    std::vector<std::future<void>> events;
+
+    const int num_threads = 3;
+    for (int thread_idx = 0; thread_idx < num_threads; thread_idx++) {
+        events.emplace_back(
+            detail::async (
+                [&] {
+                    bool pass = concurrent_tests::reader_datacopy_writer(device, test_config);
+                    ASSERT_TRUE(pass);
+                }
+            )
+        );
+    }
+
+    for (auto &f : events) {
+        f.wait();
+    }
+
+    CloseDevice(device);
+}
+
+}   // namespace concurrent_tests

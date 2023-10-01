@@ -14,7 +14,7 @@
 #include "allocator_types.hpp"
 #include "common/assert.hpp"
 #include "common/core_coord.h"
-#include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
+#include "tt_metal/impl/allocator/algorithms/free_list.hpp"
 
 namespace tt {
 
@@ -30,8 +30,8 @@ class BankManager {
    public:
     BankManager() {}
 
-    BankManager(const BufferType &buffer_type, const std::vector<int64_t> &bank_descriptors, uint64_t size_bytes, uint64_t alloc_offset=0);
-    BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_descriptor, uint64_t size_bytes, uint64_t alloc_offset=0);
+    BankManager(chip_id_t device_id, const BufferType &buffer_type, const std::vector<int64_t> &bank_descriptors, uint64_t size_bytes, uint64_t alloc_offset=0);
+    BankManager(chip_id_t device_id, const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_descriptor, uint64_t size_bytes, uint64_t alloc_offset=0);
 
     uint32_t num_banks() const;
 
@@ -53,25 +53,27 @@ class BankManager {
     void dump_blocks(std::ofstream &out) const;
 
    private:
-    constexpr static uint32_t min_allocation_size_bytes_ = 32;
-
+    // Required to pull out the correct memory block tracker from shared memory
+    chip_id_t device_id_;
     // Types of buffers allocated in the banks
     BufferType buffer_type_;
     std::unordered_set<uint64_t> allocated_buffers_;
     // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all banks using only bank_id
     // Set to 0 for cores/nodes with only 1 bank
     std::unordered_map<uint32_t, int64_t> bank_id_to_bank_offset_;
-    std::unique_ptr<Algorithm> allocator_;
+    std::unique_ptr<FreeList> allocator_;
 
     void validate_bank_id(uint32_t bank_id) const;
 
-    void init_allocator(uint64_t size_bytes, uint64_t offset);
+    void init_allocator(chip_id_t device_id, const BufferType &buffer_type, uint64_t size_bytes, uint64_t offset);
 };
 
 // Functions used to initiate allocator and allocate buffers
 void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &alloc_config);
 
 void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_config);
+
+void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const AllocatorConfig &alloc_config);
 
 uint32_t num_banks(const Allocator &allocator, const BufferType &buffer_type);
 
@@ -104,6 +106,8 @@ void deallocate_buffers(Allocator &allocator);
 
 void clear(Allocator &allocatator);
 
+const AllocDescriptor generate_allocator_descriptor(const MemoryAllocator &memory_scheme);
+
 }  // namespace allocator
 
 struct Allocator {
@@ -111,8 +115,6 @@ struct Allocator {
 
     allocator::BankManager dram_manager;
     allocator::BankManager l1_manager;
-
-    // TODO: Track lowest l1 addresses!
 
     std::unordered_map<uint32_t, uint32_t> bank_id_to_dram_channel;
     std::unordered_map<uint32_t, std::vector<uint32_t>> dram_channel_to_bank_ids;

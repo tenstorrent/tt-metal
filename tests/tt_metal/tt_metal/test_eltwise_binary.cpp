@@ -200,7 +200,7 @@ int main(int argc, char** argv) {
         }
     }  // for EltwiseOp::all()
 
-    pass &= tt_metal::CloseDevice(device);
+    tt_metal::CloseDevice(device);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

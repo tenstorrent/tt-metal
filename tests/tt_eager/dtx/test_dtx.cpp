@@ -131,7 +131,7 @@ int main(int argc, char **argv) {
             pass &= (input_vector[i] == result_vector[i-32]);
         }
 
-        pass &= tt_metal::CloseDevice(device);;
+        tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

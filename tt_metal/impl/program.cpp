@@ -81,6 +81,7 @@ namespace detail{
         enable_persistent_kernel_cache = false;
     }
 }
+
 auto Program::semaphores_on_core(const CoreCoord &core) const {
     std::vector<std::reference_wrapper<const Semaphore>> semaphores;
     for ( const Semaphore & s : this->semaphores_) {
@@ -600,10 +601,14 @@ void Program::compile( Device * device )
         !(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
     tt_set_profiler_state_for_debug_print(profile_kernel);
 
+    std::mutex kernel_hash_map_mutex;
+    // populate this map so reading binaries can wait until the kernel has finished compiling
+    std::unordered_map<KernelID, size_t> kernel_id_to_hash;
+
     // compile all kernels in parallel
     for (auto kernel_id : this->kernel_ids()) {
         auto kernel = this->get_kernel(kernel_id);
-        events.emplace_back ( detail::async ( [kernel, device, this] {
+        events.emplace_back ( detail::async ( [kernel_id, &kernel_id_to_hash, &kernel_hash_map_mutex, kernel, device, this] {
             build_kernel_for_riscv_options_t build_options(device->id(), kernel->name());
             ZoneScoped;
 
@@ -613,6 +618,11 @@ void Program::compile( Device * device )
             auto kernel_hash = KernelCompileHash(kernel, build_options, device->id());
             std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash);
 
+            {
+                unique_lock<mutex> lock(kernel_hash_map_mutex);
+                kernel_id_to_hash[kernel_id] = kernel_hash;
+            }
+
             bool cache_hit = true;
             bool path_exists = std::filesystem::exists(build_options.outpath + kernel_path_suffix);
             if ( enable_persistent_kernel_cache && path_exists ) {
@@ -620,6 +630,8 @@ void Program::compile( Device * device )
             } else if ( detail::HashLookup::inst().add(kernel_hash) ) {
                 cache_hit = false;
                 GenerateBinaries(device, &build_options, kernel_path_suffix, kernel);
+                // Signal that the binary is done compiling
+                detail::HashLookup::inst().mark_compilation_complete(kernel_hash);
             }
             if (detail::CompilationReporter::enabled()) {
                 detail::CompilationReporter::inst().add_kernel_compile_stats(*this, kernel, cache_hit, kernel_hash);
@@ -634,7 +646,9 @@ void Program::compile( Device * device )
 
     for (auto kernel_id : this->kernel_ids()) {
         auto kernel = this->get_kernel(kernel_id);
-        events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device->id()); }));
+        events.emplace_back ( detail::async ( [kernel_id, &kernel_id_to_hash, kernel, device] {
+            kernel->read_binaries(kernel_id_to_hash.at(kernel_id), device->id());
+        }));
     }
 
     for (auto & f : events)

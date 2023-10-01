@@ -66,7 +66,7 @@ Compute kernel declaration and compile-time defines
 
 .. code-block:: cpp
 
-  ComputeKernel *eltwise_binary_kernel = CreateComputeKernel(
+  ComputeKernel *eltwise_binary_kernel = CreateKernel(
       program,
       "kernels/compute/eltwise_binary.cpp",
       core,

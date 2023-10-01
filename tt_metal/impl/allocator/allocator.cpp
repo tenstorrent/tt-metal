@@ -11,16 +11,18 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 
 namespace tt {
-
 namespace tt_metal {
 
 namespace allocator {
 
-void BankManager::init_allocator(uint64_t size_bytes, uint64_t offset) {
+void BankManager::init_allocator(chip_id_t device_id, const BufferType &buffer_type, uint64_t size_bytes, uint64_t offset) {
+    std::string free_list_name = buffer_type == BufferType::DRAM ? concurrent::dram_mem_blocks_name(device_id) : concurrent::l1_mem_blocks_name(device_id);
+    uint64_t min_allocation_size_bytes = buffer_type == BufferType::DRAM ? MIN_ALLOCATABLE_DRAM_SIZE_BYTES : MIN_ALLOCATABLE_L1_SIZE_BYTES;
     this->allocator_ = std::make_unique<FreeList>(
+        free_list_name,
         size_bytes,
         offset,
-        this->min_allocation_size_bytes_,
+        min_allocation_size_bytes,
         ADDRESS_ALIGNMENT,
         FreeList::SearchPolicy::FIRST
     );
@@ -38,19 +40,19 @@ void validate_num_banks(uint32_t num_banks, const BufferType &buffer_type) {
     }
 }
 
-BankManager::BankManager(const BufferType &buffer_type, const std::vector<int64_t> &bank_offsets, uint64_t size_bytes, uint64_t alloc_offset) : buffer_type_(buffer_type) {
+BankManager::BankManager(chip_id_t device_id, const BufferType &buffer_type, const std::vector<int64_t> &bank_offsets, uint64_t size_bytes, uint64_t alloc_offset) : device_id_(device_id), buffer_type_(buffer_type) {
     unsigned int bank_id = 0;
     for (const auto bank_offset : bank_offsets) {
         this->bank_id_to_bank_offset_.insert({bank_id, bank_offset});
         bank_id++;
     }
     validate_num_banks(this->bank_id_to_bank_offset_.size(), this->buffer_type_);
-    this->init_allocator(size_bytes, alloc_offset);
+    this->init_allocator(device_id, buffer_type, size_bytes, alloc_offset);
 }
 
-BankManager::BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_bank_offset, uint64_t size_bytes, uint64_t alloc_offset) : buffer_type_(buffer_type), bank_id_to_bank_offset_(bank_id_to_bank_offset) {
+BankManager::BankManager(chip_id_t device_id, const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_bank_offset, uint64_t size_bytes, uint64_t alloc_offset) : device_id_(device_id), buffer_type_(buffer_type), bank_id_to_bank_offset_(bank_id_to_bank_offset) {
     validate_num_banks(this->bank_id_to_bank_offset_.size(), this->buffer_type_);
-    this->init_allocator(size_bytes, alloc_offset);
+    this->init_allocator(device_id, buffer_type, size_bytes, alloc_offset);
 }
 
 uint32_t BankManager::num_banks() const {
@@ -82,7 +84,7 @@ uint64_t BankManager::allocate_buffer(uint32_t size, uint32_t page_size, bool bo
 
     auto address = this->allocator_->allocate(size_per_bank, bottom_up);
     if (not address.has_value()) {
-        log_fatal(tt::LogMetal, "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to store {} B", size, magic_enum::enum_name(this->buffer_type_), num_banks, size_per_bank);
+        log_fatal(tt::LogMetal, "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks on device {}, where each bank needs to store {} B", size, magic_enum::enum_name(this->buffer_type_), num_banks, this->device_id_, size_per_bank);
     }
     allocated_buffers_.insert(address.value());
     return address.value();
@@ -129,7 +131,7 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
     for (uint32_t channel_id = 0; channel_id < alloc_config.num_dram_channels; channel_id++) {
         bank_offsets.at(channel_id) = static_cast<int32_t>(alloc_config.dram_bank_offsets.at(channel_id));
     }
-    allocator.dram_manager = BankManager(BufferType::DRAM, bank_offsets, dram_bank_size, offset_bytes);
+    allocator.dram_manager = BankManager(alloc_config.device_id, BufferType::DRAM, bank_offsets, dram_bank_size, offset_bytes);
     for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
         allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
         allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
@@ -142,7 +144,7 @@ void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_con
     uint64_t offset_bytes = static_cast<uint64_t>(L1_UNRESERVED_BASE);
     uint32_t l1_bank_size = alloc_config.worker_l1_size - L1_UNRESERVED_BASE;
     std::vector<int64_t> bank_offsets (num_l1_banks, 0);
-    allocator.l1_manager = BankManager(BufferType::L1, bank_offsets, l1_bank_size, offset_bytes);
+    allocator.l1_manager = BankManager(alloc_config.device_id, BufferType::L1, bank_offsets, l1_bank_size, offset_bytes);
 
     uint32_t bank_id = 0;
     for (uint32_t y = 0; y < alloc_config.worker_grid_size.y; y++) {
@@ -275,6 +277,25 @@ void deallocate_buffers(Allocator &allocator) {
 void clear(Allocator &allocator) {
     allocator.dram_manager.clear();
     allocator.l1_manager.clear();
+}
+
+const AllocDescriptor generate_allocator_descriptor(const MemoryAllocator &memory_scheme) {
+    AllocDescriptor descriptor;
+    switch (memory_scheme) {
+        case MemoryAllocator::BASIC: {
+            descriptor.dram = InitAndAllocFuncs{.init = init_one_bank_per_channel, .alloc = base_alloc};
+            descriptor.l1 = InitAndAllocFuncs{.init = init_one_bank_per_l1, .alloc = base_alloc};
+        }
+        break;
+        case MemoryAllocator::L1_BANKING: {
+            descriptor.dram = InitAndAllocFuncs{.init = init_one_bank_per_channel, .alloc = base_alloc};
+            descriptor.l1 = InitAndAllocFuncs{.init = init_compute_and_storage_l1_bank_manager, .alloc = base_alloc};
+        }
+        break;
+        default:
+            log_fatal("Cannot generate allocator descriptor for unsupported memory allocator scheme");
+    }
+    return descriptor;
 }
 
 }  // namespace allocator

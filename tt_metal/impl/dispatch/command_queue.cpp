@@ -32,6 +32,10 @@ uint32_t get_noc_unicast_encoding(CoreCoord coord) { return NOC_XY_ENCODING(NOC_
 
 uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
+concurrent::cq_write_interface_and_lock_pair_t get_cq_write_interface_from_shm(chip_id_t device_id) {
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device_id(device_id);
+    return tt::concurrent::get_cq_write_interface(mmio_device_id); // There is one set of CQ write ptrs/toggles per MMIO device
+}
 
 ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     /*
@@ -322,7 +326,11 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
 }
 
 void EnqueueReadBufferCommand::process() {
-    uint32_t write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
+    concurrent::cq_write_interface_and_lock_pair_t cq_write_interface_and_lock = get_cq_write_interface_from_shm(this->device->id());
+    concurrent::sys_mem_cq_write_interface_t *cq_write_interface = cq_write_interface_and_lock.first;
+    boost::interprocess::scoped_lock<boost::interprocess::named_sharable_mutex> lock(cq_write_interface_and_lock.second);
+
+    uint32_t write_ptr = cq_write_interface->fifo_wr_ptr << 4;
     uint32_t system_memory_temporary_storage_address = write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     this->read_buffer_addr = system_memory_temporary_storage_address;
     const auto cmd = this->assemble_device_command(system_memory_temporary_storage_address);
@@ -393,7 +401,11 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
 }
 
 void EnqueueWriteBufferCommand::process() {
-    uint32_t write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
+    concurrent::cq_write_interface_and_lock_pair_t cq_write_interface_and_lock = get_cq_write_interface_from_shm(this->device->id());
+    concurrent::sys_mem_cq_write_interface_t *cq_write_interface = cq_write_interface_and_lock.first;
+    boost::interprocess::scoped_lock<boost::interprocess::named_sharable_mutex> lock(cq_write_interface_and_lock.second);
+
+    uint32_t write_ptr = cq_write_interface->fifo_wr_ptr << 4;
     uint32_t system_memory_temporary_storage_address = write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
     const auto cmd = this->assemble_device_command(system_memory_temporary_storage_address);
@@ -545,7 +557,11 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
 }
 
 void EnqueueProgramCommand::process() {
-    uint32_t write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
+    concurrent::cq_write_interface_and_lock_pair_t cq_write_interface_and_lock = get_cq_write_interface_from_shm(this->device->id());
+    concurrent::sys_mem_cq_write_interface_t *cq_write_interface = cq_write_interface_and_lock.first;
+    boost::interprocess::scoped_lock<boost::interprocess::named_sharable_mutex> lock(cq_write_interface_and_lock.second);
+
+    uint32_t write_ptr = cq_write_interface->fifo_wr_ptr << 4;
     uint32_t system_memory_temporary_storage_address = write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
     const DeviceCommand cmd = this->assemble_device_command(system_memory_temporary_storage_address);
@@ -573,7 +589,11 @@ const DeviceCommand FinishCommand::assemble_device_command(uint32_t) {
 }
 
 void FinishCommand::process() {
-    uint32_t write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
+    concurrent::cq_write_interface_and_lock_pair_t cq_write_interface_and_lock = get_cq_write_interface_from_shm(this->device->id());
+    concurrent::sys_mem_cq_write_interface_t *cq_write_interface = cq_write_interface_and_lock.first;
+    boost::interprocess::scoped_lock<boost::interprocess::named_sharable_mutex> lock(cq_write_interface_and_lock.second);
+
+    uint32_t write_ptr = cq_write_interface->fifo_wr_ptr << 4;
     const auto cmd = this->assemble_device_command(0);
     uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
@@ -595,7 +615,12 @@ const DeviceCommand EnqueueWrapCommand::assemble_device_command(uint32_t) {
 }
 
 void EnqueueWrapCommand::process() {
-    uint32_t write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
+    concurrent::cq_write_interface_and_lock_pair_t cq_write_interface_and_lock = get_cq_write_interface_from_shm(this->device->id());
+    concurrent::sys_mem_cq_write_interface_t *cq_write_interface = cq_write_interface_and_lock.first;
+    boost::interprocess::scoped_lock<boost::interprocess::named_sharable_mutex> lock(cq_write_interface_and_lock.second);
+
+    uint32_t write_ptr = cq_write_interface->fifo_wr_ptr << 4;
+
     uint32_t space_left = HUGE_PAGE_SIZE - write_ptr;
 
     // Since all of the values will be 0, this will be equivalent to
@@ -682,9 +707,21 @@ CommandQueue::CommandQueue(Device* device) {
     vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
     pointers[0] = CQ_START >> 4;  // rd ptr (96 >> 4 = 6)
 
-    tt::Cluster::instance().write_sysmem_vec(pointers, 0, 0);
+    concurrent::device_state_and_lock_pair_t device_state_and_lock = concurrent::get_device_state_controller(device->id());
+    concurrent::device_state_t *device_state = device_state_and_lock.first;
+    {
+        boost::interprocess::scoped_lock<boost::interprocess::named_mutex> lock(device_state_and_lock.second);
+        // Only send dispatch kernels to device once when the device is first created
+        if (device_state->num_initializations == 1) {
+            tt::Cluster::instance().write_sysmem_vec(pointers, 0, 0);
+            send_dispatch_kernel_to_device(device);
+            chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device_id(device->id());
+            // Remove dangling synchronization primitives from previous processes and ensures the cq_write_interface is reset
+            // Currently there is one CommandQueue object per process controlling shared hugepage so this is safe to do here
+            tt::concurrent::remove_cq_write_interface(mmio_device_id);
+        }
+    }
 
-    send_dispatch_kernel_to_device(device);
     this->device = device;
 }
 
@@ -701,10 +738,19 @@ void CommandQueue::enqueue_command(Command& command, bool blocking) {
     }
 }
 
+bool wrap_is_required(chip_id_t device_id, uint32_t command_size) {
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device_id(device_id);
+    concurrent::cq_write_interface_and_lock_pair_t cq_write_interface_and_lock = tt::concurrent::get_cq_write_interface(mmio_device_id);
+    concurrent::sys_mem_cq_write_interface_t *cq_write_interface = cq_write_interface_and_lock.first;
+    // Ensure fifo_wr_ptr is not read while its being updated
+    boost::interprocess::sharable_lock<boost::interprocess::named_sharable_mutex> lock(cq_write_interface_and_lock.second);
+    return ((cq_write_interface->fifo_wr_ptr << 4) + command_size >= HUGE_PAGE_SIZE);
+}
+
 void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<uint32_t>& dst, bool blocking) {
     ZoneScopedN("CommandQueue_read_buffer");
     uint32_t read_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + buffer.size();
-    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + read_buffer_command_size >= HUGE_PAGE_SIZE) {
+    if (wrap_is_required(this->device->id(), read_buffer_command_size)) {
         tt::log_assert(read_buffer_command_size <= HUGE_PAGE_SIZE - 96, "EnqueueReadBuffer command is too large");
         this->wrap();
     }
@@ -729,9 +775,9 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<uint32_t>& dst, bo
     // This vector is potentially padded due to alignment constraints, so need to now remove the padding
     if ((buffer.page_size() % 32) != 0) {
         vector<uint32_t> new_dst(buffer.size() / sizeof(uint32_t), 0);
-        uint32_t padded_page_size_in_u32s = align(buffer.page_size(), 32) / sizeof(uint32_t);
+        uint32_t padded_page_size_in_uint32_ts = align(buffer.page_size(), 32) / sizeof(uint32_t);
         uint32_t new_dst_counter = 0;
-        for (uint32_t i = 0; i < dst.size(); i += padded_page_size_in_u32s) {
+        for (uint32_t i = 0; i < dst.size(); i += padded_page_size_in_uint32_ts) {
             for (uint32_t j = 0; j < buffer.page_size() / sizeof(uint32_t); j++) {
                 new_dst[new_dst_counter] = dst[i + j];
                 new_dst_counter++;
@@ -755,7 +801,7 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<uint32_t>& src, b
         "Buffer pages must fit within the command queue data section");
 
     uint32_t write_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + buffer.size();
-    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + write_buffer_command_size >= HUGE_PAGE_SIZE) {
+    if (wrap_is_required(this->device->id(), write_buffer_command_size)) {
         tt::log_assert(
             write_buffer_command_size <= HUGE_PAGE_SIZE - 96,
             "EnqueueWriteBuffer command is too large: {}",
@@ -831,9 +877,7 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
 
     uint32_t host_data_and_device_command_size =
         DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + (host_data.size() * sizeof(uint32_t));
-
-    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + host_data_and_device_command_size >=
-        HUGE_PAGE_SIZE) {
+    if (wrap_is_required(this->device->id(), host_data_and_device_command_size)) {
         tt::log_assert(
             host_data_and_device_command_size <= HUGE_PAGE_SIZE - 96, "EnqueueProgram command size too large");
         this->wrap();
@@ -854,24 +898,26 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
 
 void CommandQueue::finish() {
     ZoneScopedN("CommandQueue_finish");
-    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND >=
-        HUGE_PAGE_SIZE) {
+    if (wrap_is_required(this->device->id(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND)) {
         this->wrap();
     }
     tt::log_debug(tt::LogDispatch, "Finish");
 
     FinishCommand command(this->device, this->sysmem_writer);
-    this->enqueue_command(command, false);
+    {
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device_id(this->device->id());
+        boost::interprocess::scoped_lock<boost::interprocess::named_mutex> lock(concurrent::get_finish_command_mutex(mmio_device_id));
+        this->enqueue_command(command, false);
+        // We then poll to check that we're done.
+        vector<uint32_t> finish_vec;
+        do {
+            tt::Cluster::instance().read_sysmem_vec(finish_vec, HOST_CQ_FINISH_PTR, 4, 0);
+        } while (finish_vec[0] != 1);
 
-    // We then poll to check that we're done.
-    vector<uint32_t> finish_vec;
-    do {
-        tt::Cluster::instance().read_sysmem_vec(finish_vec, HOST_CQ_FINISH_PTR, 4, 0);
-    } while (finish_vec[0] != 1);
-
-    // Reset this value to 0 before moving on
-    finish_vec[0] = 0;
-    tt::Cluster::instance().write_sysmem_vec(finish_vec, HOST_CQ_FINISH_PTR, 0);
+        // Reset this value to 0 before moving on
+        finish_vec[0] = 0;
+        tt::Cluster::instance().write_sysmem_vec(finish_vec, HOST_CQ_FINISH_PTR, 0);
+    }
 }
 
 void CommandQueue::wrap() {

@@ -59,7 +59,7 @@ Device *CreateDevice(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_r
  * |----------|----------------------------|----------|-------------|----------|
  * | device   | Pointer to a device object | Device * |             | True     |
  */
-bool CloseDevice(Device *device);
+void CloseDevice(Device *device);
 
 // ==================================================
 //                  HOST API: program & kernels

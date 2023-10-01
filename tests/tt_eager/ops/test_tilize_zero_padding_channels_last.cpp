@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
         }
         pass &= (result_vec == golden_vec);
 
-	pass &= CloseDevice(device);
+	CloseDevice(device);
     } catch (const std::exception &e) {
         pass = false;
         // Capture the exception error message

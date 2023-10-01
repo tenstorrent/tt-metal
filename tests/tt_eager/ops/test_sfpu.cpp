@@ -196,7 +196,7 @@ bool run_sfpu_test(string sfpu_name) {
             //print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles);
         }
 
-        pass &= tt_metal::CloseDevice(device);;
+        tt_metal::CloseDevice(device);
         // TODO (abhullar): Uplift when raw ptr usages are removed. Commenting out delete for now because device needs to outlive buffers
         //delete device;
 

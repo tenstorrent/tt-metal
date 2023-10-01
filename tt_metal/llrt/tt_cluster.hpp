@@ -8,6 +8,9 @@
 
 #include <chrono>
 
+#include <boost/interprocess/sync/interprocess_mutex.hpp>
+#include <boost/interprocess/sync/named_mutex.hpp>
+
 #include "common/base.hpp"
 #include "common/metal_soc_descriptor.h"
 #include "common/test_common.hpp"
@@ -31,8 +34,6 @@
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
 using tt_target_dram = std::tuple<int, int, int>;
-using tt::DEVICE;
-using tt::TargetDevice;
 
 namespace tt {
 
@@ -45,16 +46,18 @@ class Cluster {
 
     static Cluster &instance();
 
-    size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
-    size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
+    size_t number_of_devices() const { return this->cluster_desc->get_number_of_chips(); }
+    size_t number_of_pci_devices() const { return this->cluster_desc->get_chips_with_mmio().size(); }
 
-    ARCH arch() const { return this->arch_; }
+    ARCH get_arch() const { return this->arch; }
 
     void initialize_device_driver(chip_id_t device_id);
     void close_device_driver(chip_id_t device_id);
 
     const metal_SocDescriptor &get_soc_desc(chip_id_t chip) const;
     uint32_t get_harvested_rows(chip_id_t chip) const;
+
+    chip_id_t get_associated_mmio_device_id(chip_id_t device_id) const;
 
     //! device driver and misc apis
     void clean_system_resources(chip_id_t device_id) const;
@@ -126,26 +129,26 @@ class Cluster {
     tt_cxy_pair convert_physical_cxy_to_virtual(const tt_cxy_pair &physical_cxy) const;
     void configure_static_tlbs(chip_id_t mmio_device_id);
 
-    ARCH arch_;
-    TargetDevice target_type_;
+    ARCH arch;
+    TargetDevice target_type;
 
     // There is one device driver per PCIe card. This map points id of the MMIO device points to the associated device driver
-    std::unordered_map<chip_id_t, std::unique_ptr<tt_device>> mmio_device_id_to_driver_;
+    std::unordered_map<chip_id_t, std::unique_ptr<tt_device>> mmio_device_id_to_driver;
 
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
-    std::string cluster_desc_path_;
-    std::unique_ptr<tt_ClusterDescriptor> cluster_desc_;
+    std::string cluster_desc_path;
+    std::unique_ptr<tt_ClusterDescriptor> cluster_desc;
     // There is an entry for every device that can be targeted (MMIO and remote)
-    std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
+    std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip;
 
-    // Maps MMIO device id to set of device ids on the same PCIe card (including the MMIO device)
-    std::unordered_map<chip_id_t, std::set<chip_id_t>> device_ids_per_card_;
-    // Save mapping of device id to closet MMIO device id for fast lookup
-    std::unordered_map<chip_id_t, chip_id_t> device_to_closest_mmio_device_;
+    // Collections of devices that are grouped based on the associated MMIO device. MMIO device is included in the grouping
+    std::unordered_map<chip_id_t, std::set<chip_id_t>> devices_grouped_by_assoc_mmio_device;
+    // Save mapping of device id to associated MMIO device id for fast lookup
+    std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_device;
     // Holds collection of devices (MMIO and remote) that can be targeted
-    std::set<chip_id_t> target_device_ids_;
+    std::set<chip_id_t> target_device_ids;
 
     tt_device_dram_address_params dram_address_params = {
         DRAM_BARRIER_BASE

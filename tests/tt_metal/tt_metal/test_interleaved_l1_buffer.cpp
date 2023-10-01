@@ -73,7 +73,7 @@ int main(int argc, char **argv) {
 
         pass &= test_interleaved_l1_buffer(device, num_bank_pages_one, num_bank_pages_two, page_size);
 
-        pass &= tt_metal::CloseDevice(device);
+        tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

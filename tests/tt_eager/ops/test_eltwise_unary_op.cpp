@@ -116,7 +116,7 @@ void test_shape_padding() {
     TT_ASSERT(output_shape == padded_input_shape);
     TT_ASSERT(output_shape.without_padding() == input_shape);
 
-    TT_ASSERT(tt::tt_metal::CloseDevice(device));
+    tt::tt_metal::CloseDevice(device);
 }
 
 namespace tt {
@@ -194,7 +194,7 @@ void test_numerically() {
         TT_ASSERT(allclose);
     }
 
-    TT_ASSERT(tt::tt_metal::CloseDevice(device));
+    tt::tt_metal::CloseDevice(device);
 }
 
 void test_program_cache() {
@@ -256,7 +256,7 @@ void test_program_cache() {
     tt::tt_metal::program_cache::enable();
     run_tests();
 
-    TT_ASSERT(tt::tt_metal::CloseDevice(device));
+    tt::tt_metal::CloseDevice(device);
 
     TT_ASSERT(tt::tt_metal::program_cache::num_entries() == 5);
 

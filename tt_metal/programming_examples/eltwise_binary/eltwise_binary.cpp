@@ -328,7 +328,7 @@ int main(int argc, char **argv) {
 
         pass &= packed_uint32_t_vector_comparison(golden_vec, result_vec, comparison_function);
 
-        pass &= CloseDevice(device);
+        CloseDevice(device);
 
     } catch (const std::exception &e) {
         tt::log_error(tt::LogTest, "Test failed with exception!");

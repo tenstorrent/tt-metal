@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
         run_operations();
         program_cache::disable_and_clear();
 
-        pass &= CloseDevice(device);
+        CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

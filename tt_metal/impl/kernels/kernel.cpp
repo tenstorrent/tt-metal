@@ -4,6 +4,7 @@
 
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/detail/kernel_cache.hpp"
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 #include "llrt/llrt.hpp"
 
@@ -216,7 +217,9 @@ void Kernel::set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&bin
     }
 }
 
-void DataMovementKernel::read_binaries(chip_id_t device_id) {
+void DataMovementKernel::read_binaries(size_t kernel_hash, int device_id) {
+    // Stall here until the binary is done compiling
+    detail::HashLookup::inst().wait_for_compilation_complete(kernel_hash);
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
     uint32_t riscv_id;
@@ -244,8 +247,10 @@ void DataMovementKernel::read_binaries(chip_id_t device_id) {
     this->set_binaries(device_id, std::move(binaries));
 }
 
-void EthernetKernel::read_binaries(int device_id) {
-   // untested
+void EthernetKernel::read_binaries(size_t kernel_hash, int device_id) {
+    // untested
+    // Stall here until the binary is done compiling
+    detail::HashLookup::inst().wait_for_compilation_complete(kernel_hash);
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
     uint32_t riscv_id;
@@ -255,7 +260,9 @@ void EthernetKernel::read_binaries(int device_id) {
     this->set_binaries(device_id, std::move(binaries));
 }
 
-void ComputeKernel::read_binaries(int device_id) {
+void ComputeKernel::read_binaries(size_t kernel_hash, int device_id) {
+    // Stall here until the binary is done compiling
+    detail::HashLookup::inst().wait_for_compilation_complete(kernel_hash);
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {

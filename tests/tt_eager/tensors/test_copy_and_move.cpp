@@ -202,7 +202,7 @@ int main(int argc, char **argv) {
 
         pass &= test_tensor_deallocate_semantics(device);
 
-        pass &= tt_metal::CloseDevice(device);
+        tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

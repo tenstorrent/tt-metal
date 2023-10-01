@@ -9,18 +9,13 @@
 #include "common/tt_backend_api_types.hpp"
 #include "common/core_coord.h"
 #include "hostdevcommon/common_values.hpp"
+#include "tt_metal/impl/buffers/buffer_types.hpp"
 
 namespace tt {
 
 namespace tt_metal {
 
 class Device;
-
-enum class BufferType {
-    DRAM,
-    L1,
-    SYSTEM_MEMORY
-};
 
 class Buffer {
    public:

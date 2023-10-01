@@ -12,22 +12,10 @@
 
 using namespace tt::tt_metal;
 
-struct SystemMemoryCQWriteInterface {
-    // Equation for fifo size is
-    // | fifo_wr_ptr + command size B - fifo_rd_ptr |
-    // Space available would just be fifo_limit - fifo_size
-    const uint32_t fifo_size = ((1024 * 1024 * 1024) - 96) >> 4;
-    const uint32_t fifo_limit = ((1024 * 1024 * 1024) >> 4) - 1;  // Last possible FIFO address
-
-    uint32_t fifo_wr_ptr;
-    bool fifo_wr_toggle;
-};
-
 uint32_t get_cq_rd_ptr(Device* device);
 
 class SystemMemoryWriter {
    public:
-    SystemMemoryCQWriteInterface cq_write_interface;
     SystemMemoryWriter();
 
     void cq_reserve_back(Device* device, uint32_t cmd_size_B);

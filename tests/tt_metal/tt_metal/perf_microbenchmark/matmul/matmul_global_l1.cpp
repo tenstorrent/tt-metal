@@ -1226,7 +1226,7 @@ int main(int argc, char** argv) {
 
     auto golden = select_columns(tensor.get_values(), Mt, Kt, Nt);
     pass &= (golden == result_untilized);
-    pass &= tt_metal::CloseDevice(device);
+    tt_metal::CloseDevice(device);
 
   } catch (const std::exception& e) {
     pass = false;

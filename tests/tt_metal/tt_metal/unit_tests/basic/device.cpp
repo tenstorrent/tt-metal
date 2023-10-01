@@ -124,7 +124,7 @@ TEST_F(BasicFixture, MultiDeviceInitializeAndTeardown) {
         }
     } catch (...) {}
     for (auto device : devices) {
-        ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+        EXPECT_NO_THROW(tt::tt_metal::CloseDevice(device));
     }
 }
 TEST_F(BasicFixture, MultiDeviceLoadBlankKernels) {
@@ -146,7 +146,7 @@ TEST_F(BasicFixture, MultiDeviceLoadBlankKernels) {
         }
     } catch (...) {}
     for (auto device: devices) {
-        ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+        EXPECT_NO_THROW(tt::tt_metal::CloseDevice(device));
     }
 }
 
@@ -155,7 +155,7 @@ TEST_F(BasicFixture, SingleDeviceInitializeAndTeardown) {
     tt::tt_metal::Device* device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
-    ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+    EXPECT_NO_THROW(tt::tt_metal::CloseDevice(device));
 }
 TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
@@ -189,7 +189,7 @@ TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
         }
         tt::log_info("{}", output_row);
     }
-    ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+    EXPECT_NO_THROW(tt::tt_metal::CloseDevice(device));
 }
 
 TEST_F(BasicFixture, SingleDeviceLoadBlankKernels) {
@@ -198,7 +198,7 @@ TEST_F(BasicFixture, SingleDeviceLoadBlankKernels) {
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
     unit_tests::basic::device::load_all_blank_kernels(device);
-    ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+    EXPECT_NO_THROW(tt::tt_metal::CloseDevice(device));
 }
 TEST_F(DeviceFixture, PingAllLegalDramChannels) {
     for (unsigned int id = 0; id < num_devices_; id++) {

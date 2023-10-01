@@ -5,11 +5,16 @@
 #include <memory>
 
 #include "command_queue_fixture.hpp"
+#include "concurrent_command_queue_fixture.hpp"
 #include "command_queue_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/detail/util.hpp"
+#include "tt_metal/common/executor.hpp"
+#include "tt_metal/test_utils/print_helpers.hpp"
+#include "tt_metal/common/concurrency_interface.hpp"
 
 using namespace tt::tt_metal;
 
@@ -48,6 +53,7 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, CommandQueue&
     vector<uint32_t> result;
     EnqueueReadBuffer(cq, bufa, result, true);
 
+    EXPECT_EQ(src, result);
     return src == result;
 }
 
@@ -203,7 +209,6 @@ TEST_F(CommandQueueFixture, TestPageSizeTooLarge) {
 }
 
 TEST_F(CommandQueueFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
-
     BufferConfig buf_config = {.num_pages = 524270, .page_size = 2048, .buftype = BufferType::DRAM};
 
     EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, buf_config));
@@ -293,3 +298,118 @@ TEST_F(CommandQueueFixture, StressWrapTest) {
 }
 
 }  // end namespace stress_tests
+
+namespace concurrent_tests {
+
+TEST_F(ConcurrentCommandQueueFixture, TestMultiThreadDramWriteRead) {
+    const chip_id_t device_id = 0;
+    Device *device = CreateDevice(device_id);
+
+    std::vector<std::future<void>> events;
+
+    events.emplace_back(
+        detail::async (
+            [&] {
+                constexpr uint32_t num_round_robins = 2;
+                BufferConfig config1 = {
+                    .num_pages = num_round_robins * (device->num_banks(BufferType::DRAM)),
+                    .page_size = 2048,
+                    .buftype = BufferType::DRAM};
+                EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, *tt::tt_metal::detail::GLOBAL_CQ, config1));
+            }
+        )
+    );
+
+    events.emplace_back(
+        detail::async (
+            [&] {
+                BufferConfig config2 = {.num_pages = 4096, .page_size = 22016, .buftype = BufferType::DRAM};
+                EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, *tt::tt_metal::detail::GLOBAL_CQ, config2));
+            }
+        )
+    );
+
+    events.emplace_back(
+        detail::async (
+            [&] {
+                BufferConfig buf_config = {.num_pages = 524270, .page_size = 2048, .buftype = BufferType::DRAM};
+                EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueReadBuffer(device, *tt::tt_metal::detail::GLOBAL_CQ, buf_config));
+            }
+        )
+    );
+
+    for (auto &f : events) {
+        f.wait();
+    }
+
+    CloseDevice(device);
+}
+
+// Multi thread/process L1 tests concurrently run:
+//  CommandQueueFixture.WriteOneTileToAllL1BanksTwiceRoundRobin
+//  CommandQueueFixture.TestBackToBackNon32BAlignedPageSize
+//  CommandQueueFixture.WriteOneTileToAllL1BanksTwiceRoundRobin
+
+TEST_F(ConcurrentCommandQueueFixture, TestMultiThreadL1WriteRead) {
+    const chip_id_t device_id = 0;
+    Device *device = CreateDevice(device_id);
+
+    std::vector<std::future<void>> events;
+
+    events.emplace_back(
+        detail::async (
+            [&] {
+                BufferConfig config1 = {
+                    .num_pages = 2 * uint32_t(device->num_banks(BufferType::L1)),
+                    .page_size = 2048,
+                    .buftype = BufferType::L1};
+
+                EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, *tt::tt_metal::detail::GLOBAL_CQ, config1));
+            }
+        )
+    );
+
+    events.emplace_back(
+        detail::async (
+            [&] {
+                Buffer bufa(device, 125000, 100, BufferType::L1);
+                auto src_a = local_test_functions::generate_arange_vector(bufa.size());
+                EnqueueWriteBuffer(*tt::tt_metal::detail::GLOBAL_CQ, bufa, src_a, false);
+
+                Buffer bufb(device, 152000, 152, BufferType::L1);
+                auto src_b = local_test_functions::generate_arange_vector(bufb.size());
+                EnqueueWriteBuffer(*tt::tt_metal::detail::GLOBAL_CQ, bufb, src_b, false);
+
+                vector<uint32_t> result_a;
+                EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, bufa, result_a, true);
+
+                vector<uint32_t> result_b;
+                EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, bufb, result_b, true);
+
+                EXPECT_EQ(src_a, result_a);
+                EXPECT_EQ(src_b, result_b);
+            }
+        )
+    );
+
+    events.emplace_back(
+        detail::async (
+            [&] {
+                BufferConfig config3 = {
+                    .num_pages = 2 * uint32_t(device->num_banks(BufferType::L1)),
+                    .page_size = 2048,
+                    .buftype = BufferType::L1};
+
+                EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, *tt::tt_metal::detail::GLOBAL_CQ, config3));
+            }
+        )
+    );
+
+    for (auto &f : events) {
+        f.wait();
+    }
+
+    CloseDevice(device);
+}
+
+}   // end namespace concurrent_tests

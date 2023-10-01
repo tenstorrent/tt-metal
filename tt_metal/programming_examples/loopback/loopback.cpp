@@ -99,7 +99,7 @@ int main(int argc, char **argv) {
 
         pass &= input_vec == result_vec;
 
-        pass &= CloseDevice(device);
+        CloseDevice(device);
 
     } catch (const std::exception &e) {
         tt::log_error(tt::LogTest, "Test failed with exception!");

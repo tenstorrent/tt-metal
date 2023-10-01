@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
         loop_count = 2001;
         pass &= RunCustomCycle(device, loop_count);
 
-        pass &= tt_metal::CloseDevice(device);
+        tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

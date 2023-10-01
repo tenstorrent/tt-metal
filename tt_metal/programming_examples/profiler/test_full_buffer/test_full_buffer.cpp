@@ -65,7 +65,7 @@ int main(int argc, char **argv) {
         int loop_count = 20;
         pass &= RunCustomCycle(device, loop_count);
 
-        pass &= tt_metal::CloseDevice(device);
+        tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

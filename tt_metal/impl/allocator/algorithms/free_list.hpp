@@ -6,10 +6,11 @@
 
 #pragma once
 
-#include <string>
+#include <optional>
 
 #include "hostdevcommon/common_values.hpp"
-#include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
+#include "tt_metal/impl/allocator/allocator_types.hpp"
+#include "tt_metal/common/concurrency_interface.hpp"
 
 namespace tt {
 
@@ -17,21 +18,21 @@ namespace tt_metal {
 
 namespace allocator {
 
-class FreeList : public Algorithm {
+using block_offset_ptr_t =  boost::interprocess::offset_ptr<concurrent::block_t>;
+class FreeList {
    public:
     enum class SearchPolicy {
         BEST = 0,
         FIRST = 1
     };
 
-    FreeList(uint64_t max_size_bytes, uint64_t offset_bytes, uint64_t min_allocation_size, uint64_t alignment, SearchPolicy search_policy);
+    FreeList(std::string name, uint64_t max_size_bytes, uint64_t offset_bytes, uint64_t min_allocation_size, uint64_t alignment, SearchPolicy search_policy);
 
-    ~FreeList();
+    uint64_t max_size_bytes() const;
 
-    void init();
+    std::optional<uint64_t> lowest_occupied_address() const;
 
-    std::vector<std::pair<uint64_t, uint64_t>> available_addresses(uint64_t size_bytes) const;
-
+    // bottom_up=true indicates that allocation grows from address 0
     std::optional<uint64_t> allocate(uint64_t size_bytes, bool bottom_up=true);
 
     std::optional<uint64_t> allocate_at_address(uint64_t absolute_start_address, uint64_t size_bytes);
@@ -45,34 +46,26 @@ class FreeList : public Algorithm {
     void dump_blocks(std::ofstream &out) const;
 
    private:
-    struct Block {
-        uint64_t address;
-        uint64_t size;
-        Block *prev_block = nullptr;
-        Block *next_block = nullptr;
-        Block *prev_free = nullptr;
-        Block *next_free = nullptr;
-    };
 
-    void dump_block(const Block *block, std::ofstream &out) const;
+    void dump_block(const block_offset_ptr_t block, std::ofstream &out) const;
 
-    bool is_allocated(const Block *block) const;
+    bool is_allocated(block_offset_ptr_t block) const;
 
-    Block *search_best(uint64_t size_bytes, bool bottom_up);
+    block_offset_ptr_t search_best(uint64_t size_bytes, bool bottom_up);
 
-    Block *search_first(uint64_t size_bytes, bool bottom_up);
+    block_offset_ptr_t search_first(uint64_t size_bytes, bool bottom_up);
 
-    Block *search(uint64_t size_bytes, bool bottom_up);
+    block_offset_ptr_t search(uint64_t size_bytes, bool bottom_up);
 
-    void allocate_entire_free_block(Block *free_block_to_allocate);
+    void allocate_entire_free_block(block_offset_ptr_t free_block_to_allocate);
 
-    void update_left_aligned_allocated_block_connections(Block *free_block, Block *allocated_block);
+    void update_left_aligned_allocated_block_connections(block_offset_ptr_t free_block, block_offset_ptr_t allocated_block);
 
-    void update_right_aligned_allocated_block_connections(Block *free_block, Block *allocated_block);
+    void update_right_aligned_allocated_block_connections(block_offset_ptr_t free_block, block_offset_ptr_t allocated_block);
 
-    Block *allocate_slice_of_free_block(Block *free_block, uint64_t offset, uint64_t size_bytes);
+    block_offset_ptr_t allocate_slice_of_free_block(block_offset_ptr_t free_block, uint64_t offset, uint64_t size_bytes);
 
-    Block *find_block(uint64_t address);
+    block_offset_ptr_t find_block(uint64_t address);
 
     void reset();
 
@@ -80,11 +73,16 @@ class FreeList : public Algorithm {
 
     void update_lowest_occupied_address(uint64_t address);
 
+    void debug_dump_blocks() const;
+
+    std::string name_;  // corresponds to name of allocated/free block tracker in shared memory
+    uint64_t max_size_bytes_;
+    uint64_t offset_bytes_;
+    uint64_t min_allocation_size_;
+    uint64_t alignment_;
+    std::optional<uint64_t> lowest_occupied_address_;
+
     SearchPolicy search_policy_;
-    Block *block_head_;
-    Block *block_tail_;
-    Block *free_block_head_;
-    Block *free_block_tail_;
 };
 
 }  // namespace allocator

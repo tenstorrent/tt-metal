@@ -12,7 +12,7 @@ TT_METAL_LIB = $(LIBDIR)/libtt_metal.a
 else
 TT_METAL_LIB = $(LIBDIR)/libtt_metal.so
 endif
-TT_METAL_LDFLAGS = $(LDFLAGS) -ltt_metal_detail -ltt_metal_impl -lprofiler -lllrt -ldevice -lbuild_kernels_for_riscv -lcommon
+TT_METAL_LDFLAGS = $(LDFLAGS) -ltt_metal_detail -ltt_metal_impl -lprofiler -lllrt -ldevice -lbuild_kernels_for_riscv -lcommon -lrt
 TT_METAL_INCLUDES = $(COMMON_INCLUDES)
 TT_METAL_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 

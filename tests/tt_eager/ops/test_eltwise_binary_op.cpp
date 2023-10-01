@@ -119,7 +119,7 @@ int main() {
 
     TT_ASSERT(tt::tt_metal::program_cache::num_entries() == 0);
 
-    TT_ASSERT(tt::tt_metal::CloseDevice(device));
+    tt::tt_metal::CloseDevice(device);
 
     return 0;
 }

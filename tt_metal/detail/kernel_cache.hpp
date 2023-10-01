@@ -8,6 +8,27 @@
 
 namespace tt::tt_metal::detail
 {
+
+    struct compile_state_condition_t {
+        std::mutex sem_mutex;
+        std::condition_variable condition;
+        bool done = false; // Initialized as locked.
+
+        void release() {
+            {
+                unique_lock<mutex> lock(this->sem_mutex);
+                this->done = true;
+            }
+            this->condition.notify_all();
+        }
+
+        void acquire() {
+            unique_lock<mutex> lock(this->sem_mutex);
+            while (not done)
+                this->condition.wait(lock);
+        }
+    };
+
     struct HashLookup {
     static HashLookup& inst() {
         static HashLookup inst_;
@@ -22,7 +43,7 @@ namespace tt::tt_metal::detail
         unique_lock<mutex> lock(mutex_);
         bool ret = false;
         if (hashes_.find(khash) == hashes_.end() ){
-            hashes_.insert(khash);
+            hashes_.emplace(khash, std::make_unique<compile_state_condition_t>());
             ret = true;
         }
         return ret;
@@ -33,10 +54,21 @@ namespace tt::tt_metal::detail
         hashes_.clear();
     }
 
+    void mark_compilation_complete(size_t khash) {
+        hashes_.at(khash)->release();
+    }
+
+    void wait_for_compilation_complete(size_t khash) {
+        hashes_.at(khash)->acquire();
+    }
 
     private:
         std::mutex mutex_;
-        std::unordered_set<size_t > hashes_;
+        // Tracks whether a kernel with the given hash has been compiled
+        // Existence of a hash in this map indicates that binary does not need to be compiled
+        // compile_state_condition_t is used to indicate compilation state and blocks all threads
+        //  (via wait_for_compilation_complete) until they are notified that compilation is complete (via mark_compilation_complete)
+        std::unordered_map<size_t, std::unique_ptr<compile_state_condition_t>> hashes_;
     };
 
 

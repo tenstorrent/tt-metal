@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
 
         pass &= test_multi_tile_multi_dram_bank_loopback(device);
 
-        pass &= tt_metal::CloseDevice(device);
+        tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

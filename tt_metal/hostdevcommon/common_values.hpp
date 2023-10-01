@@ -18,3 +18,6 @@ constexpr static std::uint32_t NOTIFY_HOST_KERNEL_COMPLETE_VALUE = 512;
 // DRAM_buffer_addr % 32 == L1_buffer_addr % 32, or
 // DRAM_buffer_addr % 32 == L1_buffer_addr % 32 == 0
 constexpr static std::uint32_t ADDRESS_ALIGNMENT = 32;
+// Minimum size (in bytes) that will be allocated by host memory allocator
+constexpr static std::uint32_t MIN_ALLOCATABLE_L1_SIZE_BYTES = 32;
+constexpr static std::uint32_t MIN_ALLOCATABLE_DRAM_SIZE_BYTES = 1024;

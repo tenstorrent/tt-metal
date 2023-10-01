@@ -34,7 +34,7 @@ int main(int argc, char **argv) {
         Tensor c = layernorm(a, 1e-4f);
         Tensor d = c.cpu();
         Tensor host_a = a.cpu(); // Move tensor a to host to validate
-        pass &= CloseDevice(device);
+        CloseDevice(device);
     } catch (const std::exception &e) {
         pass = false;
         log_error(LogTest, "{}", e.what());

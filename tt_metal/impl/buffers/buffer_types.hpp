@@ -18,6 +18,12 @@
 
 namespace tt::tt_metal {
 
+enum class BufferType {
+    DRAM,
+    L1,
+    SYSTEM_MEMORY
+};
+
 using CircularBufferID = uintptr_t;
 
 class CircularBufferConfig {

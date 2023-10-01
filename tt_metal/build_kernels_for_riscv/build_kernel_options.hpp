@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <unistd.h>
+
 #include "common/core_coord.h"
 #include "common/utils.hpp"
 #include "hostdevcommon/kernel_structs.h"
@@ -59,16 +61,13 @@ inline const std::string get_compile_outpath() {
     return tt::utils::get_root_dir() + "/built/";
 }
 
-inline const std::string get_device_compile_outpath(int device_id) {
-    return tt::utils::get_root_dir() + "/built/" + std::to_string(device_id) + "/";
-}
-
+// Firmware path does not need PID because it is compiled and loaded once onto the device
 inline const std::string get_firmware_compile_outpath(int device_id) {
     return tt::utils::get_root_dir() + "/built/" + std::to_string(device_id) + "/firmware/";
 }
 
 inline const std::string get_kernel_compile_outpath(int device_id) {
-    return tt::utils::get_root_dir() + "/built/" + std::to_string(device_id) + "/kernels/";
+    return tt::utils::get_root_dir() + "/built/" + std::to_string(getpid()) + "/" + std::to_string(device_id) + "/kernels/";
 }
 
 } // end namespace tt

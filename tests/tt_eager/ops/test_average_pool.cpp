@@ -39,6 +39,6 @@ int main () {
     TT_ASSERT(result.shape() == Shape({1, 1, TILE_HEIGHT, 2048}));
     TT_ASSERT(result.shape().without_padding() == Shape({1, 1, 1, 2048}));
 
-    TT_ASSERT(tt::tt_metal::CloseDevice(device));
+    tt::tt_metal::CloseDevice(device);
     return 0;
 }

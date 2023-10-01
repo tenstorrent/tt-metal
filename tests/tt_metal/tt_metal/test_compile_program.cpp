@@ -351,7 +351,7 @@ int main(int argc, char **argv) {
 
         pass &= test_compile_program_with_modified_program(device);
 
-	pass &= CloseDevice(device);
+	CloseDevice(device);
     } catch (const std::exception &e) {
         pass = false;
         // Capture the exception error message

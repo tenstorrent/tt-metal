@@ -45,7 +45,7 @@ We will be using the accelerator core with coordinates ``{0, 0}``.
 
   constexpr CoreCoord core = {0, 0};
 
-  DataMovementKernel *dram_copy_kernel = CreateDataMovementKernel(
+  DataMovementKernel *dram_copy_kernel = CreateKernel(
       program,
       "programming_examples/kernels/dataflow/loopback_dram_copy.cpp",
       core,
@@ -160,7 +160,7 @@ Validation and teardown
 
 .. code-block:: cpp
 
-   pass &= CloseDevice(device);
+   CloseDevice(device);
 
 We now use ``CloseDevice`` to teardown our connection to the Tenstorrent
 device.

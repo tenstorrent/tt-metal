@@ -17,6 +17,7 @@
 #include "tools/cpuprof/cpuprof.h"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/program.hpp"
+#include "tt_metal/common/concurrency_interface.hpp"
 
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
@@ -185,12 +186,12 @@ Device *CreateDevice(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_r
     return dev;
 }
 
-bool CloseDevice(Device *device) {
+void CloseDevice(Device *device) {
     // Needed to ensure that GLOBAL_CQ doesn't contain a closed device
     if (detail::GLOBAL_CQ) {
         detail::GLOBAL_CQ.reset(nullptr);
     }
-    return device->close();
+    device->close();
 }
 
 KernelID CreateKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig,ComputeConfig, EthernetConfig> &config) {
@@ -265,7 +266,7 @@ void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
 
     uint32_t host_buffer_size_bytes = host_buffer.size() * sizeof(uint32_t);
     TT_ASSERT(
-        host_buffer_size_bytes <= buffer.size(),
+        host_buffer_size_bytes == buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer", host_buffer_size_bytes, buffer.size());
 
     uint32_t page_size = buffer.page_size();
@@ -304,8 +305,15 @@ void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
 
 void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
     switch (buffer.buffer_type()) {
-        case BufferType::DRAM:
+        case BufferType::DRAM: {
+            WriteToDevice(buffer, host_buffer);
+        } break;
         case BufferType::L1: {
+            // Can't write to L1 while a program is running because buffer data may overwrite a program's circular buffers
+            // This is because circular buffer allocation is local to a program and not tracked by the global device allocator
+            const Device *device = buffer.device();
+            // Acquire shareable lock because multiple writes to L1 can proceed since L1 buffers will not overlap
+            boost::interprocess::sharable_lock<boost::interprocess::named_sharable_mutex> lock(concurrent::get_launch_program_mutex(device->id()));
             WriteToDevice(buffer, host_buffer);
         } break;
         case BufferType::SYSTEM_MEMORY: {
@@ -420,13 +428,18 @@ void LaunchProgram(Device *device, Program &program) {
     ZoneScoped;
     detail::DispatchStateCheck( false );
     detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("LaunchProgram");
+
     detail::CompileProgram(device, program);
+
+    // Only one program can run on a given device at a time
+    // Acquire exclusive lock of `run_program_mutex` to ensure no writes to L1 can proceed
+    boost::interprocess::scoped_lock<boost::interprocess::named_sharable_mutex> lock(concurrent::get_launch_program_mutex(device->id()));
+
     detail::WriteRuntimeArgsToDevice(device, program);
     detail::ConfigureDeviceWithProgram(device, program);
     auto device_id = device->id();
 
     tt::Cluster::instance().dram_barrier(device_id);
-
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox (eg, storage cores) have all landed
     tt::Cluster::instance().l1_barrier(device->id());

@@ -303,7 +303,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         assert(golden_output_vec.size() == result_vec.size());
         pass &= (golden_output_vec == result_vec);
-        pass &= tt_metal::CloseDevice(device);
+        tt_metal::CloseDevice(device);
 
     } catch (const std::exception &e) {
         pass = false;

@@ -11,6 +11,7 @@
 #include "common/core_coord.h"
 #include "hostdevcommon/common_values.hpp"
 #include "dev_mem_map.h"
+#include "third_party/umd/device/tt_cluster_descriptor_types.h" // for chip_id_t
 
 namespace tt::tt_metal {
 
@@ -45,6 +46,7 @@ struct AllocatorConfig {
     std::unordered_map<int, int> worker_log_to_physical_routing_x = {};
     std::unordered_map<int, int> worker_log_to_physical_routing_y = {};
     BankMapping l1_bank_remap = {}; // for remapping which l1 bank points to which bank if we assume normal row-major assignment
+    chip_id_t device_id; // device id needed to pull memory block tracker out of shared memory
 };
 
 enum class MemoryAllocator {
@@ -80,6 +82,6 @@ struct Statistics {
     std::vector<uint32_t> largest_free_block_addrs;  // addresses (relative to bank) that can hold the largest_free_block_bytes
 };
 
-}
+}   // namespace allocator
 
-}
+}   // namespace tt

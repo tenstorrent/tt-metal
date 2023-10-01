@@ -36,7 +36,7 @@ int main(int argc, char **argv) {
 
     run_softmax(device, {1, 1, TILE_HEIGHT, TILE_WIDTH});
     run_softmax(device, {1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2});
-    pass &= CloseDevice(device);
+    CloseDevice(device);
 
 
     if (pass) {
