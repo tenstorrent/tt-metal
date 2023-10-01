@@ -46,7 +46,7 @@ class SystemMemoryWriter {
    public:
     SystemMemoryCQWriteInterface cq_write_interface;
     SystemMemoryWriter(Device* device) :
-        m_dma_buf_size(tt::Cluster::instance().get_m_dma_buf_size()),
+        m_dma_buf_size(tt::Cluster::instance().get_m_dma_buf_size(device->id())),
         hugepage_start((char*) tt::Cluster::instance().host_dma_address(0, device->id(), 0)),
         fast_write_callable(
             tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device->id())) {

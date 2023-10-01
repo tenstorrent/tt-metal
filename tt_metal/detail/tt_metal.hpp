@@ -330,7 +330,7 @@ namespace tt::tt_metal{
             // Create valid PCIe address ranges
             // This implementation assumes contiguous ranges and aggregates the ranges into one bounds check
             // TODO: consider checking multiple ranges to detect straddling transactions
-            uint64_t pcie_chan_base_addr = tt::Cluster::instance().get_pcie_base_addr_from_device();
+            uint64_t pcie_chan_base_addr = tt::Cluster::instance().get_pcie_base_addr_from_device(device->id());
             uint64_t pcie_chan_end_addr = pcie_chan_base_addr;
             for (int pcie_chan = 0; pcie_chan < tt::Cluster::instance().get_num_host_channels(device->id()); pcie_chan++) {
                 pcie_chan_end_addr += tt::Cluster::instance().get_host_channel_size(device->id(), pcie_chan);
