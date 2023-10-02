@@ -1,17 +1,23 @@
 <!-- toc -->
 
    * [Installing](#installing)
-      * [From source - Tenstorrent machine](#from-source---tenstorrent-machine)
-      * [From a release wheel](#from-a-release-wheel)
-         * [Install dependencies](#install-dependencies)
-         * [Common](#common)
-         * [Ubuntu](#ubuntu)
-         * [Install wheel](#install-wheel)
+      * [Installing accelerator-level dependencies](#installing-accelerator-level-dependencies)
+         * [Installing TTKMD (kernel-mode driver)](#installing-ttkmd-kernel-mode-driver)
+         * [Installing tt-smi](#installing-tt-smi)
+         * [Installing tt-flash firmware](#installing-tt-flash-firmware)
+      * [Installing system-level dependencies](#installing-system-level-dependencies)
+         * [Installing dependencies on Ubuntu](#installing-dependencies-on-ubuntu)
+         * [Installing developer-level dependencies on Ubuntu](#installing-developer-level-dependencies-on-ubuntu)
+      * [From source](#from-source)
+      * [From a release wheel (UNSTABLE)](#from-a-release-wheel-unstable)
    * [Getting started](#getting-started)
       * [Environment setup](#environment-setup)
       * [Running example programs](#running-example-programs)
+      * [C++ Integration Tests](#c-integration-tests)
+      * [Python Integration Tests](#python-integration-tests)
    * [Documentation](#documentation)
    * [Troubleshooting and debugging tips](#troubleshooting-and-debugging-tips)
+      * [Slow Dispatch Mode](#slow-dispatch-mode)
    * [Contributing](#contributing)
    * [Communication](#communication)
 
@@ -26,36 +32,207 @@ Table of Contents generated with
 accelerators. We are currently working on functionality for other Tenstorrent
 architectures.
 
-### From source - Tenstorrent machine
-
-Currently, the best way to use our software is through a
-Tenstorrent-provisioned cloud machine and building from source.
-
-You can provision your own machine on the Tenstorrent cloud using documentation
+If you want to run this software on a Tenstorrent cloud machine, you can provision your own machine on the Tenstorrent cloud using documentation
 [here](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM).
 
-0. SSH into the cloud machine.
+These are the ways of installing this software:
 
-1. Create an SSH key for your machine.
+- [From source](#from-source)
+- [From a release wheel (Python)](#from-a-release-wheel-unstable)
+
+However, you must have the appropriate accelerator-level and related
+system-level dependencies. Otherwise, you may skip to your preferred
+installation method in the above list.
+
+### Installing accelerator-level dependencies
+
+You must have the following accelerator-level dependencies:
+
+For Grayskull:
+
+- At least 1 unharvested E150 attached to a PCIe x16 slot
+- TTKMD (Tenstorrent kernel-mode driver) v1.23
+- ``tt-flash`` acclerator firmware 2023-06-28
+- ``tt-smi`` tt-smi_2023-06-16-0283a02404487eea or above
+
+For Wormhole B0:
+
+- At least 1 N150 or N300 attached via PCIe
+- TTKMD (Tenstorrent kernel-mode driver) v1.23
+- ``tt-flash`` acclerator firmware 2023-08-08 (7.D)
+- ``tt-smi`` tt-smi-8.6.0.0_2023-08-22-492ad2b9ef82a243 or above
+
+#### Installing TTKMD (kernel-mode driver)
+
+The following instructions assume <VERSION> is the version of the TTKMD which
+you are installing.
+
+1. Go to the latest [SysEng releases
+   page](https://github.com/tenstorrent-metal/tt-metal-sys-eng-packages/releases)
+   and download the appropriate TTKMD installer for **your particular architecture** (ex.
+   Grayskull, Wormhole etc.).
+
+2. Transfer the TTKMD installer to your machine. If it's a remote machine that
+   you connect to via SSH, you will require something like SCP or rsync,
+   outside of the scope of this document.
+
+3. Modify permissions to execute the bash file.
 
 ```
-ssh-keygen
+sudo chmod u+x ~/install_ttkmd_<VERSION>.bash
 ```
 
-2. Add the key to your Github profile. Please refer to [SSH keys on
-   Github](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account).
+4. Execute the driver installer.
 
-3. Clone the repo. If you're using a release, please use ``--branch
+```
+sudo ~/install_ttkmd_<VERSION>.bash
+```
+
+5. Reboot.
+
+```
+sudo reboot now
+```
+
+#### Installing `tt-smi`
+
+1. Go to the latest [SysEng releases
+   page](https://github.com/tenstorrent-metal/tt-metal-sys-eng-packages/releases)
+   and download the appropriate `tt-smi` executable for **your particular architecture** (ex.
+   Grayskull, Wormhole etc.).
+
+Generally, because `tt-smi` is external software that's always improved, the
+latest version for your particular architecture is sufficient.
+
+2. Transfer `tt-smi` to your machine. If it's a remote machine that you connect to via SSH, you will require something like SCP or rsync, outside of the scope of this document.
+
+3. Move `tt-smi` to an appropriate location in your `$PATH` and make it executable. For example, if your `$PATH` contains `/usr/local/bin`,
+
+```
+sudo cp ~/tt-smi /usr/local/bin/tt-smi
+sudo chmod ugo+x /usr/local/bin/tt-smi
+```
+
+4. Test out your `tt-smi` installation:
+
+```
+tt-smi
+```
+
+5. You can then use `Ctrl+C` to exit the application.
+
+#### Installing `tt-flash` firmware
+
+1. Go to the latest [SysEng releases
+   page](https://github.com/tenstorrent-metal/tt-metal-sys-eng-packages/releases)
+   and download the appropriate `tt-flash` installer for **your particular architecture** (ex.
+   Grayskull, Wormhole etc.).
+
+2. Transfer the `tt-flash` installer to your machine. If it's a remote machine that you connect to via SSH, you will require something like SCP or rsync, outside of the scope of this document.
+
+3. Modify permissions to execute the bash file.
+
+```
+sudo chmod u+x ~/install_ttkmd_<VERSION>.bash
+```
+
+4. Execute the driver installer.
+
+```
+sudo ~/install_ttkmd_<VERSION>.bash
+```
+
+5. Reset the card to recognize the new firmware.
+
+If you have a Grayskull card, you must reboot to reset:
+
+```
+sudo reboot now
+```
+
+If you have a Wormhole card, you may use warm reset via `tt-smi`:
+
+```
+tt-smi -wr all wait
+```
+
+### Installing system-level dependencies
+
+System-level dependencies include the third-party libraries, hugepages settings, and Weka mount needed for this project.
+
+#### Installing dependencies on Ubuntu
+
+1. Install the host system-level dependencies through `apt`.
+
+```
+sudo apt install software-properties-common=0.99.9.12
+build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.8
+libgoogle-glog-dev=0.4.0-1build1 libyaml-cpp-dev=0.6.2-4ubuntu1
+libboost-all-dev=1.71.0.0ubuntu2 libsndfile1=1.0.28-7ubuntu0.1 libhwloc-dev
+```
+
+Additionally, you will need developer-level dependencies if you plan to install things from source or run tests from the repository.
+
+2. Download the raw latest version of the `setup_hugepages.py` script. It should be located [in the repository](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py).
+
+3. Invoke the first pass of the hugepages script.
+
+```
+sudo -E python3 setup_hugepages.py first_pass
+```
+
+4. Reboot the system.
+
+```
+sudo reboot now
+```
+
+5. Invoke the second pass of the hugepages script.
+
+```
+sudo -E python3 setup_hugepages.py enable
+```
+
+6. Check that hugepages is now enabled.
+
+```
+sudo -E python3 setup_hugepages.py check
+```
+
+7. You must now also install and mount WekaFS. Note that this is only available on Tenstorrent cloud machines. The instructions are on this [page](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM), which are only available to those who have access to the Tenstorrent cloud.
+
+**NOTE**: You may have to repeat the hugepages steps upon every reboot, depending on your system and other services that use hugepages.
+
+#### Installing developer-level dependencies on Ubuntu
+
+1. Install host system-level dependencies for development through `apt`.
+
+```
+sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1
+```
+
+2. Download and install [Doxygen](https://www.doxygen.nl/download.html).
+
+3. Download and install [gtest](https://github.com/google/googletest) from source.
+
+### From source
+
+Currently, the best way to use our software is building from source.
+
+You must also ensure that you have all accelerator-level, system-level, and developer system-level dependencies as outlined in the instructions above.
+
+
+1. Clone the repo. If you're using a release, please use ``--branch
    <VERSION_NUMBER>``.
 
-Otherwise, use ``main``.
+``<VERSION_NUMBER>`` is the version you will be using. Otherwise, you can use ``main``.
 
 ```
 git clone git@github.com:tenstorrent-metal/tt-metal.git --recurse-submodules --branch <VERSION_NUMBER>
 cd tt-metal
 ```
 
-4. Set up the environment. Note that this setup is required **every time you
+2. Set up the environment. Note that this setup is required **every time you
    want to use this project**.
 
 ```
@@ -65,13 +242,13 @@ export PYTHONPATH=<this repo dir>
 export TT_METAL_ENV=dev
 ```
 
-5. Build the project.
+3. Build the project.
 
 ```
 make build
 ```
 
-6. Activate the built Python environment.
+4. Activate the built Python environment.
 
 ```
 source build/python_env/bin/activate
@@ -80,7 +257,7 @@ source build/python_env/bin/activate
 You should look ahead to [Getting started](#getting-started) to further use
 this project.
 
-### From a release wheel
+### From a release wheel (UNSTABLE)
 
 **NOTE**: The wheel is not a fully-tested software artifact and most features
 do not work right now through the wheel. As of this moment, we encourage users
@@ -89,38 +266,7 @@ to try metal through source. Therefore, this section is under construction.
 Wheel files are available through the
 [releases](https://github.com/tenstorrent-metal/tt-metal/releases) page.
 
-#### Install dependencies
-
-#### Common
-
-We assume that you have the following accelerator-level dependencies:
-
-For Grayskull:
-
-- At least 1 unharvested E150 attached to a PCIe x16 slot
-- TTKMD (Tenstorrent kernel-mode driver) v1.23
-- ``tt-flash`` 2023-06-28
-- ``tt-smi`` tt-smi_2023-06-16-0283a02404487eea or above
-
-For Wormhole B0:
-
-- At least 1 N150 or N300 attached via PCIe
-- TTKMD (Tenstorrent kernel-mode driver) v1.23
-- ``tt-flash`` 2023-08-08 (7.D)
-- ``tt-smi`` tt-smi-8.6.0.0_2023-08-22-492ad2b9ef82a243 or above
-
-#### Ubuntu
-
-Install the host system-level dependencies through `apt`.
-
-```
-sudo apt install software-properties-common=0.99.9.12
-build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.8
-libgoogle-glog-dev=0.4.0-1build1 libyaml-cpp-dev=0.6.2-4ubuntu1
-libboost-all-dev=1.71.0.0ubuntu2 libsndfile1=1.0.28-7ubuntu0.1 libhwloc-dev
-```
-
-#### Install wheel
+You must also ensure that you have all accelerator-level, system-level, and developer system-level dependencies as outlined in the instructions above.
 
 1. You must add an extra index URL to download the necessary dependencies
 during wheel installation. Do so:
