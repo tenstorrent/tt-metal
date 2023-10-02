@@ -78,8 +78,8 @@ def test_custom_cycle_count():
 
 def test_full_buffer():
     REF_COUNT_DICT = {
-        "grayskull" : [3780],  # 108(compute cores) x 5(riscs) x 7(buffer size in marker)
-        "wormhole_b0" : [2520, 2240, 1960]  # [72,64,56](compute cores) x 5(riscs) x 7(buffer size in marker)
+        "grayskull" : [3240],  # 108(compute cores) x 5(riscs) x 6(buffer size in marker pairs)
+        "wormhole_b0" : [2160, 1920, 1680]  # [72,64,56](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
     }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")

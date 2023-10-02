@@ -49,8 +49,9 @@ namespace kernel_profiler{
 
         // Either buffer has room for more markers or the end of FW marker is place on the last marker spot
         volatile tt_l1_ptr uint32_t *buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_debug_print_buffer());
-	if (((wIndex + (2*TIMER_DATA_UINT32_SIZE)) < (PRINT_BUFFER_SIZE/sizeof(uint32_t))) ||\
-            ((timer_id == CC_MAIN_END) && !((wIndex + TIMER_DATA_UINT32_SIZE) > (PRINT_BUFFER_SIZE/sizeof(uint32_t))))) {
+	if (((wIndex + (3*TIMER_DATA_UINT32_SIZE)) < (PRINT_BUFFER_SIZE/sizeof(uint32_t))) ||\
+            (((timer_id == CC_MAIN_END) || (timer_id == CC_KERNEL_MAIN_END)) &&\
+             !((wIndex + TIMER_DATA_UINT32_SIZE) > (PRINT_BUFFER_SIZE/sizeof(uint32_t))))) {
 	    buffer[wIndex+TIMER_ID] = timer_id;
 	    buffer[wIndex+TIMER_VAL_L] = time_L;
 	    buffer[wIndex+TIMER_VAL_H] = time_H;

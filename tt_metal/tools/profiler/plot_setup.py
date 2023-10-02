@@ -191,7 +191,7 @@ class test_full_buffer(default_setup):
         "Marker Repeat": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "ANY", "timerID": 2},
-            "end": {"risc": "ANY", "timerID": 2},
+            "start": {"risc": "ANY", "timerID": 5},
+            "end": {"risc": "ANY", "timerID": 5},
         }
     }
