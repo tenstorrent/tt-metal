@@ -84,11 +84,23 @@ The headers of the columns with their descriptions is below:
 
 - **HOST DURATION [ns]**: Duration of the OP in nanoseconds, calculated as end_ts - start_ts
 
-- **DEVICE START CYCLE**: Tensix cycle count from the earliest RISC of the earliest core of the device that executed the OP kernel
+- **DEVICE FW START CYCLE**: Tensix cycle count from the earliest RISC of the earliest core of the device that executed the OP kernel
 
-- **DEVICE END CYCLE**: Tensix cycle count from the latest RISC of the latest core of the device that executed the OP kernel
+- **DEVICE FW END CYCLE**: Tensix cycle count from the latest RISC of the latest core of the device that executed the OP kernel
 
-- **DEVICE DURATION [ns]**: Duration on the device for the OP, calculated as (end_cycle - start_cycle)/core_frequency
+- **DEVICE FW DURATION [ns]**: FW duration on the device for the OP, calculated as (last FW end cycle - first FW start cycle)/core_frequency with cycle markers chosen across all cores and all riscs
+
+- **DEVICE KERNEL DURATION [ns]**: Kernel duration on the device for the OP, calculated as (last Kernel end cycle - first Kernel start cycle)/core_frequency with cycle markers chosen across all cores and all riscs
+
+- **DEVICE BRISC KERNEL DURATION [ns]**: Kernel duration on the device for the OP, calculated as (last Kernel end cycle - first Kernel start cycle)/core_frequency with cycle markers chosen across BRISCs of all cores
+
+- **DEVICE NCRISC KERNEL DURATION [ns]**: Kernel duration on the device for the OP, calculated as (last Kernel end cycle - first Kernel start cycle)/core_frequency with cycle markers chosen across NCRISCs of all cores
+
+- **DEVICE TRISC0 KERNEL DURATION [ns]**: Kernel duration on the device for the OP, calculated as (last Kernel end cycle - first Kernel start cycle)/core_frequency with cycle markers chosen across TRISC0s of all cores
+
+- **DEVICE TRISC1 KERNEL DURATION [ns]**: Kernel duration on the device for the OP, calculated as (last Kernel end cycle - first Kernel start cycle)/core_frequency with cycle markers chosen across TRISC1s of all cores
+
+- **DEVICE TRISC2 KERNEL DURATION [ns]**: Kernel duration on the device for the OP, calculated as (last Kernel end cycle - first Kernel start cycle)/core_frequency with cycle markers chosen across TRISC2s of all cores
 
 - **Input & Output Tensor Headers**: Header template is {Input/Output}_{IO Number}_{Field}. e.g. INPUT_0_MEMORY
 
@@ -190,9 +202,9 @@ Profiling Device
 ================
 
 Any point on the device side code can be marked with a time marker. The markers are stored in a statically assigned L1 location.
-As part of tt_metal api ``LaunchKernel`` the markers are fetched from all the cores on the device.
+As part of tt_metal api ``LaunchProgram`` the markers are fetched from all the cores on the device.
 
-Because downloading profiler results from device through has high overheads, ``TT_METAL_DEVICE_PROFILER=1`` environment variable has to be set for ``LaunchKernel`` to perform the download.
+Because downloading profiler results from device through has high overheads, ``TT_METAL_DEVICE_PROFILER=1`` environment variable has to be set for ``LaunchProgram`` to perform the download.
 
 Default markers are present in device FW(i.e. ``.cc`` files) that mark kernel and FW start and end times.
 
