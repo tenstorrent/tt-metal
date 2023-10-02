@@ -61,16 +61,18 @@ Cluster::Cluster() {
             device_id,
             get_arch_str(detected_arch));
     }
+    const std::string sdesc_file = get_soc_description_file(this->arch_, this->target_type_);
+    const std::string cluster_desc_path = (this->arch_ == tt::ARCH::WORMHOLE_B0) ? GetClusterDescYAML().string() : "";
 #else
     this->target_type_ = TargetDevice::Versim;
     std::vector<chip_id_t> physical_mmio_device_ids = {0};
     auto arch_env = getenv("ARCH_NAME");
     TT_ASSERT(arch_env, "arch_env needs to be set for versim (ARCH_NAME=)");
     this->arch_ = tt::get_arch_from_string(arch_env);
+    const std::string sdesc_file = get_soc_description_file(this->arch_, this->target_type_);
+    const std::string cluster_desc_path = "";
 #endif
 
-    const std::string sdesc_file = get_soc_description_file(this->arch_, this->target_type_);
-    const std::string cluster_desc_path = (this->arch_ == tt::ARCH::WORMHOLE_B0) ? GetClusterDescYAML().string() : "";
 
     if (cluster_desc_path == "") {
         // All Grayskull devices are MMIO mapped so physical_mmio_device_ids correspond to all available devices
