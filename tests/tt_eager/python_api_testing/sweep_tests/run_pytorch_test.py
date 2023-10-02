@@ -206,7 +206,7 @@ def run_pytorch_test(args):
 
             ################# RUN TEST SWEEP #################
             for input_shapes, datagen_funcs, generated_test_args in shapes_and_datagen(
-                shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, test_tt_layouts, test_buffer_types
+                shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, test_tt_layouts, test_mem_configs
             ):
                 # Moved this here so that we don't need to maintain a hardcoded list of headers per op
                 skip_header = results_csv_path.exists()
