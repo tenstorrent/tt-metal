@@ -261,6 +261,11 @@ namespace ckernel::packer
                                                       ((uint)pack_src_format[output_id] == (uint)DataFormat::Int32) |
                                                       ((uint)pack_src_format[output_id] == (uint)DataFormat::Float32) |
                                                       (is_fp32_dest_acc_en ? 1 : 0);
+
+      //Round to 10 bit mantissa from fp32 dest
+      if(is_fp32_dest_acc_en && pack_src_format[output_id]!=(uint)DataFormat::Float32) {
+         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
+      }
       cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] = dest_rd_ctrl.val;
 
       if (IS_BFP_FORMAT(pack_dst_format[output_id])) {
