@@ -134,6 +134,9 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
+    // This could be inefficient.
+    // If Wt is 65, the block_size will be 5. Then, the number of iteration is 13.
+    // It can be 8 * 8 + 1, so the number of iterations is 9. It's more efficient.
     constexpr uint32_t MAX_BLOCK_SIZE = 8;
     const uint32_t block_size = find_divisor_with_max_block_size(Wt, MAX_BLOCK_SIZE);
 
@@ -143,9 +146,10 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && !is_lastdim_layernorm;
     const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
 
-    uint32_t in0_t = 2 * Wt;                                      // input
-    const uint32_t in1_t = 2;                                     // scaler for reduction
-    const uint32_t in2_t = 2;                                     // epsilon
+    uint32_t in0_t = 2 * Wt;   // input
+    const uint32_t in1_t = 2;  // scaler for reduction
+    const uint32_t in2_t = 2;  // epsilon
+    // gamma and beta can be 2 * Wt. Would that be better?
     const uint32_t in3_t = gamma_has_value ? 2 * block_size : 0;  // gamma
     const uint32_t in4_t = beta_has_value ? 2 * block_size : 0;   // beta
     const uint32_t in5_t = do_mask_h ? 2 : 0;                     // mask_h
@@ -318,7 +322,7 @@ operation::ProgramWithCallbacks moreh_layernorm_(
 
     const auto writer_kernel_file = "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/writer_moreh_layernorm.cpp";
 
-    auto reader_kernels_id = CreateDataMovementKernel(
+    const auto reader_kernels_id = CreateDataMovementKernel(
         program,
         reader_kernel_file,
         all_cores,
@@ -328,7 +332,7 @@ operation::ProgramWithCallbacks moreh_layernorm_(
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
-    auto writer_kernels_id = CreateDataMovementKernel(
+    const auto writer_kernels_id = CreateDataMovementKernel(
         program,
         writer_kernel_file,
         all_cores,

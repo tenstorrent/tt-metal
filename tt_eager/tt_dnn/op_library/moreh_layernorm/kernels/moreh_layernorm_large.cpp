@@ -56,8 +56,11 @@ void MAIN {
     cb_wait_front(cb_scaler, onetile);  // comes from the reader
     cb_wait_front(cb_eps, onetile);     // comes from the reader
 
-    constexpr bool do_mask_h = (origin_H % 32) != 0 && !is_lastdim_layernorm;
-    constexpr bool do_mask_w = (origin_W % 32) != 0;
+    constexpr uint32_t TILE_H = 32;
+    constexpr uint32_t TILE_W = 32;
+
+    constexpr bool do_mask_h = (origin_H % TILE_H) != 0 && !is_lastdim_layernorm;
+    constexpr bool do_mask_w = (origin_W % TILE_W) != 0;
 
     if (do_mask_h) {
         cb_wait_front(cb_mask_h, onetile);
@@ -71,8 +74,8 @@ void MAIN {
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t first_tile = 0;
 
-    constexpr uint32_t origin_Ht = (origin_H + 32 - 1) / 32;
-    constexpr uint32_t origin_Wt = (origin_W + 32 - 1) / 32;
+    constexpr uint32_t origin_Ht = (origin_H + TILE_H - 1) / TILE_H;
+    constexpr uint32_t origin_Wt = (origin_W + TILE_W - 1) / TILE_W;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         /*
@@ -370,7 +373,7 @@ void MAIN {
 
             // * gamma
             if (do_gamma) {
-                uint32_t cb_outg = do_beta ? cb_gamma_beta : cb_out;
+                constexpr auto cb_outg = do_beta ? cb_gamma_beta : cb_out;
                 cb_wait_front(cb_gamma_beta_or_out, block_size);
                 cb_wait_front(cb_gamma, block_size);
                 cb_reserve_back(cb_outg, block_size);
