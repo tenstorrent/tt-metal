@@ -8,6 +8,7 @@
 
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 #include "tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
@@ -276,6 +277,19 @@ void py_module(py::module& m_primary) {
         R"doc(
             Performs a layernorm(a+b)*gamma + beta operation.
         )doc"
+    );
+
+    // moreh_layernorm
+    m_primary.def(
+        "moreh_layernorm",
+        &moreh_layernorm,
+        py::arg("input").noconvert(),
+        py::arg("eps").noconvert(),
+        py::arg("normalized_dims").noconvert(),
+        py::arg("gamma").noconvert() = std::nullopt,
+        py::arg("beta").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a moreh_layernorm operation."
     );
 
     // softmax

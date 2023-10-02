@@ -13,6 +13,7 @@
 #include "tt_dnn/op_library/pool/max_pool.hpp"
 #include "tt_dnn/op_library/fully_connected/fully_connected_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
@@ -318,7 +319,11 @@ void TensorModule(py::module &m_tensor) {
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
 
-
+    // moreh_layernorm
+    m_tensor.def("moreh_layernorm", &moreh_layernorm,
+        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("normalized_dims").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        "Performs a moreh_layernorm operation.
+    )doc");
 
     // groupnorm
     m_tensor.def("groupnorm", &groupnorm,

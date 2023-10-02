@@ -77,6 +77,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_softmax_backward/softmax_backward_w_large/softmax_backward_w_large.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax_backward/softmax_backward_h_large/softmax_backward_h_large.cpp \
 	tt_eager/tt_dnn/op_library/layernorm/layernorm_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.cpp \
 	tt_eager/tt_dnn/op_library/groupnorm/groupnorm_op.cpp \
 	tt_eager/tt_dnn/op_library/reshape/reshape_op.cpp \
 	tt_eager/tt_dnn/op_library/permute/permute_op.cpp \
