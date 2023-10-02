@@ -70,7 +70,7 @@ def run_eltwise_ne_tests(input_shape, in0_dtype, in1_dtype, in0_dlayout, in1_dla
             device_id=0,
             dtype=[in0_dtype, in1_dtype],
             layout=[in0_dlayout, in1_dlayout],
-            buffer_type=[in0_in_mem_config, in1_in_mem_config],
+            input_mem_config=[in0_in_mem_config, in1_in_mem_config],
             output_mem_config=out_mem_config
         )
         logger.info("Done")

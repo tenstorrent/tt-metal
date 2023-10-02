@@ -48,14 +48,9 @@ def run_permute_tests(
     test_dims = (input_shape,)
 
     for N, C, H, W in test_dims:
-        for nrepeat in range(0, 1):
+        for nrepeat in range(0, 300):
             x = torch.Tensor(size=(N, C, H, W)).uniform_(-100, 100)
             x_ref = x.detach().clone()
-
-            # permute_dims = gen_permute_args([[(1, 10, 192, 160)]])
-            # print(f"permute_dims: {permute_dims[0]}")
-            # import sys
-            # sys.exit(0)
 
             # calculate tt output
             if in_mem_config == "SYSTEM_MEMORY":
@@ -68,7 +63,7 @@ def run_permute_tests(
                 device_id=0,
                 dtype=[dtype],
                 layout=[dlayout],
-                buffer_type=[in_mem_config],
+                input_mem_config=[in_mem_config],
                 output_mem_config=out_mem_config,
                 permute_dims=[0, 2, 1, 3]
             )
@@ -76,12 +71,7 @@ def run_permute_tests(
 
 
 test_sweep_args=[
-    ((1, 10, 192, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.BufferType.L1, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 895795),
-    # ((2, 4, 192, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.BufferType.DRAM, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 99.5, 14073508),
-    # ((6, 9, 192, 128), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.BufferType.L1, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 97.5, 9248746),
-    # ((3, 2, 192, 32), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, "SYSTEM_MEMORY", ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 98.0, 18784230),
-    # ((3, 8, 96, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.BufferType.L1, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 98.0, 16934480),
-    # ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, "SYSTEM_MEMORY", ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 98.5, 13587334),
+    ((1, 10, 192, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 895795),
 ]
 
 @skip_for_wormhole_b0

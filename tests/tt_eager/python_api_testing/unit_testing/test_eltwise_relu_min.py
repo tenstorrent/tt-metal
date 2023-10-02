@@ -60,7 +60,7 @@ def run_eltwise_relu_min_tests(input_shape, dtype, dlayout, in_mem_config, out_m
             device_id=0,
             dtype=[dtype],
             layout=[dlayout],
-            buffer_type=[in_mem_config],
+            input_mem_config=[in_mem_config],
             output_mem_config=out_mem_config
         )
         logger.info("Done")

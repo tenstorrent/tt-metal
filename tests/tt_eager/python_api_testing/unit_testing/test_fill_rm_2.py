@@ -67,7 +67,7 @@ def run_fill_rm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config
             device_id=0,
             dtype=[dtype],
             layout=[dlayout],
-            buffer_type=[in_mem_config],
+            input_mem_config=[in_mem_config],
             output_mem_config=out_mem_config
         )
         logger.info("Done")
@@ -80,7 +80,7 @@ def run_fill_rm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config
 
 
 test_sweep_args=[
-    ((7, 14, 22, 134), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, "SYSTEM_MEMORY", ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 7, 130, -72.14525896036947, -72.05084300666422, 17869870),
+    ((7, 14, 22, 134), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.BufferType.DRAM, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 7, 130, -72.14525896036947, -72.05084300666422, 17869870),
 ]
 
 @skip_for_wormhole_b0
