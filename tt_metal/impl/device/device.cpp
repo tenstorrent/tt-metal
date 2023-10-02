@@ -37,7 +37,6 @@ size_t Device::detect_num_available_devices() {
 void Device::initialize_cluster() {
     ZoneScoped;
     this->clear_l1_state();
-
 #ifdef TT_METAL_VERSIM_DISABLED
     int ai_clk = tt::Cluster::instance().get_device_aiclk(this->id_);
     log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);

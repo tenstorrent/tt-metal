@@ -81,7 +81,6 @@ Cluster::Cluster() {
         for (chip_id_t logical_mmio_device_id = 0; logical_mmio_device_id < physical_mmio_device_ids.size(); logical_mmio_device_id++) {
             candidate_logical_mmio_device_ids.insert(logical_mmio_device_id);
         }
-        this->cluster_desc_ = tt_ClusterDescriptor::create_for_grayskull_cluster(candidate_logical_mmio_device_ids);
 
         // NOTE: Creating a dummy device driver to query harvesting info for Grayskull so that the UMD can be initialized with all non-harvested Grayskull devices
         // At the moment there is no way to get harvesting masks for Grayskull without creating the device driver.
@@ -102,6 +101,7 @@ Cluster::Cluster() {
                 this->target_device_ids_.insert(gs_device_id);
             }
         }
+        this->cluster_desc_ = tt_ClusterDescriptor::create_for_grayskull_cluster(this->target_device_ids_);
     } else {
         this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(cluster_desc_path);
         for (chip_id_t logical_device_id = 0; logical_device_id < this->cluster_desc_->get_number_of_chips();
@@ -326,10 +326,11 @@ void Cluster::verify_eth_fw() const {
 }
 
 int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
-    if (this->target_device_ids_.find(chip_id) != this->target_device_ids_.end()) {
+    if (this->cluster_desc_->get_chips_with_mmio().find(chip_id) != this->cluster_desc_->get_chips_with_mmio().end()) {
         return this->device_->get_clocks().at(chip_id);
+    } else {
+        return this->device_->get_clocks().at(0);
     }
-    return 0;
 }
 
 void Cluster::reset_debug_print_server_buffers() const {

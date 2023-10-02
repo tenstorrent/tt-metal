@@ -43,6 +43,7 @@ class Cluster {
     static const Cluster &instance();
 
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
+    size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
 
     ARCH arch() const { return this->arch_; }
 
