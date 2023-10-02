@@ -7,7 +7,7 @@
 // #include "compute_kernel_api.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/reduce.h"
-#include "tools/profiler/kernel_profiler.hpp"
+// #include "tools/profiler/kernel_profiler.hpp"
 
 #define DEBUG_PRINT 0
 
@@ -125,14 +125,14 @@ void MAIN {
             for (uint32_t out_w_i = 0; out_w_i < out_w_loop_count; ++out_w_i) {
                 // NOTE: Assuming in_ntiles_hw < 8 for now.
                 // TODO: subblocking to support this.
-                kernel_profiler::mark_time(11);
+                // kernel_profiler::mark_time(11);
                 // UDPRINT('T' << out_w_i);
                 // tilize
                 tilize(out_nelems, in_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, window_hw_padded, in_tiled_cb_id);
                 // UDPRINT('R' << out_w_i);
                 // Reduce H
                 reduce_h(out_nelems, in_tiled_cb_id, in_scalar_cb_id, in_ntiles_hw, in_ntiles_c, in_ntiles_hwc, out_ntiles_c, out_cb_id);
-                kernel_profiler::mark_time(12);
+                // kernel_profiler::mark_time(12);
             }
         }
     }

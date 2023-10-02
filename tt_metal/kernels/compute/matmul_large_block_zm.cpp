@@ -7,7 +7,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 
-#include "tools/profiler/kernel_profiler.hpp"
+// #include "tools/profiler/kernel_profiler.hpp"
 namespace NAMESPACE {
 void MAIN {
 
@@ -36,7 +36,7 @@ void MAIN {
         cb_wait_front(tt::CB::c_in1, in1_block_num_tiles);
         int in0_index_subblock_offset = 0;
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-            kernel_profiler::mark_time(6);
+            // kernel_profiler::mark_time(6);
             int in1_index_subblock_offset = 0;
             for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
 

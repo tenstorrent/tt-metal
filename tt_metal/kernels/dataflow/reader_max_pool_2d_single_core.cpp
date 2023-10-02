@@ -127,7 +127,7 @@ void kernel_main() {
     // Reduce scalar = 1
     cb_reserve_back(in_scalar_cb_id, 1);
 
-    kernel_profiler::mark_time(7);
+    // kernel_profiler::mark_time(7);
 
     uint16_t bf16_one_u16 = bf16_one_u32 >> 16;
     // fill 1 tile w/ scalar
@@ -145,7 +145,7 @@ void kernel_main() {
     fill_with_val_async(s_const, in_l1_write_addr, in_cb_nrows, in_nbytes_c);
     noc_async_read_barrier();
 
-    kernel_profiler::mark_time(8);
+    // kernel_profiler::mark_time(8);
 
     uint32_t batch_offset = 0;
     for (uint32_t batch = 0; batch < nbatch; ++ batch) {

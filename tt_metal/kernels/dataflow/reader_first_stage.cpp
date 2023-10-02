@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "tools/profiler/kernel_profiler.hpp"
+// #include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
 

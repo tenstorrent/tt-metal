@@ -7,7 +7,7 @@
 #include "hostdevcommon/common_values.hpp"
 
 void kernel_main() {
-    kernel_profiler::mark_time(7);
+    // kernel_profiler::mark_time(7);
     // in0 tensor args
     uint32_t in0_tensor_addr                    = get_arg_val<uint32_t>(0);
     uint32_t in0_tensor_start_tile_id           = get_arg_val<uint32_t>(1);
@@ -85,7 +85,7 @@ void kernel_main() {
         // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
         noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
 
-        kernel_profiler::mark_time_once(8, &one_time_noc_wait);
+        // kernel_profiler::mark_time_once(8, &one_time_noc_wait);
 
         // Operand 1
         cb_reserve_back(cb_id_in1, in1_block_num_tiles);
@@ -108,6 +108,6 @@ void kernel_main() {
 
         cb_push_back(cb_id_in0, in0_block_num_tiles);
         cb_push_back(cb_id_in1, in1_block_num_tiles);
-        kernel_profiler::mark_time_once(9, &one_time_cb_push);
+        // kernel_profiler::mark_time_once(9, &one_time_cb_push);
     }
 }

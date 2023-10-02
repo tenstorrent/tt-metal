@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include "dataflow_api.h"
 //#include "debug_print.h"
-#include "tools/profiler/kernel_profiler.hpp"
+// #include "tools/profiler/kernel_profiler.hpp"
 
 int __multiply(int n, int m) {
     int res = 0, count = 0;

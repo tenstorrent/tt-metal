@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "tools/profiler/kernel_profiler.hpp"
+// #include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
 
