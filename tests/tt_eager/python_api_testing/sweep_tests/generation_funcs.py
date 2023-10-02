@@ -1413,3 +1413,14 @@ def gen_logit_args(
         dtype,
     ):
         yield input_info
+
+def gen_geglu_args(input_shapes, dtypes, layouts, mem_configs):
+    for input_info in gen_dtype_layout_device(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+    ):
+        if input_info is not None:
+            input_info.update({"dim": -1})
+            yield input_info
