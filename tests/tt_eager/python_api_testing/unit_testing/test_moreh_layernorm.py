@@ -9,18 +9,21 @@ import torch.nn.functional as F
 import tt_lib as ttl
 
 
+# TODO(seunghwan100): Support Nd Tensor.
 def torch_layernorm(input,
                     normalized_dims=(3, ),
                     gamma=None,
                     beta=None,
                     epsilon=1e-5):
     """Applies Layer Normalization over a mini-batch of inputs.
+
     Args:
         input (torch.Tensor): The input tensor of shape (N, C, H, W).
         normalized_dims (tuple of ints): The dimensions to be normalized. Default: (3,).
         gamma (torch.Tensor): The scale tensor. Default: None.
         beta (torch.Tensor): The bias tensor. Default: None.
         epsilon (float): A value added to the denominator for numerical stability. Default: 1e-5.
+
     Returns:
         torch.Tensor: The output tensor of the same shape as input.
     """
