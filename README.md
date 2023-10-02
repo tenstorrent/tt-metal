@@ -62,6 +62,8 @@ For Wormhole B0:
 - ``tt-flash`` acclerator firmware 2023-08-08 (7.D)
 - ``tt-smi`` tt-smi-8.6.0.0_2023-08-22-492ad2b9ef82a243 or above
 
+The instructions for installing TTKMD, `tt-flash`, and `tt-smi` follow.
+
 #### Installing TTKMD (kernel-mode driver)
 
 The following instructions assume <VERSION> is the version of the TTKMD which
