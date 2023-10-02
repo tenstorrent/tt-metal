@@ -10,9 +10,14 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
+from tests.tt_eager.python_api_testing.sweep_tests.common import (
+    is_wormhole_b0
+)
 from loguru import logger
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
+if is_wormhole_b0():
+    pytestmark = pytest.mark.skip("Unsupported parallelizations for WH B0")
 
 def test_sharded_tile(device):
     N = 1

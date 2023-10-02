@@ -19,6 +19,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose_and_pcc,
     comp_pcc,
 )
+from tests.tt_eager.python_api_testing.sweep_tests.common import (
+    is_wormhole_b0,
+)
 from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_act_tensor,
     create_conv_act_tensor_special,
@@ -52,6 +55,8 @@ def test_resnet50_first_conv(
     fuse_relu,
     sharded_out,
 ):
+    if N == 8 and is_wormhole_b0():
+        pytest.skip("Parallelization unsupported for WH B0")
     if sharded_out and N != 8:
         pytest.skip("Tensor sharding unsupported for shape")
     (K, C, padded_C, H, W, R, S, padded_S, stride_h, stride_w, pad_h, pad_w) = (
