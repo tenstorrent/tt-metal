@@ -12,6 +12,7 @@ TT_EAGER_TESTS += \
 		 tests/tt_eager/ops/test_softmax_op \
 		 tests/tt_eager/ops/test_layernorm_op \
 		 tests/tt_eager/ops/test_moreh_matmul_op \
+		 tests/tt_eager/ops/test_moreh_layernorm_op \
 		 tests/tt_eager/ops/test_transpose_op \
 		 tests/tt_eager/ops/test_transpose_wh_single_core \
 		 tests/tt_eager/ops/test_transpose_wh_multi_core \

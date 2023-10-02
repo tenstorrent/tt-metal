@@ -85,6 +85,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_dot/moreh_dot_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_dot_backward/single_core/moreh_dot_backward_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/moreh_dot_backward/moreh_dot_backward_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.cpp \
 	tt_eager/tt_dnn/op_library/groupnorm/groupnorm_op.cpp \
 	tt_eager/tt_dnn/op_library/reshape/reshape_op.cpp \
 	tt_eager/tt_dnn/op_library/permute/permute_op.cpp \

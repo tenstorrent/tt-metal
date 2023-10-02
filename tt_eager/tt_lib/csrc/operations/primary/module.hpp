@@ -10,11 +10,12 @@
 #include "transformers/module.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
-#include "tt_dnn/op_library/softmax/softmax_op.hpp"
 #include "tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 #include "tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
+#include "tt_dnn/op_library/softmax/softmax_op.hpp"
 
 namespace py = pybind11;
 
@@ -42,7 +43,15 @@ void py_module(py::module& m_primary) {
             py::arg("per_core_N").noconvert());
     py::class_<MatmulMultiCoreReuseMultiCastProgramConfig>(m_primary, "MatmulMultiCoreReuseMultiCastProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t, bool, std::optional<UnaryWithParam>>(),
+            py::init<
+                CoreCoord,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                bool,
+                std::optional<UnaryWithParam>>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("in0_block_w").noconvert(),
@@ -51,13 +60,21 @@ void py_module(py::module& m_primary) {
             py::arg("per_core_M").noconvert(),
             py::arg("per_core_N").noconvert(),
             py::arg("transpose_mcast").noconvert(),
-            py::arg("fused_activation")
-        )
+            py::arg("fused_activation"))
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastProgramConfig::fused_activation);
 
     py::class_<MatmulMultiCoreReuseMultiCast1DProgramConfig>(m_primary, "MatmulMultiCoreReuseMultiCast1DProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t, bool, std::optional<UnaryWithParam>, bool>(),
+            py::init<
+                CoreCoord,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                bool,
+                std::optional<UnaryWithParam>,
+                bool>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("in0_block_w").noconvert(),
@@ -345,6 +362,18 @@ void py_module(py::module& m_primary) {
         "Performs a moreh_matmul_backward operation.
     )doc");
 
+    // moreh_layernorm
+    m_primary.def(
+        "moreh_layernorm",
+        &moreh_layernorm,
+        py::arg("input").noconvert(),
+        py::arg("eps").noconvert(),
+        py::arg("normalized_dims").noconvert(),
+        py::arg("gamma").noconvert() = std::nullopt,
+        py::arg("beta").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a moreh_layernorm operation.");
+
     // softmax
     m_primary.def(
         "softmax_in_place",
@@ -352,13 +381,17 @@ void py_module(py::module& m_primary) {
         "Performs a softmax operation on the last tensor dimension. Returns a reference to the input tensor modified "
         "in place.");
 
-    m_primary.def("moreh_softmax", &moreh_softmax,
+    m_primary.def(
+        "moreh_softmax",
+        &moreh_softmax,
         py::arg("input_tensors").noconvert(),
         py::arg("dim").noconvert(),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a softmax operation. Returns a output tensor.");
 
-    m_primary.def("moreh_softmax_backward", &moreh_softmax_backward,
+    m_primary.def(
+        "moreh_softmax_backward",
+        &moreh_softmax_backward,
         py::arg("output_tensor").noconvert(),
         py::arg("output_grad_tensor").noconvert(),
         py::arg("dim").noconvert(),
