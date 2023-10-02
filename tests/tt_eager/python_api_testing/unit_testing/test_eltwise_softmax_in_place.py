@@ -42,7 +42,7 @@ def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_confi
         device_id=0,
         dtype=[dtype],
         layout=[dlayout],
-        buffer_type=[in_mem_config],
+        input_mem_config=[in_mem_config],
         output_mem_config=None
     )
 
@@ -55,10 +55,10 @@ def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_confi
 
 test_sweep_args=[
     # only test that passes out of all sweeps run for pytorch_eltwise_softmax_in_place_test.yaml:
-    ((1, 9, 32, 32), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.BufferType.L1, 38346),
+    ((1, 9, 32, 32), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1), 38346),
     # rest failed:
-    ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.BufferType.DRAM, 17155532),
-    ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.BufferType.L1, 16305027),
+    ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 17155532),
+    ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1), 16305027),
 ]
 
 @skip_for_wormhole_b0

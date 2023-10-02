@@ -40,7 +40,7 @@ def run_eltwise_log_sigmoid_tests(input_shape, dtype, dlayout, in_mem_config, ou
         device_id=0,
         dtype=[dtype],
         layout=[dlayout],
-        buffer_type=[in_mem_config],
+        input_mem_config=[in_mem_config],
         output_mem_config=out_mem_config
     )
 
@@ -52,11 +52,11 @@ def run_eltwise_log_sigmoid_tests(input_shape, dtype, dlayout, in_mem_config, ou
 
 
 test_sweep_args=[
-    ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.BufferType.DRAM, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 17155532),
-    ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.BufferType.L1, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 16305027),
+    ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True,ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 17155532),
+    ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True,ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 16305027),
     ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, "SYSTEM_MEMORY", ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 13587334),
-    ((6, 4, 156, 214), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.BufferType.DRAM, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 19325774),
-    ((6, 4, 156, 214), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.BufferType.L1, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 4016313),
+    ((6, 4, 156, 214), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.MemoryConfig(True,ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 19325774),
+    ((6, 4, 156, 214), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.MemoryConfig(True,ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 4016313),
     ((6, 4, 156, 214), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, "SYSTEM_MEMORY", ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 13126809),
 ]
 
