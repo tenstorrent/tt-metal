@@ -83,7 +83,6 @@ void kernel_main() {
     generate_mask_w(cb_id_mask_w, mask_w);
 #endif
 
-    // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;
     const uint32_t NCHt = num_rows_per_core;
     constexpr uint32_t onetile = 1;

@@ -83,13 +83,11 @@ void kernel_main() {
     generate_mask_w(cb_id_mask_w, mask_w);
 #endif
 
-    // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;
     const uint32_t NCHt = num_rows_per_core;
     constexpr uint32_t onetile = 1;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        // For E[x]
         for (uint32_t wt = 0; wt < Wt; wt += block_size) {
             cb_reserve_back(cb_id_in0, block_size);
             uint32_t input_l1_write_ptr = get_write_ptr(cb_id_in0);
@@ -103,7 +101,6 @@ void kernel_main() {
 
         for (uint32_t wt = 0; wt < Wt; wt += block_size) {
 #ifdef FUSE_GAMMA
-            // for (uint32_t wt = 0; wt < Wt; wt += block_size) {
             cb_reserve_back(cb_id_gamma, block_size);
             uint32_t gamma_l1_write_addr = get_write_ptr(cb_id_gamma);
             for (uint32_t r = 0; r < block_size; r++) {
@@ -115,7 +112,6 @@ void kernel_main() {
 #endif
 
 #ifdef FUSE_BETA
-            // for (uint32_t wt = 0; wt < Wt; += block_size) {
             cb_reserve_back(cb_id_beta, block_size);
             uint32_t beta_l1_write_addr = get_write_ptr(cb_id_beta);
             for (uint32_t r = 0; r < block_size; r++) {
