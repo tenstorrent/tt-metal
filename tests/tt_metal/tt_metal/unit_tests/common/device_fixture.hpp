@@ -7,15 +7,16 @@
 #pragma once
 
 #include <gtest/gtest.h>
+
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/test_utils/env_vars.hpp"
 
-inline
-bool is_multi_device_gs_machine(const tt::ARCH& arch, const size_t num_devices) {
+inline bool is_multi_device_gs_machine(const tt::ARCH& arch, const size_t num_devices) {
     return arch == tt::ARCH::GRAYSKULL && num_devices > 1;
 }
-class MultiDeviceFixture : public ::testing::Test {
+
+class DeviceFixture : public ::testing::Test {
    protected:
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -24,13 +25,15 @@ class MultiDeviceFixture : public ::testing::Test {
             GTEST_SKIP();
         }
         arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-        num_devices_ = tt::tt_metal::Device::detect_num_available_devices(); // FIXME: Is this too greedy?
 
+        num_devices_ = tt::tt_metal::Device::detect_num_available_devices();
         if (is_multi_device_gs_machine(arch_, num_devices_)) {
             GTEST_SKIP();
         }
+
         for (unsigned int id = 0; id < num_devices_; id++) {
-            devices_.push_back(tt::tt_metal::CreateDevice(id));
+            auto* device = tt::tt_metal::CreateDevice(id);
+            devices_.push_back(device);
         }
     }
 
