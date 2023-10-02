@@ -269,7 +269,7 @@ If a Tenstorrent chip seems to hang, you may try a software reset.
 
 For Grayskull: `tt-smi -tr all`
 
-For Wormhole: `tt-smi -wr all`
+For Wormhole: `tt-smi -wr all wait`
 
 If the software reset does not work, unfortunately you will have to power cycle
 the board. This usually means rebooting the host of a board.

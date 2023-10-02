@@ -72,19 +72,16 @@ instructions and expectations for running regressions before you merge changes
 into main.
 
 
-Warm Resetting `Wormhole B0` (WH B0) Board
-------------------------------------------
-On a board machine running ``$ tt-smi --version && tt-smi`` successfully indicates the board maybe still warm-reset.
+Troubleshooting a troublesome board
+-----------------------------------
 
-::
+You may encounter an accelerator board that is hanging and/or producing
+unexpected behaviour.
 
-   $ tt-smi -wr wait all
+Usually, a reset should through ``tt-smi`` should help with resetting a board.
 
+The instructions for doing so and any further debugging information is in the
+`contribution standards
+<https://github.com/tenstorrent-metal/tt-metal/blob/main/CONTRIBUTING.md>`_.
 
-Warm Resetting `Grayskull` (GS) Board
--------------------------------------
-On a board machine running ``$ tt-smi --version && tt-smi`` successfully indicates the board maybe still warm-reset.
-
-::
-
-   $ tt-smi -tr all
+Otherwise, you may try a full power cycle (host reboot).
