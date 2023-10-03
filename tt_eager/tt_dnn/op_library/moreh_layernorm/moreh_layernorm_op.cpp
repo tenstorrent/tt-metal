@@ -18,8 +18,6 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
-using namespace tt::tt_metal;
-
 namespace tt {
 
 namespace tt_metal {
@@ -254,8 +252,8 @@ operation::ProgramWithCallbacks moreh_layernorm_(
 
     const auto reader_kernels_id = tt::operations::primary::CreateReadKernel(
         program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernels_id = tt::operations::primary::CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, reader_defines);
+    const auto writer_kernels_id =
+        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
