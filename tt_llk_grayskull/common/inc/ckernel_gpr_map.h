@@ -35,6 +35,10 @@ struct p_gpr_unpack
     constexpr static uint FACE_DIM_1x16     = 44;   // Holds face dimension (1x16)
     constexpr static uint SR_UNPACK_TILIZER_STATE_0 = 54;  // Save unpack state before tilizer is enabled for quick restore 
     constexpr static uint SR_UNPACK_TILIZER_STATE_1 = 55;  
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_0 = 56;  // Save unpack state before tilizer is enabled for quick restore 
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_1 = 57;  
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_2 = 58;  
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_3 = 59;  
 };
 
 // Math GPR thread
