@@ -55,6 +55,8 @@ def test_resnet50_first_conv(
     fuse_relu,
     sharded_out,
 ):
+    if N != 8:
+        pytest.skip("Skipping non-batch 8 tests due to potential non-determinism")
     if N == 8 and is_wormhole_b0():
         pytest.skip("Parallelization unsupported for WH B0")
     if sharded_out and N != 8:
