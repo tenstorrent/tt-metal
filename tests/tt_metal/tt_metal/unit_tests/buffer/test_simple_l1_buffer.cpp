@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "single_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "gtest/gtest.h"
 #include "test_buffer_utils.hpp"
 #include "tt_metal/host_api.hpp"
@@ -111,82 +111,122 @@ namespace tt::test::buffer::detail {
     }
 }
 
-TEST_F(SingleDeviceFixture, TestSimpleL1BufferReadOnlyLo) {
-    size_t lo_address = this->device_->l1_size_per_core() - this->device_->bank_size(tt::tt_metal::BufferType::L1);
-    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 4));
-    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 8));
-    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 16));
-    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 32));
-    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 1024));
-    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, lo_address, 16*1024));
+TEST_F(DeviceFixture, TestSimpleL1BufferReadOnlyLo) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        size_t lo_address =
+            this->devices_.at(id)->l1_size_per_core() - this->devices_.at(id)->bank_size(tt::tt_metal::BufferType::L1);
+        ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), lo_address, 4));
+        ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), lo_address, 8));
+        ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), lo_address, 16));
+        ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), lo_address, 32));
+        ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), lo_address, 1024));
+        ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), lo_address, 16 * 1024));
+    }
 }
-TEST_F(SingleDeviceFixture, TestSimpleL1BufferReadOnlyHi) {
-    size_t hi_address = this->device_->l1_size_per_core() - (16*1024);
-    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 4));
-    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 8));
-    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 16));
-    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 32));
-    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 1024));
-    ASSERT_TRUE(SimpleL1ReadOnly(this->device_, hi_address, 16*1024));
+TEST_F(DeviceFixture, TestSimpleL1BufferReadOnlyHi) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        size_t hi_address = this->devices_.at(id)->l1_size_per_core() - (16 * 1024);
+        ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), hi_address, 4));
+        ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), hi_address, 8));
+        ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), hi_address, 16));
+        ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), hi_address, 32));
+        ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), hi_address, 1024));
+        ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), hi_address, 16 * 1024));
+    }
 }
-TEST_F(SingleDeviceFixture, TestSimpleL1BufferWriteOnlyLo) {
-    size_t lo_address = this->device_->l1_size_per_core() - this->device_->bank_size(tt::tt_metal::BufferType::L1);
-    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 4));
-    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 8));
-    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 16));
-    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 32));
-    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 1024));
-    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, lo_address, 16*1024));
-}
-
-TEST_F(SingleDeviceFixture, TestSimpleL1BufferWriteOnlyHi) {
-    size_t hi_address = this->device_->l1_size_per_core() - (16*1024);
-    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 4));
-    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 8));
-    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 16));
-    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 32));
-    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 1024));
-    ASSERT_TRUE(SimpleL1WriteOnly(this->device_, hi_address, 16*1024));
+TEST_F(DeviceFixture, TestSimpleL1BufferWriteOnlyLo) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        size_t lo_address =
+            this->devices_.at(id)->l1_size_per_core() - this->devices_.at(id)->bank_size(tt::tt_metal::BufferType::L1);
+        ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), lo_address, 4));
+        ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), lo_address, 8));
+        ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), lo_address, 16));
+        ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), lo_address, 32));
+        ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), lo_address, 1024));
+        ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), lo_address, 16 * 1024));
+    }
 }
 
-TEST_F(SingleDeviceFixture, TestSimpleL1ReadWriteTileLo) {
-    size_t lo_address = 768*1024;
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, lo_address + 8*1024, lo_address + 16*1024, 2*1024));
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, lo_address + 8*1024, lo_address + 16*1024, 4*1024));
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, lo_address + 8*1024, lo_address + 16*1024, 6*1024));
+TEST_F(DeviceFixture, TestSimpleL1BufferWriteOnlyHi) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        size_t hi_address = this->devices_.at(id)->l1_size_per_core() - (16 * 1024);
+        ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), hi_address, 4));
+        ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), hi_address, 8));
+        ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), hi_address, 16));
+        ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), hi_address, 32));
+        ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), hi_address, 1024));
+        ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), hi_address, 16 * 1024));
+    }
 }
 
-TEST_F(SingleDeviceFixture, TestSimpleL1ReadWriteTileHi) {
-    size_t hi_address = this->device_->l1_size_per_core() - (24*1024);
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, hi_address + 8*1024, hi_address + 16*1024, 2*1024));
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, hi_address + 8*1024, hi_address + 16*1024, 4*1024));
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {0, 0}, hi_address + 8*1024, hi_address + 16*1024, 6*1024));
+TEST_F(DeviceFixture, TestSimpleL1ReadWriteTileLo) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        size_t lo_address = 768 * 1024;
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {0, 0}, lo_address + 8 * 1024, lo_address + 16 * 1024, 2 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {0, 0}, lo_address + 8 * 1024, lo_address + 16 * 1024, 4 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {0, 0}, lo_address + 8 * 1024, lo_address + 16 * 1024, 6 * 1024));
+    }
 }
 
-TEST_F(SingleDeviceFixture, TestSimpleL1ReadWritex2y2TileLo) {
-    size_t lo_address = 768*1024;
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, lo_address + 16*1024, 2*1024));
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, lo_address + 16*1024, 4*1024));
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, lo_address + 16*1024, 6*1024));
+TEST_F(DeviceFixture, TestSimpleL1ReadWriteTileHi) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        size_t hi_address = this->devices_.at(id)->l1_size_per_core() - (24 * 1024);
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {0, 0}, hi_address + 8 * 1024, hi_address + 16 * 1024, 2 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {0, 0}, hi_address + 8 * 1024, hi_address + 16 * 1024, 4 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {0, 0}, hi_address + 8 * 1024, hi_address + 16 * 1024, 6 * 1024));
+    }
 }
 
-TEST_F(SingleDeviceFixture, TestSimpleL1ReadWritex2y2TileHi) {
-    size_t hi_address = this->device_->l1_size_per_core() - (24*1024);
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, hi_address + 16*1024, 2*1024));
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, hi_address + 16*1024, 4*1024));
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, hi_address + 16*1024, 6*1024));
+TEST_F(DeviceFixture, TestSimpleL1ReadWritex2y2TileLo) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        size_t lo_address = 768 * 1024;
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 2 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 4 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 6 * 1024));
+    }
 }
 
-TEST_F(SingleDeviceFixture, TestBufferL1ReadWriteTileLo) {
-    size_t lo_address = 768*1024;
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, lo_address + 16*1024, 2*1024));
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, lo_address + 16*1024, 4*1024));
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, lo_address + 8*1024, lo_address + 16*1024, 6*1024));
+TEST_F(DeviceFixture, TestSimpleL1ReadWritex2y2TileHi) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        size_t hi_address = this->devices_.at(id)->l1_size_per_core() - (24 * 1024);
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 2 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 4 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 6 * 1024));
+    }
 }
 
-TEST_F(SingleDeviceFixture, TestBufferL1ReadWriteTileHi) {
-    size_t hi_address = this->device_->l1_size_per_core() - (24*1024);
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, hi_address + 16*1024, 2*1024));
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, hi_address + 16*1024, 4*1024));
-    ASSERT_TRUE(SimpleTiledL1WriteCBRead(this->device_, {2, 2}, hi_address + 8*1024, hi_address + 16*1024, 6*1024));
+TEST_F(DeviceFixture, TestBufferL1ReadWriteTileLo) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        size_t lo_address = 768 * 1024;
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 2 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 4 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 6 * 1024));
+    }
+}
+
+TEST_F(DeviceFixture, TestBufferL1ReadWriteTileHi) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        size_t hi_address = this->devices_.at(id)->l1_size_per_core() - (24 * 1024);
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 2 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 4 * 1024));
+        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
+            this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 6 * 1024));
+    }
 }

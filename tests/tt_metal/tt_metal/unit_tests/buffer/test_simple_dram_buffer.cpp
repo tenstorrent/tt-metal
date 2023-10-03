@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "single_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "gtest/gtest.h"
 #include "test_buffer_utils.hpp"
 #include "tt_metal/host_api.hpp"
@@ -45,40 +45,47 @@ namespace tt::test::buffer::detail {
     }
 }
 
-
-TEST_F(SingleDeviceFixture, TestSimpleDramBufferReadOnlyLo) {
-    size_t lo_address = DRAM_UNRESERVED_BASE;
-    ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 4));
-    ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 8));
-    ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 16));
-    ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 32));
-    ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 1024));
-    ASSERT_TRUE(SimpleDramReadOnly(this->device_, lo_address, 16*1024));
+TEST_F(DeviceFixture, TestSimpleDramBufferReadOnlyLo) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        size_t lo_address = DRAM_UNRESERVED_BASE;
+        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 4));
+        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 8));
+        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 16));
+        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 32));
+        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 1024));
+        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 16 * 1024));
+    }
 }
-TEST_F(SingleDeviceFixture, TestSimpleDramBufferReadOnlyHi) {
-    size_t hi_address = this->device_->dram_size_per_channel() - (16*1024);
-    ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 4));
-    ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 8));
-    ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 16));
-    ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 32));
-    ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 1024));
-    ASSERT_TRUE(SimpleDramReadOnly(this->device_, hi_address, 16*1024));
+TEST_F(DeviceFixture, TestSimpleDramBufferReadOnlyHi) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        size_t hi_address = this->devices_.at(id)->dram_size_per_channel() - (16 * 1024);
+        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 4));
+        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 8));
+        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 16));
+        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 32));
+        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 1024));
+        ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 16 * 1024));
+    }
 }
-TEST_F(SingleDeviceFixture, TestSimpleDramBufferWriteOnlyLo) {
-    size_t lo_address = DRAM_UNRESERVED_BASE;
-    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 4));
-    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 8));
-    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 16));
-    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 32));
-    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 1024));
-    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, lo_address, 16*1024));
+TEST_F(DeviceFixture, TestSimpleDramBufferWriteOnlyLo) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        size_t lo_address = DRAM_UNRESERVED_BASE;
+        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 4));
+        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 8));
+        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 16));
+        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 32));
+        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 1024));
+        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 16 * 1024));
+    }
 }
-TEST_F(SingleDeviceFixture, TestSimpleDramBufferWriteOnlyHi) {
-    size_t hi_address = this->device_->dram_size_per_channel() - (16*1024);
-    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 4));
-    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 8));
-    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 16));
-    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 32));
-    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 1024));
-    ASSERT_TRUE(SimpleDramWriteOnly(this->device_, hi_address, 16*1024));
+TEST_F(DeviceFixture, TestSimpleDramBufferWriteOnlyHi) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        size_t hi_address = this->devices_.at(id)->dram_size_per_channel() - (16 * 1024);
+        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 4));
+        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 8));
+        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 16));
+        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 32));
+        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 1024));
+        ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 16 * 1024));
+    }
 }

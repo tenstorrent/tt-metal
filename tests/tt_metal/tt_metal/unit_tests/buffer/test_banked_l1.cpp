@@ -2,17 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "single_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "gtest/gtest.h"
+#include "tt_metal/common/logger.hpp"
+#include "tt_metal/common/math.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-
 
 using namespace tt::tt_metal;
 
@@ -234,131 +233,153 @@ LaunchProgram(device, program);
 
 }   // end namespace local_test_functions
 
-TEST_F(SingleDeviceFixture, TestSingleCoreSingleTileBankedL1ReaderOnly) {
-    BankedL1Config test_config;
-    EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->device_, test_config, true, false));
-}
-
-TEST_F(SingleDeviceFixture, TestSingleCoreMultiTileBankedL1ReaderOnly) {
-    BankedL1Config test_config;
-    TT_ASSERT(this->device_->num_banks(BufferType::L1) % 2 == 0);
-    size_t num_tiles = this->device_->num_banks(BufferType::L1) / 2;
-    size_t tile_increment = num_tiles;
-    u32 num_iterations = 3;
-    u32 index = 0;
-    while (index < num_iterations) {
-        test_config.num_tiles = num_tiles;
-        test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
-        EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->device_, test_config, true, false));
-        num_tiles += tile_increment;
-        index++;
+TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedL1ReaderOnly) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        BankedL1Config test_config;
+        EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->devices_.at(id), test_config, true, false));
     }
 }
 
-TEST_F(SingleDeviceFixture, TestSingleCoreSingleTileBankedL1WriterOnly) {
-    BankedL1Config test_config;
-    EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->device_, test_config, false, true));
-}
-
-TEST_F(SingleDeviceFixture, TestSingleCoreMultiTileBankedL1WriterOnly) {
-    BankedL1Config test_config;
-    TT_ASSERT(this->device_->num_banks(BufferType::L1) % 2 == 0);
-    size_t num_tiles = this->device_->num_banks(BufferType::L1) / 2;
-    size_t tile_increment = num_tiles;
-    u32 num_iterations = 3;
-    u32 index = 0;
-    while (index < num_iterations) {
-        test_config.num_tiles = num_tiles;
-        test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
-        EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->device_, test_config, false, true));
-        num_tiles += tile_increment;
-        index++;
+TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderOnly) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        BankedL1Config test_config;
+        TT_ASSERT(this->devices_.at(id)->num_banks(BufferType::L1) % 2 == 0);
+        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1) / 2;
+        size_t tile_increment = num_tiles;
+        u32 num_iterations = 3;
+        u32 index = 0;
+        while (index < num_iterations) {
+            test_config.num_tiles = num_tiles;
+            test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
+            EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->devices_.at(id), test_config, true, false));
+            num_tiles += tile_increment;
+            index++;
+        }
     }
 }
 
-TEST_F(SingleDeviceFixture, TestSingleCoreSingleTileBankedL1ReaderAndWriter) {
-    BankedL1Config test_config;
-    EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->device_, test_config, true, true));
-}
-
-TEST_F(SingleDeviceFixture, TestSingleCoreMultiTileBankedL1ReaderAndWriter) {
-    BankedL1Config test_config;
-    size_t num_tiles = this->device_->num_banks(BufferType::L1);
-    TT_ASSERT(num_tiles % 2 == 0);
-    size_t tile_increment = num_tiles / 2;
-    u32 num_iterations = 6;
-    u32 index = 0;
-    while (index < num_iterations) {
-        test_config.num_tiles = num_tiles;
-        test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
-        EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->device_, test_config, true, true));
-        num_tiles += tile_increment;
-        index++;
+TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedL1WriterOnly) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        BankedL1Config test_config;
+        EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->devices_.at(id), test_config, false, true));
     }
 }
 
-TEST_F(SingleDeviceFixture, TestSingleCoreSingleTileBankedDramReaderAndL1Writer) {
-    BankedL1Config test_config;
-    test_config.input_buffer_type = BufferType::DRAM;
-    EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->device_, test_config, true, true));
-}
-
-TEST_F(SingleDeviceFixture, TestSingleCoreMultiTileBankedDramReaderAndL1Writer) {
-    BankedL1Config test_config;
-    test_config.input_buffer_type = BufferType::DRAM;
-
-    size_t num_tiles = this->device_->num_banks(BufferType::L1);
-    TT_ASSERT(num_tiles % 2 == 0);
-    size_t tile_increment = num_tiles / 2;
-    u32 num_iterations = 6;
-    u32 index = 0;
-    while (index < num_iterations) {
-        test_config.num_tiles = num_tiles;
-        test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
-        EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->device_, test_config, true, true));
-        num_tiles += tile_increment;
-        index++;
+TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1WriterOnly) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        BankedL1Config test_config;
+        TT_ASSERT(this->devices_.at(id)->num_banks(BufferType::L1) % 2 == 0);
+        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1) / 2;
+        size_t tile_increment = num_tiles;
+        u32 num_iterations = 3;
+        u32 index = 0;
+        while (index < num_iterations) {
+            test_config.num_tiles = num_tiles;
+            test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
+            EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->devices_.at(id), test_config, false, true));
+            num_tiles += tile_increment;
+            index++;
+        }
     }
 }
 
-TEST_F(SingleDeviceFixture, TestSingleCoreSingleTileBankedL1ReaderAndDramWriter) {
-    BankedL1Config test_config;
-    test_config.output_buffer_type = BufferType::DRAM;
-    EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->device_, test_config, true, true));
-}
-
-TEST_F(SingleDeviceFixture, TestSingleCoreMultiTileBankedL1ReaderAndDramWriter) {
-    BankedL1Config test_config;
-    test_config.output_buffer_type = BufferType::DRAM;
-
-    size_t num_tiles = this->device_->num_banks(BufferType::L1);
-    TT_ASSERT(num_tiles % 2 == 0);
-    size_t tile_increment = num_tiles / 2;
-    u32 num_iterations = 6;
-    u32 index = 0;
-    while (index < num_iterations) {
-        test_config.num_tiles = num_tiles;
-        test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
-        EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->device_, test_config, true, true));
-        num_tiles += tile_increment;
-        index++;
+TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedL1ReaderAndWriter) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        BankedL1Config test_config;
+        EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->devices_.at(id), test_config, true, true));
     }
 }
 
-TEST_F(SingleDeviceFixture, TestSingleCoreMultiTileBankedL1ReaderDataCopyL1Writer) {
-    BankedL1Config test_config;
-    size_t num_tiles = this->device_->num_banks(BufferType::L1);
-    TT_ASSERT(num_tiles % 2 == 0);
-    size_t tile_increment = num_tiles / 2;
-    u32 num_iterations = 6;
-    u32 index = 0;
-    test_config.logical_core = this->device_->logical_core_from_bank_id(0);
-    while (index < num_iterations) {
-        test_config.num_tiles = num_tiles;
-        test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
-        EXPECT_TRUE(local_test_functions::l1_reader_datacopy_l1_writer(this->device_, test_config));
-        num_tiles += tile_increment;
-        index++;
+TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderAndWriter) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        BankedL1Config test_config;
+        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
+        TT_ASSERT(num_tiles % 2 == 0);
+        size_t tile_increment = num_tiles / 2;
+        u32 num_iterations = 6;
+        u32 index = 0;
+        while (index < num_iterations) {
+            test_config.num_tiles = num_tiles;
+            test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
+            EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->devices_.at(id), test_config, true, true));
+            num_tiles += tile_increment;
+            index++;
+        }
+    }
+}
+
+TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedDramReaderAndL1Writer) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        BankedL1Config test_config;
+        test_config.input_buffer_type = BufferType::DRAM;
+        EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->devices_.at(id), test_config, true, true));
+    }
+}
+
+TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedDramReaderAndL1Writer) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        BankedL1Config test_config;
+        test_config.input_buffer_type = BufferType::DRAM;
+
+        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
+        TT_ASSERT(num_tiles % 2 == 0);
+        size_t tile_increment = num_tiles / 2;
+        u32 num_iterations = 6;
+        u32 index = 0;
+        while (index < num_iterations) {
+            test_config.num_tiles = num_tiles;
+            test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
+            EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->devices_.at(id), test_config, true, true));
+            num_tiles += tile_increment;
+            index++;
+        }
+    }
+}
+
+TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedL1ReaderAndDramWriter) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        BankedL1Config test_config;
+        test_config.output_buffer_type = BufferType::DRAM;
+        EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->devices_.at(id), test_config, true, true));
+    }
+}
+
+TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderAndDramWriter) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        BankedL1Config test_config;
+        test_config.output_buffer_type = BufferType::DRAM;
+
+        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
+        TT_ASSERT(num_tiles % 2 == 0);
+        size_t tile_increment = num_tiles / 2;
+        u32 num_iterations = 6;
+        u32 index = 0;
+        while (index < num_iterations) {
+            test_config.num_tiles = num_tiles;
+            test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
+            EXPECT_TRUE(local_test_functions::l1_reader_cb_writer_l1(this->devices_.at(id), test_config, true, true));
+            num_tiles += tile_increment;
+            index++;
+        }
+    }
+}
+
+TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderDataCopyL1Writer) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        BankedL1Config test_config;
+        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
+        TT_ASSERT(num_tiles % 2 == 0);
+        size_t tile_increment = num_tiles / 2;
+        u32 num_iterations = 6;
+        u32 index = 0;
+        test_config.logical_core = this->devices_.at(id)->logical_core_from_bank_id(0);
+        while (index < num_iterations) {
+            test_config.num_tiles = num_tiles;
+            test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
+            EXPECT_TRUE(local_test_functions::l1_reader_datacopy_l1_writer(this->devices_.at(id), test_config));
+            num_tiles += tile_increment;
+            index++;
+        }
     }
 }
 
