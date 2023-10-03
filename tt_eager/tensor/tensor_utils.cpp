@@ -31,12 +31,10 @@ namespace tt_metal {
         for(auto r = 0; r < w_shape[2]; r++) {
             for(auto s = 0; s < w_shape[3]; s++) {
                 for(auto c = 0; c < w_shape[1]; c++) {
-                    for(auto k = 0; k < weight_matrix_cols; k++) {
+                    for(auto k = 0; k < w_shape[0]; k++) {
                         auto matrix_idx = k + c * weight_matrix_cols + s * w_shape[1] * weight_matrix_cols + r * ((w_shape[3] * w_shape[1]) + block_height_padding) * weight_matrix_cols;
-                        if (k < w_shape[0]) {
-                            auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
-                            output_buffer[matrix_idx] = input_buffer[idx];
-                        }
+			auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
+			output_buffer[matrix_idx] = input_buffer[idx];
                     }
                 }
             }
@@ -67,12 +65,10 @@ namespace tt_metal {
         for(auto r = 0; r < w_shape[2]; r++) {
             for(auto s = 0; s < w_shape[3]; s++) {
                 for(auto c = 0; c < w_shape[1]; c++) {
-                    for(auto k = 0; k < weight_matrix_cols; k++) {
+                    for(auto k = 0; k < w_shape[0]; k++) {
                         auto matrix_idx = k + c * weight_matrix_cols + s * w_shape[1] * weight_matrix_cols + r * w_shape[3] * w_shape[1] * weight_matrix_cols;
-                        if (k < w_shape[0]) {
-                            auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
-                            output_buffer[matrix_idx] = input_buffer[idx];
-                        }
+			auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
+			output_buffer[matrix_idx] = input_buffer[idx];
                     }
                 }
             }
@@ -152,9 +148,9 @@ const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volu
 
   bool is_arch_whb0(const tt::ARCH& arch) {
     return arch == tt::ARCH::WORMHOLE_B0;
-  }  
-  
-  
+  }
+
+
 }
 
 }
