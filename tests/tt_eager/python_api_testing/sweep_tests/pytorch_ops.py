@@ -932,7 +932,7 @@ def activation_glu(x, *args, **kwargs):
 
 
 def activation_reglu(x, *args, **kwargs):
-    dim = kwargs.get("dim", 3)
+    dim = kwargs.get("dim", 2)
     a, b = torch.split(x, x.shape[dim] // 2, dim)
     return a * torch.nn.functional.relu(b)
     # return torch.matmul(a,torch.nn.functional.relu(b))
