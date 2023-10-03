@@ -327,7 +327,9 @@ int main() {
 
         // Run the BRISC kernel
         DEBUG_STATUS('R');
-        kernel_init();
+        if (mailboxes->launch.enable_brisc) {
+            kernel_init();
+        }
         DEBUG_STATUS('D');
 
         wait_ncrisc_trisc();

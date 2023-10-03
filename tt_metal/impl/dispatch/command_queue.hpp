@@ -41,9 +41,10 @@ enum class TransferType : u8 {
     T1 = 3,
     T2 = 4,
 
-    // CB and Sems
+    // CB and Sems and KernelGroups
     CB = 5,
     SEM = 6,
+    KG = 7,
 };
 
 inline void update_dispatch_map_dump(const string& name, const vector<u32>& data, std::ofstream& stream) {

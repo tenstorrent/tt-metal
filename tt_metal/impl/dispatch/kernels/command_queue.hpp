@@ -11,19 +11,6 @@
 #include "debug_status.h"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
-static uint32_t deassert_packet __attribute__((section("l1_data"))) __attribute__((aligned(16))) = (uint32_t)TENSIX_DEASSERT_SOFT_RESET_NO_STAGGER;
-
-// TODO(pgk) move all this to host/device interface
-static launch_msg_t launch_msg __attribute__((section("l1_data"))) __attribute__((aligned(16))) = {
-    .kernel_group_id = 0,
-    .ncrisc_fw_size = 0,
-    .mode = DISPATCH_MODE_DEV,
-    .enable_brisc = true,
-    .enable_ncrisc = true,
-    .enable_triscs = true,
-    .run = RUN_MSG_GO
-};
-
 template <typename T>
 inline T min(T a, T b) {
     return (a < b) ? a: b;
@@ -226,18 +213,6 @@ FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, vo
 
     volatile tt_l1_ptr uint32_t* message_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(DISPATCH_MESSAGE_ADDR);
     *message_addr_ptr = 0;
-
-    for (u32 i = 0; i < num_multicast_messages * 2; i += 2) {
-        u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
-        u32 num_messages = command_ptr[i + 1];
-        u64 launch_packet_dst_addr = worker_core_noc_coord | (uint32_t)GET_MAILBOX_ADDRESS_DEV(launch);
-
-        noc_async_write_multicast((uint32_t)&launch_msg,
-                                  launch_packet_dst_addr,
-                                  sizeof(launch_msg_t),
-                                  num_messages);
-    }
-    noc_async_write_barrier();
 
     // Wait on worker cores to notify me that they have completed
     DEBUG_STATUS('Q', 'W');
