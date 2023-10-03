@@ -48,10 +48,19 @@ struct ComputeKernelArg {
     const std::vector<uint32_t> &compile_args;
 };
 
-void CreateComputeKernel(
+[[maybe_unused]] std::vector<KernelID> CreateComputeKernel(
     Program &program,
     const std::string &file_name,
     std::vector<ComputeKernelArg> args,
+    std::map<std::string, std::string> defines = {},
+    MathFidelity math_fidelity = MathFidelity::HiFi4,
+    bool fp32_dest_acc_en = false,
+    bool math_approx_mode = false);
+
+[[maybe_unused]] KernelID CreateComputeKernel(
+    Program &program,
+    const std::string &file_name,
+    ComputeKernelArg arg,
     std::map<std::string, std::string> defines = {},
     MathFidelity math_fidelity = MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
@@ -72,11 +81,11 @@ struct CircularBufferArg {
     }
 };
 
-void CreateCircularBuffer(
-    Program &program,
-    const CoreRangeSet &core_range,
-    tt::DataFormat data_format,
-    std::vector<CircularBufferArg> args);
+[[maybe_unused]] std::vector<CircularBufferID> CreateCircularBuffer(
+    Program &program, const CoreRangeSet &core_range, tt::DataFormat data_format, std::vector<CircularBufferArg> args);
+
+[[maybe_unused]] CircularBufferID CreateCircularBuffer(
+    Program &program, const CoreRangeSet &core_range, tt::DataFormat data_format, CircularBufferArg arg);
 
 }  // namespace primary
 }  // namespace operations
