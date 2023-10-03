@@ -133,12 +133,6 @@ inline bool deduce_if_involves_ncrisc(const TensixRiscsOptions &riscs_options) {
 }
 
 namespace internal_ {
-// This loads to briscs and ncriscs - we may want to add TensixRiscsOptions here
-void load_blank_kernel_to_cores(
-    chip_id_t chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> cores);
-
-void load_blank_kernel_to_all_worker_cores_with_exceptions(
-    chip_id_t chip_id, const TensixRiscsOptions &riscs_to_load, std::unordered_set<CoreCoord> exceptions);
 
 void assert_enable_core_mailbox_is_valid_for_core(chip_id_t chip_id, const CoreCoord &core);
 

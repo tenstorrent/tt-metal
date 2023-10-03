@@ -19,6 +19,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dev_msgs.h"
 #include "risc_attribs.h"
+#include "noc_addr_ranges_gen.h"
 
 #include "debug_status.h"
 #include "debug_print.h"
@@ -44,8 +45,10 @@ uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
 uint8_t noc_size_x __attribute__((used));
 uint8_t noc_size_y __attribute__((used));
-uint8_t kernel_noc_id_var __attribute__((used));
-uint64_t dispatch_addr __attribute__((used));
+
+uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
@@ -288,11 +291,9 @@ int main() {
     int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
     l1_to_local_mem_copy((uint*)__ldm_data_start, (uint tt_l1_ptr *)MEM_BRISC_INIT_LOCAL_L1_BASE, num_words);
 
-
-    RISC_POST_STATUS(0x10000000);
-
     risc_init();
     device_setup();
+    noc_init();
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
     mailboxes->ncrisc_halt.resume_addr = 0;
@@ -325,10 +326,14 @@ int main() {
 
         run_ncrisc_trisc();
 
+        uint32_t loading_noc = mailboxes->launch.brisc_noc_id;
+
         // Run the BRISC kernel
         DEBUG_STATUS('R');
         if (mailboxes->launch.enable_brisc) {
             kernel_init();
+        } else {
+            noc_local_state_init(loading_noc);
         }
         DEBUG_STATUS('D');
 
@@ -340,10 +345,10 @@ int main() {
         kernel_profiler::mark_time(CC_MAIN_END);
 
         // Notify dispatcher core that it has completed
-        if (dispatch_addr != 0) {
-            noc_fast_atomic_increment(kernel_noc_id_var, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
+        if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
+            uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
+            noc_fast_atomic_increment(loading_noc, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
         }
-
     }
 
     return 0;

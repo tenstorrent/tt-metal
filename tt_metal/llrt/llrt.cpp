@@ -261,70 +261,22 @@ CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
 }
 
 namespace internal_ {
-// This loads to briscs and ncriscs - we may want to add TensixRiscsOptions here
-void load_blank_kernel_to_cores(chip_id_t chip_id, const TensixRiscsOptions &riscs_to_load, std::vector<CoreCoord> cores) {
-    TT_ASSERT(riscs_to_load != TensixRiscsOptions::NONE, "You must specify a non-NONE RISC to load blank kernels to");
-
-    for (const CoreCoord &core : cores) {
-        bool pass = true;
-
-        // PROF_BEGIN("write_brisc")
-        pass = test_load_write_read_risc_binary("blank_op/brisc/brisc.hex", chip_id, core, 0);
-        if (!pass) {
-            throw std::runtime_error("Initial testing read/write of brisc to core failed");
-        }  // PROF_END("write_brisc")
-
-        if (deduce_if_involves_ncrisc(riscs_to_load)) {  // PROF_BEGIN("ncrisc")
-            pass =
-                test_load_write_read_risc_binary("blank_op/ncrisc/ncrisc.hex", chip_id, core, 1);
-            if (!pass) {
-                throw std::runtime_error("Initial testing read/write of ncrisc to core failed");
-            }
-        }  // PROF_END("ncrisc")
-
-        if (deduce_if_involves_triscs(riscs_to_load)) {  // PROF_BEGIN("trisc")
-            string op_path = "blank_op";
-            pass &= test_load_write_read_trisc_binary(op_path + "/tensix_thread0/tensix_thread0.hex", chip_id, core, 0);
-            pass &= test_load_write_read_trisc_binary(op_path + "/tensix_thread1/tensix_thread1.hex", chip_id, core, 1);
-            pass &= test_load_write_read_trisc_binary(op_path + "/tensix_thread2/tensix_thread2.hex", chip_id, core, 2);
-            if (!pass) {
-                throw std::runtime_error("Initial testing read/write of blank to trisc to core failed");
-            }
-        }  // PROF_END("trisc")
-    }
-}
-
-void load_blank_kernel_to_all_worker_cores_with_exceptions(chip_id_t chip_id, const TensixRiscsOptions &riscs_to_load, std::unordered_set<CoreCoord> exceptions) {
-    std::vector<CoreCoord> cores_to_load_with_blanks;  // PROF_BEGIN("set_diff")
-
-    for (const CoreCoord &worker_core : tt::Cluster::instance().get_soc_desc(chip_id).physical_workers) {
-        if (exceptions.find(worker_core) == exceptions.end()) {
-            cores_to_load_with_blanks.push_back(worker_core);
-        }
-    }
-    // PROF_END("set_diff")
-
-    for (const CoreCoord &core : cores_to_load_with_blanks) {  // PROF_BEGIN("log_blank")
-        log_debug(tt::LogLLRuntime, "loading blank to core - {}", core.str());
-    }  // PROF_END("log_blank")
-
-    load_blank_kernel_to_cores(chip_id, riscs_to_load, cores_to_load_with_blanks);
-}
 
 bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core) {
 
-    std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address_) {
+    std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
         constexpr int RUN_MAILBOX_BOGUS = 3;
         std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
-        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address_, sizeof(uint32_t));  // read a single uint32_t
-
-        if (run_mailbox_read_val[0] != RUN_MSG_GO && run_mailbox_read_val[0] != RUN_MSG_DONE) {
-            fprintf(stderr, "Read unexpected run_mailbox value: 0x%x (expected %x or %x)\n", run_mailbox_read_val[0], RUN_MSG_GO, RUN_MSG_DONE);
+        // read a single uint32_t even though launch.run is smaller than that
+        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address & ~0x3, sizeof(uint32_t));
+        uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, run) & 3));
+        if (run != RUN_MSG_GO && run != RUN_MSG_DONE) {
+            fprintf(stderr, "Read unexpected run_mailbox value: 0x%x (expected %x or %x)\n", run, RUN_MSG_GO, RUN_MSG_DONE);
             TT_ASSERT(
                 run_mailbox_read_val[0] == RUN_MSG_GO || run_mailbox_read_val[0] == RUN_MSG_DONE);
         }
 
-        return run_mailbox_read_val[0] == RUN_MSG_DONE;
+        return run == RUN_MSG_DONE;
     };
 
     return get_mailbox_is_done(GET_MAILBOX_ADDRESS_HOST(launch.run));

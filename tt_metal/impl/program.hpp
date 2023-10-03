@@ -40,12 +40,15 @@ struct KernelGroup {
     launch_msg_t launch_msg;
 
     KernelGroup();
-    KernelGroup(std::optional<KernelID> brisc_id,
+    KernelGroup(const Program& program,
+                std::optional<KernelID> brisc_id,
                 std::optional<KernelID> ncrisc_id,
                 std::optional<KernelID> trisc_id);
 };
 
 class Program {
+    friend class KernelGroup;
+
    public:
     Program();
 
@@ -159,7 +162,6 @@ class Program {
     void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
 
     void validate_circular_buffer_region(const Device *device, std::optional<CoreCoord> logical_core) const;
-    void add_blank_kernels(Device *device);
 
     void set_cb_data_fmt( Device *device, Kernel *kernel, build_kernel_for_riscv_options_t &build_options) const;
 

@@ -22,6 +22,8 @@ volatile uint32_t local_mem_barrier __attribute__((used));
 
 uint32_t halt_stack_ptr_save;
 
+tt_l1_ptr mailboxes_t * const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
+
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
 uint8_t noc_size_x __attribute__((used));
@@ -43,7 +45,7 @@ int main(int argc, char *argv[]) {
 
   risc_init();
 
-  *GET_MAILBOX_ADDRESS_DEV(ncrisc_halt.resume_addr) = (uint32_t)ncrisc_resume;
+  mailboxes->ncrisc_halt.resume_addr = (uint32_t)ncrisc_resume;
 
   // Cleanup profiler buffer incase we never get the go message
   kernel_profiler::init_profiler();

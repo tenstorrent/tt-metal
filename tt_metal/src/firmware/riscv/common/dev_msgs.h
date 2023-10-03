@@ -39,13 +39,18 @@ enum dispatch_mode {
 };
 
 struct launch_msg_t {  // must be cacheline aligned
-    volatile uint32_t kernel_group_id;
-    volatile uint32_t ncrisc_fw_size;
+    volatile uint16_t brisc_kernel_id;
+    volatile uint16_t ncrisc_kernel_id;
+    volatile uint16_t trisc_kernel_id;
+    volatile uint16_t ncrisc_fw_size;
     volatile uint8_t mode;
+    volatile uint8_t brisc_noc_id;
     volatile uint8_t enable_brisc;
     volatile uint8_t enable_ncrisc;
     volatile uint8_t enable_triscs;
-    volatile uint32_t run;  // must be in last cacheline of this msg
+    volatile uint8_t pad0;
+    volatile uint8_t pad1;
+    volatile uint8_t run;  // must be in last cacheline of this msg
 };
 
 struct slave_sync_msg_t {
