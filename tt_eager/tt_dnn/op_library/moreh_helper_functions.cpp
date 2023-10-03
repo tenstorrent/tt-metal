@@ -95,7 +95,6 @@ KernelID CreateReadKernel(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::vector<uint32_t> &compile_args,
     std::map<string, string> defines) {
-
     return tt_metal::CreateDataMovementKernel(
         program,
         file_name,
@@ -113,7 +112,6 @@ KernelID CreateWriteKernel(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::vector<uint32_t> &compile_args,
     std::map<string, string> defines) {
-
     return tt_metal::CreateDataMovementKernel(
         program,
         file_name,
@@ -125,7 +123,7 @@ KernelID CreateWriteKernel(
             .defines = defines});
 }
 
-void CreateComputeKernel(
+[[maybe_unused]] std::vector<KernelID> CreateComputeKernel(
     Program &program,
     const std::string &file_name,
     std::vector<ComputeKernelArg> args,
@@ -133,39 +131,68 @@ void CreateComputeKernel(
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode) {
-
+    std::vector<KernelID> compute_kernel_ids{};
+    KernelID compute_kernel_id{};
     for (auto arg : args) {
-        if (arg.num_tile_per_core_group > 0) {
-            auto coumpute_kernel = CreateComputeKernel(
-                program,
-                file_name,
-                arg.core_spec,
-                tt_metal::ComputeConfig{
-                    .math_fidelity = math_fidelity,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .math_approx_mode = math_approx_mode,
-                    .compile_args = arg.compile_args,
-                    .defines = defines});
-        }
+        compute_kernel_id =
+            CreateComputeKernel(program, file_name, arg, defines, math_fidelity, fp32_dest_acc_en, math_approx_mode);
+        compute_kernel_ids.push_back(compute_kernel_id);
     }
+    return compute_kernel_ids;
 }
 
-void CreateCircularBuffer(
+[[maybe_unused]] KernelID CreateComputeKernel(
     Program &program,
-    const CoreRangeSet &core_range,
-    tt::DataFormat data_format,
-    std::vector<CircularBufferArg> args) {
+    const std::string &file_name,
+    ComputeKernelArg arg,
+    std::map<std::string, std::string> defines,
+    MathFidelity math_fidelity,
+    bool fp32_dest_acc_en,
+    bool math_approx_mode) {
+    KernelID compute_kernel_id{0};
+    if (arg.num_tile_per_core_group > 0) {
+        compute_kernel_id = CreateComputeKernel(
+            program,
+            file_name,
+            arg.core_spec,
+            tt_metal::ComputeConfig{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .math_approx_mode = math_approx_mode,
+                .compile_args = arg.compile_args,
+                .defines = defines});
+    }
+    return compute_kernel_id;
+}
+
+[[maybe_unused]] std::vector<CircularBufferID> CreateCircularBuffer(
+    Program &program, const CoreRangeSet &core_range, tt::DataFormat data_format, std::vector<CircularBufferArg> args) {
+    std::vector<CircularBufferID> cb_ids{};
+    CircularBufferID cb_id{};
     for (auto arg : args) {
+        cb_id = CreateCircularBuffer(program, core_range, data_format, arg);
+        cb_ids.push_back(cb_id);
+    }
+    return cb_ids;
+}
+
+[[maybe_unused]] CircularBufferID CreateCircularBuffer(
+    Program &program, const CoreRangeSet &core_range, tt::DataFormat data_format, CircularBufferArg arg) {
+    CircularBufferID cb_id{0};
+    if (arg.num_tiles > 0) {
         auto _buffer_index = arg.buffer_index;
         auto _num_tiles = arg.num_tiles;
         auto _data_format = (arg.data_format != tt::DataFormat::Invalid) ? arg.data_format : data_format;
         auto _core_range = (arg.core_range != nullptr) ? *arg.core_range : core_range;
 
-        tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(_num_tiles * tt_metal::detail::TileSize(_data_format), {{_buffer_index, _data_format}})
-            .set_page_size(_buffer_index, tt_metal::detail::TileSize(_data_format));
+        tt_metal::CircularBufferConfig cb_config =
+            tt_metal::CircularBufferConfig(
+                _num_tiles * tt_metal::detail::TileSize(_data_format), {{_buffer_index, _data_format}})
+                .set_page_size(_buffer_index, tt_metal::detail::TileSize(_data_format));
 
-        auto cb_src = tt_metal::CreateCircularBuffer(program, CoreRangeSet({_core_range}), cb_config);
+        cb_id = tt_metal::CreateCircularBuffer(program, CoreRangeSet({_core_range}), cb_config);
     }
+    return cb_id;
 }
 
 }  // namespace primary
