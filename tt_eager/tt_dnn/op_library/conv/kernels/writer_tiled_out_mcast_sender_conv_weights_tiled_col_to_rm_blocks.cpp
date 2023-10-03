@@ -6,10 +6,6 @@
 
 #include "debug_print.h"
 
-#ifdef FUSE_BIAS
-    #include "kernels/dataflow/reader_bmm_single_core_bias.hpp"
-#endif
-
 
 void kernel_main() {
     // This writer is for output tensor in tile format
@@ -240,11 +236,11 @@ void kernel_main() {
 
                 // Now we have the block in the CB address, we can mcast to dests!
                 uint64_t bias_multicast_data_addr = get_noc_multicast_addr(
-                    weights_mcast_dest_noc_start_x,
-                    weights_mcast_dest_noc_start_y,
-                    weights_mcast_dest_noc_end_x,
-                    weights_mcast_dest_noc_end_y,
-                    bias_start_address);
+                weights_mcast_dest_noc_start_x,
+                weights_mcast_dest_noc_start_y,
+                weights_mcast_dest_noc_end_x,
+                weights_mcast_dest_noc_end_y,
+                bias_start_address);
                 // num_dests must not include source, since we are NOT really doing a local copy!
                 noc_async_write_multicast(bias_start_address, bias_multicast_data_addr, bias_block_size_bytes, weights_mcast_num_cores);
 
@@ -252,11 +248,11 @@ void kernel_main() {
                 // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
 
                 // We should also multicast the flag to destinations
-                    // num_dests must not include source, since we are NOT really doing a local copy!
-                    noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores);
-                    #endif
+                // num_dests must not include source, since we are NOT really doing a local copy!
+                noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores);
+                #endif
 
-                    cb_push_back(bias_cb_id, bias_ntiles);
+                cb_push_back(bias_cb_id, bias_ntiles);
                 load_bias = false;
             }
             #endif

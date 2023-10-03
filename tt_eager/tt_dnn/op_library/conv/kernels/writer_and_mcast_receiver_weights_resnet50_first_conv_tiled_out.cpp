@@ -2,17 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdint.h>
 #include "dataflow_api.h"
-
-#include "debug_print.h"
 
 
 void kernel_main() {
-    // This writer is for output tensor in tile format
     uint32_t i = 0;
     uint32_t out_addr = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
-    // Bias arg. Unused if bias fusion is not enabled.
+    // Bias args. Unused if bias fusion is not enabled.
     const uint32_t bias_addr = get_arg_val<uint32_t>(i); i += 1;
 
     uint32_t out_next_tile_stride_h = get_arg_val<uint32_t>(i); i+=1;
@@ -43,7 +41,7 @@ void kernel_main() {
     uint32_t weight_next_block_stride_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_next_block_stride_w = get_arg_val<uint32_t>(i); i+=1;
 
-    // Bias arg. Unused if bias fusion is not enabled.
+    // Bias args. Unused if bias fusion is not enabled.
     const uint32_t bias_ntiles = get_arg_val<uint32_t>(i); i += 1;
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i); i += 1;
 
@@ -58,6 +56,7 @@ void kernel_main() {
     uint32_t weights_mcast_sender_semaphore_addr    = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weights_mcast_receiver_semaphore_addr  = get_arg_val<uint32_t>(i); i+=1;
 
+
     constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
@@ -67,67 +66,23 @@ void kernel_main() {
     const uint32_t tile_nbytes = get_tile_size(cb_id_out0);
     const DataFormat out_df = get_dataformat(cb_id_out0);
 
-    constexpr uint32_t tile_size_pow2_exponent = 11;    // == 2^11 = 2048 = 2 * 32 * 32 (assuming dtype = 2 bytes)
+    constexpr uint32_t tile_size_pow2_exponent = 11;
     const InterleavedPow2AddrGen<out_in_dram> s = {
         .bank_base_address = out_addr,
         .log_base_2_of_page_size = tile_size_pow2_exponent
     };
-
-    // read in bias if enabled (done only once for all batches)
-    #ifdef FUSE_BIAS
-    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(3);
-    bool load_bias = true;
-    #endif
-
-    // DPRINT << "tile_nbytes - " << tile_nbytes << ENDL();
-    // DPRINT << "out_num_blocks_h - " << out_num_blocks_h << ENDL();
-    // DPRINT << "out_num_blocks_w - " << out_num_blocks_w << ENDL();
-
-    // DPRINT << "out_num_subblocks_h - " << out_num_subblocks_h << ENDL();
-    // DPRINT << "out_num_subblocks_w - " << out_num_subblocks_w << ENDL();
-
-    // DPRINT << "out_subblock_h - " << out_subblock_h << ENDL();
-    // DPRINT << "out_subblock_w - " << out_subblock_w << ENDL();
-
-    // DPRINT << "out_subblock_tile_count - " << out_subblock_tile_count << ENDL();
-
-    // DPRINT << "num_blocks_weight_h - " << num_blocks_weight_h << ENDL();
-    // DPRINT << "weight_block_height_ntiles - " << weight_block_height_ntiles << ENDL();
-    // DPRINT << "weight_block_width_ntiles - " << weight_block_width_ntiles << ENDL();
-
-    // DPRINT << "out_subblock_h - " << out_subblock_h << ENDL();
-    // DPRINT << "out_subblock_w - " << out_subblock_w << ENDL();
-    // DPRINT << "out_block_height_num_tiles - " << out_block_height_num_tiles << ENDL();
-    // DPRINT << "out_height_num_tiles - " << out_height_num_tiles << ENDL();
-    // DPRINT << "out_width_num_tiles - " << out_width_num_tiles << ENDL();
-
     const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
     const InterleavedPow2AddrGen<true> s_weight = {
         .bank_base_address = weight_addr_dram_base,
         .log_base_2_of_page_size = tile_size_pow2_exponent
     };
 
-    // const InterleavedAddrGenFast<true> s = {
-    //     .bank_base_address = out_addr,
-    //     .page_size = tile_nbytes,
-    //     .data_format = out_df
-    // };
-
-    // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
-    // Write out col major blocks in row major layout to output
-    uint32_t out_block_w_start_tile_id = out_start_tile_id;
-    //DPRINT << "out_start_tile_id=" << out_start_tile_id << ENDL();
-    uint32_t out_block_w_start_tile_id_w = out_start_tile_id_w;
-    uint32_t weight_start_tile_id = out_start_tile_id_w;
-    //DPRINT << "weight_start_tile_id=" << weight_start_tile_id << ENDL();
-    for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
-
-        // MCAST RECEIVE WEIGHTS
-        // read weight blocks inner dim
-        // read weight slice - 1 block of weights in width dim and full weight matrix height
-        // read slice only once for all activation blocks
+    // MCAST RECEIVE WEIGHTS
+    // read weight blocks inner dim
+    // read weight slice - 1 block of weights in width dim and full weight matrix height
+    // read slice only once for all activation blocks
+    for(uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h; block_weight_h++) {
         cb_reserve_back(cb_id_weight, weight_block_num_tiles);
-
         // Set weights semaphore value to INVALID
         noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
 
@@ -139,34 +94,36 @@ void kernel_main() {
         noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
 
         cb_push_back(cb_id_weight, weight_block_num_tiles);
+    } // for num_blocks_weight_h
 
-        #ifdef FUSE_BIAS
-        if (load_bias) {
-            cb_reserve_back(bias_cb_id, bias_ntiles);
+    // first read in bias if enabled (done only once for all blocks)
+    #ifdef FUSE_BIAS
+    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(3);
+    cb_reserve_back(bias_cb_id, bias_ntiles);
 
-            // Set weights semaphore value to INVALID
-            noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
+    // Set weights semaphore value to INVALID
+    noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-            // Atomic increment source core counter
-            uint64_t weights_mcast_sender_semaphore_noc_addr = get_noc_addr(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
-            noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
+    // Atomic increment source core counter
+    uint64_t weights_mcast_sender_semaphore_noc_addr = get_noc_addr(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
+    noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
 
-            // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
-            noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
+    // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
+    noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
 
-            cb_push_back(bias_cb_id, bias_ntiles);
-            load_bias = false;
-        }
-        #endif
+    cb_push_back(bias_cb_id, bias_ntiles);
+    #endif
 
-        #ifndef SHARDED_OUT
-        uint32_t out_block_h_start_tile_id = out_block_w_start_tile_id;
-        //DPRINT << "out_block_h_start_tile_id=" << out_block_h_start_tile_id << ENDL();
-        uint32_t out_block_h_start_tile_id_h = out_start_tile_id_h;
-        for(uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
+    #ifndef SHARDED_OUT
+    uint32_t out_block_h_start_tile_id = out_start_tile_id;
+    uint32_t out_block_h_start_tile_id_h = out_start_tile_id_h;
+    for(uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
+        uint32_t out_block_w_start_tile_id = out_block_h_start_tile_id;
+        uint32_t out_block_w_start_tile_id_w = 0;
+        for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
 
-            uint32_t out_sbh_start_tile_id = out_block_h_start_tile_id;
-            uint32_t out_sbh_start_tile_id_h = out_block_h_start_tile_id_h; //
+            uint32_t out_sbh_start_tile_id = out_block_w_start_tile_id;
+            uint32_t out_sbh_start_tile_id_h = out_block_h_start_tile_id_h;
             for(uint32_t sbh = 0; sbh < out_num_subblocks_h; sbh++) {
                 uint32_t out_sbw_start_tile_id = out_sbh_start_tile_id;
                 uint32_t out_sbw_start_tile_id_w = out_block_w_start_tile_id_w;
@@ -188,7 +145,6 @@ void kernel_main() {
                             } else {
                                 //DPRINT << "out_tile_id - " << out_tile_id << ENDL();
                                 uint64_t out_tile_noc_addr = get_noc_addr(out_tile_id, s);
-                                //DPRINT << "out_tile_id=" << out_tile_id << ENDL();
                                 noc_async_write(l1_read_addr, out_tile_noc_addr, tile_nbytes);
                                 l1_read_addr += tile_nbytes;
                                 out_tile_id += out_next_tile_stride_w;
@@ -205,18 +161,14 @@ void kernel_main() {
                 out_sbh_start_tile_id += out_next_subblock_stride_h;
                 out_sbh_start_tile_id_h += out_subblock_h;
             } // out_num_subblocks_h
-            out_block_h_start_tile_id += out_next_block_stride_h;
-            out_block_h_start_tile_id_h += out_block_height_num_tiles;
-        } // out_num_blocks_h
-        out_block_w_start_tile_id += out_next_block_stride_w;
-        out_block_w_start_tile_id_w += weight_block_width_ntiles;
-        #endif
+            out_block_w_start_tile_id += out_next_block_stride_w;
+            out_block_w_start_tile_id_w += weight_block_width_ntiles;
+        } // out_num_blocks_w
+        out_block_h_start_tile_id += out_next_block_stride_h;
+        out_block_h_start_tile_id_h += out_block_height_num_tiles;
+    } // out_num_blocks_h
 
-        // Increment weight start tile id for next block in width dim
-        weight_start_tile_id += weight_next_block_stride_w;
-    } // out_num_blocks_w
-
-    #ifdef SHARDED_OUT
+    #else
     cb_wait_front(cb_id_out0, out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
     #endif
 }

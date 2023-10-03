@@ -572,9 +572,8 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     if (rn50_first_conv) {
         reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
         compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
-        // TODO: Add mcast to this conv (currently, it's doing the same thing for sender/receiver)
-        writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
-        writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_and_reader_weights_resnet50_first_conv_tiled_out.cpp";
+        writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_and_mcast_sender_weights_resnet50_first_conv_tiled_out.cpp";
+        writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_and_mcast_receiver_weights_resnet50_first_conv_tiled_out.cpp";
     } else {
         if (weight_size_h == 1 && weight_size_w == 1) {
             // use custom 1x1 conv kernels
