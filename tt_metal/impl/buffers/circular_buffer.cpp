@@ -62,6 +62,10 @@ uint32_t CircularBuffer::page_size(uint32_t buffer_index) const {
     return page_size;
 }
 
+bool CircularBuffer::globally_allocated() const {
+    return this->config_.globally_allocated_address().has_value();
+}
+
 uint32_t CircularBuffer::size() const {
     return this->config_.total_size();
 }

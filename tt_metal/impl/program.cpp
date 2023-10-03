@@ -306,7 +306,6 @@ void Program::allocate_circular_buffers() {
         // okay to access config and invalidate circular buffer address because it will be set below
         std::optional<uint32_t> globally_allocated_address = circular_buffer->config().globally_allocated_address();
         if (globally_allocated_address.has_value()) {
-            // TODO: Add asserts that global cbs are within L1 space
             computed_addr = globally_allocated_address;
         } else {
             for (auto &cb_allocator : cb_allocators) {
@@ -345,13 +344,49 @@ void Program::validate_circular_buffer_region(const Device *device, std::optiona
         }
     };
 
+    auto validate_globally_allocated_cb_space_in_l1_buffer_space = [&](const CoreCoord &core, const std::pair<u64, u64> &cb_space) {
+        if (cb_space.second > device->l1_size_per_core()) {
+            log_fatal(tt::LogMetal, "Globally allocated circular buffer on core {} grow to {} B which is beyond max L1 size of {} B", core.str(), cb_space.second, device->l1_size_per_core());
+        }
+
+        auto bank_ids = device->bank_ids_from_logical_core(core);
+        if (bank_ids.size() != 1) {
+            log_fatal(tt::LogMetal, "Expected one bank on core that holds local and L1 buffers but logical core {} has {} banks", core.str(), bank_ids.size());
+        }
+
+        auto lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids.at(0));
+        if (lowest_address.has_value()) {
+            if (cb_space.first < lowest_address.value()) {
+                log_fatal(tt::LogMetal, "Globally allocated circular buffer in program {} is outside L1 buffer space on core {}. L1 buffer space starts at {} and specified global address is at {}", this->id, core.str(), lowest_address.value(), cb_space.first);
+            }
+        } else {
+            log_fatal(tt::LogMetal, "Globally allocated circular buffer in program {} is outside L1 buffer space on core {}. No L1 buffer space allocated and specified global address is at {}", this->id, core.str(), cb_space.first);
+        }
+    };
+
     if (logical_core.has_value()) {
         const auto &cb_space = highest_cb_l1_region(logical_core.value());
         validate_cb_space_and_l1_buffer_space_disjoint(logical_core.value(), cb_space);
+        for (const auto& cb : this->circular_buffers_on_core(logical_core.value())) {
+            if (cb->globally_allocated()) {
+                auto global_address = cb->address();
+                auto cb_size = cb->size();
+                validate_globally_allocated_cb_space_in_l1_buffer_space(logical_core.value(), {global_address, global_address + cb_size});
+            }
+        }
     } else {
         for (const auto &[core, cb_config] : this->per_core_cb_allocator_) {
             const auto &cb_space = highest_cb_l1_region(core);
             validate_cb_space_and_l1_buffer_space_disjoint(core, cb_space);
+        }
+        for (const auto& cb : this->circular_buffers()) {
+            // Memory allocation is lock step across cores, so we only need to check one core to validate global addresses
+            auto core = this->per_core_cb_allocator_.begin()->first;
+            if (cb->globally_allocated()) {
+                auto global_address = cb->address();
+                auto cb_size = cb->size();
+                validate_globally_allocated_cb_space_in_l1_buffer_space(core, {global_address, global_address + cb_size});
+            }
         }
     }
 }

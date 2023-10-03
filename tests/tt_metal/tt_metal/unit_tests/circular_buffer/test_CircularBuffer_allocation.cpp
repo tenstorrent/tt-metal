@@ -107,11 +107,14 @@ TEST_F(SingleDeviceFixture, TestValidCircularBufferAddress) {
     Program program;
     CBConfig cb_config;
 
+    auto buffer_size = cb_config.page_size;
+    auto l1_buffer = CreateBuffer(this->device_, buffer_size, buffer_size, BufferType::L1);
+
     CoreRange cr = {.start = {0, 0}, .end = {0, 2}};
     CoreRangeSet cr_set({cr});
     std::vector<uint8_t> buffer_indices = {16, 24};
 
-    u32 expected_cb_addr = L1_UNRESERVED_BASE + (NUM_CIRCULAR_BUFFERS * cb_config.page_size);
+    u32 expected_cb_addr = l1_buffer.address();
     CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_indices[0], cb_config.data_format}, {buffer_indices[1], cb_config.data_format}}, expected_cb_addr)
         .set_page_size(buffer_indices[0], cb_config.page_size)
         .set_page_size(buffer_indices[1], cb_config.page_size);
@@ -159,9 +162,9 @@ TEST_F(SingleDeviceFixture, TestInvalidCircularBufferAddress) {
 
 TEST_F(SingleDeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
     Program program;
-    CBConfig cb_config {.num_pages = 5};
+    uint32_t page_size = TileSize(tt::DataFormat::Float16_b);
 
-    auto buffer_size = cb_config.page_size * 128;
+    auto buffer_size = page_size * 128;
     auto l1_buffer = CreateBuffer(this->device_, buffer_size, buffer_size, BufferType::L1);
 
     // L1 buffer is entirely in bank 0
@@ -170,12 +173,11 @@ TEST_F(SingleDeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
     CoreRangeSet cr_set({cr});
     initialize_program(program, cr_set);
 
-    auto cb_buffer_size = cb_config.page_size * cb_config.num_pages;
-    auto cb_addr = l1_buffer.address() - (cb_buffer_size * (NUM_CIRCULAR_BUFFERS - 1));
+    uint32_t num_pages = (l1_buffer.address() - L1_UNRESERVED_BASE) / NUM_CIRCULAR_BUFFERS / page_size + 1;
+    CBConfig cb_config = {.num_pages=num_pages};
     for (u32 buffer_id = 0; buffer_id < NUM_CIRCULAR_BUFFERS; buffer_id++) {
-        CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_id, cb_config.data_format}}, cb_addr).set_page_size(buffer_id, cb_config.page_size);
+        CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size * cb_config.num_pages, {{buffer_id, cb_config.data_format}}).set_page_size(buffer_id, cb_config.page_size);
         auto cb = CreateCircularBuffer(program, core, config1);
-        cb_addr += cb_buffer_size;
     }
 
     detail::CompileProgram(this->device_, program);
@@ -248,6 +250,9 @@ TEST_F(SingleDeviceFixture, TestUpdateCircularBufferAddress) {
     CoreRange cr = {.start = core0, .end = core0};
     CoreRangeSet cr_set({cr});
 
+    auto buffer_size = cb_config.page_size;
+    auto l1_buffer = CreateBuffer(this->device_, buffer_size, buffer_size, BufferType::L1);
+
     initialize_program(program, cr_set);
 
     const u32 core0_num_cbs = 2;
@@ -264,9 +269,9 @@ TEST_F(SingleDeviceFixture, TestUpdateCircularBufferAddress) {
 
     validate_cb_address(program, this->device_, cr_set, golden_addresses_per_core);
     // Update address of the first CB
-    GetCircularBufferConfig(program, cb_ids[0]).set_requested_address(L1_UNRESERVED_BASE + cb_config.page_size);
-    golden_addresses_per_core[core0][0] = (L1_UNRESERVED_BASE + cb_config.page_size);
-    golden_addresses_per_core[core0][1] = (L1_UNRESERVED_BASE + (cb_config.page_size * 2));
+    GetCircularBufferConfig(program, cb_ids[0]).set_globally_allocated_address(l1_buffer.address());
+    golden_addresses_per_core[core0][0] = l1_buffer.address();
+    golden_addresses_per_core[core0][1] = (L1_UNRESERVED_BASE);
     validate_cb_address(program, this->device_, cr_set, golden_addresses_per_core);
 }
 
@@ -353,6 +358,7 @@ TEST_F(SingleDeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
 
     auto src_dram_buffer = CreateBuffer(this->device_, buffer_size, buffer_size, BufferType::DRAM);
     auto dst_dram_buffer = CreateBuffer(this->device_, buffer_size, buffer_size, BufferType::DRAM);
+    auto global_cb_buffer = CreateBuffer(this->device_, buffer_size, buffer_size, BufferType::L1);
 
     uint32_t cb_index = 0;
     uint32_t num_input_tiles = num_tiles;
@@ -414,8 +420,7 @@ TEST_F(SingleDeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
     EXPECT_EQ(src_vec, input_cb_data);
 
     // update cb address
-    uint32_t requested_cb_address = 200 * 1024;
-    GetCircularBufferConfig(program, cb_src0).set_requested_address(requested_cb_address);
+    GetCircularBufferConfig(program, cb_src0).set_globally_allocated_address(global_cb_buffer.address());
 
     // zero out dst buffer
     std::vector<uint32_t> zero_vec = create_constant_vector_of_bfloat16(buffer_size, 0);
@@ -429,7 +434,7 @@ TEST_F(SingleDeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
     EXPECT_EQ(src_vec, second_result_vec);
 
     std::vector<uint32_t> second_cb_data;
-    detail::ReadFromDeviceL1(this->device_, core, requested_cb_address, buffer_size, second_cb_data);
+    detail::ReadFromDeviceL1(this->device_, core, global_cb_buffer.address(), buffer_size, second_cb_data);
     EXPECT_EQ(src_vec, second_cb_data);
 }
 

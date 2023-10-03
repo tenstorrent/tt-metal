@@ -159,20 +159,17 @@ bool run_chained_sfpu_test(int chain_length) {
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
         // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
         uint32_t src0_cb_index = 0;
-        uint32_t src0_cb_addr = 200 * 1024;
-        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}, src0_cb_addr)
+        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
         auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
-        uint32_t output_cb_addr = 300 * 1024;
-        tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}}, output_cb_addr)
+        tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
         auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         uint32_t interm0_cb_index = 24;
-        uint32_t interm0_cb_addr = 400 * 1024;
-        tt_metal::CircularBufferConfig cb_interm0_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{interm0_cb_index, tt::DataFormat::Float16_b}}, interm0_cb_addr)
+        tt_metal::CircularBufferConfig cb_interm0_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{interm0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(interm0_cb_index, single_tile_size);
         auto cb_interm0 = tt_metal::CreateCircularBuffer(program, core, cb_interm0_config);
 
@@ -363,32 +360,27 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
         // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel, input CB and reader
         uint32_t src0_cb_index = 0;
-        uint32_t src0_cb_addr = 200 * 1024;
-        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}, src0_cb_addr)
+        tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
         auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t src1_cb_index = 1;
-        uint32_t src1_cb_addr = 300 * 1024;
-        tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}}, src1_cb_addr)
+        tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, single_tile_size);
         auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
-        uint32_t output_cb_addr = 400 * 1024;
-        tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}}, output_cb_addr)
+        tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
         auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         uint32_t interm0_cb_index = 24;
-        uint32_t interm0_cb_addr = 500 * 1024;
-        tt_metal::CircularBufferConfig cb_interm0_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{interm0_cb_index, tt::DataFormat::Float16_b}}, interm0_cb_addr)
+        tt_metal::CircularBufferConfig cb_interm0_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{interm0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(interm0_cb_index, single_tile_size);
         auto cb_interm0 = tt_metal::CreateCircularBuffer(program, core, cb_interm0_config);
 
         uint32_t interm1_cb_index = 25;
-        uint32_t interm1_cb_addr = 600 * 1024;
-        tt_metal::CircularBufferConfig cb_interm1_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{interm1_cb_index, tt::DataFormat::Float16_b}}, interm1_cb_addr)
+        tt_metal::CircularBufferConfig cb_interm1_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{interm1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(interm1_cb_index, single_tile_size);
         auto cb_interm1 = tt_metal::CreateCircularBuffer(program, core, cb_interm1_config);
 
@@ -602,35 +594,30 @@ bool run_forked_binary_test() {
 
         std::vector<uint32_t> src_cb_buffer_indices;
         uint32_t src_cb_index = 0;
-        uint32_t src_cb_addr = 200 * 1024;
         for (uint32_t i = 0; i < num_dram_channels; i++){
             auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
             src_dram_buffers.push_back(std::move(src_dram_buffer));
-            tt_metal::CircularBufferConfig src_cb_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{src_cb_index, tt::DataFormat::Float16_b}}, src_cb_addr)
+            tt_metal::CircularBufferConfig src_cb_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{src_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src_cb_index, single_tile_size);
             auto src_cb = tt_metal::CreateCircularBuffer(program, core, src_cb_config);
             src_cb_buffer_indices.push_back(src_cb_index);
             src_cb_index++;
-            src_cb_addr += 100 * 1024;
         }
 
 
         uint32_t output_cb_index = 16; // output operands start at index 16
-        uint32_t output_cb_addr = 700 * 1024;
-        tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}}, output_cb_addr)
+        tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(output_cb_index, single_tile_size);
         auto output_cb_buffer = tt_metal::CreateCircularBuffer(program, core, output_cb_config);
 
         std::vector<uint32_t> interm_cb_buffer_indices;
         uint32_t interm_cb_index = 24;
-        uint32_t interm_cb_addr = 800 * 1024;
         for (uint32_t i = 0; i < 3; i++){
-            tt_metal::CircularBufferConfig interim_cb_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{interm_cb_index, tt::DataFormat::Float16_b}}, interm_cb_addr)
+            tt_metal::CircularBufferConfig interim_cb_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{interm_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(interm_cb_index, single_tile_size);
             auto interm_cb = tt_metal::CreateCircularBuffer(program, core, interim_cb_config);
             interm_cb_buffer_indices.push_back(interm_cb_index);
             interm_cb_index++;
-            interm_cb_addr += 100 * 1024;
         }
 
         std::vector<uint32_t> nary_reader_args {num_dram_channels, num_tiles};

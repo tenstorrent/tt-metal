@@ -14,19 +14,6 @@
 
 using namespace tt;
 
-// helper l1 allocator (same addrs across all cores, real alloc to be per-core)
-uint32_t l1_alloc(uint32_t size_in_bytes) {
-    constexpr uint32_t L1_SIZE = 1024*1024;
-    static uint32_t l1_alloc_addr = L1_UNRESERVED_BASE;
-
-    uint32_t addr = l1_alloc_addr;
-    TT_ASSERT(addr % 32 == 0); // 32-byte aligned to allow NOC transfers to any allocated address
-    TT_ASSERT(addr + size_in_bytes <= L1_SIZE); // need to fit into L1
-
-    l1_alloc_addr += size_in_bytes;
-
-    return addr;
-}
 
 int main(int argc, char **argv) {
     bool pass = true;
@@ -162,18 +149,20 @@ int main(int argc, char **argv) {
         log_info(LogTest, "total_bytes_moved: {}", total_bytes_moved);
 
         // semaphores in L1, 32B aligned for NOC transfers
-        uint32_t sender_semaphore_addr = l1_alloc(32); // we need 4B, use 32B for NOC alignemnt
-        uint32_t receiver_semaphore_addr = l1_alloc(32);
-        uint32_t l1_valid_value_addr = l1_alloc(32);
+        auto sender_semaphore = CreateBuffer(device, 32, 32, tt_metal::BufferType::L1);
+        auto receiver_semaphore = CreateBuffer(device, 32, 32, tt_metal::BufferType::L1);
+        auto l1_valid_value = CreateBuffer(device, 32, 32, tt_metal::BufferType::L1);
+        uint32_t sender_semaphore_addr = sender_semaphore.address();
+        uint32_t receiver_semaphore_addr = receiver_semaphore.address();
+        uint32_t l1_valid_value_addr = l1_valid_value.address();
 
         // circular buffers in L1
         uint32_t cb_index = 8;
         uint32_t cb_size_tiles = num_blocks_in_CB * block_size_tiles;
         uint32_t cb_size_bytes = cb_size_tiles * single_tile_size;
-        uint32_t cb_addr = l1_alloc(cb_size_bytes);
 
         for (auto core : cores) {
-            tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(cb_size_bytes, {{cb_index, tt::DataFormat::Float16_b}}, cb_addr)
+            tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(cb_size_bytes, {{cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_index, single_tile_size);
             auto cb = tt_metal::CreateCircularBuffer(program, core, cb_config);
         }

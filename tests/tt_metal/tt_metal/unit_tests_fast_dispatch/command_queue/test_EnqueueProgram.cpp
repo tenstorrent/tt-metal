@@ -193,7 +193,11 @@ TEST_F(CommandQueueFixture, TestSingleCbConfigCorrectlySentSingleCore) {
 
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
-    DummyProgramConfig config = {.cr_set = cr_set, .cb_config = cb_config, .num_cbs = 1, .first_cb_start = 500 * 1024};
+    uint32_t cb_size = cb_config.num_pages * cb_config.page_size;
+    uint32_t l1_buffer_size = 1 * cb_size;
+    auto l1_buffer = CreateBuffer(this->device_, l1_buffer_size, l1_buffer_size, BufferType::L1);
+
+    DummyProgramConfig config = {.cr_set = cr_set, .cb_config = cb_config, .num_cbs = 1, .first_cb_start = l1_buffer.address()};
 
     EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
 }
@@ -263,8 +267,12 @@ TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentMultiCore) {
 
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
+    uint32_t cb_size = cb_config.num_pages * cb_config.page_size;
+    uint32_t l1_buffer_size = NUM_CIRCULAR_BUFFERS * cb_size;
+    auto l1_buffer = CreateBuffer(this->device_, l1_buffer_size, l1_buffer_size, BufferType::L1);
+
     DummyProgramConfig config = {
-        .cr_set = cr_set, .cb_config = cb_config, .num_cbs = NUM_CIRCULAR_BUFFERS, .first_cb_start = 500 * 1024};
+        .cr_set = cr_set, .cb_config = cb_config, .num_cbs = NUM_CIRCULAR_BUFFERS, .first_cb_start = l1_buffer.address()};
 
     EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
 }

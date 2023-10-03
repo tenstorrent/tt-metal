@@ -31,6 +31,8 @@ class CircularBuffer {
 
     uint32_t page_size(uint32_t buffer_index) const;
 
+    bool globally_allocated() const;
+
     uint32_t size() const;
 
     uint32_t num_pages(uint32_t buffer_index) const;
