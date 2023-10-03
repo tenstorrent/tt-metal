@@ -27,7 +27,7 @@ using OverrideAddressesCallback = std::function<void(const Program&, const std::
 
 using OverrideRuntimeArgumentsCallback = std::function<void(
     const void* operation,
-    const Program&,
+    Program&,
     const std::vector<Tensor>&,
     const std::vector<std::optional<const Tensor>>&,
     const std::vector<Tensor>&
@@ -227,7 +227,7 @@ struct DeviceOperation {
     const std::function<const std::vector<Shape>(const std::vector<Tensor>&)> compute_output_shapes;
     const std::function<const std::vector<Tensor>(const std::vector<Tensor>&)> create_output_tensors;
     const std::function<ProgramWithCallbacks(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&, std::vector<Tensor>&)> create_program;
-    const std::function<void(OverrideRuntimeArgumentsCallback&, const Program&, const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&, std::vector<Tensor>&)> override_runtime_arguments;
+    const std::function<void(OverrideRuntimeArgumentsCallback&, Program&, const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&, std::vector<Tensor>&)> override_runtime_arguments;
     const std::function<const Hash(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)> compute_program_hash;
     const std::function<const ProfilerInfo(const std::vector<Tensor> &input_tensors)> create_profiler_info;
     const std::function<const tt::stl::reflection::Attributes()> attributes;
@@ -296,7 +296,7 @@ struct DeviceOperation {
         override_runtime_arguments{
             [this] (
                 OverrideRuntimeArgumentsCallback& override_runtime_arguments_callback,
-                const Program& program,
+                Program& program,
                 const std::vector<Tensor>& input_tensors,
                 const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                 std::vector<Tensor>& output_tensors
