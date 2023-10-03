@@ -66,6 +66,9 @@ def run_pytorch_test(args):
 
     ################# PARSE ARGS #################
     device_id = args.device_id
+    device = tt_lib.device.CreateDevice(device_id)
+    tt_lib.device.SetDefaultDevice(device)
+
     logger.info(f"Running on device {device_id} for test.")
 
     ################# PARSE TEST CONFIGS #################
@@ -248,6 +251,7 @@ def run_pytorch_test(args):
                         comparison_func,
                         device_id,
                         generated_test_args,
+                        device,
                     )
 
                     tt_lib.device.Synchronize()
@@ -272,6 +276,8 @@ def run_pytorch_test(args):
 
     duration = time.time() - start_time
     logger.info(f"Tests run in {duration:.2f}s")
+
+    tt_lib.device.CloseDevice(device)
 
 
 if __name__ == "__main__":
