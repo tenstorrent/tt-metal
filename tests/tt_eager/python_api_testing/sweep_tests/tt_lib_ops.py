@@ -31,6 +31,7 @@ def setup_host_and_device(func):
         else:
             output = func(*args, device=device, **kwargs)
 
+        ttl.device.DeallocateBuffers(device)
         return output
 
     return wrap
