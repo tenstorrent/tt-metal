@@ -60,8 +60,6 @@ inline void llk_unpack_untilize_init(const std::uint32_t operand) {
     std::uint32_t unpA_ch1_x_stride = (uint) (unpack_dst_format[operand_id]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[operand_id]&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
     std::uint32_t unpA_ch1_y_stride = FACE_R_DIM*unpA_ch1_x_stride;
 
-    wait_for_idle();
-
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim*FACE_C_DIM-1, 0x0);
 
     // Save state of unpacker config for quick restore
@@ -103,7 +101,7 @@ inline void llk_unpack_untilize_init(const std::uint32_t operand) {
 
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
     TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, UNP0_ADDR_BASE_REG_0_Base_ADDR32);
-    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::TMP1, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32);
 
     // Clear context state
     TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
