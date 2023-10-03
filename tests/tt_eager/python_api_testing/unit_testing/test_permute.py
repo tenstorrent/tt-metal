@@ -14,6 +14,8 @@ sys.path.append(f"{f}/../../../../..")
 
 import pytest
 import torch
+from itertools import permutations
+import random
 
 import tt_lib as ttl
 
@@ -27,19 +29,19 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import permute as tt_permute
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_permute_args
 
+
+all_permutations = list(permutations([0, 1, 2, 3]))
+in_mememory_configs = [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)]
+all_layouts = [ttl.tensor.Layout.TILE, ttl.tensor.Layout.ROW_MAJOR]
 
 def run_permute_tests(
     input_shape,
     dtype,
-    dlayout,
-    in_mem_config,
     out_mem_config,
-    data_seed,
     device
 ):
-    torch.manual_seed(data_seed)
+    torch.manual_seed(random.random())
 
     # Initialize the device
     tensor = ttl.tensor
@@ -48,41 +50,45 @@ def run_permute_tests(
     test_dims = (input_shape,)
 
     for N, C, H, W in test_dims:
-        for nrepeat in range(0, 300):
+        for nrepeat in range(0, 100):
             x = torch.Tensor(size=(N, C, H, W)).uniform_(-100, 100)
             x_ref = x.detach().clone()
 
-            # calculate tt output
-            if in_mem_config == "SYSTEM_MEMORY":
-                in_mem_config = None
+            one_permutation = list(random.choice(all_permutations))
+            in_memory_config = random.choice(in_mememory_configs)
+            dlayout = random.choice(all_layouts)
 
-            logger.info("Running PERMUTE test:")
+            # calculate tt output
+            if in_memory_config == "SYSTEM_MEMORY":
+                in_memory_config = None
+
+            logger.info(f"Running PERMUTE test: {dlayout}: {in_memory_config}: {one_permutation}")
             tt_result = tt_permute(
                 x=x,
                 device=device,
                 device_id=0,
                 dtype=[dtype],
                 layout=[dlayout],
-                input_mem_config=[in_mem_config],
+                input_mem_config=[in_memory_config],
                 output_mem_config=out_mem_config,
-                permute_dims=[0, 2, 1, 3]
+                permute_dims=one_permutation
             )
             logger.info("Done")
 
 
 test_sweep_args=[
-    ((1, 10, 192, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), 895795),
+    ((1, 10, 192, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)),
 ]
 
 @skip_for_wormhole_b0
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
+    "input_shape, dtype, out_mem_config",
     (
         test_sweep_args
     ),
 )
 
 def test_permute_test(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
+    input_shape, dtype, out_mem_config, device
 ):
-    run_permute_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
+    run_permute_tests(input_shape, dtype, out_mem_config, device)
