@@ -5,7 +5,6 @@
 #include "tt_eager/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 
 #include <optional>
-#include <tuple>
 #include <utility>
 
 #include "third_party/magic_enum/magic_enum.hpp"
@@ -146,10 +145,9 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && !is_lastdim_layernorm;
     const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
 
-    uint32_t in0_t = 2 * Wt;   // input
-    const uint32_t in1_t = 2;  // scaler for reduction
-    const uint32_t in2_t = 2;  // epsilon
-    // gamma and beta can be 2 * Wt. Would that be better?
+    uint32_t in0_t = 2 * Wt;                                      // input
+    const uint32_t in1_t = 2;                                     // scaler
+    const uint32_t in2_t = 2;                                     // epsilon
     const uint32_t in3_t = gamma_has_value ? 2 * block_size : 0;  // gamma
     const uint32_t in4_t = beta_has_value ? 2 * block_size : 0;   // beta
     const uint32_t in5_t = do_mask_h ? 2 : 0;                     // mask_h
@@ -173,10 +171,13 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
+        log_info(LogTest, "Large moreh_layernorm algorithm is selected.");
         in0_t = 2 * block_size;
         im1_t = 2 * block_size;
         im2_t = 2 * block_size;
         im3_t = 2;
+    } else {
+        log_info(LogTest, "Small moreh_layernorm algorithm is selected.");
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -201,97 +202,28 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    // input
-    auto cb_input_config = CircularBufferConfig(in0_t * single_tile_size, {{CB::c_in0, cb_data_format}})
-                               .set_page_size(CB::c_in0, single_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_input_config);
-
-    // scaler for reduce sum
-    auto cb_scaler_config = CircularBufferConfig(in1_t * single_tile_size, {{CB::c_in1, cb_data_format}})
-                                .set_page_size(CB::c_in1, single_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_scaler_config);
-
-    // epsilon
-    auto cb_eps_config = CircularBufferConfig(in2_t * single_tile_size, {{CB::c_in2, cb_data_format}})
-                             .set_page_size(CB::c_in2, single_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_eps_config);
-
-    if (gamma_has_value) {
-        // gamma
-        auto cb_gamma_config = CircularBufferConfig(in3_t * single_tile_size, {{CB::c_in3, cb_data_format}})
-                                   .set_page_size(CB::c_in3, single_tile_size);
-        CreateCircularBuffer(program, all_cores, cb_gamma_config);
-    }
-
-    if (beta_has_value) {
-        // beta
-        auto cb_beta_config = CircularBufferConfig(in4_t * single_tile_size, {{CB::c_in4, cb_data_format}})
-                                  .set_page_size(CB::c_in4, single_tile_size);
-        CreateCircularBuffer(program, all_cores, cb_beta_config);
-    }
-
-    if (do_mask_h) {
-        // mask_h
-        auto cb_mask_h_config = CircularBufferConfig(in5_t * single_tile_size, {{CB::c_in5, cb_data_format}})
-                                    .set_page_size(CB::c_in5, single_tile_size);
-        CreateCircularBuffer(program, all_cores, cb_mask_h_config);
-    }
-
-    if (do_mask_w) {
-        // mask_w
-        auto cb_mask_w_config = CircularBufferConfig(in6_t * single_tile_size, {{CB::c_in6, cb_data_format}})
-                                    .set_page_size(CB::c_in6, single_tile_size);
-        CreateCircularBuffer(program, all_cores, cb_mask_w_config);
-    }
-
-    // output
-    auto cb_output_config = CircularBufferConfig(out0_t * single_tile_size, {{CB::c_out0, cb_data_format}})
-                                .set_page_size(CB::c_out0, single_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_output_config);
-
-    // E[x]
-    auto cb_ex_config = CircularBufferConfig(im0_t * single_tile_size, {{CB::c_intermed0, cb_data_format}})
-                            .set_page_size(CB::c_intermed0, single_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_ex_config);
-
-    // x - E[x]
-    auto cb_xmm_config = CircularBufferConfig(im1_t * single_tile_size, {{CB::c_intermed1, cb_data_format}})
-                             .set_page_size(CB::c_intermed1, single_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_xmm_config);
-
-    // (x - E[x])^2
-    auto cb_xmm2_config = CircularBufferConfig(im2_t * single_tile_size, {{CB::c_intermed2, cb_data_format}})
-                              .set_page_size(CB::c_intermed2, single_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_xmm2_config);
-
-    if (use_large_algorithm) {
-        // Sum[(x - E[x])^2]
-        auto cb_xmm2sum_config = CircularBufferConfig(im3_t * single_tile_size, {{CB::c_intermed3, cb_data_format}})
-                                     .set_page_size(CB::c_intermed3, single_tile_size);
-        CreateCircularBuffer(program, all_cores, cb_xmm2sum_config);
-    }
-
-    // E[(x - E[x])^2] = Var[x]
-    auto cb_var_config = CircularBufferConfig(im4_t * single_tile_size, {{CB::c_intermed4, cb_data_format}})
-                             .set_page_size(CB::c_intermed4, single_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_var_config);
-
-    // 1.0/(sqrt(Var[x] + eps))
-    auto cb_ex2pe_config = CircularBufferConfig(im5_t * single_tile_size, {{CB::c_intermed5, cb_data_format}})
-                               .set_page_size(CB::c_intermed5, single_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_ex2pe_config);
-
-    if (gamma_has_value || beta_has_value) {
-        // y * gamm + beta
-        auto cb_gamma_beta_config = CircularBufferConfig(im6_t * single_tile_size, {{CB::c_intermed6, cb_data_format}})
-                                        .set_page_size(CB::c_intermed6, single_tile_size);
-        CreateCircularBuffer(program, all_cores, cb_gamma_beta_config);
-    }
-
-    // Sum[x]
-    auto cb_xsum_config = CircularBufferConfig(im7_t * single_tile_size, {{CB::c_intermed7, cb_data_format}})
-                              .set_page_size(CB::c_intermed7, single_tile_size);
-    CreateCircularBuffer(program, all_cores, cb_xsum_config);
+    tt::operations::primary::CreateCircularBuffer(
+        program,
+        all_cores,
+        cb_data_format,
+        {
+            {CB::c_in0, in0_t},        // input
+            {CB::c_in1, in1_t},        // scaler
+            {CB::c_in2, in2_t},        // epsilon
+            {CB::c_in3, in3_t},        // gamma
+            {CB::c_in4, in4_t},        // beta
+            {CB::c_in5, in5_t},        // mask_h
+            {CB::c_in6, in6_t},        // mask_w
+            {CB::c_out0, out0_t},      // output
+            {CB::c_intermed0, im0_t},  // E[x]
+            {CB::c_intermed1, im1_t},  // x - E[x]
+            {CB::c_intermed2, im2_t},  // (x - E[x])^2
+            {CB::c_intermed3, im3_t},  // Sum[(x - E[x])^2]
+            {CB::c_intermed4, im4_t},  // E[(x - E[x])^2] = Var[x]
+            {CB::c_intermed5, im5_t},  // 1.0/(sqrt(Var[x] + eps))
+            {CB::c_intermed6, im6_t},  // y * gamm + beta
+            {CB::c_intermed7, im7_t},  // Sum[x]
+        });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -308,7 +240,6 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     if (beta_has_value) {
         reader_defines["FUSE_BETA"] = "1";
     }
-
     if (do_mask_h) {
         reader_defines["DO_MASK_H"] = "1";
     }
@@ -319,34 +250,16 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const auto reader_kernel_file =
         use_large_algorithm ? "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/reader_moreh_layernorm_large.cpp"
                             : "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/reader_moreh_layernorm_small.cpp";
-
     const auto writer_kernel_file = "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/writer_moreh_layernorm.cpp";
 
-    const auto reader_kernels_id = CreateDataMovementKernel(
-        program,
-        reader_kernel_file,
-        all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = reader_compile_time_args,
-            .defines = reader_defines});
-
-    const auto writer_kernels_id = CreateDataMovementKernel(
-        program,
-        writer_kernel_file,
-        all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_time_args});
+    const auto reader_kernels_id = tt::operations::primary::CreateReadKernel(
+        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    const auto writer_kernels_id = tt::operations::primary::CreateWriteKernel(
+        program, writer_kernel_file, all_cores, writer_compile_time_args, reader_defines);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const bool fp32_dest_acc_en{false};
-    const bool math_approx_mode{false};
-
     std::map<std::string, std::string> compute_defines{};
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     if (is_lastdim_layernorm) {
@@ -365,19 +278,12 @@ operation::ProgramWithCallbacks moreh_layernorm_(
         beta_has_value,
         is_lastdim_layernorm};
 
-    const auto layernorm_kernel_file =
+    const auto compute_kernel_file =
         use_large_algorithm ? "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_large.cpp"
                             : "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_small.cpp";
 
-    const auto compute_kernels_id_1 = tt_metal::CreateComputeKernel(
-        program,
-        layernorm_kernel_file,
-        core_group_1,
-        tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_args_group_1,
-            .defines = compute_defines});
+    tt::operations::primary::CreateComputeKernel(
+        program, compute_kernel_file, {core_group_1, num_rows_per_core_group_1, compute_args_group_1}, compute_defines);
 
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{
@@ -390,15 +296,11 @@ operation::ProgramWithCallbacks moreh_layernorm_(
             beta_has_value,
             is_lastdim_layernorm};
 
-        const auto compute_kernels_id_2 = tt_metal::CreateComputeKernel(
+        tt::operations::primary::CreateComputeKernel(
             program,
-            layernorm_kernel_file,
-            core_group_2,
-            tt_metal::ComputeConfig{
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_args_group_2,
-                .defines = compute_defines});
+            compute_kernel_file,
+            {core_group_2, num_rows_per_core_group_2, compute_args_group_2},
+            compute_defines);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -469,11 +371,7 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     auto override_runtime_args_callback = [reader_kernels_id = reader_kernels_id,
                                            writer_kernels_id = writer_kernels_id,
                                            num_cores_to_be_used = num_cores_to_be_used,
-                                           num_cores_y = num_cores_y,
-                                           core_group_1 = core_group_1,
-                                           core_group_2 = core_group_2,
-                                           num_rows_per_core_group_1 = num_rows_per_core_group_1,
-                                           num_rows_per_core_group_2 = num_rows_per_core_group_2](
+                                           num_cores_y = num_cores_y](
                                               const Program& program,
                                               const std::vector<Buffer*>& input_buffers,
                                               const std::vector<Buffer*>& output_buffers) {
@@ -485,15 +383,6 @@ operation::ProgramWithCallbacks moreh_layernorm_(
 
         for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-            uint32_t num_rows_per_core;
-            if (core_group_1.core_coord_in_core_ranges(core)) {
-                num_rows_per_core = num_rows_per_core_group_1;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
-                num_rows_per_core = num_rows_per_core_group_2;
-            } else {
-                TT_ASSERT(false, "Core not in specified core ranges.");
-            }
 
             {
                 auto runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);

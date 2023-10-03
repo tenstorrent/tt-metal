@@ -10,7 +10,6 @@
 #include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "debug_print.h"
 
 ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
 ALWI void REL() { release_dst(tt::DstMode::Half); }
@@ -33,7 +32,7 @@ void MAIN {
     binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0);
 
     constexpr auto cb_x = tt::CB::c_in0;       // input
-    constexpr auto cb_scaler = tt::CB::c_in1;  // scaler for reduction
+    constexpr auto cb_scaler = tt::CB::c_in1;  // scaler
     constexpr auto cb_eps = tt::CB::c_in2;     // epsilon
     constexpr auto cb_gamma = tt::CB::c_in3;   // gamma
     constexpr auto cb_beta = tt::CB::c_in4;    // beta
