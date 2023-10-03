@@ -93,7 +93,6 @@ static FILE * create_file(const string& log_path) {
     fprintf(f, "\tR=run (entering kernel)\n");
     fprintf(f, "\tD=done (finished spin loop)\n");
     fprintf(f, "\tX=host written value prior to fw launch\n");
-    fprintf(f, "\tU=unexpected value\n");
     fprintf(f, "\n");
     fprintf(f, "\tA single character status is in the FW, other characters clarify where, eg:\n");
     fprintf(f, "\t\tNRW is \"noc read wait\"\n");
@@ -101,8 +100,8 @@ static FILE * create_file(const string& log_path) {
     fprintf(f, "\tnoc<n>:<risc>{a, l}=an L1 address used by NOC<n> by <riscv> (eg, local src address)\n");
     fprintf(f, "\tnoc<n>:<riscv>{(x,y), a, l}=NOC<n> unicast address used by <riscv>\n");
     fprintf(f, "\tnoc<n>:<riscv>{(x1,y1)-(x2,y2), a, l}=NOC<n> multicast address used by <riscv>\n");
-    fprintf(f, "\trmsg:<c>=brisc run message, I=init, G=go, D=done; N/n and T/t are enable/disable NCRISC/TRISC\n");
-    fprintf(f, "\tsmsg:<c>=slave run message, one of I, G, D for NCRISC, TRISC0, TRISC1, TRISC2\n");
+    fprintf(f, "\trmsg:<c>=brisc host run message, D/H device/host dispatch; I/G/D init/go/done; | separator; B/b enable/disable brisc; N/n enable/disable ncrisc; T/t enable/disable TRISC\n");
+    fprintf(f, "\tsmsg:<c>=slave run message, I/G/D for NCRISC, TRISC0, TRISC1, TRISC2\n");
     fprintf(f, "\n");
 
     return f;
@@ -195,7 +194,7 @@ static void dump_run_state(FILE *f, uint32_t state) {
     else if (state == RUN_MSG_GO) code = 'G';
     else if (state == RUN_MSG_DONE) code = 'D';
     if (code == 'U') {
-        fprintf(f, "U(%d)", state);
+        log_fatal(LogLLRuntime, "Watcher unexpected run state {}", code);
     } else {
         fprintf(f, "%c", code);
     }
@@ -206,11 +205,43 @@ static void dump_run_mailboxes(FILE *f,
                                const slave_sync_msg_t *slave_sync) {
 
     fprintf(f, "rmsg:");
+
+    if (launch->mode == DISPATCH_MODE_DEV) {
+        fprintf(f, "D");
+    } else if (launch->mode == DISPATCH_MODE_HOST) {
+        fprintf(f, "H");
+    } else {
+        log_fatal(LogLLRuntime, "Watcher unexpected launch mode {}", launch->mode);
+
+    }
+
     dump_run_state(f, launch->run);
-    if (launch->enable_ncrisc) fprintf(f, "N");
-    else fprintf(f, "n");
-    if (launch->enable_triscs) fprintf(f, "T");
-    else fprintf(f, "t");
+
+    fprintf(f, "|");
+
+    if (launch->enable_brisc == 1) {
+        fprintf(f, "B");
+    } else if (launch->enable_brisc == 0) {
+        fprintf(f, "b");
+    } else {
+        log_fatal(LogLLRuntime, "Watcher unexpected brisc enable {}", launch->enable_brisc);
+    }
+
+    if (launch->enable_ncrisc == 1) {
+        fprintf(f, "N");
+    } else if (launch->enable_ncrisc == 0) {
+        fprintf(f, "n");
+    } else {
+        log_fatal(LogLLRuntime, "Watcher unexpected ncrisc enable {}", launch->enable_ncrisc);
+    }
+
+    if (launch->enable_triscs == 1) {
+        fprintf(f, "T");
+    } else if (launch->enable_triscs == 0) {
+        fprintf(f, "t");
+    } else {
+        log_fatal(LogLLRuntime, "Watcher unexpected trisc enable {}", launch->enable_triscs);
+    }
 
     fprintf(f, " ");
 
@@ -232,7 +263,7 @@ static void dump_debug_status(FILE *f, const debug_status_msg_t *debug_status) {
             if (isprint(v)) {
                 fprintf(f, "%c", v);
             } else {
-                fprintf(f, "U(%d)", v);
+                log_fatal(LogLLRuntime, "Watcher unexpected debug status unprintable character {}", (int)v);
             }
         }
         if (cpu != num_riscv_per_core - 1) fprintf(f, ",");
