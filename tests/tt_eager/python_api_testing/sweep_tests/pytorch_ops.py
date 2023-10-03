@@ -375,6 +375,12 @@ def layernorm_noweights(x, *args, **kwargs):
     )
 
 
+def groupnorm_noweights(x, *args, **kwargs):
+    return torch.nn.functional.group_norm(
+        input=x, num_groups=1, weight=None, bias=None, eps=1e-05
+    )
+
+
 def add_layernorm(x, y, z, w, *args, **kwargs):
     res = x + y
 
@@ -926,7 +932,7 @@ def activation_glu(x, *args, **kwargs):
 
 
 def activation_reglu(x, *args, **kwargs):
-    dim = kwargs.get("dim", 3)
+    dim = kwargs.get("dim", 2)
     a, b = torch.split(x, x.shape[dim] // 2, dim)
     return a * torch.nn.functional.relu(b)
     # return torch.matmul(a,torch.nn.functional.relu(b))
