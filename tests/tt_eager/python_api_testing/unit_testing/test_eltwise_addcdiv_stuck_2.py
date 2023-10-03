@@ -2,23 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
 import random
 from loguru import logger
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../../..")
-
-import pytest
 import torch
 
 import tt_lib as ttl
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
-
-from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_addcdiv as tt_eltwise_addcdiv
-
+from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import setup_tt_tensor
+from models.utility_functions import tt2torch_tensor
 
 
 def run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, data_seed, scalar):
@@ -29,29 +20,29 @@ def run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, dat
     y = torch.Tensor(size=input_shape).uniform_(-100, 100)
     z = torch.Tensor(size=input_shape).uniform_(-100, 100)
 
-    # ref_value = torch.addcdiv(x, y, z, value=scalar)
     logger.info(f"Running addcdiv with input_shape {input_shape} dtype {dtype} dlayout {dlayout} buffer_type {buffer_type} output_mem_config {output_mem_config} scalar {scalar} data_seed {data_seed}")
 
+    device = ttl.device.CreateDevice(0)
+
     try:
-        ttz = tt_eltwise_addcdiv(
-            x=x,
-            y=y,
-            z=z,
-            scalar=scalar,
-            device=None,
-            device_id=0,
-            dtype=dtype,
-            layout=dlayout,
-            buffer_type=buffer_type,
-            output_mem_config=output_mem_config)
+        t0 = setup_tt_tensor(x, device, dlayout[0], ttl.tensor.MemoryConfig(True, buffer_type[0]), dtype[0])
+        t1 = setup_tt_tensor(y, device, dlayout[1], ttl.tensor.MemoryConfig(True, buffer_type[1]), dtype[1])
+        t2 = setup_tt_tensor(z, device, dlayout[2], ttl.tensor.MemoryConfig(True, buffer_type[2]), dtype[2])
+        t3 = ttl.tensor.addcdiv(t0, t1, t2, scalar, output_mem_config)
+
+        y = tt2torch_tensor(t3)
     except Exception as exc:
         logger.warning(f"run_addcdiv RuntimeError occured {exc}")
+
+    ttl.device.DeallocateBuffers(device)
+    ttl.device.CloseDevice(device)
 
     logger.info(f"Finished running addcdiv")
 
 
 @skip_for_wormhole_b0
 def test_addcdiv_test():
+
     run_addcdiv(
         (3, 10, 73, 388),
         dtype=[ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
