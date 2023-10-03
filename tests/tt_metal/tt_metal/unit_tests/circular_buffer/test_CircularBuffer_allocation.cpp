@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "single_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "gtest/gtest.h"
 #include "circular_buffer_test_utils.hpp"
 #include "tt_metal/host_api.hpp"
@@ -38,7 +38,8 @@ void validate_cb_address(Program &program, Device *device, const CoreRangeSet &c
     }
 }
 
-TEST_F(SingleDeviceFixture, TestCircularBuffersSequentiallyPlaced) {
+TEST_F(DeviceFixture, TestCircularBuffersSequentiallyPlaced) {
+  for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     CBConfig cb_config;
     CoreCoord core({.x = 0, .y = 0});
@@ -60,10 +61,12 @@ TEST_F(SingleDeviceFixture, TestCircularBuffersSequentiallyPlaced) {
         {core, expected_addresses}
     };
 
-    validate_cb_address(program, this->device_, cr_set, golden_addresses);
+    validate_cb_address(program, this->devices_.at(id), cr_set, golden_addresses);
+}
 }
 
-TEST_F(SingleDeviceFixture, TestCircularBufferSequentialAcrossAllCores) {
+TEST_F(DeviceFixture, TestCircularBufferSequentialAcrossAllCores) {
+  for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     CBConfig cb_config;
 
@@ -100,15 +103,17 @@ TEST_F(SingleDeviceFixture, TestCircularBufferSequentialAcrossAllCores) {
     golden_addresses_per_core[core2][multicore_buffer_idx] = expected_multi_core_address;
 
     initialize_program(program, cr_set);
-    validate_cb_address(program, this->device_, cr_set, golden_addresses_per_core);
+    validate_cb_address(program, this->devices_.at(id), cr_set, golden_addresses_per_core);
+}
 }
 
-TEST_F(SingleDeviceFixture, TestValidCircularBufferAddress) {
+TEST_F(DeviceFixture, TestValidCircularBufferAddress) {
+  for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     CBConfig cb_config;
 
     auto buffer_size = cb_config.page_size;
-    auto l1_buffer = CreateBuffer(this->device_, buffer_size, buffer_size, BufferType::L1);
+    auto l1_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferType::L1);
 
     CoreRange cr = {.start = {0, 0}, .end = {0, 2}};
     CoreRangeSet cr_set({cr});
@@ -133,10 +138,12 @@ TEST_F(SingleDeviceFixture, TestValidCircularBufferAddress) {
     }
 
     initialize_program(program, cr_set);
-    validate_cb_address(program, this->device_, cr_set, golden_addresses_per_core);
+    validate_cb_address(program, this->devices_.at(id), cr_set, golden_addresses_per_core);
+}
 }
 
-TEST_F(SingleDeviceFixture, TestInvalidCircularBufferAddress) {
+TEST_F(DeviceFixture, TestInvalidCircularBufferAddress) {
+  for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     CBConfig cb_config;
 
@@ -157,15 +164,17 @@ TEST_F(SingleDeviceFixture, TestInvalidCircularBufferAddress) {
     auto cb2 = CreateCircularBuffer(program, cr_set, config2);
 
     initialize_program(program, cr_set);
-    EXPECT_ANY_THROW(LaunchProgram(this->device_, program));
+    EXPECT_ANY_THROW(LaunchProgram(this->devices_.at(id), program));
+}
 }
 
-TEST_F(SingleDeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
+TEST_F(DeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
+  for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     uint32_t page_size = TileSize(tt::DataFormat::Float16_b);
 
     auto buffer_size = page_size * 128;
-    auto l1_buffer = CreateBuffer(this->device_, buffer_size, buffer_size, BufferType::L1);
+    auto l1_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferType::L1);
 
     // L1 buffer is entirely in bank 0
     auto core = l1_buffer.logical_core_from_bank_id(0);
@@ -180,11 +189,13 @@ TEST_F(SingleDeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
         auto cb = CreateCircularBuffer(program, core, config1);
     }
 
-    detail::CompileProgram(this->device_, program);
-    EXPECT_ANY_THROW(detail::ConfigureDeviceWithProgram(this->device_, program));
+    detail::CompileProgram(this->devices_.at(id), program);
+    EXPECT_ANY_THROW(detail::ConfigureDeviceWithProgram(this->devices_.at(id), program));
+}
 }
 
-TEST_F(SingleDeviceFixture, TestValidUpdateCircularBufferSize) {
+TEST_F(DeviceFixture, TestValidUpdateCircularBufferSize) {
+  for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     CBConfig cb_config;
     CoreCoord core0{.x = 0, .y = 0};
@@ -205,17 +216,19 @@ TEST_F(SingleDeviceFixture, TestValidUpdateCircularBufferSize) {
         expected_cb_addr += cb_config.page_size;
     }
 
-    validate_cb_address(program, this->device_, cr_set, golden_addresses_per_core);
+    validate_cb_address(program, this->devices_.at(id), cr_set, golden_addresses_per_core);
 
     // Update size of the first CB
     GetCircularBufferConfig(program, cb_ids[0]).set_total_size(cb_config.page_size * 2);
     golden_addresses_per_core[core0][0] = L1_UNRESERVED_BASE;
     golden_addresses_per_core[core0][1] = (L1_UNRESERVED_BASE + (cb_config.page_size * 2));
 
-    validate_cb_address(program, this->device_, cr_set, golden_addresses_per_core);
+    validate_cb_address(program, this->devices_.at(id), cr_set, golden_addresses_per_core);
+}
 }
 
-TEST_F(SingleDeviceFixture, TestInvalidUpdateCircularBufferSize) {
+TEST_F(DeviceFixture, TestInvalidUpdateCircularBufferSize) {
+  for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     CBConfig cb_config;
     CoreCoord core0{.x = 0, .y = 0};
@@ -236,14 +249,16 @@ TEST_F(SingleDeviceFixture, TestInvalidUpdateCircularBufferSize) {
         expected_cb_addr += cb_config.page_size;
     }
 
-    validate_cb_address(program, this->device_, cr_set, golden_addresses_per_core);
+    validate_cb_address(program, this->devices_.at(id), cr_set, golden_addresses_per_core);
 
     // Update size of the first CB
     GetCircularBufferConfig(program, cb_ids[0]).set_total_size(cb_config.page_size / 2);
-    EXPECT_ANY_THROW(LaunchProgram(this->device_, program));
+    EXPECT_ANY_THROW(LaunchProgram(this->devices_.at(id), program));
+}
 }
 
-TEST_F(SingleDeviceFixture, TestUpdateCircularBufferAddress) {
+TEST_F(DeviceFixture, TestUpdateCircularBufferAddress) {
+  for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     CBConfig cb_config;
     CoreCoord core0{.x = 0, .y = 0};
@@ -251,7 +266,7 @@ TEST_F(SingleDeviceFixture, TestUpdateCircularBufferAddress) {
     CoreRangeSet cr_set({cr});
 
     auto buffer_size = cb_config.page_size;
-    auto l1_buffer = CreateBuffer(this->device_, buffer_size, buffer_size, BufferType::L1);
+    auto l1_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferType::L1);
 
     initialize_program(program, cr_set);
 
@@ -267,15 +282,17 @@ TEST_F(SingleDeviceFixture, TestUpdateCircularBufferAddress) {
         expected_cb_addr += cb_config.page_size;
     }
 
-    validate_cb_address(program, this->device_, cr_set, golden_addresses_per_core);
+    validate_cb_address(program, this->devices_.at(id), cr_set, golden_addresses_per_core);
     // Update address of the first CB
     GetCircularBufferConfig(program, cb_ids[0]).set_globally_allocated_address(l1_buffer.address());
     golden_addresses_per_core[core0][0] = l1_buffer.address();
     golden_addresses_per_core[core0][1] = (L1_UNRESERVED_BASE);
-    validate_cb_address(program, this->device_, cr_set, golden_addresses_per_core);
+    validate_cb_address(program, this->devices_.at(id), cr_set, golden_addresses_per_core);
+}
 }
 
-TEST_F(SingleDeviceFixture, TestUpdateCircularBufferPageSize) {
+TEST_F(DeviceFixture, TestUpdateCircularBufferPageSize) {
+  for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     CBConfig cb_config;
     CoreCoord core0{.x = 0, .y = 0};
@@ -298,7 +315,7 @@ TEST_F(SingleDeviceFixture, TestUpdateCircularBufferPageSize) {
         expected_cb_addr += cb_config.page_size;
     }
 
-    LaunchProgram(this->device_, program);
+    LaunchProgram(this->devices_.at(id), program);
 
     vector<u32> cb_config_vector;
     u32 cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(u32);
@@ -308,7 +325,7 @@ TEST_F(SingleDeviceFixture, TestUpdateCircularBufferPageSize) {
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
                 CoreCoord core_coord{.x = x, .y = y};
                 tt::tt_metal::detail::ReadFromDeviceL1(
-                    this->device_, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
+                    this->devices_.at(id), core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
 
                 std::map<uint8_t, uint32_t> address_per_buffer_index = golden_addresses_per_core.at(core_coord);
                 std::map<uint8_t, uint32_t> num_pages_per_buffer_index = golden_num_pages_per_core.at(core_coord);
@@ -325,7 +342,7 @@ TEST_F(SingleDeviceFixture, TestUpdateCircularBufferPageSize) {
     GetCircularBufferConfig(program, cb_ids[1]).set_page_size(1, cb_config.page_size / 2);
     golden_num_pages_per_core[core0][1] = 2;
 
-    LaunchProgram(this->device_, program);
+    LaunchProgram(this->devices_.at(id), program);
 
     // addresses should not be changed
     for (const CoreRange &core_range : cr_set.ranges()) {
@@ -333,7 +350,7 @@ TEST_F(SingleDeviceFixture, TestUpdateCircularBufferPageSize) {
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
                 CoreCoord core_coord{.x = x, .y = y};
                 tt::tt_metal::detail::ReadFromDeviceL1(
-                    this->device_, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
+                    this->devices_.at(id), core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
 
                 std::map<uint8_t, uint32_t> address_per_buffer_index = golden_addresses_per_core.at(core_coord);
                 std::map<uint8_t, uint32_t> num_pages_per_buffer_index = golden_num_pages_per_core.at(core_coord);
@@ -347,8 +364,10 @@ TEST_F(SingleDeviceFixture, TestUpdateCircularBufferPageSize) {
         }
     }
 }
+}
 
-TEST_F(SingleDeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
+TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
+  for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     CoreCoord core{.x = 0, .y = 0};
 
@@ -356,9 +375,9 @@ TEST_F(SingleDeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
     uint32_t num_tiles = 2;
     uint32_t buffer_size = single_tile_size * num_tiles;
 
-    auto src_dram_buffer = CreateBuffer(this->device_, buffer_size, buffer_size, BufferType::DRAM);
-    auto dst_dram_buffer = CreateBuffer(this->device_, buffer_size, buffer_size, BufferType::DRAM);
-    auto global_cb_buffer = CreateBuffer(this->device_, buffer_size, buffer_size, BufferType::L1);
+    auto src_dram_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferType::DRAM);
+    auto dst_dram_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferType::DRAM);
+    auto global_cb_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferType::L1);
 
     uint32_t cb_index = 0;
     uint32_t num_input_tiles = num_tiles;
@@ -408,7 +427,7 @@ TEST_F(SingleDeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
         buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
     WriteToBuffer(src_dram_buffer, src_vec);
 
-    LaunchProgram(this->device_, program);
+    LaunchProgram(this->devices_.at(id), program);
 
     std::vector<uint32_t> result_vec;
     ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -416,7 +435,7 @@ TEST_F(SingleDeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
 
     std::vector<uint32_t> input_cb_data;
     uint32_t cb_address = L1_UNRESERVED_BASE;
-    detail::ReadFromDeviceL1(this->device_, core, L1_UNRESERVED_BASE, buffer_size, input_cb_data);
+    detail::ReadFromDeviceL1(this->devices_.at(id), core, L1_UNRESERVED_BASE, buffer_size, input_cb_data);
     EXPECT_EQ(src_vec, input_cb_data);
 
     // update cb address
@@ -427,15 +446,16 @@ TEST_F(SingleDeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
     WriteToBuffer(dst_dram_buffer, zero_vec);
 
     // relaunch program
-    LaunchProgram(this->device_, program);
+    LaunchProgram(this->devices_.at(id), program);
 
     std::vector<uint32_t> second_result_vec;
     ReadFromBuffer(dst_dram_buffer, second_result_vec);
     EXPECT_EQ(src_vec, second_result_vec);
 
     std::vector<uint32_t> second_cb_data;
-    detail::ReadFromDeviceL1(this->device_, core, global_cb_buffer.address(), buffer_size, second_cb_data);
+    detail::ReadFromDeviceL1(this->devices_.at(id), core, global_cb_buffer.address(), buffer_size, second_cb_data);
     EXPECT_EQ(src_vec, second_cb_data);
+}
 }
 
 }   // end namespace basic_tests::circular_buffer

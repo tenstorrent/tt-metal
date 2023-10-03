@@ -8,7 +8,7 @@
 #include <functional>
 #include <random>
 
-#include "single_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -100,16 +100,21 @@ void try_creating_more_than_max_num_semaphores(
 
 }  // namespace unit_tests::initialize_semaphores
 
-TEST_F(SingleDeviceFixture, InitializeLegalSemaphores) {
-    tt_metal::Program program = tt_metal::Program();
-    CoreRange core_range = {.start = {0, 0}, .end = {1, 1}};
-    unit_tests::initialize_semaphores::initialize_and_compile_program(device_, program, core_range);
-    unit_tests::initialize_semaphores::create_and_read_max_num_semaphores(device_, program, core_range);
+TEST_F(DeviceFixture, InitializeLegalSemaphores) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        tt_metal::Program program = tt_metal::Program();
+        CoreRange core_range = {.start = {0, 0}, .end = {1, 1}};
+        unit_tests::initialize_semaphores::initialize_and_compile_program(devices_.at(id), program, core_range);
+        unit_tests::initialize_semaphores::create_and_read_max_num_semaphores(devices_.at(id), program, core_range);
+    }
 }
 
-TEST_F(SingleDeviceFixture, InitializeIllegalSemaphores) {
-    tt_metal::Program program = tt_metal::Program();
-    CoreRange core_range = {.start = {0, 0}, .end = {1, 1}};
-    unit_tests::initialize_semaphores::initialize_and_compile_program(device_, program, core_range);
-    unit_tests::initialize_semaphores::try_creating_more_than_max_num_semaphores(device_, program, core_range);
+TEST_F(DeviceFixture, InitializeIllegalSemaphores) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        tt_metal::Program program = tt_metal::Program();
+        CoreRange core_range = {.start = {0, 0}, .end = {1, 1}};
+        unit_tests::initialize_semaphores::initialize_and_compile_program(devices_.at(id), program, core_range);
+        unit_tests::initialize_semaphores::try_creating_more_than_max_num_semaphores(
+            devices_.at(id), program, core_range);
+    }
 }

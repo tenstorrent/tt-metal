@@ -9,7 +9,7 @@
 #include <random>
 
 #include "common/test_tiles.hpp"  // FIXME: Remove dependency on this or move to test_utils like tilize/untilize
-#include "single_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
@@ -792,15 +792,23 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
 }
 }  // namespace unit_tests::compute::matmul
 
-TEST_F(SingleDeviceFixture, SingleCoreSingleTileMatmul) {
-    ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(this->device_));
+TEST_F(DeviceFixture, SingleCoreSingleTileMatmul) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul(this->devices_.at(id)));
+    }
 }
-TEST_F(SingleDeviceFixture, SingleCoreSingleBlockSingleTileMatmul) {
-    ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->device_, 1, 1, 1));
+TEST_F(DeviceFixture, SingleCoreSingleBlockSingleTileMatmul) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 1, 1, 1));
+    }
 }
-TEST_F(SingleDeviceFixture, SingleCoreSingleBlockSingleTileAccumulationMatmul) {
-    ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->device_, 1, 2, 1));
+TEST_F(DeviceFixture, SingleCoreSingleBlockSingleTileAccumulationMatmul) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 1, 2, 1));
+    }
 }
-TEST_F(SingleDeviceFixture, SingleCoreSingleBlockSingleTileNoAccumulationMatmul) {
-    ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->device_, 2, 1, 2));
+TEST_F(DeviceFixture, SingleCoreSingleBlockSingleTileNoAccumulationMatmul) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        ASSERT_TRUE(unit_tests::compute::matmul::single_block_matmul(this->devices_.at(id), 2, 1, 2));
+    }
 }

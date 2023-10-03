@@ -8,9 +8,8 @@
 #include <functional>
 #include <random>
 
-#include "multi_device_fixture.hpp"
-#include "single_device_fixture.hpp"
 #include "basic_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
@@ -131,98 +130,6 @@ TEST_F(BasicFixture, MultiDeviceLoadBlankKernels) {
         ASSERT_TRUE(tt::tt_metal::CloseDevice(devices.at(id)));
     }
 }
-TEST_F(MultiDeviceFixture, PingAllLegalDramChannels) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto device_ = devices_.at(id);
-        {
-            size_t start_byte_address = DRAM_UNRESERVED_BASE;
-            ASSERT_TRUE(
-                unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
-            ASSERT_TRUE(
-                unit_tests::basic::device::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
-            ASSERT_TRUE(
-                unit_tests::basic::device::dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
-            ASSERT_TRUE(
-                unit_tests::basic::device::dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
-            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
-            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
-        }
-        {
-            size_t start_byte_address = device_->dram_size_per_channel() - 32 * 1024;
-            ASSERT_TRUE(
-                unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
-            ASSERT_TRUE(
-                unit_tests::basic::device::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
-            ASSERT_TRUE(
-                unit_tests::basic::device::dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
-            ASSERT_TRUE(
-                unit_tests::basic::device::dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
-            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
-            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
-        }
-    }
-}
-TEST_F(MultiDeviceFixture, PingIllegalDramChannels) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto device_ = devices_.at(id);
-        auto num_channels = device_->num_dram_channels() + 1;
-        size_t start_byte_address = DRAM_UNRESERVED_BASE;
-        ASSERT_ANY_THROW(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, num_channels));
-    }
-}
-
-TEST_F(MultiDeviceFixture, PingAllLegalL1Cores) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto device_ = devices_.at(id);
-        {
-            size_t start_byte_address = L1_UNRESERVED_BASE;  // FIXME: Should remove dependency on
-                                                          // hostdevcommon/common_runtime_address_map.h header.
-            ASSERT_TRUE(
-                unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
-            ASSERT_TRUE(
-                unit_tests::basic::device::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
-            ASSERT_TRUE(
-                unit_tests::basic::device::l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
-            ASSERT_TRUE(
-                unit_tests::basic::device::l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
-        }
-        {
-            size_t start_byte_address = device_->l1_size_per_core() - 32 * 1024;
-            ASSERT_TRUE(
-                unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
-            ASSERT_TRUE(
-                unit_tests::basic::device::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
-            ASSERT_TRUE(
-                unit_tests::basic::device::l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
-            ASSERT_TRUE(
-                unit_tests::basic::device::l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
-        }
-    }
-}
-
-TEST_F(MultiDeviceFixture, PingIllegalL1Cores) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto device_ = devices_.at(id);
-        auto grid_size = device_->logical_grid_size();
-        grid_size.x++;
-        grid_size.y++;
-        size_t start_byte_address = L1_UNRESERVED_BASE;  // FIXME: Should remove dependency on
-                                                      // hostdevcommon/common_runtime_address_map.h header.
-        ASSERT_ANY_THROW(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, grid_size));
-    }
-}
 
 TEST_F(BasicFixture, SingleDeviceInitializeAndTeardown) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
@@ -274,77 +181,93 @@ TEST_F(BasicFixture, SingleDeviceLoadBlankKernels) {
     unit_tests::basic::device::load_all_blank_kernels(device);
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }
-TEST_F(SingleDeviceFixture, PingAllLegalDramChannels) {
-    {
+TEST_F(DeviceFixture, PingAllLegalDramChannels) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        {
+            size_t start_byte_address = DRAM_UNRESERVED_BASE;
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                devices_.at(id), 4, start_byte_address, devices_.at(id)->num_dram_channels()));
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                devices_.at(id), 12, start_byte_address, devices_.at(id)->num_dram_channels()));
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                devices_.at(id), 16, start_byte_address, devices_.at(id)->num_dram_channels()));
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                devices_.at(id), 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                devices_.at(id), 2 * 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
+        }
+        {
+            size_t start_byte_address = devices_.at(id)->dram_size_per_channel() - 32 * 1024;
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                devices_.at(id), 4, start_byte_address, devices_.at(id)->num_dram_channels()));
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                devices_.at(id), 12, start_byte_address, devices_.at(id)->num_dram_channels()));
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                devices_.at(id), 16, start_byte_address, devices_.at(id)->num_dram_channels()));
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                devices_.at(id), 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                devices_.at(id), 2 * 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
+            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
+                devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
+        }
+    }
+}
+TEST_F(DeviceFixture, PingIllegalDramChannels) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto num_channels = devices_.at(id)->num_dram_channels() + 1;
         size_t start_byte_address = DRAM_UNRESERVED_BASE;
-        ASSERT_TRUE(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::dram_ping(device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::dram_ping(device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
+        ASSERT_ANY_THROW(unit_tests::basic::device::dram_ping(devices_.at(id), 4, start_byte_address, num_channels));
     }
-    {
-        size_t start_byte_address = device_->dram_size_per_channel() - 32 * 1024;
-        ASSERT_TRUE(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, device_->num_dram_channels()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::dram_ping(device_, 12, start_byte_address, device_->num_dram_channels()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::dram_ping(device_, 16, start_byte_address, device_->num_dram_channels()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::dram_ping(device_, 1024, start_byte_address, device_->num_dram_channels()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::dram_ping(device_, 2 * 1024, start_byte_address, device_->num_dram_channels()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::dram_ping(device_, 32 * 1024, start_byte_address, device_->num_dram_channels()));
-    }
-}
-TEST_F(SingleDeviceFixture, PingIllegalDramChannels) {
-    auto num_channels = device_->num_dram_channels() + 1;
-    size_t start_byte_address = DRAM_UNRESERVED_BASE;
-    ASSERT_ANY_THROW(unit_tests::basic::device::dram_ping(device_, 4, start_byte_address, num_channels));
 }
 
-TEST_F(SingleDeviceFixture, PingAllLegalL1Cores) {
-    {
+TEST_F(DeviceFixture, PingAllLegalL1Cores) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        {
+            size_t start_byte_address = L1_UNRESERVED_BASE;  // FIXME: Should remove dependency on
+                                                             // hostdevcommon/common_runtime_address_map.h header.
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                devices_.at(id), 4, start_byte_address, devices_.at(id)->logical_grid_size()));
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                devices_.at(id), 12, start_byte_address, devices_.at(id)->logical_grid_size()));
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                devices_.at(id), 16, start_byte_address, devices_.at(id)->logical_grid_size()));
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                devices_.at(id), 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                devices_.at(id), 2 * 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
+        }
+        {
+            size_t start_byte_address = devices_.at(id)->l1_size_per_core() - 32 * 1024;
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                devices_.at(id), 4, start_byte_address, devices_.at(id)->logical_grid_size()));
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                devices_.at(id), 12, start_byte_address, devices_.at(id)->logical_grid_size()));
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                devices_.at(id), 16, start_byte_address, devices_.at(id)->logical_grid_size()));
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                devices_.at(id), 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                devices_.at(id), 2 * 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
+                devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
+        }
+    }
+}
+
+TEST_F(DeviceFixture, PingIllegalL1Cores) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto grid_size = devices_.at(id)->logical_grid_size();
+        grid_size.x++;
+        grid_size.y++;
         size_t start_byte_address = L1_UNRESERVED_BASE;  // FIXME: Should remove dependency on
-                                                      // hostdevcommon/common_runtime_address_map.h header.
-        ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
-        ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
-        ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::l1_ping(device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::l1_ping(device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
+                                                         // hostdevcommon/common_runtime_address_map.h header.
+        ASSERT_ANY_THROW(unit_tests::basic::device::l1_ping(devices_.at(id), 4, start_byte_address, grid_size));
     }
-    {
-        size_t start_byte_address = device_->l1_size_per_core() - 32 * 1024;
-        ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, device_->logical_grid_size()));
-        ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 12, start_byte_address, device_->logical_grid_size()));
-        ASSERT_TRUE(unit_tests::basic::device::l1_ping(device_, 16, start_byte_address, device_->logical_grid_size()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::l1_ping(device_, 1024, start_byte_address, device_->logical_grid_size()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::l1_ping(device_, 2 * 1024, start_byte_address, device_->logical_grid_size()));
-        ASSERT_TRUE(
-            unit_tests::basic::device::l1_ping(device_, 32 * 1024, start_byte_address, device_->logical_grid_size()));
-    }
-}
-
-TEST_F(SingleDeviceFixture, PingIllegalL1Cores) {
-    auto grid_size = device_->logical_grid_size();
-    grid_size.x++;
-    grid_size.y++;
-    size_t start_byte_address =
-        L1_UNRESERVED_BASE;  // FIXME: Should remove dependency on hostdevcommon/common_runtime_address_map.h header.
-    ASSERT_ANY_THROW(unit_tests::basic::device::l1_ping(device_, 4, start_byte_address, grid_size));
 }
 
 // Harvesting tests
@@ -394,38 +317,47 @@ TEST_F(BasicFixture, ValidateLogicalToPhysicalCoreCoordHostMapping) {
 // 2. Launch a kernel to read and increment the value in each bank
 // 3. Host validates that the value from step 1 has been incremented
 // Purpose of this test is to ensure that L1 reader/writer APIs do not target harvested cores
-TEST_F(SingleDeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
-    uint32_t num_l1_banks = this->device_->num_banks(BufferType::L1);
-    std::vector<uint32_t> host_input(1);
-    std::map<uint32_t, uint32_t> bank_id_to_value;
-    uint32_t l1_address = this->device_->l1_size_per_core() - 2048;
-    for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
-        host_input[0] = bank_id + 1;
-        bank_id_to_value[bank_id] = host_input.at(0);
-        CoreCoord logical_core = this->device_->logical_core_from_bank_id(bank_id);
-        uint32_t write_address = l1_address + this->device_->l1_bank_offset_from_bank_id(bank_id);
-        tt_metal::detail::WriteToDeviceL1(this->device_, logical_core, write_address, host_input);
-    }
+TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        uint32_t num_l1_banks = this->devices_.at(id)->num_banks(BufferType::L1);
+        std::vector<uint32_t> host_input(1);
+        std::map<uint32_t, uint32_t> bank_id_to_value;
+        uint32_t l1_address = this->devices_.at(id)->l1_size_per_core() - 2048;
+        for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
+            host_input[0] = bank_id + 1;
+            bank_id_to_value[bank_id] = host_input.at(0);
+            CoreCoord logical_core = this->devices_.at(id)->logical_core_from_bank_id(bank_id);
+            uint32_t write_address = l1_address + this->devices_.at(id)->l1_bank_offset_from_bank_id(bank_id);
+            tt_metal::detail::WriteToDeviceL1(this->devices_.at(id), logical_core, write_address, host_input);
+        }
 
-    tt_metal::Program program = tt_metal::Program();
-    string kernel_name = "tests/tt_metal/tt_metal/test_kernels/ping_legal_l1s.cpp";
-    CoreCoord logical_target_core = CoreCoord({.x = 0, .y = 0});
-    uint32_t intermediate_l1_addr = L1_UNRESERVED_BASE;
-    uint32_t size_bytes = host_input.size() * sizeof(uint32_t);
-    tt_metal::KernelID kernel_id = tt_metal::CreateDataMovementKernel(
-        program, kernel_name, logical_target_core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0, .compile_args = {l1_address, intermediate_l1_addr, size_bytes}}
-    );
+        tt_metal::Program program = tt_metal::Program();
+        string kernel_name = "tests/tt_metal/tt_metal/test_kernels/ping_legal_l1s.cpp";
+        CoreCoord logical_target_core = CoreCoord({.x = 0, .y = 0});
+        uint32_t intermediate_l1_addr = L1_UNRESERVED_BASE;
+        uint32_t size_bytes = host_input.size() * sizeof(uint32_t);
+        tt_metal::KernelID kernel_id = tt_metal::CreateDataMovementKernel(
+            program,
+            kernel_name,
+            logical_target_core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::NOC_0,
+                .compile_args = {l1_address, intermediate_l1_addr, size_bytes}});
 
-    tt_metal::LaunchProgram(this->device_, program);
+        tt_metal::LaunchProgram(this->devices_.at(id), program);
 
-    std::vector<uint32_t> output;
-    for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
-        CoreCoord logical_core = this->device_->logical_core_from_bank_id(bank_id);
-        uint32_t read_address = l1_address + this->device_->l1_bank_offset_from_bank_id(bank_id);
-        tt_metal::detail::ReadFromDeviceL1(this->device_, logical_core, read_address, size_bytes, output);
-        ASSERT_TRUE(output.size() == host_input.size());
-        uint32_t expected_value = bank_id_to_value.at(bank_id) + 1; // ping_legal_l1s kernel increments each value it reads
-        ASSERT_TRUE(output.at(0) == expected_value) << "Logical core " + logical_core.str() + " should have " + std::to_string(expected_value) + " but got " + std::to_string(output.at(0));
+        std::vector<uint32_t> output;
+        for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
+            CoreCoord logical_core = this->devices_.at(id)->logical_core_from_bank_id(bank_id);
+            uint32_t read_address = l1_address + this->devices_.at(id)->l1_bank_offset_from_bank_id(bank_id);
+            tt_metal::detail::ReadFromDeviceL1(this->devices_.at(id), logical_core, read_address, size_bytes, output);
+            ASSERT_TRUE(output.size() == host_input.size());
+            uint32_t expected_value =
+                bank_id_to_value.at(bank_id) + 1;  // ping_legal_l1s kernel increments each value it reads
+            ASSERT_TRUE(output.at(0) == expected_value) << "Logical core " + logical_core.str() + " should have " +
+                                                               std::to_string(expected_value) + " but got " +
+                                                               std::to_string(output.at(0));
+        }
     }
 }

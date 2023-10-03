@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "single_device_fixture.hpp"
-#include "gtest/gtest.h"
 #include "circular_buffer_test_utils.hpp"
-#include "tt_metal/host_api.hpp"
+#include "device_fixture.hpp"
+#include "gtest/gtest.h"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 
 using namespace tt::tt_metal;
@@ -44,7 +44,7 @@ bool test_cb_config_written_to_core(Program &program, Device *device, const Core
     return pass;
 }
 
-TEST_F(SingleDeviceFixture, TestCreateCircularBufferAtValidIndices) {
+TEST_F(DeviceFixture, TestCreateCircularBufferAtValidIndices) {
     CBConfig cb_config;
 
     CoreRange cr = {.start = {0, 0}, .end = {0, 1}};
@@ -72,23 +72,25 @@ TEST_F(SingleDeviceFixture, TestCreateCircularBufferAtValidIndices) {
         .set_page_size(24, cb_config.page_size);
     auto cb = CreateCircularBuffer(program, cr_set, config);
 
-    EXPECT_TRUE(test_cb_config_written_to_core(program, this->device_, cr_set, golden_cb_config));
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(test_cb_config_written_to_core(program, this->devices_.at(id), cr_set, golden_cb_config));
+    }
 }
 
-TEST_F(SingleDeviceFixture, TestCreateCircularBufferAtInvalidIndex) {
+TEST_F(DeviceFixture, TestCreateCircularBufferAtInvalidIndex) {
     CBConfig cb_config;
 
     EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{NUM_CIRCULAR_BUFFERS, cb_config.data_format}}));
 }
 
-TEST_F(SingleDeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {
+TEST_F(DeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {
     Program program;
     CBConfig cb_config;
 
     EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}}).set_page_size(1, cb_config.page_size));
 }
 
-TEST_F(SingleDeviceFixture, TestCreateCircularBufferAtOverlappingIndex) {
+TEST_F(DeviceFixture, TestCreateCircularBufferAtOverlappingIndex) {
     Program program;
     CBConfig cb_config;
 

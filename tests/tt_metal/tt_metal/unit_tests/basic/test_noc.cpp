@@ -8,8 +8,6 @@
 #include <functional>
 #include <random>
 
-#include "multi_device_fixture.hpp"
-#include "single_device_fixture.hpp"
 #include "basic_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
