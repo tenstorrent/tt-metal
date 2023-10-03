@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor &a, Tensor& out
 operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& output);
 operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end);
 
-Tensor untilize (const Tensor &a, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, bool use_multicore = true);
+Tensor untilize (const Tensor &a, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, bool use_multicore = false);
 Tensor untilize_with_unpadding(const Tensor &a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 namespace untilize_helpers {

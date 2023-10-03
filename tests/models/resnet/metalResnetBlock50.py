@@ -75,16 +75,22 @@ def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
         x_padded_shape = tt_lib.tensor.pad_to_tile_shape(
             x.shape(), False, False, True, True
         )
-        return tt_lib.tensor.format_input_tensor(
-            x, device, x_padded_shape, pad_value, target_layout, output_mem_config
-        )
+        if (x.shape() != x_padded_shape):
+            return tt_lib.tensor.format_input_tensor(
+                x, device, x_padded_shape, pad_value, target_layout, output_mem_config
+            )
+        else:
+            return tt_lib.tensor.tilize(x, output_mem_config, use_multicore=True)
     elif (
         x.layout() == tt_lib.tensor.Layout.TILE
         and target_layout == tt_lib.tensor.Layout.ROW_MAJOR
     ):
-        return tt_lib.tensor.format_output_tensor(
-            x, x.shape_without_padding(), device, target_layout, output_mem_config
-        )
+        if (x.shape() != x.shape_without_padding()):
+            return tt_lib.tensor.format_output_tensor(
+                x, x.shape_without_padding(), device, target_layout, output_mem_config
+            )
+        else:
+            return tt_lib.tensor.untilize(x, output_mem_config, use_multicore=True)
     else:
         assert False
 
@@ -1237,7 +1243,7 @@ class ResNet(nn.Module):
         x = tt_lib.tensor.pad(
             x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config, use_multicore=True
         )
-        x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config)
+        x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config, use_multicore=True)
 
         x = self.avgpool(x, self.memory_config)
 
@@ -1257,7 +1263,7 @@ class ResNet(nn.Module):
         x = tt_lib.tensor.pad(
             x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config, use_multicore=True
         )
-        x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config)
+        x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config, use_multicore=True)
 
         x = self.fc(x)
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
