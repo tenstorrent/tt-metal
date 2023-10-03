@@ -460,6 +460,55 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     };
 
     return {std::move(program), override_runtime_args_callback};
+
+    auto override_runtime_arguments_callback = [
+            reader_kernel_id=unary_reader_kernel_id,
+            writer_kernel_id=unary_writer_kernel_id,
+            cb_src0=cb_src0,
+            cb_output=cb_output,
+            ncores=ncores,
+            ncores_x=ncores_x
+        ]
+    (
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>& output_tensors
+    ) {
+
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
+
+        bool src_sharded = input_tensors.at(0).memory_config().is_sharded();
+        bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
+
+        if (src_sharded) {
+            auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
+            src0_cb_config.set_globally_allocated_address(src_buffer->address());
+        } else {
+            for (uint32_t i = 0; i < ncores; ++ i) {
+                CoreCoord core = {i % ncores_x, i / ncores_x};
+                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                runtime_args[0] = src_buffer->address();
+                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
+            }
+        }
+
+        if (out_sharded) {
+            auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
+            output_cb_config.set_globally_allocated_address(dst_buffer->address());
+        } else {
+            for (uint32_t i = 0; i < ncores; ++ i) {
+                CoreCoord core = {i % ncores_x, i / ncores_x};
+                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                runtime_args[0] = dst_buffer->address();
+                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
+            }
+        }
+    };
+
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 }  // namespace tt_metal

@@ -10,14 +10,13 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.common import (
-    is_wormhole_b0
-)
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0
 from loguru import logger
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
 if is_wormhole_b0():
     pytestmark = pytest.mark.skip("Unsupported parallelizations for WH B0")
+
 
 def test_sharded_tile(device):
     N = 1
@@ -223,12 +222,8 @@ def test_sharded_tilize(H, num_cores, device):
     assert passing
 
 
-@pytest.mark.parametrize(
-    "in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"]
-)
-@pytest.mark.parametrize(
-    "out_sharded", [True, False], ids=["out_sharded", "out_unsharded"]
-)
+@pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
+@pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M, num_cores", [[25088, 98]])
 @pytest.mark.parametrize("N", [64, 256])
 def test_sharded_matmul(device, in0_sharded, out_sharded, M, N, num_cores):
@@ -264,22 +259,18 @@ def test_sharded_matmul(device, in0_sharded, out_sharded, M, N, num_cores):
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         )
 
-    program_config = ttl.operations.primary.get_mcast_1d_config(
-        in0_t, in1_t, True, None, False, out_sharded
-    )
+    program_config = ttl.operations.primary.get_mcast_1d_config(in0_t, in1_t, True, None, False, out_sharded)
     if N == 256:
-        program_config = (
-            ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(12, 9),
-                in0_block_w=2,
-                out_subblock_h=1,
-                out_subblock_w=8,
-                per_core_M=8,
-                per_core_N=8,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=False,
-            )
+        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(12, 9),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=8,
+            per_core_N=8,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
         )
     output_t = ttl.operations.primary.matmul_1d(
         in0_t,
@@ -299,15 +290,9 @@ def test_sharded_matmul(device, in0_sharded, out_sharded, M, N, num_cores):
     assert passing
 
 
-@pytest.mark.parametrize(
-    "in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"]
-)
-@pytest.mark.parametrize(
-    "in1_sharded", [True, False], ids=["in1_sharded", "in1_unsharded"]
-)
-@pytest.mark.parametrize(
-    "out_sharded", [True, False], ids=["out_sharded", "out_unsharded"]
-)
+@pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
+@pytest.mark.parametrize("in1_sharded", [True, False], ids=["in1_sharded", "in1_unsharded"])
+@pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("H, num_cores", [[25088, 98]])
 def test_sharded_binary(device, in0_sharded, in1_sharded, out_sharded, H, num_cores):
     in0_shape = [1, 1, H, 64]
@@ -367,8 +352,8 @@ def test_sharded_program_cache(device, use_program_cache):
     C = 1
     H = 25088
     W = 64
-    x = torch.arange(N * C * H * W).reshape((N, C, H, W)).bfloat16().float()
-    x2 = (-1 * torch.arange(N * C * H * W)).reshape((N, C, H, W)).bfloat16().float()
+    x = torch.ones((N, C, H, W)).bfloat16().float()
+    x2 = torch.zeros((N, C, H, W)).bfloat16().float()
 
     xt = (
         ttl.tensor.Tensor(
@@ -387,9 +372,7 @@ def test_sharded_program_cache(device, use_program_cache):
         )
     )
 
-    yt = ttl.tensor.interleaved_to_sharded(
-        xt, 98, [H // 98, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
-    )
+    yt = ttl.tensor.interleaved_to_sharded(xt, 98, [H // 98, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED)
 
     zt = ttl.tensor.sharded_to_interleaved(
         yt,
@@ -416,9 +399,7 @@ def test_sharded_program_cache(device, use_program_cache):
         )
     )
 
-    yt2 = ttl.tensor.interleaved_to_sharded(
-        xt2, 98, [H // 98, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED
-    )
+    yt2 = ttl.tensor.interleaved_to_sharded(xt2, 98, [H // 98, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED)
 
     zt2 = ttl.tensor.sharded_to_interleaved(
         yt2,

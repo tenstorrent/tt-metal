@@ -57,7 +57,7 @@ pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape
 }
 
 
-void create_CBs(tt_metal::Program &program,
+CircularBufferID create_CBs(tt_metal::Program &program,
                                 tt_metal::Device* device,
                                 CoreRange core,
                                 uint32_t num_cb0_tiles,
@@ -88,6 +88,7 @@ void create_CBs(tt_metal::Program &program,
 		.set_page_size(tilize_mode_tilized_act_cb, single_tile_size);
     auto cb_src0_tilized = tt_metal::CreateCircularBuffer(program, core, cb_src0_tilized_config);
 
+    CircularBufferID cb_output;
     if (untilize_out) {
         CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{matmul_partials_cb, tt::DataFormat::Float16_b}})
 		    .set_page_size(matmul_partials_cb, single_tile_size);
@@ -109,7 +110,7 @@ void create_CBs(tt_metal::Program &program,
         if (output_cb_address.has_value()) {
             cb_output_config = cb_output_config.set_globally_allocated_address(output_cb_address.value());
         }
-        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
     } else {
         CoreRangeSet cores(std::set<CoreRange>({core}));
         std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {
@@ -122,7 +123,7 @@ void create_CBs(tt_metal::Program &program,
         if (output_cb_address.has_value()) {
             cb_matmul_partials_config = cb_matmul_partials_config.set_globally_allocated_address(output_cb_address.value());
         }
-        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, cores, cb_matmul_partials_config);
+        cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_matmul_partials_config);
     }
 
     if (with_bias) {
@@ -138,6 +139,7 @@ void create_CBs(tt_metal::Program &program,
         auto cb_out_for_bias = tt_metal::CreateCircularBuffer(program, core, cb_out_for_bias_config);
         log_debug("BIAS CBs: {} {} {}", bias_cb, bias_ntiles, bias_pagesize);
     }
+    return cb_output;
 }
 
 operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity,
@@ -540,7 +542,7 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     if (output.memory_config().is_sharded()) {
         output_cb_address = output.buffer()->address();
     }
-    create_CBs(
+    auto cb_output = create_CBs(
             program,
             a.device(),
             all_cores,
@@ -957,29 +959,31 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
 
     } // for num_cores
 
-    auto override_runtime_args_callback = [
-        reader_kernel_ids=reader_ids,
-        writer_kernel_ids=writer_ids,
-        total_num_cores=total_num_cores,
-        num_cores_x=num_cores_x,
-        num_cores_y=num_cores_y,
-        has_bias=has_bias
-    ]
+    auto override_runtime_arguments_callback = [
+            reader_kernel_ids=reader_ids,
+            writer_kernel_ids=writer_ids,
+            cb_output=cb_output,
+            total_num_cores=total_num_cores,
+            num_cores_x=num_cores_x,
+            num_cores_y=num_cores_y,
+            has_bias=has_bias
+        ]
     (
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<Tensor>& output_tensors
     ) {
 
-        TT_ASSERT(input_buffers.size() == 3);
-        TT_ASSERT(output_buffers.size() == 1);
+        TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
+        TT_ASSERT(output_tensors.size() == 1);
 
-        auto src_dram_buffer_a = input_buffers.at(0);
-        auto src_dram_buffer_b = input_buffers.at(1);
+        auto src_buffer_a = input_tensors.at(0).buffer();
+        auto src_buffer_b = input_tensors.at(1).buffer();
 
-        auto dst_dram_buffer = output_buffers.at(0);
-        //cout << "conv src address = " << src_dram_buffer_a->address() << ", buffer type = " << (int) src_dram_buffer_a->buffer_type() << ", page size = " << src_dram_buffer_a->page_size() << " , size = " << src_dram_buffer_a->size() << endl;
-        //cout << "conv dst address = " << dst_dram_buffer->address() << ", buffer type = " << (int) dst_dram_buffer->buffer_type() << ", page size = " << dst_dram_buffer->page_size() << " , size = " << dst_dram_buffer->size() << endl;
+        auto dst_buffer = output_tensors.at(0).buffer();
+        bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
         for(uint32_t core_i = 0; core_i < total_num_cores; core_i++) {
             uint32_t core_x_i = core_i % num_cores_x;
@@ -987,26 +991,28 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
             CoreCoord core = {core_x_i, core_y_i};
             {
                 auto runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_i], core);
-                runtime_args[0] = src_dram_buffer_a->address();
+                runtime_args[0] = src_buffer_a->address();
                 SetRuntimeArgs(program, reader_kernel_ids[core_i], core, runtime_args);
             }
 
             {
                 auto runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_i], core);
-                runtime_args[0] = dst_dram_buffer->address();
-                runtime_args[1] = src_dram_buffer_b->address();
+                runtime_args[0] = dst_buffer->address();
+                runtime_args[1] = src_buffer_b->address();
                 if (has_bias) {
-                    auto src_dram_buffer_c = input_buffers.at(2);
-                    TT_ASSERT(src_dram_buffer_c != nullptr);
-                    runtime_args[2] = src_dram_buffer_c->address();
+                    auto src_buffer_c = optional_input_tensors.at(0).value().buffer();
+                    TT_ASSERT(src_buffer_c != nullptr);
+                    runtime_args[2] = src_buffer_c->address();
                 }
                 SetRuntimeArgs(program, writer_kernel_ids[core_i], core, runtime_args);
             }
         }
+        if (out_sharded) {
+            auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
+            output_cb_config.set_globally_allocated_address(dst_buffer->address());
+        }
     };
-
-    return {std::move(program), override_runtime_args_callback};
-
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 Tensor optimized_conv(const Tensor& a,

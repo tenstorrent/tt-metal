@@ -462,21 +462,32 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor &input, T
         }
     );
 
-    auto override_runtime_args_callback = [
+    auto override_runtime_arguments_callback = [
             unary_reader_kernel_id,
             unary_writer_kernel_id,
+            cb_src0,
+            cb_output,
             num_cores,
             num_cores_x
         ]
     (
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<Tensor>& output_tensors
     ) {
+        auto src_buffer = input_tensors.at(0).buffer();
 
+        auto dst_buffer = output_tensors.at(0).buffer();
+
+        auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
+        src0_cb_config.set_globally_allocated_address(src_buffer->address());
+
+        auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
+        output_cb_config.set_globally_allocated_address(dst_buffer->address());
     };
-
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 operation::ProgramWithCallbacks tilize_multi_core(const Tensor& a, Tensor& output) {

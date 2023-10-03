@@ -216,7 +216,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
 		.set_page_size(out_cb_id, out_cb_pagesize);
     auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
 
-
+    CircularBufferID cb_sharded_out = 0;
     if (output.memory_config().is_sharded()) {
         uint32_t sharded_out_cb_id = CB::c_out1;            // output rows in RM
 
@@ -225,7 +225,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
         uint32_t sharded_out_cb_page_size = output.shard_spec().value().shard_shape[1] * out_nbytes;    // there is just one row of channels after reduction
         CircularBufferConfig cb_sharded_out_config = CircularBufferConfig(sharded_out_num_pages * sharded_out_cb_page_size, {{sharded_out_cb_id, out_df}})
             .set_page_size(sharded_out_cb_id, sharded_out_cb_page_size).set_globally_allocated_address(output.buffer()->address());
-        auto cb_sharded_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_out_config);
+        cb_sharded_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_out_config);
     }
 
     // Construct const buffer with -INF
@@ -431,29 +431,42 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
         }
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel, writer_kernel, ncores, ncores_w](const Program& program,
-                                                            const std::vector<Buffer*>& input_buffers,
-                                                            const std::vector<Buffer*>& output_buffers) {
-        auto src_dram_buffer = input_buffers.at(0);
-        auto dst_dram_buffer = output_buffers.at(0);
+    auto override_runtime_arguments_callback = [
+            reader_kernel, writer_kernel, cb_sharded_out, ncores, ncores_w
+        ]
+    (
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<Tensor>& output_tensors
+    ) {
+        auto src_buffer = input_tensors.at(0).buffer();
+
+        auto dst_buffer = output_tensors.at(0).buffer();
+        bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
+
         for (uint32_t i = 0; i < ncores; ++ i) {
             CoreCoord core{i % ncores_w, i / ncores_w };
             {
                 auto runtime_args = GetRuntimeArgs(program, reader_kernel, core);
-                runtime_args[0] = src_dram_buffer->address();
-                runtime_args[1] = dst_dram_buffer->address();
+                runtime_args[0] = src_buffer->address();
+                runtime_args[1] = dst_buffer->address();
                 SetRuntimeArgs(program, reader_kernel, core, runtime_args);
             }
             {
                 auto runtime_args = GetRuntimeArgs(program, writer_kernel, core);
-                runtime_args[0] = src_dram_buffer->address();
-                runtime_args[1] = dst_dram_buffer->address();
+                runtime_args[0] = src_buffer->address();
+                runtime_args[1] = dst_buffer->address();
                 SetRuntimeArgs(program, writer_kernel, core, runtime_args);
             }
         }
+        if (out_sharded) {
+            auto& output_cb_config = GetCircularBufferConfig(program, cb_sharded_out);
+            output_cb_config.set_globally_allocated_address(dst_buffer->address());
+        }
     };
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 // This version uses only output row distribution along H

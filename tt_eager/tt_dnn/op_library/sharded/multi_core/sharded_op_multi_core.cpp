@@ -48,12 +48,12 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
         num_cores += core_range.size();
     }
 
-    uint32_t src0_cb_index = 0;
+    uint32_t out_cb_index = 0;
     uint32_t num_input_units = num_units_per_shard;
     uint32_t page_size = round_up_to_mul32(unit_size);
-    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_units * page_size, {{src0_cb_index, cb_data_format}})
-		.set_page_size(src0_cb_index, page_size).set_globally_allocated_address(output.buffer()->address());
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt_metal::CircularBufferConfig cb_out_config = tt_metal::CircularBufferConfig(num_input_units * page_size, {{out_cb_index, cb_data_format}})
+		.set_page_size(out_cb_index, page_size).set_globally_allocated_address(output.buffer()->address());
+    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
 
     auto src_buffer = input.buffer();
 
@@ -65,7 +65,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
     if (input.layout() == Layout::TILE) {
 
         std::vector<uint32_t> reader_compile_time_args = {
-            (std::uint32_t) src0_cb_index,
+            (std::uint32_t) out_cb_index,
             (std::uint32_t) src_is_dram
         };
 
@@ -78,7 +78,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
         bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(unit_size);
         uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(unit_size) : 0;
         std::vector<uint32_t> reader_compile_time_args = {
-            (std::uint32_t) src0_cb_index,
+            (std::uint32_t) out_cb_index,
             (std::uint32_t) src_is_dram,
             (std::uint32_t) src_stick_size_is_power_of_two,
             (std::uint32_t) src_log2_stick_size
@@ -91,7 +91,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
     tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_sharded.cpp",
@@ -157,34 +157,38 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
         num_units_written += num_units_per_shard;
     }
 
-    auto override_runtime_args_callback = [
+    auto override_runtime_arguments_callback = [
             unary_reader_kernel_id,
             unary_writer_kernel_id,
+            cb_output,
             num_cores,
             num_cores_x
         ]
     (
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>& output_tensors
     ) {
 
-        auto src_buffer = input_buffers.at(0);
+        auto src_buffer = input_tensors.at(0).buffer();
 
-        auto dst_buffer = output_buffers.at(0);
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
             CoreCoord core = {i % num_cores_x, i / num_cores_x};
-
             {
                 auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
                 SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
             }
         }
+        auto& cb_out_config = GetCircularBufferConfig(program, cb_output);
+        cb_out_config.set_globally_allocated_address(dst_buffer->address());
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &input, Tensor &output) {
@@ -220,7 +224,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
     uint32_t page_size = round_up_to_mul32(unit_size);
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_units * page_size, {{src0_cb_index, cb_data_format}})
 		.set_page_size(src0_cb_index, page_size).set_globally_allocated_address(input.buffer()->address());
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     auto src_buffer = input.buffer();
 
@@ -325,22 +329,24 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
         }
         num_units_written+=num_units_per_shard;
     }
-
-    auto override_runtime_args_callback = [
+    auto override_runtime_arguments_callback = [
             unary_reader_kernel_id,
             unary_writer_kernel_id,
+            cb_src0,
             num_cores,
             num_cores_x
         ]
     (
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>& output_tensors
     ) {
 
-        auto src_buffer = input_buffers.at(0);
+        auto src_buffer = input_tensors.at(0).buffer();
 
-        auto dst_buffer = output_buffers.at(0);
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
             CoreCoord core = {i % num_cores_x, i / num_cores_x};
@@ -350,9 +356,11 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
                 SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
             }
         }
+        auto& cb_src0_config = GetCircularBufferConfig(program, cb_src0);
+        cb_src0_config.set_globally_allocated_address(src_buffer->address());
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 }  // namespace tt_metal

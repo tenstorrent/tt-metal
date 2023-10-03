@@ -221,11 +221,14 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
             binary_reader_kernel_id,
             unary_writer_kernel_id,
             eltwise_binary_kernel_id,
+            cb_src0,
+            cb_src1,
+            cb_output,
             compute_with_storage_grid_size
         ]
     (
         const void* operation,
-        const Program& program,
+        Program& program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
@@ -300,8 +303,28 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
             SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_read});
             num_tiles_read += num_tiles_per_core;
         }
+        if (src0_sharded) {
+            auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
+            src0_cb_config.set_globally_allocated_address(src_buffer_a->address());
+            tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
+            uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
+            src0_cb_config.set_total_size(num_tiles_per_core_group_1 * src0_single_tile_size);
+        }
+        if (src1_sharded) {
+            auto& src1_cb_config = GetCircularBufferConfig(program, cb_src1);
+            src1_cb_config.set_globally_allocated_address(src_buffer_b->address());
+            tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensors.at(1).dtype());
+            uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
+            src1_cb_config.set_total_size(num_tiles_per_core_group_1 * src1_single_tile_size);
+        }
+        if (out_sharded) {
+            auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
+            output_cb_config.set_globally_allocated_address(dst_buffer->address());
+            tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensors.at(0).dtype());
+            uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
+            output_cb_config.set_total_size(num_tiles_per_core_group_1 * dst_single_tile_size);
+        }
     };
-
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 

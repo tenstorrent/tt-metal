@@ -992,9 +992,11 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         }
     }
 
-    auto override_runtime_args_callback = [
+    auto override_runtime_arguments_callback = [
             reader_kernel_ids,
             writer_kernel_ids,
+            cb_src0,
+            cb_output,
             num_cores_r,
             num_cores_c,
             num_cores,
@@ -1002,18 +1004,23 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             start_core_y
         ]
     (
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<Tensor>& output_tensors
     ) {
-        TT_ASSERT(input_buffers.size() == 3);
-        TT_ASSERT(output_buffers.size() == 1);
+        TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
+        TT_ASSERT(output_tensors.size() == 1);
 
-        auto src_dram_buffer_a = input_buffers.at(0);
-        auto src_dram_buffer_b = input_buffers.at(1);
-        auto bias_dram_buffer = input_buffers.at(2);
+        auto src_buffer_a = input_tensors.at(0).buffer();
+        auto src_buffer_b = input_tensors.at(1).buffer();
+        auto bias_tensor = optional_input_tensors.at(0);
 
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_buffer = output_tensors.at(0).buffer();
+
+        bool src0_sharded = input_tensors.at(0).memory_config().is_sharded();
+        bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
         for (uint32_t i = 0; i < num_cores; i++) {
             uint32_t core_idx_x = i % num_cores_c;
@@ -1025,17 +1032,17 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 {
                     auto reader_kernel_id = reader_kernel_ids.at(i);
                     auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = src_dram_buffer_a->address();
+                    runtime_args[0] = src_buffer_a->address();
                     SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
                 }
 
                 {
                     auto writer_kernel_id = writer_kernel_ids.at(i);
                     auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[0] = src_dram_buffer_b->address();
-                    runtime_args[4] = dst_dram_buffer->address();
-                    if (bias_dram_buffer != nullptr) {
-                        runtime_args[14] = bias_dram_buffer->address();
+                    runtime_args[0] = src_buffer_b->address();
+                    runtime_args[4] = dst_buffer->address();
+                    if (bias_tensor.has_value()) {
+                        runtime_args[14] = bias_tensor.value().buffer()->address();
                     }
                     SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
                 }
@@ -1045,20 +1052,30 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 {
                     auto reader_kernel_id = reader_kernel_ids.at(i);
                     auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = src_dram_buffer_a->address();
+                    runtime_args[0] = src_buffer_a->address();
                     SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
                 }
 
                 {
                     auto writer_kernel_id = writer_kernel_ids.at(i);
                     auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[1] = dst_dram_buffer->address();
+                    runtime_args[1] = dst_buffer->address();
                     SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
                 }
             }
         }
+
+        if (src0_sharded) {
+            auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
+            src0_cb_config.set_globally_allocated_address(src_buffer_a->address());
+        }
+
+        if (out_sharded) {
+            auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
+            output_cb_config.set_globally_allocated_address(dst_buffer->address());
+        }
     };
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 }
