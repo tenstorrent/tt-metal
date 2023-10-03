@@ -73,38 +73,6 @@ namespace detail{
     {
         enable_persistent_kernel_cache = false;
     }
-
-    inline void CompileBlankKernel(Device *device) {
-        // Crude way to check if blank_op needs to be compiled or not
-        // TODO(pgk):
-        //  - fw is compiled every run
-        //  - for unknown reasons, fw size can vary run to run
-        //  - kernels from one run linked against fw from another run may clash
-        //  - rebuid blank kernels once per run
-        static bool compiled = false;
-        if (compiled) {
-            return;
-        }
-
-        build_kernel_for_riscv_options_t blank_build_options(device->id(), "blank_op");
-        struct hlk_args_t {
-            std::int32_t dummy;
-        };
-        void *hlk_args = new hlk_args_t{
-            .dummy = 0,
-        };
-        blank_build_options.set_hlk_args_all_cores(hlk_args, sizeof(hlk_args_t));
-        blank_build_options.set_hlk_file_name_all_cores("tt_metal/kernels/compute/blank.cpp");
-        blank_build_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
-        blank_build_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
-        std::string arch_name = tt::get_string_lowercase(device->arch());
-
-        generate_binaries_params_t default_params;
-        detail::GenerateDeviceHeaders(device, &blank_build_options, blank_build_options.name);
-        generate_binaries_all_riscs(&blank_build_options, blank_build_options.name, arch_name, default_params);
-
-        compiled = true;
-    }
 }
 auto Program::semaphores_on_core(const CoreCoord &core) const {
     std::vector<std::reference_wrapper<const Semaphore>> semaphores;
@@ -136,7 +104,8 @@ Kernel *Program::get_kernel(KernelID kernel_id) const {
 KernelGroup::KernelGroup() : core_ranges({}) {
 }
 
-KernelGroup::KernelGroup(std::optional<KernelID> brisc_id,
+KernelGroup::KernelGroup(const Program& program,
+                         std::optional<KernelID> brisc_id,
                          std::optional<KernelID> ncrisc_id,
                          std::optional<KernelID> trisc_id) : core_ranges({}) {
 
@@ -144,8 +113,22 @@ KernelGroup::KernelGroup(std::optional<KernelID> brisc_id,
     this->riscv1_id = ncrisc_id;
     this->compute_id = trisc_id;
 
-    this->launch_msg.enable_brisc = brisc_id ? true : false;
-    this->launch_msg.enable_ncrisc = ncrisc_id ? true : false;
+    // Note: validation prior to this confirmed noc state is consistent
+    this->launch_msg.brisc_noc_id = 0;
+    if (brisc_id) {
+        this->launch_msg.enable_brisc = true;
+        this->launch_msg.brisc_noc_id = std::get<DataMovementConfig>(program.get_kernel(brisc_id.value())->config()).noc;
+    } else {
+        this->launch_msg.enable_brisc = false;
+    }
+
+    if (ncrisc_id) {
+        this->launch_msg.enable_ncrisc = true;
+        this->launch_msg.brisc_noc_id = 1 - std::get<DataMovementConfig>(program.get_kernel(ncrisc_id.value())->config()).noc;
+    } else {
+        this->launch_msg.enable_ncrisc = false;
+    }
+
     this->launch_msg.enable_triscs = trisc_id ? true : false;
 
     this->launch_msg.run = RUN_MSG_GO;
@@ -252,7 +235,8 @@ void Program::update_kernel_groups() {
         int index = 0;
         core_to_kernel_group_index_table_.resize(grid_extent_.x * grid_extent_.y, core_to_kernel_group_invalid_index);
         for (auto& kg_to_cores : map) {
-            kernel_groups_.push_back(KernelGroup(kg_to_cores.first.brisc_id,
+            kernel_groups_.push_back(KernelGroup(*this,
+                                                 kg_to_cores.first.brisc_id,
                                                  kg_to_cores.first.ncrisc_id,
                                                  kg_to_cores.first.trisc_id));
             kernel_groups_.back().core_ranges = kernel_groups_.back().core_ranges.merge( kg_to_cores.second);
@@ -534,48 +518,6 @@ void Program::construct_core_range_set_for_worker_cores() {
     TT_ASSERT(!found_kernels || this->worker_crs_.ranges().size() >= 1, "Invalid core range set");
 }
 
-
-// Just adds blank kernels, doesn't compile them or read binaries
-void Program::add_blank_kernels(Device *device) {
-    ZoneScoped;
-
-    // This can be smarter by combining core ranges into maximal rectangles but this code can be removed once we load BRISC FW separately from the kernel binary
-    this->update_kernel_groups();
-
-    CoreRangeSet unique_core_ranges_without_brisc_kernel({}),
-        unique_core_ranges_without_ncrisc_kernel({}),
-        unique_core_ranges_without_compute_kernel({}) ;
-
-    vector<KernelID> blank_ids;
-    for (auto& kernel_group : this->kernel_groups_) {
-        if (not kernel_group.riscv0_id.has_value())
-            unique_core_ranges_without_brisc_kernel = unique_core_ranges_without_brisc_kernel.merge( kernel_group.core_ranges);
-        if (not kernel_group.riscv1_id.has_value())
-            unique_core_ranges_without_ncrisc_kernel = unique_core_ranges_without_ncrisc_kernel.merge(kernel_group.core_ranges);
-        if (not kernel_group.compute_id.has_value())
-            unique_core_ranges_without_compute_kernel = unique_core_ranges_without_compute_kernel.merge( kernel_group.core_ranges);
-    }
-
-    if (not unique_core_ranges_without_brisc_kernel.ranges().empty()) {
-        KernelID blank_kernel_id = CreateDataMovementKernel(
-            *this, "tt_metal/kernels/dataflow/blank.cpp", unique_core_ranges_without_brisc_kernel,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-        blank_ids.push_back(blank_kernel_id);
-    }
-
-    if (not unique_core_ranges_without_ncrisc_kernel.ranges().empty()) {
-        KernelID blank_kernel_id = CreateDataMovementKernel(
-            *this, "tt_metal/kernels/dataflow/blank.cpp", unique_core_ranges_without_ncrisc_kernel,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-        blank_ids.push_back(blank_kernel_id);
-    }
-
-    if (not unique_core_ranges_without_compute_kernel.ranges().empty()) {
-        KernelID blank_kernel_id = CreateComputeKernel(*this, "tt_metal/kernels/compute/blank.cpp", unique_core_ranges_without_compute_kernel);
-        blank_ids.push_back(blank_kernel_id);
-    }
-}
-
 void Program::set_cb_data_fmt(
     Device *device, Kernel *kernel, build_kernel_for_riscv_options_t &build_options) const {
     ZoneScoped;
@@ -599,8 +541,6 @@ void Program::compile( Device * device )
         "dependent on information that is set during device initialization.",
         this->get_id());
 
-    tt::tt_metal::detail::CompileBlankKernel(device);
-
     detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("CompileProgram");
     bool profile_kernel = getDeviceProfilerState();
     std::vector<std::future<void>> events;
@@ -608,10 +548,7 @@ void Program::compile( Device * device )
         !(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
     tt_set_profiler_state_for_debug_print(profile_kernel);
 
-    // add blank kernels to program, we do this serially before we start compiling all kernels in parallel
-    this->add_blank_kernels(device);
-
-    // compile all kernels in parallel, including the blanks
+    // compile all kernels in parallel
     for (auto kernel_id : this->kernel_ids()) {
         auto kernel = this->get_kernel(kernel_id);
         events.emplace_back ( detail::async ( [kernel, device, this] {

@@ -205,11 +205,9 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_flushed_l
 }
 
 
-// modified to initialize just the specified NOC
-// this way BRISC can initialize NOC-0, and NCRISC NOC-1
-// renamed to noc_init
-inline void noc_init(int noc) {
-//  for (int noc = 0; noc < NUM_NOCS; noc++) {
+inline void noc_init() {
+#pragma GCC unroll 0
+  for (int noc = 0; noc < NUM_NOCS; noc++) {
     uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
     uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
     uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
@@ -222,11 +220,14 @@ inline void noc_init(int noc) {
 
     NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_MID, (uint32_t)(xy_local_addr >> 32));
+  }
+}
 
+
+inline void noc_local_state_init(int noc) {
     noc_reads_num_issued[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
     noc_nonposted_writes_num_issued[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
     noc_nonposted_writes_acked[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
-//  }
 }
 
 

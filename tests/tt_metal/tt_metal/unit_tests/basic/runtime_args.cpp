@@ -79,7 +79,7 @@ bool verify_result_data_movement(
     };
 
     EXPECT_TRUE(
-        program.kernel_ids().size() == 3);  // 2 Blanks get auto-populated even though we added 1 kernel into program
+        program.kernel_ids().size() == 1);
     tt_metal::Kernel *kernel = tt_metal::detail::GetKernel(program, program.kernel_ids().at(0));
     auto processor = kernel->processor();
     auto rt_arg_addr = get_runtime_arg_addr(kernel);
@@ -111,7 +111,7 @@ TEST_F(DeviceFixture, LegallyModifyRTArgsDataMovement) {
             unit_tests::runtime_args::initialize_program_data_movement(this->devices_.at(id), core_range_set);
         ASSERT_TRUE(
             program.kernel_ids().size() ==
-            3);  // 2 Blanks get auto-populated even though we added 1 kernel into program
+            1);
         std::vector<uint32_t> initial_runtime_args = {101, 202};
         SetRuntimeArgs(program, program.kernel_ids().at(0), core_range_set, initial_runtime_args);
 
@@ -167,7 +167,7 @@ bool verify_result_compute(
 
 
     EXPECT_TRUE(
-        program.kernel_ids().size() == 3);  // 2 Blanks get auto-populated even though we added 1 kernel into program
+        program.kernel_ids().size() == 1);
     tt_metal::Kernel *kernel = tt_metal::detail::GetKernel(program, program.kernel_ids().at(0));
     auto processor = kernel->processor();
     auto rt_arg_addr = get_runtime_arg_addr(kernel);
@@ -231,7 +231,7 @@ TEST_F(DeviceFixture, IllegallyModifyRTArgs) {
             unit_tests::runtime_args::initialize_program_data_movement(this->devices_.at(id), core_range_set);
         ASSERT_TRUE(
             program.kernel_ids().size() ==
-            3);  // 2 Blanks get auto-populated even though we added 1 kernel into program
+            1);
         std::vector<uint32_t> initial_runtime_args = {101, 202};
         SetRuntimeArgs(program, program.kernel_ids().at(0), core_range_set, initial_runtime_args);
 

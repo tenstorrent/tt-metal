@@ -102,7 +102,7 @@ static FILE * create_file(const string& log_path) {
     fprintf(f, "\tnoc<n>:<risc>{a, l}=an L1 address used by NOC<n> by <riscv> (eg, local src address)\n");
     fprintf(f, "\tnoc<n>:<riscv>{(x,y), a, l}=NOC<n> unicast address used by <riscv>\n");
     fprintf(f, "\tnoc<n>:<riscv>{(x1,y1)-(x2,y2), a, l}=NOC<n> multicast address used by <riscv>\n");
-    fprintf(f, "\trmsg:<c>=brisc host run message, D/H device/host dispatch; I/G/D init/go/done; | separator; B/b enable/disable brisc; N/n enable/disable ncrisc; T/t enable/disable TRISC\n");
+    fprintf(f, "\trmsg:<c>=brisc host run message, D/H device/host dispatch; I/G/D init/go/done; brisc NOC ID; | separator; B/b enable/disable brisc; N/n enable/disable ncrisc; T/t enable/disable TRISC\n");
     fprintf(f, "\tsmsg:<c>=slave run message, I/G/D for NCRISC, TRISC0, TRISC1, TRISC2\n");
     fprintf(f, "\n");
 
@@ -219,7 +219,13 @@ static void dump_run_mailboxes(FILE *f,
     } else {
         log_fatal(LogLLRuntime, "Watcher unexpected launch mode on core {}: {} (expected {} or {})",
                   core.str(), launch->mode, DISPATCH_MODE_DEV, DISPATCH_MODE_HOST);
+    }
 
+    if (launch->brisc_noc_id == 0 || launch->brisc_noc_id == 1) {
+        fprintf(f, "%d", launch->brisc_noc_id);
+    } else {
+        log_fatal(LogLLRuntime, "Watcher unexpected brisc noc_id on core {}: {} (expected 0 or 1)",
+                  core.str(), launch->brisc_noc_id);
     }
 
     dump_run_state(f, core, launch->run);
@@ -231,7 +237,7 @@ static void dump_run_mailboxes(FILE *f,
     } else if (launch->enable_brisc == 0) {
         fprintf(f, "b");
     } else {
-        log_fatal(LogLLRuntime, "Watcher unexpected brisc enable on core: {}, (expected 0 or 1)",
+        log_fatal(LogLLRuntime, "Watcher unexpected brisc enable on core {}: {} (expected 0 or 1)",
                   core.str(),
                   launch->enable_brisc);
     }
@@ -241,7 +247,7 @@ static void dump_run_mailboxes(FILE *f,
     } else if (launch->enable_ncrisc == 0) {
         fprintf(f, "n");
     } else {
-        log_fatal(LogLLRuntime, "Watcher unexpected ncrisc enable on core: {}, (expected 0 or 1)",
+        log_fatal(LogLLRuntime, "Watcher unexpected ncrisc enable on core {}: {} (expected 0 or 1)",
                   core.str(),
                   launch->enable_ncrisc);
     }
@@ -251,7 +257,7 @@ static void dump_run_mailboxes(FILE *f,
     } else if (launch->enable_triscs == 0) {
         fprintf(f, "t");
     } else {
-        log_fatal(LogLLRuntime, "Watcher unexpected trisc enable on core: {}, (expected 0 or 1)",
+        log_fatal(LogLLRuntime, "Watcher unexpected trisc enable on core {}: {} (expected 0 or 1)",
                   core.str(),
                   launch->enable_triscs);
     }

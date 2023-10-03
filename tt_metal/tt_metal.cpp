@@ -33,7 +33,9 @@ void ConfigureKernelGroup(const Program &program, const KernelGroup *kernel_grou
     if (kernel_group->riscv1_id.has_value()) {
         detail::GetKernel(program, kernel_group->riscv1_id.value())->configure(device, logical_core);
     }
-    detail::GetKernel(program, kernel_group->riscv0_id.value())->configure(device, logical_core);
+    if (kernel_group->riscv0_id.has_value()) {
+        detail::GetKernel(program, kernel_group->riscv0_id.value())->configure(device, logical_core);
+    }
 }
 
 std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
@@ -113,16 +115,6 @@ namespace detail {
 
             program.init_semaphores(*device, logical_core);
         }
-
-        // Skip loading of blank kernels to storage cores
-        for (const CoreCoord &logical_storage_core : device->storage_only_cores()) {
-            worker_cores.insert(device->worker_core_from_logical_core(logical_storage_core));
-        }
-
-        // Load blank kernel to all riscs of all cores excluding those in worker_cores
-        const llrt::TensixRiscsOptions riscs_options = llrt::TensixRiscsOptions::ALL_RISCS;  // PROF_BEGIN("LOAD_BLANK")
-        llrt::internal_::load_blank_kernel_to_all_worker_cores_with_exceptions(
-            device_id, riscs_options, worker_cores);                                // PROF_END("LOAD_BLANK")
 
         return pass;
     }
@@ -372,7 +364,9 @@ void ConfigureKernelGroup(const Program &program, const KernelGroup &kernel_grou
     if (kernel_group.riscv1_id.has_value()) {
         detail::GetKernel(program, kernel_group.riscv1_id.value())->configure(device, logical_core);
     }
-    detail::GetKernel(program, kernel_group.riscv0_id.value())->configure(device, logical_core);
+    if (kernel_group.riscv0_id.has_value()) {
+        detail::GetKernel(program, kernel_group.riscv0_id.value())->configure(device, logical_core);
+    }
 }
 
 void SetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {

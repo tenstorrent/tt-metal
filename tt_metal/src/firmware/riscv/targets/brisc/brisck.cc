@@ -32,13 +32,6 @@ uint8_t loading_noc = NOC_INDEX;
 uint8_t loading_noc = 0;
 #endif
 
-// to reduce the amount of code changes, both BRISC and NRISCS instatiate these counter for both NOCs (ie NUM_NOCS)
-// however, atm NCRISC uses only NOC-1 and BRISC uses only NOC-0
-// this way we achieve full separation of counters / cmd_buffers etc.
-uint32_t noc_reads_num_issued[NUM_NOCS];
-uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
-uint32_t noc_nonposted_writes_acked[NUM_NOCS];
-
 // dram channel to x/y lookup tables
 // The number of banks is generated based off device we are running on --> controlled by allocator
 uint8_t dram_bank_to_noc_x[NUM_DRAM_BANKS];
@@ -65,21 +58,9 @@ void kernel_launch() {
     init_dram_bank_to_noc_coord_lookup_tables();  // done by both BRISC / NCRISC
     init_l1_bank_to_noc_coord_lookup_tables();  // done by both BRISC / NCRISC
 
-    noc_init(loading_noc);
+    noc_local_state_init(loading_noc);
 
     kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
     kernel_main();
     kernel_profiler::mark_time(CC_KERNEL_MAIN_END);
-
-    // FW needs to notify device dispatcher when we are done
-    // Some information needed is known here, pass it back
-    kernel_noc_id_var = loading_noc;
-
-#if defined(TT_METAL_SLOW_DISPATCH_MODE)
-    dispatch_addr = 0;
-#else
-    dispatch_addr = (my_x[loading_noc] == NOC_X(DISPATCH_CORE_X) && my_y[loading_noc] == NOC_Y(DISPATCH_CORE_Y)) ?
-        0 :
-        get_noc_addr(DISPATCH_CORE_X, DISPATCH_CORE_Y, DISPATCH_MESSAGE_ADDR);
-#endif
 }

@@ -48,7 +48,7 @@ void kernel_launch() {
     init_dram_bank_to_noc_coord_lookup_tables();
     init_l1_bank_to_noc_coord_lookup_tables();
 
-    noc_init(loading_noc);
+    noc_local_state_init(loading_noc);
 
     kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
     kernel_main();
