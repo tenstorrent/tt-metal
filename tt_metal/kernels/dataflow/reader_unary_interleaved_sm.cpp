@@ -35,11 +35,11 @@ void generate_inv_sqrt_hw_bcast_tile() {
 void kernel_main() {
 
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
+    uint32_t blk  = get_arg_val<uint32_t>(1);
     uint32_t num_tiles = get_arg_val<uint32_t>(3); // same arg index as in reader_unary and in reader_unary_transpose_wh_8bank
     uint32_t tile_offset = get_arg_val<uint32_t>(4);
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t blk = get_compile_time_arg_val(1); // 8 for perf for fused kernels, this imposes constraints on Wt
     constexpr uint32_t cb_id_in0 = 0, cb_id_in1 = 1;
 
     // ublocks size defined in tiles
@@ -51,7 +51,7 @@ void kernel_main() {
     uint32_t partHt = get_arg_val<uint32_t>(5);
     uint32_t Wt = get_arg_val<uint32_t>(6);
     uint32_t mask_addr = get_arg_val<uint32_t>(7);
-    constexpr bool mask_is_dram = get_compile_time_arg_val(2) == 1;
+    constexpr bool mask_is_dram = get_compile_time_arg_val(1) == 1;
 
     constexpr uint32_t cb_id_attn = 4;
     uint32_t mask_tile_bytes = get_tile_size(cb_id_attn);

@@ -85,6 +85,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
 
     uint32_t NCHt = NC*Ht;
     CoreGridDesc grid(input_tensor.device());
+    auto all_device_cores = CoreRange({0, 0}, {grid.x_ - 1, grid.y_ - 1});
+
     uint32_t num_cores = grid.numcores_dividing_numtiles(NCHt);
     uint32_t partHt = NCHt/num_cores; // only used by fused_scale_mask variant
 
@@ -98,28 +100,10 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     TT_ASSERT(partHt >= Ht || Ht % partHt == 0);
     //cout << "NUM CORES=" << num_cores << " WTPC=" << wtpc << " partHt=" << partHt << endl;
 
-    // Parallelize across rows
-    // TODO: Refactor by calling utility function?
-    uint32_t num_full_rows = num_cores / grid.x_;
-    uint32_t last_row_cores = num_cores % grid.x_;
-
-    std::set<CoreRange> all_cores_set;
-    if (num_full_rows) {
-        all_cores_set.insert((CoreRange) {
-            .start={0, 0}, .end={grid.x_ - 1, num_full_rows - 1}
-        });
-    }
-    if (last_row_cores) {
-        all_cores_set.insert((CoreRange) {
-            .start={0, num_full_rows}, .end={last_row_cores - 1, num_full_rows}
-        });
-    }
-    CoreRangeSet all_cores(all_cores_set);
     bool src0_is_dram = src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
-        src0_is_dram,
-        block_size
+        src0_is_dram
     };
     if (mask.has_value()) {
         bool mask_is_dram = mask.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -128,120 +112,199 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
-        src0_is_dram,
-        block_size
+        src0_is_dram
     };
     std::map<string, string> softmax_defines;
     if (mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
     }
     auto reader_kernels_id = CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/reader_unary_interleaved_sm.cpp", all_cores,
+        program, "tt_metal/kernels/dataflow/reader_unary_interleaved_sm.cpp", all_device_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args,
             .defines = softmax_defines
-        });
-        //DataMovementProcessor::RISCV_1, core.x < 6 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
+    });
+    //DataMovementProcessor::RISCV_1, core.x < 6 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
 
     auto writer_kernels_id = CreateDataMovementKernel(
-        program, "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp", all_cores,
+        program, "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id_blocked_sm.cpp", all_device_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = writer_compile_time_args,
             .defines = softmax_defines
-        });
-        //DataMovementProcessor::RISCV_0, core.x < 6 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
+    });
+    //DataMovementProcessor::RISCV_0, core.x < 6 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
 
     // for broadcasting in H direction we need to
     // NCHt, Nt, Wt
     // if wtpc < Ht then since we pass tpc to the kernel as Ht, the broadcasts should be correct
     // if wtpc >= Ht then tpc should be a multiple of Ht
-    vector<uint32_t> compute_args = { wtpc, partHt, Wt, block_size };
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = true;
     auto softmax_kernels_id = CreateComputeKernel(
-        program, "kernels/compute/softmax.cpp", all_cores,
+        program, "kernels/compute/softmax.cpp", all_device_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode,
-            .compile_args = compute_args,
+            .compile_args = {},
             .defines = softmax_defines
-        });
+    });
 
     // Create circular buffers
     // see softmax.cpp for which buffers are needed
 
-    CircularBufferConfig c_in0_config = CircularBufferConfig(in0_t * in0_tile_size, {{CB::c_in0, in0_cb_data_format}}).set_page_size(CB::c_in0, in0_tile_size);
-    CreateCircularBuffer( program, all_cores, c_in0_config);
-    CircularBufferConfig c_out0_config = CircularBufferConfig(out0_t * in0_tile_size, {{CB::c_out0, in0_cb_data_format}}).set_page_size(CB::c_out0, in0_tile_size);
-    CreateCircularBuffer( program, all_cores, c_out0_config );
-    CircularBufferConfig c_intermed1_config = CircularBufferConfig(im1_t * in0_tile_size, {{CB::c_intermed1, in0_cb_data_format}}).set_page_size(CB::c_intermed1, in0_tile_size);
-    CreateCircularBuffer( program, all_cores, c_intermed1_config );
-    CircularBufferConfig c_in2_config = CircularBufferConfig(in2_t * scalar_tile_size, {{CB::c_in2, DataFormat::Float16_b}}).set_page_size(CB::c_in2, scalar_tile_size);
-    CreateCircularBuffer( program, all_cores, c_in2_config );
-    CircularBufferConfig c_intermed0_config = CircularBufferConfig(im0_t * in0_tile_size, {{CB::c_intermed0, in0_cb_data_format}}).set_page_size(CB::c_intermed0, in0_tile_size);
-    CreateCircularBuffer( program, all_cores, c_intermed0_config );
+    auto c_in0_config = CircularBufferConfig(in0_t * in0_tile_size, {{CB::c_in0, in0_cb_data_format}}).set_page_size(CB::c_in0, in0_tile_size);
+    auto cb_in0_id = CreateCircularBuffer( program, all_device_cores, c_in0_config);
+    auto c_out0_config = CircularBufferConfig(out0_t * in0_tile_size, {{CB::c_out0, in0_cb_data_format}}).set_page_size(CB::c_out0, in0_tile_size);
+    auto cb_out0_id = CreateCircularBuffer( program, all_device_cores, c_out0_config );
+    auto c_intermed1_config = CircularBufferConfig(im1_t * in0_tile_size, {{CB::c_intermed1, in0_cb_data_format}}).set_page_size(CB::c_intermed1, in0_tile_size);
+    auto cb_intermed1_id = CreateCircularBuffer( program, all_device_cores, c_intermed1_config );
+    auto c_in2_config = CircularBufferConfig(in2_t * scalar_tile_size, {{CB::c_in2, DataFormat::Float16_b}}).set_page_size(CB::c_in2, scalar_tile_size);
+    auto cb_in2_id = CreateCircularBuffer( program, all_device_cores, c_in2_config );
+    auto c_intermed0_config = CircularBufferConfig(im0_t * in0_tile_size, {{CB::c_intermed0, in0_cb_data_format}}).set_page_size(CB::c_intermed0, in0_tile_size);
+    auto cb_intermed0_id = CreateCircularBuffer( program, all_device_cores, c_intermed0_config );
+    std::optional<CircularBufferID> cb_intermed3_id;
+    std::optional<CircularBufferID> cb_in3_id;
+    std::optional<CircularBufferID> cb_in4_id;
     if (mask.has_value()) {
         CircularBufferConfig c_intermed3_config = CircularBufferConfig(im3_t * in0_tile_size, {{CB::c_intermed3, in0_cb_data_format}}).set_page_size(CB::c_intermed3, in0_tile_size);
-        CreateCircularBuffer( program, all_cores, c_intermed3_config );
+        cb_intermed3_id = CreateCircularBuffer( program, all_device_cores, c_intermed3_config );
         CircularBufferConfig c_in3_config = CircularBufferConfig(in3_t * scalar_tile_size, {{CB::c_in3, DataFormat::Float16_b}}).set_page_size(CB::c_in3, scalar_tile_size);
-        CreateCircularBuffer( program, all_cores, c_in3_config );
+        cb_in3_id = CreateCircularBuffer( program, all_device_cores, c_in3_config );
         CircularBufferConfig c_in4_config = CircularBufferConfig(in4_t * mask_tile_size, {{CB::c_in4, mask_cb_data_format}}).set_page_size(CB::c_in4, mask_tile_size);
-        CreateCircularBuffer( program, all_cores, c_in4_config);
+        cb_in4_id = CreateCircularBuffer( program, all_device_cores, c_in4_config);
     }
     uint32_t src_addr = src0_dram_buffer->address();
     uint32_t mask_addr = mask.has_value() ? mask.value().buffer()->address() : 0;
 
-    for (uint32_t icore = 0; icore < num_cores; icore++) {
+    for (uint32_t icore = 0; icore < grid.x_ * grid.y_; icore++) {
         auto core = grid.wrap_core(icore);
+        if (icore >= num_cores) {
+            SetRuntimeArgs(program, reader_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0, 0, 0 }); // [8]=1.0f is scaler
+            SetRuntimeArgs(program, softmax_kernels_id, core, { 0, 0, 0, 0 });
+            SetRuntimeArgs(program, writer_kernels_id, core, { 0, 0, 0, 0 });
+            continue;
+        }
 
         uint32_t tile_offset = wtpc*Wt*icore;
         union { float f; uint32_t u; } s; s.f = scale.value_or(1.0f); // scale for fused scale-mask-softmax
         // always in-place
         //                                                              0  1    2       3            4   5       6          7           8
-        SetRuntimeArgs(program, reader_kernels_id, core, { src_addr, 0, s.u, wtpc*Wt, tile_offset, partHt, Wt, mask_addr, 0x3f800000 }); // [8]=1.0f is scaler
-        SetRuntimeArgs(program, writer_kernels_id, core, { src_addr, wtpc*Wt, tile_offset });
+        SetRuntimeArgs(program, reader_kernels_id, core, { src_addr, block_size, s.u, wtpc*Wt, tile_offset, partHt, Wt, mask_addr, 0x3f800000 }); // [8]=1.0f is scaler
+        SetRuntimeArgs(program, softmax_kernels_id, core, { wtpc, partHt, Wt, block_size });
+        SetRuntimeArgs(program, writer_kernels_id, core, { src_addr, wtpc*Wt, tile_offset, block_size });
     }
 
-    auto override_runtime_args_callback = [
-            reader_kernel_id=reader_kernels_id,
-            writer_kernel_id=writer_kernels_id,
-            num_cores,
-            grid
+    auto override_runtime_arguments_callback = [
+            reader_kernels_id,
+            writer_kernels_id,
+            softmax_kernels_id,
+            grid,
+            scalar_tile_size,
+            in0_tile_size,
+            mask_tile_size,
+            cb_in0_id,
+            cb_out0_id,
+            cb_intermed1_id,
+            cb_in2_id,
+            cb_intermed0_id,
+            cb_intermed3_id,
+            cb_in3_id,
+            cb_in4_id
         ]
     (
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<Tensor>& output_tensors
     ) {
-        TT_ASSERT(input_buffers.size() == 2);
 
-        auto src_dram_buffer = input_buffers.at(0);
-        auto mask_dram_buffer = input_buffers.at(1);
+        const auto scale = static_cast<const SoftmaxInPlace*>(operation)->scale;
 
-        for (uint32_t icore = 0; icore < num_cores; icore++) {
+        auto src_dram_buffer_address = input_tensors.at(0).buffer()->address();
+        auto mask_dram_buffer_address = optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
+
+        const auto shape = input_tensors.at(0).shape();
+        u32 W = shape[3], H = shape[2] * shape[1], NC = shape[0];
+        u32 HW = H*W;
+
+        u32 Wt = W/TILE_WIDTH;
+        u32 Ht = H/TILE_HEIGHT;
+
+        int32_t num_tiles = input_tensors.at(0).volume()/TILE_HW;
+        uint32_t block_size = find_max_divisor(Wt, 8);
+
+        // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
+        uint32_t in0_t  = block_size*2;
+        uint32_t out0_t = block_size*2;
+        uint32_t im1_t  = 1; // 1/sum(exp(x))
+        uint32_t in2_t  = 1; // scaler for reduce coming from reader
+        uint32_t in3_t  = 1; // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
+        uint32_t in4_t  = div_up(Wt, block_size)*block_size; // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
+
+        // cb_exps - keeps exps in CB in L1 to avoid recomputing
+        uint32_t im0_t  = block_size*div_up(Wt, block_size);
+        TT_ASSERT(im0_t == Wt);
+
+        // used for buffering scale-mask
+        // can't easily reuse im0_t because cumulative wait for Wt needs to have Wt tiles contiguous free
+        uint32_t im3_t  = block_size*(div_up(Wt, block_size)+1);
+        TT_ASSERT(im3_t == Wt+block_size);
+
+        TT_ASSERT(Wt % block_size == 0);
+        TT_ASSERT((block_size != -1) && "Wt must be divisible by one of the numbers in the range from 8 to 1.");
+        TT_ASSERT(im0_t % block_size == 0 && "Size of cb must be divisible by the size of block used by the reader and compute kernel.");
+        TT_ASSERT(out0_t % block_size == 0 && "Size of cb must be divisible by the size of block used by the reader and compute kernel.");
+        TT_ASSERT(in4_t % block_size == 0);
+        TT_ASSERT(W <= TILE_WIDTH*im0_t && "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
+
+        uint32_t NCHt = NC*Ht;
+        uint32_t num_cores = grid.numcores_dividing_numtiles(NCHt);
+        uint32_t partHt = NCHt/num_cores; // only used by fused_scale_mask variant
+
+        // we are actually splitting blocks of Wt tiles, not tiles, so no checking for bank alignment is needed
+        TilesSplit ts(num_cores, NCHt);
+        auto wtpc = ts.get_tpc();
+        TT_ASSERT(NCHt % wtpc == 0);
+        TT_ASSERT(NCHt % num_cores == 0);
+        TT_ASSERT(wtpc < Ht || (wtpc % Ht == 0));
+        TT_ASSERT(NCHt % num_cores == 0);
+        TT_ASSERT(partHt >= Ht || Ht % partHt == 0);
+
+        GetCircularBufferConfig(program, cb_in0_id).set_total_size(in0_t * in0_tile_size).set_page_size(CB::c_in0, in0_tile_size);
+        GetCircularBufferConfig(program, cb_out0_id).set_total_size(out0_t * in0_tile_size).set_page_size(CB::c_out0, in0_tile_size);
+        GetCircularBufferConfig(program, cb_intermed1_id).set_total_size(im1_t * in0_tile_size).set_page_size(CB::c_intermed1, in0_tile_size);
+        GetCircularBufferConfig(program, cb_in2_id).set_total_size(in2_t * in0_tile_size).set_page_size(CB::c_in2, scalar_tile_size);
+        GetCircularBufferConfig(program, cb_intermed0_id).set_total_size(im0_t * in0_tile_size).set_page_size(CB::c_intermed0, in0_tile_size);
+
+        if (optional_input_tensors.at(0).has_value()) {
+            GetCircularBufferConfig(program, cb_intermed3_id.value()).set_total_size(im3_t * in0_tile_size).set_page_size(CB::c_intermed3, in0_tile_size);
+            GetCircularBufferConfig(program, cb_in3_id.value()).set_total_size(in3_t * in0_tile_size).set_page_size(CB::c_in3, scalar_tile_size);
+            GetCircularBufferConfig(program, cb_in4_id.value()).set_total_size(in4_t * in0_tile_size).set_page_size(CB::c_in4, mask_tile_size);
+        }
+
+        for (uint32_t icore = 0; icore < grid.x_ * grid.y_; icore++) {
             auto core = grid.wrap_core(icore);
-
-            {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_dram_buffer->address();
-                if (mask_dram_buffer != nullptr) {
-                    runtime_args[7] = mask_dram_buffer->address();
-                }
-                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
+            if (icore >= num_cores) {
+                SetRuntimeArgs(program, reader_kernels_id, core, { 0, 0, 0, 0, 0, 0, 0, 0, 0 }); // [8]=1.0f is scaler
+                SetRuntimeArgs(program, softmax_kernels_id, core, { 0, 0, 0, 0 });
+                SetRuntimeArgs(program, writer_kernels_id, core, { 0, 0, 0, 0 });
+                continue;
             }
 
-            {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = src_dram_buffer->address();
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
-            }
+            uint32_t tile_offset = wtpc*Wt*icore;
+            union { float f; uint32_t u; } s; s.f = scale.value_or(1.0f); // scale for fused scale-mask-softmax
+
+            SetRuntimeArgs(program, reader_kernels_id, core, { src_dram_buffer_address, block_size, s.u, wtpc*Wt, tile_offset, partHt, Wt, mask_dram_buffer_address, 0x3f800000 }); // [8]=1.0f is scaler
+            SetRuntimeArgs(program, softmax_kernels_id, core, { wtpc, partHt, Wt, block_size });
+            SetRuntimeArgs(program, writer_kernels_id, core, { src_dram_buffer_address, wtpc*Wt, tile_offset, block_size });
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 } // scale_mask_softmax_
 
 
@@ -293,6 +356,19 @@ tt::stl::reflection::Attributes SoftmaxInPlace::attributes() const {
     return {
         {"scale", this->scale},
     };
+}
+
+
+const operation::Hash SoftmaxInPlace::compute_program_hash(
+    const std::vector<Tensor> &input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    return fmt::format(
+        "SoftmaxInPlace_{}_{}_{}_{}",
+        input_tensors.at(0).memory_config(),
+        input_tensors.at(0).dtype(),
+        optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().memory_config()} : std::nullopt,
+        optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().dtype()} : std::nullopt
+    );
 }
 
 Tensor softmax_in_place(Tensor& input_tensor) {

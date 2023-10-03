@@ -50,7 +50,7 @@ struct CoreGridDesc {
         return core;
     }
 
-    int numcores_dividing_numtiles(int num_tiles, int block_size = 1) {
+    int numcores_dividing_numtiles(int num_tiles, int block_size = 1) const {
         // since we will be splitting num_tiles into num_cores we need to find num_cores such that
         // num_tiles % num_cores = 0, so that it's evenly divided since we don't support leftovers at the moment
         // TODO(AP): optimize if needed, O(max_cores) atm

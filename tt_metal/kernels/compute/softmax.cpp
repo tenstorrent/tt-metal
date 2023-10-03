@@ -26,10 +26,10 @@ ALWI void REL() { release_dst(tt::DstMode::Half); }
 namespace NAMESPACE {
 void MAIN {
 
-    constexpr uint32_t NCHt = get_compile_time_arg_val(0);
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);
-    constexpr uint32_t Wt = get_compile_time_arg_val(2);
-    constexpr uint32_t ndst = get_compile_time_arg_val(3);
+    uint32_t NCHt = get_arg_val<uint32_t>(0);
+    uint32_t Ht = get_arg_val<uint32_t>(1);
+    uint32_t Wt = get_arg_val<uint32_t>(2);
+    uint32_t ndst = get_arg_val<uint32_t>(3);
     binary_op_init_common(tt::CB::c_in0, tt::CB::c_in2);
 
     constexpr uint32_t onetile = 1;

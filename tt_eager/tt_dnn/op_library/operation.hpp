@@ -131,6 +131,19 @@ constexpr bool implements_compute_program_hash() {
     >{};
 }
 
+template<class T, class... Args>
+using has_compute_program_hash_with_optional_input_tensors_t = decltype(std::declval<T>().compute_program_hash(std::declval<Args>()...));
+
+template<class T>
+constexpr bool implements_compute_program_hash_with_optional_input_tensors() {
+    return std::experimental::is_detected<
+        has_compute_program_hash_with_optional_input_tensors_t,
+        T,
+        const std::vector<Tensor>&,
+        const std::vector<std::optional<const Tensor>>&
+    >{};
+}
+
 template<class T>
 constexpr bool is_device_operation() {
     return implements_create_program<T>() or implements_create_program_with_optional_input_tensors<T>();
@@ -313,6 +326,11 @@ struct DeviceOperation {
                     static_assert(detail::implements_create_program<T>());
                     TT_ASSERT(optional_input_tensors.empty());
                     return operation.compute_program_hash(input_tensors);
+                }
+                else if constexpr (detail::implements_compute_program_hash_with_optional_input_tensors<T>()) {
+                    static_assert(detail::implements_create_program_with_optional_input_tensors<T>());
+                    TT_ASSERT(not optional_input_tensors.empty());
+                    return operation.compute_program_hash(input_tensors, optional_input_tensors);
                 }
                 else if constexpr (detail::implements_create_program<T>()) {
                     TT_ASSERT(optional_input_tensors.empty());

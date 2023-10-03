@@ -28,6 +28,10 @@ struct SoftmaxInPlace {
         std::vector<Tensor> &output_tensors
     ) const;
     tt::stl::reflection::Attributes attributes() const;
+
+    const operation::Hash compute_program_hash(
+        const std::vector<Tensor> &input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 };
 
 // const ref prevents in-place
