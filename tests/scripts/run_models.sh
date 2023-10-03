@@ -108,3 +108,5 @@ env pytest tests/models/EfficientNet/tests -k efficientnet_v2_s_model_real
 env pytest tests/models/EfficientNet/tests -k efficientnet_lite0_model_real
 
 env pytest tests/models/nanogpt -k nanogpt_model_real
+
+env pytest tests/models/resnet/test_metal_resnet50.py
