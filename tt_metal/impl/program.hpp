@@ -69,7 +69,7 @@ class Program {
 
     KernelGroup * kernels_on_core(const CoreCoord &core);
 
-    void update_kernel_groups();
+    std::vector<KernelGroup>& get_kernel_groups();
 
     const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_on_core(const CoreCoord &core) const;
 
@@ -162,6 +162,8 @@ class Program {
     void add_blank_kernels(Device *device);
 
     void set_cb_data_fmt( Device *device, Kernel *kernel, build_kernel_for_riscv_options_t &build_options) const;
+
+    void update_kernel_groups();
 };
 
 }  // namespace tt_metal

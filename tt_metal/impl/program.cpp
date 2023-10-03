@@ -144,16 +144,16 @@ KernelGroup::KernelGroup(std::optional<KernelID> brisc_id,
     this->riscv1_id = ncrisc_id;
     this->compute_id = trisc_id;
 
-    if (brisc_id) {
-        this->launch_msg.enable_brisc = true;
-    }
-    if (ncrisc_id) {
-        this->launch_msg.enable_ncrisc = true;
-    }
-    if (trisc_id) {
-        this->launch_msg.enable_triscs = true;
-    }
-    launch_msg.run = RUN_MSG_GO;
+    this->launch_msg.enable_brisc = brisc_id ? true : false;
+    this->launch_msg.enable_ncrisc = ncrisc_id ? true : false;
+    this->launch_msg.enable_triscs = trisc_id ? true : false;
+
+    this->launch_msg.run = RUN_MSG_GO;
+}
+
+std::vector<KernelGroup>& Program::get_kernel_groups() {
+    update_kernel_groups();
+    return kernel_groups_;
 }
 
 KernelGroup * Program::kernels_on_core(const CoreCoord &core) {

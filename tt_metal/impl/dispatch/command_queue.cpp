@@ -59,6 +59,7 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
         init_map.emplace(TransferType::T1, init_vec);
         init_map.emplace(TransferType::T2, init_vec);
         init_map.emplace(TransferType::SEM, init_vec);
+        init_map.emplace(TransferType::KG, init_vec);
         ProgramSection section = {.section = init_map, .size_in_bytes = 0};
         sections.push_back(section);
     };
@@ -187,6 +188,44 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
         sections.at(current_section_idx).size_in_bytes += 16;
     };
 
+    auto write_kernel_group_transfer = [&](const KernelGroup& kg) {
+        u32 num_bytes_so_far = program_vector.size() * sizeof(u32);
+        u32 num_new_bytes = sizeof(launch_msg_t);
+
+        if (num_bytes_so_far + num_new_bytes > MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR) {
+            current_section_idx++;
+            initialize_section();
+        }
+
+        CoreRangeSet cr_set = kg.core_ranges;
+
+        for (const CoreRange& core_range : cr_set.ranges()) {
+            CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
+            CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
+
+            u32 noc_multicast_encoding = get_noc_multicast_encoding(physical_start, physical_end);
+
+            // XXXXX Ughughughugh
+            uint32_t *data = (uint32_t *)&kg.launch_msg;
+            program_vector.push_back(data[0]);
+            program_vector.push_back(data[1]);
+            program_vector.push_back(data[2]);
+            program_vector.push_back(data[3]);
+
+            sections.at(current_section_idx)
+                .at(TransferType::KG)
+                .push_back(std::make_tuple(
+                    GET_MAILBOX_ADDRESS_HOST(launch),
+                    start_in_bytes,
+                    sizeof(launch_msg_t),
+                    noc_multicast_encoding,
+                    core_range.size()));
+
+            start_in_bytes += sizeof(launch_msg_t);
+            sections.at(current_section_idx).size_in_bytes += sizeof(launch_msg_t);
+        }
+    };
+
     initialize_section();
     const static std::map<tt::RISCV, vector<TransferType>> processor_to_transfer_type = {
         {tt::RISCV::BRISC, {TransferType::B}},
@@ -205,6 +244,11 @@ ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Pro
 
     for (auto sem : program.semaphores()) {
         write_sem_config_transfer(sem);
+    }
+
+    for (KernelGroup& kg : program.get_kernel_groups()) {
+        kg.launch_msg.mode = DISPATCH_MODE_DEV;
+        write_kernel_group_transfer(kg);
     }
 
     TT_ASSERT(current_section_idx == 0, "Testing for just one section so far");
@@ -385,34 +429,6 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 host_data
         command.set_multicast_message_noc_coord(multicast_message_noc_coord, num_messages);
     }
 
-    u32 program_src = this->buffer.address();
-    u32 program_src_noc = noc_coord_to_u32(this->buffer.noc_coordinates());
-
-    for (const ProgramSection& section : this->program_to_dev_map.program_sections) {
-        vector<TrailingWriteCommand> trailing_write_commands;
-
-        // Kernel section
-        for (const auto& [transfer_type, transfer_info_vector] : section.section) {
-            for (const auto& [dst_addr, src, size_in_bytes, noc_multicast_encoding, num_receivers] :
-                 transfer_info_vector) {
-                TrailingWriteCommand trailing_write = {
-                    .src = src,
-                    .dst = dst_addr,
-                    .dst_noc = noc_multicast_encoding,
-                    .transfer_size = size_in_bytes,
-                    .num_receivers = num_receivers};
-
-                trailing_write_commands.push_back(trailing_write);
-            }
-        }
-
-        // This is not fully correct since if there are multiple sections, they are not starting at the correct
-        // part of the program buffer... a simpler method would be for there to be multiple buffers, where each
-        // buffer owns a section... that is definitely a TODO(agrebenisan)
-        command.add_read_multi_write_instruction(
-            program_src, program_src_noc, section.size_in_bytes, trailing_write_commands);
-    }
-
     // Deal with runtime args
     u32 data_size_in_bytes = 0;
     vector<TrailingWriteCommand> trailing_write_commands;
@@ -493,6 +509,35 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 host_data
     }
 
     command.set_data_size_in_bytes(data_size_in_bytes);
+
+    u32 program_src = this->buffer.address();
+    u32 program_src_noc = noc_coord_to_u32(this->buffer.noc_coordinates());
+
+    for (const ProgramSection& section : this->program_to_dev_map.program_sections) {
+        vector<TrailingWriteCommand> trailing_write_commands;
+
+        // Kernel section
+        for (const auto& [transfer_type, transfer_info_vector] : section.section) {
+            for (const auto& [dst_addr, src, size_in_bytes, noc_multicast_encoding, num_receivers] :
+                 transfer_info_vector) {
+                TrailingWriteCommand trailing_write = {
+                    .src = src,
+                    .dst = dst_addr,
+                    .dst_noc = noc_multicast_encoding,
+                    .transfer_size = size_in_bytes,
+                    .num_receivers = num_receivers};
+
+                trailing_write_commands.push_back(trailing_write);
+            }
+        }
+
+        // This is not fully correct since if there are multiple sections, they are not starting at the correct
+        // part of the program buffer... a simpler method would be for there to be multiple buffers, where each
+        // buffer owns a section... that is definitely a TODO(agrebenisan)
+        command.add_read_multi_write_instruction(
+            program_src, program_src_noc, section.size_in_bytes, trailing_write_commands);
+    }
+
     return command;
 }
 
