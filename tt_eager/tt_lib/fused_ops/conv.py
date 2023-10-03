@@ -174,7 +174,10 @@ def resnet50_optimized_conv(weight: List[Union[int, float]], conv_params, device
         weight_untiled, weight_block_h, weight_block_w
     )
     else:
-        assert act_block_shape_hw[1] == C
+        if R == 1 and S == 1:
+            assert C % act_block_shape_hw[1] == 0
+        else:
+            assert act_block_shape_hw[1] == C
         weight_tiled_ = tensor.convert_conv_weight_tensor_to_tiled_layout(
             weight_untiled, weight_block_h, weight_block_w
         )

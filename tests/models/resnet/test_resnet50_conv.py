@@ -358,38 +358,38 @@ hardcoded_matmul_config_conv = {
     },
 }
 
-hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
+hardcoded_conv_blocking_and_parallelization_config = {
     1: {
-        (3136, 64): [64, 64, 64, 64, 64, (7, 7), 64, 64],
-        (800, 128): [32, 128, 32, 64, 32, (5, 5), 32, 128],
-        (224, 256): [32, 128, 32, 128, 32, (1, 7), 32, 256],
-        (64, 512): [32, 64, 32, 64, 32, (1, 2), 32, 512],
+        (3136, 64): [64 * 3, 64, 64, 64, 64, 64, (7, 7), 64, 64],
+        (800, 128): [128, 32, 128, 32, 64, 32, (5, 5), 32, 128],
+        (224, 256): [256, 32, 128, 32, 128, 32, (1, 7), 32, 256],
+        (64, 512): [512, 32, 64, 32, 64, 32, (1, 2), 32, 512],
         # bypass convs
-        (3136, 256): [64, 64, 64, 64, 64, (7, 7), 64, 256],
-        (800, 512): [32, 64, 32, 64, 32, (5, 5), 32, 512],
-        (224, 1024): [32, 128, 32, 64, 32, (1, 7), 32, 1024],
-        (64, 2048): [32, 128, 32, 64, 32, (1, 2), 32, 2048],
+        (3136, 256): [128, 64, 64, 64, 64, 64, (7, 7), 64, 256],
+        (800, 512): [256, 32, 64, 32, 64, 32, (5, 5), 32, 512],
+        (224, 1024): [512, 32, 128, 32, 64, 32, (1, 7), 32, 1024],
+        (64, 2048): [1024, 32, 128, 32, 64, 32, (1, 2), 32, 2048],
     },
     2: {
-        (6272, 64): [128, 64, 128, 64, 128, (7, 7), 128, 64],
-        (1568, 128): [32, 128, 32, 64, 32, (7, 7), 32, 128],
-        (416, 256): [64, 128, 64, 128, 64, (7, 1), 64, 256],
-        (128, 512): [32, 64, 32, 64, 32, (1, 4), 32, 512],
+        (6272, 64): [64 * 3, 128, 64, 128, 64, 128, (7, 7), 128, 64],
+        (1568, 128): [128, 32, 128, 32, 64, 32, (7, 7), 32, 128],
+        (416, 256): [256, 64, 128, 64, 128, 64, (7, 1), 64, 256],
+        (128, 512): [512, 32, 64, 32, 64, 32, (1, 4), 32, 512],
         # bypass convs
-        (6272, 256): [128, 64, 128, 64, 128, (7, 7), 128, 256],
-        (1568, 512): [32, 64, 32, 64, 32, (7, 7), 32, 512],
-        (416, 1024): [64, 128, 64, 64, 64, (7, 1), 64, 1024],
-        (128, 2048): [64, 128, 64, 64, 64, (1, 2), 64, 2048],
+        (6272, 256): [128, 128, 64, 128, 64, 128, (7, 7), 128, 256],
+        (1568, 512): [256, 32, 64, 32, 64, 32, (7, 7), 32, 512],
+        (416, 1024): [512, 64, 128, 64, 64, 64, (7, 1), 64, 1024],
+        (128, 2048): [1024, 64, 128, 64, 64, 64, (1, 2), 64, 2048],
     },
     8: {
-        (25088, 64): [256, 64, 128, 64, 256, (12, 9), 256, 64],
-        (6272, 128): [64, 128, 64, 128, 64, (12, 9), 64, 128],
-        (1568, 256): [160, 32, 32, 32, 160, (10, 8), 160, 32],
-        (416, 512): [96, 64, 32, 32, 96, (5, 8), 96, 64],
+        (25088, 64): [64 * 3, 256, 64, 128, 64, 256, (12, 9), 256, 64],
+        (6272, 128): [128, 64, 128, 64, 128, 64, (12, 9), 64, 128],
+        (1568, 256): [256, 160, 32, 32, 32, 160, (10, 8), 160, 32],
+        (416, 512): [512, 96, 64, 32, 32, 96, (5, 8), 96, 64],
         # bypass convs
-        (6272, 512): [64, 512, 32, 256, 64, (12, 9), 64, 512],
-        (1568, 1024): [160, 128, 32, 64, 160, (10, 8), 160, 128],
-        (416, 2048): [32, 256, 32, 32, 96, (5, 8), 96, 256],
+        (6272, 512): [256, 64, 512, 32, 256, 64, (12, 9), 64, 512],
+        (1568, 1024): [512, 160, 128, 32, 64, 160, (10, 8), 160, 128],
+        (416, 2048): [512, 96, 256, 32, 32, 96, (5, 8), 96, 256],
     },
 }
 
@@ -434,7 +434,7 @@ hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv = {
             0,
             0,
         ),  # slightly slower with new matmul but less than old matmul + bias computation time
-        # convs in rn50 (not complete list)
+        # unique convs in rn50 (complete list)
         # layer1
         (64, 64, 56, 56, 3, 3, 1, 1, 1, 1),
         # layer2
@@ -504,11 +504,9 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
                 matmul_config,
             )
         else:
-            assert (
-                conv_as_mm_padded_act_height,
-                K,
-            ) in hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv[N]
+            assert (conv_as_mm_padded_act_height, K) in hardcoded_conv_blocking_and_parallelization_config[N]
             [
+                act_block_w_datums,
                 act_block_h_datums,
                 weight_block_w_datums,
                 out_subblock_h_datums,
@@ -517,9 +515,14 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
                 grid_size,
                 per_core_out_matrix_h,
                 per_core_weight_matrix_w,
-            ] = hardcoded_act_blk_h_weight_blk_w_out_subblk_h_out_subblk_w_for_conv[N][
-                (conv_as_mm_padded_act_height, K)
-            ]
+            ] = hardcoded_conv_blocking_and_parallelization_config[N][(conv_as_mm_padded_act_height, K)]
+            if R == 1 and S == 1:
+                assert C % act_block_w_datums == 0
+            else:
+                assert act_block_w_datums == C or act_block_w_datums == C * S
+            assert act_block_w_datums % 32 == 0
+            assert act_block_h_datums % 32 == 0
+            assert weight_block_w_datums % 32 == 0
             assert per_core_out_matrix_h % 32 == 0
             per_core_out_matrix_h_ntiles = (int)(per_core_out_matrix_h / 32)
             per_core_weight_matrix_w_ntiles = (int)(per_core_weight_matrix_w / 32)
@@ -527,8 +530,8 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
                 conv_weight_pyt.reshape(-1).tolist(),
                 conv_params,
                 device,
-                [act_block_h_datums, C],
-                [C, weight_block_w_datums],
+                [act_block_h_datums, act_block_w_datums],
+                [act_block_w_datums, weight_block_w_datums],
                 [out_subblock_h_datums, out_subblock_w_datums],
                 out_block_h_datums,
                 grid_size,

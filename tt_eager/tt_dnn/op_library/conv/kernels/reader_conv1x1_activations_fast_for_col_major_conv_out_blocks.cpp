@@ -75,6 +75,8 @@ void kernel_main() {
     constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
     constexpr uint32_t conv_act_size_c_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t log_base_2_of_conv_act_size_c_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t num_channel_slices = get_compile_time_arg_val(8); // arg index=7 unused
+    constexpr uint32_t channel_slice_size_bytes = get_compile_time_arg_val(9);
 
     constexpr uint32_t cb_id_act = 0;
     constexpr uint32_t tile_size_pow2_exponent = 11;
@@ -112,52 +114,64 @@ void kernel_main() {
         uint32_t n = n_start;
         uint32_t n_reset = n_start;
         for(uint32_t nbh = 0; nbh < num_blocks_act_h; nbh++) {
-            cb_reserve_back(cb_id_act, act_block_num_tiles);
-            uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
-            uint32_t l1_addr_offset = 0;
-            for(uint32_t bh = 0; bh < act_block_h_datums; bh++) {
-                uint32_t in_h_offset = out_h * stride_h;
-                uint32_t in_w_offset = out_w * stride_w; // expect stride 1 or 2.. make this compile time args - also conv input width
-                uint32_t read_size_bytes = conv_act_size_c_bytes;
+            uint32_t channel_slice_offset = 0;
+            for (uint32_t chs = 0; chs < num_channel_slices; chs++) {
+                out_h = out_h_reset;
+                out_w = out_w_reset;
+                total_h = total_h_reset;
+                n = n_reset;
+                cb_reserve_back(cb_id_act, act_block_num_tiles);
+                uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
+                uint32_t l1_addr_offset = 0;
+                for(uint32_t bh = 0; bh < act_block_h_datums; bh++) {
+                    uint32_t in_h_offset = out_h * stride_h;
+                    uint32_t in_w_offset = out_w * stride_w; // expect stride 1 or 2.. make this compile time args - also conv input width
+                    uint32_t read_size_bytes = channel_slice_size_bytes;
 
-                if (total_h < act_matrix_height_unpadded) {
-                    uint32_t in_h = in_h_offset;
-                    uint32_t in_w = in_w_offset;
+                    if (total_h < act_matrix_height_unpadded) {
+                        uint32_t in_h = in_h_offset;
+                        uint32_t in_w = in_w_offset;
 
-                    if(in_h < pad_h || in_w < pad_w || in_h >= (conv_act_size_h + pad_h) || in_w >= (conv_act_size_w_ + pad_w)) {
-                        // pad 0s in l1
-                        uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
-                        uint32_t pad_size_bytes = read_size_bytes;
-                        pad_l1_buffer_with_zeroes(dst_addr, pad_size_bytes);
+                        if(in_h < pad_h || in_w < pad_w || in_h >= (conv_act_size_h + pad_h) || in_w >= (conv_act_size_w_ + pad_w)) {
+                            // pad 0s in l1
+                            uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
+                            uint32_t pad_size_bytes = read_size_bytes;
+                            pad_l1_buffer_with_zeroes(dst_addr, pad_size_bytes);
+                        } else {
+                            // read one channel from dram multi bank - row_id = channel_id
+                            uint32_t in_h_raw = in_h - pad_h;
+                            uint32_t in_w_raw = in_w - pad_w;
+                            uint32_t channel_id = (n * conv_act_size_h * conv_act_size_w) + (in_h_raw * conv_act_size_w) + in_w_raw;
+                            //DPRINT << "n=" << n << " h=" << in_h_raw << " w=" << in_w_raw << " conv_act_size_h=" << conv_act_size_h << " conv_act_size_w=" << conv_act_size_w << ENDL();
+                            uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
+                            s_act.noc_async_read_partial_page(channel_id, dst_addr, channel_slice_size_bytes, channel_slice_offset);
+                        }
+                    } //else { DPRINT << "total_h here =" << total_h << ENDL();  } //do nothing. let garbage rows be in l1
+                    l1_addr_offset += read_size_bytes;
+                    if(out_w < conv_output_size_w - 1) {
+                        out_w += 1;
                     } else {
-                        // read one channel from dram multi bank - row_id = channel_id
-                        uint32_t in_h_raw = in_h - pad_h;
-                        uint32_t in_w_raw = in_w - pad_w;
-                        uint32_t channel_id = (n * conv_act_size_h * conv_act_size_w) + (in_h_raw * conv_act_size_w) + in_w_raw;
-                        //DPRINT << "n=" << n << " h=" << in_h_raw << " w=" << in_w_raw << " conv_act_size_h=" << conv_act_size_h << " conv_act_size_w=" << conv_act_size_w << ENDL();
-                        uint32_t dst_addr = l1_write_addr_act + l1_addr_offset;
-                        s_act.noc_async_read_page(channel_id, dst_addr);
+                        out_w = 0;
+                        if (out_h < conv_output_size_h - 1) {
+                            out_h += 1;
+                        } else if (total_h < act_matrix_height_unpadded){
+                            // next image in batch
+                            out_h = 0;
+                            n += 1;
+                        }
                     }
-                } //else { DPRINT << "total_h here =" << total_h << ENDL();  } //do nothing. let garbage rows be in l1
-                l1_addr_offset += read_size_bytes;
-                if(out_w < conv_output_size_w - 1) {
-                    out_w += 1;
-                } else {
-                    out_w = 0;
-                    if (out_h < conv_output_size_h - 1) {
-                        out_h += 1;
-                    } else if (total_h < act_matrix_height_unpadded){
-                        // next image in batch
-                        out_h = 0;
-                        n += 1;
-                    }
-                }
-                total_h += 1;
-            } // for block height
-            //DPRINT << "waiting on read barrier" << ENDL();
-            noc_async_read_barrier();
-            //DPRINT << "done on read barrier" << ENDL();
-            cb_push_back(cb_id_act, act_block_num_tiles);
+                    total_h += 1;
+                } // for block height
+                //DPRINT << "waiting on read barrier" << ENDL();
+                noc_async_read_barrier();
+                //DPRINT << "done on read barrier" << ENDL();
+                cb_push_back(cb_id_act, act_block_num_tiles);
+                channel_slice_offset += channel_slice_size_bytes;
+            } // for num channel slices
+            out_h_reset = out_h;
+            out_w_reset = out_w;
+            total_h_reset = total_h;
+            n_reset = n;
         } // for num of act blocks in height dim
     } // for num of weight blocks in width dim
 }
