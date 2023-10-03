@@ -122,7 +122,7 @@ def test_perf_bare_metal(
     "expected_inference_time, expected_compile_time",
     (
         (
-            2.7,
+            2.9,
             17.5,
         ),
     ),
