@@ -120,7 +120,7 @@ static void dump_l1_status(FILE *f, WatcherDevice *wdev, CoreCoord core) {
     }
 }
 
-static const char * get_sanity_riscv_name(uint32_t type)
+static const char * get_sanity_riscv_name(CoreCoord core, uint32_t type)
 {
     switch (type) {
     case DebugSanitizeBrisc:
@@ -134,30 +134,31 @@ static const char * get_sanity_riscv_name(uint32_t type)
     case DebugSanitizeTrisc2:
         return "trisc2";
     default:
-        log_fatal(LogLLRuntime, "Watcher unexpected riscv type {}", type);
+        log_fatal(LogLLRuntime, "Watcher unexpected riscv type on core {}: {}", core.str(), type);
     }
     return nullptr;
 }
 
-static void dump_noc_sanity_status(FILE *f, int noc, const debug_sanitize_noc_addr_msg_t* san) {
+static void dump_noc_sanity_status(FILE *f, CoreCoord core, int noc, const debug_sanitize_noc_addr_msg_t* san) {
 
     switch (san->invalid) {
     case DebugSanitizeNocInvalidOK:
         if (san->addr != DEBUG_SANITIZE_NOC_SENTINEL_OK_64 ||
             san->len != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 ||
             san->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_16) {
-            log_fatal(LogLLRuntime, "Watcher unexpected noc debug state, reported valid got (addr,len,which)=({},{},{})", san->addr, san->len, san->which);
+            log_fatal(LogLLRuntime, "Watcher unexpected noc debug state on core {}, reported valid got (addr,len,which)=({},{},{})",
+                      core.str(), san->addr, san->len, san->which);
         }
         break;
     case DebugSanitizeNocInvalidL1:
-        fprintf(f, "noc%d:%s{0x%08lx, %d}", noc, get_sanity_riscv_name(san->which), san->addr, san->len);
+        fprintf(f, "noc%d:%s{0x%08lx, %d}", noc, get_sanity_riscv_name(core, san->which), san->addr, san->len);
         fflush(f);
         log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC L1/reg address, see log");
         break;
     case DebugSanitizeNocInvalidUnicast:
         fprintf(f, "noc%d:%s{(%02ld,%02ld) 0x%08lx, %d}",
                 noc,
-                get_sanity_riscv_name(san->which),
+                get_sanity_riscv_name(core, san->which),
                 NOC_UNICAST_ADDR_X(san->addr),
                 NOC_UNICAST_ADDR_Y(san->addr),
                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
@@ -167,7 +168,7 @@ static void dump_noc_sanity_status(FILE *f, int noc, const debug_sanitize_noc_ad
     case DebugSanitizeNocInvalidMulticast:
         fprintf(f, "noc%d:%s{(%02ld,%02ld)-(%02ld,%02ld) 0x%08lx, %d}",
                 noc,
-                get_sanity_riscv_name(san->which),
+                get_sanity_riscv_name(core, san->which),
                 NOC_MCAST_ADDR_START_X(san->addr),
                 NOC_MCAST_ADDR_START_Y(san->addr),
                 NOC_MCAST_ADDR_END_X(san->addr),
@@ -177,30 +178,33 @@ static void dump_noc_sanity_status(FILE *f, int noc, const debug_sanitize_noc_ad
         log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC multicast transaction, see log");
         break;
     default:
-        log_fatal(LogLLRuntime, "Watcher unexpected noc debug state, unknown failure code: {}\n", san->invalid);
+        log_fatal(LogLLRuntime, "Watcher unexpected noc debug state on core {}, unknown failure code: {}\n",
+                  core.str(), san->invalid);
     }
 }
 
-static void dump_noc_sanity_status(FILE *f, const debug_sanitize_noc_addr_msg_t *san) {
+static void dump_noc_sanity_status(FILE *f, CoreCoord core, const debug_sanitize_noc_addr_msg_t *san) {
 
     for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
-        dump_noc_sanity_status(f, noc, &san[noc]);
+        dump_noc_sanity_status(f, core, noc, &san[noc]);
     }
 }
 
-static void dump_run_state(FILE *f, uint32_t state) {
+static void dump_run_state(FILE *f, CoreCoord core, uint32_t state) {
     char code = 'U';
     if (state == RUN_MSG_INIT) code = 'I';
     else if (state == RUN_MSG_GO) code = 'G';
     else if (state == RUN_MSG_DONE) code = 'D';
     if (code == 'U') {
-        log_fatal(LogLLRuntime, "Watcher unexpected run state {}", code);
+        log_fatal(LogLLRuntime, "Watcher unexpected run state on core{}: {} (expected {} or {} or {})",
+                  core.str(), state, RUN_MSG_INIT, RUN_MSG_GO, RUN_MSG_DONE);
     } else {
         fprintf(f, "%c", code);
     }
 }
 
 static void dump_run_mailboxes(FILE *f,
+                               CoreCoord core,
                                const launch_msg_t *launch,
                                const slave_sync_msg_t *slave_sync) {
 
@@ -211,11 +215,12 @@ static void dump_run_mailboxes(FILE *f,
     } else if (launch->mode == DISPATCH_MODE_HOST) {
         fprintf(f, "H");
     } else {
-        log_fatal(LogLLRuntime, "Watcher unexpected launch mode {}", launch->mode);
+        log_fatal(LogLLRuntime, "Watcher unexpected launch mode on core {}: {} (expected {} or {})",
+                  core.str(), launch->mode, DISPATCH_MODE_DEV, DISPATCH_MODE_HOST);
 
     }
 
-    dump_run_state(f, launch->run);
+    dump_run_state(f, core, launch->run);
 
     fprintf(f, "|");
 
@@ -224,7 +229,9 @@ static void dump_run_mailboxes(FILE *f,
     } else if (launch->enable_brisc == 0) {
         fprintf(f, "b");
     } else {
-        log_fatal(LogLLRuntime, "Watcher unexpected brisc enable {}", launch->enable_brisc);
+        log_fatal(LogLLRuntime, "Watcher unexpected brisc enable on core: {}, (expected 0 or 1)",
+                  core.str(),
+                  launch->enable_brisc);
     }
 
     if (launch->enable_ncrisc == 1) {
@@ -232,7 +239,9 @@ static void dump_run_mailboxes(FILE *f,
     } else if (launch->enable_ncrisc == 0) {
         fprintf(f, "n");
     } else {
-        log_fatal(LogLLRuntime, "Watcher unexpected ncrisc enable {}", launch->enable_ncrisc);
+        log_fatal(LogLLRuntime, "Watcher unexpected ncrisc enable on core: {}, (expected 0 or 1)",
+                  core.str(),
+                  launch->enable_ncrisc);
     }
 
     if (launch->enable_triscs == 1) {
@@ -240,21 +249,23 @@ static void dump_run_mailboxes(FILE *f,
     } else if (launch->enable_triscs == 0) {
         fprintf(f, "t");
     } else {
-        log_fatal(LogLLRuntime, "Watcher unexpected trisc enable {}", launch->enable_triscs);
+        log_fatal(LogLLRuntime, "Watcher unexpected trisc enable on core: {}, (expected 0 or 1)",
+                  core.str(),
+                  launch->enable_triscs);
     }
 
     fprintf(f, " ");
 
     fprintf(f, "smsg:");
-    dump_run_state(f, slave_sync->ncrisc);
-    dump_run_state(f, slave_sync->trisc0);
-    dump_run_state(f, slave_sync->trisc1);
-    dump_run_state(f, slave_sync->trisc2);
+    dump_run_state(f, core, slave_sync->ncrisc);
+    dump_run_state(f, core, slave_sync->trisc0);
+    dump_run_state(f, core, slave_sync->trisc1);
+    dump_run_state(f, core, slave_sync->trisc2);
 
     fprintf(f, " ");
 }
 
-static void dump_debug_status(FILE *f, const debug_status_msg_t *debug_status) {
+static void dump_debug_status(FILE *f, CoreCoord core, const debug_status_msg_t *debug_status) {
 
     for (int cpu = 0; cpu < num_riscv_per_core; cpu++) {
         for (int byte = 0; byte < num_status_bytes_per_riscv; byte++) {
@@ -263,7 +274,8 @@ static void dump_debug_status(FILE *f, const debug_status_msg_t *debug_status) {
             if (isprint(v)) {
                 fprintf(f, "%c", v);
             } else {
-                log_fatal(LogLLRuntime, "Watcher unexpected debug status unprintable character {}", (int)v);
+                log_fatal(LogLLRuntime, "Watcher unexpected debug status on core {}, unprintable character {}",
+                          core.str(), (int)v);
             }
         }
         if (cpu != num_riscv_per_core - 1) fprintf(f, ",");
@@ -306,13 +318,13 @@ static void dump_core(FILE *f, WatcherDevice *wdev, CoreCoord core, bool dump_al
 
     if (watcher::enabled) {
         // Dump state only gathered if device is compiled w/ watcher
-        dump_debug_status(f, mbox_data->debug_status);
+        dump_debug_status(f, core, mbox_data->debug_status);
         dump_l1_status(f, wdev, core);
-        dump_noc_sanity_status(f, mbox_data->sanitize_noc);
+        dump_noc_sanity_status(f, core, mbox_data->sanitize_noc);
     }
 
     // Dump state always available
-    dump_run_mailboxes(f, &mbox_data->launch, &mbox_data->slave_sync);
+    dump_run_mailboxes(f, core, &mbox_data->launch, &mbox_data->slave_sync);
     if (dump_all || OptionsG.get_watcher_dump_all()) {
         // Reading registers while running can cause hangs, only read if
         // requested explicitly
