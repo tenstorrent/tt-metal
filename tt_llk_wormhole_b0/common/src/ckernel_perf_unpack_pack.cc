@@ -192,9 +192,9 @@ void record_overlay_decoupled_output_bw_start(uint32_t num_tiles) {
    if (perf_end > (TRISC_PERF_BUF_SIZE >> 2)) {
       perf_end = TRISC_PERF_BUF_SIZE >> 2;
    }
-   uint32_t event_id = get_event_id(0, 0, perf::EventType::OUTPUT_NUM_TILES, 0);
+   uint32_t event_id = get_event_id(0, 0, perf::EventType::OUTPUT_NUM_TILES, perf_events_target_inputs[0]);
    record_perf_value_and_check_overflow(event_id, num_tiles, 0);
-   event_id = get_event_id(0, 0, perf::EventType::OUTPUT_TIMESTAMP, 0);
+   event_id = get_event_id(0, 0, perf::EventType::OUTPUT_TIMESTAMP, perf_events_target_inputs[0]);
    uint32_t timestamp_low = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
    uint32_t timestamp_high = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
    record_perf_value_and_check_overflow(event_id, timestamp_low, timestamp_high, 0);
@@ -207,7 +207,7 @@ void record_overlay_decoupled_output_bw_end() {
    if (perf_end > (TRISC_PERF_BUF_SIZE >> 2)) {
       perf_end = TRISC_PERF_BUF_SIZE >> 2;
    }
-   uint32_t event_id = get_event_id(0, 0, perf::EventType::OUTPUT_TIMESTAMP, 0);
+   uint32_t event_id = get_event_id(0, 0, perf::EventType::OUTPUT_TIMESTAMP, perf_events_target_inputs[0]);
    uint32_t timestamp_low = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
    uint32_t timestamp_high = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
    record_perf_value_and_check_overflow(event_id, timestamp_low, timestamp_high, 0);
