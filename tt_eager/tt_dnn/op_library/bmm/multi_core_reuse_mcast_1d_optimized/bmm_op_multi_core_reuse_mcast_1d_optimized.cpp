@@ -125,8 +125,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             // in0/in1 common args
             (std::uint32_t)  K / in0_block_w, // num_blocks
             // in0 mcast args
-            (std::uint32_t)  bottom_right_core_physical.x, // in0_mcast_dest_noc_start_x
-            (std::uint32_t)  top_left_core_physical.x, // in0_mcast_dest_noc_end_x
+            (std::uint32_t)  top_left_core_physical.x, // in0_mcast_dest_noc_start_x
+            (std::uint32_t)  bottom_right_core_physical.x, // in0_mcast_dest_noc_end_x
             (std::uint32_t)  in0_mcast_sender_semaphore,
             (std::uint32_t)  in0_mcast_receiver_semaphore,
             (std::uint32_t)  num_cores - 1, // in0_mcast_num_dests
@@ -336,8 +336,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 (std::uint32_t)  in0_buffer->address(),
                 (std::uint32_t)  K * per_core_M * output_idx_y, // in0_tensor_start_tile_id
                 // in0 mcast args
-                (std::uint32_t)  bottom_right_core_physical.y, // in0_mcast_dest_noc_start_y
-                (std::uint32_t)  top_left_core_physical.y, // in0_mcast_dest_noc_end_y
+                (std::uint32_t)  top_left_core_physical.y, // in0_mcast_dest_noc_start_y
+                (std::uint32_t)  bottom_right_core_physical.y, // in0_mcast_dest_noc_end_y
 
                 // padding args
                 (std::uint32_t) per_core_M // last_block_h
