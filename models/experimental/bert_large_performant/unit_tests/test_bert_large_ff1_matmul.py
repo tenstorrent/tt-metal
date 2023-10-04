@@ -92,6 +92,7 @@ def run_bert_large_ff1_matmul_test(
         out_subblock_w=1,
         per_core_M=12,
         per_core_N=11,
+        transpose_mcast=False,
         fused_activation=fused_activation,
     )
     t2 = ttl.operations.primary.matmul(

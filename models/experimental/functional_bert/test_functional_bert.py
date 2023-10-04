@@ -361,6 +361,7 @@ def create_bert_multi_head_attention_config(batch_size):
                 out_subblock_w=2,
                 per_core_M=12,
                 per_core_N=8,
+                transpose_mcast=False,
                 fused_activation=None,
             ),
             output_mem_config=MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, BufferType.L1),
@@ -401,6 +402,7 @@ def create_bert_multi_head_attention_config(batch_size):
                     out_subblock_w=1,
                     per_core_M=12,
                     per_core_N=3,
+                    transpose_mcast=False,
                     fused_activation=None,
                 )
             ),
@@ -425,6 +427,7 @@ def create_bert_feedforward_config(batch_size):
                     out_subblock_w=1,
                     per_core_M=12,
                     per_core_N=11,
+                    transpose_mcast=False,
                     fused_activation=(ttl.tensor.FusibleActivation.GELU, True),
                 )
             ),
@@ -440,6 +443,7 @@ def create_bert_feedforward_config(batch_size):
                     out_subblock_w=1,
                     per_core_M=12,
                     per_core_N=3,
+                    transpose_mcast=False,
                     fused_activation=None,
                 )
             ),
