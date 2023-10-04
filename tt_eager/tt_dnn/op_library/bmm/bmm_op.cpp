@@ -394,6 +394,7 @@ Tensor bert_large_fused_qkv_matmul(const Tensor &input_tensor_a, const Tensor &i
         .out_subblock_w = 2,
         .per_core_M = 12,
         .per_core_N = 8,
+        .transpose_mcast = false,
         .fused_activation = std::nullopt,
     };
     return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
@@ -413,6 +414,7 @@ Tensor bert_large_ff1_matmul(const Tensor &input_tensor_a, const Tensor &input_t
         .out_subblock_w = 1,
         .per_core_M = 12,
         .per_core_N = 11,
+        .transpose_mcast = false,
         .fused_activation=fused_activation,
     };
     return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
@@ -431,6 +433,7 @@ Tensor bert_large_ff2_matmul(const Tensor &input_tensor_a, const Tensor &input_t
         .out_subblock_w = 1,
         .per_core_M = 12,
         .per_core_N = 3,
+        .transpose_mcast = false,
         .fused_activation= std::nullopt,
     };
     return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
@@ -449,6 +452,7 @@ Tensor bert_large_selfout_matmul(const Tensor &input_tensor_a, const Tensor &inp
         .out_subblock_w = 1,
         .per_core_M = 12,
         .per_core_N = 3,
+        .transpose_mcast = false,
         .fused_activation= std::nullopt,
     };
     return operations::primary::matmul(input_tensor_a, input_tensor_b, bias, program_config, mem_config, output_dtype);
@@ -577,6 +581,7 @@ tt::stl::reflection::Attributes MatmulMultiCoreReuseMultiCastProgramConfig::attr
         {"out_subblock_w",  this->out_subblock_w},
         {"per_core_M",  this->per_core_M},
         {"per_core_N",  this->per_core_N},
+        {"transpose_mcast", this->transpose_mcast},
         {"fused_activation",  this->fused_activation},
     };
 }
@@ -779,7 +784,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.compute_with_storage_grid_size,
                     output_dtype, math_fidelity,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
-                    program_config.per_core_M, program_config.per_core_N, fuse_batch, program_config.fused_activation
+                    program_config.per_core_M, program_config.per_core_N, fuse_batch, program_config.transpose_mcast, program_config.fused_activation
                 );
             }
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
@@ -810,7 +815,11 @@ MatmulParallelizationStrategy Matmul::get_parallelization_strategy(const std::ve
                 return MatmulParallelizationStrategy::MULTI_CORE_REUSE_OPTIMIZED;
             }
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED;
+                if (program_config.transpose_mcast) {
+                    return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_2D_TRANSPOSED_OPTIMIZED;
+                } else {
+                    return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED;
+                }
             }
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
                 if (program_config.mcast_in0) {
