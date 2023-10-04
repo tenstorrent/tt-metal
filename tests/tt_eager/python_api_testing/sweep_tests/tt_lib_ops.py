@@ -563,14 +563,22 @@ def add_layernorm_noweights(x, y, *args, device, dtype, layout, input_mem_config
 
 
 @setup_host_and_device
-def layernorm(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+def layernorm(
+    x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
+):
+
+    if layout[1] == ttl.tensor.Layout.TILE:
+        y = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
+
+    if layout[2] == ttl.tensor.Layout.TILE:
+        z = torch.nn.functional.pad(z, (0, 0, 0, 32 - z.shape[2]))
+
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
     t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
     t3 = ttl.operations.primary.layernorm(t0, 1e-5, t1, t2, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t3)
-
 
 @setup_host_and_device
 def add_layernorm(
