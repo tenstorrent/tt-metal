@@ -24,7 +24,7 @@ run_perf_models() {
 
     env pytest tests/models/resnet/tests -m $pipeline_type
 
-    env pytest tests/models/metal_BERT_large_15 -m $pipeline_type
+    env pytest models/experimental/metal_BERT_large_15/tests -m $pipeline_type
 
     env pytest tests/models/deit/tests -m $pipeline_type
 

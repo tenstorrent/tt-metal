@@ -3,36 +3,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from loguru import logger
 import torch
+
+from loguru import logger
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
-import sys
-from pathlib import Path
-import csv
-import datetime
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
+import tt_lib
 
-import time
-import tt_lib as ttl
-from tests.models.metal_BERT_large_15.embeddings import TtEmbeddings
-from tests.models.metal_BERT_large_15.bert_encoder import TtBertEncoder
+from models.experimental.metal_BERT_large_15.tt.embeddings import TtEmbeddings
+from models.experimental.metal_BERT_large_15.tt.bert_encoder import TtBertEncoder
+from models.experimental.metal_BERT_large_15.tt.model_config import get_model_config
+
 from tt_lib.utils import pad_activation, pad_weight
 from models.utility_functions import (
     enable_persistent_kernel_cache,
-    enable_compilation_reports,
     disable_compilation_reports,
-    enable_memory_reports,
-    comp_allclose_and_pcc,
     comp_pcc,
     comp_allclose,
     disable_persistent_kernel_cache,
+    profiler,
 )
-from models.utility_functions import profiler
-
-from tests.models.metal_BERT_large_15.model_config import get_model_config
 
 
 class TtBertBatchDram(torch.nn.Module):
@@ -68,36 +58,36 @@ class TtBertBatchDram(torch.nn.Module):
 
         weight = pad_weight(torch.transpose(state_dict["qa_outputs.weight"], -2, -1))
         weight = (
-            ttl.tensor.Tensor(
+            tt_lib.tensor.Tensor(
                 weight.reshape(-1).tolist(),
                 weight.shape,
                 model_config["QA_LINEAR_WEIGHTS_DTYPE"],
-                ttl.tensor.Layout.ROW_MAJOR,
+                tt_lib.tensor.Layout.ROW_MAJOR,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(tt_lib.tensor.Layout.TILE)
             .to(device, model_config["QA_LINEAR_WEIGHTS_MEMCFG"])
         )
         bias = pad_weight(state_dict["qa_outputs.bias"])
         bias = (
-            ttl.tensor.Tensor(
+            tt_lib.tensor.Tensor(
                 bias.reshape(-1).tolist(),
                 bias.shape,
                 model_config["QA_LINEAR_BIAS_DTYPE"],
-                ttl.tensor.Layout.ROW_MAJOR,
+                tt_lib.tensor.Layout.ROW_MAJOR,
             )
-            .to(ttl.tensor.Layout.TILE)
+            .to(tt_lib.tensor.Layout.TILE)
             .to(device, model_config["QA_LINEAR_BIAS_MEMCFG"])
         )
 
         # QA linear
         # TODO: Replace with custom op with fused bias?
         def qa_linear_(activation):
-            output = ttl.tensor.matmul(activation, weight, model_config["QA_LINEAR_OUTPUT_MEMCFG"])
-            output_plus_bias = ttl.tensor.bcast(
+            output = tt_lib.tensor.matmul(activation, weight, model_config["QA_LINEAR_OUTPUT_MEMCFG"])
+            output_plus_bias = tt_lib.tensor.bcast(
                 output,
                 bias,
-                ttl.tensor.BcastOpMath.ADD,
-                ttl.tensor.BcastOpDim.H,
+                tt_lib.tensor.BcastOpMath.ADD,
+                tt_lib.tensor.BcastOpDim.H,
                 model_config["QA_LINEAR_OUTPUT_MEMCFG"],
             )
             return output_plus_bias
@@ -108,9 +98,9 @@ class TtBertBatchDram(torch.nn.Module):
         tt_embeddings = self.embeddings(input_ids, token_type_ids)
         embeddings_shape = tt_embeddings.shape()
         if tt_embeddings.dtype() != self.model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"]:
-            embeddings = tt_embeddings.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+            embeddings = tt_embeddings.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
             tt_embeddings = (
-                ttl.tensor.Tensor(
+                tt_lib.tensor.Tensor(
                     embeddings.reshape(-1).tolist(),
                     (
                         embeddings_shape[0],
@@ -120,8 +110,8 @@ class TtBertBatchDram(torch.nn.Module):
                     ),
                     # output of embeddings dtype should be same as op1
                     self.model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"],
-                    ttl.tensor.Layout.ROW_MAJOR,
-                ).to(ttl.tensor.Layout.TILE)
+                    tt_lib.tensor.Layout.ROW_MAJOR,
+                ).to(tt_lib.tensor.Layout.TILE)
                 # output config of embeddings should be same as op1_input
                 .to(self.device, self.model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"])
             )
@@ -136,13 +126,13 @@ class TtBertBatchDram(torch.nn.Module):
             )  # Limit neg value that goes into exp
             extended_attention_mask = pad_activation(extended_attention_mask)
             tt_attention_mask = (
-                ttl.tensor.Tensor(
+                tt_lib.tensor.Tensor(
                     extended_attention_mask.reshape(-1).tolist(),
                     extended_attention_mask.shape,
                     self.model_config["OP8_SOFTMAX_ATTENTION_MASK_DTYPE"],
-                    ttl.tensor.Layout.ROW_MAJOR,
+                    tt_lib.tensor.Layout.ROW_MAJOR,
                 )
-                .to(ttl.tensor.Layout.TILE)
+                .to(tt_lib.tensor.Layout.TILE)
                 .to(self.device, self.model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
             )
         else:
@@ -162,7 +152,7 @@ class TtBertBatchDram(torch.nn.Module):
                 # profiler.start("__one_encoder")
                 hidden_states = encoder(hidden_states, attention_mask)
                 if self.model_config["MOVE_ENCODER_OUTPUT_BOOL"]:
-                    hidden_states = ttl.tensor.move(hidden_states)
+                    hidden_states = tt_lib.tensor.move(hidden_states)
                 # profiler.end("__one_encoder")
 
             # profiler.end("_run_encoders")
@@ -272,7 +262,7 @@ def run_bert_question_and_answering_inference(
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
     tt_out = tt_bert_model(1, tt_embedding, tt_attention_mask)
-    ttl.device.Synchronize()
+    tt_lib.device.Synchronize()
     profiler.end("first_model_run_with_compile", force_enable=True)
     del tt_out
 
@@ -289,14 +279,14 @@ def run_bert_question_and_answering_inference(
     profiler.start(f"model_run_{PERF_CNT}_times_for_inference")
     tt_embedding = tt_bert_model.model_embedding(**bert_input)
     tt_out = tt_bert_model(1, tt_embedding, tt_attention_mask)
-    ttl.device.Synchronize()
+    tt_lib.device.Synchronize()
     profiler.end(f"model_run_{PERF_CNT}_times_for_inference", PERF_CNT)
 
     # output postprocessing
     profiler.start("processing_output_to_string")
 
     tt_untilized_output = (
-        tt_out.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
+        tt_out.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
     )
 
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
@@ -326,7 +316,7 @@ def run_bert_question_and_answering_inference(
     passing = passing_start and passing_end
 
     if real_input:
-        if model_config["DEFAULT_DTYPE"] == ttl.tensor.DataType.BFLOAT8_B and not passing:
+        if model_config["DEFAULT_DTYPE"] == tt_lib.tensor.DataType.BFLOAT8_B and not passing:
             logger.warning("Skipping post processing due to garbage output in BFP8!")
         else:
             for i in range(batch):
@@ -359,7 +349,7 @@ def run_bert_question_and_answering_inference(
 
     # assert profiler.get("whole_model") < 60.0
 
-    if model_config["DEFAULT_DTYPE"] == ttl.tensor.DataType.BFLOAT8_B and not passing:
+    if model_config["DEFAULT_DTYPE"] == tt_lib.tensor.DataType.BFLOAT8_B and not passing:
         pytest.xfail("PCC is garbage for BFLOAT8_B. Numbers are for perf only!")
 
     assert passing, f"At least one start or end logits don't meet PCC requirement {pcc}"
@@ -421,7 +411,7 @@ def test_bert_batch_dram(
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    ttl.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/BERT_large_full_{request.node.callspec.id}")
+    tt_lib.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/BERT_large_full_{request.node.callspec.id}")
 
     run_bert_question_and_answering_inference(
         model_version,
@@ -495,7 +485,7 @@ def test_bert_batch_dram_with_program_cache(
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    ttl.profiler.set_profiler_location(
+    tt_lib.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_full_with_program_cache_{request.node.callspec.id}"
     )
 
@@ -514,7 +504,7 @@ def test_bert_batch_dram_with_program_cache(
     )
 
     if batch == 8 and model_config_str == "MIXED_PRECISION_BATCH8":
-        assert ttl.program_cache.num_entries() == 19
+        assert tt_lib.program_cache.num_entries() == 19
 
     else:
-        assert ttl.program_cache.num_entries() == 18
+        assert tt_lib.program_cache.num_entries() == 18

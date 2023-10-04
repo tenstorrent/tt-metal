@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import tt_lib as ttl
+import tt_lib
 from loguru import logger
 
 
@@ -103,8 +103,8 @@ def pretty_print_model_config(model_config):
 
 def get_model_config(model_config_str):
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
-    DRAM_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-    L1_MEMCFG = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    DRAM_MEMCFG = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)
+    L1_MEMCFG = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
 
     # Set default dtype and mem_config based on model_config_str
     if model_config_str in (
@@ -116,13 +116,13 @@ def get_model_config(model_config_str):
         dtype_str, mem_config_str = model_config_str.split("-")
         mem_config = DRAM_MEMCFG if mem_config_str == "DRAM" else L1_MEMCFG
         dtype = (
-            ttl.tensor.DataType.BFLOAT16
+            tt_lib.tensor.DataType.BFLOAT16
             if dtype_str == "BFLOAT16"
-            else ttl.tensor.DataType.BFLOAT8_B
+            else tt_lib.tensor.DataType.BFLOAT8_B
         )
 
     elif model_config_str in ("MIXED_PRECISION_BATCH9", "MIXED_PRECISION_BATCH8"):
-        dtype = ttl.tensor.DataType.BFLOAT8_B
+        dtype = tt_lib.tensor.DataType.BFLOAT8_B
         mem_config = L1_MEMCFG
 
     else:
@@ -133,17 +133,17 @@ def get_model_config(model_config_str):
         "DEFAULT_DTYPE": dtype,
         "DEFAULT_MEMCFG": mem_config,
         "MOVE_ENCODER_OUTPUT_BOOL": False,
-    }  # DEFAULT_MEMCFG also used to determine banking for ttl.device.InitializeDevice
+    }  # DEFAULT_MEMCFG also used to determine banking for tt_lib.device.InitializeDevice
     model_config.update(dict(zip(OP_MEMCFG_KEYS, [mem_config] * len(OP_MEMCFG_KEYS))))
     model_config.update(dict(zip(OP_DTYPE_KEYS, [dtype] * len(OP_DTYPE_KEYS))))
 
     # Layernorm Gamma Beta must always be BFLOAT16
     model_config.update(
         {
-            "OP12_LAYERNORM_GAMMA_DTYPE": ttl.tensor.DataType.BFLOAT16,
-            "OP12_LAYERNORM_BETA_DTYPE": ttl.tensor.DataType.BFLOAT16,
-            "OP15_LAYERNORM_GAMMA_DTYPE": ttl.tensor.DataType.BFLOAT16,
-            "OP15_LAYERNORM_BETA_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            "OP12_LAYERNORM_GAMMA_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "OP12_LAYERNORM_BETA_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "OP15_LAYERNORM_GAMMA_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "OP15_LAYERNORM_BETA_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
         }
     )
 
@@ -213,18 +213,18 @@ def get_model_config(model_config_str):
             "QA_LINEAR_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "QA_LINEAR_BIAS_MEMCFG": DRAM_MEMCFG,
             # MHA
-            "OP1_FUSED_QKV_MM_INPUT_DTYPE": ttl.tensor.DataType.BFLOAT16,
-            "OP7_PRE_SOFTMAX_BMM_OUTPUT_DTYPE": ttl.tensor.DataType.BFLOAT16,
-            "OP8_SOFTMAX_ATTENTION_MASK_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            "OP1_FUSED_QKV_MM_INPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "OP7_PRE_SOFTMAX_BMM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "OP8_SOFTMAX_ATTENTION_MASK_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
             # MHA SELFOUT ATTENTION
-            "OP11_SELFOUT_OUTPUT_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            "OP11_SELFOUT_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
             # MHA LAYERNORM
-            "OP12_LAYERNORM_OUTPUT_DTYPE": ttl.tensor.DataType.BFLOAT16,  # Used for ffn sub-graph test, might need in the future with mixed precision
+            "OP12_LAYERNORM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,  # Used for ffn sub-graph test, might need in the future with mixed precision
             # FFN
-            "OP14_FF2_MM_OUTPUT_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            "OP14_FF2_MM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
             # After all encoders
-            "QA_LINEAR_WEIGHTS_DTYPE": ttl.tensor.DataType.BFLOAT16,
-            "QA_LINEAR_BIAS_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            "QA_LINEAR_WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "QA_LINEAR_BIAS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
         }
         model_config.update(new_config_values)
 
@@ -248,18 +248,18 @@ def get_model_config(model_config_str):
             "QA_LINEAR_WEIGHTS_MEMCFG": DRAM_MEMCFG,
             "QA_LINEAR_BIAS_MEMCFG": DRAM_MEMCFG,
             # MHA
-            "OP1_FUSED_QKV_MM_INPUT_DTYPE": ttl.tensor.DataType.BFLOAT16,
-            "OP7_PRE_SOFTMAX_BMM_OUTPUT_DTYPE": ttl.tensor.DataType.BFLOAT16,
-            "OP8_SOFTMAX_ATTENTION_MASK_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            "OP1_FUSED_QKV_MM_INPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "OP7_PRE_SOFTMAX_BMM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "OP8_SOFTMAX_ATTENTION_MASK_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
             # MHA SELFOUT ATTENTION
-            "OP11_SELFOUT_OUTPUT_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            "OP11_SELFOUT_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
             # MHA LAYERNORM
-            "OP12_LAYERNORM_OUTPUT_DTYPE": ttl.tensor.DataType.BFLOAT16,  # Used for ffn sub-graph test, might need in the future with mixed precision
+            "OP12_LAYERNORM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,  # Used for ffn sub-graph test, might need in the future with mixed precision
             # FFN
-            "OP14_FF2_MM_OUTPUT_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            "OP14_FF2_MM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
             # After all encoders
-            "QA_LINEAR_WEIGHTS_DTYPE": ttl.tensor.DataType.BFLOAT16,
-            "QA_LINEAR_BIAS_DTYPE": ttl.tensor.DataType.BFLOAT16,
+            "QA_LINEAR_WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "QA_LINEAR_BIAS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
         }
         model_config.update(new_config_values)
 
