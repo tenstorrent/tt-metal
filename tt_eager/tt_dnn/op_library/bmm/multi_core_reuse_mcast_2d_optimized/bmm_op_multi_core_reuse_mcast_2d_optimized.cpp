@@ -153,12 +153,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     auto in0_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    uint32_t in3_mcast_sender_semaphore = 0;
-    uint32_t in3_mcast_receiver_semaphore = 0;
-    if (bias_buffer != nullptr) {
-        in3_mcast_sender_semaphore = in1_mcast_sender_semaphore;
-        in3_mcast_receiver_semaphore = in1_mcast_receiver_semaphore;
-    }
+
     CoreCoord top_left_core = {(std::size_t) start_core_x, (std::size_t) start_core_y};
     CoreCoord top_left_core_plus_one = {(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1};
     CoreCoord bottom_right_core = {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1};
@@ -240,16 +235,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)  M * N // MtNt
     };
     if (bias_buffer != nullptr) {
-        // in3 mcast args
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)  in3_is_dram);
-        // in1 tensor args
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)  1);
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  bottom_right_core_physical.y); // in1_mcast_dest_noc_start_y
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  top_left_core_plus_one_physical.y); // in1_mcast_dest_noc_end_y
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  in3_mcast_sender_semaphore);
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  in3_mcast_receiver_semaphore);
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  (num_cores_r - 1)); // in1_mcast_num_dests
-        in1_sender_writer_compile_time_args.push_back((std::uint32_t)  (num_cores_r - 1)); // in1_mcast_num_cores
     }
     std::vector<uint32_t> in0_receiver_compile_time_args = {
             // in0 block args
@@ -293,11 +280,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)  M * N // MtNt
     };
     if (bias_buffer != nullptr) {
-        // in3 mcast args
         in1_receiver_writer_compile_time_args.push_back((std::uint32_t)  per_core_N);
-        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)  top_left_core_physical.y); // in1_mcast_sender_noc_y
-        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)  in3_mcast_sender_semaphore);
-        in1_receiver_writer_compile_time_args.push_back((std::uint32_t)  in3_mcast_receiver_semaphore);
     }
 
     std::map<string, string> mm_kernel_defines;
@@ -557,8 +540,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 if (bias_buffer != nullptr) {
                     mm_in1_sender_writer_args.push_back((std::uint32_t)  bias_buffer->address());
                     mm_in1_sender_writer_args.push_back((std::uint32_t)  per_core_N * core_idx_x); //in1_tensor_start_tile_id
-                    mm_in1_sender_writer_args.push_back((std::uint32_t)  bottom_core_physical.x); // in1_mcast_dest_noc_start_x
-                    mm_in1_sender_writer_args.push_back((std::uint32_t)  top_core_plus_one_physical.x); // in1_mcast_dest_noc_end_x
                 }
 
                 tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
@@ -612,10 +593,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in1_receiver_writer_args.push_back(out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(0);
                     mm_in1_receiver_writer_args.push_back(0);
-                }
-
-                if (bias_buffer != nullptr) {
-                    mm_in1_receiver_writer_args.push_back((std::uint32_t)  top_core_physical.x); // in1_mcast_sender_noc_x
                 }
 
                 tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
@@ -673,8 +650,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 if (bias_buffer != nullptr) {
                     mm_in1_sender_writer_args.push_back((std::uint32_t)  bias_buffer->address());
                     mm_in1_sender_writer_args.push_back((std::uint32_t)  per_core_N * core_idx_x); //in1_tensor_start_tile_id
-                    mm_in1_sender_writer_args.push_back((std::uint32_t)  bottom_core_physical.x); // in1_mcast_dest_noc_start_x
-                    mm_in1_sender_writer_args.push_back((std::uint32_t)  top_core_plus_one_physical.x); // in1_mcast_dest_noc_end_x
                 }
                 tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args); // RISCV_1_default
                 tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args); // RISCV_0_default
@@ -734,11 +709,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in1_receiver_writer_args.push_back(out_subblock_w);
                     mm_in1_receiver_writer_args.push_back(0);
                     mm_in1_receiver_writer_args.push_back(0);
-                }
-
-
-                if (bias_buffer != nullptr) {
-                    mm_in1_receiver_writer_args.push_back((std::uint32_t)  top_core_physical.x); // in1_mcast_sender_noc_x
                 }
 
                 // left half
