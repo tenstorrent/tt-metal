@@ -940,9 +940,13 @@ inline void calculate_bitwise_or(uint value)
     // }
      for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
-        vInt val = 5;
-        vInt res =  reinterpret<vInt>(v) | other;
-        dst_reg[0] = reinterpret<vFloat>(res);
+        //vInt val = 5;
+        vInt int_v = float_to_int16(v);
+        vInt res_i =  int_v | other;
+
+        vFloat res = int32_to_float(res_i, 0);
+
+        dst_reg[0] = (res);
         dst_reg++;
     }
 }
