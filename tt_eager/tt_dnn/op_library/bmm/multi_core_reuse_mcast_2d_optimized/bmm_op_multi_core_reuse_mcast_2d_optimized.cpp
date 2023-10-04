@@ -188,8 +188,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             // in0/in1 common args
             (std::uint32_t)  K / in0_block_w, // num_blocks
             // in0 mcast args
-            (std::uint32_t)  bottom_right_core_physical.x, // in0_mcast_dest_noc_start_x
-            (std::uint32_t)  top_left_core_plus_one_physical.x, // in0_mcast_dest_noc_end_x
+            (std::uint32_t)  top_left_core_plus_one_physical.x, // in0_mcast_dest_noc_start_x
+            (std::uint32_t)  bottom_right_core_physical.x, // in0_mcast_dest_noc_end_x
             (std::uint32_t)  in0_mcast_sender_semaphore,
             (std::uint32_t)  in0_mcast_receiver_semaphore,
             (std::uint32_t)  (num_cores_c - 1), // in0_mcast_num_dests
@@ -344,18 +344,18 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     KernelID mm_kernel_in0_receiver_other_noc_setup_id = 0;
 
     if (split_half) {
-         mm_kernel_in1_receiver_writer_other_noc_setup_id = tt_metal::CreateKernel(
-             program,
-             "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
-             in0_receiver_in1_receiver_right_half,
-             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = in1_receiver_writer_compile_time_args, .defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines});
+        mm_kernel_in1_receiver_writer_other_noc_setup_id = tt_metal::CreateKernel(
+            program,
+            "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+            in0_receiver_in1_receiver_right_half,
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = in1_receiver_writer_compile_time_args, .defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines});
 
-         mm_kernel_in0_receiver_other_noc_setup_id = tt_metal::CreateKernel(
-             program,
-             "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
-             in0_receiver_in1_receiver_right_half,
-             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = in0_receiver_compile_time_args});
-     }
+        mm_kernel_in0_receiver_other_noc_setup_id = tt_metal::CreateKernel(
+            program,
+            "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+            in0_receiver_in1_receiver_right_half,
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = in0_receiver_compile_time_args});
+    }
     /* Checkerboard logic
     auto mm_kernel_in0_receiver_ckb_white = tt_metal::CreateKernel(
         program,
@@ -522,8 +522,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     (std::uint32_t)  in0_buffer->address(),
                     (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
                     // in0 mcast args
-                    (std::uint32_t)  right_core_physical.y, // in0_mcast_dest_noc_start_y
-                    (std::uint32_t)  left_core_plus_one_physical.y, // in0_mcast_dest_noc_end_y
+                    (std::uint32_t)  left_core_plus_one_physical.y, // in0_mcast_dest_noc_start_y
+                    (std::uint32_t)  right_core_physical.y, // in0_mcast_dest_noc_end_y
 
                     // padding args
                     (std::uint32_t) per_core_M // last_block_h
@@ -573,8 +573,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     (std::uint32_t)  in0_buffer->address(),
                     (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
                     // in0 mcast args
-                    (std::uint32_t)  right_core_physical.y, // in0_mcast_dest_noc_start_y
-                    (std::uint32_t)  left_core_plus_one_physical.y // in0_mcast_dest_noc_end_y
+                    (std::uint32_t)  left_core_plus_one_physical.y, // in0_mcast_dest_noc_start_y
+                    (std::uint32_t)  right_core_physical.y // in0_mcast_dest_noc_end_y
                 };
 
                 std::vector<uint32_t> mm_in1_receiver_writer_args = {
