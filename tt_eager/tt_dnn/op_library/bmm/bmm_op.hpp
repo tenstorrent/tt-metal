@@ -25,7 +25,11 @@ enum class MatmulParallelizationStrategy {
     MULTI_CORE_REUSE_MCAST_GENERALIZED = 4,
     MULTI_CORE_REUSE_PADDING = 5,
     MULTI_CORE_REUSE_MCAST_PADDING = 6,
-    SINGLE_CORE = 7
+    MULTI_CORE_REUSE_OPTIMIZED = 7,
+    MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED = 8,
+    MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED = 9,
+    MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED = 10,
+    SINGLE_CORE = 11
 };
 
 
@@ -208,6 +212,7 @@ struct Matmul {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor> &output_tensors
     ) const;
+    MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
