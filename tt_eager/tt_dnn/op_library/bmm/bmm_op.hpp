@@ -27,9 +27,10 @@ enum class MatmulParallelizationStrategy {
     MULTI_CORE_REUSE_MCAST_PADDING = 6,
     MULTI_CORE_REUSE_OPTIMIZED = 7,
     MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED = 8,
-    MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED = 9,
-    MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED = 10,
-    SINGLE_CORE = 11
+    MULTI_CORE_REUSE_MCAST_2D_TRANSPOSED_OPTIMIZED = 9,
+    MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED = 10,
+    MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED = 11,
+    SINGLE_CORE = 12
 };
 
 
@@ -74,7 +75,7 @@ inline Tensor bmm    (const Tensor &input_tensor_a, const Tensor &input_tensor_b
 }
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, std::optional<UnaryWithParam> fused_activation);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const std::optional<const Tensor> bias, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch, bool transpose_mcast, std::optional<UnaryWithParam> fused_activation);
 operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& input_tensor_a, const Tensor& input_tensor_b, const Shape &ashape, const Shape &bshape, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch);
 
 
@@ -171,6 +172,7 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     std::size_t out_subblock_w;
     std::size_t per_core_M;
     std::size_t per_core_N;
+    bool transpose_mcast;
     std::optional<UnaryWithParam> fused_activation;
 
     tt::stl::reflection::Attributes attributes() const;

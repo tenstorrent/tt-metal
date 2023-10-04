@@ -11,11 +11,13 @@ void kernel_main() {
     uint32_t in0_tensor_addr                    = get_arg_val<uint32_t>(0);
     uint32_t in0_tensor_start_tile_id           = get_arg_val<uint32_t>(1);
     // in0 mcast args
-    uint32_t in0_mcast_dest_noc_start_y         = get_arg_val<uint32_t>(2);
-    uint32_t in0_mcast_dest_noc_end_y           = get_arg_val<uint32_t>(3);
+    uint32_t in0_mcast_dest_noc_start_x         = get_arg_val<uint32_t>(2);
+    uint32_t in0_mcast_dest_noc_start_y         = get_arg_val<uint32_t>(3);
+    uint32_t in0_mcast_dest_noc_end_x           = get_arg_val<uint32_t>(4);
+    uint32_t in0_mcast_dest_noc_end_y           = get_arg_val<uint32_t>(5);
 
     // padding args
-    uint32_t last_block_h                       = get_arg_val<uint32_t>(4);
+    uint32_t last_block_h                       = get_arg_val<uint32_t>(6);
 
     // COMPILE TIME ARGS
     // interleaved accessor args
@@ -32,15 +34,13 @@ void kernel_main() {
     // in0/in1 common args
     constexpr uint32_t num_blocks                         = get_compile_time_arg_val(7);
     // in0 mcast args
-    constexpr uint32_t in0_mcast_dest_noc_start_x         = get_compile_time_arg_val(8);
-    constexpr uint32_t in0_mcast_dest_noc_end_x           = get_compile_time_arg_val(9);
-    constexpr uint32_t in0_mcast_sender_semaphore_addr    = get_compile_time_arg_val(10);
-    constexpr uint32_t in0_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(11);
-    constexpr uint32_t in0_mcast_num_dests                = get_compile_time_arg_val(12);
-    constexpr uint32_t in0_mcast_num_cores                = get_compile_time_arg_val(13);
+    constexpr uint32_t in0_mcast_sender_semaphore_addr    = get_compile_time_arg_val(8);
+    constexpr uint32_t in0_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(9);
+    constexpr uint32_t in0_mcast_num_dests                = get_compile_time_arg_val(10);
+    constexpr uint32_t in0_mcast_num_cores                = get_compile_time_arg_val(11);
     // batch args
-    constexpr uint32_t MtKt                               = get_compile_time_arg_val(14); // if 0
-    constexpr uint32_t batch                              = get_compile_time_arg_val(15);
+    constexpr uint32_t MtKt                               = get_compile_time_arg_val(12); // if 0
+    constexpr uint32_t batch                              = get_compile_time_arg_val(13);
 
 
     constexpr uint32_t cb_id_in0 = 0;

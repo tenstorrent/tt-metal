@@ -73,6 +73,7 @@ void py_module(py::module& m_primary) {
                     std::size_t out_subblock_w,
                     std::size_t per_core_M,
                     std::size_t per_core_N,
+                    bool transpose_mcast,
                     std::optional<UnaryWithParam> fused_activation
                 ) {
 
@@ -83,6 +84,7 @@ void py_module(py::module& m_primary) {
                         .out_subblock_w=out_subblock_w,
                         .per_core_M=per_core_M,
                         .per_core_N=per_core_N,
+                        .transpose_mcast=transpose_mcast,
                         .fused_activation=fused_activation,
                     };
 
@@ -95,8 +97,10 @@ void py_module(py::module& m_primary) {
             py::arg("out_subblock_w").noconvert(),
             py::arg("per_core_M").noconvert(),
             py::arg("per_core_N").noconvert(),
+            py::arg("transpose_mcast").noconvert(),
             py::arg("fused_activation")
-        );
+        )
+        .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastProgramConfig::fused_activation);
 
     py::class_<MatmulMultiCoreReuseMultiCast1DProgramConfig>(m_primary, "MatmulMultiCoreReuseMultiCast1DProgramConfig")
         .def(

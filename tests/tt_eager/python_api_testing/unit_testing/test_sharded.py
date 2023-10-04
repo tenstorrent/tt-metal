@@ -226,7 +226,7 @@ def test_sharded_tilize(H, num_cores, device):
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M, num_cores", [[25088, 98]])
 @pytest.mark.parametrize("N", [64, 256])
-def test_sharded_matmul(device, in0_sharded, out_sharded, M, N, num_cores):
+def test_sharded_matmul_1d_in1(device, in0_sharded, out_sharded, M, N, num_cores):
     K = 64
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
@@ -424,3 +424,68 @@ def test_sharded_program_cache(device, use_program_cache):
 
     assert torch.equal(tt_og, tt_got_back)
     assert torch.equal(tt_og2, tt_got_back2)
+
+
+@pytest.mark.parametrize("in0_sharded", [False], ids=["in0_unsharded"])
+@pytest.mark.parametrize("out_sharded", [False], ids=["out_unsharded"])
+@pytest.mark.parametrize("M, num_cores", [[1600, 80]])
+@pytest.mark.parametrize("N", [1024])
+def test_sharded_matmul_2d_transposed(device, in0_sharded, out_sharded, M, N, num_cores):
+    K = 256
+    in0_shape = [1, 1, M, K]
+    in1_shape = [1, 1, K, N]
+    bias_shape = [1, 1, 1, N]
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+    bias = torch.randn(bias_shape).bfloat16().float()
+
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config)
+    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config)
+    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config)[0]
+
+    output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
+
+    if in0_sharded:
+        in0_t = ttl.tensor.interleaved_to_sharded(
+            in0_t,
+            num_cores,
+            [M // num_cores, K],
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        )
+
+    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(10, 8),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        per_core_M=5,
+        per_core_N=4,
+        transpose_mcast=True,
+        fused_activation=None,
+    )
+    output_t = ttl.operations.primary.matmul(
+        in0_t,
+        in1_t,
+        bias=bias_t,
+        program_config=program_config,
+        output_mem_config=output_mem_config,
+    )
+    if out_sharded:
+        output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+    pt_out = in0 @ in1 + bias
+
+    tt_out = tt2torch_tensor(output_t)
+
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
+    assert passing
