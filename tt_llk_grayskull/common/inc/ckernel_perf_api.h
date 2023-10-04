@@ -10,7 +10,6 @@
 #include "epoch.h"
 
 #ifdef PERF_DUMP
-#include "perf_events_target_inputs.h"
 #include "perf_lib/scratch_api.h"
 #include "perf_res_decouple.h"
 #include "ckernel_perf_math.h"
