@@ -132,16 +132,22 @@ tt-smi
 
 2. Transfer the `tt-flash` installer to your machine. If it's a remote machine that you connect to via SSH, you will require something like SCP or rsync, outside of the scope of this document.
 
-3. Modify permissions to execute the bash file.
+3. Modify permissions to execute the flash installer. Note that flash installers may have arbitrary file names from release, so we will be using `<FLASH_FILE>` as a placeholder for the sake of these instructions.
 
 ```
-sudo chmod u+x ~/install_ttkmd_<VERSION>.bash
+sudo chmod u+x ~/<FLASH_FILE>
 ```
 
-4. Execute the driver installer.
+4. Execute the flash installer.
 
 ```
-sudo ~/install_ttkmd_<VERSION>.bash
+sudo ~/<FLASH_FILE>
+```
+
+If the installer detects a newer firmware but you would like to install a specific older one, you may try the `--force` option:
+
+```
+sudo ~/<FLASH_FILE> --force
 ```
 
 5. Reset the card to recognize the new firmware.
