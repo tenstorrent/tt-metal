@@ -172,6 +172,14 @@ System-level dependencies include the third-party libraries, hugepages settings,
 
 1. Install the host system-level dependencies through `apt`.
 
+First, perform an update:
+
+```
+sudo apt update
+```
+
+Then, install the dependencies:
+
 ```
 sudo apt install software-properties-common=0.99.9.12
 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.8
