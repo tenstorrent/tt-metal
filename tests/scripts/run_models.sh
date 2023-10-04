@@ -35,10 +35,10 @@ env pytest tests/models/deit/tests/test_deit_for_image_classification_with_teach
 env pytest tests/models/vit/tests/test_vit_image_classification.py -k test_vit_image_classification
 
 # Split bert tests as a workaround to issue #2892
-env pytest tests/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram -k BFLOAT8_B
-env pytest tests/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram -k BFLOAT16
-env pytest tests/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram -k MIXED_PRECISION
-env pytest tests/models/metal_BERT_large_15/test_bert_batch_dram.py::test_bert_batch_dram_with_program_cache
+env pytest models/experimental/metal_BERT_large_15/tests/test_bert_batch_dram.py::test_bert_batch_dram -k BFLOAT8_B
+env pytest models/experimental/metal_BERT_large_15/tests/test_bert_batch_dram.py::test_bert_batch_dram -k BFLOAT16
+env pytest models/experimental/metal_BERT_large_15/tests/test_bert_batch_dram.py::test_bert_batch_dram -k MIXED_PRECISION
+env pytest models/experimental/metal_BERT_large_15/tests/test_bert_batch_dram.py::test_bert_batch_dram_with_program_cache
 
 env pytest tests/models/t5 -k t5_dense_act_dense
 env pytest tests/models/t5 -k t5_layer_norm

@@ -2,43 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../tt")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import torch
-from datasets import load_dataset
-from loguru import logger
-from torchvision import models
-from transformers import AutoImageProcessor
-from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 import pytest
-import tt_lib as ttl
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
-from test_bert_batch_dram import TtBertBatchDram
 
-from tests.models.metal_BERT_large_15.model_config import get_model_config
+from loguru import logger
+from transformers import BertForQuestionAnswering, BertTokenizer
 
+import tt_lib
+
+from models.experimental.metal_BERT_large_15.tests.test_bert_batch_dram import TtBertBatchDram
+from models.experimental.metal_BERT_large_15.tt.model_config import get_model_config
 from models.utility_functions import (
     enable_persistent_kernel_cache,
-    enable_compilation_reports,
-    enable_memory_reports,
-    comp_allclose_and_pcc,
-    comp_pcc,
-    comp_allclose,
     disable_persistent_kernel_cache,
     profiler,
+    prep_report,
 )
-from models.utility_functions import prep_report
-import pytest
-from loguru import logger
 
 BATCH_SIZE = 8
 model_version = "phiyodr/bert-large-finetuned-squad2"
@@ -102,12 +81,12 @@ def run_perf_bert15(
         profiler.start(first_run_key)
         tt_embedding = tt_model.model_embedding(**inputs)
         tt_output = tt_model(1, tt_embedding, tt_attention_mask)
-        ttl.device.Synchronize()
+        tt_lib.device.Synchronize()
         profiler.end(first_run_key, force_enable=True)
-        
+
         del tt_output
         enable_persistent_kernel_cache()
-        
+
         profiler.start(second_attention_mask_key)
         tt_attention_mask = tt_model.model_attention_mask(**inputs)
         profiler.end(second_attention_mask_key, force_enable=True)
@@ -115,9 +94,9 @@ def run_perf_bert15(
         profiler.start(second_run_key)
         tt_embedding = tt_model.model_embedding(**inputs)
         tt_output = tt_model(1, tt_embedding, tt_attention_mask)
-        ttl.device.Synchronize()
+        tt_lib.device.Synchronize()
         profiler.end(second_run_key, force_enable=True)
-        
+
         del tt_output
 
     first_iter_time = profiler.get(first_run_key)
