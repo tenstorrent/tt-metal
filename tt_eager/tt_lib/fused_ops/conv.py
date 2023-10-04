@@ -118,6 +118,7 @@ def resnet50_1x1_conv_as_matmul(weight: List[Union[int, float]], conv_params, de
                                         out_subblock_w=matmul_config["out_subblock_w"],
                                         per_core_M=matmul_config["per_core_M"],
                                         per_core_N=matmul_config["per_core_N"],
+                                        transpose_mcast=False,
                                         fused_activation=tensor.FusibleActivationWithParam(tensor.FusibleActivation.RELU) if fuse_relu else None)
     else:
         matmul_program_config = matmul_config
