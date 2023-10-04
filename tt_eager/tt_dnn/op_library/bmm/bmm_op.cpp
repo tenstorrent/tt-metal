@@ -799,6 +799,34 @@ operation::ProgramWithCallbacks Matmul::create_program(
     );
 }
 
+MatmulParallelizationStrategy Matmul::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+    return std::visit(
+        [&](const auto& program_config) -> MatmulParallelizationStrategy {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, MatmulDefaultProgramConfig>) {
+                return bmm_op_utils::get_parallelization_strategy(input_tensors);
+            }
+            else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
+                return MatmulParallelizationStrategy::MULTI_CORE_REUSE_OPTIMIZED;
+            }
+            else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
+                return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED;
+            }
+            else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                if (program_config.mcast_in0) {
+                    return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED;
+                } else {
+                    return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED;
+                }
+            } else {
+                TT_THROW("Unrecognized Config");
+            }
+        },
+        this->program_config
+    );
+}
+
+
 tt::stl::reflection::Attributes Matmul::attributes() const {
     return {
         {"program_config", this->program_config},
