@@ -51,7 +51,10 @@ def run_tt_lib_test(
         *tensor_inputs, device_id=device_id, device=device, **test_args
     )
     pytorch_out = pytorch_op(*tensor_inputs, **test_args)
-
+    if (str(pytorch_op).split()[1] == "bitwise_or"):
+        print("input", *tensor_inputs)
+        print("Metal", tt_lib_out)
+        print("torch out", pytorch_out)
     result, output = output_comparison_func(pytorch_out, tt_lib_out)
 
     if plot_func is not None:

@@ -326,9 +326,11 @@ def gen_default_dtype_layout_device(
     buffer_type = []
 
     for input_shape in input_shapes:
-        #dtype.append(ttl.tensor.DataType.BFLOAT16)
-        # ToDo: Need to and pass update the Dtype
-        dtype.append(ttl.tensor.DataType.UINT32)
+        if dtypes == None:
+           dtype.append(ttl.tensor.DataType.BFLOAT16)
+        else:
+            # ToDo: Need to and pass update the Dtype
+            dtype.append(dtypes)
         buffer_type.append(ttl.tensor.BufferType.DRAM)
 
         if input_shape[-2] % 32 == 0 and input_shape[-1] % 32 == 0:
