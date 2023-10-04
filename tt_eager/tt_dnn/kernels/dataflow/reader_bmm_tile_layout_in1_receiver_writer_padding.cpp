@@ -10,20 +10,21 @@ void kernel_main() {
     // READER
     // in1 mcast args
     uint32_t in1_mcast_sender_noc_x             = get_arg_val<uint32_t>(0);
+    uint32_t in1_mcast_sender_noc_y             = get_arg_val<uint32_t>(1);
 
     // WRITER
     // out tensor args
-    uint32_t out_tensor_addr                    = get_arg_val<uint32_t>(1);
-    uint32_t out_tensor_start_tile_id           = get_arg_val<uint32_t>(2);
+    uint32_t out_tensor_addr                    = get_arg_val<uint32_t>(2);
+    uint32_t out_tensor_start_tile_id           = get_arg_val<uint32_t>(3);
 
     // padding args (WRITER)
-    uint32_t out_num_nonzero_subblocks_h        = get_arg_val<uint32_t>(3);
-    uint32_t out_last_subblock_h                = get_arg_val<uint32_t>(4);
-    uint32_t padded_block_tiles_h_skip          = get_arg_val<uint32_t>(5);
-    uint32_t out_num_nonzero_subblocks_w        = get_arg_val<uint32_t>(6);
-    uint32_t out_last_subblock_w                = get_arg_val<uint32_t>(7);
-    uint32_t padded_subblock_tiles_addr_skip    = get_arg_val<uint32_t>(8);
-    uint32_t padded_block_tiles_w_skip          = get_arg_val<uint32_t>(9);
+    uint32_t out_num_nonzero_subblocks_h        = get_arg_val<uint32_t>(4);
+    uint32_t out_last_subblock_h                = get_arg_val<uint32_t>(5);
+    uint32_t padded_block_tiles_h_skip          = get_arg_val<uint32_t>(6);
+    uint32_t out_num_nonzero_subblocks_w        = get_arg_val<uint32_t>(7);
+    uint32_t out_last_subblock_w                = get_arg_val<uint32_t>(8);
+    uint32_t padded_subblock_tiles_addr_skip    = get_arg_val<uint32_t>(9);
+    uint32_t padded_block_tiles_w_skip          = get_arg_val<uint32_t>(10);
 
     // COMPILE TIME ARGS
     // interleaved accessor args
@@ -35,31 +36,30 @@ void kernel_main() {
     // in0/in1 common args
     constexpr uint32_t num_blocks                         = get_compile_time_arg_val(2);
     // in1 mcast args
-    constexpr uint32_t in1_mcast_sender_noc_y             = get_compile_time_arg_val(3);
-    constexpr uint32_t in1_mcast_sender_semaphore_addr    = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(5);
+    constexpr uint32_t in1_mcast_sender_semaphore_addr    = get_compile_time_arg_val(3);
+    constexpr uint32_t in1_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(4);
     // batch args
-    constexpr uint32_t batch                              = get_compile_time_arg_val(6);
+    constexpr uint32_t batch                              = get_compile_time_arg_val(5);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w                = get_compile_time_arg_val(7);
-    constexpr uint32_t out_tensor_stride_h                = get_compile_time_arg_val(8);
-    constexpr uint32_t out_tensor_next_subblock_stride_w  = get_compile_time_arg_val(9);
-    constexpr uint32_t out_tensor_next_subblock_stride_h  = get_compile_time_arg_val(10);
+    constexpr uint32_t out_tensor_stride_w                = get_compile_time_arg_val(6);
+    constexpr uint32_t out_tensor_stride_h                = get_compile_time_arg_val(7);
+    constexpr uint32_t out_tensor_next_subblock_stride_w  = get_compile_time_arg_val(8);
+    constexpr uint32_t out_tensor_next_subblock_stride_h  = get_compile_time_arg_val(9);
 
     // out subblock args
-    constexpr uint32_t out_subblock_w                     = get_compile_time_arg_val(11);
-    constexpr uint32_t out_subblock_h                     = get_compile_time_arg_val(12);
-    constexpr uint32_t out_subblock_tile_count            = get_compile_time_arg_val(13);
+    constexpr uint32_t out_subblock_w                     = get_compile_time_arg_val(10);
+    constexpr uint32_t out_subblock_h                     = get_compile_time_arg_val(11);
+    constexpr uint32_t out_subblock_tile_count            = get_compile_time_arg_val(12);
 
     // batch args
-    constexpr uint32_t MtNt                               = get_compile_time_arg_val(14); // if 0
+    constexpr uint32_t MtNt                               = get_compile_time_arg_val(13); // if 0
     // Don't need batch; same as batch from READER args
 
     #ifdef FUSE_BIAS
         // in3 block args
-        constexpr uint32_t in3_block_w                        = get_compile_time_arg_val(15);
+        constexpr uint32_t in3_block_w                        = get_compile_time_arg_val(14);
 
         constexpr uint32_t cb_id_in3 = 3;
     #endif
