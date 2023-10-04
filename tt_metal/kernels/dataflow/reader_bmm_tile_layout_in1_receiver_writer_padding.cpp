@@ -58,18 +58,10 @@ void kernel_main() {
     // Don't need batch; same as batch from READER args
 
     #ifdef FUSE_BIAS
-        // in3 mcast args
-        uint32_t in3_mcast_sender_noc_x             = get_arg_val<uint32_t>(10);
-
         // in3 block args
         constexpr uint32_t in3_block_w                        = get_compile_time_arg_val(15);
 
-        // in3 mcast args
-        constexpr uint32_t in3_mcast_sender_noc_y             = get_compile_time_arg_val(16);
-        constexpr uint32_t in3_mcast_sender_semaphore_addr    = get_compile_time_arg_val(17);
-        constexpr uint32_t in3_mcast_receiver_semaphore_addr  = get_compile_time_arg_val(18);
         constexpr uint32_t cb_id_in3 = 3;
-        volatile tt_l1_ptr uint32_t* in3_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in3_mcast_receiver_semaphore_addr);
     #endif
 
     // WRITER
@@ -93,6 +85,7 @@ void kernel_main() {
         .data_format = output_data_format
     };
 
+    const uint64_t in1_mcast_sender_semaphore_noc_addr = get_noc_addr(in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, in1_mcast_sender_semaphore_addr);
 
     for (uint32_t b = 0; b < batch; b++) {
         for(uint32_t block = 0; block < num_blocks; block++) {
@@ -103,7 +96,6 @@ void kernel_main() {
             noc_semaphore_set(in1_mcast_receiver_semaphore_addr_ptr, INVALID);
 
             // Atomic increment source core counter
-            uint64_t in1_mcast_sender_semaphore_noc_addr = get_noc_addr(in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, in1_mcast_sender_semaphore_addr);
             noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
 
             // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
@@ -119,14 +111,13 @@ void kernel_main() {
                 cb_reserve_back(cb_id_in3, in3_block_w);
 
                 // Set in1 semaphore value to INVALID
-                noc_semaphore_set(in3_mcast_receiver_semaphore_addr_ptr, INVALID);
+                noc_semaphore_set(in1_mcast_receiver_semaphore_addr_ptr, INVALID);
 
                 // Atomic increment source core counter
-                uint64_t in3_mcast_sender_semaphore_noc_addr = get_noc_addr(in3_mcast_sender_noc_x, in3_mcast_sender_noc_y, in3_mcast_sender_semaphore_addr);
-                noc_semaphore_inc(in3_mcast_sender_semaphore_noc_addr, 1);
+                noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
 
                 // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                noc_semaphore_wait(in3_mcast_receiver_semaphore_addr_ptr, VALID);
+                noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
 
                 cb_push_back(cb_id_in3, in3_block_w);
             }
