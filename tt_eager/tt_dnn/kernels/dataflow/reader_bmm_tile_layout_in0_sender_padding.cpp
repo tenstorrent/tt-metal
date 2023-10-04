@@ -109,10 +109,10 @@ void kernel_main() {
 
             // Now we have the block in the CB address, we can mcast to dests!
             uint64_t in0_multicast_data_addr = get_noc_multicast_addr(
-            in0_mcast_dest_noc_end_x,
-            in0_mcast_dest_noc_end_y,
             in0_mcast_dest_noc_start_x,
             in0_mcast_dest_noc_start_y,
+            in0_mcast_dest_noc_end_x,
+            in0_mcast_dest_noc_end_y,
             in0_start_address);
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_async_write_multicast(in0_start_address, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores);
@@ -122,10 +122,10 @@ void kernel_main() {
 
             // We should also multicast the flag to destinations
             uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-            in0_mcast_dest_noc_end_x,
-            in0_mcast_dest_noc_end_y,
             in0_mcast_dest_noc_start_x,
             in0_mcast_dest_noc_start_y,
+            in0_mcast_dest_noc_end_x,
+            in0_mcast_dest_noc_end_y,
             in0_mcast_receiver_semaphore_addr);
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_semaphore_set_multicast(in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
