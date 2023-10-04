@@ -79,7 +79,7 @@ void kernel_main() {
         .log_base_2_of_page_size = log_base_2_of_page_size
     };
     #else
-    const InterleavedAddrGen<true> addrg = {
+    const InterleavedAddrGen<gamma_is_dram> addrg = {
         .bank_base_address = gamma_addr,
         .page_size = page_size
     };
@@ -88,12 +88,12 @@ void kernel_main() {
     #endif
     #ifdef FUSE_BETA
     #if (stick_size_is_pow2)
-    const InterleavedPow2AddrGen<gamma_is_dram> addrb = {
+    const InterleavedPow2AddrGen<beta_is_dram> addrb = {
         .bank_base_address = beta_addr,
         .log_base_2_of_page_size = log_base_2_of_page_size
     };
     #else
-    const InterleavedAddrGen<true> addrb = {
+    const InterleavedAddrGen<beta_is_dram> addrb = {
         .bank_base_address = beta_addr,
         .page_size = page_size
     };
