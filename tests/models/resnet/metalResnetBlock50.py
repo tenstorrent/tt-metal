@@ -68,24 +68,16 @@ def _nearest_y(x, y):
 def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
     if x.layout() == target_layout:
         return x
-    if (
-        x.layout() == tt_lib.tensor.Layout.ROW_MAJOR
-        and target_layout == tt_lib.tensor.Layout.TILE
-    ):
-        x_padded_shape = tt_lib.tensor.pad_to_tile_shape(
-            x.shape(), False, False, True, True
-        )
-        if (x.shape() != x_padded_shape):
+    if x.layout() == tt_lib.tensor.Layout.ROW_MAJOR and target_layout == tt_lib.tensor.Layout.TILE:
+        x_padded_shape = tt_lib.tensor.pad_to_tile_shape(x.shape(), False, False, True, True)
+        if x.shape() != x_padded_shape:
             return tt_lib.tensor.format_input_tensor(
                 x, device, x_padded_shape, pad_value, target_layout, output_mem_config
             )
         else:
             return tt_lib.tensor.tilize(x, output_mem_config, use_multicore=True)
-    elif (
-        x.layout() == tt_lib.tensor.Layout.TILE
-        and target_layout == tt_lib.tensor.Layout.ROW_MAJOR
-    ):
-        if (x.shape() != x.shape_without_padding()):
+    elif x.layout() == tt_lib.tensor.Layout.TILE and target_layout == tt_lib.tensor.Layout.ROW_MAJOR:
+        if x.shape() != x.shape_without_padding():
             return tt_lib.tensor.format_output_tensor(
                 x, x.shape_without_padding(), device, target_layout, output_mem_config
             )
@@ -385,54 +377,76 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
-        (6272, 512, 256): {
-            "compute_with_storage_grid_size": (8, 9),
-            "in0_block_w": 2,
-            "out_subblock_h": 1,
-            "out_subblock_w": 1,
-            "per_core_M": 22,
-            "per_core_N": 1,
-        },
-        (1568, 256, 1024): {
-            "compute_with_storage_grid_size": (8, 9),
-            "in0_block_w": 4,
-            "out_subblock_h": 1,
-            "out_subblock_w": 1,
-            "per_core_M": 6,
-            "per_core_N": 4,
-        },
-        (1568, 1024, 256): {
-            "compute_with_storage_grid_size": (8, 9),
-            "in0_block_w": 16,
-            "out_subblock_h": 1,
-            "out_subblock_w": 1,
-            "per_core_M": 6,
-            "per_core_N": 1,
-        },
-        (1568, 1024, 512): {
-            "compute_with_storage_grid_size": (8, 9),
-            "in0_block_w": 16,
-            "out_subblock_h": 1,
-            "out_subblock_w": 1,
-            "per_core_M": 6,
-            "per_core_N": 2,
-        },
-        (416, 512, 2048): {
-            "compute_with_storage_grid_size": (8, 7),
-            "in0_block_w": 16,
-            "out_subblock_h": 1,
-            "out_subblock_w": 1,
-            "per_core_M": 2,
-            "per_core_N": 8,
-        },
-        (416, 2048, 512): {
-            "compute_with_storage_grid_size": (8, 7),
-            "in0_block_w": 32,
-            "out_subblock_h": 1,
-            "out_subblock_w": 1,
-            "per_core_M": 2,
-            "per_core_N": 2,
-        },
+        (6272, 512, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(10, 8),
+            in0_block_w=2,
+            out_subblock_h=5,
+            out_subblock_w=1,
+            per_core_M=20,
+            per_core_N=1,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        (1568, 256, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(10, 8),
+            in0_block_w=4,
+            out_subblock_h=5,
+            out_subblock_w=1,
+            per_core_M=5,
+            per_core_N=4,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        (1568, 1024, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(10, 8),
+            in0_block_w=16,
+            out_subblock_h=5,
+            out_subblock_w=1,
+            per_core_M=5,
+            per_core_N=1,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        (1568, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(10, 8),
+            in0_block_w=16,
+            out_subblock_h=5,
+            out_subblock_w=1,
+            per_core_M=5,
+            per_core_N=2,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        (1568, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(10, 8),
+            in0_block_w=16,
+            out_subblock_h=5,
+            out_subblock_w=1,
+            per_core_M=5,
+            per_core_N=2,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        (416, 512, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 8),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=5,
+            per_core_M=2,
+            per_core_N=10,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        (416, 2048, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(7, 8),
+            in0_block_w=16,
+            out_subblock_h=2,
+            out_subblock_w=3,
+            per_core_M=2,
+            per_core_N=3,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
     },
 }
 
