@@ -154,11 +154,11 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const uint32_t out0_t = 2 * block_size;  // output
 
     const uint32_t im0_t = 2;                                                         // E[x]
-    uint32_t im1_t = 2 * Wt;                                                          // x - E[x]
-    uint32_t im2_t = 2 * Wt;                                                          // (x - E[x])^2
+    uint32_t im1_t = Wt;                                                              // x - E[x]
+    uint32_t im2_t = Wt;                                                              // (x - E[x])^2
     uint32_t im3_t = 0;                                                               // Sum[(x - E[x])^2]
     const uint32_t im4_t = 2;                                                         // E[(x - E[x])^2] = Var[x]
-    const uint32_t im5_t = 8;                                                         // 1.0/(sqrt(Var[x] + eps))
+    const uint32_t im5_t = 1;                                                         // 1.0/(sqrt(Var[x] + eps))
     const uint32_t im6_t = (gamma_has_value || beta_has_value) ? 2 * block_size : 0;  // x * gamm + beta
     const uint32_t im7_t = 2;                                                         // Sum[x]
 
