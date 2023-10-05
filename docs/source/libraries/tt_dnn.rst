@@ -657,4 +657,3 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.rdiv
 
-
