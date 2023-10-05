@@ -967,10 +967,10 @@ Tensor assign(const Tensor& input_a, const MemoryConfig& output_mem_config)
 }
 
 // binary assign
-Tensor _assign_binary(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+Tensor _assign_binary(const Tensor& input_a,const Tensor& input_b, const MemoryConfig& output_mem_config) {
     TT_ASSERT( (input_a.layout() == input_b.layout()) , "Input tensors layout need to be same");
-    TT_ASSERT( (input_a.volume() == input_b.volume()) , "Input tensors volume need to be same");
-    Tensor result = clone(input_a, output_mem_config);
+    TT_ASSERT( (input_a.shape() == input_b.shape()) , "Input tensors shape need to be same");
+    Tensor result = copy(input_a, input_b);
     return result;
 }
 Tensor assign(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config)
