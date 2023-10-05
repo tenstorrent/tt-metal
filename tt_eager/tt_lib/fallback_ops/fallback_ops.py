@@ -799,3 +799,20 @@ def bitwise_xor(
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
     return torch.bitwise_xor(input.to(torch.int), other)
+
+
+@convert_tt_tensors_wrapper
+def bitwise_not(
+    input: ttl_tensor.Tensor
+) -> ttl_tensor.Tensor:
+    """
+    Computes the bitwise NOT of the given ``input`` tensor.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | Input tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+
+    """
+    return torch.bitwise_not(input.to(torch.int))
