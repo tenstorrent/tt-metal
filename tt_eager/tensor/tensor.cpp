@@ -268,17 +268,23 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     auto& shard_grid = shard_spec.shard_grid;
     auto& shard_shape = shard_spec.shard_shape;
 
-    // TODO: Assert for Contiguous RM Cores
     uint32_t num_cores = 0;
     for (const auto& core_range : shard_grid.ranges()) {
         num_cores += core_range.size();
     }
 
     uint32_t num_shards;
+    uint32_t total_height = tt_metal::compute_volume(shape) / shape[-1];
+        uint32_t total_width = shape[-1];
     if (memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        uint32_t total_height = tt_metal::compute_volume(shape) / shape[-1];
-        TT_ASSERT(total_height % shard_shape[0] == 0 && shape[-1] == shard_shape[1]);
+        TT_ASSERT(total_height % shard_shape[0] == 0 && total_width == shard_shape[1], "Shard shape does not divide tensor shape correctly according to sharding scheme");
         num_shards = total_height / shard_shape[0];
+    } else if (memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        TT_ASSERT(total_height == shard_shape[0] && total_width % shard_shape[1] == 0, "Shard shape does not divide tensor shape correctly according to sharding scheme");
+        num_shards = total_width / shard_shape[1];
+    } else if (memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        TT_ASSERT(total_height % shard_shape[0] == 0 && total_width % shard_shape[1] == 0, "Shard shape does not divide tensor shape correctly according to sharding scheme");
+        num_shards = (total_height / shard_shape[0]) * (total_width / shard_shape[1]);
     } else {
         TT_ASSERT("Unsupported sharding scheme");
     }
@@ -287,6 +293,9 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
 
     if (layout == Layout::TILE) {
         TT_ASSERT((shard_shape[0] % TILE_HEIGHT == 0 && shard_shape[1] % TILE_WIDTH == 0), "Shard shape must be tile sized");
+    } else if (layout == Layout::ROW_MAJOR) {
+        // Require alignment for now
+        TT_ASSERT(shard_shape[1] * tensor_impl::element_size_bytes_wrapper(data_type) % 32 == 0);
     }
 
     uint32_t shard_size = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(Shape({shard_shape[0], shard_shape[1]}), data_type));
