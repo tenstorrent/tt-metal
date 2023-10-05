@@ -643,3 +643,10 @@ Other Operations
 .. autofunction:: tt_lib.tensor.swiglu
 
 .. autofunction:: tt_lib.tensor.embeddings
+
+.. autofunction:: tt_lib.tensor.rpow
+
+.. autofunction:: tt_lib.tensor.rsub
+
+.. autofunction:: tt_lib.tensor.rdiv
+
