@@ -1530,3 +1530,28 @@ def gen_dtype_layout_device_bert(
                 )
 
     return result
+
+
+def gen_polygamma_args(
+    input_shapes,
+    supported_dtypes,
+    supported_layouts,
+    on_device,
+    low=-1,
+    high=10,
+    dtype=torch.bfloat16,
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        supported_dtypes,
+        supported_layouts,
+        on_device,
+        "k",
+        low,
+        high,
+        dtype,
+    ):
+        # the n(int) order of the polygamma function is b/w 1 to 10
+        k_order = np.random.randint(1, 10)
+        input_info.update({"k": k_order})
+        yield input_info

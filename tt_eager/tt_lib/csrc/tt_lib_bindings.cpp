@@ -12,6 +12,8 @@
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 
 #include "tt_dnn/op_library/auto_format.hpp"
+#include "tt_dnn/op_library/math.hpp"
+
 #include "tt_lib_bindings.hpp"
 #include "tt_lib_bindings_tensor.hpp"
 #include "operations/module.hpp"
@@ -40,6 +42,19 @@ void DeviceModule(py::module &m_device) {
         .def("id", &Device::id, "Device's ID")
         .def("arch", &Device::arch, "Device's arch");
 
+    // *** eps constant ***
+    m_device.attr("EPS_GS") = EPS_GS;
+    m_device.attr("EPS_WHB0") = EPS_WHB0;
+
+    pyDevice.def("sfpu_eps", &Device::sfpu_eps, R"doc(
+        Machine epsilon value for current device.
+
+        +------------------+------------------------+-----------------------+-------------+----------+
+        | Argument         | Description            | Data type             | Valid range | Required |
+        +==================+========================+=======================+=============+==========+
+        | device           | return machine epsilon | tt_lib.device.Device  |     NA      | Yes      |
+        +------------------+------------------------+-----------------------+-------------+----------+
+        )doc");
     m_device.def("CreateDevice", [](int device_id) { return CreateDevice(device_id); }, R"doc(
         Creates an instance of TT device.
 

@@ -22,6 +22,8 @@
 #define FUSE_SQRT_RECIP 0
 #endif
 
+#define EPS 1.19209e-07 //std::numeric_limits::epsilon() for FP32
+
 using namespace ckernel;
 
 namespace ckernel::math

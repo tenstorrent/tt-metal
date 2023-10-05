@@ -365,6 +365,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.multigammaln
 
+.. autofunction:: tt_lib.tensor.assign
+
 .. autofunction:: tt_lib.tensor.isclose
 
 .. autofunction:: tt_lib.tensor.i0
@@ -376,6 +378,8 @@ Tensor elementwise operations
 .. autofunction:: tt_lib.tensor.logical_or
 
 .. autofunction:: tt_lib.tensor.logical_ori
+
+.. autofunction:: tt_lib.tensor.polygamma
 
 Tensor relational operations
 ----------------------------------
@@ -475,6 +479,12 @@ Broadcast and Reduce
 
 .. autofunction:: tt_lib.tensor.reduce
 
+
+.. autofunction:: tt_lib.tensor.rpow
+
+.. autofunction:: tt_lib.tensor.rsub
+
+.. autofunction:: tt_lib.tensor.rdiv
 
 Fallback Operations
 ===================
@@ -652,3 +662,5 @@ Other Operations
 .. autofunction:: tt_lib.tensor.swiglu
 
 .. autofunction:: tt_lib.tensor.embeddings
+
+.. autofunction:: tt_lib.tensor.nextafter

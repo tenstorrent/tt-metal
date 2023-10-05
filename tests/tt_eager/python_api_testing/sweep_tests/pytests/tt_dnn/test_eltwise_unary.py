@@ -40,13 +40,6 @@ if is_wormhole_b0():
     shapes = [
         shapes[0],
     ]
-    input_mem_cfgs = [
-        input_mem_cfgs[0],
-    ]
-    #output_mem_cfgs = [
-    #    output_mem_cfgs[0],
-    #]
-
 
 @pytest.mark.parametrize(
     "input_shapes",
@@ -69,9 +62,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update(
@@ -104,9 +95,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-1e6, high=1e6), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         comparison_func = comparison_funcs.comp_pcc
@@ -134,9 +123,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         comparison_func = comparison_funcs.comp_pcc
@@ -163,9 +150,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.int32
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.int32)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         comparison_func = comparison_funcs.comp_pcc
@@ -188,12 +173,10 @@ class TestEltwiseUnary:
         input_mem_config,
         output_mem_config,
     ):
-        if (is_wormhole_b0() and fast_and_appx):
+        if is_wormhole_b0() and fast_and_appx:
             pytest.skip("Gelu appx mode not working for WH b0")
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args["fast_and_appx"] = fast_and_appx
@@ -218,9 +201,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=1, high=1e8), torch.bfloat16
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=1, high=1e8), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args["fast_and_appx"] = fast_and_appx
@@ -245,9 +226,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-10, high=10), torch.bfloat16
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-10, high=10), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args["fast_and_appx"] = fast_and_appx
@@ -382,9 +361,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=0, high=100), torch.float32
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=0, high=100), torch.float32)
         ]
         comparison_func = partial(comparison_funcs.comp_pcc)
         run_single_pytorch_test(
@@ -395,9 +372,7 @@ class TestEltwiseUnary:
             device,
         )
 
-    @pytest.mark.parametrize(
-        "relu_type, limit_type", [["min", "lower"], ["max", "upper"]]
-    )
+    @pytest.mark.parametrize("relu_type, limit_type", [["min", "lower"], ["max", "upper"]])
     @pytest.mark.parametrize("input_value", [-2.0, -1.0, 0.0, 1.0, 2.0])
     @pytest.mark.parametrize("limit", [-2.0, -1.0, 0.0, 1.0, 2.0])
     def test_run_eltwise_relu_limit_ops(
@@ -475,9 +450,7 @@ class TestEltwiseUnary:
         )
 
     @pytest.mark.parametrize("log_kind", ["log", "log2", "log10"])
-    @pytest.mark.parametrize(
-        "range", [{"low": 1e-6, "high": 1.0}, {"low": 1, "high": 100000}]
-    )
+    @pytest.mark.parametrize("range", [{"low": 1e-6, "high": 1.0}, {"low": 1, "high": 100000}])
     def test_run_eltwise_log_ops(
         self,
         log_kind,
@@ -490,9 +463,7 @@ class TestEltwiseUnary:
     ):
         datagen_func = [
             generation_funcs.gen_func_with_cast(
-                partial(
-                    generation_funcs.gen_rand, low=range["low"], high=range["high"]
-                ),
+                partial(generation_funcs.gen_rand, low=range["low"], high=range["high"]),
                 torch.float32,
             )
         ]
@@ -616,9 +587,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update({"scalar": scalar})
@@ -638,9 +607,7 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @pytest.mark.parametrize(
-        "unary_kind", ["add_unary", "sub_unary", "mul_unary", "div_unary"]
-    )
+    @pytest.mark.parametrize("unary_kind", ["add_unary", "sub_unary", "mul_unary", "div_unary"])
     @pytest.mark.parametrize("scalar", [-2.0, 1.0, 2.0, 8.0])
     def test_run_eltwise_binop_to_unary_ops(
         self,
@@ -653,9 +620,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
         ]
         comparison_func = comparison_funcs.comp_pcc
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
@@ -676,9 +641,7 @@ class TestEltwiseUnary:
         )
 
     @pytest.mark.parametrize("clip_kind", ["clip", "hardtanh"])
-    @pytest.mark.parametrize(
-        "clip_range", ({"low": -2.0, "high": 2.0}, {"low": -5.5, "high": 27.5})
-    )
+    @pytest.mark.parametrize("clip_range", ({"low": -2.0, "high": 2.0}, {"low": -5.5, "high": 27.5}))
     def test_run_eltwise_clip_ops(
         self,
         clip_kind,
@@ -690,9 +653,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-10, high=10), torch.float32
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-10, high=10), torch.float32)
         ]
         comparison_func = comparison_funcs.comp_pcc
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
@@ -723,9 +684,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update({"alpha": alpha})
@@ -757,9 +716,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args.update({"negative_slope": negative_slope})
@@ -791,9 +748,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-4, high=10), torch.float32
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-4, high=10), torch.float32)
         ]
         comparison_func = partial(comparison_funcs.comp_pcc)
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
@@ -856,9 +811,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args["fast_and_appx"] = fast_and_appx
@@ -878,9 +831,7 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @pytest.mark.parametrize(
-        "fn_kind", ["isinf", "isposinf", "isneginf", "isnan", "isfinite"]
-    )
+    @pytest.mark.parametrize("fn_kind", ["isinf", "isposinf", "isneginf", "isnan", "isfinite"])
     def test_run_eltwise_inf_nan_ops(
         self,
         input_shapes,
@@ -910,6 +861,7 @@ class TestEltwiseUnary:
             datagen_func,
             comparison_func,
             device,
+            test_args,
         )
 
     def test_run_eltwise_tan_op(
@@ -933,4 +885,77 @@ class TestEltwiseUnary:
             datagen_func,
             comparison_func,
             device,
+        )
+
+    @pytest.mark.parametrize("fn_kind", ["rpow", "rsub", "rdiv"])
+    def test_run_eltwise_reverse_ops(
+        self,
+        input_shapes,
+        fn_kind,
+        device,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
+    ):
+        values = {"rdiv": (1.0, 100.0), "rsub": (1.0, 50.0), "rpow": (5.0, 10.0)}
+        low_v, high_v = values[fn_kind]
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=low_v, high=high_v),
+                torch.bfloat16,
+            )
+        ]
+        comparison_func = comparison_funcs.comp_pcc
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args.update(
+            {
+                "input_mem_config": [input_mem_config],
+                "output_mem_config": output_mem_config,
+                "factor": 4.0,
+            }
+        )
+        run_single_pytorch_test(
+            f"eltwise-{fn_kind}",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            device,
+            test_args,
+        )
+
+
+    @pytest.mark.parametrize("fn_kind", ["rsub", "rdiv"])
+    def test_run_eltwise_reverse_neg_ops(
+        self,
+        input_shapes,
+        fn_kind,
+        device,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
+    ):
+        values = {"rdiv": (1.0, 100.0), "rsub": (1.0, 50.0), "rpow": (5.0, 10.0)}
+        low_v, high_v = values[fn_kind]
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generation_funcs.gen_rand, low=low_v, high=high_v),
+                torch.bfloat16,
+            )
+        ]
+        comparison_func = comparison_funcs.comp_pcc
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args.update(
+            {
+                "input_mem_config": [input_mem_config],
+                "output_mem_config": output_mem_config,
+                "factor": pi,
+            }
+        )
+        run_single_pytorch_test(
+            f"eltwise-{fn_kind}",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            device,
+            test_args,
         )
