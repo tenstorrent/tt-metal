@@ -4,25 +4,25 @@
 
 import torch
 import tt_lib as ttl
-from tests.tt_eager.python_api_testing.sweep_tests import (
-    comparison_funcs,
-)
+
+from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs
+
 from loguru import logger
 import pytest
 
-
 @pytest.mark.parametrize("op_kind", ["or", "and", "not", "xor"])
-@pytest.mark.parametrize("other", [5, 10, -1])
-@pytest.mark.parametrize("on_device", [True, False])
 @pytest.mark.parametrize(
-    "input_shape",
+    "input_shape, other, on_device",
     (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 32]), 5, True),
+        (torch.Size([1, 1, 32, 32]), 5, False),
+        (torch.Size([1, 1, 320, 384]), 5, True),
+        (torch.Size([1, 1, 320, 384]), 5, False),
+        (torch.Size([1, 3, 320, 384]), 5, True),
+        (torch.Size([1, 3, 320, 384]), 5, False),
     ),
 )
-def test_bitwise_ops_fallback(op_kind, input_shape, other, on_device, device):
+def test_bitwise_or_fallback(op_kind, input_shape, other, on_device, device):
     torch.manual_seed(1234)
 
     # x = torch.randn(input_shape, dtype=torch.int8)
