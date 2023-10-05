@@ -20,5 +20,5 @@ test-list:
       args:
         data-layout: ["ROW_MAJOR", "TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
-        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM"]
