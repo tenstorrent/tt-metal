@@ -520,6 +520,8 @@ These operations are currently not supported on TT accelerator device and will e
 .. autoclass:: tt_lib.fallback_ops.bitwise_or
 
 .. autoclass:: tt_lib.fallback_ops.bitwise_and
+
+.. autoclass:: tt_lib.fallback_ops.bitwise_xor
 Experimental Operations
 =======================
 
