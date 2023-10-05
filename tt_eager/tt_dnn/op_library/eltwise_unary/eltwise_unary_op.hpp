@@ -84,10 +84,10 @@ inline Tensor run_eltwise_unary(const Tensor& input_tensor, std::vector<UnaryWit
     return operation::run_with_autoformat(EltwiseUnary{ops_chain, output_mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE}).at(0);
 }
 
-template <UnaryOpType unary_op_type>
+template <UnaryOpType unary_op_type, typename T=float>
 struct make_eltwise_unary_with_param {
-    Tensor operator()(const Tensor& input_tensor, float param, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
-        return run_eltwise_unary(input_tensor, {UnaryWithParam{.op_type=unary_op_type, .param=param}}, output_mem_config);
+    Tensor operator()(const Tensor& input_tensor, T param, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
+        return run_eltwise_unary(input_tensor, {UnaryWithParam{.op_type=unary_op_type, .param=static_cast<float>(param)}}, output_mem_config);
     }
 };
 
@@ -140,23 +140,23 @@ constexpr auto erfinv = make_eltwise_unary<UnaryOpType::ERFINV>{};
 constexpr auto tan = make_eltwise_unary<UnaryOpType::TAN>{};
 constexpr auto relu_max = make_eltwise_unary_with_param<UnaryOpType::RELU_MAX>{};
 constexpr auto relu_min = make_eltwise_unary_with_param<UnaryOpType::RELU_MIN>{};
-constexpr auto power = make_eltwise_unary_with_param<UnaryOpType::POWER>{};
+constexpr auto power = make_eltwise_unary_with_param<UnaryOpType::POWER, uint32_t>{};
 constexpr auto leaky_relu = make_eltwise_unary_with_param<UnaryOpType::LEAKY_RELU>{};
 constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
 
 inline Tensor erf(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    return make_eltwise_unary_with_param<UnaryOpType::ERF>{}(input_tensor, static_cast<float>(fast_and_approx), output_mem_config);
+    return make_eltwise_unary_with_param<UnaryOpType::ERF>{}(input_tensor, fast_and_approx, output_mem_config);
 }
 inline Tensor erfc(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    return make_eltwise_unary_with_param<UnaryOpType::ERFC>{}(input_tensor, static_cast<float>(fast_and_approx), output_mem_config);
+    return make_eltwise_unary_with_param<UnaryOpType::ERFC>{}(input_tensor, fast_and_approx, output_mem_config);
 }
 
 inline Tensor gelu(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    return make_eltwise_unary_with_param<UnaryOpType::GELU>{}(input_tensor, static_cast<float>(fast_and_approx), output_mem_config);
+    return make_eltwise_unary_with_param<UnaryOpType::GELU>{}(input_tensor, fast_and_approx, output_mem_config);
 }
 inline Tensor rsqrt(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
-    return make_eltwise_unary_with_param<UnaryOpType::RSQRT>{}(input_tensor, static_cast<float>(fast_and_approx), output_mem_config);
+    return make_eltwise_unary_with_param<UnaryOpType::RSQRT>{}(input_tensor, fast_and_approx, output_mem_config);
 }
 
 inline Tensor log_sigmoid(const Tensor &input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
