@@ -601,9 +601,9 @@ namespace tt::tt_metal::detail{
             Moves input tensor ``arg0`` (given by input_a) to ``arg1`` (given by input_b) if their
             volumes and memory layouts match, and returns input_b tensor.
 
-            Input tensor must have BFLOAT16 data type.
+            Input tensors can be of any data type.
 
-            Output tensor will have BFLOAT16 data type.
+            Output tensor will be of same data type as Input tensor.
 
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
@@ -617,9 +617,9 @@ namespace tt::tt_metal::detail{
             py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Clones input tensors ``arg0`` (given by input) and returns the output tensor.
 
-            Input tensor must have BFLOAT16 data type.
+            Input tensor can be of any data type.
 
-            Output tensor will have BFLOAT16 data type.
+            Output tensor will be of same data type as Input tensor.
 
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
