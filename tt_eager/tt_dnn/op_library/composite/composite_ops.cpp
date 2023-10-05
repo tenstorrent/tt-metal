@@ -258,9 +258,16 @@ Tensor selu(const Tensor& x,const float scale, const float alpha, const MemoryCo
 }
 
 //ELU :
-// Theano defins it as,
+// Theano defines it as,
 // return tensor.switch(x > 0, x, alpha * tensor.expm1(x))
 
+// rpow: y = k**(a) = exp( a**log(k) )
+Tensor rpow(const Tensor& a,float k, const MemoryConfig& output_mem_config) {
+  TT_ASSERT( k > 0.0, "rpow cannot be calcualted for non-positive numbers");
+  float log_k = logf(k);
+  Tensor result = bcast(a, mk_tiled_scalar(log_k), BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
+  return exp(result,output_mem_config);
+}
 
 // Function Clip
 //use clip y = min( max( x, min_value), max_value) by broadcast

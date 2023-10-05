@@ -137,6 +137,18 @@ namespace tt::tt_metal::detail {
 
         );
         detail::bind_unary_op_with_param(
+            m_tensor, "rdiv", rdiv,
+            py::arg("denominator"),
+            R"doc(Returns tensor  with value ``{1}`` divided by each of respective elements of the input tensor ``{0}``.)doc",
+            R"doc("denominator value which is actually calculated as numerator", "float", ">=0.0")doc"
+        );
+        detail::bind_unary_op_with_param(
+            m_tensor, "rsub", rsub,
+            py::arg("value"),
+            R"doc(Returns tensor  with respective elements of the input tensor ``{0}`` subtracted from the ``{1}``.)doc",
+            R"doc("subtrahent value which is actually calculated as minuend", "float")doc"
+        );
+        detail::bind_unary_op_with_param(
             m_tensor, "power", power,
             py::arg("exponent"),
             R"doc(Returns tensor with the all of elements of the input tensor ``{0}`` raised to ``{1}``.)doc",

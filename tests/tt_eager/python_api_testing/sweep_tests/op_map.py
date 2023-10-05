@@ -468,6 +468,18 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_signbit,
         "pytorch_op": pytorch_ops.signbit,
     },
+    "eltwise-rpow": {
+        "tt_lib_op": tt_lib_ops.eltwise_rpow,
+        "pytorch_op": pytorch_ops.eltwise_rpow,
+    },
+    "eltwise-rdiv": {
+        "tt_lib_op": tt_lib_ops.eltwise_rdiv,
+        "pytorch_op": pytorch_ops.eltwise_rdiv,
+    },
+    "eltwise-rsub": {
+        "tt_lib_op": tt_lib_ops.eltwise_rsub,
+        "pytorch_op": pytorch_ops.eltwise_rsub,
+    },
     # Eltwise binary
     "eltwise-ne": {
         "tt_lib_op": tt_lib_ops.eltwise_ne,
