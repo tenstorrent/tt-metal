@@ -257,13 +257,6 @@ inline void write_data_to_device_buffer(const BufferType<T>& data_to_write, Devi
     // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
     // And effectively get rid of any additional allocation
 
-    if (data_type == DataType::BFLOAT16) {
-        if (memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED) {
-            TT_ASSERT(shape[3] % 2 == 0, "Input tensor width must be a multiple of 2 to pack interleaved row major data");
-        } else {
-            TT_ASSERT(compute_volume(shape) % 2 == 0, "Input tensor volume must be a multiple of 2 to pack contiguous data");
-        }
-    }
     auto uint32_data = pack_vec_into_uint32_vec<T>(data_to_write);
 
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
