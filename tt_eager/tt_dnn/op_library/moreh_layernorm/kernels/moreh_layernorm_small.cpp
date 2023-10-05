@@ -197,8 +197,6 @@ void MAIN {
          * mask xmm
          */
         if (do_mask_h || do_mask_w) {
-            cb_wait_front(cb_xmm, Wt);
-            cb_reserve_back(cb_xmm, Wt);
             for (uint32_t wt = 0; wt < Wt; wt += block_size) {
                 for (uint32_t j = 0; j < block_size; j++) {
                     ACQ();
@@ -225,7 +223,6 @@ void MAIN {
                     REL();
                 }  // block_size loop
                 cb_pop_front(cb_xmm, block_size);
-                cb_push_back(cb_xmm, block_size);
             }  // Wt loop
         }      // if (do_mask_h || do_mask_w)
 
@@ -235,7 +232,6 @@ void MAIN {
          */
         cb_reserve_back(cb_xmm2, Wt);
         for (uint32_t wt = 0; wt < Wt; wt += block_size) {
-            cb_wait_front(cb_xmm, wt + block_size);
             for (uint32_t j = 0; j < block_size; j++) {
                 ACQ();
                 mul_tiles_init();
@@ -361,7 +357,9 @@ void MAIN {
             }  // if (do_beta)
         }      // Wt loop
         cb_pop_front(cb_ex2pe, onetile);
-        cb_pop_front(cb_xmm, Wt);
+        if (!do_mask_h && !do_mask_w) {
+            cb_pop_front(cb_xmm, Wt);
+        }
     }  // NCHt loop
     cb_pop_front(cb_scaler, onetile);
     cb_pop_front(cb_eps, onetile);
