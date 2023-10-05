@@ -411,12 +411,12 @@ namespace ckernel::unpacker
    }
 
 
-   inline void set_dst_write_addr(const uint32_t &context_id, const uint32_t &operand_id)
+   inline void set_dst_write_addr(const uint32_t &context_id, const uint32_t &unpack_dst_format)
    {
       uint32_t dst_byte_addr = 16*(4 + mailbox_read(ThreadId::MathThreadId)); // Apply fixed offset of 4*16 to dest address
       TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0); // Disable address bit swizzle
       TTI_RDCFG(p_gpr_unpack::UNPACK_STRIDE, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Save current stride
-      uint unpA_ch1_x_stride = (uint) (unpack_dst_format[operand_id]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[operand_id]&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
+      uint unpA_ch1_x_stride = (uint) (unpack_dst_format&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
       uint unpA_ch1_z_stride = FACE_C_DIM*FACE_R_DIM*unpA_ch1_x_stride;
       TT_SETDMAREG(0, LOWER_HALFWORD(unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT), 0, LO_16(p_gpr_unpack::TMP_LO));
       TTI_WRCFG(p_gpr_unpack::TMP_LO, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32); // Set unpack stride

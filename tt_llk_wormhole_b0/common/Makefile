@@ -42,6 +42,8 @@ INCLUDES = \
 	-I$(CKERNEL_DIR)/$(ARCH_NAME)/common/inc \
 	-I$(HLK_INC) \
 	-I$(CKERNEL_DIR)/$(ARCH_NAME)/llk_lib/ \
+	-I$(CKERNEL_DIR)/$(ARCH_NAME)/buda/llk_io/ \
+	-I$(CKERNEL_DIR)/$(ARCH_NAME)/buda/llk_api/ \
 	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME)/ \
 	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME)/noc \
 	-I$(BUDA_HOME)/perf_lib/ \
@@ -55,6 +57,8 @@ INCLUDES = \
 	-I$(CKERNEL_DIR)/hlkc/inc \
 	-I$(CKERNEL_DIR)/hlkc/src \
 	-I$(CKERNEL_DIR)/$(ARCH_NAME)/llk_lib/ \
+	-I$(CKERNEL_DIR)/$(ARCH_NAME)/buda/llk_io/ \
+	-I$(CKERNEL_DIR)/$(ARCH_NAME)/buda/llk_api/ \
 	-I$(CKERNEL_INC_DIR)/gen/out \
 	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME) \
 	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME)/noc \
