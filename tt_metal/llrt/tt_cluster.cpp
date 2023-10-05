@@ -326,10 +326,9 @@ void Cluster::verify_eth_fw() const {
 }
 
 int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
-    if (this->cluster_desc_->get_chips_with_mmio().find(chip_id) != this->cluster_desc_->get_chips_with_mmio().end()) {
-        return this->device_->get_clocks().at(chip_id);
-    } else {
-        return this->device_->get_clocks().at(0);
+    if (this->target_device_ids_.find(chip_id) != this->target_device_ids_.end()) {
+        chip_id_t mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(chip_id);
+        return this->device_->get_clocks().at(mmio_device_id);
     }
 }
 
@@ -445,8 +444,8 @@ void Cluster::write_dram_vec(
     this->device_->write_to_device(mem_ptr, len, virtual_dram_core, addr, "LARGE_WRITE_TLB");
     if (this->device_->get_target_remote_device_ids().find(virtual_dram_core.chip) !=
         this->device_->get_target_remote_device_ids().end()) {
-        this->device_->wait_for_non_mmio_flush();
-    }
+            this->device_->wait_for_non_mmio_flush();
+        }
 }
 
 void Cluster::write_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uint64_t addr, bool small_access) const {

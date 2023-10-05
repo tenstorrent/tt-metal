@@ -109,10 +109,10 @@ TEST_F(BasicFixture, MultiDeviceInitializeAndTeardown) {
         for (unsigned int id = 0; id < num_devices; id++) {
             devices.push_back(tt::tt_metal::CreateDevice(id));
         }
-    }
-
-    for (auto device: devices) {
-        ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+    } catch (...) {
+        for (auto device : devices) {
+            ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+        }
     }
 }
 TEST_F(BasicFixture, MultiDeviceLoadBlankKernels) {
@@ -132,9 +132,10 @@ TEST_F(BasicFixture, MultiDeviceLoadBlankKernels) {
         for (unsigned int id = 0; id < num_devices; id++) {
             unit_tests::basic::device::load_all_blank_kernels(devices.at(id));
         }
-    }
-    for (auto device: devices) {
-        ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+    } catch (...) {
+        for (auto device: devices) {
+            ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
+        }
     }
 }
 
