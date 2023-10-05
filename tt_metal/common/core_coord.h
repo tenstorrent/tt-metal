@@ -44,8 +44,12 @@ inline CoreCoord get_core_coord_from_relative(const RelativeCoreCoord& in, const
 struct CoreRange {
     CoreCoord start;
     CoreCoord end;
+    CoreRange (const CoreCoord &point) {
+      this->start = point;
+      this->end = point;
+    }
 
-    CoreRange(CoreCoord start, CoreCoord end) {
+    CoreRange(const CoreCoord & start, const CoreCoord & end) {
         tt::log_assert(
             end.x >= start.x and end.y >= start.y,
             "Invalid core range for start: {}, end: {}", start.str(), end.str());
@@ -53,6 +57,11 @@ struct CoreRange {
         this->start = start;
         this->end = end;
     }
+
+    CoreRange(const CoreRange &other) = default;
+    CoreRange& operator=(const CoreRange &other) = default;
+    CoreRange(CoreRange &&other) = default;
+    CoreRange& operator=(CoreRange &&other) = default;
 
     std::optional<CoreRange> intersects ( const CoreRange & other ) const
     {
@@ -78,11 +87,11 @@ struct CoreRange {
     std::optional<CoreRange> merge ( const CoreRange & cr) const
     {
         if ( this->intersects(cr) ){
-          if ( this->start.x == cr.start.x && this->end.x == cr.end.x )
-            return CoreRange ( {this->start.x, std::min(this->start.y, cr.start.y)} , { this->end.x, std::max( this->end.y, cr.end.y) } );
+            if ( this->start.x == cr.start.x && this->end.x == cr.end.x )
+                return CoreRange ( {this->start.x, std::min(this->start.y, cr.start.y)} , { this->end.x, std::max( this->end.y, cr.end.y) } );
 
-          else if ( this->start.y == cr.start.y && this->end.y == cr.end.y )
-            return CoreRange ( { std::min( this->start.x, cr.start.x ), this->start.y}, { std::max( this->end.x, cr.end.x) , this->end.y });
+            else if ( this->start.y == cr.start.y && this->end.y == cr.end.y )
+                return CoreRange ( { std::min( this->start.x, cr.start.x ), this->start.y}, { std::max( this->end.x, cr.end.x) , this->end.y });
         }
         return std::nullopt;
     }
