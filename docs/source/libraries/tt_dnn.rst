@@ -476,6 +476,12 @@ Broadcast and Reduce
 .. autofunction:: tt_lib.tensor.reduce
 
 
+.. autofunction:: tt_lib.tensor.rpow
+
+.. autofunction:: tt_lib.tensor.rsub
+
+.. autofunction:: tt_lib.tensor.rdiv
+
 Fallback Operations
 ===================
 
