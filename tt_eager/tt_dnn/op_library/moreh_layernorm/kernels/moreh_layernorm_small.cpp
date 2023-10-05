@@ -251,6 +251,7 @@ void MAIN {
                 REL();
             }
         }  // Wt loop
+        // We don't pop cb_xmm here.
 
         /*
          * E[(x-E[x])^2 = Var[x]
