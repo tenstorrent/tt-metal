@@ -20,6 +20,11 @@ union Converter {
         c.u = _v;
         return c.f;
     }
+    static uint32_t to_uint(float _f) {
+      Converter c{};
+      c.f = _f;
+      return c.u;
+    }
 };
 
 } // namespace sfpu

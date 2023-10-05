@@ -19,7 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, gene
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 import tt_lib as ttl
-
+import numpy as np
 
 fns = ["std_hw", "mean_hw", "var_hw", "normalize_hw"]
 
@@ -61,3 +61,10 @@ class TestStats:
             device,
             test_args,
         )
+
+class TestEPS:
+    def test_basic_gs(self):
+        assert ttl.device.EPS_GS == 0.001953125
+
+    def test_basic_whb0(self):
+        assert np.isclose(ttl.device.EPS_WHB0, 1.19209e-07)

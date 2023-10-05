@@ -21,6 +21,8 @@
 #define FUSE_SQRT_RECIP 0
 #endif
 
+#define EPS 0.001953125 //std::numeric_limits::epsilon() - BF19 aka TF32
+
 using namespace ckernel;
 
 namespace ckernel::math
