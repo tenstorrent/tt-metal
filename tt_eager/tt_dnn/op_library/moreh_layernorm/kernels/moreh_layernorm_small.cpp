@@ -209,44 +209,65 @@ void MAIN {
         cb_pop_front(cb_x, Wt);
 
         /*
-         * (x - E[x])^2
-         * cb_xmm2
+         * Sum[(x - E[x])^2]
+         * cb_xmm2sum
          */
         cb_wait_front(cb_xmm, Wt);
-        cb_reserve_back(cb_xmm2, Wt);
-        for (uint32_t wt = 0; wt < Wt; wt += block_size) {
-            for (uint32_t j = 0; j < block_size; j++) {
+        for (uint32_t wt = 0; wt < Wt; wt++) {
+            ACQ();
+            cb_reserve_back(cb_xmm2, onetile);
+
+            mul_tiles_init();
+            mul_tiles(cb_xmm, cb_xmm, wt, wt, dst0);
+            pack_tile(dst0, cb_xmm2);
+
+            cb_push_back(cb_xmm2, onetile);
+            REL();
+            if (wt == 0) {
                 ACQ();
-                mul_tiles_init();
+                cb_wait_front(cb_xmm2, onetile);
+                cb_reserve_back(cb_xmm2sum, onetile);
 
-                mul_tiles(cb_xmm, cb_xmm, wt + j, wt + j, j);
-                pack_tile(j, cb_xmm2);
+                copy_tile_init();
+                copy_tile(cb_xmm2, first_tile, dst0);
+                pack_tile(dst0, cb_xmm2sum);
 
+                cb_pop_front(cb_xmm2, onetile);
+                cb_push_back(cb_xmm2sum, onetile);
                 REL();
-            }  // block_size loop
-            cb_push_back(cb_xmm2, block_size);
+            } else {
+                ACQ();
+                cb_wait_front(cb_xmm2sum, onetile);
+                cb_wait_front(cb_xmm2, onetile);
+                cb_reserve_back(cb_xmm2sum, onetile);
+
+                add_tiles_init();
+                add_tiles(cb_xmm2sum, cb_xmm2, first_tile, first_tile, dst0);
+                pack_tile(dst0, cb_xmm2sum);
+
+                cb_pop_front(cb_xmm2sum, onetile);
+                cb_pop_front(cb_xmm2, onetile);
+                cb_push_back(cb_xmm2sum, onetile);
+                REL();
+            }
         }  // Wt loop
-        // We don't pop cb_xmm here.
 
         /*
          * E[(x-E[x])^2 = Var[x]
          * cb_var
          */
-        cb_reserve_back(cb_var, onetile);
-        reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
         ACQ();
-        cb_wait_front(cb_xmm2, Wt);
-        for (uint32_t wt = 0; wt < Wt; wt += block_size) {
-            for (uint32_t j = 0; j < block_size; j++) {
-                reduce_tile(REDUCE_OP, REDUCE_DIM, cb_xmm2, cb_scaler, j, first_tile, dst0);
-            }  // block_size loop
-            cb_pop_front(cb_xmm2, block_size);
-        }  // Wt loop
+        cb_reserve_back(cb_var, onetile);
+        cb_wait_front(cb_xmm2sum, onetile);
+        reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
 
+        reduce_tile(REDUCE_OP, REDUCE_DIM, cb_xmm2sum, cb_scaler, first_tile, first_tile, dst0);
         pack_tile(dst0, cb_var);
+
         reduce_revert_delta();
-        REL();
         cb_push_back(cb_var, onetile);
+        cb_pop_front(cb_xmm2sum, onetile);
+        REL();
 
         /*
          * 1.0/(sqrt(E[(x-E[x])^2] + eps))
