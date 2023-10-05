@@ -25,10 +25,14 @@ int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
 
     string size_string = "";
+    uint32_t iter;
     try {
       std::tie(size_string, input_args) =
           test_args::get_command_option_and_remaining_args(input_args,
                                                            "--size");
+      std::tie(iter, input_args) =
+          test_args::get_command_option_uint32_and_remaining_args(input_args,
+                                                           "--iter", 1);
     } catch (const std::exception& e) {
       log_fatal(tt::LogTest,
                 "Please input test size with \"--size <size to test>\"",
@@ -49,18 +53,27 @@ int main(int argc, char** argv) {
     log_info(LogTest, "Target DRAM channel = {}", dram_channel);
 
     // Execute Application
+    log_info(LogTest, "iter {}", iter);
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         buffer_size, 100,
         std::chrono::system_clock::now().time_since_epoch().count());
 
     {
       auto begin = std::chrono::steady_clock::now();
-      pass &= tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_channel,
-                                                         dram_addr, src_vec);
       auto end = std::chrono::steady_clock::now();
-      auto elapsed_us = duration_cast<microseconds>(end - begin).count();
+      auto elapsed_sum = end - begin;
+
+      for (int i=0; i<iter; i++) {
+        begin = std::chrono::steady_clock::now();
+        pass &= tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_channel,
+                                                         dram_addr, src_vec);
+        end = std::chrono::steady_clock::now();
+        elapsed_sum += end - begin;
+      }
+
+      auto elapsed_us = duration_cast<microseconds>(elapsed_sum / iter).count();
       auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) /
-                (elapsed_us / 1000.0 / 1000.0);
+                  (elapsed_us / 1000.0 / 1000.0);
       log_info(LogTest, "WriteToDeviceDRAMChannel {:.3f}ms, {:.3f}GB/s",
                elapsed_us / 1000.0, bw);
     }
@@ -68,13 +81,20 @@ int main(int argc, char** argv) {
     std::vector<uint32_t> result_vec;
     {
       auto begin = std::chrono::steady_clock::now();
-      tt_metal::detail::ReadFromDeviceDRAMChannel(
-          device, dram_channel, dram_addr, buffer_size, result_vec);
-
       auto end = std::chrono::steady_clock::now();
-      auto elapsed_us = duration_cast<microseconds>(end - begin).count();
+      auto elapsed_sum = end - begin;
+
+      for (int i=0; i<iter; i++) {
+        begin = std::chrono::steady_clock::now();
+        tt_metal::detail::ReadFromDeviceDRAMChannel(
+          device, dram_channel, dram_addr, buffer_size, result_vec);
+        end = std::chrono::steady_clock::now();
+        elapsed_sum += end - begin;
+      }
+
+      auto elapsed_us = duration_cast<microseconds>(elapsed_sum / iter).count();
       auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) /
-                (elapsed_us / 1000.0 / 1000.0);
+                  (elapsed_us / 1000.0 / 1000.0);
       log_info(LogTest, "ReadFromDeviceDRAMChannel {:.3f}ms, {:.3f}GB/s",
                elapsed_us / 1000.0, bw);
     }

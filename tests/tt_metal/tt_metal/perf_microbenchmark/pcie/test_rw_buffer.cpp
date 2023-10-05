@@ -25,7 +25,11 @@ int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
 
     string buffer_type_string = "";
+    uint32_t iter;
     try {
+      std::tie(iter, input_args) =
+          test_args::get_command_option_uint32_and_remaining_args(input_args,
+                                                           "--iter", 1);
       std::tie(buffer_type_string, input_args) =
           test_args::get_command_option_and_remaining_args(input_args,
                                                            "--buffer_type");
@@ -64,7 +68,6 @@ int main(int argc, char** argv) {
                                                     : tt_metal::BufferType::L1);
 
     // Execute Application
-    int iter=1000;
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         buffer_size, 100,
         std::chrono::system_clock::now().time_since_epoch().count());
