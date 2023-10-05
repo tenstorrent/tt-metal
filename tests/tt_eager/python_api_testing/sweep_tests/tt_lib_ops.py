@@ -1738,6 +1738,8 @@ eltwise_logical_or = make_binary_op(ttl.tensor.logical_or)
 matmul = make_binary_op(ttl.tensor.matmul)
 outer = make_binary_op(ttl.tensor.outer)
 bmm = make_binary_op(ttl.tensor.bmm)
+bert_large_pre_softmax_bmm = make_binary_op(ttl.tensor.bert_large_pre_softmax_bmm)
+bert_large_post_softmax_bmm = make_binary_op(ttl.tensor.bert_large_post_softmax_bmm)
 
 eltwise_isfinite = make_unary_op(ttl.tensor.isfinite)
 eltwise_isinf = make_unary_op(ttl.tensor.isinf)
