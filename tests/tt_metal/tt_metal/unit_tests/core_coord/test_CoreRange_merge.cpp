@@ -12,7 +12,7 @@ namespace basic_tests::CoreRange{
 
 TEST_F(CoreCoordHarness, TestCoreRangeMerge)
 {
-    EXPECT_EQ ( this->single_core.merge(this->single_core).value(), this->single_core );
+    EXPECT_EQ ( this->sc1.merge(this->sc1).value(), this->sc1 );
     EXPECT_EQ ( this->cr4.merge(this->cr5).value(), this->cr6 );
     EXPECT_EQ ( this->cr4.merge(this->cr6).value(), this->cr6 );
     EXPECT_EQ ( this->cr4.merge(this->cr4).value(), this->cr4 );
@@ -22,6 +22,8 @@ TEST_F(CoreCoordHarness, TestCoreRangeNotMergeable){
     EXPECT_FALSE ( this->cr1.merge(this->cr3));
     EXPECT_FALSE ( this->cr2.merge(this->cr3));
     EXPECT_FALSE ( this->cr1.merge(this->cr6));
+    EXPECT_FALSE ( this->sc1.merge(this->sc3));
+    EXPECT_FALSE ( this->sc1.merge(this->sc2) );
 }
 
 }

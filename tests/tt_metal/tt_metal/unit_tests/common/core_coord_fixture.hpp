@@ -18,7 +18,10 @@ class CoreCoordHarness : public ::testing::Test {
     CoreRange cr6 = {.start={0, 0}, .end={6, 4}};
     CoreRange cr7 = {.start={2, 0}, .end={7, 4}};
     CoreRange cr8 = {.start={0, 0}, .end={7, 4}};
-    CoreRange single_core = {.start={1, 1}, .end={1, 1}};
+    CoreRange sc1 = CoreCoord(1, 1);
+    CoreRange sc2 = CoreCoord(1, 2);
+    CoreRange sc3 = CoreCoord(1, 3);
+
 
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
