@@ -676,3 +676,5 @@ Other Operations
 .. autofunction:: tt_lib.tensor.swiglu
 
 .. autofunction:: tt_lib.tensor.embeddings
+
+.. autofunction:: tt_lib.tensor.nextafter

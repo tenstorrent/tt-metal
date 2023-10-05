@@ -424,6 +424,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_erfinv,
         "pytorch_op": pytorch_ops.erfinv,
     },
+    "eltwise-nextafter": {
+        "tt_lib_op": tt_lib_ops.eltwise_nextafter,
+        "pytorch_op": pytorch_ops.nextafter,
+    },
     "eltwise-subalpha": {
         "tt_lib_op": tt_lib_ops.eltwise_subalpha,
         "pytorch_op": pytorch_ops.subalpha,

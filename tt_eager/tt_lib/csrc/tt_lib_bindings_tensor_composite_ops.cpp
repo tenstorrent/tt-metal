@@ -661,6 +661,7 @@ namespace tt::tt_metal::detail{
         detail::bind_binary_op<false, true>(m_tensor, "hypot", &hypot, R"doc(Returns tensor with the hypot activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
         detail::bind_binary_op<false, true>(m_tensor, "xlogy", &xlogy, R"doc(Performs eltwise-binary xlogy (``{0} * log( {1} )``) on two tensors.)doc");
         detail::bind_binary_op<false, true>(m_tensor, "atan2", &atan2, R"doc(Returns tensor with the atan2 activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
+        detail::bind_binary_op<false, true>(m_tensor, "nextafter", &nextafter, R"doc(Returns the next floating-point value after input towards other of the input tensors ``{0}`` and ``{1}``.)doc");
 
 
     }
