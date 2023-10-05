@@ -763,3 +763,21 @@ def bitwise_or(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
     return torch.bitwise_or(input.to(torch.int), other)
+
+
+@convert_tt_tensors_wrapper
+def bitwise_and(
+    input: ttl_tensor.Tensor, other: int
+) -> ttl_tensor.Tensor:
+    """
+    Computes the bitwise AND of ``input`` and ``other``.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | Input tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | other      | Other value to peform AND                     | int         |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.bitwise_and(input.to(torch.int), other)
