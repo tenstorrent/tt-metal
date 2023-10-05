@@ -104,11 +104,15 @@ TEST_F(BasicFixture, MultiDeviceInitializeAndTeardown) {
     ASSERT_TRUE(num_devices > 0);
     std::vector<tt::tt_metal::Device*> devices;
 
-    for (unsigned int id = 0; id < num_devices; id++) {
-        devices.push_back(tt::tt_metal::CreateDevice(id));
+    try
+    {
+        for (unsigned int id = 0; id < num_devices; id++) {
+            devices.push_back(tt::tt_metal::CreateDevice(id));
+        }
     }
-    for (unsigned int id = 0; id < num_devices; id++) {
-        ASSERT_TRUE(tt::tt_metal::CloseDevice(devices.at(id)));
+
+    for (auto device: devices) {
+        ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
     }
 }
 TEST_F(BasicFixture, MultiDeviceLoadBlankKernels) {
@@ -120,14 +124,17 @@ TEST_F(BasicFixture, MultiDeviceLoadBlankKernels) {
     ASSERT_TRUE(num_devices > 0);
     std::vector<tt::tt_metal::Device*> devices;
 
-    for (unsigned int id = 0; id < num_devices; id++) {
-        devices.push_back(tt::tt_metal::CreateDevice(id));
+    try
+    {
+        for (unsigned int id = 0; id < num_devices; id++) {
+            devices.push_back(tt::tt_metal::CreateDevice(id));
+        }
+        for (unsigned int id = 0; id < num_devices; id++) {
+            unit_tests::basic::device::load_all_blank_kernels(devices.at(id));
+        }
     }
-    for (unsigned int id = 0; id < num_devices; id++) {
-        unit_tests::basic::device::load_all_blank_kernels(devices.at(id));
-    }
-    for (unsigned int id = 0; id < num_devices; id++) {
-        ASSERT_TRUE(tt::tt_metal::CloseDevice(devices.at(id)));
+    for (auto device: devices) {
+        ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
     }
 }
 
