@@ -29,20 +29,9 @@ void kernel_main() {
     const uint32_t Wt = get_arg_val<uint32_t>(2);
     const uint32_t tile_offset = get_arg_val<uint32_t>(3);
     const uint32_t scaler = get_arg_val<uint32_t>(4);
-    // const uint32_t eps = get_arg_val<uint32_t>(5);
-    const uint32_t gamma_addr = get_arg_val<uint32_t>(6);
-    const uint32_t beta_addr = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_scaler = 1;
-    // constexpr uint32_t cb_id_eps = 2;
-    constexpr uint32_t cb_id_gamma = 3;
-    constexpr uint32_t cb_id_beta = 4;
-    constexpr uint32_t cb_id_mask_h = 5;
-    constexpr uint32_t cb_id_mask_w = 6;
-
-    const uint32_t mask_h = get_arg_val<uint32_t>(8);
-    const uint32_t mask_w = get_arg_val<uint32_t>(9);
 
     const uint32_t input_tile_bytes = get_tile_size(cb_id_in0);
     const DataFormat input_data_format = get_dataformat(cb_id_in0);
@@ -56,6 +45,8 @@ void kernel_main() {
         .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
 
 #ifdef FUSE_GAMMA
+    constexpr uint32_t cb_id_gamma = 3;
+    const uint32_t gamma_addr = get_arg_val<uint32_t>(6);
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
     const DataFormat gamma_data_format = get_dataformat(cb_id_gamma);
     const InterleavedAddrGenFast<gamma_is_dram> gamm_addrg = {
@@ -63,6 +54,8 @@ void kernel_main() {
 #endif
 
 #ifdef FUSE_BETA
+    constexpr uint32_t cb_id_beta = 4;
+    const uint32_t beta_addr = get_arg_val<uint32_t>(7);
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
     const DataFormat beta_data_format = get_dataformat(cb_id_beta);
     const InterleavedAddrGenFast<beta_is_dram> beta_addrg = {
@@ -75,11 +68,15 @@ void kernel_main() {
 
 #ifdef DO_MASK_H
     // for mask_h
+    constexpr uint32_t cb_id_mask_h = 5;
+    const uint32_t mask_h = get_arg_val<uint32_t>(8);
     generate_mask_h(cb_id_mask_h, mask_h);
 #endif
 
 #ifdef DO_MASK_W
     // for mask_w
+    constexpr uint32_t cb_id_mask_w = 6;
+    const uint32_t mask_w = get_arg_val<uint32_t>(9);
     generate_mask_w(cb_id_mask_w, mask_w);
 #endif
 
