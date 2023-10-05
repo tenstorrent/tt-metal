@@ -241,12 +241,6 @@ Tensor asinh(const Tensor& input_a, const MemoryConfig& output_mem_config = oper
 //acosh(x) = log(x + sqrt(x^2 - 1))
 Tensor acosh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-//binary assign
-Tensor assign(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-//unary assign
-Tensor assign(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 //atanh[x] = 0.5 * ln((1 + x) / (1 - x))
 Tensor atanh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
