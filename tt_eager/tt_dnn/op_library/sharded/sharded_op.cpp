@@ -3,12 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/sharded/sharded_op.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
-#include "tt_dnn/op_library/bcast/bcast_op.hpp"
-#include "tt_dnn/op_library/composite/composite_ops.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
@@ -27,7 +24,6 @@ void Sharded::validate(const std::vector<Tensor> &input_tensors) const {
         TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
     } else if (this->sharded_op_type == ShardedOpType::SHARDED_TO_INTERLEAVED) {
         TT_ASSERT(input_tensor.memory_config().is_sharded());
-        TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
     }
     // Divisibility of num_cores and shard size with tensor shape is done in tensor creation, so no need to assert here
 }
@@ -59,6 +55,8 @@ operation::ProgramWithCallbacks Sharded::create_program(const std::vector<Tensor
 
 tt::stl::reflection::Attributes Sharded::attributes() const {
     return {
+        {"shard_spec", this->shard_spec},
+        {"sharded_op_type", this->sharded_op_type},
         {"output_mem_config", this->output_mem_config},
     };
 }

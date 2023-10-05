@@ -33,6 +33,7 @@ void Untilize::validate(const std::vector<Tensor> &input_tensors) const {
             TT_ASSERT(this->output_mem_config == input_tensor_a.memory_config());
         }
         TT_ASSERT(this->use_multicore == true);
+        TT_ASSERT(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
     } else if (this->output_mem_config.is_sharded()) {
         TT_ASSERT(this->use_multicore == true);
         uint32_t ntiles = input_tensor_a.volume() / TILE_HW;
@@ -65,7 +66,7 @@ std::vector<Tensor> Untilize::create_output_tensors(const std::vector<Tensor> &i
             auto shard_grid = num_cores_to_corerange_set(num_cores, input_tensor.device()->compute_with_storage_grid_size(), true);
             uint32_t fused_height = input_tensor.volume() / input_tensor.shape()[-1];
             std::array<uint32_t, 2> shard_shape = {fused_height / num_cores, input_tensor.shape()[-1]};
-            ShardSpec shard_spec{.shard_grid=shard_grid, .shard_shape=shard_shape};
+            ShardSpec shard_spec{.shard_grid=shard_grid, .shard_shape=shard_shape, .shard_orientation=ShardOrientation::ROW_MAJOR};
             return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.dtype(), Layout::ROW_MAJOR, input_tensor.device(), this->output_mem_config, shard_spec)};
         }
     } else {

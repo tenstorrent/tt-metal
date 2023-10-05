@@ -119,6 +119,7 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
     TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_ASSERT(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
         if (input_tensor_b.memory_config().is_sharded()) {
             TT_ASSERT(input_tensor_a.memory_config() == input_tensor_b.memory_config());
             TT_ASSERT(input_tensor_a.shard_spec().value() == input_tensor_b.shard_spec().value());
@@ -131,6 +132,7 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
     } else if (input_tensor_b.memory_config().is_sharded()) {
         TT_ASSERT(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_ASSERT(input_tensor_b.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
         if (this->output_mem_config.is_sharded()) {
             TT_ASSERT(input_tensor_b.memory_config() == this->output_mem_config);
         } else {
@@ -175,6 +177,7 @@ std::vector<Tensor> EltwiseBinary::create_output_tensors(
             uint32_t target_num_cores = num_blocks < num_grid_cores ? num_blocks : num_grid_cores;
             shard_spec.shard_grid = num_cores_to_corerange_set(target_num_cores, input_tensor_a.device()->compute_with_storage_grid_size(), true);
             shard_spec.shard_shape = {num_blocks / target_num_cores * TILE_HEIGHT, input_tensor_a.shape()[-1]};
+            shard_spec.shard_orientation = ShardOrientation::ROW_MAJOR;
         }
         return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor_a.dtype(), Layout::TILE, input_tensor_a.device(), this->output_mem_config, shard_spec)};
     }

@@ -169,6 +169,8 @@ bool operator!=(const Shape& shape_a, const Shape& shape_b) {
 bool MemoryConfig::is_sharded() const {
     switch (this->memory_layout) {
         case TensorMemoryLayout::HEIGHT_SHARDED:
+        case TensorMemoryLayout::WIDTH_SHARDED:
+        case TensorMemoryLayout::BLOCK_SHARDED:
             return true;
         default:
             return false;
@@ -215,6 +217,9 @@ bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b) {
     if (spec_a.shard_grid != spec_b.shard_grid) {
         return false;
     }
+    if (spec_a.shard_orientation != spec_b.shard_orientation) {
+        return false;
+    }
     return true;
 }
 
@@ -226,6 +231,7 @@ tt::stl::reflection::Attributes ShardSpec::attributes() const {
     return {
         {"shard_grid", this->shard_grid.str()},
         {"shard_shape", this->shard_shape},
+        {"shard_orientation", this->shard_orientation},
     };
 }
 
