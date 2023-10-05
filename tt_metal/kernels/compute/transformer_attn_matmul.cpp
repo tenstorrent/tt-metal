@@ -17,11 +17,11 @@ void MAIN {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t batch = get_compile_time_arg_val(0);
-    constexpr uint32_t Mt = get_compile_time_arg_val(1);
-    constexpr uint32_t Kt = get_compile_time_arg_val(2);
-    constexpr uint32_t Nt = get_compile_time_arg_val(3);
-    constexpr uint32_t transpose_hw = get_compile_time_arg_val(4);
+    constexpr uint32_t transpose_hw = get_compile_time_arg_val(0);
+    uint32_t batch = get_arg_val<uint32_t>(0);
+    uint32_t Mt = get_arg_val<uint32_t>(1);
+    uint32_t Kt = get_arg_val<uint32_t>(2);
+    uint32_t Nt = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_intermed0 = 24;
     constexpr uint32_t cb_intermed1 = 25;
