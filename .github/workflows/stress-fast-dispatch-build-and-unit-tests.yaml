@@ -1,0 +1,42 @@
+name: "[stress] all - Stress test Fast Dispatch post-commit main build and unit tests"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * *"
+
+jobs:
+  stress-build-and-unit-tests:
+    timeout-minutes: 1440
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        runner-info: [
+          {arch: grayskull, runs-on: ["stress-grayskull", "cloud-virtual-machine"], fw: "fw-date-2023-06-28", machine-type: "virtual_machine"},
+          {arch: grayskull, runs-on: ["stress-grayskull", "self-reset"], fw: "fw-date-2023-06-28", machine-type: "bare_metal"},
+
+#          {arch: wormhole_b0, runs-on: ["stress-wormhole_b0", "cloud-virtual-machine"], fw: "fw-date-2023-08-08", machine-type: "virtual_machine"},
+#          {arch: wormhole_b0, runs-on: ["stress-wormhole_b0", "self-reset"], fw: "fw-date-2023-08-08", machine-type: "bare_metal"},
+        ]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.runner-info.arch }}
+    environment: dev
+    runs-on: ${{ matrix.runner-info.runs-on }}
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
+        with:
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+      - name: Set up dyanmic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Build tt-metal and libs
+        run: make build
+      - name: Build tt-metal CPP tests
+        run: make tests
+      - name: Run pre/post regression tests in a loop
+        run: |
+          source build/python_env/bin/activate
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type stress_post_commit --dispatch-mode fast
