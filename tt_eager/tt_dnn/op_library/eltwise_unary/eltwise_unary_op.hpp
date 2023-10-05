@@ -21,7 +21,7 @@ enum class UnaryOpType {
     EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
     ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26, HEAVISIDE = 27,
     EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31, RSQRT = 32, RELU6 = 33, ATAN = 34, ERF = 35, ERFC = 36, ISINF = 37, ISPOSINF = 38, ISNEGINF = 39, ISNAN = 40, LOGICAL_NOT_UNARY = 41, ISFINITE = 42,
-    ERFINV = 43, I0 = 44, TAN = 45
+    ERFINV = 43, I0 = 44, TAN = 45, RSUB = 46, RDIV = 47
 };
 
 template <typename T>
@@ -37,6 +37,8 @@ bool is_parametrized_type(T val) {
     case UnaryOpType::HEAVISIDE:
     case UnaryOpType::ERF:
     case UnaryOpType::ERFC:
+    case UnaryOpType::RSUB:
+    case UnaryOpType::RDIV:
         return true;
     default:
         return false;
@@ -144,6 +146,7 @@ constexpr auto power = make_eltwise_unary_with_param<UnaryOpType::POWER, uint32_
 constexpr auto leaky_relu = make_eltwise_unary_with_param<UnaryOpType::LEAKY_RELU>{};
 constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
+constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};
 
 inline Tensor erf(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return make_eltwise_unary_with_param<UnaryOpType::ERF>{}(input_tensor, fast_and_approx, output_mem_config);
@@ -177,6 +180,8 @@ Tensor mul_unary(float value, const Tensor& input_tensor, const MemoryConfig& ou
 
 Tensor div_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 Tensor div_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+//same as div_unary(value,tensor)
+Tensor rdiv(const Tensor& input_tensor,float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //deg2rad(a) using scale pi/180.
 inline Tensor deg2rad(const Tensor &input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) { return mul_unary(input_tensor, (float)(M_PI/180.0), output_mem_config); }
