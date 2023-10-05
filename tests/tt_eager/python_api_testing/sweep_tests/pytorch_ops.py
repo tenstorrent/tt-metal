@@ -950,3 +950,12 @@ def activation_swiglu(x, *args, **kwargs):
     a, b = torch.split(x, x.shape[dim] // 2, dim)
     return a * torch.nn.functional.silu(b)
     # return torch.matmul(a,torch.nn.functional.silu(b))
+
+
+def bert_large_pre_softmax_bmm(x, y, *args, **kwargs):
+    ref_bmm = torch.matmul(x, y)
+    return ref_bmm
+
+def bert_large_post_softmax_bmm(x, y, *args, **kwargs):
+    ref_bmm = torch.matmul(x.reshape([9, 16, 384, 384]), y)
+    return ref_bmm
