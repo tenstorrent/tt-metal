@@ -41,6 +41,7 @@ void Tilize::validate(const std::vector<Tensor> &input_tensors) const {
         TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         TT_ASSERT(this->output_mem_config == input_tensor_a.memory_config());
         TT_ASSERT(this->use_multicore == true);
+        TT_ASSERT(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
     } else {
         TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
         TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);

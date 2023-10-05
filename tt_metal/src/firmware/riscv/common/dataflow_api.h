@@ -467,7 +467,7 @@ struct InterleavedPow2AddrGen {
                                              // you know that bank_unit_size is a power of 2
 
     FORCE_INLINE
-    std::uint64_t get_noc_addr(const uint32_t id) const {
+    std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0) const {
         // So far, only using this for DRAM, but will eventually generalize to allow usage in L1 as well
         uint32_t bank_id;
         uint32_t addr;
@@ -479,10 +479,10 @@ struct InterleavedPow2AddrGen {
 #ifdef IS_NOT_POW2_NUM_DRAM_BANKS
             bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
             addr =
-                (udivsi3_const_divisor<NUM_DRAM_BANKS>(id) << this->log_base_2_of_page_size) + this->bank_base_address;
+                (udivsi3_const_divisor<NUM_DRAM_BANKS>(id) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
 #else
             uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
-            addr = ((id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address;
+            addr = ((id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
 #endif
             addr += bank_to_dram_offset[bank_id];
             noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
@@ -490,10 +490,10 @@ struct InterleavedPow2AddrGen {
 #ifdef IS_NOT_POW2_NUM_L1_BANKS
             bank_id = umodsi3_const_divisor<NUM_L1_BANKS>(id);
             addr =
-                (udivsi3_const_divisor<NUM_L1_BANKS>(id) << this->log_base_2_of_page_size) + this->bank_base_address;
+                (udivsi3_const_divisor<NUM_L1_BANKS>(id) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
 #else
             bank_id = id & (NUM_L1_BANKS - 1);
-            addr = ((id >> LOG_BASE_2_OF_NUM_L1_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address;
+            addr = ((id >> LOG_BASE_2_OF_NUM_L1_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
 #endif
             addr += bank_to_l1_offset[bank_id];
             noc_xy = l1_bank_to_noc_xy[noc_index][bank_id];
@@ -807,7 +807,7 @@ FORCE_INLINE std::uint64_t get_noc_addr(const uint32_t id, const InterleavedAddr
 }
 
 template <bool DRAM>
-FORCE_INLINE std::uint64_t get_noc_addr(const uint32_t id, const InterleavedPow2AddrGen<DRAM>& s) {
+FORCE_INLINE std::uint64_t get_noc_addr(const uint32_t id, const InterleavedPow2AddrGen<DRAM>& s, uint32_t offset = 0) {
     /*
         Alternative API for getting the noc address when we are reading using a swizzled
         layout. This version assumes bank unit size is a power of 2. For arbitrary bank
@@ -819,7 +819,7 @@ FORCE_INLINE std::uint64_t get_noc_addr(const uint32_t id, const InterleavedPow2
         InterleavedPow2AddrGen: Check struct for attribute definitions.
     */
 
-    return s.get_noc_addr(id);
+    return s.get_noc_addr(id, offset);
 }
 
 template <bool DRAM>

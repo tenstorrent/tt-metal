@@ -37,9 +37,18 @@ struct Sharded {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-inline Tensor interleaved_to_sharded(const Tensor &input_tensor, uint32_t num_cores, std::array<uint32_t, 2> shard_shape, TensorMemoryLayout shard_scheme) {
-    CoreRangeSet grid = num_cores_to_corerange_set(num_cores, input_tensor.device()->compute_with_storage_grid_size(), true);
-    auto shard_spec = ShardSpec{.shard_grid=grid, .shard_shape=shard_shape};
+inline Tensor interleaved_to_sharded(const Tensor &input_tensor, std::array<uint32_t, 2> shard_shape, TensorMemoryLayout shard_scheme, ShardOrientation shard_orientation) {
+    uint32_t num_cores;
+    switch (shard_scheme) {
+        case TensorMemoryLayout::HEIGHT_SHARDED: num_cores = (input_tensor.volume() / input_tensor.shape()[-1]) / shard_shape[0]; break;
+        case TensorMemoryLayout::WIDTH_SHARDED: num_cores = input_tensor.shape()[-1] / shard_shape[1]; break;
+        case TensorMemoryLayout::BLOCK_SHARDED: num_cores = ((input_tensor.volume() / input_tensor.shape()[-1]) / shard_shape[0]) * (input_tensor.shape()[-1] / shard_shape[1]); break;
+        default:
+            TT_ASSERT(false, "Unsupported sharding scheme");
+    }
+    bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
+    CoreRangeSet grid = num_cores_to_corerange_set(num_cores, input_tensor.device()->compute_with_storage_grid_size(), row_wise);
+    auto shard_spec = ShardSpec{.shard_grid=grid, .shard_shape=shard_shape, .shard_orientation=shard_orientation};
     MemoryConfig sharded_mem_config = MemoryConfig{.memory_layout = shard_scheme, .buffer_type = BufferType::L1};
     return operation::run(Sharded{.shard_spec=shard_spec, .sharded_op_type=ShardedOpType::INTERLEAVED_TO_SHARDED, sharded_mem_config}, {input_tensor}).at(0);
 }
