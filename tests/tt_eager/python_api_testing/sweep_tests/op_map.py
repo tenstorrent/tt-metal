@@ -428,6 +428,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_erfinv,
         "pytorch_op": pytorch_ops.erfinv,
     },
+    "eltwise-nextafter": {
+        "tt_lib_op": tt_lib_ops.eltwise_nextafter,
+        "pytorch_op": pytorch_ops.nextafter,
+    },
     "eltwise-subalpha": {
         "tt_lib_op": tt_lib_ops.eltwise_subalpha,
         "pytorch_op": pytorch_ops.subalpha,
@@ -439,6 +443,10 @@ op_map = {
     "eltwise-logit": {
         "tt_lib_op": tt_lib_ops.eltwise_logit,
         "pytorch_op": pytorch_ops.logit,
+    },
+    "eltwise-polygamma": {
+        "tt_lib_op": tt_lib_ops.eltwise_polygamma,
+        "pytorch_op": pytorch_ops.polygamma,
     },
     "eltwise-logical_xori": {
         "tt_lib_op": tt_lib_ops.eltwise_logical_xori,
@@ -475,6 +483,18 @@ op_map = {
     "eltwise-signbit": {
         "tt_lib_op": tt_lib_ops.eltwise_signbit,
         "pytorch_op": pytorch_ops.signbit,
+    },
+    "eltwise-rpow": {
+        "tt_lib_op": tt_lib_ops.eltwise_rpow,
+        "pytorch_op": pytorch_ops.eltwise_rpow,
+    },
+    "eltwise-rdiv": {
+        "tt_lib_op": tt_lib_ops.eltwise_rdiv,
+        "pytorch_op": pytorch_ops.eltwise_rdiv,
+    },
+    "eltwise-rsub": {
+        "tt_lib_op": tt_lib_ops.eltwise_rsub,
+        "pytorch_op": pytorch_ops.eltwise_rsub,
     },
     # Eltwise binary
     "eltwise-ne": {
@@ -564,6 +584,14 @@ op_map = {
     "eltwise-logaddexp2": {
         "tt_lib_op": tt_lib_ops.eltwise_logaddexp2,
         "pytorch_op": pytorch_ops.logaddexp2,
+    },
+    "eltwise-assign_binary": {
+        "tt_lib_op": tt_lib_ops.eltwise_assign_binary,
+        "pytorch_op": pytorch_ops.assign_binary,
+    },
+    "eltwise-assign_unary": {
+        "tt_lib_op": tt_lib_ops.eltwise_assign_unary,
+        "pytorch_op": pytorch_ops.assign_unary,
     },
     "eltwise-logical_or": {
         "tt_lib_op": tt_lib_ops.eltwise_logical_or,

@@ -8,6 +8,7 @@
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 
+
 namespace tt::tt_metal::detail {
     void TensorModuleXaryOPs( py::module & m_tensor){
 
@@ -137,6 +138,18 @@ namespace tt::tt_metal::detail {
             HEAVISIDE(x) = 0 if x < 0 , 1 if x > 0 , else value.)doc",
             R"doc("value", "float", "")doc"
 
+        );
+        detail::bind_unary_op_with_param(
+            m_tensor, "rdiv", rdiv,
+            py::arg("denominator"),
+            R"doc(Returns tensor  with value ``{1}`` divided by each of respective elements of the input tensor ``{0}``.)doc",
+            R"doc("denominator value which is actually calculated as numerator", "float", ">=0.0")doc"
+        );
+        detail::bind_unary_op_with_param(
+            m_tensor, "rsub", rsub,
+            py::arg("value"),
+            R"doc(Returns tensor  with respective elements of the input tensor ``{0}`` subtracted from the ``{1}``.)doc",
+            R"doc("subtrahent value which is actually calculated as minuend", "float")doc"
         );
         detail::bind_unary_op_with_param(
             m_tensor, "power", power,

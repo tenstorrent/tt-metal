@@ -24,6 +24,9 @@ class Program;
 
 using on_close_device_callback = std::function<void ()>;
 
+static constexpr float  EPS_GS = 0.001953125f;
+static constexpr float  EPS_WHB0 = 1.19209e-7f;
+
 class ActiveDevices {
     enum class ActiveState {
         UNINITIALIZED = 0,
@@ -107,6 +110,9 @@ class Device {
     // Set of logical dispatch core coordinates
     const std::set<CoreCoord> &dispatch_cores() const { return this->dispatch_cores_; }
     void deallocate_buffers();
+
+    // machine epsilon
+    float sfpu_eps() const;
 
    private:
     void check_allocator_is_initialized() const;

@@ -430,17 +430,21 @@ namespace tt::tt_metal::detail
             )
             .def(
                 py::init<>(
-                    [](const py::object& torch_tensor, DataType data_type) {
+                    [](const py::object& torch_tensor, std::optional<DataType> data_type = std::nullopt) {
                         return detail::convert_torch_tensor_to_tt_tensor(torch_tensor, data_type);
                     }
                 ),
+                py::arg("torch_tensor"),
+                py::arg("data_type") = std::nullopt,
                 py::return_value_policy::move,
                 R"doc(
-                    +---------------+---------------+
-                    | Argument      | Name          |
-                    +===============+===============+
-                    | arg0          | torch_tensor  |
-                    +---------------+---------------+
+                    +--------------+---------------------+
+                    | Argument     | Description         |
+                    +==============+=====================+
+                    | torch_tensor | Pytorch Tensor      |
+                    +--------------+---------------------+
+                    | data_type    | TT Tensor data type |
+                    +--------------+---------------------+
 
                     Example of creating a TT Tensor that uses torch.Tensor's storage as its own storage:
 

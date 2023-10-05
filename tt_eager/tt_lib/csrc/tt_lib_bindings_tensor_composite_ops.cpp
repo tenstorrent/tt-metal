@@ -10,6 +10,26 @@
 namespace tt::tt_metal::detail{
     void TensorModuleCompositeOPs( py::module & m_tensor){
 
+        m_tensor.def("sfpu_eps",
+                    [] (const std::array<uint32_t, 4> shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
+                        return tt::tt_metal::sfpu_eps(shape, layout, device, output_mem_config);
+                    },
+                py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+                    Returns a new tensor filled with the machine epsilon value in shape specified by input ``shape``.
+
+                    Input shape is specified as a list of 4 integer elements
+
+                    Output tensor will have BFLOAT16 data type.
+
+                    .. csv-table::
+                        :header: "Argument", "Description", "Data type", "Valid range", "Required"
+                        "shape", "Shape vector", "Vector<int>", "[W, Z, Y, X]", "Yes"
+                        "layout", "Tensor layout", "Layout", "default is ROW_MAJOR", "No"
+                        "device", "Device tensor is placed on", "Device", "default is None (on host)", "No"
+                        "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                )doc");
+
+
         m_tensor.def("outer", &outer,
             py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Perform a non-batched outer product multiplication ``arg0 x arg1`` with two tensors.
@@ -143,6 +163,12 @@ namespace tt::tt_metal::detail{
             R"doc("immediate", "float", "")doc"
         );
 
+        detail::bind_unary_op_with_param(
+            m_tensor, "rpow", rpow,
+            py::arg("base"),
+            R"doc(Returns tensor  raising ``{1}`` value to power of respective elements of the input exponent tensor ``{0}``.)doc",
+            R"doc("base value", "float", ">0.0")doc"
+        );
 
         detail::bind_unary_op_with_param(
             m_tensor, "logical_ori", &logical_ori,
@@ -187,12 +213,14 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("isclose", &isclose,
-            py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("rtol") = 1e-05f, py::arg("atol") = 1e-08f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("rtol") = 1e-05f, py::arg("atol") = 1e-08f, py::arg("equal_nan") = false, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Applies the isclose function to the elements of the input tensor ``input`` and ``other``.
 
             Input tensor must have BFLOAT16 data type.
 
             Output tensor will have BFLOAT16 data type.
+
+            if equal_nan True, then two NaN s will be considered equal, else not equal.
 
             isclose(input, other, rtol, atol) = ∣input−other∣ ≤ atol+rtol×∣other∣.
 
@@ -203,6 +231,7 @@ namespace tt::tt_metal::detail{
                 "other", "Tensor isclose is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "rtol", "rtol value", "float", "default to 1e-05f", "No"
                 "atol", "atol value", "float", "default to 1e-08f", "No"
+                "equal_nan", "equal_nan value", "bool", "default to false", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
@@ -613,6 +642,13 @@ namespace tt::tt_metal::detail{
         );
 
         detail::bind_unary_op_with_param(
+            m_tensor, "polygamma", &polygamma,
+            py::arg("n"),
+            R"doc(Returns a tensor that is a polygamma of input tensor where the range supports from 1 to 10 with shape ``[W, Z, Y, X]`` along n ``{1}``.)doc",
+            R"doc("the order of the polygamma along", "int", "1 to 10")doc"
+        );
+
+        detail::bind_unary_op_with_param(
             m_tensor, "logical_xori", &logical_xori,
             py::arg("immediate"),
             R"doc(Perform an eltwise logical XOR (``{0} ^ {1}``) on input tensor and immediate value.)doc",
@@ -645,6 +681,7 @@ namespace tt::tt_metal::detail{
         detail::bind_binary_op<false, true>(m_tensor, "hypot", &hypot, R"doc(Returns tensor with the hypot activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
         detail::bind_binary_op<false, true>(m_tensor, "xlogy", &xlogy, R"doc(Performs eltwise-binary xlogy (``{0} * log( {1} )``) on two tensors.)doc");
         detail::bind_binary_op<false, true>(m_tensor, "atan2", &atan2, R"doc(Returns tensor with the atan2 activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
+        detail::bind_binary_op<false, true>(m_tensor, "nextafter", &nextafter, R"doc(Returns the next floating-point value after input towards other of the input tensors ``{0}`` and ``{1}``.)doc");
 
 
     }

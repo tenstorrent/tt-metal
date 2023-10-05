@@ -9,6 +9,7 @@
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
+#include "tt_dnn/op_library/math.hpp"
 
 namespace tt {
 
@@ -258,9 +259,16 @@ Tensor selu(const Tensor& x,const float scale, const float alpha, const MemoryCo
 }
 
 //ELU :
-// Theano defins it as,
+// Theano defines it as,
 // return tensor.switch(x > 0, x, alpha * tensor.expm1(x))
 
+// rpow: y = k**(a) = exp( a**log(k) )
+Tensor rpow(const Tensor& a,float k, const MemoryConfig& output_mem_config) {
+  TT_ASSERT( k > 0.0, "rpow cannot be calcualted for non-positive numbers");
+  float log_k = logf(k);
+  Tensor result = bcast(a, mk_tiled_scalar(log_k), BcastOpMath::MUL, BcastOpDim::HW, output_mem_config);
+  return exp(result,output_mem_config);
+}
 
 // Function Clip
 //use clip y = min( max( x, min_value), max_value) by broadcast
@@ -601,18 +609,27 @@ Tensor _logical_xor(const Tensor& input_a, const Tensor& input_b, const MemoryCo
 }
 
 // ∣input−other∣≤ atol+rtol×∣other∣
-Tensor _isclose(const Tensor& input_a, const Tensor& input_b, float rtol, float atol, const MemoryConfig& output_mem_config) {
-    Tensor is_close_lhs = abs(sub(input_a, input_b, std::nullopt, output_mem_config), output_mem_config);
+Tensor _isclose(const Tensor& input_a, const Tensor& input_b, float rtol, float atol, bool equal_nan, const MemoryConfig& output_mem_config) {
+    Tensor value1 = input_a;
+    Tensor value2 = input_b;
+    if (!equal_nan){
+        // If equal_nan false, then two NaN will not be considered be equal
+        // As below operation's computes the NaN and make it as false based on the formula.
+        // Input 1 = 1, Input = 0 => 1 - 0 <= atol + rtol * |0|, hence comparison explicily false.
+        value1 = where(isnan(value1, output_mem_config), ones_like(value1, output_mem_config), value1, output_mem_config);
+        value2 = where(isnan(value2, output_mem_config), zeros_like(value2, output_mem_config), value2, output_mem_config);
+    }
+    Tensor is_close_lhs = abs(sub(value1, value2, std::nullopt, output_mem_config), output_mem_config);
     Tensor is_close_rhs(input_b);
     {
-         Tensor mul_result = mul_unary(abs(input_b, output_mem_config), rtol, output_mem_config);
+         Tensor mul_result = mul_unary(abs(value2, output_mem_config), rtol, output_mem_config);
          is_close_rhs = add_unary(mul_result, atol, output_mem_config);
     }
-    return where(lte(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config),ones_like(input_a, output_mem_config), zeros_like(input_a, output_mem_config), output_mem_config);
+    return where(lte(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config),ones_like(value2, output_mem_config), zeros_like(value2, output_mem_config), output_mem_config);
 }
-Tensor isclose(const Tensor& input_a, const Tensor& input_b, float rtol, float atol, const MemoryConfig& output_mem_config)
+Tensor isclose(const Tensor& input_a, const Tensor& input_b, float rtol, float atol, bool equal_nan, const MemoryConfig& output_mem_config)
 {
-    return operation::decorate_as_composite(__func__, _isclose)(input_a, input_b, rtol, atol, output_mem_config);
+    return operation::decorate_as_composite(__func__, _isclose)(input_a, input_b, rtol, atol, equal_nan, output_mem_config);
 }
 
 //ldexp(input,other)=input * (2^other)
@@ -666,6 +683,29 @@ Tensor _addalpha(const Tensor& input_a, const Tensor& input_b, float alpha, cons
 Tensor addalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _addalpha)(input_a, input_b, alpha, output_mem_config);
+}
+
+//nextafter
+Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    float eps;
+    if (is_arch_whb0(input_a.device()->arch())) {
+        eps = 1.19209e-07f;
+    } else {
+        eps = 0.001953125f;
+    }
+    Tensor result(input_a);
+    {
+        Tensor eps_gt(input_a);
+        {
+            eps_gt = where(gt(input_a, input_b, std::nullopt, output_mem_config), add_unary(input_a, eps, output_mem_config), input_a, output_mem_config);
+        }
+        result = where(lt(input_a, input_b, std::nullopt, output_mem_config), sub_unary(input_a, eps, output_mem_config), eps_gt, output_mem_config);
+    }
+    return result;
+}
+Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _nextafter)(input_a, input_b, output_mem_config);
 }
 
 //addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
@@ -752,6 +792,32 @@ Tensor _logit(const Tensor& input_a,  float eps, const MemoryConfig& output_mem_
 Tensor logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _logit)(input_a, eps, output_mem_config);
+}
+
+//polygamma support for the range of input(1, 10) and n(1, 10)
+Tensor _polygamma(const Tensor &input_a, uint32_t k, const MemoryConfig& output_mem_config) {
+
+    float k_der = 1.0f + k;
+    float fact_val = std::tgamma(k_der);
+    float pos_neg = 1.0f;
+    if (k ==2 || k == 4 || k ==6 || k == 8 || k == 10){
+        pos_neg =  -1.0f;
+    }
+    Tensor temp(input_a);
+    {
+        Tensor z1 = recip(power(input_a, k_der, output_mem_config), output_mem_config);
+        temp = z1;
+        for(int idx=1; idx < 11; idx++) {
+            z1 = recip(power(add_unary(input_a, idx, output_mem_config), k_der, output_mem_config), output_mem_config);
+            temp = add(temp, z1, std::nullopt, output_mem_config);
+        }
+    }
+    fact_val *= pos_neg;
+    return mul_unary(temp, fact_val, output_mem_config);
+}
+Tensor polygamma(const Tensor& input_a, uint32_t value, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _polygamma)(input_a, value, output_mem_config);
 }
 
 //logical_xori
@@ -1075,6 +1141,11 @@ Tensor swiglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig&
     return swiglu_result;
 }
 
+//on-device tensor creation with shape and filled with value
+Tensor sfpu_eps(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
+  float value = device->sfpu_eps();
+  return tt::numpy::full(shape, value, DataType::BFLOAT16, layout, device, output_mem_config);
+}
 
 }//namespace tt_metal
 
