@@ -148,7 +148,7 @@ namespace tt::tt_metal::detail{
             py::arg("base"),
             R"doc(Returns tensor  raising ``{1}`` value to power of respective elements of the input exponent tensor ``{0}``.)doc",
             R"doc("base value", "float", ">0.0")doc"
-        );
+	);
 
         detail::bind_unary_op_with_param(
             m_tensor, "logical_ori", &logical_ori,

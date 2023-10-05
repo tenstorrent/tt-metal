@@ -370,17 +370,14 @@ def layernorm(x, y, z, *args, **kwargs):
 
     return torch.nn.functional.layer_norm(input=x, normalized_shape=y.shape, weight=y, bias=z, eps=1e-05)
 
-
 def layernorm_noweights(x, *args, **kwargs):
     last = x.shape[3]
     return torch.nn.functional.layer_norm(input=x, normalized_shape=(last,), weight=None, bias=None, eps=1e-05)
-
 
 def groupnorm_noweights(x, *args, **kwargs):
     return torch.nn.functional.group_norm(
         input=x, num_groups=1, weight=None, bias=None, eps=1e-05
     )
-
 
 def add_layernorm(x, y, z, w, *args, **kwargs):
     res = x + y
@@ -953,7 +950,6 @@ def activation_swiglu(x, *args, **kwargs):
     a, b = torch.split(x, x.shape[dim] // 2, dim)
     return a * torch.nn.functional.silu(b)
     # return torch.matmul(a,torch.nn.functional.silu(b))
-
 
 def bert_large_pre_softmax_bmm(x, y, *args, **kwargs):
     ref_bmm = torch.matmul(x, y)
