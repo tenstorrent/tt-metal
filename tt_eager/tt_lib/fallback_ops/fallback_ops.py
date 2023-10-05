@@ -28,9 +28,7 @@ def full(size: List[int], fill_value: float) -> ttl_tensor.Tensor:
 
 
 @convert_tt_tensors_wrapper
-def tensor_slice(
-    input: ttl_tensor.Tensor, slices: List[Union[slice, EllipsisType]]
-) -> ttl_tensor.Tensor:
+def tensor_slice(input: ttl_tensor.Tensor, slices: List[Union[slice, EllipsisType]]) -> ttl_tensor.Tensor:
     """
     Creates a ``tt_lib.tensor.Tensor`` from ``input`` using ``slices``.
     To use ``...``, pass in ``...`` or ``Ellipsis``.
@@ -48,9 +46,7 @@ def tensor_slice(
 
 
 @convert_tt_tensors_wrapper
-def reshape(
-    input: ttl_tensor.Tensor, N: int, C: int, H: int, W: int
-) -> ttl_tensor.Tensor:
+def reshape(input: ttl_tensor.Tensor, N: int, C: int, H: int, W: int) -> ttl_tensor.Tensor:
     """
     Returns a new ``tt_lib.tensor.Tensor`` with the same data and number of elements as ``input``, but with the specified shape ``[N, C, H, W]``.
 
@@ -72,9 +68,7 @@ def reshape(
 
 
 @convert_tt_tensors_wrapper
-def chunk(
-    input: ttl_tensor.Tensor, chunks: int, dim: int = 0
-) -> List[ttl_tensor.Tensor]:
+def chunk(input: ttl_tensor.Tensor, chunks: int, dim: int = 0) -> List[ttl_tensor.Tensor]:
     """
     Attempts to split a ``tt_lib.tensor.Tensor`` into the specified number of chunks. Each chunk is a new copy of part of the input tensor.
 
@@ -132,9 +126,7 @@ def conv2d(
     """
     if bias is not None:
         bias = torch.reshape(bias, (bias.shape[-1],))
-    return torch.nn.functional.conv2d(
-        input, weight, bias, stride, padding, dilation, groups
-    )
+    return torch.nn.functional.conv2d(input, weight, bias, stride, padding, dilation, groups)
 
 
 @convert_tt_tensors_wrapper
@@ -324,7 +316,7 @@ def repeat_interleave(
     repeats: Union[ttl_tensor.Tensor, int],
     dim: Optional[int] = None,
     *,
-    output_size: Optional[int] = None
+    output_size: Optional[int] = None,
 ) -> ttl_tensor.Tensor:
     r"""
     Returns a tensor with repeated elements of input tensor ``input``.
@@ -478,9 +470,7 @@ class Conv2d(torch.nn.Module):
         )
         self.pt_fallback.weight = torch.nn.Parameter(weights)
         self.pt_fallback.bias = (
-            torch.nn.Parameter(biases.reshape((biases.shape[-1],)))
-            if biases is not None
-            else biases
+            torch.nn.Parameter(biases.reshape((biases.shape[-1],))) if biases is not None else biases
         )
 
     @convert_tt_tensors_wrapper
@@ -548,9 +538,7 @@ class BatchNorm2d(torch.nn.Module):
         running_var = running_var.reshape(num_features)
         num_batches_tracked = torch.tensor(num_batches_tracked.item())
 
-        self.pt_fallback = torch.nn.BatchNorm2d(
-            num_features, eps, momentum, affine, track_running_stats
-        )
+        self.pt_fallback = torch.nn.BatchNorm2d(num_features, eps, momentum, affine, track_running_stats)
         self.pt_fallback.weight = torch.nn.Parameter(weights)
         self.pt_fallback.bias = torch.nn.Parameter(biases)
         self.pt_fallback.running_mean = running_mean
@@ -704,13 +692,11 @@ class MaxPool2d(torch.nn.Module):
         dilation: Union[int, Tuple[int, int]] = 1,
         return_indices: bool = False,
         ceil_mode: bool = False,
-        channels_last = False,
-        reshape_2d = False,
+        channels_last=False,
+        reshape_2d=False,
     ):
         super().__init__()
-        self.pt_fallback = torch.nn.MaxPool2d(
-            kernel_size, stride, padding, dilation, return_indices, ceil_mode
-        )
+        self.pt_fallback = torch.nn.MaxPool2d(kernel_size, stride, padding, dilation, return_indices, ceil_mode)
         self.channels_last = channels_last
         self.reshape_2d = reshape_2d
 
@@ -723,7 +709,7 @@ class MaxPool2d(torch.nn.Module):
         if self.channels_last:
             output = torch.permute(output, (0, 2, 3, 1))
         if self.reshape_2d:
-            output = torch.reshape(output, (1, 1, output.shape[0]*output.shape[1]*output.shape[2], output.shape[3]))
+            output = torch.reshape(output, (1, 1, output.shape[0] * output.shape[1] * output.shape[2], output.shape[3]))
         return output
 
 
@@ -746,7 +732,7 @@ class AdaptiveAvgPool2d(torch.nn.Module):
     def __init__(
         self,
         output_size: Union[int, None, Tuple[Optional[int], Optional[int]]],
-        channels_last = False,
+        channels_last=False,
     ):
         super().__init__()
         self.pt_fallback = torch.nn.AdaptiveAvgPool2d(output_size)
@@ -761,3 +747,19 @@ class AdaptiveAvgPool2d(torch.nn.Module):
         if self.channels_last:
             output = torch.permute(output, (0, 2, 3, 1))
         return output
+
+
+@convert_tt_tensors_wrapper
+def bitwise_or(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
+    """
+    Computes the bitwise OR of ``input`` and ``other``.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | Input tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | other      | Other value to peform OR                      | int         |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.bitwise_or(input.to(torch.int), other)

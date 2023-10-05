@@ -517,6 +517,8 @@ These operations are currently not supported on TT accelerator device and will e
 
 .. autoclass:: tt_lib.fallback_ops.AdaptiveAvgPool2d
 
+.. autoclass:: tt_lib.fallback_ops.bitwise_or
+
 Experimental Operations
 =======================
 
