@@ -45,8 +45,14 @@ enum class TensorMemoryLayout {
     INTERLEAVED,
     SINGLE_BANK,
     HEIGHT_SHARDED,
+    WIDTH_SHARDED,
+    BLOCK_SHARDED,
 };
 
+enum class ShardOrientation {
+    ROW_MAJOR,
+    COL_MAJOR,
+};
 
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
@@ -216,6 +222,7 @@ constexpr void raise_unsupported_storage() {
 struct ShardSpec {
     CoreRangeSet shard_grid;
     std::array<uint32_t, 2> shard_shape;
+    ShardOrientation shard_orientation;
     tt::stl::reflection::Attributes attributes() const;
 };
 
