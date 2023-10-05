@@ -46,7 +46,7 @@ inline void are_valid_normalized_dims(const std::vector<uint32_t>& normalized_di
         TT_ASSERT(normalized_dims.at(2) == 2);
         TT_ASSERT(normalized_dims.at(3) == 3);
     } else {
-        TT_ASSERT("Not supported case yet.");
+        TT_ASSERT(false, "Not supported case yet.");
     }
 }
 
