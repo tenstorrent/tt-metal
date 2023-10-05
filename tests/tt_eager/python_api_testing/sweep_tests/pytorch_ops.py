@@ -58,6 +58,7 @@ def normalize_hw(x, *args, **kwargs):
             x[i, j, :, :] = (x[i, j, :, :] - mx[i, j, :, :]) / sx[i, j, :, :]
     return x
 
+
 def var_global(x, *args, **kwargs):
     return torch.var(x, [0, 1, 2, 3], keepdim=True)
 
@@ -69,11 +70,13 @@ def std_global(x, *args, **kwargs):
 def mean_global(x, *args, **kwargs):
     return torch.mean(x, [0, 1, 2, 3], keepdim=True)
 
+
 def normalize_global(x, *args, **kwargs):
     mx = mean_global(x)
     sx = std_global(x)
-    x = (x-mx)/sx
+    x = (x - mx) / sx
     return x
+
 
 # Ternary Ops
 def sum(x, *args, dim, **kwargs):
@@ -317,9 +320,7 @@ def softmax_in_place(x, *args, **kwargs):
 
 
 def ref_stable_softmax(x):
-    torch.set_printoptions(
-        precision=2, threshold=1000, sci_mode=False, edgeitems=8, linewidth=480
-    )
+    torch.set_printoptions(precision=2, threshold=1000, sci_mode=False, edgeitems=8, linewidth=480)
     z = x  # - torch.max(x, dim=3, keepdim=True)[0]
     numerator = torch.exp(z)
     # print(x.shape)
@@ -363,16 +364,12 @@ def layernorm(x, y, z, *args, **kwargs):
     z = z.squeeze(0)
     z = z.squeeze(0)
 
-    return torch.nn.functional.layer_norm(
-        input=x, normalized_shape=y.shape, weight=y, bias=z, eps=1e-05
-    )
+    return torch.nn.functional.layer_norm(input=x, normalized_shape=y.shape, weight=y, bias=z, eps=1e-05)
 
 
 def layernorm_noweights(x, *args, **kwargs):
     last = x.shape[3]
-    return torch.nn.functional.layer_norm(
-        input=x, normalized_shape=(last,), weight=None, bias=None, eps=1e-05
-    )
+    return torch.nn.functional.layer_norm(input=x, normalized_shape=(last,), weight=None, bias=None, eps=1e-05)
 
 
 def groupnorm_noweights(x, *args, **kwargs):
@@ -392,18 +389,14 @@ def add_layernorm(x, y, z, w, *args, **kwargs):
     z = z.squeeze(0)
     z = z.squeeze(0)
 
-    return torch.nn.functional.layer_norm(
-        input=res, normalized_shape=z.shape, weight=z, bias=w, eps=1e-05
-    )
+    return torch.nn.functional.layer_norm(input=res, normalized_shape=z.shape, weight=z, bias=w, eps=1e-05)
 
 
 def add_layernorm_noweights(x, y, *args, **kwargs):
     res = x + y
     last = res.shape[3]
 
-    return torch.nn.functional.layer_norm(
-        input=res, normalized_shape=(last,), weight=None, bias=None, eps=1e-05
-    )
+    return torch.nn.functional.layer_norm(input=res, normalized_shape=(last,), weight=None, bias=None, eps=1e-05)
 
 
 def scale_mask_softmax_in_place(x, y, scale, *args, **kwargs):
@@ -777,8 +770,10 @@ def reduce_sum(x, dims=None, keepdim=True, *args, **kwargs):
 def reduce_max(x, dims=None, keepdim=True, *args, **kwargs):
     return torch.amax(x, dims, keepdim)
 
+
 def reduce_min(x, dims=None, keepdim=True, *args, **kwargs):
     return torch.amin(x, dims, keepdim)
+
 
 def flatten(x, *args, **kwargs):
     return torch.flatten(x)
@@ -828,9 +823,7 @@ def tilize_with_zero_padding(x, *args, **kwargs):
     )
 
 
-def tilize_with_val_padding(
-    x, output_tensor_shape, input_tensor_start, pad_value, *args, **kwargs
-):
+def tilize_with_val_padding(x, output_tensor_shape, input_tensor_start, pad_value, *args, **kwargs):
     pad = torch.nn.functional.pad(
         x,
         tuple(
@@ -860,10 +853,7 @@ def untilize_with_unpadding(x, output_tensor_start, output_tensor_end, *args, **
 ################################################
 def pad(x, *args, output_tensor_shape, input_tensor_start, pad_value, **kwargs):
     input_tensor_shape = x.shape
-    input_tensor_end = tuple(
-        input_tensor_start[i] + input_tensor_shape[i]
-        for i in range(len(input_tensor_shape))
-    )
+    input_tensor_end = tuple(input_tensor_start[i] + input_tensor_shape[i] for i in range(len(input_tensor_shape)))
     out = torch.full(output_tensor_shape, pad_value, dtype=torch.bfloat16)
     out[
         input_tensor_start[0] : input_tensor_end[0],
@@ -964,3 +954,17 @@ def bert_large_ff1_matmul(x, y, z, *args, **kwargs):
     ref_bmm = torch.matmul(x, y)
     ref_bmm = ref_bmm + z
     return ref_bmm
+
+def eltwise_rpow(x, *args, **kwargs):
+    dim = kwargs["factor"]
+    return torch.pow(dim, x)
+
+
+def eltwise_rsub(x, *args, **kwargs):
+    dim = kwargs["factor"]
+    return torch.sub(dim, x)
+
+
+def eltwise_rdiv(x, *args, **kwargs):
+    dim = kwargs["factor"]
+    return dim / x
