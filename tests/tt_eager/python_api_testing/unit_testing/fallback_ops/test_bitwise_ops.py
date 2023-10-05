@@ -4,27 +4,25 @@
 
 import torch
 import tt_lib as ttl
-from models.utility_functions import (
-    comp_allclose_and_pcc,
-    comp_pcc,
+from tests.tt_eager.python_api_testing.sweep_tests import (
+    comparison_funcs,
 )
 from loguru import logger
 import pytest
 
 
 @pytest.mark.parametrize("op_kind", ["or", "and", "not", "xor"])
+@pytest.mark.parametrize("other", [5, 10, -1])
+@pytest.mark.parametrize("on_device", [True, False])
 @pytest.mark.parametrize(
-    "input_shape, other, on_device",
+    "input_shape",
     (
-        (torch.Size([1, 1, 32, 32]), 5, True),
-        (torch.Size([1, 1, 32, 32]), 5, False),
-        (torch.Size([1, 1, 320, 384]), 5, True),
-        (torch.Size([1, 1, 320, 384]), 5, False),
-        (torch.Size([1, 3, 320, 384]), 5, True),
-        (torch.Size([1, 3, 320, 384]), 5, False),
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bitwise_or_fallback(op_kind, input_shape, other, on_device, device):
+def test_bitwise_ops_fallback(op_kind, input_shape, other, on_device, device):
     torch.manual_seed(1234)
 
     # x = torch.randn(input_shape, dtype=torch.int8)
@@ -52,7 +50,7 @@ def test_bitwise_or_fallback(op_kind, input_shape, other, on_device, device):
         pt_out = torch.bitwise_not(x)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    comp_pass, _ = comp_pcc(pt_out, output, 1.0)
-    _, comp_out = comp_allclose_and_pcc(pt_out, output)
+    comp_pass, _ = comparison_funcs.comp_equal(pt_out, output)
+    _, comp_out = comparison_funcs.comp_allclose_and_pcc(pt_out, output)
     logger.info(comp_out)
     assert comp_pass
