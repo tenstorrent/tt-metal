@@ -67,6 +67,7 @@ struct AttnMatmul {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
+    const operation::Hash compute_program_hash(const std::vector<Tensor> &input_tensors) const;
 };
 
 inline Tensor attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype=std::nullopt) {
