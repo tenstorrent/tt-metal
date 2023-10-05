@@ -177,13 +177,28 @@ void MAIN {
         cb_reserve_back(cb_xmm, Wt);
         for (uint32_t wt = 0; wt < Wt; wt += block_size) {
             for (uint32_t j = 0; j < block_size; j++) {
+                const uint32_t w_idx = wt + j;
                 ACQ();
                 if (is_lastdim_layernorm) {
                     sub_bcast_cols_init_short();
-                    sub_tiles_bcast_cols(cb_x, cb_ex, wt + j, first_tile, j);
+                    sub_tiles_bcast_cols(cb_x, cb_ex, w_idx, first_tile, j);
                 } else {
                     sub_tiles_bcast_scalar_init_short();
-                    sub_tiles_bcast_scalar(cb_x, cb_ex, wt + j, first_tile, j);
+                    sub_tiles_bcast_scalar(cb_x, cb_ex, w_idx, first_tile, j);
+                }
+                // mask xmm
+                if (do_mask_h || do_mask_w) {
+                    const uint32_t mask_dst = j < 15 ? j + 1 : 0;
+                    copy_tile_init();
+                    mask_tile_init();
+                    if (do_mask_h && need_to_do_mask_h(w_idx, origin_Ht, origin_Wt)) {
+                        copy_tile(cb_mask_h, first_tile, mask_dst);  // mask_h
+                        mask_tile(j, mask_dst);
+                    }
+                    if (do_mask_w && (w_idx + 1) % origin_Wt == 0) {
+                        copy_tile(cb_mask_w, first_tile, mask_dst);  // mask_w
+                        mask_tile(j, mask_dst);
+                    }
                 }
                 pack_tile(j, cb_xmm);
                 REL();
@@ -194,42 +209,10 @@ void MAIN {
         cb_pop_front(cb_x, Wt);
 
         /*
-         * mask xmm
-         */
-        if (do_mask_h || do_mask_w) {
-            for (uint32_t wt = 0; wt < Wt; wt += block_size) {
-                for (uint32_t j = 0; j < block_size; j++) {
-                    ACQ();
-
-                    copy_tile_init();
-                    copy_tile(cb_xmm, j, j);  // xmm
-
-                    const uint32_t mask_dst = j < 15 ? j + 1 : 0;
-                    const uint32_t w_idx = wt + j;
-
-                    if (do_mask_h && need_to_do_mask_h(w_idx, origin_Ht, origin_Wt)) {
-                        copy_tile(cb_mask_h, first_tile, mask_dst);  // mask_h
-                        mask_tile_init();
-                        mask_tile(j, mask_dst);
-                    }
-
-                    if (do_mask_w && (w_idx + 1) % origin_Wt == 0) {
-                        copy_tile(cb_mask_w, first_tile, mask_dst);  // mask_w
-                        mask_tile_init();
-                        mask_tile(j, mask_dst);
-                    }
-
-                    pack_tile(j, cb_xmm);
-                    REL();
-                }  // block_size loop
-                cb_pop_front(cb_xmm, block_size);
-            }  // Wt loop
-        }      // if (do_mask_h || do_mask_w)
-
-        /*
          * (x - E[x])^2
          * cb_xmm2
          */
+        cb_wait_front(cb_xmm, Wt);
         cb_reserve_back(cb_xmm2, Wt);
         for (uint32_t wt = 0; wt < Wt; wt += block_size) {
             for (uint32_t j = 0; j < block_size; j++) {
@@ -357,9 +340,7 @@ void MAIN {
             }  // if (do_beta)
         }      // Wt loop
         cb_pop_front(cb_ex2pe, onetile);
-        if (!do_mask_h && !do_mask_w) {
-            cb_pop_front(cb_xmm, Wt);
-        }
+        cb_pop_front(cb_xmm, Wt);
     }  // NCHt loop
     cb_pop_front(cb_scaler, onetile);
     cb_pop_front(cb_eps, onetile);
