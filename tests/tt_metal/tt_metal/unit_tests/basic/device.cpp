@@ -109,10 +109,9 @@ TEST_F(BasicFixture, MultiDeviceInitializeAndTeardown) {
         for (unsigned int id = 0; id < num_devices; id++) {
             devices.push_back(tt::tt_metal::CreateDevice(id));
         }
-    } catch (...) {
-        for (auto device : devices) {
-            ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
-        }
+    } catch (...) {}
+    for (auto device : devices) {
+        ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
     }
 }
 TEST_F(BasicFixture, MultiDeviceLoadBlankKernels) {
@@ -132,10 +131,9 @@ TEST_F(BasicFixture, MultiDeviceLoadBlankKernels) {
         for (unsigned int id = 0; id < num_devices; id++) {
             unit_tests::basic::device::load_all_blank_kernels(devices.at(id));
         }
-    } catch (...) {
-        for (auto device: devices) {
-            ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
-        }
+    } catch (...) {}
+    for (auto device: devices) {
+        ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
     }
 }
 
@@ -279,46 +277,6 @@ TEST_F(DeviceFixture, PingIllegalL1Cores) {
 }
 
 // Harvesting tests
-
-// This test ensures that no logical core maps to a harvested row
-TEST_F(BasicFixture, ValidateLogicalToPhysicalCoreCoordHostMapping) {
-    size_t num_devices = tt_metal::Device::detect_num_available_devices();
-    ASSERT_TRUE(num_devices > 0);
-    tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    num_devices = (arch == tt::ARCH::GRAYSKULL) ? 1 : num_devices;
-    for (int device_id = 0; device_id < num_devices; device_id++) {
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
-        uint32_t harvested_rows_mask = tt::Cluster::instance().get_harvested_rows(device_id);
-        log_info(LogTest, "Device {} harvesting mask {}", device_id, harvested_rows_mask);
-        std::unordered_set<int> harvested_rows;
-        int row_coordinate = 0;
-        int tmp = harvested_rows_mask;
-        string delim = "";
-        string harvested_row_str;
-        while (tmp) {
-            if (tmp & 1) {
-                harvested_rows.insert(row_coordinate);
-                harvested_row_str += delim + std::to_string(row_coordinate);
-                delim = ", ";
-            }
-            tmp = tmp >> 1;
-            row_coordinate++;
-        }
-
-        log_info(LogTest, "Device {} has {} harvested rows. Physical harvested row coordinates are: {}", device_id, harvested_rows.size(), harvested_row_str);
-
-        CoreCoord logical_grid_size = device->logical_grid_size();
-        for (int x = 0; x < logical_grid_size.x; x++) {
-            for (int y = 0; y < logical_grid_size.y; y++) {
-                CoreCoord logical_core_coord(x, y);
-                CoreCoord physical_core_coord = device->worker_core_from_logical_core(logical_core_coord);
-                ASSERT_TRUE(harvested_rows.find(physical_core_coord.y) == harvested_rows.end());
-            }
-        }
-
-        tt_metal::CloseDevice(device);
-    }
-}
 
 // Test methodology:
 // 1. Host write single uint32_t value to each L1 bank

@@ -330,6 +330,8 @@ int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
         chip_id_t mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(chip_id);
         return this->device_->get_clocks().at(mmio_device_id);
     }
+    log_fatal(LogLLRuntime, "Cannot get frequency for device {} that is not initialized!", chip_id);
+    return 0;
 }
 
 void Cluster::reset_debug_print_server_buffers() const {
@@ -359,7 +361,8 @@ void Cluster::reset_debug_print_server_buffers() const {
 void Cluster::assert_risc_reset(const chip_id_t &chip) const { this->device_->assert_risc_reset(chip); }
 
 void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const {
-    tt_cxy_pair virtual_chip_coord = this->convert_physical_cxy_to_virtual(physical_chip_coord);
+    const metal_SocDescriptor &soc_desc = this->get_soc_desc(physical_chip_coord.chip);
+    tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(physical_chip_coord);
     this->device_->deassert_risc_reset_at_core(virtual_chip_coord);
 }
 
@@ -402,7 +405,7 @@ void Cluster::write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
     tt_cxy_pair dram_core = tt_cxy_pair(chip_id, desc_to_use.get_core_for_dram_channel(d_chan, d_subchannel));
     size_t offset = desc_to_use.get_address_offset(d_chan);
-    write_dram_vec(vec, dram_core, addr + offset, small_access);
+        write_dram_vec(vec, dram_core, addr + offset, small_access);
 }
 
 void Cluster::read_dram_vec(
@@ -423,24 +426,15 @@ void Cluster::read_dram_vec(
     read_dram_vec(vec, dram_core, addr + offset, size, small_access);
 }
 
-// UMD expects virtual NOC coordinates
-tt_cxy_pair Cluster::convert_physical_cxy_to_virtual(const tt_cxy_pair &physical_cxy) const {
-    const metal_SocDescriptor &soc_desc = get_soc_desc(physical_cxy.chip);
-    CoreCoord virtual_core({
-        .x = static_cast<size_t>(soc_desc.physical_routing_to_virtual_routing_x.at(physical_cxy.x)),
-        .y = static_cast<size_t>(soc_desc.physical_routing_to_virtual_routing_y.at(physical_cxy.y)),
-    });
-    return tt_cxy_pair(physical_cxy.chip, virtual_core);
-}
-
 void Cluster::write_dram_vec(
     const std::uint32_t *mem_ptr, uint32_t len, tt_cxy_pair dram_core, uint64_t addr, bool small_access) const {
     int chip_id = dram_core.chip;
+    const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         tt::llrt::watcher_sanitize_host_noc_write(
-            get_soc_desc(chip_id), {dram_core.x, dram_core.y}, addr, len * sizeof(uint32_t));
+            soc_desc, {dram_core.x, dram_core.y}, addr, len * sizeof(uint32_t));
     }
-    tt_cxy_pair virtual_dram_core = this->convert_physical_cxy_to_virtual(dram_core);
+    tt_cxy_pair virtual_dram_core = soc_desc.convert_to_umd_coordinates(dram_core);
     this->device_->write_to_device(mem_ptr, len, virtual_dram_core, addr, "LARGE_WRITE_TLB");
     if (this->device_->get_target_remote_device_ids().find(virtual_dram_core.chip) !=
         this->device_->get_target_remote_device_ids().end()) {
@@ -455,12 +449,14 @@ void Cluster::write_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uint6
 void Cluster::read_dram_vec(
     std::uint32_t *mem_ptr, tt_cxy_pair dram_core, uint64_t addr, uint32_t size_in_bytes, bool small_access) const {
     int chip_id = dram_core.chip;
+    const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         tt::llrt::watcher_sanitize_host_noc_read(
-            get_soc_desc(chip_id), {dram_core.x, dram_core.y}, addr, size_in_bytes);
+            soc_desc, {dram_core.x, dram_core.y}, addr, size_in_bytes);
     }
-    tt_cxy_pair virtual_dram_core = this->convert_physical_cxy_to_virtual(dram_core);
+
+    tt_cxy_pair virtual_dram_core = soc_desc.convert_to_umd_coordinates(dram_core);
     this->device_->read_from_device(mem_ptr, virtual_dram_core, addr, size_in_bytes, "LARGE_READ_TLB");
 }
 
@@ -468,10 +464,12 @@ void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64
     const unsigned int len = 1;
     const unsigned int size_in_bytes = len * sizeof(uint32_t);
     int chip_id = target.chip;
+    const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
+
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
-        tt::llrt::watcher_sanitize_host_noc_write(get_soc_desc(chip_id), {target.x, target.y}, addr, size_in_bytes);
+        tt::llrt::watcher_sanitize_host_noc_write(soc_desc, {target.x, target.y}, addr, size_in_bytes);
     }
-    tt_cxy_pair virtual_target = this->convert_physical_cxy_to_virtual(target);
+    tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);
     this->device_->write_to_device(mem_ptr, len, virtual_target, addr, "REG_TLB");
     if (this->device_->get_target_remote_device_ids().find(virtual_target.chip) !=
         this->device_->get_target_remote_device_ids().end()) {
@@ -483,10 +481,12 @@ void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr
     const unsigned int len = 1;
     const unsigned int size_in_bytes = len * sizeof(uint32_t);
     int chip_id = target.chip;
+    const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
+
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
-        tt::llrt::watcher_sanitize_host_noc_read(get_soc_desc(chip_id), {target.x, target.y}, addr, size_in_bytes);
+        tt::llrt::watcher_sanitize_host_noc_read(soc_desc, {target.x, target.y}, addr, size_in_bytes);
     }
-    tt_cxy_pair virtual_target = this->convert_physical_cxy_to_virtual(target);
+    tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);
     this->device_->read_from_device(mem_ptr, virtual_target, addr, size_in_bytes, "REG_TLB");
 }
 

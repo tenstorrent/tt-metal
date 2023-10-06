@@ -34,6 +34,7 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
 
   std::unordered_map<int, int> worker_log_to_physical_routing_x;
   std::unordered_map<int, int> worker_log_to_physical_routing_y;
+  // Physical to virtual maps are only applicable for x and y of tensix workers
   std::unordered_map<int, int> physical_routing_to_virtual_routing_x;
   std::unordered_map<int, int> physical_routing_to_virtual_routing_y;
 
@@ -48,6 +49,8 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
   const std::vector<CoreCoord>& get_pcie_cores() const;
   const std::vector<CoreCoord> get_dram_cores() const;
   const std::vector<CoreCoord>& get_ethernet_cores() const;
+
+  tt_cxy_pair convert_to_umd_coordinates(const tt_cxy_pair &physical_cxy) const;
 
   private:
   void generate_physical_descriptors_from_virtual(uint32_t harvesting_mask);

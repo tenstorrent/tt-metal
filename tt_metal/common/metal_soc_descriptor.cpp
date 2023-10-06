@@ -81,6 +81,19 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
   this->dram_address_offsets = device_descriptor_yaml["dram_address_offsets"].as<std::vector<size_t>>();
 }
 
+// UMD expects virtual NOC coordinates for worker cores
+tt_cxy_pair metal_SocDescriptor::convert_to_umd_coordinates(const tt_cxy_pair &physical_cxy) const {
+    CoreCoord physical_coord({.x = physical_cxy.x, .y = physical_cxy.y});
+    const CoreDescriptor &core_desc = this->physical_cores.at(physical_coord);
+    CoreCoord virtual_coord = physical_coord;
+    if (core_desc.type == CoreType::WORKER or core_desc.type == CoreType::HARVESTED) {
+      virtual_coord.x = static_cast<size_t>(this->physical_routing_to_virtual_routing_x.at(physical_cxy.x));
+      virtual_coord.y = static_cast<size_t>(this->physical_routing_to_virtual_routing_y.at(physical_cxy.y));
+    }
+    return tt_cxy_pair(physical_cxy.chip, virtual_coord);
+}
+
+
 void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t harvesting_mask) {
   if (harvesting_mask == 0) {
     this->worker_log_to_physical_routing_x = this->worker_log_to_routing_x;
@@ -97,7 +110,7 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
     return;
   }
 
-  std::unordered_set<int> row_coordinates_to_remove;
+  std::set<int> row_coordinates_to_remove;
   int row_coordinate = 0;
   int tmp = harvesting_mask;
   while (tmp) {
@@ -108,18 +121,28 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
       row_coordinate++;
   }
 
+  std::set<int> virtual_harvested_rows;
+  for (const CoreCoord &virtual_harvested_core : this->harvested_workers) {
+    virtual_harvested_rows.insert(virtual_harvested_core.y);
+  }
+
+  if (row_coordinates_to_remove.size() != virtual_harvested_rows.size()) {
+    tt::log_fatal("Expected number of harvested rows removed by UMD ({}) to match number of harvested rows set in harvesting mask ({})", virtual_harvested_rows.size(), row_coordinates_to_remove.size());
+  }
+
   // Columns are not harvested so virtual x == physical x
   std::set<int> virtual_y_coords;
   for (const auto &[virtual_noc_core, core_desc] : this->cores) {
     if (core_desc.type == CoreType::WORKER or core_desc.type == CoreType::HARVESTED) {
       virtual_y_coords.insert(virtual_noc_core.y);
+      this->physical_routing_to_virtual_routing_x.insert({virtual_noc_core.x, virtual_noc_core.x});
     }
-    this->physical_routing_to_virtual_routing_x.insert({virtual_noc_core.x, virtual_noc_core.x});
   }
   this->worker_log_to_physical_routing_x = this->worker_log_to_routing_x;
 
   std::unordered_map<int, int> virtual_routing_to_physical_routing_y;
   auto virtual_y_coord_it = virtual_y_coords.begin();
+  // worker grid size does not include harvested rows
   for (int logical_y_coord = 0; logical_y_coord < this->worker_grid_size.y; logical_y_coord++) {
     while (row_coordinates_to_remove.find(*virtual_y_coord_it) != row_coordinates_to_remove.end()) {
       virtual_y_coord_it++;
@@ -132,24 +155,32 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
     virtual_routing_to_physical_routing_y.insert({virtual_y_coord, physical_y_coord});
   }
 
+  // map physical harvested rows to virtual harvested rows
+  std::unordered_map<int, int> virtual_harvested_row_to_physical_harvested_row;
+  for (auto v_it = virtual_harvested_rows.begin(), p_it = row_coordinates_to_remove.begin(); v_it != virtual_harvested_rows.end() and p_it != row_coordinates_to_remove.end(); ++v_it, ++p_it) {
+    virtual_routing_to_physical_routing_y.insert({*v_it, *p_it});
+    this->physical_routing_to_virtual_routing_y.insert({*p_it, *v_it});
+  }
+
   for (const auto &[virtual_noc_core, core_desc] : this->cores) {
     CoreCoord physical_noc_core = virtual_noc_core;
     CoreDescriptor phys_core_desc = core_desc;
-    if (core_desc.type == CoreType::WORKER) {
+    if (core_desc.type == CoreType::WORKER or core_desc.type == CoreType::HARVESTED) {
       physical_noc_core.y = virtual_routing_to_physical_routing_y.at(virtual_noc_core.y);
       phys_core_desc.coord = physical_noc_core;
-      this->physical_workers.push_back(physical_noc_core);
-    } else if (core_desc.type == CoreType::HARVESTED) {
-      this->physical_harvested_workers.push_back(physical_noc_core);
-      this->physical_routing_to_virtual_routing_y.insert({physical_noc_core.y, virtual_noc_core.y});
-    } else {
-      this->physical_routing_to_virtual_routing_y.insert({physical_noc_core.y, physical_noc_core.y});
+      if (row_coordinates_to_remove.find(physical_noc_core.y) != row_coordinates_to_remove.end()) {
+        phys_core_desc.type = CoreType::HARVESTED;
+        this->physical_harvested_workers.push_back(physical_noc_core);
+      } else {
+        phys_core_desc.type = CoreType::WORKER;
+        this->physical_workers.push_back(physical_noc_core);
+      }
     }
     this->physical_cores.insert({physical_noc_core, phys_core_desc});
   }
 
   TT_ASSERT(
-    this->physical_routing_to_virtual_routing_y.size() == this->grid_size.y and this->physical_routing_to_virtual_routing_x.size() == this->grid_size.x);
+    this->physical_routing_to_virtual_routing_y.size() == this->worker_grid_size.y + row_coordinates_to_remove.size() and this->physical_routing_to_virtual_routing_x.size() == this->worker_grid_size.x);
 }
 
 const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_noc_rows) {
