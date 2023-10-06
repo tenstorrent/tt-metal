@@ -165,7 +165,7 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const uint32_t cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + im0_t + im1_t + im2_t +
                                im3_t + im4_t + im5_t + im6_t + im7_t) *
                               single_tile_size;
-    const uint32_t available_L1 = device->l1_size() - L1_UNRESERVED_BASE;
+    const uint32_t available_L1 = device->l1_size_per_core() - L1_UNRESERVED_BASE;
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
