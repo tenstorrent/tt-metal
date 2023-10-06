@@ -372,6 +372,18 @@ void Device::deallocate_buffers(){
     allocator::deallocate_buffers(*allocator_);
 }
 
+float Device::sfpu_eps() const {
+
+  float value = std::numeric_limits<float>::epsilon();
+  if( arch() == tt::ARCH::GRAYSKULL  ) {
+    value = tt::tt_metal::EPS_GS;
+  } else if( arch() == tt::ARCH::WORMHOLE_B0 ) {
+    value = tt::tt_metal::EPS_WHB0;
+  }
+
+  return value;
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt

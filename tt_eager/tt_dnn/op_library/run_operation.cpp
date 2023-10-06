@@ -339,4 +339,10 @@ std::vector<Tensor> run_with_autoformat(
     return formatted_output_tensors;
 }
 
+//on-device tensor creation with shape and filled with value
+Tensor sfpu_eps(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
+  float value = device->sfpu_eps();
+  return tt::numpy::full(shape, value, DataType::BFLOAT16, layout, device, output_mem_config);
+}
+
 }

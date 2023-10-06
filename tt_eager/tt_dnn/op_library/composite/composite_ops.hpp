@@ -214,6 +214,9 @@ Tensor hardtanh(const Tensor& a,float low = -1.0f, float high = +1.0f, const Mem
 //clamp
 Tensor clamp(const Tensor& a,float low, float high, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+//machine epsilon
+Tensor eps(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 //logit(input, eps)=log(input / 1 - input)
 Tensor logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 

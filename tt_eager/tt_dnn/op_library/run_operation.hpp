@@ -315,6 +315,9 @@ inline std::vector<Tensor> run_with_autoformat(
     return run_with_autoformat(operation, input_tensors, input_formatting, output_layouts, optional_input_tensors, optional_input_formatting);
 }
 
+//on-device tensor creation with shape and filled with value
+Tensor sfpu_eps(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config);
+
 } //namespace operation
 
 } //namespace tt::tt_metal
