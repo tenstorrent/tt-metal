@@ -145,9 +145,9 @@ namespace tt::tt_metal::detail{
 
         detail::bind_unary_op_with_param(
             m_tensor, "rpow", rpow,
-            py::arg("exponent in function call but calculated as base"),
-            R"doc(Returns tensor  raising ``{1}`` value to power of respective elements of the input tensor ``{0}``.)doc",
-            R"doc("exponent value", "float", ">0.0")doc"
+            py::arg("base"),
+            R"doc(Returns tensor  raising ``{1}`` value to power of respective elements of the input exponent tensor ``{0}``.)doc",
+            R"doc("base value", "float", ">0.0")doc"
         );
 
         detail::bind_unary_op_with_param(
