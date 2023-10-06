@@ -9,6 +9,7 @@
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
+#include "tt_dnn/op_library/math.hpp"
 
 namespace tt {
 
@@ -1140,6 +1141,11 @@ Tensor swiglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig&
     return swiglu_result;
 }
 
+//on-device tensor creation with shape and filled with value
+Tensor sfpu_eps(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
+  float value = device->sfpu_eps();
+  return tt::numpy::full(shape, value, DataType::BFLOAT16, layout, device, output_mem_config);
+}
 
 }//namespace tt_metal
 
