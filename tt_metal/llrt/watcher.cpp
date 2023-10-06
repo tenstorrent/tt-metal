@@ -361,7 +361,7 @@ static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
 static void watcher_loop(int sleep_usecs) {
     int count = 0;
 
-    log_info(LogLLRuntime, "Watcher thread watching...");
+    log_info(LogLLRuntime, "Watcher thread attached...");
 
     while (true) {
         // Odds are this thread will be killed during the usleep
@@ -500,6 +500,7 @@ void watcher_attach(void *dev,
     }
 
     if (llrt::watcher::logfile != nullptr) {
+        log_info(LogLLRuntime, "Watcher thread detached");
         fprintf(watcher::logfile, "At %ds attach device %d\n", watcher::get_elapsed_secs(), device_id);
     }
 
