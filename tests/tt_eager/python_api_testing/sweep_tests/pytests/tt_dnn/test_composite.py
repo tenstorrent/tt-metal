@@ -117,6 +117,8 @@ if is_wormhole_b0():
                 "digamma",
                 "lgamma",
                 "multigammaln",
+                "assign_unary",
+                "assign_binary",
             ),
             shapes,
         )
@@ -191,6 +193,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         "logit",
         "logical_xor",
         "isclose",
+        "assign_binary",
     ]:
         num_inputs = 2
 

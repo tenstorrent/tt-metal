@@ -626,6 +626,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.logical_noti
 
+.. autofunction:: tt_lib.tensor.assign
+
 .. autofunction:: tt_lib.tensor.std_hw
 
 .. autofunction:: tt_lib.tensor.normalize_hw
