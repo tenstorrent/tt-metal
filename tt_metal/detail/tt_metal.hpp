@@ -295,12 +295,11 @@ namespace tt::tt_metal{
 
             CoreCoord dispatch_logical_core = device->worker_core_from_logical_core(*device->dispatch_cores().begin());
 
-            // XXXX TODO(PGK): get addr range values from device descriptor...
             generate_noc_addr_ranges_header (
                 build_options,
                 op_path_suffix,
                 0, (uint64_t)4 * 1024 * 1024 * 1024,
-                0, 1 * 1024 * 1024 * 1024,
+                0, device->dram_size_per_channel(),
                 soc_d.get_pcie_cores(),
                 soc_d.get_dram_cores(),
                 soc_d.get_ethernet_cores(),
