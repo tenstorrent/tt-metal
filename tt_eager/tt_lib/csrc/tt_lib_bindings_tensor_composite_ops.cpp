@@ -593,6 +593,38 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
+        m_tensor.def("assign", py::overload_cast<const Tensor&, const Tensor&, const MemoryConfig&>(&assign),
+            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
+            Moves input tensor ``arg0`` (given by input_a) to ``arg1`` (given by input_b) if their
+            volumes and memory layouts match, and returns input_b tensor.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input_a", "Tensor assign is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_b", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+        m_tensor.def("assign", py::overload_cast<const Tensor&, const MemoryConfig&>(&assign),
+            py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Clones input tensors ``arg0`` (given by input) and returns the output tensor.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Tensor assign is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
         m_tensor.def("threshold", &threshold,
             py::arg("input").noconvert(), py::arg("threshold"), py::arg("value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns tensor with the threshold activation on elements of the input tensors ``arg0`` at threshold ``threshold``,

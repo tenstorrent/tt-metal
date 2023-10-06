@@ -257,6 +257,10 @@ def nez(x, *args, **kwargs):
     return (x != 0.0).to(x.dtype)
 
 
+def assign_unary(x, *args, **kwargs):
+    return torch.clone(x)
+
+
 def sign(x, *args, **kwargs):
     return torch.sign(x)
 
@@ -656,6 +660,11 @@ def bias_gelu(x, y, *args, **kwargs):
 
 def lerp_binary(x, y, *args, weight, **kwargs):
     return torch.lerp(x, y, weight)
+
+
+def assign_binary(x, y, *args, **kwargs):
+    y.copy_(x)
+    return y
 
 
 def isclose(x, y, *args, rtol, atol, **kwargs):

@@ -573,6 +573,14 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_logaddexp2,
         "pytorch_op": pytorch_ops.logaddexp2,
     },
+    "eltwise-assign_binary": {
+        "tt_lib_op": tt_lib_ops.eltwise_assign_binary,
+        "pytorch_op": pytorch_ops.assign_binary,
+    },
+    "eltwise-assign_unary": {
+        "tt_lib_op": tt_lib_ops.eltwise_assign_unary,
+        "pytorch_op": pytorch_ops.assign_unary,
+    },
     "eltwise-logical_or": {
         "tt_lib_op": tt_lib_ops.eltwise_logical_or,
         "pytorch_op": pytorch_ops.logical_or,
