@@ -277,13 +277,13 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
         GetCircularBufferConfig(program, cb_in0_id).set_total_size(in0_t * in0_tile_size).set_page_size(CB::c_in0, in0_tile_size);
         GetCircularBufferConfig(program, cb_out0_id).set_total_size(out0_t * in0_tile_size).set_page_size(CB::c_out0, in0_tile_size);
         GetCircularBufferConfig(program, cb_intermed1_id).set_total_size(im1_t * in0_tile_size).set_page_size(CB::c_intermed1, in0_tile_size);
-        GetCircularBufferConfig(program, cb_in2_id).set_total_size(in2_t * in0_tile_size).set_page_size(CB::c_in2, scalar_tile_size);
+        GetCircularBufferConfig(program, cb_in2_id).set_total_size(in2_t * scalar_tile_size).set_page_size(CB::c_in2, scalar_tile_size);
         GetCircularBufferConfig(program, cb_intermed0_id).set_total_size(im0_t * in0_tile_size).set_page_size(CB::c_intermed0, in0_tile_size);
 
         if (optional_input_tensors.at(0).has_value()) {
             GetCircularBufferConfig(program, cb_intermed3_id.value()).set_total_size(im3_t * in0_tile_size).set_page_size(CB::c_intermed3, in0_tile_size);
-            GetCircularBufferConfig(program, cb_in3_id.value()).set_total_size(in3_t * in0_tile_size).set_page_size(CB::c_in3, scalar_tile_size);
-            GetCircularBufferConfig(program, cb_in4_id.value()).set_total_size(in4_t * in0_tile_size).set_page_size(CB::c_in4, mask_tile_size);
+            GetCircularBufferConfig(program, cb_in3_id.value()).set_total_size(in3_t * scalar_tile_size).set_page_size(CB::c_in3, scalar_tile_size);
+            GetCircularBufferConfig(program, cb_in4_id.value()).set_total_size(in4_t * mask_tile_size).set_page_size(CB::c_in4, mask_tile_size);
         }
 
         for (uint32_t icore = 0; icore < grid.x_ * grid.y_; icore++) {
