@@ -185,6 +185,12 @@ FORCE_INLINE void write_program_section(
 }
 
 FORCE_INLINE void write_program(u32 num_program_relays, volatile tt_l1_ptr u32*& command_ptr) {
+    if (num_program_relays) {
+        // Not pretty, but this is short-lived. Setting the message addr to 0 since we
+        // are sending the go signals 'as data'.
+        volatile tt_l1_ptr uint32_t* message_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(DISPATCH_MESSAGE_ADDR);
+        *message_addr_ptr = 0;
+    }
     for (u32 relay = 0; relay < num_program_relays; relay++) {
         u32 src = command_ptr[0];
         u32 src_noc = command_ptr[1];
@@ -212,7 +218,6 @@ FORCE_INLINE void launch_program(u32 num_workers, u32 num_multicast_messages, vo
         return;
 
     volatile tt_l1_ptr uint32_t* message_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(DISPATCH_MESSAGE_ADDR);
-    *message_addr_ptr = 0;
 
     // Wait on worker cores to notify me that they have completed
     DEBUG_STATUS('Q', 'W');
