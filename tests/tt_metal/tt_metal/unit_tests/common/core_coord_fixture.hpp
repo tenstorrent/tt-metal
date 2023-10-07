@@ -18,10 +18,17 @@ class CoreCoordHarness : public ::testing::Test {
     CoreRange cr6 = {.start={0, 0}, .end={6, 4}};
     CoreRange cr7 = {.start={2, 0}, .end={7, 4}};
     CoreRange cr8 = {.start={0, 0}, .end={7, 4}};
-    CoreRange sc1 = CoreCoord(1, 1);
-    CoreRange sc2 = CoreCoord(1, 2);
-    CoreRange sc3 = CoreCoord(1, 3);
+    CoreRange cr9 = {.start={2, 0}, .end={7, 1}};
+    CoreRange cr10 = {.start={0, 2}, .end={1, 2}};
+    CoreRange cr11 = {.start={1, 0}, .end={7, 1}};
+    CoreRange cr12 = {.start={0, 0}, .end={7, 1}};
+    CoreRange cr13 = {.start={0, 0}, .end={1, 2}};
+    CoreRange cr14 = {.start={0, 1}, .end={1, 1}};
+    CoreRange cr15 = {.start={0, 1}, .end={0, 2}};
 
+    CoreRange sc1 = {.start={1, 1}, .end={1, 1}};
+    CoreRange sc2 = {.start={0, 1}, .end={0, 1}};
+    CoreRange sc3 = {.start={0, 2}, .end={0, 2}};
 
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");

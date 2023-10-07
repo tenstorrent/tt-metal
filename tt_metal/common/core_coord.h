@@ -75,6 +75,15 @@ struct CoreRange {
         return {};
     }
 
+    bool adjacent ( const CoreRange & other ) const
+    {
+        std::size_t x1 = std::max(this->start.x, other.start.x);
+        std::size_t y1 = std::max(this->start.y, other.start.y);
+        std::size_t x2 = std::min(this->end.x, other.end.x);
+        std::size_t y2 = std::min(this->end.y, other.end.y);
+        return ( (x2 + 1 == x1 && y1 <= y2) || (y2 + 1 == y1 && x1 <= x2) );
+    }
+
     bool contains ( const CoreRange & other ) const
     {
         return (other.start.x >= this->start.x ) &&
@@ -86,7 +95,7 @@ struct CoreRange {
     // Merge lined-up (in x or y dimension) intersecting/adjacent rectangles
     std::optional<CoreRange> merge ( const CoreRange & cr) const
     {
-        if ( this->intersects(cr) ){
+        if ( this->intersects(cr) || this->adjacent(cr) ) {
             if ( this->start.x == cr.start.x && this->end.x == cr.end.x )
                 return CoreRange ( {this->start.x, std::min(this->start.y, cr.start.y)} , { this->end.x, std::max( this->end.y, cr.end.y) } );
 
