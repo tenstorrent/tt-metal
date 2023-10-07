@@ -292,7 +292,9 @@ namespace tt::tt_metal{
                 }
             }
 
-            CoreCoord dispatch_logical_core = device->worker_core_from_logical_core(*device->dispatch_cores().begin());
+            auto dispatch_cores = device->dispatch_cores().begin();
+            CoreCoord producer_logical_core = *dispatch_cores++;
+            CoreCoord consumer_logical_core = *dispatch_cores;
 
             generate_noc_addr_ranges_header (
                 build_options,
@@ -304,7 +306,7 @@ namespace tt::tt_metal{
                 soc_d.get_ethernet_cores(),
                 soc_d.grid_size,
                 harvested_rows,
-                {dispatch_logical_core});
+                {device->worker_core_from_logical_core(consumer_logical_core)});
         }
 
         inline DataMovementConfig GetDataMovementConfig(Program &program, const std::string &file_name, const CoreRangeSet &core_ranges, const std::optional<DataMovementConfig> &dm_config) {

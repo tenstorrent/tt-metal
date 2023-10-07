@@ -5,148 +5,96 @@
  */
 
 #include <array>
-#include <vector>
 
-#include "tt_metal/hostdevcommon/common_values.hpp"
+#include "dev_mem_map.h"
+#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 
-using std::array;
-using std::vector;
-
-// This is used for relays in which we read a large block of data
-// and we want to relay small portions of this data to workers
-struct TrailingWriteCommand {
-    u32 src;
-    u32 dst;
-    u32 dst_noc;
-    u32 transfer_size;
-    u32 num_receivers;
-};
-
-static constexpr u32 NUM_DISPATCH_CORES = 108;  // TODO(agrebenisan): Need to fix for wormhole
-
-// The beginning of data section for dispatcher
-static constexpr u32 DEVICE_COMMAND_DATA_ADDR = 150 * 1024;
-
-static constexpr u32 DEVICE_COMMAND_NUM_ENTRIES = 5632; // 22KB device command
-static constexpr u32 NUM_ENTRIES_PER_BUFFER_RELAY = 8;
-static constexpr u32 CONTROL_SECTION_NUM_ENTRIES = 16;
-static constexpr u32 NUM_DATA_MOVEMENT_INSTRUCTIONS = 4;
-static constexpr u32 RELAY_BUFFER_NUM_ENTRIES = NUM_DATA_MOVEMENT_INSTRUCTIONS * NUM_ENTRIES_PER_BUFFER_RELAY;
-static constexpr u32
-    RELAY_PROGRAM_NUM_ENTRIES =  // Whatever is left of the available size, we allocate for relaying program data
-    DEVICE_COMMAND_NUM_ENTRIES - CONTROL_SECTION_NUM_ENTRIES - RELAY_BUFFER_NUM_ENTRIES - NUM_DISPATCH_CORES;
-
-static constexpr u32 HUGE_PAGE_SIZE = 1024 * 1024 * 1024;
-
-
-// DeviceCommand.desc organized as follows
-// finish (whether we need to notify host when we finished)
-// launch (whether we need to notify all worker cores to run)
-// num relays (how many buffers are we moving around)
-// relay addresses (list with 'num relays' entries specifying
-// how to move the buffers around)
-
-// We need to ensure that the command size is divisible by 32
-static_assert(DEVICE_COMMAND_NUM_ENTRIES * sizeof(u32) % 32 == 0);
-
-// To stay consistent with the 16B addressing on grayskull, I created this constant
-static constexpr u32 NUM_16B_WORDS_IN_DEVICE_COMMAND = (DEVICE_COMMAND_NUM_ENTRIES * sizeof(u32)) / 16;
 class DeviceCommand {
-   private:
-    static constexpr u32 num_4B_words_in_relay_buffer_instruction = 8;
-    static constexpr u32 num_possible_relay_buffer_instructions = 4;
+   public:
+    DeviceCommand();
+
+    // Constants
+    static constexpr u32 NUM_ENTRIES_IN_COMMAND_HEADER = 16;
+    static constexpr u32 NUM_ENTRIES_IN_DEVICE_COMMAND = 5632;
+    static constexpr u32 NUM_BYTES_IN_DEVICE_COMMAND = NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(u32);
+    static constexpr u32 DATA_SECTION_ADDRESS = L1_UNRESERVED_BASE + NUM_BYTES_IN_DEVICE_COMMAND;
+    static constexpr u32 PROGRAM_PAGE_SIZE = 2048;
+    static constexpr u32 PRODUCER_DATA_BUFFER_SIZE =
+        (MEM_L1_SIZE - (NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(u32)) - L1_UNRESERVED_BASE);
+    static constexpr u32 CONSUMER_DATA_BUFFER_SIZE = (PRODUCER_DATA_BUFFER_SIZE - NUM_BYTES_IN_DEVICE_COMMAND) / 2;
+    static constexpr u32 NUM_POSSIBLE_GO_SIGNALS = 108;
+    static constexpr u32 DEVICE_COMMAND_DATA_ADDR = L1_UNRESERVED_BASE + NUM_BYTES_IN_DEVICE_COMMAND;
+    static constexpr u32 NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION = 6;
+    static constexpr u32 NUM_POSSIBLE_BUFFER_TRANSFERS = 2;
+
+    // Ensure any changes to this device command have asserts modified/extended
+    static_assert(NUM_ENTRIES_IN_COMMAND_HEADER == 16);
+    static_assert((NUM_BYTES_IN_DEVICE_COMMAND % 32) == 0);
 
     // Command header
     static constexpr u32 wrap_idx = 0;
     static constexpr u32 finish_idx = 1;
     static constexpr u32 num_workers_idx = 2;
     static constexpr u32 num_multicast_messages_idx = 3;
-    static constexpr u32 data_size_in_bytes_idx = 4;
-    static constexpr u32 num_relay_buffer_reads_idx = 5;
-    static constexpr u32 num_relay_buffer_writes_idx = 6;
-    static constexpr u32 num_relay_program_writes_idx = 7;
+    static constexpr u32 num_buffer_transfers_idx = 4;
+    static constexpr u32 is_program_buffer_idx = 5;
+    static constexpr u32 stall_idx = 6;
+    static constexpr u32 page_size_idx = 7;
+    static constexpr u32 producer_cb_size_idx = 8;
+    static constexpr u32 consumer_cb_size_idx = 9;
+    static constexpr u32 producer_cb_num_pages_idx = 10;
+    static constexpr u32 consumer_cb_num_pages_idx = 11;
+    static constexpr u32 num_pages_idx = 12;
+    static constexpr u32 data_size_idx = 13;
 
-    static_assert(CONTROL_SECTION_NUM_ENTRIES == 16);
-    u32 worker_launch_idx = CONTROL_SECTION_NUM_ENTRIES;  // So far, we unicast the de-assert until Almeet provides
-                                                          // support for program.logical_cores() -> core range set
+    void wrap();
 
-    // Relay instructions
-    u32 relay_buffer_entry_idx = CONTROL_SECTION_NUM_ENTRIES +
-                                 NUM_DISPATCH_CORES;  // Not const, keeps track of which index in the array we're at
+    void finish();
 
-    // This magic 16 coming from the fact that we needed to over-allocate the control bit
-    // section in order to have the command size be nicely divisble by 32
-    static_assert(CONTROL_SECTION_NUM_ENTRIES + NUM_DISPATCH_CORES + RELAY_BUFFER_NUM_ENTRIES == 156);
-    u32 relay_program_entry_idx = CONTROL_SECTION_NUM_ENTRIES + NUM_DISPATCH_CORES + RELAY_BUFFER_NUM_ENTRIES;
+    void set_num_workers(const u32 num_workers);
 
-    array<u32, DEVICE_COMMAND_NUM_ENTRIES> desc;
+    void set_num_multicast_messages(const u32 num_multicast_messages);  // Specifies how many core ranges to deassert
 
-    // Creates a buffer read or write in which the first address is a single page and the second can be multiple pages.
-    // Num bursts corresponds to how many bursts of data we need to pull into the dispatch core (essentially the number
-    // of relays). We try to read in as much data per burst as possible, and if the data is not divisible by num bursts,
-    // we have a remainder step in which we try to relay the last chunk, specified by remainder_burst_size.
-    void add_buffer_instruction(
-        u32 addr0,
-        u32 addr0_noc,
-        u32 addr1,
+    void set_multicast_message_noc_coord(const u32 core_coord, const u32 num_messages);
 
-        u32 padded_buf_size,
-        u32 burst_size,
-        u32 page_size,
-        u32 padded_page_size,
-        u32 buf_type);
+    void set_is_program();
 
-   public:
-    DeviceCommand();
-    static constexpr u32 size() { return DEVICE_COMMAND_NUM_ENTRIES; }
-    static constexpr u32 size_in_bytes() { return DEVICE_COMMAND_NUM_ENTRIES * sizeof(u32); }
+    void set_stall();
 
-    void finish();  // Creates a finish command, in which the command queue is blocked until the device notifies host of
-                    // completion.
+    void set_page_size(const u32 page_size);
 
-    void set_num_workers(u32 num_workers);
-    void set_num_multicast_messages(u32 num_multicast_messages);  // Specifies how many core ranges to deassert
+    void set_producer_cb_size(const u32 cb_size);
 
-    void set_worker_noc_coord(u32 noc_coord);
+    void set_consumer_cb_size(const u32 cb_size);
 
-    void add_read_buffer_instruction(
-        u32 dst,
-        u32 dst_noc,
-        u32 src,
+    void set_producer_cb_num_pages(const u32 cb_num_pages);
 
-        u32 padded_buf_size,
-        u32 burst_size,
-        u32 page_size,
-        u32 padded_page_size,
-        u32 buf_type);
+    void set_consumer_cb_num_pages(const u32 cb_num_pages);
 
-    void add_write_buffer_instruction(
-        u32 src,
-        u32 src_noc,
-        u32 dst,
+    void set_num_pages(const u32 num_pages);
 
-        u32 padded_buf_size,
-        u32 burst_size,
-        u32 page_size,
-        u32 padded_page_size,
-        u32 buf_type);
+    void set_data_size(const u32 data_size);
 
-    // The data transfer pattern that this instruction
-    // attempts to resolve is when we need to read data
-    // such as kernel binaries/cb configs/sem configs/rt args into
-    // the dispatch core's L1 in one shot, and then sending
-    // small pieces of this data around (multicasting or
-    // unicasting) where the transfer sizes are not uniform
-    // in size
-    void add_read_multi_write_instruction(
-        u32 src, u32 src_noc, u32 transfer_size, vector<TrailingWriteCommand> write_commands);
+    u32 get_data_size() const;
 
-    // number of bytes in buffer following command, if applicable
-    void set_data_size_in_bytes(u32 data_size_in_bytes);
+    void add_buffer_transfer_instruction(
+        const u32 src,
+        const u32 dst,
+        const u32 num_pages,
+        const u32 padded_page_size,
+        const u32 src_buf_type,
+        const u32 dst_buf_type);
 
-    void set_multicast_message_noc_coord(u32 core_coord, u32 num_messages);
+    void write_program_entry(const u32 val);
 
-    u32 get_data_size_in_bytes() const;
+    void add_write_page_partial_instruction(
+        const u32 num_bytes, const u32 dst, const u32 dst_noc, const u32 num_receivers, const bool advance);
 
-    const array<u32, DEVICE_COMMAND_NUM_ENTRIES>& get_desc() const;
+    const std::array<u32, NUM_ENTRIES_IN_DEVICE_COMMAND>& get_desc() const;
+
+   private:
+    std::array<u32, DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND> desc;
+    u32 worker_launch_idx;
+    u32 buffer_transfer_idx;
+    u32 program_transfer_idx;
 };

@@ -31,72 +31,23 @@ using std::shared_ptr;
 using std::tuple;
 using std::unique_ptr;
 
-typedef std::map<CoreCoord, std::map<tt::RISCV, std::vector<u32>>> RuntimeArgs;
-
-enum class TransferType : u8 {
-    // RISCV types
-    B = 0,
-    N = 1,
-    T0 = 2,
-    T1 = 3,
-    T2 = 4,
-
-    // CB and Sems and KernelGroups
-    CB = 5,
-    SEM = 6,
-    KG = 7,
+struct transfer_info {
+    u32 size_in_bytes;
+    u32 dst;
+    u32 dst_noc_multicast_encoding;
+    u32 num_receivers;
+    bool last_multicast_in_group;
 };
 
-inline void update_dispatch_map_dump(const string& name, const vector<u32>& data, std::ofstream& stream) {
-    string decorative_stars(name.size(), '*');
-
-    stream << decorative_stars << '\n';
-    stream << name << '\n';
-    stream << decorative_stars << '\n';
-
-    for (u32 datum: data) {
-        stream << datum << '\n';
-    }
-}
-
-inline const string transfer_type_to_string(const TransferType& transfer_type) {
-    switch (transfer_type) {
-        case TransferType::B: return "B";
-        case TransferType::N: return "NC";
-        case TransferType::T0: return "T0";
-        case TransferType::T1: return "T1";
-        case TransferType::T2: return "T2";
-        default: TT_THROW("Invalid riscv type");
-    }
-}
-
-typedef tuple<
-    u32 /* addr */,
-    u32 /* start_in_bytes */,
-    u32 /* kernel_size_in_bytes */,
-    u32 /* noc_multicast_encoding */,
-    u32 /* num_receivers */>
-    transfer_info;
-struct ProgramSection {
-    // Maps type to src, transfer size, and multicast encoding
-    map<TransferType, vector<transfer_info>> section;  // Maps the RISC-V type to transfer info
-    size_t size_in_bytes;
-
-    vector<transfer_info>& at(TransferType key) { return this->section.at(key); }
-};
-
-// The role of this datastructure is to essentially describe
-// the mapping between binaries within DRAM to worker cores.
-// Given that our program buffer could potentially be bigger
-// than available L1, we may need
-struct ProgramSrcToDstAddrMap {
-    vector<u32> program_vector;
-    vector<ProgramSection> program_sections;
-    vector<pair<u32, u32>> multicast_message_noc_coords;
+struct ProgramMap {
     u32 num_workers;
+    vector<pair<u32, u32>> multicast_message_noc_coords;
+    vector<u32> program_pages;
+    vector<transfer_info> program_page_transfers;
+    vector<transfer_info> host_page_transfers;
+    vector<u32> num_transfers_in_program_pages;
+    vector<u32> num_transfers_in_host_data_pages;
 };
-
-ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Program& program);
 
 // Only contains the types of commands which are enqueued onto the device
 enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, WRAP, INVALID };
@@ -161,15 +112,14 @@ class EnqueueProgramCommand : public Command {
    private:
     Device* device;
     Buffer& buffer;
-    ProgramSrcToDstAddrMap& program_to_dev_map;
-    const RuntimeArgs runtime_args;
-    const std::vector<std::shared_ptr<CircularBuffer>> circular_buffers;
+    ProgramMap& program_to_dev_map;
+    vector<u32>& host_data;
     SystemMemoryWriter& writer;
+    bool stall;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_PROGRAM;
 
    public:
-    static map<const Program*, DeviceCommand> command_cache;
-    EnqueueProgramCommand(Device*, Buffer&, ProgramSrcToDstAddrMap&, SystemMemoryWriter&, const RuntimeArgs&, const std::vector<std::shared_ptr<CircularBuffer>> &circular_buffers);
+    EnqueueProgramCommand(Device*, Buffer&, ProgramMap&, SystemMemoryWriter&, vector<u32>& host_data, bool stall);
 
     const DeviceCommand assemble_device_command(u32);
 
@@ -230,7 +180,7 @@ class CommandQueue {
     map<u64, unique_ptr<Buffer>>
         program_to_buffer;
 
-    map<u64, ProgramSrcToDstAddrMap> program_to_dev_map;
+    map<u64, ProgramMap> program_to_dev_map;
 
     void enqueue_command(shared_ptr<Command> command, bool blocking);
 

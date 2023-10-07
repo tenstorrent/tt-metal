@@ -51,7 +51,7 @@ class Device {
     // TODO: move these to host_api
     static size_t detect_num_available_devices();
     static size_t detect_num_available_pci_devices();
-    friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
+    // friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
     Device(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap = {});
 

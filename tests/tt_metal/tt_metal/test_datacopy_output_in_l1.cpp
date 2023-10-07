@@ -8,7 +8,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
-#include "tt_metal/tools/tt_gdb/tt_gdb.hpp"
+//#include "tt_metal/tools/tt_gdb/tt_gdb.hpp"
 
 
 //////////////////////////////////////////////////////////////////////////////////////////

@@ -91,7 +91,6 @@ constexpr static std::uint32_t OP_INFO_SIZE      = 280; // So far, holds up to 1
 // Dispatch message address
 constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR = 110816;
 constexpr static std::uint64_t DISPATCH_MESSAGE_REMOTE_SENDER_ADDR = 110848;
-constexpr static std::uint32_t NOTIFY_HOST_KERNEL_COMPLETE_ADDR = 110912;
 
 // Command queue pointers
 constexpr static u32 CQ_READ_PTR = 110944;
@@ -104,6 +103,25 @@ static constexpr u32 HOST_CQ_READ_PTR = 0;
 static constexpr u32 HOST_CQ_READ_TOGGLE_PTR = 32;
 static constexpr u32 HOST_CQ_FINISH_PTR = 64;
 static constexpr u32 CQ_START = 96;
+
+static constexpr u32 CQ_CONSUMER_CB_BASE = 111056;
+// CB0
+static constexpr u32 CQ_CONSUMER_CB0_ACK = CQ_CONSUMER_CB_BASE;
+static constexpr u32 CQ_CONSUMER_CB0_RECV = CQ_CONSUMER_CB0_ACK + 16;
+static constexpr u32 CQ_CONSUMER_CB0_NUM_PAGES_BASE = CQ_CONSUMER_CB0_RECV + 16;
+static constexpr u32 CQ_CONSUMER_CB0_PAGE_SIZE = CQ_CONSUMER_CB0_NUM_PAGES_BASE + 16;
+static constexpr u32 CQ_CONSUMER_CB0_TOTAL_SIZE = CQ_CONSUMER_CB0_PAGE_SIZE + 16;
+static constexpr u32 CQ_CONSUMER_CB0_READ_PTR = CQ_CONSUMER_CB0_TOTAL_SIZE + 16;
+static constexpr u32 CQ_CONSUMER_CB0_WRITE_PTR = CQ_CONSUMER_CB0_READ_PTR + 16;
+
+// CB1
+static constexpr u32 CQ_CONSUMER_CB1_ACK = CQ_CONSUMER_CB0_WRITE_PTR + 16;
+static constexpr u32 CQ_CONSUMER_CB1_RECV = CQ_CONSUMER_CB1_ACK + 16;
+static constexpr u32 CQ_CONSUMER_CB1_NUM_PAGES_BASE = CQ_CONSUMER_CB1_RECV + 16;
+static constexpr u32 CQ_CONSUMER_CB1_PAGE_SIZE = CQ_CONSUMER_CB1_NUM_PAGES_BASE + 16;
+static constexpr u32 CQ_CONSUMER_CB1_TOTAL_SIZE = CQ_CONSUMER_CB1_PAGE_SIZE + 16;
+static constexpr u32 CQ_CONSUMER_CB1_READ_PTR = CQ_CONSUMER_CB1_TOTAL_SIZE + 16;
+static constexpr u32 CQ_CONSUMER_CB1_WRITE_PTR = CQ_CONSUMER_CB1_READ_PTR + 16;
 
 // DRAM write barrier
 // Host writes (4B value) to and reads from this address across all L1s to ensure previous writes have been committed

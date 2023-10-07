@@ -158,7 +158,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
     Program program;
 
     for (u32 sem_id = 0; sem_id < program_config.num_sems; sem_id++) {
-        auto sem = CreateSemaphore(program, program_config.cr_set, sem_id);
+        CreateSemaphore(program, program_config.cr_set, sem_id);
     }
 
     EnqueueProgram(cq, program, false);
@@ -179,11 +179,70 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
 
             u32 sem_id = 0;
             for (u32 i = 0; i < sem_vector.size(); i += sizeof(u32)) {
+
                 bool sem_match = sem_vector.at(i) == sem_id;
                 sem_id++;
 
                 pass &= sem_match;
             }
+        } while (not terminate);
+    }
+
+    return pass;
+}
+
+bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& cq, const DummyProgramConfig& program_config) {
+    Program program;
+    bool pass = true;
+
+    CoreRangeSet cr_set = program_config.cr_set;
+
+    auto dummy_kernel0 = CreateDataMovementKernel(
+        program, "tests/tt_metal/tt_metal/gtest_unit_tests/command_queue/test_kernels/runtime_args_kernel0.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    auto dummy_kernel1 = CreateDataMovementKernel(
+        program, "tests/tt_metal/tt_metal/gtest_unit_tests/command_queue/test_kernels/runtime_args_kernel1.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+    auto dummy_compute_kernel = CreateComputeKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set);
+
+    vector<u32> dummy_kernel0_args = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    vector<u32> dummy_kernel1_args = {9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20};
+
+    for (const CoreRange& core_range : program_config.cr_set.ranges()) {
+        CoresInCoreRangeGenerator core_range_generator(core_range, tt::Cluster::instance().get_soc_desc(0).worker_grid_size);
+
+        bool terminate;
+        do {
+            auto [core_coord, terminate_] = core_range_generator();
+
+            SetRuntimeArgs(program, dummy_kernel0, core_coord, dummy_kernel0_args);
+            SetRuntimeArgs(program, dummy_kernel1, core_coord, dummy_kernel1_args);
+
+            terminate = terminate_;
+        } while (not terminate);
+    }
+
+    tt::tt_metal::detail::CompileProgram(device, program);
+    EnqueueProgram(cq, program, false);
+    Finish(cq);
+
+    for (const CoreRange& core_range : program_config.cr_set.ranges()) {
+        CoresInCoreRangeGenerator core_range_generator(core_range, tt::Cluster::instance().get_soc_desc(0).worker_grid_size);
+
+        bool terminate;
+        do {
+            auto [core_coord, terminate_] = core_range_generator();
+            terminate = terminate_;
+
+            vector<u32> dummy_kernel0_args_readback;
+            tt::tt_metal::detail::ReadFromDeviceL1(
+                device, core_coord, BRISC_L1_ARG_BASE, dummy_kernel0_args.size() * sizeof(u32), dummy_kernel0_args_readback);
+            pass &= (dummy_kernel0_args == dummy_kernel0_args_readback);
+
+            vector<u32> dummy_kernel1_args_readback;
+            tt::tt_metal::detail::ReadFromDeviceL1(
+                device, core_coord, NCRISC_L1_ARG_BASE, dummy_kernel1_args.size() * sizeof(u32), dummy_kernel1_args_readback);
+            pass &= (dummy_kernel1_args == dummy_kernel1_args_readback);
         } while (not terminate);
     }
 
@@ -405,6 +464,14 @@ TEST_F(CommandQueueFixture, ComputeRuntimeArgs) {
     }
 }
 
+TEST_F(CommandQueueFixture, TestRuntimeArgsCorrectlySentSingleCore) {
+    CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
+    CoreRangeSet cr_set({cr});
+
+    DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+    local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, dummy_program_config);
+}
+
 }  // end namespace single_core_tests
 
 namespace multicore_tests {
@@ -471,6 +538,16 @@ TEST_F(CommandQueueFixture, TestAllSemConfigsCorrectlySentMultiCore) {
     DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
 
     EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+}
+
+TEST_F(CommandQueueFixture, TestAllRuntimeArgsCorrectlySentMultiCore) {
+    CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
+
+    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 2}};
+    CoreRangeSet cr_set({cr});
+
+    DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+    EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, dummy_program_config));
 }
 
 }  // end namespace multicore_tests
