@@ -54,9 +54,7 @@ extern uint8_t l1_bank_to_noc_x[NUM_L1_BANKS];
 extern uint8_t l1_bank_to_noc_y[NUM_L1_BANKS];
 extern uint32_t l1_bank_to_noc_xy[NUM_L1_BANKS];
 
-inline u32 nearest_32(u32 x) {
-    return ((x - 1) | 31) + 1;
-}
+inline u32 align(u32 addr, u32 alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
 // GS RISC-V RTL bug workaround (l1 reads followed by local mem reads causes a hang)
 // in ncrisc.cc/brisc.cc: volatile uint32_t local_mem_barrier;
@@ -421,6 +419,7 @@ std::uint64_t get_noc_addr(std::uint32_t noc_x, std::uint32_t noc_y, std::uint32
         Get an encoding which contains tensix core and address you want to
         write to via the noc multicast
     */
+
     return NOC_XY_ADDR(NOC_X(noc_x), NOC_Y(noc_y), addr);
 }
 
@@ -437,6 +436,44 @@ std::uint64_t get_noc_addr_helper(std::uint32_t noc_x, std::uint32_t noc_y, std:
     return NOC_XY_ADDR(NOC_X(noc_x), NOC_Y(noc_y), addr);
 }
 
+
+
+u64 get_dram_noc_addr(const u32 id, const u32 page_size, const u32 bank_base_address, const u32 offset = 0) {
+    uint32_t bank_id;
+    uint32_t addr;
+    #ifdef IS_NOT_POW2_NUM_DRAM_BANKS
+    bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
+    addr = mulsi3(udivsi3_const_divisor<NUM_DRAM_BANKS>(id), align(page_size, 32)) + bank_base_address + offset;
+    #else
+    bank_id = id & (NUM_DRAM_BANKS - 1);
+    addr = mulsi3(id >> LOG_BASE_2_OF_NUM_DRAM_BANKS, align(page_size, 32)) + bank_base_address + offset;
+    #endif
+
+    addr += bank_to_dram_offset[bank_id];
+    u32 noc_x = dram_bank_to_noc_x[bank_id];
+    u32 noc_y = dram_bank_to_noc_y[bank_id];
+
+    u64 noc_addr = get_noc_addr_helper(noc_x, noc_y, addr);
+    return noc_addr;
+}
+
+u64 get_l1_noc_addr(const u32 id, const u32 page_size, const u32 bank_base_address, const u32 offset = 0) {
+    u32 bank_id = id & (NUM_L1_BANKS - 1);
+    u32 addr = mulsi3(id >> LOG_BASE_2_OF_NUM_L1_BANKS, align(page_size, 32)) + bank_base_address + offset;
+    addr += bank_to_l1_offset[bank_id];
+    u32 noc_x = l1_bank_to_noc_x[bank_id];
+    u32 noc_y = l1_bank_to_noc_y[bank_id];
+    u64 noc_addr = get_noc_addr_helper(noc_x, noc_y, addr);
+    return noc_addr;
+}
+
+u64 get_system_memory_noc_addr(const u32 id, const u32 page_size, const u32 base_addr, const u32 offset = 0) {
+    constexpr static u64 pcie_core_noc_encoding = u64(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
+    u32 addr = base_addr + page_size * id + offset;
+    u64 noc_addr = pcie_core_noc_encoding | addr;
+    return noc_addr;
+}
+
 template <bool DRAM>
 struct InterleavedAddrGen {
     uint32_t bank_base_address;  // Base address for the whole tensor.
@@ -451,13 +488,13 @@ struct InterleavedAddrGen {
 #ifdef IS_NOT_POW2_NUM_DRAM_BANKS
             uint32_t bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
             addr =
-                mulsi3(udivsi3_const_divisor<NUM_DRAM_BANKS>(id), nearest_32(this->page_size)) + this->bank_base_address + offset;
+                mulsi3(udivsi3_const_divisor<NUM_DRAM_BANKS>(id), align(this->page_size, 32)) + this->bank_base_address + offset;
             addr += bank_to_dram_offset[bank_id];
             noc_x = dram_bank_to_noc_x[bank_id];
             noc_y = dram_bank_to_noc_y[bank_id];
 #else
             uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
-            addr = mulsi3(id >> LOG_BASE_2_OF_NUM_DRAM_BANKS, nearest_32(this->page_size)) + this->bank_base_address + offset;
+            addr = mulsi3(id >> LOG_BASE_2_OF_NUM_DRAM_BANKS, align(this->page_size, 32)) + this->bank_base_address + offset;
 
             addr += bank_to_dram_offset[bank_id];
             noc_x = dram_bank_to_noc_x[bank_id];
@@ -465,7 +502,7 @@ struct InterleavedAddrGen {
 #endif
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
-            addr = mulsi3(id >> LOG_BASE_2_OF_NUM_L1_BANKS, nearest_32(this->page_size)) + this->bank_base_address + offset;
+            addr = mulsi3(id >> LOG_BASE_2_OF_NUM_L1_BANKS, align(this->page_size, 32)) + this->bank_base_address + offset;
             addr += bank_to_l1_offset[bank_id];
             noc_x = l1_bank_to_noc_x[bank_id];
             noc_y = l1_bank_to_noc_y[bank_id];
@@ -919,6 +956,11 @@ FORCE_INLINE void noc_async_write_tile(
 }
 
 FORCE_INLINE
+uint32_t get_semaphore(uint32_t semaphore_id) {
+    return SEMAPHORE_BASE + semaphore_id * sizeof(uint32_t);
+}
+
+FORCE_INLINE
 void noc_semaphore_set_remote(std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr) {
     DEBUG_STATUS('N', 'S', 'S', 'W');
     DEBUG_SANITIZE_NOC_ADDR(dst_noc_addr, 4);
@@ -1246,6 +1288,9 @@ void cq_wait_front() {
     while (cq_read_interface.fifo_rd_ptr == get_cq_write_ptr()[0] and
            cq_read_interface.fifo_rd_toggle == get_cq_write_toggle()[0]) {
     }
+
+    // DPRINT << "RD PTR IN WAIT FRONT: " << cq_read_interface.fifo_rd_ptr << ENDL();
+    // DPRINT << "WR PTR IN WAIT FRONT: " << get_cq_write_ptr()[0] <<  ENDL();
     DEBUG_STATUS('N', 'Q', 'D');
 }
 
@@ -1278,8 +1323,70 @@ void cq_pop_front(u32 cmd_size_B) {
     // First part of equation aligns to nearest multiple of 32, and then we shift to make it a 16B addr. Both
     // host and device are consistent in updating their pointers in this way, so they won't get out of sync. The
     // alignment is necessary because we can only read/write from/to 32B aligned addrs in host<->dev communication.
-    u32 cmd_size_16B = nearest_32(cmd_size_B) >> 4;
+    u32 cmd_size_16B = align(cmd_size_B, 32) >> 4;
     cq_read_interface.fifo_rd_ptr += cmd_size_16B;
 
     notify_host_of_cq_read_pointer();
+
+    // DPRINT << "NEW RD PTR " << (cq_read_interface.fifo_rd_ptr << 4) << ENDL();
 }
+
+enum class BufferType: u8 {
+    DRAM = 0,
+    L1 = 1,
+    SYSTEM_MEMORY = 2
+};
+
+class Buffer {
+   private:
+    u32 bank_base_address;
+    u32 page_size_;
+    u64 (*get_noc_addr_helper)(const u32, const u32, const u32, const u32);
+    BufferType type;
+
+    void set_type(const BufferType type) {
+        this->type = type;
+        switch (type) {
+            case BufferType::DRAM:          this->get_noc_addr_helper = get_dram_noc_addr; break;
+            case BufferType::L1:            this->get_noc_addr_helper = get_l1_noc_addr; break;
+            case BufferType::SYSTEM_MEMORY: this->get_noc_addr_helper = get_system_memory_noc_addr; break;
+        }
+    }
+    u64 get_noc_addr(const u32 id, const u32 offset = 0) {
+        return this->get_noc_addr_helper(id, this->page_size_, this->bank_base_address, offset);
+    }
+
+   public:
+
+    Buffer(const BufferType type, const u32 bank_base_address, const u32 page_size) {
+        this->set_type(type);
+        this->bank_base_address = bank_base_address;
+        this->page_size_ = page_size;
+    }
+
+    u32 page_size() { return this->page_size_; }
+
+    void noc_async_write_buffer(u32 src, const u32 id, const u32 num_pages, const u32 offset) {
+        if (this->type == BufferType::SYSTEM_MEMORY) {
+            noc_async_write(src, this->get_noc_addr(id, offset), this->page_size_ * num_pages);
+        } else {
+            for (u32 i = 0; i < num_pages; i++) {
+                u64 address = this->get_noc_addr(id + i, offset);
+                noc_async_write(src, address, this->page_size_);
+                src += this->page_size_;
+            }
+        }
+    }
+
+    void noc_async_read_buffer(u32 dst, const u32 id, const u32 num_pages, const u32 offset) {
+        if (this->type == BufferType::SYSTEM_MEMORY) {
+            noc_async_read(this->get_noc_addr(id, offset), dst, this->page_size_ * num_pages);
+        } else {
+            for (u32 i = 0; i < num_pages; i++) {
+                u64 address = this->get_noc_addr(id + i, offset);
+                noc_async_read(address, dst, this->page_size_);
+                dst += this->page_size_;
+            }
+        }
+    }
+};

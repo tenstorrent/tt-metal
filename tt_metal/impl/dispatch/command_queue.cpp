@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt_metal/impl/dispatch/command_queue.hpp"
+
 #include "debug_tools.hpp"
 #include "device_data.hpp"
 #include "noc/noc_parameters.h"
@@ -9,13 +11,14 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 // XXXX TODO(PGK): fix include paths so device can export interfaces
 #include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
-#include<algorithm> // for copy() and assign()
-#include<iterator> // for back_inserter
+#include <algorithm> // for copy() and assign()
+#include <iterator> // for back_inserter
 
+
+static constexpr u32 HUGE_PAGE_SIZE = 1024 * 1024 * 1024;
 
 namespace tt::tt_metal {
 
@@ -27,244 +30,205 @@ u32 get_noc_multicast_encoding(const CoreCoord& top_left, const CoreCoord& botto
 
 u32 align(u32 addr, u32 alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
-ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Program& program) {
-    // This function retrieves all the required information to group program binaries into sections,
-    // such that each section is the largest amount of data that can be read into the dispatch
-    // core's L1 at a time. For each section, it also specifies the relay program information,
-    // as described in device_command.hpp.
-    ProgramSrcToDstAddrMap program_to_device_map;
-    vector<u32>& program_vector = program_to_device_map.program_vector;
-    vector<ProgramSection>& sections = program_to_device_map.program_sections;
+u32 noc_coord_to_u32(CoreCoord coord) { return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y)); }
 
-    // Initialize the worker notify section
+ProgramMap ConstructProgramMap(const Device* device, Program& program) {
+    /*
+        TODO(agrebenisan): Move this logic to compile program
+    */
+    vector<pair<u32, u32>> multicast_message_noc_coords;
+    vector<transfer_info> program_page_transfers;
+    vector<transfer_info> host_page_transfers;
+    vector<u32> num_transfers_in_program_pages; // This is a vector that corresponds to the number of transfers within program pages acros all program pages
+    vector<u32> num_transfers_in_host_data_pages; // Same thing, but for runtime arg pages
+    u32 num_transfers_within_page = 0;
+
+    u32 src = 0;
+    constexpr static u32 noc_transfer_alignment_in_bytes = 16;
+    auto update_program_page_transfers = [&num_transfers_within_page](
+                                             u32 src,
+                                             u32 num_bytes,
+                                             u32 dst,
+                                             vector<transfer_info>& transfers,
+                                             vector<u32>& num_transfers_per_page,
+                                             const vector<pair<u32, u32>>& dst_noc_multicast_info) -> u32 {
+        while (num_bytes) {
+            u32 num_bytes_left_in_page = DeviceCommand::PROGRAM_PAGE_SIZE - (src % DeviceCommand::PROGRAM_PAGE_SIZE);
+            u32 num_bytes_in_transfer = std::min(num_bytes_left_in_page, num_bytes);
+            src = align(src + num_bytes_in_transfer, noc_transfer_alignment_in_bytes);
+
+            u32 multicast_instruction_idx = 1;
+            for (const auto& [dst_noc_multicast_encoding, num_receivers] : dst_noc_multicast_info) {
+                bool last = multicast_instruction_idx == dst_noc_multicast_info.size();
+                transfer_info transfer_instruction = {.size_in_bytes = num_bytes_in_transfer, .dst = dst, .dst_noc_multicast_encoding = dst_noc_multicast_encoding, .num_receivers = num_receivers, .last_multicast_in_group = last};
+                transfers.push_back(transfer_instruction);
+                num_transfers_within_page++;
+                multicast_instruction_idx++;
+            }
+
+            dst += num_bytes_in_transfer;
+            num_bytes -= num_bytes_in_transfer;
+
+            if ((src % DeviceCommand::PROGRAM_PAGE_SIZE) == 0) {
+                num_transfers_per_page.push_back(num_transfers_within_page);
+                num_transfers_within_page = 0;
+            }
+        }
+
+        return src;
+    };
+
+    auto extract_dst_noc_multicast_info = [&device](const set<CoreRange>& ranges) -> vector<pair<u32, u32>> {
+        // This API extracts all the pairs of noc multicast encodings given a set of core ranges
+        vector<pair<u32, u32>> dst_noc_multicast_info;
+        for (const CoreRange& core_range : ranges) {
+            CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
+            CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
+
+            u32 dst_noc_multicast_encoding = get_noc_multicast_encoding(physical_start, physical_end);
+
+            u32 num_receivers = core_range.size();
+            dst_noc_multicast_info.push_back(std::make_pair(dst_noc_multicast_encoding, num_receivers));
+        }
+        return dst_noc_multicast_info;
+    };
+
+    // Step 1: Get the locations of the worker cores and how many worker cores there are in this program
     for (const CoreRange& core_range : program.get_worker_core_range_set().ranges()) {
         CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
         CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
-        program_to_device_map.multicast_message_noc_coords.push_back(
+        multicast_message_noc_coords.push_back(
             std::make_pair(get_noc_multicast_encoding(physical_start, physical_end), core_range.size()));
     }
-    program_to_device_map.num_workers = program.logical_cores().size();
 
-    // 'section' here refers to a piece of the program buffer
-    // that we can read in one shot into dispatch core L1
-    u32 current_section_idx = 0;
-    auto initialize_section = [&sections]() {
-        // The purpose of this function is to create a new 'section'
-        // as described in the above comment.
-        vector<transfer_info> init_vec;
-        map<TransferType, vector<transfer_info>> init_map;
-        init_map.emplace(TransferType::B, init_vec);
-        init_map.emplace(TransferType::N, init_vec);
-        init_map.emplace(TransferType::T0, init_vec);
-        init_map.emplace(TransferType::T1, init_vec);
-        init_map.emplace(TransferType::T2, init_vec);
-        init_map.emplace(TransferType::SEM, init_vec);
-        init_map.emplace(TransferType::KG, init_vec);
-        ProgramSection section = {.section = init_map, .size_in_bytes = 0};
-        sections.push_back(section);
+    static const map<RISCV, u32> processor_to_l1_arg_base_addr = {
+        {RISCV::BRISC, BRISC_L1_ARG_BASE},
+        {RISCV::NCRISC, NCRISC_L1_ARG_BASE},
+        {RISCV::COMPUTE, TRISC_L1_ARG_BASE},
     };
+    // Step 2: Get transfer info for runtime args (soon to just be host data). We
+    // want to send host data first because of the higher latency to pull
+    // in host data.
+    for (const auto kernel_id : program.kernel_ids()) {
+        const Kernel* kernel = detail::GetKernel(program, kernel_id);
+        u32 dst = processor_to_l1_arg_base_addr.at(kernel->processor());
+        for (const auto& [core_coord, runtime_args] : kernel->runtime_args()) {
+            CoreCoord physical_core = device->worker_core_from_logical_core(core_coord);
+            u32 num_bytes = runtime_args.size() * sizeof(u32);
+            u32 dst_noc = get_noc_multicast_encoding(physical_core, physical_core);
 
-    u32 start_in_bytes = DEVICE_COMMAND_DATA_ADDR;
-
-    const char* DISPATCH_MAP_DUMP = std::getenv("TT_METAL_DISPATCH_MAP_DUMP");
-    std::ofstream dispatch_dump_file;
-
-    if (DISPATCH_MAP_DUMP != nullptr) {
-        dispatch_dump_file.open(DISPATCH_MAP_DUMP, std::ofstream::out | std::ofstream::trunc);
+            // Only one receiver per set of runtime arguments
+            src = update_program_page_transfers(
+                src, num_bytes, dst, host_page_transfers, num_transfers_in_host_data_pages, {{dst_noc, 1}});
+        }
     }
 
-    auto write_program_kernel_transfer = [&](const Kernel* kernel, vector<TransferType> transfer_types) {
-        size_t i = 0;
-        const vector<ll_api::memory>& kernel_bins = kernel->binaries();
-        CoreRangeSet cr_set = kernel->core_range_set();
-
-        for (TransferType transfer_type : transfer_types) {
-            u32 dst_code_location;
-
-            switch (transfer_type) {
-                case TransferType::B: dst_code_location = MEM_BRISC_INIT_LOCAL_L1_BASE; break;
-                case TransferType::N: dst_code_location = MEM_NCRISC_INIT_LOCAL_L1_BASE; break;
-                case TransferType::T0: dst_code_location = MEM_TRISC0_INIT_LOCAL_L1_BASE; break;
-                case TransferType::T1: dst_code_location = MEM_TRISC1_INIT_LOCAL_L1_BASE; break;
-                case TransferType::T2: dst_code_location = MEM_TRISC2_INIT_LOCAL_L1_BASE; break;
-                default: TT_THROW("Invalid riscv type");
-            }
-
-            const ll_api::memory& kernel_bin = kernel_bins.at(i);
-            i++;
-
-            u32 num_bytes_so_far = program_vector.size() * sizeof(u32);
-            u32 num_new_bytes = kernel_bin.size() * sizeof(u32);
-
-            if (num_bytes_so_far + num_new_bytes > MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR) {
-                current_section_idx++;
-                initialize_section();
-            }
-
-            // Appends the binary to a vector
-            vector<pair<u32, u32>> binary_destination_and_size;
-            kernel_bin.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len) {
-                program_vector.insert(program_vector.end(), mem_ptr, mem_ptr + len);
-
-                // Each section needs to be aligned to 16B
-                u32 padding = (align(len * sizeof(u32), 16) / sizeof(u32)) - len;
-                for (u32 i = 0; i < padding; i++) {
-                    program_vector.push_back(0);
-                }
-
-                u32 destination = tt::llrt::relocate_dev_addr(addr, dst_code_location);
-                u32 transfer_size_in_bytes = len * sizeof(u32);
-
-                binary_destination_and_size.push_back(std::make_pair(destination, transfer_size_in_bytes));
-
-                sections.at(current_section_idx).size_in_bytes += (transfer_size_in_bytes + sizeof(u32) * padding);
-
-                if (DISPATCH_MAP_DUMP != nullptr) {
-                    string name = "BINARY SPAN " + transfer_type_to_string(transfer_type);
-                    update_dispatch_map_dump(name, std::move(vector<u32>(mem_ptr, mem_ptr + len)), dispatch_dump_file);
-                }
-            });
-
-            // Need to initialize to 0 to avoid 'maybe-not-initialized' error
-            u32 start_in_bytes_copy = 0;
-            for (const CoreRange& core_range : cr_set.ranges()) {
-                CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
-                CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
-
-                u32 noc_multicast_encoding = get_noc_multicast_encoding(physical_start, physical_end);
-
-                start_in_bytes_copy = start_in_bytes;
-                for (const auto& [destination, transfer_size_in_bytes] : binary_destination_and_size) {
-                    sections.at(current_section_idx)
-                        .at(transfer_type)
-                        .push_back(std::make_tuple(
-                            destination,
-                            start_in_bytes_copy,
-                            transfer_size_in_bytes,
-                            noc_multicast_encoding,
-                            core_range.size()));
-                    start_in_bytes_copy = align(start_in_bytes_copy + transfer_size_in_bytes, 16);
-                }
-            }
-            start_in_bytes = start_in_bytes_copy;
+    // Step 3: Continue constructing pages for circular buffer configs
+    for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
+        vector<pair<u32, u32>> dst_noc_multicast_info = extract_dst_noc_multicast_info(cb->core_ranges().ranges());
+        constexpr static u32 num_bytes = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(u32);
+        for (const auto buffer_index : cb->buffer_indices()) {
+            src = update_program_page_transfers(
+                src,
+                num_bytes,
+                CIRCULAR_BUFFER_CONFIG_BASE + buffer_index * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(u32),
+                host_page_transfers,
+                num_transfers_in_host_data_pages,
+                dst_noc_multicast_info);
         }
-    };
+    }
 
-    // If only we could template lambdas in C++17, then wouldn't need this code duplication!
-    // Maybe we can move to C++20 soon :)
-    auto write_sem_config_transfer = [&](const Semaphore& sem) {
-        u32 num_bytes_so_far = program_vector.size() * sizeof(u32);
-        u32 num_new_bytes = 16;
+    // Cleanup step of separating runtime arg pages from program pages
+    if (num_transfers_within_page) {
+        num_transfers_in_host_data_pages.push_back(num_transfers_within_page);
+        num_transfers_within_page = 0;
+    }
 
-        if (num_bytes_so_far + num_new_bytes > MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR) {
-            current_section_idx++;
-            initialize_section();
-        }
+    static const map<RISCV, u32> processor_to_local_mem_addr = {
+        {RISCV::BRISC, MEM_BRISC_INIT_LOCAL_L1_BASE},
+        {RISCV::NCRISC, MEM_NCRISC_INIT_LOCAL_L1_BASE},
+        {RISCV::TRISC0, MEM_TRISC0_INIT_LOCAL_L1_BASE},
+        {RISCV::TRISC1, MEM_TRISC1_INIT_LOCAL_L1_BASE},
+        {RISCV::TRISC2, MEM_TRISC2_INIT_LOCAL_L1_BASE}};
 
-        program_vector.push_back(sem.initial_value());
-        for (u32 i = 0; i < (SEMAPHORE_ALIGNMENT / sizeof(u32)) - 1; i++) {
-            program_vector.push_back(0);
-        }
-
-        if (DISPATCH_MAP_DUMP != nullptr) {
-            vector<u32> sem_config = {sem.initial_value()};
-            update_dispatch_map_dump("SEM", sem_config, dispatch_dump_file);
-        }
-
-        CoreRangeSet cr_set = sem.core_range_set();
-
-        for (const CoreRange& core_range : cr_set.ranges()) {
-            CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
-            CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
-
-            u32 noc_multicast_encoding = get_noc_multicast_encoding(physical_start, physical_end);
-
-            sections.at(current_section_idx)
-                .at(TransferType::SEM)
-                .push_back(
-                    std::make_tuple(sem.address(), start_in_bytes, 4, noc_multicast_encoding, core_range.size()));
-        }
-        start_in_bytes += 16;
-        sections.at(current_section_idx).size_in_bytes += 16;
-    };
-
-    auto write_kernel_group_transfer = [&](const KernelGroup& kg) {
-        u32 num_bytes_so_far = program_vector.size() * sizeof(u32);
-        u32 num_new_bytes = sizeof(launch_msg_t);
-
-        if (num_bytes_so_far + num_new_bytes > MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR) {
-            current_section_idx++;
-            initialize_section();
-        }
-
-        CoreRangeSet cr_set = kg.core_ranges;
-
-        for (const CoreRange& core_range : cr_set.ranges()) {
-            CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
-            CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
-
-            u32 noc_multicast_encoding = get_noc_multicast_encoding(physical_start, physical_end);
-
-            // XXXXX Ughughughugh
-            uint32_t *data = (uint32_t *)&kg.launch_msg;
-            program_vector.push_back(data[0]);
-            program_vector.push_back(data[1]);
-            program_vector.push_back(data[2]);
-            program_vector.push_back(data[3]);
-
-            sections.at(current_section_idx)
-                .at(TransferType::KG)
-                .push_back(std::make_tuple(
-                    GET_MAILBOX_ADDRESS_HOST(launch),
-                    start_in_bytes,
-                    sizeof(launch_msg_t),
-                    noc_multicast_encoding,
-                    core_range.size()));
-
-            start_in_bytes += sizeof(launch_msg_t);
-            sections.at(current_section_idx).size_in_bytes += sizeof(launch_msg_t);
-        }
-    };
-
-    initialize_section();
-    const static std::map<tt::RISCV, vector<TransferType>> processor_to_transfer_type = {
-        {tt::RISCV::BRISC, {TransferType::B}},
-        {tt::RISCV::NCRISC, {TransferType::N}},
-        {tt::RISCV::TRISC0, {TransferType::T0}},
-        {tt::RISCV::TRISC1, {TransferType::T1}},
-        {tt::RISCV::TRISC2, {TransferType::T2}},
-        {tt::RISCV::COMPUTE, {TransferType::T0, TransferType::T1, TransferType::T2}},
-    };
-
+    // Step 4: Determine the transfer information for each program binary
+    src = 0; // Restart src since it begins in a new page
     for (KernelID kernel_id : program.kernel_ids()) {
-        auto kernel = detail::GetKernel(program, kernel_id);
-        vector<TransferType> riscv_type = processor_to_transfer_type.at(kernel->processor());
-        write_program_kernel_transfer(kernel, riscv_type);
+        const Kernel* kernel = detail::GetKernel(program, kernel_id);
+        vector<pair<u32, u32>> dst_noc_multicast_info =
+            extract_dst_noc_multicast_info(kernel->core_range_set().ranges());
+
+        vector<RISCV> sub_kernels;
+        if (kernel->processor() == RISCV::COMPUTE) {
+            sub_kernels = {RISCV::TRISC0, RISCV::TRISC1, RISCV::TRISC2};
+        } else {
+            sub_kernels = {kernel->processor()};
+        }
+
+        u32 sub_kernel_index = 0;
+        for (const ll_api::memory& kernel_bin : kernel->binaries()) {
+            kernel_bin.process_spans([&](vector<u32>::const_iterator mem_ptr, u64 dst, u32 len) {
+                u32 num_bytes = len * sizeof(u32);
+                if ((dst & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
+                    dst = (dst & ~MEM_LOCAL_BASE) + processor_to_local_mem_addr.at(sub_kernels[sub_kernel_index]);
+                } else if ((dst & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
+                    dst = (dst & ~MEM_NCRISC_IRAM_BASE) + MEM_NCRISC_INIT_IRAM_L1_BASE;
+                }
+
+                src = update_program_page_transfers(
+                    src, num_bytes, dst, program_page_transfers, num_transfers_in_program_pages, dst_noc_multicast_info);
+            });
+            sub_kernel_index++;
+        }
     }
 
-    for (auto sem : program.semaphores()) {
-        write_sem_config_transfer(sem);
+    // Step 5: Continue constructing pages for semaphore configs
+    for (const Semaphore& semaphore : program.semaphores()) {
+        vector<pair<u32, u32>> dst_noc_multicast_info =
+            extract_dst_noc_multicast_info(semaphore.core_range_set().ranges());
+
+        src = update_program_page_transfers(
+            src,
+            SEMAPHORE_ALIGNMENT,
+            semaphore.address(),
+            program_page_transfers,
+            num_transfers_in_program_pages,
+            dst_noc_multicast_info);
     }
 
-    for (KernelGroup& kg : program.get_kernel_groups()) {
-        kg.launch_msg.mode = DISPATCH_MODE_DEV;
-        write_kernel_group_transfer(kg);
+    if (num_transfers_within_page) {
+        num_transfers_in_program_pages.push_back(num_transfers_within_page);
     }
 
-    TT_ASSERT(current_section_idx == 0, "Testing for just one section so far");
+    // Create a vector of all program binaries/cbs/semaphores
+    vector<u32> program_pages(align(src, DeviceCommand::PROGRAM_PAGE_SIZE) / sizeof(u32), 0);
+    u32 program_page_idx = 0;
+    for (KernelID kernel_id : program.kernel_ids()) {
+        const Kernel* kernel = detail::GetKernel(program, kernel_id);
 
-    return program_to_device_map;
+        for (const ll_api::memory& kernel_bin : kernel->binaries()) {
+            kernel_bin.process_spans([&](vector<u32>::const_iterator mem_ptr, u64 dst, u32 len) {
+                std::copy(mem_ptr, mem_ptr + len, program_pages.begin() + program_page_idx);
+                program_page_idx = align(program_page_idx + len, noc_transfer_alignment_in_bytes / sizeof(u32));
+            });
+        }
+    }
+
+    for (const Semaphore& semaphore : program.semaphores()) {
+        program_pages[program_page_idx] = semaphore.initial_value();
+        program_page_idx += 4;
+    }
+
+    return {
+        .num_workers = u32(program.logical_cores().size()),
+        .multicast_message_noc_coords = std::move(multicast_message_noc_coords),
+        .program_pages = std::move(program_pages),
+        .program_page_transfers = std::move(program_page_transfers),
+        .host_page_transfers = std::move(host_page_transfers),
+        .num_transfers_in_program_pages = std::move(num_transfers_in_program_pages),
+        .num_transfers_in_host_data_pages = std::move(num_transfers_in_host_data_pages),
+    };
 }
-
-string EnqueueCommandTypeToString(EnqueueCommandType ctype) {
-    switch (ctype) {
-        case EnqueueCommandType::ENQUEUE_READ_BUFFER: return "EnqueueReadBuffer";
-        case EnqueueCommandType::ENQUEUE_WRITE_BUFFER: return "EnqueueWriteBuffer";
-        default: TT_THROW("Invalid command type");
-    }
-}
-
-u32 noc_coord_to_u32(CoreCoord coord) { return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y)); }
 
 // EnqueueReadBufferCommandSection
 EnqueueReadBufferCommand::EnqueueReadBufferCommand(
@@ -276,43 +240,45 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
 const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst_address) {
     DeviceCommand command;
 
-    u32 num_pages = this->buffer.size() / this->buffer.page_size();
     u32 padded_page_size = align(this->buffer.page_size(), 32);
-    u32 data_size_in_bytes = padded_page_size * num_pages;
-    command.set_data_size_in_bytes(data_size_in_bytes);
-
-    u32 available_l1 = MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR;
-    u32 burst_size = (available_l1 / padded_page_size) * padded_page_size;
-
-    vector<CoreCoord> pcie_cores = tt::Cluster::instance().get_soc_desc(this->device->id()).pcie_cores;
-    TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
-    const CoreCoord& pcie_core = pcie_cores.at(0);
-
-    command.add_read_buffer_instruction(
-        dst_address,
-        NOC_XY_ENCODING(pcie_core.x, pcie_core.y),
+    u32 data_size_in_bytes = padded_page_size * this->buffer.num_pages();
+    command.add_buffer_transfer_instruction(
         this->buffer.address(),
-
-        data_size_in_bytes,
-        burst_size,
-        this->buffer.page_size(),
+        dst_address,
+        this->buffer.num_pages(),
         padded_page_size,
-        (u32) this->buffer.buffer_type());
+        (u32)this->buffer.buffer_type(),
+        u32(BufferType::SYSTEM_MEMORY));
 
+    u32 producer_cb_num_pages = (DeviceCommand::PRODUCER_DATA_BUFFER_SIZE / padded_page_size);
+    u32 consumer_cb_num_pages = (DeviceCommand::CONSUMER_DATA_BUFFER_SIZE / padded_page_size);
+    u32 producer_cb_size = producer_cb_num_pages * padded_page_size;
+    u32 consumer_cb_size = consumer_cb_num_pages * padded_page_size;
+    command.set_stall();
+    command.set_page_size(padded_page_size);
+    command.set_producer_cb_size(producer_cb_size);
+    command.set_consumer_cb_size(consumer_cb_size);
+    command.set_producer_cb_num_pages(producer_cb_num_pages);
+    command.set_consumer_cb_num_pages(consumer_cb_num_pages);
+    command.set_num_pages(this->buffer.num_pages());
+    command.set_data_size(padded_page_size * this->buffer.num_pages());
+
+    TT_ASSERT(padded_page_size <= consumer_cb_size, "Page is too large to fit in consumer buffer");
     return command;
 }
 
 void EnqueueReadBufferCommand::process() {
     u32 write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
-    u32 system_memory_temporary_storage_address = write_ptr + DeviceCommand::size_in_bytes();
+    u32 system_memory_temporary_storage_address = write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     this->read_buffer_addr = system_memory_temporary_storage_address;
-    const auto command_desc = this->assemble_device_command(system_memory_temporary_storage_address).get_desc();
+    const auto cmd = this->assemble_device_command(system_memory_temporary_storage_address);
+    const auto command_desc = cmd.get_desc();
     vector<u32> command_vector(command_desc.begin(), command_desc.end());
 
     u32 num_pages = this->buffer.size() / this->buffer.page_size();
     u32 padded_page_size = align(this->buffer.page_size(), 32);
-    u32 data_size_in_bytes = padded_page_size * num_pages;
-    u32 cmd_size = DeviceCommand::size_in_bytes() + data_size_in_bytes;
+    u32 data_size_in_bytes = cmd.get_data_size();
+    u32 cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
 
     this->writer.cq_reserve_back(this->device, cmd_size);
     this->writer.cq_write(this->device, command_vector, write_ptr);
@@ -335,52 +301,48 @@ EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
 const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(u32 src_address) {
     DeviceCommand command;
 
-    u32 num_pages = this->buffer.size() / this->buffer.page_size();
     u32 padded_page_size = this->buffer.page_size();
     if (this->buffer.page_size() != this->buffer.size()) {
         padded_page_size = align(this->buffer.page_size(), 32);
     }
-    u32 data_size_in_bytes = padded_page_size * num_pages;
-    command.set_data_size_in_bytes(data_size_in_bytes);
-
-    u32 available_l1 = MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR;
-    u32 burst_size = (available_l1 / padded_page_size) * padded_page_size;
-
-    vector<CoreCoord> pcie_cores = tt::Cluster::instance().get_soc_desc(this->device->id()).pcie_cores;
-    TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
-    const CoreCoord& pcie_core = pcie_cores.at(0);
-
-    command.add_write_buffer_instruction(
+    u32 data_size_in_bytes = padded_page_size * this->buffer.num_pages();
+    command.add_buffer_transfer_instruction(
         src_address,
-        NOC_XY_ENCODING(pcie_core.x, pcie_core.y),
         this->buffer.address(),
-
-        data_size_in_bytes,
-        burst_size,
-        this->buffer.page_size(),
+        this->buffer.num_pages(),
         padded_page_size,
-        (u32)(this->buffer.buffer_type()));
+        (u32) BufferType::SYSTEM_MEMORY,
+        (u32)this->buffer.buffer_type());
+
+    u32 producer_cb_num_pages = (DeviceCommand::PRODUCER_DATA_BUFFER_SIZE / padded_page_size);
+    u32 producer_cb_size = producer_cb_num_pages * padded_page_size;
+
+    u32 consumer_cb_num_pages = (DeviceCommand::CONSUMER_DATA_BUFFER_SIZE / padded_page_size);
+    u32 consumer_cb_size = consumer_cb_num_pages * padded_page_size;
+
+    command.set_page_size(padded_page_size);
+    command.set_producer_cb_size(producer_cb_size);
+    command.set_consumer_cb_size(consumer_cb_size);
+    command.set_producer_cb_num_pages(producer_cb_num_pages);
+    command.set_consumer_cb_num_pages(consumer_cb_num_pages);
+    command.set_num_pages(this->buffer.num_pages());
+    command.set_data_size(padded_page_size * this->buffer.num_pages());
+
+    TT_ASSERT(padded_page_size <= consumer_cb_size, "Page is too large to fit in consumer buffer");
 
     return command;
 }
 
 void EnqueueWriteBufferCommand::process() {
     u32 write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
-    u32 system_memory_temporary_storage_address = write_ptr + DeviceCommand::size_in_bytes();
+    u32 system_memory_temporary_storage_address = write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
-    const auto command_desc = this->assemble_device_command(system_memory_temporary_storage_address).get_desc();
+    const auto cmd = this->assemble_device_command(system_memory_temporary_storage_address);
+    const auto command_desc = cmd.get_desc();
     vector<u32> command_vector(command_desc.begin(), command_desc.end());
+    u32 data_size_in_bytes = cmd.get_data_size();
 
-    u32 num_pages = this->buffer.size() / this->buffer.page_size();
-
-    u32 padded_page_size = this->buffer.page_size();
-    if (this->buffer.page_size() != this->buffer.size()) {
-        padded_page_size = align(this->buffer.page_size(), 32);
-    }
-
-    u32 data_size_in_bytes = padded_page_size * num_pages;
-
-    u32 cmd_size = DeviceCommand::size_in_bytes() + data_size_in_bytes;
+    u32 cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
     this->writer.cq_reserve_back(this->device, cmd_size);
     this->writer.cq_write(this->device, command_vector, write_ptr);
 
@@ -389,7 +351,7 @@ void EnqueueWriteBufferCommand::process() {
     if (this->buffer.page_size() % 32 != 0 and this->buffer.page_size() != this->buffer.size()) {
         vector<u32>::const_iterator src_iterator = this->src.begin();
         u32 num_u32s_in_page = this->buffer.page_size() / sizeof(u32);
-        u32 num_pages = this->buffer.size() / this->buffer.page_size();
+        u32 num_pages = this->buffer.num_pages();
         u32 dst = system_memory_temporary_storage_address;
         for (u32 i = 0; i < num_pages; i++) {
             vector<u32> src_page(src_iterator, src_iterator + num_u32s_in_page);
@@ -409,12 +371,12 @@ EnqueueCommandType EnqueueWriteBufferCommand::type() { return this->type_; }
 EnqueueProgramCommand::EnqueueProgramCommand(
     Device* device,
     Buffer& buffer,
-    ProgramSrcToDstAddrMap& program_to_dev_map,
+    ProgramMap& program_to_dev_map,
     SystemMemoryWriter& writer,
-    const RuntimeArgs& runtime_args,
-    const std::vector<std::shared_ptr<CircularBuffer>> &circular_buffers
+    vector<u32>& host_data,
+    bool stall
     ) :
-    buffer(buffer), program_to_dev_map(program_to_dev_map), writer(writer), runtime_args(runtime_args), circular_buffers(circular_buffers) {
+    buffer(buffer), program_to_dev_map(program_to_dev_map), writer(writer), host_data(host_data), stall(stall) {
     this->device = device;
 }
 
@@ -429,113 +391,75 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 host_data
         command.set_multicast_message_noc_coord(multicast_message_noc_coord, num_messages);
     }
 
-    // Deal with runtime args
-    u32 data_size_in_bytes = 0;
-    vector<TrailingWriteCommand> trailing_write_commands;
-    u32 dev_data_src = DEVICE_COMMAND_DATA_ADDR;
-
-
-    for (const auto& [core_coord, rt_arg_map] : this->runtime_args) {
-        // u32 dst_noc = noc_coord_to_u32(core_coord);
-        CoreCoord worker_dst_noc = this->device->worker_core_from_logical_core(core_coord);
-        u32 dst_noc_multicast_encoding = get_noc_multicast_encoding(worker_dst_noc, worker_dst_noc);
-
-        for (const auto& [riscv, rt_args_for_core] : rt_arg_map) {
-            u32 dst;
-            switch (riscv) {
-                case tt::RISCV::BRISC: dst = BRISC_L1_ARG_BASE; break;
-                case tt::RISCV::NCRISC: dst = NCRISC_L1_ARG_BASE; break;
-                case tt::RISCV::COMPUTE: dst = TRISC_L1_ARG_BASE; break;
-                default: TT_THROW("Invalid RISCV for runtime args");
+    auto populate_program_data_transfer_instructions =
+        [&command](const vector<u32>& num_transfers_per_page, const vector<transfer_info>& transfers_in_pages) {
+            u32 i = 0;
+            for (u32 j = 0; j < num_transfers_per_page.size(); j++) {
+                u32 num_transfers_in_page = num_transfers_per_page[j];
+                command.write_program_entry(num_transfers_in_page);
+                for (u32 k = 0; k < num_transfers_in_page; k++) {
+                    const auto [num_bytes, dst, dst_noc, num_receivers, last_multicast_in_group] = transfers_in_pages[i];
+                    command.add_write_page_partial_instruction(num_bytes, dst, dst_noc, num_receivers, last_multicast_in_group);
+                    i++;
+                }
             }
+        };
 
-            u32 transfer_size = u32(rt_args_for_core.size() * sizeof(u32));
+    command.set_is_program();
 
-            TrailingWriteCommand trailing_write = {
-                .src = dev_data_src,
-                .dst = dst,
-                .dst_noc = dst_noc_multicast_encoding,
-                .transfer_size = transfer_size,
-                .num_receivers = 1 /* Due to unicasting */};
+    // Not used, since we specified that this is a program command, and the consumer just looks at the write program
+    // info
+    constexpr static u32 dummy_dst_addr = 0;
+    constexpr static u32 dummy_buffer_type = 0;
+    u32 num_host_data_pages = this->program_to_dev_map.num_transfers_in_host_data_pages.size();
+    u32 num_program_binary_pages = this->program_to_dev_map.num_transfers_in_program_pages.size();
+    u32 num_pages = num_host_data_pages + num_program_binary_pages;
+    command.set_page_size(DeviceCommand::PROGRAM_PAGE_SIZE);
+    command.set_num_pages(num_pages);
+    command.set_data_size(
+        DeviceCommand::PROGRAM_PAGE_SIZE *
+        num_host_data_pages);  // Only the runtime args are part of the device command
 
-            trailing_write_commands.push_back(trailing_write);
-            data_size_in_bytes = align(data_size_in_bytes + transfer_size, 32);
-            dev_data_src = align(dev_data_src + transfer_size, 32);
-        }
+    if (num_host_data_pages != 0) {
+        command.add_buffer_transfer_instruction(
+            host_data_src,
+            dummy_dst_addr,
+            num_host_data_pages,
+            DeviceCommand::PROGRAM_PAGE_SIZE,
+            u32(BufferType::SYSTEM_MEMORY),
+            dummy_buffer_type);
+        populate_program_data_transfer_instructions(
+            this->program_to_dev_map.num_transfers_in_host_data_pages, this->program_to_dev_map.host_page_transfers);
     }
 
-
-    auto write_cb_config_transfer = [&](const CircularBuffer& cb) {
-        CoreRangeSet cr_set = cb.core_ranges();
-        for (const CoreRange& core_range : cr_set.ranges()) {
-            CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
-            CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
-            u32 noc_multicast_encoding = get_noc_multicast_encoding(physical_start, physical_end);
-            for (auto buffer_index : cb.buffer_indices()) {
-                u32 transfer_size = 16;
-                u32 dst_addr =  CIRCULAR_BUFFER_CONFIG_BASE +
-                                buffer_index * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(u32);
-                u32 num_receivers = core_range.size();
-                TrailingWriteCommand trailing_write = {
-                    .src = dev_data_src,
-                    .dst = dst_addr,
-                    .dst_noc = noc_multicast_encoding,
-                    .transfer_size = transfer_size,
-                    .num_receivers = num_receivers
-                };
-                trailing_write_commands.push_back(trailing_write);
-                data_size_in_bytes = align(data_size_in_bytes + transfer_size, 16);
-                dev_data_src = align(dev_data_src + transfer_size, 16);
-            }
-        }
-    };
-
-    for (const std::shared_ptr<CircularBuffer> cb : this->circular_buffers) {
-        write_cb_config_transfer(*cb);
+    if (num_program_binary_pages != 0) {
+        command.add_buffer_transfer_instruction(
+            this->buffer.address(),
+            dummy_dst_addr,
+            num_program_binary_pages,
+            DeviceCommand::PROGRAM_PAGE_SIZE,
+            u32(this->buffer.buffer_type()),
+            dummy_buffer_type);
+        populate_program_data_transfer_instructions(
+            this->program_to_dev_map.num_transfers_in_program_pages, this->program_to_dev_map.program_page_transfers);
     }
 
+    constexpr static u32 producer_cb_num_pages = (DeviceCommand::PRODUCER_DATA_BUFFER_SIZE / DeviceCommand::PROGRAM_PAGE_SIZE);
+    constexpr static u32 producer_cb_size = producer_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
 
+    constexpr static u32 consumer_cb_num_pages = (DeviceCommand::CONSUMER_DATA_BUFFER_SIZE / DeviceCommand::PROGRAM_PAGE_SIZE);
+    constexpr static u32 consumer_cb_size = consumer_cb_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE;
 
-    u32 device_id = 0;
-    vector<CoreCoord> pcie_cores = tt::Cluster::instance().get_soc_desc(device_id).pcie_cores;
-    TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
-    const CoreCoord& pcie_core = pcie_cores.at(0);
+    command.set_producer_cb_size(producer_cb_size);
+    command.set_consumer_cb_size(consumer_cb_size);
+    command.set_producer_cb_num_pages(producer_cb_num_pages);
+    command.set_consumer_cb_num_pages(consumer_cb_num_pages);
 
-    u32 host_noc_addr = noc_coord_to_u32({pcie_core.x, pcie_core.y});
-
-    if (data_size_in_bytes) {
-        command.add_read_multi_write_instruction(
-            host_data_src, host_noc_addr, data_size_in_bytes, trailing_write_commands);
-    }
-
-    command.set_data_size_in_bytes(data_size_in_bytes);
-
-    u32 program_src = this->buffer.address();
-    u32 program_src_noc = noc_coord_to_u32(this->buffer.noc_coordinates());
-
-    for (const ProgramSection& section : this->program_to_dev_map.program_sections) {
-        vector<TrailingWriteCommand> trailing_write_commands;
-
-        // Kernel section
-        for (const auto& [transfer_type, transfer_info_vector] : section.section) {
-            for (const auto& [dst_addr, src, size_in_bytes, noc_multicast_encoding, num_receivers] :
-                 transfer_info_vector) {
-                TrailingWriteCommand trailing_write = {
-                    .src = src,
-                    .dst = dst_addr,
-                    .dst_noc = noc_multicast_encoding,
-                    .transfer_size = size_in_bytes,
-                    .num_receivers = num_receivers};
-
-                trailing_write_commands.push_back(trailing_write);
-            }
-        }
-
-        // This is not fully correct since if there are multiple sections, they are not starting at the correct
-        // part of the program buffer... a simpler method would be for there to be multiple buffers, where each
-        // buffer owns a section... that is definitely a TODO(agrebenisan)
-        command.add_read_multi_write_instruction(
-            program_src, program_src_noc, section.size_in_bytes, trailing_write_commands);
+    // Should only ever be set if we are
+    // enqueueing a program immediately
+    // after writing it to a buffer
+    if (this->stall) {
+        command.set_stall();
     }
 
     return command;
@@ -543,42 +467,19 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 host_data
 
 void EnqueueProgramCommand::process() {
     u32 write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
-    u32 system_memory_temporary_storage_address = write_ptr + DeviceCommand::size_in_bytes();
+    u32 system_memory_temporary_storage_address = write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
     const DeviceCommand cmd = this->assemble_device_command(system_memory_temporary_storage_address);
     const auto command_desc = cmd.get_desc();
-
     vector<u32> command_vector(command_desc.begin(), command_desc.end());
 
-    vector<u32> rt_args_vector;
-    for (const auto& [core_coord, rt_arg_map] : this->runtime_args) {
-        for (const auto& [riscv, rt_args_for_core] : rt_arg_map) {
-            rt_args_vector.insert(rt_args_vector.end(), rt_args_for_core.begin(), rt_args_for_core.end());
-        }
-    }
-
-
-    const u32 cmd_size = DeviceCommand::size_in_bytes() + cmd.get_data_size_in_bytes();
+    u32 data_size_in_bytes = cmd.get_data_size();
+    const u32 cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
     this->writer.cq_reserve_back(this->device, cmd_size);
     this->writer.cq_write(this->device, command_vector, write_ptr);
-    this->writer.cq_write(this->device, rt_args_vector, system_memory_temporary_storage_address);
-    u32 cb_write_ptr = system_memory_temporary_storage_address + (rt_args_vector.size() * sizeof(u32));
-
-    vector<u32> cb_configs;
-    for(auto & cb_ptr: this->circular_buffers){
-        CoreRangeSet cr_set = cb_ptr->core_ranges();
-        for (const CoreRange& core_range : cr_set.ranges()) {
-            for (auto buffer_index : cb_ptr->buffer_indices()) {
-                cb_configs.push_back(cb_ptr->address() >> 4);
-                cb_configs.push_back(cb_ptr->size() >> 4);
-                cb_configs.push_back(cb_ptr->num_pages(buffer_index));
-                cb_configs.push_back(cb_ptr->page_size(buffer_index) >> 4);
-            }
-        }
+    if (this->host_data.size() != 0) {
+        this->writer.cq_write(this->device, this->host_data, system_memory_temporary_storage_address);
     }
-
-
-    this->writer.cq_write(this->device, cb_configs, cb_write_ptr);
     this->writer.cq_push_back(this->device, cmd_size);
 }
 
@@ -598,7 +499,7 @@ void FinishCommand::process() {
     const auto command_desc = this->assemble_device_command(0).get_desc();
     vector<u32> command_vector(command_desc.begin(), command_desc.end());
 
-    u32 cmd_size = DeviceCommand::size_in_bytes();
+    u32 cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
     this->writer.cq_reserve_back(this->device, cmd_size);
     this->writer.cq_write(this->device, command_vector, write_ptr);
@@ -619,13 +520,12 @@ const DeviceCommand EnqueueWrapCommand::assemble_device_command(u32) {
 
 void EnqueueWrapCommand::process() {
     u32 write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
-
     u32 space_left = HUGE_PAGE_SIZE - write_ptr;
 
     // Since all of the values will be 0, this will be equivalent to
     // a bunch of NOPs
     vector<u32> command_vector(space_left / sizeof(u32), 0);
-    command_vector.at(0) = 1;  // wrap
+    command_vector[0] = 1;  // wrap
 
     this->writer.cq_reserve_back(this->device, space_left);
     this->writer.cq_write(this->device, command_vector, write_ptr);
@@ -641,48 +541,64 @@ void send_dispatch_kernel_to_device(Device* device) {
     // TT-metal, don't like the fact that I'm writing this from scratch
 
     Program dispatch_program = Program();
-    CoreCoord dispatch_logical_core = *device->dispatch_cores().begin();
-    vector<CoreCoord> pcie_cores = tt::Cluster::instance().get_soc_desc(device->id()).pcie_cores;
-    TT_ASSERT(pcie_cores.size() == 1, "Should only have one pcie core");
+    auto dispatch_cores = device->dispatch_cores().begin();
+    CoreCoord producer_logical_core = *dispatch_cores++;
+    CoreCoord consumer_logical_core = *dispatch_cores;
 
-    std::map<string, string> dispatch_defines = {
+    CoreCoord producer_physical_core = device->worker_core_from_logical_core(producer_logical_core);
+    CoreCoord consumer_physical_core = device->worker_core_from_logical_core(consumer_logical_core);
+
+    std::map<string, string> producer_defines = {
         {"IS_DISPATCH_KERNEL", ""},
-        {"PCIE_NOC_X", std::to_string(pcie_cores[0].x)},
-        {"PCIE_NOC_Y", std::to_string(pcie_cores[0].y)},
+        {"CONSUMER_NOC_X", std::to_string(consumer_physical_core.x)},
+        {"CONSUMER_NOC_Y", std::to_string(consumer_physical_core.y)},
     };
-    const char* DISPATCH_MAP_DUMP = std::getenv("TT_METAL_DISPATCH_MAP_DUMP");
-    if (DISPATCH_MAP_DUMP) {
-        dispatch_defines["TT_METAL_DISPATCH_MAP_DUMP"] = "";
-    }
+    std::map<string, string> consumer_defines = {
+        {"PRODUCER_NOC_X", std::to_string(producer_physical_core.x)},
+        {"PRODUCER_NOC_Y", std::to_string(producer_physical_core.y)},
+    };
     std::vector<uint32_t> dispatch_compile_args = {DEVICE_DATA.TENSIX_SOFT_RESET_ADDR};
-    auto dispatch_kernel = tt::tt_metal::CreateDataMovementKernel(
+    tt::tt_metal::CreateDataMovementKernel(
         dispatch_program,
-        "tt_metal/impl/dispatch/kernels/command_queue.cpp",
-        dispatch_logical_core,
-        tt::tt_metal::DataMovementConfig{
+        "tt_metal/impl/dispatch/kernels/command_queue_producer.cpp",
+        producer_logical_core,
+        tt::tt_metal::DataMovementConfig {
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .compile_args = dispatch_compile_args,
-            .defines = dispatch_defines
-        }
-    );
+            .defines = producer_defines});
+
+    tt::tt_metal::CreateDataMovementKernel(
+        dispatch_program,
+        "tt_metal/impl/dispatch/kernels/command_queue_consumer.cpp",
+        consumer_logical_core,
+        tt::tt_metal::DataMovementConfig {
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = dispatch_compile_args,
+            .defines = consumer_defines});
+
+    tt::tt_metal::CreateSemaphore(dispatch_program, {producer_logical_core, producer_logical_core}, 2);
+    tt::tt_metal::CreateSemaphore(dispatch_program, {consumer_logical_core, consumer_logical_core}, 0);
 
     detail::CompileProgram(device, dispatch_program);
     tt::tt_metal::detail::ConfigureDeviceWithProgram(device, dispatch_program);
 
     u32 fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;
     vector<u32> fifo_addr_vector = {fifo_addr};
-    tt::tt_metal::detail::WriteToDeviceL1(device, dispatch_logical_core, CQ_READ_PTR, fifo_addr_vector);
-    tt::tt_metal::detail::WriteToDeviceL1(device, dispatch_logical_core, CQ_WRITE_PTR, fifo_addr_vector);
+    tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_READ_PTR, fifo_addr_vector);
+    tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_WRITE_PTR, fifo_addr_vector);
 
     // Initialize wr toggle
     vector<u32> toggle_start_vector = {0};
-    tt::tt_metal::detail::WriteToDeviceL1(device, dispatch_logical_core, CQ_READ_TOGGLE, toggle_start_vector);
-    tt::tt_metal::detail::WriteToDeviceL1(device, dispatch_logical_core, CQ_WRITE_TOGGLE, toggle_start_vector);
+    tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_READ_TOGGLE, toggle_start_vector);
+    tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_WRITE_TOGGLE, toggle_start_vector);
 
-    CoreCoord dpc = device->worker_core_from_logical_core(dispatch_logical_core);
-    launch_msg_t *msg = &dispatch_program.kernels_on_core(dispatch_logical_core)->launch_msg;
-    tt::llrt::write_launch_msg_to_core(device->id(), dpc, msg);
+    launch_msg_t msg = dispatch_program.kernels_on_core(producer_logical_core)->launch_msg;
+
+    // TODO(pkeller): Should use LaunchProgram once we have a mechanism to avoid running all RISCs
+    tt::llrt::write_launch_msg_to_core(device->id(), producer_physical_core, &msg);
+    tt::llrt::write_launch_msg_to_core(device->id(), consumer_physical_core, &msg);
 }
 
 // CommandQueue section
@@ -696,11 +612,7 @@ CommandQueue::CommandQueue(Device* device) {
     this->device = device;
 }
 
-CommandQueue::~CommandQueue() {
-    // if (this->device->cluster_is_initialized()) {
-    //     this->finish();
-    // }
-}
+CommandQueue::~CommandQueue() {}
 
 void CommandQueue::enqueue_command(shared_ptr<Command> command, bool blocking) {
     // For the time-being, doing the actual work of enqueing in
@@ -715,7 +627,7 @@ void CommandQueue::enqueue_command(shared_ptr<Command> command, bool blocking) {
 
 void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<u32>& dst, bool blocking) {
     ZoneScopedN("CommandQueue_read_buffer");
-    u32 read_buffer_command_size = DeviceCommand::size_in_bytes() + buffer.size();
+    u32 read_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + buffer.size();
     if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + read_buffer_command_size >= HUGE_PAGE_SIZE) {
         tt::log_assert(read_buffer_command_size <= HUGE_PAGE_SIZE - 96, "EnqueueReadBuffer command is too large");
         this->wrap();
@@ -760,12 +672,14 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<u32>& src, bool b
     uint32_t src_size_bytes = src.size() * sizeof(uint32_t);
     TT_ASSERT(
         src_size_bytes <= buffer.size(),
-        "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer", src_size_bytes, buffer.size());
+        "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
+        src_size_bytes,
+        buffer.size());
     TT_ASSERT(
-        buffer.page_size() < MEM_L1_SIZE - DEVICE_COMMAND_DATA_ADDR,
+        buffer.page_size() < MEM_L1_SIZE - DeviceCommand::DATA_SECTION_ADDRESS,
         "Buffer pages must fit within the command queue data section");
 
-    u32 write_buffer_command_size = DeviceCommand::size_in_bytes() + buffer.size();
+    u32 write_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + buffer.size();
     if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + write_buffer_command_size >= HUGE_PAGE_SIZE) {
         tt::log_assert(
             write_buffer_command_size <= HUGE_PAGE_SIZE - 96,
@@ -775,6 +689,8 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<u32>& src, bool b
     }
     tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer");
 
+    // TODO(agrebenisan): This could just be a stack variable since we
+    // are just running in one thread
     shared_ptr<EnqueueWriteBufferCommand> command =
         std::make_shared<EnqueueWriteBufferCommand>(this->device, buffer, src, this->sysmem_writer);
     this->enqueue_command(command, blocking);
@@ -786,51 +702,62 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
 
     // Need to relay the program into DRAM if this is the first time
     // we are seeing it
-
     const u64 program_id = program.get_id();
+
+    // Whether or not we should stall the producer from prefetching binary data. If the
+    // data is cached, then we don't need to stall, otherwise we need to wait for the
+    // data to land in DRAM first
+    bool stall = false;
     if (not this->program_to_buffer.count(program_id)) {
-        ProgramSrcToDstAddrMap program_to_device_map = ConstructProgramSrcToDstAddrMap(this->device, program);
+        stall = true;
+        ProgramMap program_to_device_map = ConstructProgramMap(this->device, program);
 
-        vector<u32>& program_vector = program_to_device_map.program_vector;
-        u32 program_data_size_in_bytes = program_vector.size() * sizeof(u32);
+        vector<u32>& program_pages = program_to_device_map.program_pages;
+        u32 program_data_size_in_bytes = program_pages.size() * sizeof(u32);
 
-        u32 write_buffer_command_size = DeviceCommand::size_in_bytes() + program_data_size_in_bytes;
+        u32 write_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + program_data_size_in_bytes;
 
         this->program_to_buffer.emplace(
             program_id,
             std::make_unique<Buffer>(
-                this->device, program_data_size_in_bytes, program_data_size_in_bytes, BufferType::DRAM));
+                this->device, program_data_size_in_bytes, DeviceCommand::PROGRAM_PAGE_SIZE, BufferType::DRAM));
 
-        this->enqueue_write_buffer(*this->program_to_buffer.at(program_id), program_vector, blocking);
-
+        this->enqueue_write_buffer(*this->program_to_buffer.at(program_id), program_pages, blocking);
         this->program_to_dev_map.emplace(program_id, std::move(program_to_device_map));
     }
+
     tt::log_debug(tt::LogDispatch, "EnqueueProgram");
+    vector<u32> host_data;
 
-    auto get_current_runtime_args = [&program]() {
-        RuntimeArgs runtime_args;
-        for (const auto kernel_id : program.kernel_ids()) {
-            const auto kernel = detail::GetKernel(program, kernel_id);
-            tt::RISCV processor = kernel->processor();
-            for (const auto& [logical_core, rt_args] : kernel->runtime_args()) {
-                u32 padding = (align(rt_args.size() * sizeof(u32), 32) / sizeof(u32)) - rt_args.size();
-
-                runtime_args[logical_core][processor] = rt_args;
-                for (u32 i = 0; i < padding; i++) {
-                    runtime_args[logical_core][processor].push_back(0);
-                }
+    // Writing runtime args and circular buffer configs
+    constexpr static u32 padding_alignment = 16;
+    for (const auto kernel_id : program.kernel_ids()) {
+        const Kernel* kernel = detail::GetKernel(program, kernel_id);
+        for (const auto& [_, core_runtime_args] : kernel->runtime_args()) {
+            host_data.insert(host_data.end(), core_runtime_args.begin(), core_runtime_args.end());
+            u32 num_padding = align(host_data.size(), padding_alignment / sizeof(u32)) - host_data.size();
+            for (u32 i = 0; i < num_padding; i++) {
+                host_data.push_back(0);
             }
         }
-        return runtime_args;
-    };
+    }
 
-    auto rt_args = get_current_runtime_args();
+    for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
+        for (const auto buffer_index : cb->buffer_indices()) {
+            host_data.push_back(cb->address() >> 4);
+            host_data.push_back(cb->size() >> 4);
+            host_data.push_back(cb->num_pages(buffer_index));
+            host_data.push_back((cb->size() / cb->num_pages(buffer_index)) >> 4);
+        }
+    }
 
-    u32 runtime_args_and_device_command_size = DeviceCommand::size_in_bytes() + (rt_args.size() * sizeof(u32));
-    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + runtime_args_and_device_command_size >=
+    u32 host_data_and_device_command_size =
+        DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + (host_data.size() * sizeof(u32));
+
+    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + host_data_and_device_command_size >=
         HUGE_PAGE_SIZE) {
         tt::log_assert(
-            runtime_args_and_device_command_size <= HUGE_PAGE_SIZE - 96, "EnqueueProgram command size too large");
+            host_data_and_device_command_size <= HUGE_PAGE_SIZE - 96, "EnqueueProgram command size too large");
         this->wrap();
     }
 
@@ -839,8 +766,8 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
         *this->program_to_buffer.at(program_id),
         this->program_to_dev_map.at(program_id),
         this->sysmem_writer,
-        rt_args,
-        program.circular_buffers()
+        host_data,
+        stall
         );
 
     this->enqueue_command(command, blocking);
@@ -848,7 +775,8 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
 
 void CommandQueue::finish() {
     ZoneScopedN("CommandQueue_finish");
-    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + DeviceCommand::size_in_bytes() >= HUGE_PAGE_SIZE) {
+    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND >=
+        HUGE_PAGE_SIZE) {
         this->wrap();
     }
     tt::log_debug(tt::LogDispatch, "Finish");
@@ -890,24 +818,12 @@ void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool
 
 void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     detail::DispatchStateCheck(true);
-    const char* COMPARE_DISPATCH_DEVICE_TO_HOST = std::getenv("TT_METAL_COMPARE_DISPATCH_DEVICE_TO_HOST");
-    const char* DISPATCH_MAP_DUMP = std::getenv("TT_METAL_DISPATCH_MAP_DUMP");
 
     detail::CompileProgram(cq.device, program);
-
-    if (COMPARE_DISPATCH_DEVICE_TO_HOST != nullptr) {
-        TT_ASSERT(
-            DISPATCH_MAP_DUMP != nullptr,
-            "Cannot compare dispatch device output to host when dispatch map dump not enabled");
-    }
 
     program.allocate_circular_buffers();
     detail::ValidateCircularBufferRegion(program, cq.device);
     cq.enqueue_program(program, blocking);
-
-    if (COMPARE_DISPATCH_DEVICE_TO_HOST != nullptr) {
-        internal::wait_for_program_vector_to_arrive_and_compare_to_host_program_vector(DISPATCH_MAP_DUMP, cq.device);
-    }
 }
 
 void Finish(CommandQueue& cq) {
@@ -915,4 +831,4 @@ void Finish(CommandQueue& cq) {
     cq.finish();
 }
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

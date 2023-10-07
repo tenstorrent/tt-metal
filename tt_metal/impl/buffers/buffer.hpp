@@ -43,7 +43,9 @@ class Buffer {
     // Returns address of buffer in the first bank
     u32 address() const { return static_cast<u32>(address_); }
 
-    u64 page_size() const { return page_size_; }
+    u32 page_size() const { return page_size_; }
+
+    u32 num_pages() const { return this->size() / this->page_size(); }
 
     BufferType buffer_type() const { return buffer_type_; }
 
