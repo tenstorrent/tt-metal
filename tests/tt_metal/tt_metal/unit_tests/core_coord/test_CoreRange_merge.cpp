@@ -20,8 +20,8 @@ TEST_F(CoreCoordHarness, TestCoreRangeMerge)
     EXPECT_EQ ( this->cr1.merge(this->cr11).value(), this->cr12 );
     EXPECT_EQ ( this->cr1.merge(this->cr10).value(), this->cr13 );
     EXPECT_EQ ( this->cr1.merge(this->cr10).value(), this->cr13 );
-    EXPECT_EQ ( this->single_core.merge(this->single_core1).value(), this->cr14 );
-    EXPECT_EQ ( this->single_core1.merge(this->single_core2).value(), this->cr15 );
+    EXPECT_EQ ( this->sc1.merge(this->sc2).value(), this->cr14 );
+    EXPECT_EQ ( this->sc2.merge(this->sc3).value(), this->cr15 );
 
 }
 

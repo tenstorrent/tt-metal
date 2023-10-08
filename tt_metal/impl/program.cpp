@@ -255,7 +255,7 @@ void Program::update_kernel_groups() {
             kernel_groups_.push_back(KernelGroup(kg_to_cores.first.brisc_id,
                                                  kg_to_cores.first.ncrisc_id,
                                                  kg_to_cores.first.trisc_id));
-            kernel_groups_.back().core_ranges.merge(kg_to_cores.second);
+            kernel_groups_.back().core_ranges = kernel_groups_.back().core_ranges.merge( kg_to_cores.second);
 
             // Map from core X,Y back to the unique KernelGroup
             for (CoreRange range : kg_to_cores.second) {
@@ -528,7 +528,7 @@ std::vector<CoreCoord> Program::logical_cores() const {
 void Program::construct_core_range_set_for_worker_cores() {
     bool found_kernels = false;
     for (const auto &[kernel_id, kernel] : this->kernel_by_id_) {
-        this->worker_crs_.merge ( kernel->core_range_set());
+        this->worker_crs_ = this->worker_crs_.merge ( kernel->core_range_set() );
         found_kernels = true;
     }
     TT_ASSERT(!found_kernels || this->worker_crs_.ranges().size() >= 1, "Invalid core range set");
@@ -549,11 +549,11 @@ void Program::add_blank_kernels(Device *device) {
     vector<KernelID> blank_ids;
     for (auto& kernel_group : this->kernel_groups_) {
         if (not kernel_group.riscv0_id.has_value())
-            unique_core_ranges_without_brisc_kernel.merge(kernel_group.core_ranges.ranges());
+            unique_core_ranges_without_brisc_kernel = unique_core_ranges_without_brisc_kernel.merge( kernel_group.core_ranges);
         if (not kernel_group.riscv1_id.has_value())
-            unique_core_ranges_without_ncrisc_kernel.merge(kernel_group.core_ranges.ranges());
+            unique_core_ranges_without_ncrisc_kernel = unique_core_ranges_without_ncrisc_kernel.merge(kernel_group.core_ranges);
         if (not kernel_group.compute_id.has_value())
-            unique_core_ranges_without_compute_kernel.merge(kernel_group.core_ranges.ranges());
+            unique_core_ranges_without_compute_kernel = unique_core_ranges_without_compute_kernel.merge( kernel_group.core_ranges);
     }
 
     if (not unique_core_ranges_without_brisc_kernel.ranges().empty()) {

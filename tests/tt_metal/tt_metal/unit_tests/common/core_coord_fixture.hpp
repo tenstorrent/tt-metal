@@ -25,10 +25,12 @@ class CoreCoordHarness : public ::testing::Test {
     CoreRange cr13 = {.start={0, 0}, .end={1, 2}};
     CoreRange cr14 = {.start={0, 1}, .end={1, 1}};
     CoreRange cr15 = {.start={0, 1}, .end={0, 2}};
+    CoreRange cr16 = {.start={0, 0}, .end={1, 2}};
 
     CoreRange sc1 = {.start={1, 1}, .end={1, 1}};
     CoreRange sc2 = {.start={0, 1}, .end={0, 1}};
     CoreRange sc3 = {.start={0, 2}, .end={0, 2}};
+    CoreRange sc4 = {.start={1, 2}, .end={1, 2}};
 
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
