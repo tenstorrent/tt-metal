@@ -10,7 +10,8 @@
 #include <string>
 #include <set>
 #include <optional>
-
+#include <algorithm>
+#include <limits>
 #include "common/assert.hpp"
 #include "third_party/umd/device/tt_xy_pair.h"
 
@@ -202,80 +203,76 @@ class CoreRangeSet {
     CoreRangeSet(CoreRangeSet &&other) = default;
     CoreRangeSet& operator=(CoreRangeSet &&other) = default;
 
-    CoreRangeSet merge ( const std::set<CoreRange> & core_ranges ){
-      std::set<CoreRange> scr = core_ranges;
-      scr.insert(ranges_.begin(), ranges_.end());
-      std::vector<CoreRange> diffs;
-      std::set<CoreRange> filter_set, tmp;
-      // Find all CoreRanges that are completely contained by another CoreRange
-      for (auto it1 = scr.begin(); it1 != scr.end(); it1++){
-        for (auto it2 = scr.begin(); it2 != scr.end(); it2++ ){
-          if ( it1 == it2 ){
-            continue;
-          }
-          // std::cout << "Comparing " << it1->str() << " and " << it2->str() << std::endl;
+    CoreRangeSet merge ( const std::set<CoreRange> & other) const
+    {
+      size_t min_x = std::numeric_limits<size_t>::max(), max_x = 0, min_y = std::numeric_limits<size_t>::max(), max_y = 0;
+      std::set<CoreRange> crs = this->ranges_;
+      crs.insert(other.begin(), other.end());
 
-          if ( it1->contains(*it2)){
-            // std::cout << it1->str() << " contains " << it2->str() << std::endl;
-            filter_set.insert(*it2);
-          }
-        }
+      for (const auto & cr : crs )
+      {
+        // std::cout << "merging " << cr.str() << std::endl;
+        min_x = std::min ( min_x, cr.start.x);
+        max_x = std::max ( max_x, cr.end.x);
+        min_y = std::min ( min_y, cr.start.y);
+        max_y = std::max ( max_y , cr.end.y );
       }
 
-      std::set_difference( std::make_move_iterator( scr.begin() ),
-                           std::make_move_iterator( scr.end() ),
-                           filter_set.begin(), filter_set.end(),
-        std::inserter(tmp, tmp.end()));
+      bool grid[max_y+1][max_x+1] = {};
 
-      scr.swap(tmp);
-      filter_set.clear();
-      tmp.clear();
-      ranges_.clear();
-      // Merge CoreRanges, where possible
-      for (auto it1 = scr.begin(); it1 != scr.end(); it1++){
-        for (auto it2 = scr.begin(); it2 != scr.end(); it2++ ){
-          if ( it1 == it2 ){
-            continue;
+      for (const auto & cr : crs )
+        for (unsigned y = cr.start.y; y <= cr.end.y; y++)
+          for (unsigned x = cr.start.x; x <= cr.end.x; x++)
+            grid[y][x] = true;
+
+      crs.clear();
+      for (unsigned y = min_y; y <= max_y; y++){
+        std::set<CoreRange> filter_set, tmp, new_crs;
+        std::vector < CoreRange > ranges;
+        std::optional<unsigned> x_start;
+        for (unsigned x = min_x; x <= max_x; x++){
+          if (grid[y][x] && !x_start.has_value()){
+            // std::cout << "Setting x_start " << x << "," << y << std::endl;
+            x_start = x;
           }
-          if ( auto merged = it1->merge(*it2) ){
-            // std::cout << "merging " << it1->str() << " and " << it2->str() << std::endl;
-            ranges_.insert ( merged.value());
-            filter_set.insert(*it1);
-            filter_set.insert(*it2);
+          else if ( !grid[y][x] && x_start.has_value()){
+            ranges.push_back( CoreRange( CoreCoord (x_start.value(), y), CoreCoord (x-1, y) ));
+            // std::cout << "added CR " << ranges.back().str() << std::endl;
+            x_start = std::nullopt;
+            TT_ASSERT( !x_start.has_value() );
           }
         }
+        if (x_start.has_value()){
+          ranges.push_back( CoreRange( CoreCoord (x_start.value(), y), CoreCoord (max_x, y) ) );
+          // std::cout << "added CR " << ranges.back().str() << std::endl;
+        }
+        for (const auto & cr : ranges){
+          for ( const auto & prev_cr : crs ){
+              if ( auto merged = cr.merge(prev_cr) ){
+                // std::cout << "merging " << cr.str() << " and " << prev_cr.str() << " with " << merged.value().str() << std::endl;
+                new_crs.insert ( merged.value());
+                filter_set.insert(prev_cr);
+                filter_set.insert(cr);
+              }
+          }
+          crs.insert ( cr );
+        }
+        // Set(A) = Set(A) - Set(B)
+        std::set_difference( std::make_move_iterator( crs.begin() ),
+                            std::make_move_iterator( crs.end() ),
+                            filter_set.begin(), filter_set.end(),
+            std::inserter(tmp, tmp.end()));
+        crs.swap(tmp);
+        crs.insert(new_crs.begin(), new_crs.end());
       }
-      std::set_difference( std::make_move_iterator( scr.begin() ),
-                           std::make_move_iterator( scr.end() ),
-                           filter_set.begin(), filter_set.end(),
-                           std::inserter(tmp, tmp.end()));
 
-      scr.swap(tmp);
-
-      ranges_.insert(scr.begin(), scr.end());
-
-      //TODO: Diff CoreRanges
-      // for ( unsigned i = 0; i < vcr.size(); i++){
-      //   for (unsigned j = i+1; j < vcr.size(); j++){
-
-      //     auto d1 = vcr[i].diff(vcr[j]);
-      //     auto d2 = vcr[j].diff(vcr[i]);
-
-      //     if (d1.size() < d2.size() )
-      //     {
-      //       diffs.insert(diffs.end(), d1.begin(), d1.end());
-      //       diffs.push_back( vcr[j]);
-      //     }
-      //     else{
-      //       diffs.insert(diffs.end(), d2.begin(), d2.end());
-      //       diffs.push_back( vcr[i]);
-      //     }
-      //   }
+      // for ( const auto & cr : crs ){
+      //   std::cout << " final merged CR:" << cr.str() << std::endl;
       // }
-      return *this;
+      return CoreRangeSet(crs);
     }
 
-    CoreRangeSet merge ( const CoreRangeSet & s )
+    CoreRangeSet merge ( const CoreRangeSet & s ) const
     {
       return this->merge (s.ranges());
     }
@@ -298,7 +295,7 @@ class CoreRangeSet {
       return false;
     }
 
-    std::set<CoreRange> ranges() const { return this->ranges_; }
+    const std::set<CoreRange>& ranges() const { return this->ranges_; }
 
     std::string str() const {
       std::string core_range_set_str = "{";

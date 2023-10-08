@@ -83,7 +83,7 @@ class Program {
     void init_semaphores ( const Device & device, const CoreCoord &logical_core ) const;
     std::vector<CoreCoord> logical_cores() const;
 
-    CoreRangeSet get_worker_core_range_set() const { return worker_crs_; };
+    const CoreRangeSet& get_worker_core_range_set() const { return worker_crs_; };
 
     std::vector<std::string> cores_to_ops() const;
 
