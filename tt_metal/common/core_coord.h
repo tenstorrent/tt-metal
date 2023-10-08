@@ -236,14 +236,13 @@ class CoreRangeSet {
             x_start = x;
           }
           else if ( !grid[y][x] && x_start.has_value()){
-            ranges.push_back( CoreRange( CoreCoord (x_start.value(), y), CoreCoord (x-1, y) ));
+            ranges.push_back( CoreRange( {x_start.value(), y}, {x-1, y} ));
             // std::cout << "added CR " << ranges.back().str() << std::endl;
             x_start = std::nullopt;
-            TT_ASSERT( !x_start.has_value() );
           }
         }
         if (x_start.has_value()){
-          ranges.push_back( CoreRange( CoreCoord (x_start.value(), y), CoreCoord (max_x, y) ) );
+          ranges.push_back( CoreRange( {x_start.value(), y}, {max_x, y} ) );
           // std::cout << "added CR " << ranges.back().str() << std::endl;
         }
         for (const auto & cr : ranges){
