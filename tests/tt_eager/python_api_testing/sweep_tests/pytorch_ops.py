@@ -671,8 +671,8 @@ def assign_binary(x, y, *args, **kwargs):
     return y
 
 
-def isclose(x, y, *args, rtol, atol, **kwargs):
-    return torch.isclose(x, y, rtol=rtol, atol=atol)
+def isclose(x, y, *args, rtol, atol, equal_nan, **kwargs):
+    return torch.isclose(x, y, rtol=rtol, atol=atol, equal_nan=equal_nan)
 
 
 def xlogy(x, y, *args, **kwargs):

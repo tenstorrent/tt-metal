@@ -119,7 +119,7 @@ Tensor multigammaln(const Tensor& a, const MemoryConfig& output_mem_config = ope
 Tensor logical_andi(const Tensor& input_a, float immediate, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // ∣input−other∣≤ atol+rtol×∣other∣
-Tensor isclose(const Tensor& input_a, const Tensor& input_b, float rtol, float atol, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor isclose(const Tensor& input_a, const Tensor& input_b, float rtol, float atol, bool equal_nan  = false, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 
 //addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
