@@ -18,9 +18,7 @@ namespace ckernel
 namespace sfpu
 {
 
-
-
-template <int max_iter = 3>
+template <int max_iter = 3,bool save_reg=true>
 sfpi_inline vFloat sfpu_reciprocal(const vFloat in)
 {
     // Force sign to 1 (make number negative)
@@ -29,11 +27,16 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in)
     val = setexp(val, 126); // Set exponent to 126 to make the number in 0.5-1
     // Use 1.44 as first guess at x, ideal value would be 1.33, but we happen to have 1.44 available, so use that to avoid a load
     vFloat vConstLn2Recip = vConstFloatPrgm0;
-    vFloat two = vConstFloatPrgm1;
-    vFloat result = vConstLn2Recip * (val * vConstLn2Recip + two);
+
+    vFloat two;
+    if constexpr (save_reg) {
+        two = vConstFloatPrgm1;
+    }
+
+    vFloat result = vConstLn2Recip * (val * vConstLn2Recip + (save_reg ? 2.0 : two));
 
     for (int s_iter = 0; s_iter < (max_iter-1); s_iter++) {
-        result = result * (val * result + two);
+        result = result * (val * result + (save_reg ? 2.0 : two));
     }
 
     vInt orig_exp = exexp(in);
@@ -64,7 +67,7 @@ inline void calculate_reciprocal()
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat in = dst_reg[0];
-        vFloat out = sfpu_reciprocal<APPROXIMATION_MODE ? 2 : 3>(in);
+        vFloat out = sfpu_reciprocal<APPROXIMATION_MODE ? 2 : 3,true>(in);
 
         v_if (in < 0.0F) {
             // Invert sign on calculated value if CC=1 (number is negative)
