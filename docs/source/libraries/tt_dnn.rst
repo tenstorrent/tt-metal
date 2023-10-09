@@ -656,4 +656,3 @@ Other Operations
 .. autofunction:: tt_lib.tensor.rsub
 
 .. autofunction:: tt_lib.tensor.rdiv
-
