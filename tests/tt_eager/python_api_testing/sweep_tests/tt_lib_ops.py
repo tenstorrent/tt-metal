@@ -1607,6 +1607,37 @@ def eltwise_power(
     return tt2torch_tensor(t1)
 
 
+def bert_large_fused_qkv_matmul(
+    x,
+    y,
+    z,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    a_t = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    b_t = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+
+    bias_t = (
+        ttl.tensor.Tensor(
+            z.flatten().tolist(),
+            z.shape,
+            dtype[2],
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .pad([1, 1, 32, 3072], [0, 0, 0, 0], 0)
+        .to(layout[2])
+        .to(device, input_mem_config[2])
+    )
+
+    t3 = ttl.tensor.bert_large_fused_qkv_matmul(a_t, b_t, bias_t, output_mem_config=output_mem_config)
+    return tt2torch_tensor(t3)
+
+
 @setup_host_and_device
 def eltwise_bias_gelu_unary(x, *args, bias, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])

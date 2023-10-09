@@ -378,7 +378,8 @@ def gen_dtype_layout_device(
     input_shapes,
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs], # mem_configs[-1] is outpu_mem_config
+    mem_configs=[supported_mem_configs], # mem_configs[-1] is output_mem_config
+    do_sanitize_args=True,
 ):
     # last buffer_types option is for output buffer
     dtype_mem_config_layouts = []
@@ -401,7 +402,10 @@ def gen_dtype_layout_device(
 
     for out_mem_config in mem_configs[-1]:
         for dtype_mem_config_layout_combination in product(*dtype_mem_config_layouts):
-            out = sanitize_args(input_shapes, dtype_mem_config_layout_combination)
+            if do_sanitize_args:
+                out = sanitize_args(input_shapes, dtype_mem_config_layout_combination)
+            else:
+                out = 1
 
             if out is not None:
                 dtype = []
@@ -512,6 +516,15 @@ def gen_add_layernorm_args(
     mem_configs=[supported_mem_configs],
 ):
     return gen_dtype_layout_device_layernorm(input_shapes, dtypes, layouts, mem_configs, runtime_tile_padding_layernorm = False, runtime_tile_padding_add_layernorm=True)
+
+
+def gen_bert_qkv_args(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    mem_configs=[supported_mem_configs],
+):
+    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
 
 
 def gen_permute_args(

@@ -187,6 +187,10 @@ def power(x, *args, exponent, **kwargs):
     return result
 
 
+def bert_large_fused_qkv_matmul(x, y, z, *args, **kwargs):
+    return torch.matmul(x, y) + z
+
+
 def polyval(x, *args, coeffs, **kwargs):
     result = 0.0
     for coeff in coeffs:

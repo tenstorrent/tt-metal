@@ -376,6 +376,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_power,
         "pytorch_op": pytorch_ops.power,
     },
+    "bert-large-fused-qkv-matmul": {
+        "tt_lib_op": tt_lib_ops.bert_large_fused_qkv_matmul,
+        "pytorch_op": pytorch_ops.bert_large_fused_qkv_matmul,
+    },
     "eltwise-relu_max": {
         "tt_lib_op": tt_lib_ops.eltwise_relu_max,
         "pytorch_op": pytorch_ops.relu_max,
