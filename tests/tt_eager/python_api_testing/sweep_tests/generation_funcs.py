@@ -1424,3 +1424,26 @@ def gen_geglu_args(input_shapes, dtypes, layouts, mem_configs):
         if input_info is not None:
             input_info.update({"dim": -1})
             yield input_info
+
+def gen_tilize_args(input_shapes, dtypes, layouts, mem_configs):
+
+    input_info = gen_dtype_layout_device(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+    )
+
+    new_input_info = []
+
+    for input_args in input_info:
+        input_args_1 = input_args.copy()
+        input_args_2 = input_args.copy()
+        input_args_1.update({"use_multicore": True})
+        new_input_info.append(input_args_1)
+        input_args_2.update({"use_multicore": False})
+        new_input_info.append(input_args_2)
+
+    for info in new_input_info:
+        if input_info is not None:
+            yield info
