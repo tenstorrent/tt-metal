@@ -75,11 +75,11 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in)
 template <bool APPROXIMATION_MODE, int ITERATIONS=4>
 inline void calculate_reciprocal()
 {
-    #pragma GCC unroll 0
+    #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat in = dst_reg[0];
-        vFloat out = sfpu_reciprocal<false, APPROXIMATION_MODE ? 2 : 3>(in);
+        vFloat out = sfpu_reciprocal<true, APPROXIMATION_MODE ? 2 : 3>(in);
 
         // Reload to reduce register pressure
         v_if (dst_reg[0] < 0.0F) {
