@@ -609,18 +609,27 @@ Tensor _logical_xor(const Tensor& input_a, const Tensor& input_b, const MemoryCo
 }
 
 // ∣input−other∣≤ atol+rtol×∣other∣
-Tensor _isclose(const Tensor& input_a, const Tensor& input_b, float rtol, float atol, const MemoryConfig& output_mem_config) {
-    Tensor is_close_lhs = abs(sub(input_a, input_b, std::nullopt, output_mem_config), output_mem_config);
+Tensor _isclose(const Tensor& input_a, const Tensor& input_b, float rtol, float atol, bool equal_nan, const MemoryConfig& output_mem_config) {
+    Tensor value1 = input_a;
+    Tensor value2 = input_b;
+    if (!equal_nan){
+        // If equal_nan false, then two NaN will not be considered be equal
+        // As below operation's computes the NaN and make it as false based on the formula.
+        // Input 1 = 1, Input = 0 => 1 - 0 <= atol + rtol * |0|, hence comparison explicily false.
+        value1 = where(isnan(value1, output_mem_config), ones_like(value1, output_mem_config), value1, output_mem_config);
+        value2 = where(isnan(value2, output_mem_config), zeros_like(value2, output_mem_config), value2, output_mem_config);
+    }
+    Tensor is_close_lhs = abs(sub(value1, value2, std::nullopt, output_mem_config), output_mem_config);
     Tensor is_close_rhs(input_b);
     {
-         Tensor mul_result = mul_unary(abs(input_b, output_mem_config), rtol, output_mem_config);
+         Tensor mul_result = mul_unary(abs(value2, output_mem_config), rtol, output_mem_config);
          is_close_rhs = add_unary(mul_result, atol, output_mem_config);
     }
-    return where(lte(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config),ones_like(input_a, output_mem_config), zeros_like(input_a, output_mem_config), output_mem_config);
+    return where(lte(is_close_lhs, is_close_rhs, std::nullopt, output_mem_config),ones_like(value2, output_mem_config), zeros_like(value2, output_mem_config), output_mem_config);
 }
-Tensor isclose(const Tensor& input_a, const Tensor& input_b, float rtol, float atol, const MemoryConfig& output_mem_config)
+Tensor isclose(const Tensor& input_a, const Tensor& input_b, float rtol, float atol, bool equal_nan, const MemoryConfig& output_mem_config)
 {
-    return operation::decorate_as_composite(__func__, _isclose)(input_a, input_b, rtol, atol, output_mem_config);
+    return operation::decorate_as_composite(__func__, _isclose)(input_a, input_b, rtol, atol, equal_nan, output_mem_config);
 }
 
 //ldexp(input,other)=input * (2^other)
