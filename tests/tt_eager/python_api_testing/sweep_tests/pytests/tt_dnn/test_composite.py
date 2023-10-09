@@ -50,9 +50,7 @@ def custom_compare(*args, **kwargs):
     ]:
         comparison_func = comparison_funcs.comp_equal
     else:
-        comparison_func = partial(
-            comparison_funcs.comp_pcc, pcc=reference_pcc[function]
-        )
+        comparison_func = partial(comparison_funcs.comp_pcc, pcc=reference_pcc[function])
     result = comparison_func(*args, **kwargs)
     return result
 
@@ -231,6 +229,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
             {
                 "rtol": random.choice([1e-3, 1e-5, 1e-7]),
                 "atol": random.choice([1e-2, 1e-4, 1e-6]),
+                "equal_nan": random.choice([False, True]),
             }
         )
     run_single_pytorch_test(
