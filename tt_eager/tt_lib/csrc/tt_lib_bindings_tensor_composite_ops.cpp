@@ -193,12 +193,14 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("isclose", &isclose,
-            py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("rtol") = 1e-05f, py::arg("atol") = 1e-08f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("rtol") = 1e-05f, py::arg("atol") = 1e-08f, py::arg("equal_nan") = false, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Applies the isclose function to the elements of the input tensor ``input`` and ``other``.
 
             Input tensor must have BFLOAT16 data type.
 
             Output tensor will have BFLOAT16 data type.
+
+            if equal_nan True, then two NaN s will be considered equal, else not equal.
 
             isclose(input, other, rtol, atol) = ∣input−other∣ ≤ atol+rtol×∣other∣.
 
@@ -209,6 +211,7 @@ namespace tt::tt_metal::detail{
                 "other", "Tensor isclose is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "rtol", "rtol value", "float", "default to 1e-05f", "No"
                 "atol", "atol value", "float", "default to 1e-08f", "No"
+                "equal_nan", "equal_nan value", "bool", "default to false", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 

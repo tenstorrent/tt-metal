@@ -748,6 +748,7 @@ def eltwise_isclose(
     *args,
     rtol,
     atol,
+    equal_nan,
     device,
     dtype,
     layout,
@@ -757,7 +758,7 @@ def eltwise_isclose(
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttl.tensor.isclose(t0, t1, rtol, atol, output_mem_config=output_mem_config)
+    t2 = ttl.tensor.isclose(t0, t1, rtol, atol, equal_nan, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t2)
 
