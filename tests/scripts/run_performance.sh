@@ -20,7 +20,7 @@ run_perf_models() {
 
     env pytest tests/models/roberta -m $pipeline_type
 
-    env pytest tests/models/t5/tests -m $pipeline_type
+    env pytest tests/models/t5/old_tests -m $pipeline_type
 
     env pytest tests/models/resnet/tests -m $pipeline_type
 
