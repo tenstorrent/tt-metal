@@ -359,6 +359,23 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(start_shape, end_shape, interval, _gen_conv_shapes):
                 yield shapes, datagen_funcs, test_args
 
+        elif method == "bert_qkv":
+            assert num_shapes == 3
+
+            assert len(start_shape) == len(end_shape) == 1
+            assert len(interval) == 1
+
+            def _gen_bert_qkv_shapes(shape):
+                batch_size = shape[0]
+                shape1 = [batch_size, 1, 384, 1024]
+                shape2 = [1, 1, 1024, 3072]
+                shape3 = [1, 1, 1, 3072]
+
+                return [shape1, shape2, shape3]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(start_shape, end_shape, interval, _gen_bert_qkv_shapes):
+                yield shapes, datagen_funcs, test_args
+
         elif method == "linear":
             # start-shape and end-shape are lists of two shapes
             # Only supports dim = 4; for the second shape, only the last dim is used
@@ -399,6 +416,7 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(shape1_start, shape1_end, interval, _gen_linear_shapes):
                 yield shapes, datagen_funcs, test_args
+
 
         else:
             raise NotImplementedError("Method {method} is not a valid choice")
