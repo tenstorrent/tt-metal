@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "tt_dnn/op_library/clone/clone_op.hpp"
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -333,6 +334,13 @@ Tensor reshape (const Tensor &input_tensor_a, int N, int C, int H, int W, const 
         // Don't need to do a check here to see the H and W both divisible by 32
         // since handled within the tensor reshape method
         return input_tensor_a.reshape(N, C, H, W);
+    }
+    if (input_tensor_a.shape() == output_shape) {
+        if (input_tensor_a.memory_config() != output_mem_config) {
+            return clone(input_tensor_a, output_mem_config);
+        } else {
+            return input_tensor_a;
+        }
     }
     return operation::run_without_autoformat(Reshape{N, C, H, W, output_mem_config}, {input_tensor_a}).at(0);
 }

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/pad/pad_op.hpp"
+#include "tt_dnn/op_library/clone/clone_op.hpp"
 #include "tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -594,11 +595,15 @@ tt::stl::reflection::Attributes Pad::attributes() const {
     };
 }
 
-Tensor pad(const Tensor &input_tensor, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value, const MemoryConfig& mem_config, bool use_multicore) {
+Tensor pad(const Tensor &input_tensor, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value, const MemoryConfig& output_mem_config, bool use_multicore) {
     if (input_tensor.shape() == output_tensor_shape) {
-        return input_tensor;
+        if (input_tensor.memory_config() != output_mem_config) {
+            return clone(input_tensor, output_mem_config);
+        } else {
+            return input_tensor;
+        }
     }
-    return operation::run_without_autoformat(Pad{output_tensor_shape, input_tensor_start, pad_value, mem_config, use_multicore}, {input_tensor}).at(0);
+    return operation::run_without_autoformat(Pad{output_tensor_shape, input_tensor_start, pad_value, output_mem_config, use_multicore}, {input_tensor}).at(0);
 
 }
 
