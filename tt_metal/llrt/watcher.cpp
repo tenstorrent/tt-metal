@@ -502,7 +502,7 @@ void watcher_attach(void *dev,
     }
 
     if (llrt::watcher::logfile != nullptr) {
-        log_info(LogLLRuntime, "Watcher thread detached");
+        log_info(LogLLRuntime, "Watcher thread attached");
         fprintf(watcher::logfile, "At %ds attach device %d\n", watcher::get_elapsed_secs(), device_id);
     }
 
@@ -523,6 +523,7 @@ void watcher_detach(void *old) {
     auto pair = watcher::devices.find(old);
     TT_ASSERT(pair != watcher::devices.end());
     if (watcher::logfile != nullptr) {
+        log_info(LogLLRuntime, "Watcher thread detached");
         fprintf(watcher::logfile, "At %ds detach device %d\n", watcher::get_elapsed_secs(), pair->second->device_id_);
     }
     watcher::devices.erase(old);
