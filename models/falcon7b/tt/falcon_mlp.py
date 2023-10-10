@@ -6,7 +6,6 @@ import torch
 from torch import nn
 import tt_lib
 
-from models.helper_funcs import Linear as TTLinear
 from models.utility_functions import torch2tt_tensor
 
 
@@ -67,8 +66,6 @@ class TtFalconMLP(nn.Module):
                 tt_memory_config=self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_MEMCFG"],
                 tt_dtype=self.model_config["DENSE_4H_TO_H_MM_WEIGHTS_DTYPE"],
             )
-
-        # self.act_fn = tt_lib.tensor.gelu
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         hidden_states = tt_lib.tensor.falcon_dense_h_to_4h_matmul(

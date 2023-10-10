@@ -9,8 +9,7 @@ from typing import Optional, Tuple
 
 import tt_lib
 
-from tests.models.falcon.falcon_model import TtFalconModelShared
-from models.helper_funcs import Linear as TTLinear
+from models.falcon7b.tt.falcon_model import TtFalconModelShared
 from models.utility_functions import torch2tt_tensor
 
 
@@ -75,6 +74,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             layer_past_len=layer_past_len,
             use_cache=use_cache,
         )
+
         lm_logits = tt_lib.tensor.falcon_lm_head_matmul(
             hidden_states,
             self.lm_head_weights,

@@ -3,17 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import pytest
-from torch import nn
 from abc import abstractmethod
 from typing import Optional, Tuple
 
 import tt_lib
 
-from tests.models.falcon.falcon_decoder import TtFalconDecoderLayer
+from models.falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.utility_functions import (
     torch2tt_tensor,
     pad_by_zero,
+    nearest_32,
 )
 
 
@@ -66,14 +65,10 @@ class TtFalconModelShared(torch.nn.Module):
 
         layer_name = f"{base_url}"
 
-        embeddings_weights_str = f"{layer_name}.word_embeddings.weight"
         layernorm_weights_str = f"{layer_name}.ln_f.weight"
         layernorm_bias_str = f"{layer_name}.ln_f.bias"
         if tt_cache_path is not None:
-            # self.embeddings_weight = tt_lib.tensor.load_tensor(
-            #     str(tt_cache_path
-            #     / f"{embeddings_weights_str}_{self.model_config['WORD_EMBEDDING_WEIGHTS_DTYPE'].name}.bin")
-            # ).to(device, self.model_config["WORD_EMBEDDING_WEIGHTS_MEMCFG"])
+
             self.layernorm_gamma = tt_lib.tensor.load_tensor(
                 str(
                     tt_cache_path
@@ -87,13 +82,7 @@ class TtFalconModelShared(torch.nn.Module):
                 )
             ).to(device, self.model_config["LN_F_BIAS_MEMCFG"])
         else:
-            # self.embeddings_weight = torch2tt_tensor(
-            #     self.state_dict[embeddings_weights_str],
-            #     device,
-            #     tt_lib.tensor.Layout.ROW_MAJOR,
-            #     self.model_config["WORD_EMBEDDING_WEIGHTS_MEMCFG"],
-            #     self.model_config['WORD_EMBEDDING_WEIGHTS_DTYPE']
-            # )
+
             self.layernorm_gamma = pad_by_zero(
                 self.state_dict[layernorm_weights_str],
                 device,
@@ -108,20 +97,17 @@ class TtFalconModelShared(torch.nn.Module):
             )[0]
         self.layernorm_eps = config.layer_norm_epsilon
 
-    def model_preprocessing(self, input_ids, kv_cache_len, llm_mode):
-        # input_ids: torch.Tensor with shape [batch, seq_len]
+    def model_preprocessing(self, llm_mode, input_ids, kv_cache_len, num_input_tokens):
 
         assert input_ids.dim() == 2
-        batch, seq_len = input_ids.shape
+        batch_size, sequence_size = input_ids.shape
 
         embeddings = self.embeddings(input_ids)
 
         # Generate input and attention_mask ---------------------------------------------
-        # TODO: Generate attention_mask on device
         if llm_mode == "prefill":
-            q_len, kv_len = seq_len, seq_len
-            assert batch == 1, "For prefill, batch must be 1!"
-            assert q_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
+            assert batch_size == 1, "For prefill, batch_size must be 1!"
+            assert sequence_size % 32 == 0, "For prefill, sequence_size must be multiple of 32!"
             assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
 
             tt_embeddings = torch2tt_tensor(
@@ -131,20 +117,32 @@ class TtFalconModelShared(torch.nn.Module):
                 tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
             )
 
-            attention_mask_bool = torch.ones(batch, 1, q_len, kv_len, dtype=bool).triu(
-                diagonal=1
+            attention_mask_bool = torch.zeros(batch_size, 1, sequence_size, num_input_tokens, dtype=bool)
+            for i in range(0, num_input_tokens):
+                for j in range(i + 1, num_input_tokens):
+                    attention_mask_bool[:, :, i, j] = True
+
+            attention_mask_bool_padded = torch.cat(
+                (
+                    attention_mask_bool,
+                    torch.ones(batch_size, 1, sequence_size, sequence_size - num_input_tokens, dtype=bool),
+                ),
+                dim=-1,
             )
+
             tt_attention_mask = torch2tt_tensor(
-                (attention_mask_bool * -100000).expand(-1, self.config.n_head, -1, -1),
+                (attention_mask_bool_padded * -1e3).expand(
+                    -1, self.config.num_attention_heads, -1, -1
+                ),
                 self.device,
                 tt_memory_config=self.model_config["ATTN_MASK_MEMCFG"],
                 tt_dtype=self.model_config["ATTN_MASK_DTYPE"],
             )
 
+
         elif llm_mode == "decode":
-            q_len, kv_len = seq_len, kv_cache_len + 1
-            assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
-            assert q_len == 1, "For decode, q_len must be 1!"
+            assert batch_size % 32 == 0, "For decode, batch_size must be multiple of 32!"
+            assert sequence_size == 1, "For decode, q_len must be 1!"
 
             tt_embeddings = torch2tt_tensor(
                 embeddings.unsqueeze(1).transpose(0, 2),
@@ -153,20 +151,21 @@ class TtFalconModelShared(torch.nn.Module):
                 tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
             )
 
-            attention_mask_bool = torch.zeros(batch, 1, q_len, kv_len, dtype=bool)
+            attention_mask_bool = torch.zeros(batch_size, 1, sequence_size, num_input_tokens, dtype=bool)
             attention_mask_bool[:, :, :, -1] = True
 
-            kv_len_padded = (kv_len + 31) // 32 * 32
+            num_max_tokens = nearest_32(kv_cache_len + 1) # Potentially, num_max_tokens must be provided as a separate argument
             attention_mask_bool_padded = torch.cat(
                 (
                     attention_mask_bool,
-                    torch.ones(batch, 1, q_len, kv_len_padded - kv_len, dtype=bool),
+                    torch.ones(batch_size, 1, sequence_size, num_max_tokens - num_input_tokens, dtype=bool),
+
                 ),
                 dim=-1,
             )
             tt_attention_mask = torch2tt_tensor(
-                (attention_mask_bool_padded.transpose(0, 2) * -100000).expand(
-                    -1, self.config.n_head, -1, -1
+                (attention_mask_bool_padded.transpose(0, 2) * -1e3).expand(
+                    -1, self.config.num_attention_heads, -1, -1
                 ),
                 self.device,
                 tt_memory_config=self.model_config["ATTN_MASK_MEMCFG"],
@@ -210,9 +209,8 @@ class TtFalconModelShared(torch.nn.Module):
         # apply final norm layer
         layer_output = tt_lib.tensor.layernorm(
             layer_output,
-            self.layernorm_eps,  # These don't fit: self.layernorm_gamma, self.layernorm_beta
+            self.layernorm_eps,
             output_mem_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
-            # output_dtype=self.model_config["LN_F_OUTPUT_DTYPE"], # Not currently supported
         )
         layer_output = tt_lib.tensor.bcast(
             layer_output,
@@ -220,7 +218,6 @@ class TtFalconModelShared(torch.nn.Module):
             tt_lib.tensor.BcastOpMath.MUL,
             tt_lib.tensor.BcastOpDim.H,
             output_mem_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
-            # output_dtype=self.model_config["LN_F_OUTPUT_DTYPE"], # Not currently supported
         )
         layer_output = tt_lib.tensor.bcast(
             layer_output,
@@ -228,7 +225,6 @@ class TtFalconModelShared(torch.nn.Module):
             tt_lib.tensor.BcastOpMath.ADD,
             tt_lib.tensor.BcastOpDim.H,
             output_mem_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
-            # output_dtype=self.model_config["LN_F_OUTPUT_DTYPE"], # Not currently supported
         )
 
         return layer_output, presents

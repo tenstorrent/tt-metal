@@ -4,28 +4,22 @@
 
 from functools import partial
 import pytest
-import numpy as np
 import torch
 from loguru import logger
-from transformers.generation.logits_process import LogitsProcessorList
 
 from transformers import AutoTokenizer
-import torch.nn.functional as F
 
-from tests.python_api_testing.models.falcon.reference.hf_modeling_falcon import (
-    FalconForCausalLM,
-)
+from models.falcon7b.reference.hf_modeling_falcon import FalconForCausalLM
 import time
 
 falcon1b = "tiiuae/falcon-rw-1b"
 MODEL_VERSION = "tiiuae/falcon-7b-instruct"
 
 
-def post_process(logits, input_ids, logits_processor):
+def post_process(logits):
     next_token_logits = logits[:, -1, :]
-    next_tokens_scores = logits_processor(input_ids, next_token_logits)
-    next_tokens = torch.argmax(next_tokens_scores, dim=-1)
-    ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
+    next_tokens = torch.argmax(next_token_logits, dim=-1)
+    ids = next_tokens[:, None]
     return ids
 
 
@@ -34,7 +28,7 @@ def generate_next_id(
 ):
     outputs = causalLMModel(input_ids, past_key_values=kv_cache, use_cache=use_cache)
     return (
-        post_processor(logits=outputs.logits, input_ids=input_ids),
+        post_processor(logits=outputs.logits),
         outputs.past_key_values,
     )
 
@@ -44,12 +38,11 @@ def generate_next_id(
     ([1, 32]),
 )
 def test_cpu_demo_no_kv(batch_size):
-    logits_processor = LogitsProcessorList()
-    post_processor = partial(post_process, logits_processor=logits_processor)
+    post_processor = partial(post_process)
 
     logger.info("Initializing tokenizer")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_VERSION)
-    # prompt_text = ["Girafatron is obsessed with giraffes, the most glorious animal on the face of this Earth. Giraftron believes all other animals are irrelevant when compared to the glorious majesty of the giraffe.\nDaniel: Hello, Girafatron!\nGirafatron:"] * batch_size
+    num_tokens = 128
     prompt_text = ["Write a poem about Valencia"] * batch_size
 
     logger.info("Tokenizing inputs")
@@ -59,7 +52,7 @@ def test_cpu_demo_no_kv(batch_size):
     input_ids = tokenized_inputs["input_ids"]
 
     logger.info("Initializing CausalLM Model")
-    causalLM = FalconForCausalLM.from_pretrained(MODEL_VERSION, device_map="auto")
+    causalLM = FalconForCausalLM.from_pretrained(MODEL_VERSION, device_map="auto", offload_folder="offload")
     causalLM.eval()
 
     generator = partial(
@@ -68,14 +61,9 @@ def test_cpu_demo_no_kv(batch_size):
 
     logger.info("Generating new ids")
     ids = input_ids
-    for i in range(15):
-        # iteration should become slower one by one
-        # First iteration is about 3.5sec (batch=32)
-        # Fifth iteration is about 4.5sec (batch=32)
+    for i in range(num_tokens):
         start_ = time.time()
         logger.info(f"generating token {i}")
-        # input- > len(ids) = 10
-        # output -> len(ids) = 11
         ids, kv_cache = generator(input_ids=ids)
         logger.info(f"iteration {i} duration {time.time() - start_}")
 
@@ -91,12 +79,15 @@ def test_cpu_demo_no_kv(batch_size):
     ([1, 32]),
 )
 def test_cpu_demo_kv(batch_size):
-    logits_processor = LogitsProcessorList()
-    post_processor = partial(post_process, logits_processor=logits_processor)
+    torch.manual_seed(0)
+
+    post_processor = partial(post_process)
 
     logger.info("Initializing tokenizer")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_VERSION)
-    # prompt_text = ["Girafatron is obsessed with giraffes, the most glorious animal on the face of this Earth. Giraftron believes all other animals are irrelevant when compared to the glorious majesty of the giraffe.\nDaniel: Hello, Girafatron!\nGirafatron:"] * batch_size
+
+    num_tokens = 128
+
     prompt_text = ["Write a poem about Valencia"] * batch_size
 
     logger.info("Tokenizing inputs")
@@ -106,7 +97,7 @@ def test_cpu_demo_kv(batch_size):
     input_ids = tokenized_inputs["input_ids"]
 
     logger.info("Initializing CausalLM Model")
-    causalLM = FalconForCausalLM.from_pretrained(MODEL_VERSION, device_map="auto")
+    causalLM = FalconForCausalLM.from_pretrained(MODEL_VERSION, device_map="auto", offload_folder="offload")
     causalLM.eval()
 
     generator = partial(
@@ -119,25 +110,25 @@ def test_cpu_demo_kv(batch_size):
 
     # input 10 tokens
     ids, kv_cache = generator(input_ids=ids, use_cache=True)
-    # output 11 token (input + 1 new token)
-    # kv_ccache # 1, seq_len=10, xxxx)
-    ids = ids[:, -1].unsqueeze(1)
+
     # [batch x 1]
     generated_ids = torch.concat((generated_ids, ids), dim=1)
+    print("OUTPUT OF PREFILL", generated_ids)
 
-    for i in range(10):
+    for i in range(num_tokens):
         start_ = time.time()
         logger.info(f"generating token {i}")
         # input:
         # kv cache of len = 10
         # ids= len 1 - new generated token
         ids, kv_cache = generator(input_ids=ids, kv_cache=kv_cache, use_cache=True)
-        # output:
-        # kv cache of len == 11 -> include [user input + 11th generated]
-        # ids -> 2 (11th generated token, new token)
-        ids = ids[:, -1].unsqueeze(1)
+
         generated_ids = torch.concat((generated_ids, ids), dim=1)
         logger.info(f"token {i} generated in {time.time() - start_} secs")
+
+        output_prompts = tokenizer.batch_decode(generated_ids.tolist())
+        for output_prompt in output_prompts:
+            logger.info(f"output::: {output_prompt}")
 
     generated_ids = generated_ids.tolist()
     text = tokenizer.batch_decode(generated_ids)
@@ -152,12 +143,11 @@ def test_cpu_demo_kv(batch_size):
     ([1, 3, 8]),
 )
 def test_cpu_demo_with_kv_split(batch_size):
-    logits_processor = LogitsProcessorList()
-    post_processor = partial(post_process, logits_processor=logits_processor)
+    post_processor = partial(post_process)
 
     logger.info("Initializing tokenizer")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_VERSION)
-    # prompt_text = ["Girafatron is obsessed with giraffes, the most glorious animal on the face of this Earth. Giraftron believes all other animals are irrelevant when compared to the glorious majesty of the giraffe.\nDaniel: Hello, Girafatron!\nGirafatron:"] * batch_size
+    num_tokens = 128
     prompts = ["Write a poem about Valencia"] * batch_size
 
     logger.info("Tokenizing inputs")
@@ -171,7 +161,7 @@ def test_cpu_demo_with_kv_split(batch_size):
     logger.info("Initializing CausalLM Model")
     generators = []
     for i in range(batch_size):
-        causalLM = FalconForCausalLM.from_pretrained(MODEL_VERSION, device_map="auto")
+        causalLM = FalconForCausalLM.from_pretrained(MODEL_VERSION, device_map="auto", offload_folder="offload")
         causalLM.eval()
         generator = partial(
             generate_next_id, causalLMModel=causalLM, post_processor=post_processor
@@ -216,7 +206,7 @@ def test_cpu_demo_with_kv_split(batch_size):
     # tensor: [batch x 32 x seq_len x 64]
     logger.info("Generate tokens batched")
     generator = generators[0]
-    for i in range(20):
+    for i in range(num_tokens):
         # iterations should be about the same length
         # each iterations is less than 2 sec (machine dependents)
         logger.info(f"generating token {i}")
