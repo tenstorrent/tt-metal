@@ -821,4 +821,8 @@ op_map = {
         "tt_lib_op": tt_lib_ops.bert_large_post_softmax_bmm,
         "pytorch_op": pytorch_ops.bert_large_post_softmax_bmm,
     },
+    "bert-large-ff1-matmul": {
+        "tt_lib_op": tt_lib_ops.bert_large_ff1_matmul,
+        "pytorch_op": pytorch_ops.bert_large_ff1_matmul,
+    },
 }
