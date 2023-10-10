@@ -363,7 +363,7 @@ static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
 static void watcher_loop(int sleep_usecs) {
     int count = 0;
 
-    log_info(LogLLRuntime, "Watcher thread attached...");
+    log_info(LogLLRuntime, "Watcher thread watching...");
 
     while (true) {
         // Odds are this thread will be killed during the usleep
@@ -502,7 +502,6 @@ void watcher_attach(void *dev,
     }
 
     if (llrt::watcher::logfile != nullptr) {
-        log_info(LogLLRuntime, "Watcher thread attached");
         fprintf(watcher::logfile, "At %ds attach device %d\n", watcher::get_elapsed_secs(), device_id);
     }
 
@@ -514,6 +513,7 @@ void watcher_attach(void *dev,
     // This allows dump() to be called from debugger
     std::shared_ptr<watcher::WatcherDevice> wdev(new watcher::WatcherDevice(device_id, get_grid_size, worker_from_logical, storage_only_cores));
     watcher::devices.insert(pair<void *, std::shared_ptr<watcher::WatcherDevice>>(dev, wdev));
+    log_info(LogLLRuntime, "Watcher attached device {}", device_id);
 }
 
 void watcher_detach(void *old) {
@@ -523,7 +523,7 @@ void watcher_detach(void *old) {
     auto pair = watcher::devices.find(old);
     TT_ASSERT(pair != watcher::devices.end());
     if (watcher::logfile != nullptr) {
-        log_info(LogLLRuntime, "Watcher thread detached");
+        log_info(LogLLRuntime, "Watcher detached device {}", pair->second->device_id_);
         fprintf(watcher::logfile, "At %ds detach device %d\n", watcher::get_elapsed_secs(), pair->second->device_id_);
     }
     watcher::devices.erase(old);
