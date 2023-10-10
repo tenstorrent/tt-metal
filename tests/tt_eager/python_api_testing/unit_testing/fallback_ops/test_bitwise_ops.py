@@ -11,46 +11,87 @@ from loguru import logger
 import pytest
 
 
-@pytest.mark.parametrize("op_kind", ["or", "and", "not", "xor"])
-@pytest.mark.parametrize("other", [5, 10, -1])
-@pytest.mark.parametrize("on_device", [True, False])
 @pytest.mark.parametrize(
-    "input_shape",
+    "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bitwise_ops_fallback(op_kind, input_shape, other, on_device, device):
-    torch.manual_seed(1234)
+@pytest.mark.parametrize("on_device", [True, False])
+class TestBitwiseOps:
+    @pytest.mark.parametrize("op_kind", ["or", "and", "not", "xor"])
+    @pytest.mark.parametrize("other", [5, 10, -1])
+    def test_unary_bitwise_ops_fallback(self, input_shapes, other, on_device, op_kind, device):
+        torch.manual_seed(1234)
 
-    # x = torch.randn(input_shape, dtype=torch.int8)
-    x = torch.randint(low=0, high=100, size=input_shape)
-    # Test on host RM
-    t0 = ttl.tensor.Tensor(
-        x.reshape(-1).tolist(),
-        x.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    )
-    if on_device:
-        t0 = t0.to(device)
-    if op_kind == "or":
-        t1 = ttl.fallback_ops.bitwise_or(t0, other)
-        pt_out = torch.bitwise_or(x, other)
-    elif op_kind == "and":
-        t1 = ttl.fallback_ops.bitwise_and(t0, other)
-        pt_out = torch.bitwise_and(x, other)
-    elif op_kind == "xor":
-        t1 = ttl.fallback_ops.bitwise_xor(t0, other)
-        pt_out = torch.bitwise_xor(x, other)
-    elif op_kind == "not":
-        t1 = ttl.fallback_ops.bitwise_not(t0)
-        pt_out = torch.bitwise_not(x)
+        # x = torch.randn(input_shape, dtype=torch.int8)
+        x = torch.randint(low=0, high=100, size=input_shapes)
+        # Test on host RM
+        t0 = ttl.tensor.Tensor(
+            x.reshape(-1).tolist(),
+            x.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        if on_device:
+            t0 = t0.to(device)
+        if op_kind == "or":
+            t1 = ttl.fallback_ops.unary_bitwise_or(t0, other)
+            pt_out = torch.bitwise_or(x, other)
+        elif op_kind == "and":
+            t1 = ttl.fallback_ops.unary_bitwise_and(t0, other)
+            pt_out = torch.bitwise_and(x, other)
+        elif op_kind == "xor":
+            t1 = ttl.fallback_ops.unary_bitwise_xor(t0, other)
+            pt_out = torch.bitwise_xor(x, other)
+        elif op_kind == "not":
+            t1 = ttl.fallback_ops.bitwise_not(t0)
+            pt_out = torch.bitwise_not(x)
 
-    output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    comp_pass, _ = comparison_funcs.comp_equal(pt_out, output)
-    _, comp_out = comparison_funcs.comp_allclose_and_pcc(pt_out, output)
-    logger.info(comp_out)
-    assert comp_pass
+        output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        comp_pass, _ = comparison_funcs.comp_equal(pt_out, output)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(pt_out, output)
+        logger.info(comp_out)
+        assert comp_pass
+
+    @pytest.mark.parametrize("op_kind", ["or", "and", "xor"])
+    def test_binary_bitwise_ops_fallback(self, input_shapes, on_device, op_kind, device):
+        torch.manual_seed(1234)
+
+        x = torch.randint(low=0, high=100, size=input_shapes)
+        y = torch.randint(low=0, high=200, size=input_shapes)
+        # Test on host RM
+        t0 = ttl.tensor.Tensor(
+            x.reshape(-1).tolist(),
+            x.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        if on_device:
+            t0 = t0.to(device)
+        t1 = ttl.tensor.Tensor(
+            y.reshape(-1).tolist(),
+            y.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        if on_device:
+            t1 = t1.to(device)
+
+        if op_kind == "or":
+            tout = ttl.fallback_ops.binary_bitwise_or(t0, t1)
+            pt_out = torch.bitwise_or(x, y)
+        elif op_kind == "and":
+            tout = ttl.fallback_ops.binary_bitwise_and(t0, t1)
+            pt_out = torch.bitwise_and(x, y)
+        elif op_kind == "xor":
+            tout = ttl.fallback_ops.binary_bitwise_xor(t0, t1)
+            pt_out = torch.bitwise_xor(x, y)
+
+        output = tout.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+        comp_pass, _ = comparison_funcs.comp_equal(pt_out, output)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(pt_out, output)
+        logger.info(comp_out)
+        assert comp_pass
