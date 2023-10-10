@@ -862,7 +862,7 @@ template <SfpuType operation, bool APPROXIMATION_MODE, int SfpuType_PARAM = 0, i
 inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0)
 {
     if constexpr (operation == SfpuType::exp_with_base) {
-	constexpr bool zero_negative = true;
+        constexpr bool zero_negative = true;
         calculate_exponential<APPROXIMATION_MODE, zero_negative, true, ITERATIONS>(param0);
     }
     else if constexpr (operation == SfpuType::tanh) {
