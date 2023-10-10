@@ -376,6 +376,38 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(start_shape, end_shape, interval, _gen_bert_qkv_shapes):
                 yield shapes, datagen_funcs, test_args
 
+
+        elif method == "bert_selfout":
+            # start-shape and end-shape are lists of two shapes
+            # Only supports dim = 4; for the second shape, only the last dim is used
+            assert (len(start_shape) == 1)
+            assert (len(end_shape) == 1)
+
+            def _gen_bert_selfout_shapes(shape):
+                a_shape = [9, 1, 384, 1024]
+                b_shape = [1, 1, 1024, 1024]
+                bias_shape = [1, 1, 1, 1024]
+                return [a_shape, b_shape, bias_shape]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(start_shape, end_shape, interval, _gen_bert_selfout_shapes):
+                yield shapes, datagen_funcs, test_args
+
+
+        elif method == "bert_ff2":
+            # start-shape and end-shape are lists of two shapes
+            # Only supports dim = 4; for the second shape, only the last dim is used
+            assert (len(start_shape) == 1)
+            assert (len(end_shape) == 1)
+
+            def _gen_bert_ff2_shapes(shape):
+                a_shape = [9, 1, 384, 4096]
+                b_shape = [1, 1, 4096, 1024]
+                bias_shape = [1, 1, 1, 1024]
+                return [a_shape, b_shape, bias_shape]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(start_shape, end_shape, interval, _gen_bert_ff2_shapes):
+                yield shapes, datagen_funcs, test_args
+
         elif method == "linear":
             # start-shape and end-shape are lists of two shapes
             # Only supports dim = 4; for the second shape, only the last dim is used

@@ -968,3 +968,13 @@ def bert_large_ff1_matmul(x, y, z, *args, **kwargs):
     ref_bmm = torch.matmul(x, y)
     ref_bmm = ref_bmm + z
     return ref_bmm
+
+def bert_large_selfout_matmul(x, y, z, *args, **kwargs):
+    ref_bmm = torch.matmul(x, y)
+    ref_bmm = ref_bmm + z
+    return ref_bmm
+    
+def bert_large_ff2_matmul(x, y, z, *args, **kwargs):
+    ref_bmm = torch.matmul(x, y)
+    ref_bmm = ref_bmm + z
+    return ref_bmm
