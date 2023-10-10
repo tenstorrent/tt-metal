@@ -6,6 +6,7 @@
 
 #include "tt_dnn/op_library/move/move_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
+#include "tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -61,24 +62,27 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
     tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-    uint32_t num_pages = output.volume() / TILE_HW;
+    bool tilized = input.layout() == Layout::TILE;
+
+    uint32_t page_size = input.buffer()->page_size();
+
+    uint32_t num_pages = tilized ? output.volume() / TILE_HW : output.volume() / output.shape()[-1];
     tt_metal::Device *device = output.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_pages);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
     const auto num_dram_banks = device->num_banks(BufferType::DRAM);
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     uint32_t size_per_l1_bank = tt_metal::detail::SizeBytesPerBank(output.buffer()->size(), output.buffer()->page_size(), num_l1_banks);
-    TT_ASSERT(size_per_l1_bank % single_tile_size == 0);
 
     // CB is being used as temp L1 buffer to copy src data into before writing to dst
     uint32_t cb_index = 0;
+    uint32_t aligned_page_size = round_up_to_mul32(page_size);
     tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(size_per_l1_bank, {{cb_index, cb_data_format}})
-		.set_page_size(cb_index, single_tile_size);
+		.set_page_size(cb_index, aligned_page_size);
     auto cb = tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
     auto semaphore_addr = CreateSemaphore(program, all_cores, 0);
@@ -88,11 +92,17 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
     bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
 
+    uint32_t log2_page_size = 0;
     std::vector<uint32_t> compile_time_args = {cb_index, (uint32_t)src_is_dram, (uint32_t)dst_is_dram};
+    if (!tilized) {
+        bool page_size_is_power_of_two = is_power_of_two_at_least_32(page_size);
+        log2_page_size = page_size_is_power_of_two ? (std::uint32_t)log2(page_size) : 0;
+        compile_time_args.push_back((uint32_t)page_size_is_power_of_two);
+    }
 
     KernelID kernel_id = CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/move_interleaved_with_overlap.cpp",
+        tilized ? "tt_eager/tt_dnn/op_library/move/kernels/move_interleaved_with_overlap.cpp" : "tt_eager/tt_dnn/op_library/move/kernels/move_stick_layout_interleaved_with_overlap.cpp",
         all_cores,
         DataMovementConfig{.compile_args = compile_time_args}
     );
@@ -112,14 +122,14 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
     // if third multicast is not needed range_2_noc will be ignored
     bool do_third_multicast = (noc_multicast_regions.size() == 3);
 
-    uint32_t total_num_tiles = 0;
-    for (uint32_t i = 0, tiles_handled_per_core = 0; i < num_cores; i++) {
+    uint32_t total_num_pages = 0;
+    for (uint32_t i = 0, pages_handled_per_core = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_tiles_per_core;
+        uint32_t num_pages_per_core;
         if (core_group_1.core_coord_in_core_ranges(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
+            num_pages_per_core = num_pages_per_core_group_1;
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
+            num_pages_per_core = num_pages_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
@@ -128,8 +138,8 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
         std::vector<uint32_t> runtime_args = {
             src_buffer->address(),
             dst_buffer->address(),
-            tiles_handled_per_core,
-            num_tiles_per_core,
+            pages_handled_per_core,
+            num_pages_per_core,
             semaphore_addr,
             (uint32_t)noc_controller.x,
             (uint32_t)noc_controller.y,
@@ -152,8 +162,13 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
             (uint32_t)logical_multicast_regions.back().size(),
             (uint32_t)do_third_multicast
         };
+        if (!tilized) {
+            runtime_args.push_back(page_size);
+            runtime_args.push_back(aligned_page_size);
+            runtime_args.push_back(log2_page_size);
+        }
         SetRuntimeArgs(program, kernel_id, core, runtime_args);
-        tiles_handled_per_core += num_tiles_per_core;
+        pages_handled_per_core += num_pages_per_core;
     }
 
     auto override_runtime_args_callback = [kernel_id, num_cores, num_cores_y](const Program &program, const std::vector<Buffer*>& input_buffers, const std::vector<Buffer*>& output_buffers) {

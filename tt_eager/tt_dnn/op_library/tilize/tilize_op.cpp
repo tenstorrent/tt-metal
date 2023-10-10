@@ -5,7 +5,7 @@
 #include <math.h>
 
 #include "tt_dnn/op_library/tilize/tilize_op.hpp"
-#include "tt_dnn/op_library/clone/clone_op.hpp"
+#include "tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"

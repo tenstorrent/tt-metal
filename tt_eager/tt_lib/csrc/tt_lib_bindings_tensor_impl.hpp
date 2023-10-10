@@ -37,9 +37,7 @@ void bind_binary_op(py::module_ &module, std::string op_name, Func &&f, std::str
     std::string docstring = fmt::format(R"doc(
         {0}
 
-        Both input tensors must have BFLOAT16 data type, and be of equal shape.
-
-        Output tensor will have BFLOAT16 data type.
+        Both input tensors must be of equal shape.
 
         .. csv-table::
             :header: "Argument", "Description", "Data type", "Valid range", "Required"

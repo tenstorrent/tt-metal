@@ -13,7 +13,7 @@
 #include "tt_metal/detail/util.hpp"
 
 #include "tt_dnn/op_library/run_operation.hpp"
-
+#include "tt_metal/detail/tt_metal.hpp"
 using namespace tt::constants;
 
 namespace move_op_utils {
@@ -39,6 +39,7 @@ struct Move {
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    MoveOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
@@ -60,8 +61,10 @@ inline Tensor move(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config
     DeallocateBuffer(*input_tensor.buffer());
     auto output_tensor = create_device_tensor(input_tensor.shape(), input_tensor.dtype(), input_tensor.layout(), input_tensor.device(), output_mem_config);
 
+    bool tilized = input_tensor.layout() == Layout::TILE;
+
     // get_parallelization_strategy
-    uint32_t num_tiles = input_tensor.volume() / TILE_HW;
+    uint32_t num_units = tilized ? input_tensor.volume() / TILE_HW : input_tensor.volume() / input_tensor.shape()[-1];
 
     bool move_within_same_mem_space = input_mem_config.buffer_type == output_mem_config.buffer_type;
     // Input and output addresses won't overlap if they are in different memory substrates
@@ -93,9 +96,9 @@ inline Tensor move(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config
     bool fits_in_cb = (L1_UNRESERVED_BASE + size_per_l1_bank) <= (output_mem_config.buffer_type == tt_metal::BufferType::L1 ? output_tensor.buffer()->address() : output_tensor.device()->l1_size_per_core());
 
     MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::SINGLE_CORE;
-    if (num_tiles > 1 and non_overlap) {
+    if (num_units > 1 and non_overlap) {
         move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE;
-    } else if (num_tiles > 1 and (not non_overlap) and fits_in_cb and compute_with_storage_grid_size.x > 1 and compute_with_storage_grid_size.y > 1) {
+    } else if (num_units > 1 and (not non_overlap) and fits_in_cb and compute_with_storage_grid_size.x > 1 and compute_with_storage_grid_size.y > 1) {
         move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP;
     }
 

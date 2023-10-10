@@ -4,7 +4,7 @@
 
 #include "tt_dnn/op_library/concat/concat_op.hpp"
 
-#include "tt_dnn/op_library/clone/clone_op.hpp"
+#include "tt_dnn/op_library/copy/copy_op.hpp"
 
 #include "tensor/tensor_utils.hpp"
 

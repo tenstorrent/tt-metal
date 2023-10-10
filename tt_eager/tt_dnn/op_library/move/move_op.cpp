@@ -34,7 +34,6 @@ namespace tt_metal {
 
 void Move::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_ASSERT((input_tensor_a.layout() == Layout::TILE), "Inputs to move must be tilized");
 }
 
 std::vector<Shape> Move::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -62,6 +61,9 @@ operation::ProgramWithCallbacks Move::create_program(const std::vector<Tensor>& 
     }
 }
 
+MoveOpParallelizationStrategy Move::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+    return this->move_op_parallelization_strategy;
+}
 
 tt::stl::reflection::Attributes Move::attributes() const {
     return {

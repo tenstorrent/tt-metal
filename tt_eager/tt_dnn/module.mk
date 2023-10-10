@@ -4,9 +4,9 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/layout_conversion/layout_conversion_op.cpp \
 	tt_eager/tt_dnn/op_library/sharded/sharded_op.cpp \
 	tt_eager/tt_dnn/op_library/sharded/multi_core/sharded_op_multi_core.cpp \
-	tt_eager/tt_dnn/op_library/clone/clone_op.cpp \
-	tt_eager/tt_dnn/op_library/clone/single_core/clone_op_single_core.cpp \
-	tt_eager/tt_dnn/op_library/clone/multi_core/clone_op_multi_core.cpp \
+	tt_eager/tt_dnn/op_library/copy/copy_op.cpp \
+	tt_eager/tt_dnn/op_library/copy/single_core/copy_op_single_core.cpp \
+	tt_eager/tt_dnn/op_library/copy/multi_core/copy_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/move/move_op.cpp \
 	tt_eager/tt_dnn/op_library/move/single_core/move_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/move/multi_core/move_op_multi_core.cpp \

@@ -72,6 +72,23 @@ def linear(
 #################### TT-DNN ####################
 ################################################
 @setup_host_and_device
+def copy(
+    x,
+    y,
+    *args,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = ttl.tensor.copy(t0, t1)
+
+    return tt2torch_tensor(t1)
+
+@setup_host_and_device
 def clone(
     x,
     *args,

@@ -28,8 +28,13 @@ void kernel_main() {
         .data_format = data_format
     };
 
+    #ifdef BACKWARDS
+    uint32_t end_id = start_id - num_tiles;
+    for (uint32_t i = start_id; i != end_id; -- i) {
+    #else
     uint32_t end_id = start_id + num_tiles;
-    for (uint32_t i = start_id; i < end_id; i ++) {
+    for (uint32_t i = start_id; i < end_id; ++ i) {
+    #endif
         cb_wait_front(cb_id_out, onetile);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
         noc_async_write_tile(i, s, l1_read_addr);

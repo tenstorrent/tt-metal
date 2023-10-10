@@ -22,6 +22,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.clone,
         "pytorch_op": pytorch_ops.clone,
     },
+    "copy": {
+        "tt_lib_op": tt_lib_ops.copy,
+        "pytorch_op": pytorch_ops.copy,
+    },
     "move": {
         "tt_lib_op": tt_lib_ops.move,
         "pytorch_op": pytorch_ops.move,

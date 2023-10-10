@@ -26,8 +26,11 @@ def linear(x, weight, bias=None, *args, **kwargs):
 ################################################
 #################### TT-DNN ####################
 ################################################
+def copy(x, y, *args, **kwargs):
+    return y.copy_(x)
+
 def clone(x, *args, **kwargs):
-    return x
+    return torch.clone(x)
 
 
 def move(x, *args, **kwargs):

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_dnn/op_library/pad/pad_op.hpp"
-#include "tt_dnn/op_library/clone/clone_op.hpp"
+#include "tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
