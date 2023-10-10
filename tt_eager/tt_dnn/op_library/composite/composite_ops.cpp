@@ -684,6 +684,29 @@ Tensor addalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const
     return operation::decorate_as_composite(__func__, _addalpha)(input_a, input_b, alpha, output_mem_config);
 }
 
+//nextafter
+Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    float eps;
+    if (is_arch_whb0(input_a.device()->arch())) {
+        eps = 1.19209e-07f;
+    } else {
+        eps = 0.001953125f;
+    }
+    Tensor result(input_a);
+    {
+        Tensor eps_gt(input_a);
+        {
+            eps_gt = where(gt(input_a, input_b, std::nullopt, output_mem_config), add_unary(input_a, eps, output_mem_config), input_a, output_mem_config);
+        }
+        result = where(lt(input_a, input_b, std::nullopt, output_mem_config), sub_unary(input_a, eps, output_mem_config), eps_gt, output_mem_config);
+    }
+    return result;
+}
+Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _nextafter)(input_a, input_b, output_mem_config);
+}
+
 //addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
 Tensor _addcmul(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c, float value, const MemoryConfig& output_mem_config) {
     Tensor t_value = mk_tiled_scalar(value);

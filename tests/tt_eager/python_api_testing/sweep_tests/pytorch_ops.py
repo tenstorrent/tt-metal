@@ -649,6 +649,10 @@ def atan2(x, y, *args, **kwargs):
     return torch.atan2(y, x)
 
 
+def nextafter(x, y, *args, **kwargs):
+    return torch.nextafter(x, y)
+
+
 def logical_and(x, y, *args, **kwargs):
     result = torch.logical_and(x, y)
     return result
