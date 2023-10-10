@@ -22,9 +22,10 @@ namespace sfpu
 
 
 
-sfpi_inline vFloat sfpu_exp(vFloat val)
+sfpi_inline vFloat sfpu_exp(vFloat _val)
 {
     // If exponent is > -1 extract it and replace with -1
+    vFloat val = _val;
     vInt exp = exexp(val);
     v_if (exp >= 0) {
         val = setexp(val, 126);
@@ -45,6 +46,11 @@ sfpi_inline vFloat sfpu_exp(vFloat val)
         }
     }
     v_endif;
+
+    //: ZERO_NEGATIVE
+    v_if( _val < -87.0f) {
+        val = 0.0f;
+    } v_endif;
 
     return val;
 }
@@ -108,7 +114,7 @@ template <bool APPROXIMATION_MODE>
 sfpi_inline vFloat calculate_exponential_body(vFloat in)
 {
     vFloat out;
-
+    vFloat _val = in;
     if constexpr (APPROXIMATION_MODE)
     {
         constexpr int FRAC_BITS = 3;
@@ -139,13 +145,19 @@ sfpi_inline vFloat calculate_exponential_body(vFloat in)
         v_endif;
     }
 
+    //: ZERO_NEGATIVE
+    v_if( _val < -87.0f) {
+        out = 0.0f;
+    } v_endif;
+
     return out;
 }
 
 
 template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE>
-sfpi_inline vFloat calculate_exponential_body_improved(vFloat val)
+sfpi_inline vFloat calculate_exponential_body_improved(vFloat _val)
 {
+    vFloat val = _val;
     vFloat out;
     if constexpr (APPROXIMATION_MODE)
     {
@@ -181,6 +193,12 @@ sfpi_inline vFloat calculate_exponential_body_improved(vFloat val)
         }
         v_endif;
     }
+
+    //: ZERO_NEGATIVE
+    v_if( _val < -87.0f) {
+        out = 0.0f;
+    } v_endif;
+
     return out;
 }
 

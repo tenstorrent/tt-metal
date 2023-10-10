@@ -19,9 +19,10 @@ namespace ckernel
 {
 namespace sfpu
 {
-sfpi_inline vFloat sfpu_exp(vFloat val)
+sfpi_inline vFloat sfpu_exp(const vFloat _val)
 {
     // If exponent is > -1 extract it and replace with -1
+    vFloat val = _val;
     vInt exp = exexp(val);
     v_if (exp >= 0) {
         val = setexp(val, 126);
@@ -43,6 +44,11 @@ sfpi_inline vFloat sfpu_exp(vFloat val)
         }
     }
     v_endif;
+
+    //ZERO_NEGATIVE
+    v_if( _val < -87.0f) {
+        val = 0.0f;
+    } v_endif;
 
     return val;
 }
@@ -85,7 +91,7 @@ inline void calculate_exponential(int16_t exp_base_scale_factor = 0)
             // without using Relu in Packer to clamp -ve Infinity to 0.
             if constexpr (ZERO_NEGATIVE)
             {
-                v_if (val_short < 0) {
+                v_if (dst_reg[0] < -87.0f) {
                     dst_reg[0] = vConst0;
                 }
                 v_endif;
@@ -100,7 +106,9 @@ inline void calculate_exponential(int16_t exp_base_scale_factor = 0)
 
             // Loaded by reciprocal
             dst_reg[0] = val;
-            v_if (orig < 0) {
+            v_if( orig < -87.0f ) {
+                dst_reg[0] = 0.0f;
+            } v_elseif( orig < 0.0f ) {
                 dst_reg[0] = sfpu_reciprocal<false>(val);
             }
             v_endif;
@@ -170,10 +178,17 @@ sfpi_inline vFloat calculate_exponential_body(vFloat in)
         }
         v_endif;
     }
+
+    if constexpr (ZERO_NEGATIVE) {
+        v_if (in < -87.0f) {
+            out = 0.0f;
+        } v_endif;
+    }
+
     return out;
 }
 
-
+//meaning of ZERO_NEGATIVE is different here as from prior templates
 template <bool APPROXIMATION_MODE, bool ZERO_NEGATIVE>
 sfpi_inline vFloat calculate_exponential_body_improved(vFloat in)
 {
@@ -225,6 +240,7 @@ sfpi_inline vFloat calculate_exponential_body_improved(vFloat in)
         }
         v_endif;
     }
+
     return out;
 }
 
