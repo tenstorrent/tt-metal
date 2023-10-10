@@ -1447,3 +1447,73 @@ def gen_tilize_args(input_shapes, dtypes, layouts, mem_configs):
     for info in new_input_info:
         if input_info is not None:
             yield info
+
+
+def sanitize_args_bert(input_shapes, input_setup):
+    for i in range(len(input_shapes)):
+        shape = input_shapes[i]
+
+        if (
+            (
+                input_setup[i]["layout"] == ttl.tensor.Layout.ROW_MAJOR
+                and input_setup[i]["input_mem_config"] != None
+                and shape[3] % 2 != 0
+            )  # Shape cannot be placed as row major on device
+            or (
+                input_setup[i]["dtype"] == ttl.tensor.DataType.BFLOAT8_B
+                and input_setup[i]["layout"] != ttl.tensor.Layout.TILE
+            )  # BFLOAT8_B must be tile layout
+        ):
+            return None
+    return input_setup
+
+
+def gen_dtype_layout_device_bert(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    mem_configs=[supported_mem_configs], # mem_configs[-1] is outpu_mem_config
+):
+    # last buffer_types option is for output buffer
+    dtype_mem_config_layouts = []
+
+    for i in range(len(input_shapes)):
+        dtype_mem_config_layout = []
+
+        for dtype, layout, input_mem_config in product(
+            dtypes[i],
+            layouts[i],
+            mem_configs[i],
+        ):
+            dtype_mem_config_layout.append(
+                {"dtype": dtype, "layout": layout, "input_mem_config": input_mem_config}
+            )
+
+        dtype_mem_config_layouts.append(dtype_mem_config_layout)
+
+    result = []
+
+    for out_mem_config in mem_configs[-1]:
+        for dtype_mem_config_layout_combination in product(*dtype_mem_config_layouts):
+            out = sanitize_args_bert(input_shapes, dtype_mem_config_layout_combination)
+
+            if out is not None:
+                dtype = []
+                layout = []
+                input_mem_config = []
+
+                for x in dtype_mem_config_layout_combination:
+                    dtype.append(x["dtype"])
+                    layout.append(x["layout"])
+                    input_mem_config.append(x["input_mem_config"])
+
+                result.append(
+                    {
+                        "dtype": dtype,
+                        "layout": layout,
+                        "input_mem_config": input_mem_config,
+                        "output_mem_config": out_mem_config,
+                    }
+                )
+
+    return result

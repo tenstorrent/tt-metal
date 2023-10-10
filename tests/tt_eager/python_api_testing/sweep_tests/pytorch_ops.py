@@ -959,3 +959,8 @@ def bert_large_pre_softmax_bmm(x, y, *args, **kwargs):
 def bert_large_post_softmax_bmm(x, y, *args, **kwargs):
     ref_bmm = torch.matmul(x.reshape([9, 16, 384, 384]), y)
     return ref_bmm
+
+def bert_large_ff1_matmul(x, y, z, *args, **kwargs):
+    ref_bmm = torch.matmul(x, y)
+    ref_bmm = ref_bmm + z
+    return ref_bmm
