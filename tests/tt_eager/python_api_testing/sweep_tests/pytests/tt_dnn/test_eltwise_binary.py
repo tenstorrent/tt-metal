@@ -3,18 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import sys
 import torch
-from pathlib import Path
 from functools import partial
-import copy
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
+import tt_lib as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
@@ -31,8 +22,8 @@ shapes = [
     [[1, 3, 320, 384], [1, 3, 320, 384]],  # Multi core
 ]
 
-input_mem_cfgs = copy.copy(generation_funcs.supported_mem_configs)
-output_mem_cfgs = copy.copy(generation_funcs.supported_mem_configs)
+input_mem_cfgs = generation_funcs.supported_mem_configs
+output_mem_cfgs = generation_funcs.supported_mem_configs
 
 if is_wormhole_b0():
     shapes = [
@@ -41,7 +32,7 @@ if is_wormhole_b0():
     input_mem_cfgs = [
         input_mem_cfgs[0],
     ]
-    #del output_mem_cfgs[1:]
+
 
 @pytest.mark.parametrize(
     "input_shapes",
@@ -51,25 +42,26 @@ if is_wormhole_b0():
 @pytest.mark.parametrize("output_mem_config", output_mem_cfgs)
 class TestEltwiseBinary:
     @pytest.mark.parametrize("fn_kind", ["add", "sub", "mul", "squared_difference"])
+    @pytest.mark.parametrize("in0_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+    @pytest.mark.parametrize("in1_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
     def test_run_eltwise_binary_ops(
         self,
         input_shapes,
         fn_kind,
+        in0_dtype,
+        in1_dtype,
         input_mem_config,
         output_mem_config,
         device,
         function_level_defaults,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
         ] * len(input_shapes)
-        test_args = list(
-            generation_funcs.gen_default_dtype_layout_device(input_shapes)
-        )[0]
+        test_args = list(generation_funcs.gen_default_dtype_layout_device(input_shapes))[0]
         test_args.update(
             {
+                "dtype": [in0_dtype, in1_dtype],
                 "input_mem_config": [input_mem_config, input_mem_config],
                 "output_mem_config": output_mem_config,
             }
@@ -84,7 +76,12 @@ class TestEltwiseBinary:
             test_args,
         )
 
-    @pytest.mark.parametrize("fn_kind", ["bias_gelu",])
+    @pytest.mark.parametrize(
+        "fn_kind",
+        [
+            "bias_gelu",
+        ],
+    )
     def test_run_eltwise_binary_bias_ops(
         self,
         input_shapes,
@@ -95,14 +92,10 @@ class TestEltwiseBinary:
         function_level_defaults,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
         ] * len(input_shapes)
 
-        test_args = list(
-            generation_funcs.gen_default_dtype_layout_device(input_shapes)
-        )[0]
+        test_args = list(generation_funcs.gen_default_dtype_layout_device(input_shapes))[0]
         test_args.update(
             {
                 "input_mem_config": [input_mem_config, input_mem_config],
@@ -130,13 +123,9 @@ class TestEltwiseBinary:
         function_level_defaults,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
         ] * len(input_shapes)
-        test_args = list(
-            generation_funcs.gen_default_dtype_layout_device(input_shapes)
-        )[0]
+        test_args = list(generation_funcs.gen_default_dtype_layout_device(input_shapes))[0]
         test_args.update(
             {
                 "input_mem_config": [input_mem_config, input_mem_config],
@@ -156,8 +145,8 @@ class TestEltwiseBinary:
     @pytest.mark.parametrize(
         "log_kind, input_range",
         (
-            ("logaddexp",  {"low": -90, "high": 90}),
-            ("ldexp",      {"low": -64, "high": 64}),
+            ("logaddexp", {"low": -90, "high": 90}),
+            ("ldexp", {"low": -64, "high": 64}),
             ("logaddexp2", {"low": -100, "high": 100}),
         ),
     )
@@ -165,15 +154,12 @@ class TestEltwiseBinary:
         self, input_shapes, input_mem_config, output_mem_config, log_kind, input_range, device, function_level_defaults
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, **input_range), torch.bfloat16
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, **input_range), torch.bfloat16)
         ] * len(input_shapes)
         test_args = list(generation_funcs.gen_default_dtype_layout_device(input_shapes))[0]
-        test_args.update({
-            "input_mem_config": [input_mem_config, input_mem_config],
-            "output_mem_config": output_mem_config
-        })
+        test_args.update(
+            {"input_mem_config": [input_mem_config, input_mem_config], "output_mem_config": output_mem_config}
+        )
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-{log_kind}",
@@ -184,8 +170,7 @@ class TestEltwiseBinary:
             test_args,
         )
 
-
-    @pytest.mark.parametrize("logical_kind", ["logical_and","logical_or"])
+    @pytest.mark.parametrize("logical_kind", ["logical_and", "logical_or"])
     def test_run_eltwise_binary_logical_ops(
         self,
         input_shapes,
@@ -196,13 +181,9 @@ class TestEltwiseBinary:
         function_level_defaults,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=-100, high=100), torch.int32
-            )
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.int32)
         ] * len(input_shapes)
-        test_args = list(
-            generation_funcs.gen_default_dtype_layout_device(input_shapes)
-        )[0]
+        test_args = list(generation_funcs.gen_default_dtype_layout_device(input_shapes))[0]
         test_args.update(
             {
                 "input_mem_config": [input_mem_config, input_mem_config],

@@ -299,10 +299,10 @@ std::vector<Tensor> run_with_autoformat(
 std::vector<Tensor> run_with_autoformat(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
-    const std::vector<FormatParams> input_formatting,
-    const std::vector<Layout> output_layouts,
+    const std::vector<FormatParams>& input_formatting,
+    const std::vector<Layout>& output_layouts,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-    const std::vector<FormatParams> optional_input_formatting
+    const std::vector<std::optional<FormatParams>>& optional_input_formatting
 ) {
     Device* device = detail::get_device(input_tensors, optional_input_tensors);
 
@@ -319,7 +319,9 @@ std::vector<Tensor> run_with_autoformat(
     for (uint32_t i = 0; i < optional_input_tensors.size(); i++) {
         if (optional_input_tensors[i].has_value()) {
             auto& input_tensor = optional_input_tensors[i].value();
-            formatted_optional_input_tensors.push_back(AutoFormat::format_input_tensor(input_tensor, device, optional_input_formatting[i].pad_shape, optional_input_formatting[i].pad_value, optional_input_formatting[i].target_layout));
+            TT_ASSERT(optional_input_formatting.at(i).has_value());
+            auto& input_formatting = optional_input_formatting.at(i).value();
+            formatted_optional_input_tensors.push_back(AutoFormat::format_input_tensor(input_tensor, device, input_formatting.pad_shape, input_formatting.pad_value, input_formatting.target_layout));
         } else {
             formatted_optional_input_tensors.push_back(optional_input_tensors[i]);
         }

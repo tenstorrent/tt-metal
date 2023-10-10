@@ -16,8 +16,10 @@ namespace primary {
 
 using namespace tt_metal;
 
-struct SoftmaxInPlace {
+struct Softmax {
     const std::optional<float> scale;
+    const bool inplace;
+    const MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -48,4 +50,13 @@ Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> sc
 
 }  // namespace primary
 }  // namespace operations
+
+namespace tt_metal {
+Tensor softmax(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+namespace transformers {
+Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+}  // namespace transformers
+}  // namespace tt_metal
+
 }  // namespace tt

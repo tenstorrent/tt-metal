@@ -26,10 +26,11 @@ ALWI void REL() { release_dst(tt::DstMode::Half); }
 namespace NAMESPACE {
 void MAIN {
 
-    uint32_t NCHt = get_arg_val<uint32_t>(0);
-    uint32_t Ht = get_arg_val<uint32_t>(1);
-    uint32_t Wt = get_arg_val<uint32_t>(2);
-    uint32_t ndst = get_arg_val<uint32_t>(3);
+    const uint32_t NCHt = get_arg_val<uint32_t>(0);
+    const uint32_t Ht = get_arg_val<uint32_t>(1);
+    const uint32_t Wt = get_arg_val<uint32_t>(2);
+    const uint32_t ndst = get_arg_val<uint32_t>(3);
+    const uint32_t start_ht = get_arg_val<uint32_t>(4);
     binary_op_init_common(tt::CB::c_in0, tt::CB::c_in2);
 
     constexpr uint32_t onetile = 1;
@@ -54,7 +55,8 @@ void MAIN {
     #endif
 
     constexpr int dst0 = 0;
-    uint32_t ht = 0;
+    uint32_t ht = start_ht;
+    bool wait_mask = true;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         #if FUSED_SCALE_MASK
         for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
@@ -74,7 +76,7 @@ void MAIN {
 
         for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
             ACQ();
-            if (ht == 0) {
+            if (wait_mask) {
                 cb_wait_front(cb_fused_attn, wt+ndst); // cumulative wait for up to Wt tiles, only at first ht
             }
             cb_wait_front(cb_scale_mask, ndst);
@@ -92,8 +94,15 @@ void MAIN {
             cb_push_back(cb_exps, ndst);
             REL();
         }
-        if (ht == Ht-1)
+        if (wait_mask) {
+            wait_mask = false;
+        }
+        ht++;
+        if (ht == Ht) {
             cb_pop_front(cb_fused_attn, Wt);
+            ht = 0;
+            wait_mask = true;
+        }
         #else
 
         for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
@@ -152,9 +161,6 @@ void MAIN {
         }
         cb_pop_front(cb_recipsumexps, 1);
         cb_pop_front(cb_exps, Wt);
-        ht ++;
-        if (ht == Ht)
-            ht = 0;
     } // NCHt loop
     //cb_pop_front(cb_bcast_scaler, 1); // we don't actually have to do this
     //cb_pop_front(cb_fused_scale, 1); // we don't actually have to do this
