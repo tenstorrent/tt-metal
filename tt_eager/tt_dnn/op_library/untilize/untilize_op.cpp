@@ -6,6 +6,7 @@
 
 
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
+#include "tt_dnn/op_library/clone/clone_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_metal/host_api.hpp"
@@ -89,13 +90,17 @@ tt::stl::reflection::Attributes Untilize::attributes() const {
     };
 }
 
-Tensor untilize(const Tensor &input_tensor_a, const MemoryConfig& mem_config, bool use_multicore) {
+Tensor untilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_config, bool use_multicore) {
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
         log_warning("Perf warning: Trying to untilize non-tilized data.");
-        return input_tensor_a;
+        if (input_tensor_a.memory_config() != output_mem_config) {
+            return clone(input_tensor_a, output_mem_config);
+        } else {
+            return input_tensor_a;
+        }
     }
-    return operation::run_without_autoformat(Untilize{mem_config, use_multicore}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(Untilize{output_mem_config, use_multicore}, {input_tensor_a}).at(0);
 }
 
 
@@ -158,7 +163,7 @@ tt::stl::reflection::Attributes UntilizeWithUnpadding::attributes() const {
     };
 }
 
-Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& mem_config) {
+Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& output_mem_config) {
     // No-op (Will do a tensor copy)
     // TODO: We need to run asserts before this
     const Shape output_tensor_shape = {
@@ -170,12 +175,16 @@ Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const Shape &output
     if (input_tensor_a.layout() != Layout::TILE) {
         if (input_tensor_a.shape() == output_tensor_shape) {
             log_warning("Perf warning: Untilize with unpadding called on already untilized tensor of target shape");
-            return input_tensor_a;
+            if (input_tensor_a.memory_config() != output_mem_config) {
+                return clone(input_tensor_a, output_mem_config);
+            } else {
+                return input_tensor_a;
+            }
         } else {
             TT_ASSERT(false, "Cannot untilize and unpad input which is not tilized");
         }
     }
-    return operation::run_without_autoformat(UntilizeWithUnpadding{output_tensor_start, output_tensor_end, mem_config}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(UntilizeWithUnpadding{output_tensor_start, output_tensor_end, output_mem_config}, {input_tensor_a}).at(0);
 }
 
 }  // namespace tt_metal

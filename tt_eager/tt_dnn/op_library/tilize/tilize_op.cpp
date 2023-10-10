@@ -5,6 +5,7 @@
 #include <math.h>
 
 #include "tt_dnn/op_library/tilize/tilize_op.hpp"
+#include "tt_dnn/op_library/clone/clone_op.hpp"
 #include "tt_dnn/op_library/math.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -81,7 +82,11 @@ Tensor tilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_confi
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::TILE) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
-        return input_tensor_a;
+        if (input_tensor_a.memory_config() != output_mem_config) {
+            return clone(input_tensor_a, output_mem_config);
+        } else {
+            return input_tensor_a;
+        }
     }
     return operation::run_without_autoformat(Tilize{output_mem_config, use_multicore}, {input_tensor_a}).at(0);
 }
@@ -156,7 +161,11 @@ Tensor tilize_with_zero_padding(const Tensor &input_tensor_a, const MemoryConfig
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::TILE) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
-        return input_tensor_a;
+        if (input_tensor_a.memory_config() != output_mem_config) {
+            return clone(input_tensor_a, output_mem_config);
+        } else {
+            return input_tensor_a;
+        }
     }
     auto shape = input_tensor_a.shape();
 

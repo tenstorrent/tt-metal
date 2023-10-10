@@ -4,6 +4,7 @@
 
 #include "tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
+#include "tt_dnn/op_library/clone/clone_op.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -106,6 +107,15 @@ Tensor permute(const Tensor &a, std::vector<std::int64_t> dims, const MemoryConf
 
     std::vector<uint32_t> normalized_dims(dims.size());
     std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [a](std::int64_t idx) {return a.shape().get_normalized_index(idx);});
+    std::vector<uint32_t> seq_dims(dims.size());
+    std::iota(seq_dims.begin(), seq_dims.end(), 0);
+    if (normalized_dims == seq_dims) {
+        if (a.memory_config() != output_mem_config) {
+            return clone(a, output_mem_config);
+        } else {
+            return a;
+        }
+    }
     return operation::decorate_as_composite(__func__, permute_)(a, normalized_dims, output_mem_config);
 }
 
