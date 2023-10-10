@@ -750,7 +750,7 @@ class AdaptiveAvgPool2d(torch.nn.Module):
 
 
 @convert_tt_tensors_wrapper
-def bitwise_or(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
+def unary_bitwise_or(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
     """
     Computes the bitwise OR of ``input`` and ``other``.
 
@@ -759,16 +759,14 @@ def bitwise_or(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
     +============+===============================================+=============+=================+==========+
     | input      | Input tensor                                  | Tensor      |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
-    | other      | Other value to peform OR                      | int         |                 | Yes      |
+    | other      | Immediate value                               | int         |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
     return torch.bitwise_or(input.to(torch.int), other)
 
 
 @convert_tt_tensors_wrapper
-def bitwise_and(
-    input: ttl_tensor.Tensor, other: int
-) -> ttl_tensor.Tensor:
+def unary_bitwise_and(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
     """
     Computes the bitwise AND of ``input`` and ``other``.
 
@@ -777,16 +775,14 @@ def bitwise_and(
     +============+===============================================+=============+=================+==========+
     | input      | Input tensor                                  | Tensor      |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
-    | other      | Other value to peform AND                     | int         |                 | Yes      |
+    | other      | Immediate value                               | int         |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
     return torch.bitwise_and(input.to(torch.int), other)
 
 
 @convert_tt_tensors_wrapper
-def bitwise_xor(
-    input: ttl_tensor.Tensor, other: int
-) -> ttl_tensor.Tensor:
+def unary_bitwise_xor(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
     """
     Computes the bitwise XOR of ``input`` and ``other``.
 
@@ -795,16 +791,14 @@ def bitwise_xor(
     +============+===============================================+=============+=================+==========+
     | input      | Input tensor                                  | Tensor      |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
-    | other      | Other value to peform XOR                     | int         |                 | Yes      |
+    | other      | Immediate value                               | int         |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
     return torch.bitwise_xor(input.to(torch.int), other)
 
 
 @convert_tt_tensors_wrapper
-def bitwise_not(
-    input: ttl_tensor.Tensor
-) -> ttl_tensor.Tensor:
+def bitwise_not(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
     """
     Computes the bitwise NOT of the given ``input`` tensor.
 
@@ -816,3 +810,51 @@ def bitwise_not(
 
     """
     return torch.bitwise_not(input.to(torch.int))
+
+
+@convert_tt_tensors_wrapper
+def binary_bitwise_or(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    """
+    Computes the bitwise OR of ``input`` and ``other``.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | First tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | other      | Second tensor                                 | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.bitwise_or(input.to(torch.int), other.to(torch.int))
+
+
+@convert_tt_tensors_wrapper
+def binary_bitwise_and(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    """
+    Computes the bitwise AND of ``input`` and ``other``.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | First tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | other      | Second Tensor                                 | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.bitwise_and(input.to(torch.int), other.to(torch.int))
+
+
+@convert_tt_tensors_wrapper
+def binary_bitwise_xor(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    """
+    Computes the bitwise XOR of ``input`` and ``other``.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | First tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | other      | Second tensor                                 | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.bitwise_xor(input.to(torch.int), other.to(torch.int))
