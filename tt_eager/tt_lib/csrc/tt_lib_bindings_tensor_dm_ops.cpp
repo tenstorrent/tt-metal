@@ -16,7 +16,7 @@
 #include "tt_dnn/op_library/concat/concat_op.hpp"
 #include "tt_dnn/op_library/bcast/bcast_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
-#include "tt_dnn/op_library/clone/clone_op.hpp"
+#include "tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_dnn/op_library/sharded/sharded_op.hpp"
 
 namespace tt::tt_metal::detail{
@@ -43,6 +43,7 @@ namespace tt::tt_metal::detail{
         detail::export_enum<BcastOpDim>(m_tensor);
 
         detail::bind_unary_op(m_tensor, "clone", &clone, R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.)doc");
+        detail::bind_binary_op<false, false>(m_tensor, "copy", &copy, R"doc(  Copies the elements from ``{0}`` into ``{1}``. ``{1}`` is modified in place.)doc");
 
         // *** tensor manipulation ***
         m_tensor.def("concat", &concat,

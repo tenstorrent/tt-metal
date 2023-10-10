@@ -108,8 +108,6 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
     TT_ASSERT(input_tensor_a.device() == input_tensor_b.device(), "Operands to eltwise binary need to be on the same device!");
     TT_ASSERT(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to eltwise binary need to be allocated in buffers on device!");
     TT_ASSERT((input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE), "Inputs to eltwise binary must be tilized");
-    TT_ASSERT(input_tensor_a.dtype() == input_tensor_b.dtype());
-    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         if (input_tensor_b.memory_config().is_sharded()) {

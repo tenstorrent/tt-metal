@@ -29,7 +29,14 @@ void kernel_main() {
         .page_size = stick_size
     };
     #endif
-    for (uint32_t i = start_id; i < start_id + num_sticks; i++) {
+
+    #ifdef BACKWARDS
+    uint32_t end_id = start_id - num_sticks;
+    for (uint32_t i = start_id; i != end_id; -- i) {
+    #else
+    uint32_t end_id = start_id + num_sticks;
+    for (uint32_t i = start_id; i < end_id; ++ i) {
+    #endif
         cb_wait_front(cb_id_out0, 1);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
         uint64_t dst_noc_addr = get_noc_addr(i, s0);

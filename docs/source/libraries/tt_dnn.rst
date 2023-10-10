@@ -396,7 +396,6 @@ Tensor ternary operations
 
 .. autofunction:: tt_lib.tensor.threshold
 
-
 Tensor matrix math operations
 -----------------------------
 
@@ -432,6 +431,10 @@ but in general retaining the data.
 
 .. autofunction:: tt_lib.tensor.unpad
 
+.. autofunction:: tt_lib.tensor.clone
+
+.. autofunction:: tt_lib.tensor.copy
+
 Tensor creation operations
 --------------------------
 
@@ -459,10 +462,6 @@ Broadcast and Reduce
 
 .. autofunction:: tt_lib.tensor.reduce
 
-Other Operations
-----------------
-
-.. autofunction:: tt_lib.tensor.clone
 
 Fallback Operations
 ===================
