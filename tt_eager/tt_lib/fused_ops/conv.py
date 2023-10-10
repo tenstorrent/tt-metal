@@ -282,3 +282,66 @@ def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, ac
         return output_plus_bias
 
     return conv_
+
+def resnet50_1x1_conv_s2_as_downsample_and_matmul(weight: List[Union[int, float]], conv_params, downsample_params, device, bias, matmul_config):
+    """
+    Returns a function that performs a Convolution. Bias is fused with matmul.
+    """
+    assert len(conv_params) == 10
+    K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
+
+    assert R == S and R == 1 and P_H == P_W and P_H == 0 and U == V and U == 2
+    assert dilation == 1 and groups == 1
+
+    weights_shape = [K, C, R, S]
+
+    assert C % 16 == 0
+    assert K % 32 == 0
+
+    weight_untiled = tensor.Tensor(
+        weight, weights_shape, tensor.DataType.BFLOAT16, tensor.Layout.ROW_MAJOR
+    )
+    # weight for matmul op
+    weight_tiled_ = tensor.convert_conv_weight_tensor_to_tiled_layout(
+        weight_untiled, 1, 1
+    )
+
+    weight_on_device = weight_tiled_.to(device)
+    bias_shape = [1, 1, 1, K]
+    bias_channels_padded_shape = [1, 1, 32, K]
+    bias_ = (
+        tensor.Tensor(
+            bias, bias_shape, tensor.DataType.BFLOAT16, tensor.Layout.ROW_MAJOR
+        )
+        .pad(bias_channels_padded_shape, (0, 0, 0, 0), 0)
+        .to(tensor.Layout.TILE)
+    )
+    bias_on_device = bias_.to(device)
+    if isinstance(matmul_config, dict):
+        matmul_program_config = operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                                        compute_with_storage_grid_size=matmul_config["compute_with_storage_grid_size"],
+                                        in0_block_w=matmul_config["in0_block_w"],
+                                        out_subblock_h=matmul_config["out_subblock_h"],
+                                        out_subblock_w=matmul_config["out_subblock_w"],
+                                        per_core_M=matmul_config["per_core_M"],
+                                        per_core_N=matmul_config["per_core_N"],
+                                        transpose_mcast=False,
+                                        fused_activation=None)
+    else:
+        matmul_program_config = matmul_config
+
+    # input and output must be sharded
+    sharded_memory_config = tensor.MemoryConfig(
+                tensor.TensorMemoryLayout.HEIGHT_SHARDED, tensor.BufferType.L1
+            )
+    def conv_(activation):
+        # downsample op
+        output = tensor.downsample (activation, downsample_params, sharded_memory_config)
+        output = operations.primary.matmul(output, weight_on_device, bias=bias_on_device, program_config=matmul_program_config,
+                                            output_mem_config=sharded_memory_config,
+                                            output_dtype=activation.dtype(),
+                                            math_fidelity=tensor.MathFidelity.HiFi4)
+
+        return output
+
+    return conv_
