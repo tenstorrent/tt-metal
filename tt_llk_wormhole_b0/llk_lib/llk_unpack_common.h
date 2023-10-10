@@ -132,3 +132,7 @@ inline void llk_unpack_dbg_feature_disable(){
     reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1<<11); // Set debug feature disable bit 11
                                                            // workaround for bug tenstorrent/budabackend#1372
 }
+
+inline void llk_enable_int8_fpu_math() {
+    enalbe_int8_fpu_math();
+}

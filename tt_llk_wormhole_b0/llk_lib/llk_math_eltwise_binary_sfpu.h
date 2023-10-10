@@ -102,7 +102,7 @@ inline void llk_math_eltwise_binary_sfpu(
 
 template <SfpuType sfpu_op, bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_init(
-    const uint operand, uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0) {
+    uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0) {
     TT_LLK_DUMP("llk_math_eltwise_binary_sfpu_init<{}, {}>({}, {}, {}, {}, {}, {})", sfpu_op, APPROXIMATE, param0, param1, param2, param3, param4, param5);
     eltwise_binary_sfpu_configure_addrmod< sfpu_op >();
     if constexpr (sfpu_op == SfpuType::quant_int32) {
@@ -125,8 +125,8 @@ inline void llk_math_eltwise_binary_sfpu_quant_int32(const uint operand, uint ds
 }
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_binary_sfpu_quant_int32_init(const uint operand, const uint zero_point) {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::quant_int32, APPROXIMATE>(operand, zero_point);
+inline void llk_math_eltwise_binary_sfpu_quant_int32_init(const uint zero_point) {
+    llk_math_eltwise_binary_sfpu_init<SfpuType::quant_int32, APPROXIMATE>(zero_point);
 }
 
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
@@ -135,8 +135,8 @@ inline void llk_math_eltwise_binary_sfpu_requant_int32(const uint operand, uint 
 }
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_binary_sfpu_requant_int32_init(const uint operand, const uint zero_point) {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::requant_int32, APPROXIMATE>(operand, zero_point);
+inline void llk_math_eltwise_binary_sfpu_requant_int32_init(const uint zero_point) {
+    llk_math_eltwise_binary_sfpu_init<SfpuType::requant_int32, APPROXIMATE>(zero_point);
 }
 
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
@@ -145,6 +145,6 @@ inline void llk_math_eltwise_binary_sfpu_dequant_int32(const uint operand, uint 
 }
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_binary_sfpu_dequant_int32_init(const uint operand, const uint zero_point) {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::dequant_int32, APPROXIMATE>(operand, zero_point);
+inline void llk_math_eltwise_binary_sfpu_dequant_int32_init(const uint zero_point) {
+    llk_math_eltwise_binary_sfpu_init<SfpuType::dequant_int32, APPROXIMATE>(zero_point);
 }

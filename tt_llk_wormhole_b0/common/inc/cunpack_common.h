@@ -199,6 +199,12 @@ namespace ckernel::unpacker
       return unpack_narrow_tile[operand_id];
    }
 
+   inline void enalbe_int8_fpu_math() {
+      alu_config_u alu_payload = {.val = 0};
+      alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = 1;
+      cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, ALU_ACC_CTRL_INT8_math_enabled_MASK>(alu_payload.val);
+   }
+
    inline void configure_unpack_AB(
      uint unpA_operand_id, 
      uint unpB_operand_id, 
@@ -213,9 +219,9 @@ namespace ckernel::unpacker
    {
 
       // Check that unpacker is done (all contexts freed up) before starting hw configuration
-      wait_for_idle();	     
+      wait_for_idle();
 
-      // Reset address counters	      
+      // Reset address counters
       unpacker_addr_counter_init();
 
       // Get pointer to registers for current state ID
@@ -244,9 +250,9 @@ namespace ckernel::unpacker
       alu_config_u alu_payload = {.val = 0};
 
       uint32_t fp32_dest_acc_en = (is_fp32_dest_acc_en) ? (1) : (0);
-      uint32_t int8_math_enabled = ((uint)unpack_dst_format[unpA_operand_id] == (uint)DataFormat::Int8) || 
-                                   ((uint)unpack_dst_format[unpB_operand_id] == (uint)DataFormat::Int8) || 
-                                   ((uint)unpack_dst_format[unpA_operand_id] == (uint)DataFormat::Int32) || 
+      uint32_t int8_math_enabled = ((uint)unpack_dst_format[unpA_operand_id] == (uint)DataFormat::Int8) ||
+                                   ((uint)unpack_dst_format[unpB_operand_id] == (uint)DataFormat::Int8) ||
+                                   ((uint)unpack_dst_format[unpA_operand_id] == (uint)DataFormat::Int32) ||
                                    ((uint)unpack_dst_format[unpB_operand_id] == (uint)DataFormat::Int32);
 
       alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcA = unpack_dst_format[unpA_operand_id];
