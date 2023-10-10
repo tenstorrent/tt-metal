@@ -235,21 +235,12 @@ def device_init_destroy(request):
 
     arch = getattr(ttl.device.Arch, silicon_arch_name.upper())
 
-    if arch == ttl.device.Arch.WORMHOLE_B0:
-        dispatch = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
-        os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
-
     device = ttl.device.CreateDevice(device_id)
     ttl.device.SetDefaultDevice(device)
 
     yield device
 
     ttl.device.CloseDevice(device)
-
-    if arch == ttl.device.Arch.WORMHOLE_B0:
-        os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
-        if dispatch is not None:
-            os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = dispatch
 
 @pytest.fixture(scope="function")
 def device(device_init_destroy):
