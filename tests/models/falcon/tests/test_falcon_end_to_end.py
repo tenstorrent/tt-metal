@@ -5,26 +5,24 @@
 import torch
 import pytest
 from loguru import logger
-from pathlib import Path
 
 import tt_lib
-from tests.models.falcon.reference.hf_modeling_falcon import (
+from models.falcon7b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
-from tests.models.falcon.falcon_causallm import TtFalconCausalLM
+from models.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 
 # TODO: Remove this?
-from tests.models.falcon.falcon_common import (
+from models.falcon7b.tt.falcon_common import (
     PytorchFalconCausalLM,
 )
 
-from tests.models.falcon.model_config import (
+from models.falcon7b.model_config import (
     get_model_config,
     get_tt_cache_path,
 )
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
     comp_pcc,
 )
 from models.utility_functions import (
@@ -148,13 +146,13 @@ def run_test_FalconCausalLM_end_to_end(
         model_inputs = torch.split(model_input, 1)
         tt_embeddings, tt_attention_mask = zip(
             *[
-                tt_FalconCausalLM.model_preprocessing(m_i, kv_cache_len, llm_mode)
+                tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
                 for m_i in model_inputs
             ]
         )
     elif llm_mode == "decode":
         tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
-            model_input, kv_cache_len, llm_mode
+            llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
     profiler.end("processing_of_input")
 
@@ -169,7 +167,7 @@ def run_test_FalconCausalLM_end_to_end(
         model_inputs = torch.split(model_input, 1)
         tt_embeddings, tt_attention_mask = zip(
             *[
-                tt_FalconCausalLM.model_preprocessing(m_i, kv_cache_len, llm_mode)
+                tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
                 for m_i in model_inputs
             ]
         )
@@ -229,13 +227,13 @@ def run_test_FalconCausalLM_end_to_end(
         model_inputs = torch.split(model_input, 1)
         tt_embeddings, tt_attention_mask = zip(
             *[
-                tt_FalconCausalLM.model_preprocessing(m_i, kv_cache_len, llm_mode)
+                tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
                 for m_i in model_inputs
             ]
         )
     elif llm_mode == "decode":
         tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
-            model_input, kv_cache_len, llm_mode
+            llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
 
     profiler.start(f"model_run_for_inference")
@@ -244,7 +242,7 @@ def run_test_FalconCausalLM_end_to_end(
         model_inputs = torch.split(model_input, 1)
         tt_embeddings, tt_attention_mask = zip(
             *[
-                tt_FalconCausalLM.model_preprocessing(m_i, kv_cache_len, llm_mode)
+                tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
                 for m_i in model_inputs
             ]
         )

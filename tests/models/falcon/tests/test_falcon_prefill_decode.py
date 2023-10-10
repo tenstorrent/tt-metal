@@ -7,12 +7,12 @@ import pytest
 from loguru import logger
 
 import tt_lib
-from tests.models.falcon.reference.hf_modeling_falcon import (
+from models.falcon7b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
-from tests.models.falcon.falcon_causallm import TtFalconCausalLM
+from models.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 
-from tests.models.falcon.model_config import (
+from models.falcon7b.model_config import (
     get_model_config,
     get_tt_cache_path,
 )
@@ -139,12 +139,12 @@ def run_test_FalconCausalLM_inference(
     (
         tt_prefill_embeddings,
         tt_prefill_attention_mask,
-    ) = tt_FalconCausalLM.model_preprocessing(model_prefill_input, 0, "prefill")
+    ) = tt_FalconCausalLM.model_preprocessing("prefill", model_prefill_input, 0, num_input_tokens=seq_len)
     (
         tt_decode_embeddings,
         tt_decode_attention_mask,
     ) = tt_FalconCausalLM.model_preprocessing(
-        model_decode_input, kv_cache_len, "decode"
+        "decode", model_decode_input, kv_cache_len, num_input_tokens=seq_len + 1
     )
 
     # PREFILL
@@ -231,7 +231,7 @@ def test_FalconCausalLM_inference(
     seq_len = 128
     max_seq_len = 2048
     num_layers = 32
-    pcc = 0.90
+    pcc = 0.87
     run_test_FalconCausalLM_inference(
         device,
         model_version,

@@ -9,10 +9,9 @@ from typing import Optional, Tuple
 
 import tt_lib
 
-from tests.models.falcon.falcon_attention import TtFalconAttention
-from tests.models.falcon.falcon_mlp import TtFalconMLP
+from models.falcon7b.tt.falcon_attention import TtFalconAttention
+from models.falcon7b.tt.falcon_mlp import TtFalconMLP
 from models.utility_functions import pad_by_zero
-
 
 class TtFalconDecoderLayer(nn.Module):
     def __init__(
@@ -111,13 +110,12 @@ class TtFalconDecoderLayer(nn.Module):
 
         assert (
             not output_attentions
-        )  # hf_reference Falcon Attention doesn't support this
+        )
 
         layernorm_output = tt_lib.tensor.layernorm(
             hidden_states,
-            self.layernorm_eps,  # These don't fit: self.layernorm_gamma, self.layernorm_beta
+            self.layernorm_eps,
             output_mem_config=self.model_config["INPUT_LAYERNORM_OUTPUT_MEMCFG"],
-            # output_dtype=self.model_config["INPUT_LAYERNORM_OUTPUT_DTYPE"], # Not currently supported
         )
         layernorm_output = tt_lib.tensor.bcast(
             layernorm_output,
@@ -125,7 +123,6 @@ class TtFalconDecoderLayer(nn.Module):
             tt_lib.tensor.BcastOpMath.MUL,
             tt_lib.tensor.BcastOpDim.H,
             output_mem_config=self.model_config["INPUT_LAYERNORM_OUTPUT_MEMCFG"],
-            # output_dtype=self.model_config["INPUT_LAYERNORM_OUTPUT_DTYPE"], # Not currently supported
         )
         layernorm_output = tt_lib.tensor.bcast(
             layernorm_output,
@@ -133,8 +130,8 @@ class TtFalconDecoderLayer(nn.Module):
             tt_lib.tensor.BcastOpMath.ADD,
             tt_lib.tensor.BcastOpDim.H,
             output_mem_config=self.model_config["INPUT_LAYERNORM_OUTPUT_MEMCFG"],
-            # output_dtype=self.model_config["INPUT_LAYERNORM_OUTPUT_DTYPE"], # Not currently supported
         )
+
         residual = hidden_states
 
         # Self Attention
@@ -151,20 +148,14 @@ class TtFalconDecoderLayer(nn.Module):
         )
         attention_output, outputs = attn_outputs[0], attn_outputs[1:]
 
-        # config.parallel_attn=False not implemented
-        # See: tests/models/falcon/hf_reference_falcon_model.py
-        # residual and layernorm_output would be modified here
-
         # MLP
         # mlp will deallocate layernorm_output
         mlp_output = self.mlp(layernorm_output)
 
-        # config.parallel_attn=True
         output = tt_lib.tensor.add(
             mlp_output,
             attention_output,
             output_mem_config=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"],
-            # output_dtype=self.model_config["PARALLEL_ATTN_ADD_OUTPUT_DTYPE"], # Not currently supported
         )
         mlp_output.deallocate()
         attention_output.deallocate()
@@ -175,7 +166,6 @@ class TtFalconDecoderLayer(nn.Module):
             output,
             residual,
             output_mem_config=self.model_config["DROPOUT_ADD_OUTPUT_MEMCFG"],
-            # output_dtype=self.model_config["DROPOUT_ADD_OUTPUT_DTYPE"], # Not currently supported
         )
         residual.deallocate()
 

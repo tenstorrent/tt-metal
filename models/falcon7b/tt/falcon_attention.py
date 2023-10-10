@@ -9,7 +9,6 @@ from typing import Optional, Tuple
 
 import tt_lib
 
-from models.helper_funcs import Linear as TTLinear
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
@@ -37,7 +36,6 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         super().__init__()
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
 
-        # Build here to make `torch.jit.trace` work.
         self.max_seq_len_cached = max_position_embeddings
         self.model_config = model_config
         t = torch.arange(
@@ -81,12 +79,11 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
     def forward(
         self, layer: tt_lib.tensor.Tensor, token_idx: Optional[int] = None
     ) -> tt_lib.tensor.Tensor:
-        # x: [bs, num_attention_heads, seq_len, head_size]
-        # seq_len > self.max_seq_len_cached block is unlikely to be run after we build sin/cos in `__init__`. Keep the logic here just in case.
         seq_len = layer.shape()[2]
         assert (
             seq_len <= self.max_seq_len_cached
         ), "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
+
 
         return tt_lib.tensor.rotary_embedding(
             layer,
@@ -94,7 +91,6 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
             self.tt_sin_cached,
             token_idx,
             output_mem_config=self.model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"],
-            # output_dtype=self.model_config["ROTARY_EMBEDDING_OUTPUT_DTYPE"], # Not currently supported
         )
 
 
@@ -146,8 +142,6 @@ class TtFalconAttention(nn.Module):
                 )
             ).to(device, self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"])
         else:
-            # TODO: Take in model_config instead of hardcoding dtypes/mem_configs
-            # self.query_key_value_weights = torch2tt_tensor(torch.rand(4544, 4672), self.device)
             self.query_key_value_weights = torch2tt_tensor(
                 torch.transpose(
                     self.state_dict[query_key_value_str],
@@ -159,7 +153,6 @@ class TtFalconAttention(nn.Module):
                 tt_dtype=self.model_config["FUSED_QKV_MM_WEIGHTS_DTYPE"],
             )
 
-            # self.dense_weights = torch2tt_tensor(torch.rand(4544, 4544), self.device)
             self.dense_weights = torch2tt_tensor(
                 torch.transpose(
                     self.state_dict[selfout_str],
@@ -201,10 +194,11 @@ class TtFalconAttention(nn.Module):
         Prefill input shape: [batch, 1, seq_len, hidden_size]
         Decode input shape: [seq_len, 1, batch, hidden_size]
         """
+        device = hidden_states.device()
 
         assert (
             not output_attentions
-        )  # hf_reference Falcon Attention doesn't support this
+        )
 
         if llm_mode == "prefill":
             batch = hidden_states.shape()[0]
@@ -215,7 +209,6 @@ class TtFalconAttention(nn.Module):
             q_len = hidden_states.shape()[0]
             # We always store max_position_embeddings for kv_cache,
             # so we need separate variable to store the actual len of the kv_cache
-            # TODO: Can layer_past_len be zero??
             assert layer_past is not None
             assert layer_past_len > 0 and layer_past_len <= self.max_position_embeddings
         else:
@@ -231,7 +224,7 @@ class TtFalconAttention(nn.Module):
             self.query_key_value_weights,
             output_mem_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
             output_dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
-        )  # b, 1, seq_len, 73 * head_dim
+        )
 
         ###########
         ### TMs ###
@@ -239,7 +232,6 @@ class TtFalconAttention(nn.Module):
         query_layer, key_layer, value_layer = tt_lib.tensor.nlp_create_qkv_heads(
             fused_query_key_value,
             output_mem_config=self.model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"],
-            # output_dtype=self.model_config["CREATE_QKV_HEADS_OUTPUT_DTYPE"], # Not currently supported
         )
         fused_query_key_value.deallocate()
 
@@ -270,17 +262,12 @@ class TtFalconAttention(nn.Module):
                 output_mem_config=self.model_config["K_CACHE_SLICE_OUTPUT_MEMCFG"],
             )
 
-        kv_seq_len = key_layer.shape()[-2]
-
         ######################
         ### PRE-SOFTMAX MM ###
         ######################
-        # TT implementation for:
-        # attn_weights = torch.matmul(query_layer, key_layer.transpose(2, 3)) / math.sqrt(self.head_dim)
         key_layer_transposed = tt_lib.tensor.transpose(
             key_layer,
             output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
-            # output_dtype=self.model_config["K_TRANSPOSED_OUTPUT_DTYPE"], # Not currently supported
         )
         key_layer.deallocate()
 
@@ -289,8 +276,8 @@ class TtFalconAttention(nn.Module):
                 query_layer,
                 key_layer_transposed,
                 output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                # output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"], # Not currently supported
             )
+
         elif llm_mode == "decode":
             attn_weights = tt_lib.operations.primary.transformers.attn_matmul(
                 query_layer,
@@ -310,29 +297,23 @@ class TtFalconAttention(nn.Module):
             tt_lib.tensor.BcastOpMath.MUL,
             tt_lib.tensor.BcastOpDim.HW,
             output_mem_config=self.model_config["PRE_SOFTMAX_SCALE_OUTPUT_MEMCFG"],
-            # output_dtype=self.model_config["PRE_SOFTMAX_SCALE_OUTPUT_DTYPE"], # Not currently supported
-        )  # b, self.num_heads, q_len, kv_seq_len
+        )
+
+        if attention_mask is not None:
+            attn_weights = tt_lib.tensor.add(
+                attn_weights,
+                attention_mask,
+                output_mem_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
+            )
+
 
         ###############
         ### SOFTMAX ###
         ###############
         # TODO: Replace with scaled_softmax_attention_mask from BERT
-
-        # TODO: C can be 1 if we have bcast add along C; otherwise; we need to repeat along C
-        attn_weights = tt_lib.tensor.add(
-            attn_weights,
-            attention_mask,
-            output_mem_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
-            # output_dtype=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_DTYPE"], # Not currently supported
-        )
-
-        # TT implementation for:
-        # PyTorch: upcast attention to fp32
-        # attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_layer.dtype)
         attn_weights = tt_lib.operations.primary.softmax_in_place(
             attn_weights,
-            # output_mem_config=self.model_config["SOFTMAX_OUTPUT_MEMCFG"], # Not needed since in place
-            # output_dtype=self.model_config["SOFTMAX_OUTPUT_DTYPE"],
+
         )
 
         ######################
@@ -344,7 +325,6 @@ class TtFalconAttention(nn.Module):
         elif llm_mode == "decode":
             # Update kv_cache in place
             tt_lib.tensor.update_cache(layer_past[1], value_layer, layer_past_len)
-            # key and value layers will have kv_seq_len padded to nearest 32
             value_layer = tt_lib.tensor.unpad(
                 layer_past[1],
                 [0, 0, 0, 0],
@@ -362,8 +342,8 @@ class TtFalconAttention(nn.Module):
                 attn_weights,
                 value_layer,
                 output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                # output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"], # Not currently supported
             )
+
         elif llm_mode == "decode":
             attn_output = tt_lib.operations.primary.transformers.attn_matmul(
                 attn_weights,
@@ -383,8 +363,8 @@ class TtFalconAttention(nn.Module):
         attn_output = tt_lib.tensor.nlp_concat_heads(
             attn_output,
             output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
-            # output_dtype=self.model_config["CONCAT_HEADS_OUTPUT_DTYPE"], # Not currently supported
         )
+
         attn_output = tt_lib.tensor.falcon_selfout_matmul(
             attn_output,
             self.dense_weights,
