@@ -27,7 +27,7 @@ u32 get_noc_multicast_encoding(const CoreCoord& top_left, const CoreCoord& botto
 
 u32 align(u32 addr, u32 alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
-ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Program& program) {
+ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, const Program& program) {
     // This function retrieves all the required information to group program binaries into sections,
     // such that each section is the largest amount of data that can be read into the dispatch
     // core's L1 at a time. For each section, it also specifies the relay program information,
@@ -735,7 +735,7 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<u32>& src, bool b
     this->enqueue_command(command, blocking);
 }
 
-void CommandQueue::enqueue_program(Program& program, bool blocking) {
+void CommandQueue::enqueue_program(const Program& program, bool blocking) {
     ZoneScopedN("CommandQueue_enqueue_program");
     TT_ASSERT(not blocking, "EnqueueProgram only has support for non-blocking mode currently");
 

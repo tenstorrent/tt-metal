@@ -95,7 +95,7 @@ struct ProgramSrcToDstAddrMap {
     u32 num_workers;
 };
 
-ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, Program& program);
+ProgramSrcToDstAddrMap ConstructProgramSrcToDstAddrMap(const Device* device, const Program& program);
 
 // Only contains the types of commands which are enqueued onto the device
 enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUEUE_PROGRAM, FINISH, WRAP, INVALID };
@@ -237,7 +237,7 @@ class CommandQueue {
 
     void enqueue_write_buffer(Buffer& buffer, vector<u32>& src, bool blocking);
 
-    void enqueue_program(Program& program, bool blocking);
+    void enqueue_program(const Program& program, bool blocking);
 
     void finish();
 
