@@ -11,9 +11,7 @@ from contextlib import contextmanager
 
 # Log only once to not pollute output
 def check_log_pytorch_warning(arg):
-    if not getattr(
-        check_log_pytorch_warning, "_pytorch_warning_logged", False
-    ) and torch.is_tensor(arg):
+    if not getattr(check_log_pytorch_warning, "_pytorch_warning_logged", False) and torch.is_tensor(arg):
         logger.warning(
             "Pytorch tensor was passed as input to fallback op instead of TT tensor. This is currently supported to improve perf but support for this will be deprecated."
         )
@@ -54,16 +52,15 @@ def convert_tt_tensor_to_pt_tensor(tt_tensor, output_format):
     if output_format.get("device", None) is None and tt_tensor.storage_type() == ttl_tensor.StorageType.DEVICE:
         output_format["device"] = tt_tensor.device()
 
-    if output_format.get("dtype", None) is None:
-        output_format["dtype"] = tt_tensor.dtype()
-
     if ttl_profiler.get_profiler_flag():
         ttl_profiler.append_input_data(tt_tensor)
 
     tt_tensor = tt_tensor.cpu()
     tt_tensor = tt_tensor.to(ttl_tensor.Layout.ROW_MAJOR)
     torch_tensor = tt_tensor.to_torch()
-    torch_tensor = torch_tensor.to(torch.float) # TODO: THIS LINE SHOULDN'T BE HERE!!!
+    # Required as not all torch ops/layers support bfloat16
+    if torch_tensor.dtype == torch.bfloat16:
+        torch_tensor = torch_tensor.float()
     return torch_tensor
 
 
@@ -72,7 +69,10 @@ def convert_pt_tensor_to_tt_tensor(pt_tensor, output_format):
     if len(output_shape) < 4:
         output_shape = [1] * (4 - len(output_shape)) + output_shape
 
-    tt_tensor = ttl_tensor.Tensor(pt_tensor.reshape(output_shape), output_format["dtype"])
+    # Required as tt ops don't currently support float
+    if pt_tensor.dtype == torch.float32:
+        pt_tensor = pt_tensor.bfloat16()
+    tt_tensor = ttl_tensor.Tensor(pt_tensor.reshape(output_shape))
 
     if output_format["layout"] == ttl_tensor.Layout.TILE:
         if (
@@ -131,8 +131,6 @@ def convert_pt_tensors_to_tt_tensors(args, output_format):
 
 
 def convert_tt_tensors_wrapper(func):
-
-
     @wraps(func)
     def wrap(*args, **kwargs):
         ttl_tensor.log_fallback_operation(func, *args, **kwargs)
@@ -140,9 +138,9 @@ def convert_tt_tensors_wrapper(func):
         output_format = {"layout": ttl_tensor.Layout.TILE}
 
         if ttl_profiler.get_profiler_flag():
-            ttl_profiler.start_profiling("fallback_op",ttl_profiler.OpType.python_fallback)
+            ttl_profiler.start_profiling("fallback_op", ttl_profiler.OpType.python_fallback)
             # This is to check if this is a function of a class. We add the object id if it is
-            if '.' in func.__qualname__:
+            if "." in func.__qualname__:
                 obj_id = id(args[0])
                 split_name = func.__qualname__.rsplit(".", 1)
                 ttl_profiler.set_preferred_name(f"{split_name[0]}_{obj_id}.{split_name[1]}")
@@ -150,23 +148,17 @@ def convert_tt_tensors_wrapper(func):
                 ttl_profiler.set_preferred_name(func.__qualname__)
 
             # Override str functions for PT and TT Tensors to format/report desired values
-            with custom_tensor_print_handler(
-                ttl_tensor.Tensor
-            ), custom_tensor_print_handler(torch.Tensor):
+            with custom_tensor_print_handler(ttl_tensor.Tensor), custom_tensor_print_handler(torch.Tensor):
                 if args:
                     # This if is to skip the 'self' argument of class methods.
                     # Note that this may not work correctly in all cases
                     ttl_profiler.append_meta_data(
                         f"args:({str(args) if '.' not in func.__qualname__ else str(args[1:])})".replace(
                             ",", ";"
-                        ).replace(
-                            " ", ""
-                        )
+                        ).replace(" ", "")
                     )
                 if kwargs:
-                    ttl_profiler.append_meta_data(
-                        f"kwargs:({str(kwargs)})".replace(",", "|").replace(" ", "")
-                    )
+                    ttl_profiler.append_meta_data(f"kwargs:({str(kwargs)})".replace(",", "|").replace(" ", ""))
 
         new_args = convert_tt_tensors_to_pt_tensors(args, output_format)
         new_kwargs = convert_tt_tensors_to_pt_tensors(kwargs, output_format)
@@ -174,8 +166,6 @@ def convert_tt_tensors_wrapper(func):
         # Set default output format
         if output_format.get("device", None) is None:
             output_format["device"] = ttl_device.GetDefaultDevice()
-        if output_format.get("dtype", None) is None:
-            output_format["dtype"] = ttl_tensor.DataType.BFLOAT16
 
         outputs = func(*new_args, **new_kwargs)
 
@@ -184,12 +174,8 @@ def convert_tt_tensors_wrapper(func):
 
         if ttl_profiler.get_profiler_flag():
             # Override str functions for PT and TT Tensors to format/report desired values
-            with custom_tensor_print_handler(
-                ttl_tensor.Tensor
-            ), custom_tensor_print_handler(torch.Tensor):
-                ttl_profiler.append_meta_data(
-                    f"outputs:({str(new_outputs)})".replace(",", "|").replace(" ", "")
-                )
+            with custom_tensor_print_handler(ttl_tensor.Tensor), custom_tensor_print_handler(torch.Tensor):
+                ttl_profiler.append_meta_data(f"outputs:({str(new_outputs)})".replace(",", "|").replace(" ", ""))
             ttl_profiler.stop_profiling("fallback_op")
 
         return new_outputs
