@@ -144,6 +144,46 @@ bool test_tensor_move_semantics(Device *device) {
     return pass;
 }
 
+bool test_tensor_deallocate_semantics(Device *device) {
+
+    bool pass = true;
+    Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+
+    MemoryConfig dram_mem_config = MemoryConfig{.memory_layout=TensorMemoryLayout::INTERLEAVED, .buffer_type=BufferType::DRAM};
+    MemoryConfig l1_mem_config = MemoryConfig{.memory_layout=TensorMemoryLayout::INTERLEAVED, .buffer_type=BufferType::L1};
+
+    // dev tensor allocate, deallocate, reallocate same address DRAM
+    Tensor dev_a = tt::numpy::random::random(single_tile_shape).to(Layout::TILE).to(device, dram_mem_config);
+    uint32_t address_a = dev_a.buffer()->address();
+    dev_a.deallocate();
+    Tensor dev_b = tt::numpy::random::random(single_tile_shape).to(Layout::TILE).to(device, dram_mem_config);
+    uint32_t address_b = dev_b.buffer()->address();
+    pass &= address_a == address_b;
+
+    // dev tensor allocate, allocate, deallocate, reallocate same address DRAM
+    Tensor dev_c = tt::numpy::random::random(single_tile_shape).to(Layout::TILE).to(device, dram_mem_config);
+    dev_b.deallocate();
+    Tensor dev_d = tt::numpy::random::random(single_tile_shape).to(Layout::TILE).to(device, dram_mem_config);
+    uint32_t address_d = dev_d.buffer()->address();
+    pass &= address_b == address_d;
+
+    // dev tensor allocate, deallocate, reallocate same address L1
+    Tensor dev_e = tt::numpy::random::random(single_tile_shape).to(Layout::TILE).to(device, l1_mem_config);
+    uint32_t address_e = dev_e.buffer()->address();
+    dev_e.deallocate();
+    Tensor dev_f = tt::numpy::random::random(single_tile_shape).to(Layout::TILE).to(device, l1_mem_config);
+    uint32_t address_f = dev_f.buffer()->address();
+    pass &= address_e == address_f;
+
+    // dev tensor allocate, allocate, deallocate, reallocate same address DRAM
+    Tensor dev_g = tt::numpy::random::random(single_tile_shape).to(Layout::TILE).to(device, l1_mem_config);
+    dev_f.deallocate();
+    Tensor dev_h = tt::numpy::random::random(single_tile_shape).to(Layout::TILE).to(device, l1_mem_config);
+    uint32_t address_h = dev_h.buffer()->address();
+    pass &= address_f == address_h;
+
+    return pass;
+}
 
 int main(int argc, char **argv) {
     bool pass = true;
@@ -159,6 +199,8 @@ int main(int argc, char **argv) {
         pass &= test_tensor_copy_semantics(device);
 
         pass &= test_tensor_move_semantics(device);
+
+        pass &= test_tensor_deallocate_semantics(device);
 
         pass &= tt_metal::CloseDevice(device);
 
