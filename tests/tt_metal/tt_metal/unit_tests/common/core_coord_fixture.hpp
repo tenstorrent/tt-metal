@@ -31,12 +31,4 @@ class CoreCoordHarness : public ::testing::Test {
     CoreRange sc2 = {.start={0, 1}, .end={0, 1}};
     CoreRange sc3 = {.start={0, 2}, .end={0, 2}};
     CoreRange sc4 = {.start={1, 2}, .end={1, 2}};
-
-    void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (not slow_dispatch) {
-            tt::log_fatal("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
-            GTEST_SKIP();
-        }
-    }
 };
