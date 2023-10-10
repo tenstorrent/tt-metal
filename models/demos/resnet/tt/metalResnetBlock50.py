@@ -16,7 +16,7 @@ from tt_lib.utils import pad_weight
 from tt_lib.fused_ops.average_pool import run_avg_pool_on_device_wrapper as TtAvgPool
 from tt_lib.fused_ops.max_pool import run_max_pool_on_device_wrapper as TtMaxPool
 from tt_lib.fused_ops.max_pool import compute_max_pool_shape
-from tt_lib.fused_ops.conv import resnet50_first_conv, resnet50_1x1_conv_as_matmul, resnet50_optimized_conv
+from tt_lib.fused_ops.conv import resnet50_first_conv, resnet50_1x1_conv_as_matmul, resnet50_optimized_conv, resnet50_1x1_conv_s2_as_downsample_and_matmul
 from models.utility_functions import _nearest_32
 
 
@@ -365,6 +365,17 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
             mcast_in0=False,
         ),
+        (6272, 256, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(12, 9),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=2,
+            per_core_N=16,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        ),
         (6272, 512, 128): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(12, 9),
             in0_block_w=16,
@@ -517,6 +528,7 @@ class Bottleneck(nn.Module):
         sharded=None,
         out_sharded=False,
         act_block_w_equals_input_channels_x_filter_width=False,
+        use_downsample_op_and_mm_for_conv1x1_s2=False
     ) -> None:
         super().__init__()
         self.device = device
@@ -540,6 +552,8 @@ class Bottleneck(nn.Module):
         else:
             self.sharded_memory_config = self.memory_config
         self.out_memory_config = self.sharded_memory_config if out_sharded else self.memory_config
+        if use_downsample_op_and_mm_for_conv1x1_s2:
+            assert sharded
 
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -684,7 +698,7 @@ class Bottleneck(nn.Module):
         if self.downsample_or_noop is None:
             self.downsample_or_noop = do_nothing_op
         else:
-            if self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0:
+            if (not use_downsample_op_and_mm_for_conv1x1_s2) and (self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0):
                 # this downsample conv requires row major input
                 def downsample_conv_op_wrapper(op):
                     def downsample_conv_op_with_formatting(x):
@@ -890,6 +904,7 @@ class ResNet(nn.Module):
             batch_size=batch_size,
             sharded=tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
             out_sharded=False,
+            use_downsample_op_and_mm_for_conv1x1_s2=True if sharded else False,
         )
         self.layer3, self.layer3_output_shape = self._make_layer(
             block,
@@ -979,6 +994,7 @@ class ResNet(nn.Module):
         sharded=None,
         out_sharded=False,
         act_block_w_equals_input_channels_x_filter_width=False,
+        use_downsample_op_and_mm_for_conv1x1_s2=False,
     ):
         norm_layer = self._norm_layer
         downsample = None
@@ -989,6 +1005,8 @@ class ResNet(nn.Module):
             self.ds_conv_output_memory_config = tt_lib.tensor.MemoryConfig(sharded, tt_lib.tensor.BufferType.L1)
         else:
             self.ds_conv_output_memory_config = self.memory_config
+        if use_downsample_op_and_mm_for_conv1x1_s2:
+            assert sharded
         if dilate:
             self.dilation *= stride
             stride = 1
@@ -1068,6 +1086,26 @@ class ResNet(nn.Module):
                     matmul_config,
                     output_mem_config=self.ds_conv_output_memory_config,
                 )
+            elif use_downsample_op_and_mm_for_conv1x1_s2:
+                assert (
+                    downsample_output_padded_face_size,
+                    self.inplanes,
+                    downsample_output_channels,
+                ) in hardcoded_matmul_config_conv[batch_size]
+                matmul_config = hardcoded_matmul_config_conv[batch_size][
+                    (downsample_output_padded_face_size, self.inplanes, downsample_output_channels)
+                ]
+                assert stride == 2
+                downsample_op_params = [batch_size, layer_input_shape[1], layer_input_shape[2], stride, stride]
+                #print("Calling ds op and matmul op, input shape - ", layer_input_shape)
+                self.downsample_conv_on_tt = resnet50_1x1_conv_s2_as_downsample_and_matmul(
+                    downsample_conv_weight.reshape(-1).tolist(),
+                    self.downsample_params,
+                    downsample_op_params, # used by downsample op
+                    self.device,
+                    downsample_conv_bias.tolist(),
+                    matmul_config
+                )
             else:
                 assert (
                     downsample_output_padded_face_size,
@@ -1130,6 +1168,7 @@ class ResNet(nn.Module):
                 sharded=sharded,
                 out_sharded=sharded,
                 act_block_w_equals_input_channels_x_filter_width=act_block_w_equals_input_channels_x_filter_width,
+                use_downsample_op_and_mm_for_conv1x1_s2=use_downsample_op_and_mm_for_conv1x1_s2
             )
         )
         self.inplanes = planes * block.expansion

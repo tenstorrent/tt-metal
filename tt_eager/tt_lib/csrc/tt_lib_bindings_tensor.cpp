@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_lib_bindings.hpp"
+#include "tt_dnn/op_library/downsample/downsample_op.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
 #include "tt_dnn/op_library/conv/conv_op.hpp"
 #include "tt_dnn/op_library/conv/optimized_conv_op.hpp"
@@ -195,6 +196,21 @@ void TensorModule(py::module &m_tensor) {
         R"doc(Returns a tensor that is a sum  of input tensor with shape ``[W, Z, Y, X]`` along dimensions ``{1}``.)doc",
         R"doc("dimension to sum along", "int", "0, 1, 2, or 3")doc"
     );
+
+    m_tensor.def("downsample", &downsample,
+        py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(),
+        R"doc(
+        Performs a downsample on the input of a conv with a stride > 1 and a kernel window 1x1
+        This op can be followed by a regular matmul to perform the conv1x1 with stride=1 operation
+
+        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
+        | Argument          | Description                                                                       | Data type     | Valid range | Required |
+        +===================+===================================================================================+===============+=============+==========+
+        | a                 | Input tensor (TILED)                                                              | uint32_t      |             | Yes      |
+        | downsample_params | Params list: batch size, conv input H, conv input W, conv stride H, conv stride W | uint32_t      |             | Yes      |
+        | output_mem_config | output tensor memory config                                                       | MemoryConfig  |             | Yes      |
+        +-------------------+-----------------------------------------------------------------------------------+---------------+-------------+----------+
+    )doc");
 
     m_tensor.def("conv", &conv, R"doc(
         Perform a conv ``A x B`` with two tensors
