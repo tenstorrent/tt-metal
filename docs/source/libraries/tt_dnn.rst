@@ -529,11 +529,17 @@ These operations are currently not supported on TT accelerator device and will e
 
 .. autoclass:: tt_lib.fallback_ops.AdaptiveAvgPool2d
 
-.. autoclass:: tt_lib.fallback_ops.bitwise_or
+.. autoclass:: tt_lib.fallback_ops.unary_bitwise_or
 
-.. autoclass:: tt_lib.fallback_ops.bitwise_and
+.. autoclass:: tt_lib.fallback_ops.unary_bitwise_and
 
-.. autoclass:: tt_lib.fallback_ops.bitwise_xor
+.. autoclass:: tt_lib.fallback_ops.unary_bitwise_xor
+
+.. autoclass:: tt_lib.fallback_ops.binary_bitwise_or
+
+.. autoclass:: tt_lib.fallback_ops.binary_bitwise_and
+
+.. autoclass:: tt_lib.fallback_ops.binary_bitwise_xor
 
 .. autoclass:: tt_lib.fallback_ops.bitwise_not
 
