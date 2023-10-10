@@ -65,6 +65,19 @@ And there are 2 special methods that can be optionally implemented to set the pr
         <ParallelizationStrategyEnum> get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     };
 
+Fast Dispatch
+-------------
+
+Fast dispatch allows programs/kernels to be enqueued to run, so host code does not have to wait for ops/programs to finish running.
+The enqueued programs run asynchronously to the host code.
+To wait for kernels to complete, either read a tensor from device to host with:
+
+.. autofunction:: tt_lib.tensor.Tensor.cpu
+
+or to perform only a wait, use:
+
+.. autofunction:: tt_lib.device.Synchronize
+
 
 Program Caching
 ----------------------------
