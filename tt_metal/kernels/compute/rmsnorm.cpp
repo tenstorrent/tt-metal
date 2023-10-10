@@ -22,11 +22,11 @@ ALWI void REL() { release_dst(tt::DstMode::Half); }
 
 namespace NAMESPACE {
 void MAIN {
-    constexpr uint32_t NCHt = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t blk = get_compile_time_arg_val(2);
-    constexpr uint32_t do_gamma = get_compile_time_arg_val(3);
-    constexpr uint32_t do_beta = get_compile_time_arg_val(4);
+    const uint32_t NCHt = get_arg_val<uint32_t>(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr uint32_t blk = get_compile_time_arg_val(1);
+    constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
+    constexpr uint32_t do_beta = get_compile_time_arg_val(3);
 
 
     #ifdef FUSE_PRE_ADD

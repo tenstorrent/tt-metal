@@ -17,7 +17,6 @@
 
 using u32 = std::uint32_t;
 using namespace tt::constants;
-using namespace std;
 using namespace tt::tt_metal;
 
 namespace tt {
@@ -43,8 +42,9 @@ operation::ProgramWithCallbacks layernorm_(
 ) {
 
     const auto shape = a.shape();
-    u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
+    u32 W = shape[3], H = shape[2];
     u32 HW = H*W;
+    u32 NC = a.volume() / HW;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
     const auto& a_dtype = a.dtype();
@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks layernorm_(
     u32 Wt = W/TILE_WIDTH;
     u32 Ht = H/TILE_HEIGHT;
 
-    uint32_t num_tensor_tiles = NC*H*W / TILE_HW;
+    uint32_t num_tensor_tiles = a.volume() / TILE_HW;
 
     uint32_t block_size = find_max_divisor(Wt, 8);
 
@@ -126,38 +126,14 @@ operation::ProgramWithCallbacks layernorm_(
     TT_ASSERT(num_gamma_tiles % block_size == 0);
     TT_ASSERT(num_beta_tiles % block_size == 0);
 
-    uint32_t NCHt = NC*Ht;
-    CoreGridDesc grid(a.device());
-    uint32_t num_cores = grid.numcores_dividing_numtiles(NCHt);
-    TT_ASSERT(NCHt % num_cores == 0);
-
-    // we are actually splitting blocks of Wt tiles, not tiles, so no checking for bank alignment is needed
-    TilesSplit ts(num_cores, NCHt);
-    auto wtpc = ts.get_tpc(); // Wt*tpc per core
-    TT_ASSERT(NCHt % wtpc == 0);
-
+    uint32_t num_tile_rows = NC * Ht;
+    auto grid_size = device->compute_with_storage_grid_size();
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = split_work_to_cores(grid_size, num_tile_rows, true);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     Program program = Program();
-
-    // Parallelize across rows
-    // TODO: Refactor by calling utility function?
-    uint32_t num_full_rows = num_cores / grid.x_;
-    uint32_t last_row_cores = num_cores % grid.x_;
-
-    std::set<CoreRange> all_cores_set;
-    if (num_full_rows) {
-        all_cores_set.insert((CoreRange) {
-            .start={0, 0}, .end={grid.x_ - 1, num_full_rows - 1}
-        });
-    }
-    if (last_row_cores) {
-        all_cores_set.insert((CoreRange) {
-            .start={0, num_full_rows}, .end={last_row_cores - 1, num_full_rows}
-        });
-    }
 
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
@@ -200,8 +176,6 @@ operation::ProgramWithCallbacks layernorm_(
     };
 
 
-    CoreRangeSet all_cores(all_cores_set);
-
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
     std::map<string, string> reader_defines;
     std::map<string, string> eltwise_binary_defines;
@@ -219,7 +193,7 @@ operation::ProgramWithCallbacks layernorm_(
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
     auto reader_kernels_id = CreateDataMovementKernel(
         program,
-        use_row_major_kernel ? "tt_metal/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp" : "tt_metal/kernels/dataflow/reader_unary_interleaved_ln.cpp",
+        use_row_major_kernel ? "tt_eager/tt_dnn/op_library/layernorm/kernels/reader_unary_interleaved_ln_rm_gb.cpp" : "tt_eager/tt_dnn/op_library/layernorm/kernels/reader_unary_interleaved_ln.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = reader_defines}
     );
@@ -231,11 +205,11 @@ operation::ProgramWithCallbacks layernorm_(
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args}
     );
 
-    vector<uint32_t> compute_args = { wtpc, Wt, block_size, gamma.has_value(), beta.has_value() };
+    vector<uint32_t> compute_args = { Wt, block_size, gamma.has_value(), beta.has_value() };
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = true;
-    auto eltwise_binary_kernels_id = CreateComputeKernel(
+    auto compute_kernels_id = CreateComputeKernel(
         program,
         rms_norm ? "tt_metal/kernels/compute/rmsnorm.cpp" : "tt_metal/kernels/compute/layernorm.cpp",
         all_cores,
@@ -293,24 +267,37 @@ operation::ProgramWithCallbacks layernorm_(
         CreateCircularBuffer( program, all_cores, c_in1_config);
     }
 
+    uint32_t curr_row = 0;
     union { float f; uint32_t u; } winv; winv.f = 1.0f / W; // bcast-w scaler
     union { float f; uint32_t u; } e; e.f = eps; // epsilon
-    for (uint32_t icore = 0; icore < num_cores; icore++) {
-        auto core = grid.wrap_core(icore);
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-        uint32_t tile_offset = wtpc*Wt*icore;
+        uint32_t num_tile_rows_per_core;
+        if (core_group_1.core_coord_in_core_ranges(core)) {
+            num_tile_rows_per_core = num_tile_rows_per_core_group_1;
+        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            num_tile_rows_per_core = num_tile_rows_per_core_group_2;
+        } else {
+            TT_ASSERT(false, "Core not in specified core ranges");
+        }
+
+        uint32_t tile_offset = curr_row * Wt;
+
         SetRuntimeArgs(program, reader_kernels_id, core,
-            { a_addr, wtpc, Wt, tile_offset, winv.u, e.u, // 0-5
+            { a_addr, num_tile_rows_per_core, Wt, tile_offset, winv.u, e.u, // 0-5
             gamma_dram_addr, beta_dram_addr, b_dram_addr } // 6-8
         );
-        SetRuntimeArgs(program, writer_kernels_id, core, { dst_addr, wtpc*Wt, tile_offset } );
+        SetRuntimeArgs(program, compute_kernels_id, core, { num_tile_rows_per_core });
+        SetRuntimeArgs(program, writer_kernels_id, core, { dst_addr, num_tile_rows_per_core * Wt, tile_offset } );
+        curr_row += num_tile_rows_per_core;
     }
 
     auto override_runtime_args_callback = [
             reader_kernel_id=reader_kernels_id,
             writer_kernel_id=writer_kernels_id,
             num_cores,
-            grid
+            grid_size
         ]
     (
         const Program &program,
@@ -325,8 +312,8 @@ operation::ProgramWithCallbacks layernorm_(
 
         auto dst_dram_buffer = output_buffers.at(0);
 
-        for (uint32_t icore = 0; icore < num_cores; icore++) {
-            auto core = grid.wrap_core(icore);
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
             {
                 auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);

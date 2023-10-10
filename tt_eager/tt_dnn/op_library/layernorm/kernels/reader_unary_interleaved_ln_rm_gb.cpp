@@ -6,7 +6,7 @@
 #include "dataflow_api.h"
 
 
-void generate_bcast_scaler() {
+FORCE_INLINE void generate_bcast_scaler() {
     constexpr uint32_t cb_in_2 = 2;
     union { float f; uint32_t u; } u; u.u = get_arg_val<uint32_t>(4);
     cb_reserve_back(cb_in_2, 1);
@@ -20,7 +20,7 @@ void generate_bcast_scaler() {
     cb_push_back(cb_in_2, 1);
 }
 
-void generate_epsilon() {
+FORCE_INLINE void generate_epsilon() {
     constexpr uint32_t eps_cb_id = 3;
     union { float f; uint32_t u; } u; u.u = get_arg_val<uint32_t>(5);
     cb_reserve_back(eps_cb_id, 1);

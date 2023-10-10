@@ -2,15 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-from pathlib import Path
-import sys
-import time
-import os
 from loguru import logger
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../../..")
 
 import torch
 
@@ -22,59 +14,6 @@ from tt_lib.utils import (
     untilize,
     is_close,
 )
-
-
-# This ref implementation is only here for debugging
-def ref_ln(x, gamma, beta=None, epsilon=1e-5, b=None):
-    # prints a tile slice with these tile coord range
-    torch.set_printoptions(
-        precision=2, threshold=1000, sci_mode=False, edgeitems=8, linewidth=480
-    )
-    sth = 16
-    stw = 16
-    ph0, ph1, pw0, pw1 = 1, 2, 0, 1
-    # ph0, ph1, pw0, pw1 = 0, 1, 0, 1
-
-    # print("x.shape=", x.shape)
-    # print("eps=", epsilon)
-    # print(f"slice={ph0}:{ph1}, {pw0}:{pw1}")
-    # print("Ref x=\n", x[0, 0, ph0 * 32 : ph1 * 32 : sth, pw0 * 32 : pw1 * 32 : stw])
-    # print(
-    #     "Ref a=\n", (x - b)[0, 0, ph0 * 32 : ph1 * 32 : sth, pw0 * 32 : pw1 * 32 : stw]
-    # )
-    # print("Ref b=\n", b[0, 0, ph0 * 32 : ph1 * 32 : sth, pw0 * 32 : pw1 * 32 : stw])
-    mean = x.mean(dim=-1, keepdim=True)
-    # print("Ref Ex=\n", mean[0, 0, ph0*32 : ph1*32 : sth, 0*32 : 1*32 : stw])
-    xmm = x - mean
-    # print("Ref xmm=\n", xmm[0, 0, ph0*32 : ph1*32 : st, pw0*32 : pw1*32 : st])
-    xmm2 = xmm**2
-    # print("Ref xmm2=\n", xmm2[0, 0, ph0*32 : ph1*32 : sth, pw0*32 : pw1*32 : stw])
-    exmm2 = xmm2.mean(dim=-1, keepdim=True)
-    # print("Ref exmm2=\n", exmm2[0, 0, ph0*32 : ph1*32 : sth, 0*32 : 1*32 : stw])
-
-    std = (exmm2 + epsilon).sqrt()
-    # print("Ref sqrt_exmm2=\n", std[0, 0, ph0*32 : ph1*32 : st, 0*32 : 1*32 : st])
-
-    invstd = 1.0 / std
-    # print("Ref 1/sqrt_exmm2=\n", invstd[0, 0, ph0*32 : ph1*32 : st, 0*32 : 1*32 : st])
-    y1 = xmm * invstd
-    # print("Ref y*1+0=\n", y1[0, 0, ph0*32 : ph1*32 : st, pw0*32 : pw1*32 : st])
-    y = y1.clone()
-    if gamma is not None:
-        # print("yshape=", y.shape)
-        # print("gshape=", gamma.shape)
-        y *= gamma
-    if beta is not None:
-        y += beta
-    # y = gamma.repeat(x.shape[0], x.shape[1], x.shape[2], x.shape[3]//gamma.shape[3]) # Debug gamma
-    return y, mean, exmm2, std, invstd, y1
-
-
-def ref_layernorm(x, eps, gamma, beta, H, W):
-    lnorm = torch.nn.LayerNorm((W,), eps)
-    lnorm.weight = torch.nn.Parameter(torch.full((W,), gamma))
-    lnorm.bias = torch.nn.Parameter(torch.full((W,), beta))
-    return lnorm(x)
 
 
 def run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_config):
@@ -144,24 +83,16 @@ def run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_c
 
             if test_id == 0:
                 logger.info("Running LN_NOGB")
-                ttz = ttl.operations.primary.layernorm(
-                    ttx, epsf, None, None, output_mem_config=out_mem_config
-                )
+                ttz = ttl.operations.primary.layernorm(ttx, epsf, None, None, output_mem_config=out_mem_config)
             elif test_id == 1:
                 logger.info("Running LN_G")
-                ttz = ttl.operations.primary.layernorm(
-                    ttx, epsf, ttgamma, None, output_mem_config=out_mem_config
-                )
+                ttz = ttl.operations.primary.layernorm(ttx, epsf, ttgamma, None, output_mem_config=out_mem_config)
             elif test_id == 2:
                 logger.info("Running LN_GB")
-                ttz = ttl.operations.primary.layernorm(
-                    ttx, epsf, ttgamma, ttbeta, out_mem_config
-                )
+                ttz = ttl.operations.primary.layernorm(ttx, epsf, ttgamma, ttbeta, out_mem_config)
             elif test_id == 3:
                 logger.info("Running add_LN_GB")
-                ttz = ttl.operations.primary.add_layernorm(
-                    ttx, tty, epsf, ttgamma, ttbeta, out_mem_config
-                )
+                ttz = ttl.operations.primary.add_layernorm(ttx, tty, epsf, ttgamma, ttbeta, out_mem_config)
             else:
                 assert False
             logger.info("Done")
@@ -177,10 +108,7 @@ def run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_c
             tt_got_back = ttz.cpu().to_torch()
             tt_got_back = untilize(tt_got_back)
 
-            # ref_lnorm = ref_layernorm(x, epsf, gammaf, betaf, H, W)
-            ref_lnorm, _, _, _, _, _ = ref_ln(x + y, gamma, beta, epsf, y)
-
-            time.sleep(0.3)  # sleep to avoid print intermixing with kernel prints
+            ref_lnorm = torch.nn.functional.layer_norm(x + y, x.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
 
             assert is_close(tt_got_back, ref_lnorm)
 
@@ -223,9 +151,7 @@ import pytest
     (0, 1, 2, 3),
     ids=["LN", "LN_G", "LN_GB", "add_LN_GB"],
 )
-def test_layernorm_test(
-    device, test_id, batch, dtype, in0_mem_config, out_mem_config, request
-):
+def test_layernorm_test(device, test_id, batch, dtype, in0_mem_config, out_mem_config, request):
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_fused_layernorm_{request.node.callspec.id}"
     )
