@@ -54,6 +54,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_mcast_1d_optimized/bmm_op_multi_core_reuse_mcast_1d_optimized.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_mcast_2d_optimized/bmm_op_multi_core_reuse_mcast_2d_optimized.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_optimized/bmm_op_multi_core_reuse_optimized.cpp \
+	tt_eager/tt_dnn/op_library/downsample/downsample_op.cpp \
 	tt_eager/tt_dnn/op_library/conv/conv_op.cpp \
 	tt_eager/tt_dnn/op_library/conv/optimized_conv_op.cpp \
 	tt_eager/tt_dnn/op_library/tilize/tilize_multi_core/tilize_op_multi_core.cpp \
