@@ -5,6 +5,8 @@
 #include "tt_lib_bindings_tensor.hpp"
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "tt_dnn/op_library/eltwise_binary/eltwise_binary_op.hpp"
+#include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
+#include "tt_dnn/op_library/softmax/softmax_op.hpp"
 
 namespace tt::tt_metal::detail {
     void TensorModuleXaryOPs( py::module & m_tensor){
@@ -259,5 +261,15 @@ namespace tt::tt_metal::detail {
             R"doc(Perform an eltwise-binary add on one tensor ``{0}`` and one scalar ``{1}``.)doc",
             R"doc("Scalar", "float", "")doc"
         );
+
+        // softmax
+        m_tensor.def("softmax", &softmax,
+            py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            "Performs a softmax operation on the last tensor dimension.");
+
+        m_tensor.def("scale_mask_softmax", &transformers::scale_mask_softmax,
+        py::arg("input").noconvert(), py::arg("scale"), py::arg("mask").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a fused scale->attention_mask->softmax operation.");
+
     }
 }

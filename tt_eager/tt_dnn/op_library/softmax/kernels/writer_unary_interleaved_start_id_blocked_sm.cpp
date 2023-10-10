@@ -5,10 +5,10 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    uint32_t dst_addr  = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t tile_offset = get_arg_val<uint32_t>(2);
-    uint32_t blk = get_arg_val<uint32_t>(3);
+    const uint32_t dst_addr  = get_arg_val<uint32_t>(0);
+    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
+    const uint32_t tile_offset = get_arg_val<uint32_t>(2);
+    const uint32_t blk = get_arg_val<uint32_t>(3);
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
 

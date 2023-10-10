@@ -202,7 +202,7 @@ void test_bert() {
     std::uint32_t hidden_size = num_heads * head_size;
     std::uint32_t intermediate_size = hidden_size * 4;
 
-    auto attention_mask = tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {1, 1, TILE_HEIGHT, sequence_size}, Layout::TILE).to(device, l1_memory_config);
+    auto attention_mask = tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), {batch_size, 1, TILE_HEIGHT, sequence_size}, Layout::TILE).to(device, l1_memory_config);
 
     auto parameters = Parameters{};
     for (auto encoder_index = 0; encoder_index < num_encoders; encoder_index++) {

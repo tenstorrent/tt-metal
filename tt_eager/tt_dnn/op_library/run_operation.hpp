@@ -297,19 +297,19 @@ inline std::vector<Tensor> run_with_autoformat(
 std::vector<Tensor> run_with_autoformat(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
-    const std::vector<FormatParams> input_formatting,
-    const std::vector<Layout> output_layouts,
+    const std::vector<FormatParams>& input_formatting,
+    const std::vector<Layout>& output_layouts,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
-    const std::vector<FormatParams> optional_input_formatting = {}
+    const std::vector<std::optional<FormatParams>>& optional_input_formatting = {}
 );
 template<typename ConcreteOperation>
 inline std::vector<Tensor> run_with_autoformat(
     ConcreteOperation&& concrete_op,
     const std::vector<Tensor>& input_tensors,
-    const std::vector<FormatParams> input_formatting,
-    const std::vector<Layout> output_layouts,
+    const std::vector<FormatParams>& input_formatting,
+    const std::vector<Layout>& output_layouts,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {},
-    const std::vector<FormatParams> optional_input_formatting = {}
+    const std::vector<std::optional<FormatParams>>& optional_input_formatting = {}
 ) {
     const auto operation = DeviceOperation(concrete_op);
     return run_with_autoformat(operation, input_tensors, input_formatting, output_layouts, optional_input_tensors, optional_input_formatting);
