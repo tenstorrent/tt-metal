@@ -319,7 +319,7 @@ hardcoded_matmul_config_conv = {
         ),
         (1568, 256, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
-            in0_block_w=4,
+            in0_block_w=4, # TODO: Should be 1 once sharding is enabled, Leave for now for better perf
             out_subblock_h=5,
             out_subblock_w=1,
             per_core_M=5,
@@ -329,7 +329,7 @@ hardcoded_matmul_config_conv = {
         ),
         (1568, 1024, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
-            in0_block_w=16,
+            in0_block_w=4,
             out_subblock_h=5,
             out_subblock_w=1,
             per_core_M=5,
@@ -339,7 +339,7 @@ hardcoded_matmul_config_conv = {
         ),
         (1568, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
-            in0_block_w=16,
+            in0_block_w=4,
             out_subblock_h=5,
             out_subblock_w=1,
             per_core_M=5,
@@ -349,7 +349,7 @@ hardcoded_matmul_config_conv = {
         ),
         (1568, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
-            in0_block_w=16,
+            in0_block_w=4,
             out_subblock_h=5,
             out_subblock_w=1,
             per_core_M=5,
@@ -359,21 +359,21 @@ hardcoded_matmul_config_conv = {
         ),
         (416, 512, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
-            in0_block_w=8,
+            in0_block_w=2,
             out_subblock_h=1,
-            out_subblock_w=5,
+            out_subblock_w=8,
             per_core_M=2,
-            per_core_N=10,
+            per_core_N=8,
             transpose_mcast=True,
             fused_activation=None,
         ),
         (416, 2048, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
-            in0_block_w=16,
+            in0_block_w=8,
             out_subblock_h=2,
-            out_subblock_w=3,
+            out_subblock_w=2,
             per_core_M=2,
-            per_core_N=3,
+            per_core_N=2,
             transpose_mcast=True,
             fused_activation=None,
         ),
