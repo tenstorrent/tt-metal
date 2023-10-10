@@ -15,6 +15,16 @@ from pathlib import Path
 from itertools import chain
 from functools import partial
 from loguru import logger
+import pytest
+import numpy as np
+import sys
+
+tt_home = os.environ.get('TT_METAL_HOME')
+profiler_path = os.path.join(tt_home, 'tt_metal/tools/profiler')
+sys.path.append(profiler_path)
+
+from process_device_log import import_log_run_stats
+import plot_setup
 
 from tests.scripts.common import (
     run_single_test,
@@ -24,7 +34,8 @@ def run_moreh_single_test(test_name, test_entry):
     full_env = copy.deepcopy(os.environ)
     logger.info(f"========= RUNNING MOREH TEST - {test_name}")
     result = sp.run(test_entry, shell=True, capture_output=True, env=full_env)
-    # print(result.stdout.decode('utf-8'))
+    print(result.stdout.decode('utf-8'))
+    print(result.stderr.decode('utf-8'))
     return result
 
 def capture_terminal_line(log, keyword):
@@ -39,30 +50,27 @@ def capture_line_result(line, position):
     float_values = [float(value) for value in float_values]
     return float_values[position]
 
-def run_process_device_log(home_path, log_path, params=""):
-    full_env = copy.deepcopy(os.environ)
-    args = " --no-print-stats --no-webapp --no-plots --no-artifacts " + params
-    cmd = ["./process_device_log.py" + args]
-    sp.run(cmd, shell=True, text=True, cwd=log_path)
-    return
-
 def generate_csv(file_name, header, data):
     with open(file_name, mode='w', newline='') as file:
         writer = csv.writer(file)
         writer.writerow(header)
         writer.writerows(data)
 
-def get_device_data(in_file_name):
-    with open(in_file_name, mode='r') as in_file:
-        in_data = json.load(in_file)
-        total_cycle = in_data['data']['devices']['0']['cores']['DEVICE']['analysis']['T0 -> ANY CORE ANY RISC FW end']['stats']['Average']
+def profile_results(setup):
+    os.chdir(profiler_path)
+    devices_data = import_log_run_stats(setup)
+    deviceID = list(devices_data["devices"].keys())[0]
+    total_cycle = devices_data['devices'][deviceID]['cores']['DEVICE']['analysis']['T0 -> ANY CORE ANY RISC FW end']['stats']['Average']
+    os.chdir(tt_home)
     return total_cycle
 
-def get_device_noc_data(in_file_name):
-    with open(in_file_name, mode='r') as in_file:
-        in_data = json.load(in_file)
-        min = in_data['data']['devices']['0']['cores']['DEVICE']['analysis']['NoC For Loop']['stats']['Min']
-        max = in_data['data']['devices']['0']['cores']['DEVICE']['analysis']['NoC For Loop']['stats']['Max']
+def profile_noc_results(setup):
+    os.chdir(profiler_path)
+    devices_data = import_log_run_stats(setup)
+    deviceID = list(devices_data["devices"].keys())[0]
+    min = devices_data['devices'][deviceID]['cores']['DEVICE']['analysis']['NoC For Loop']['stats']['Min']
+    max = devices_data['devices'][deviceID]['cores']['DEVICE']['analysis']['NoC For Loop']['stats']['Max']
+    os.chdir(tt_home)
     return min, max
 
 # pcie write
@@ -162,26 +170,32 @@ def test_matmul_local(n=9, c=12, mt=72, nt=96, kt=24):
                 "--n " + str(n) + " --c " + str(c) + " --mt " + str(mt) + " --nt " + str(nt) + " --kt " + str(kt)
     run_moreh_single_test('matmul local l1', command)
 
-def test_pcie_h2d_dram(path):
-    test_vector_small = [
+
+@pytest.mark.parametrize(
+    "iteration, test_vector_small, test_vector_large",
+    [(10,
+     np.array([
                 8192,
                 32768,
                 131072,
                 524288,
                 2097152,
-                8388608]
-    test_vector_large = [
+                8388608]),
+     np.array([
                 33554432,
                 134217728,
-                536870912]
-    file_name = path + '/' + 'logs/H2D_DRAM_Bandwidth.csv'
+                536870912]))]
+)
+def test_pcie_h2d_dram(iteration, test_vector_small, test_vector_large):
+    home_path = os.environ.get('TT_METAL_HOME')
+    log_path = os.path.join(home_path, 'tt_metal/tools/profiler')
+    file_name = os.path.join(log_path, 'logs/H2D_DRAM_Bandwidth.csv')
     header = ['Transfer Size', 'WriteToDeviceDRAMChannel', 'WriteToBuffer', 'EnqueueWriteBuffer']
     data = []
-    iter=10
     for test_point in test_vector_small:
-        bw_wdd = test_write_device_dram_channel(iter, 0, test_point)
-        bw_wb = test_write_buffer(iter, 0, test_point)
-        bw_ewb = test_enqueue_write_buffer(iter, 0, test_point)
+        bw_wdd = test_write_device_dram_channel(iteration, 0, test_point)
+        bw_wb = test_write_buffer(iteration, 0, test_point)
+        bw_ewb = test_enqueue_write_buffer(iteration, 0, test_point)
         data_entry = [test_point, bw_wdd, bw_wb, bw_ewb]
         data.append(data_entry)
     for test_point in test_vector_large:
@@ -193,26 +207,32 @@ def test_pcie_h2d_dram(path):
     generate_csv(file_name, header, data)
     return
 
-def test_pcie_d2h_dram(path):
-    test_vector_small = [
+
+@pytest.mark.parametrize(
+    "iteration, test_vector_small, test_vector_large",
+    [(10,
+     np.array([
                 8192,
                 32768,
                 131072,
                 524288,
                 2097152,
-                8388608]
-    test_vector_large = [
+                8388608]),
+     np.array([
                 33554432,
                 134217728,
-                536870912]
-    file_name = path + '/' + 'logs/D2H_DRAM_Bandwidth.csv'
+                536870912]))]
+)
+def test_pcie_d2h_dram(iteration, test_vector_small, test_vector_large):
+    home_path = os.environ.get('TT_METAL_HOME')
+    log_path = os.path.join(home_path, 'tt_metal/tools/profiler')
+    file_name = os.path.join(log_path, 'logs/D2H_DRAM_Bandwidth.csv')
     header = ['Transfer Size', 'ReadFromDeviceDRAMChannel', 'ReadFromBuffer', 'EnqueueReadBuffer']
     data = []
-    iter=10
     for test_point in test_vector_small:
-        bw_wdd = test_read_device_dram_channel(iter, 0, test_point)
-        bw_wb = test_read_buffer(iter, 0, test_point)
-        bw_ewb = test_enqueue_read_buffer(iter, 0, test_point)
+        bw_wdd = test_read_device_dram_channel(iteration, 0, test_point)
+        bw_wb = test_read_buffer(iteration, 0, test_point)
+        bw_ewb = test_enqueue_read_buffer(iteration, 0, test_point)
         data_entry = [test_point, bw_wdd, bw_wb, bw_ewb]
         data.append(data_entry)
     for test_point in test_vector_large:
@@ -224,154 +244,162 @@ def test_pcie_d2h_dram(path):
     generate_csv(file_name, header, data)
     return
 
-def test_pcie_h2d_l1(path):
-    test_vector = [
+
+@pytest.mark.parametrize(
+    "iteration, test_vector",
+    [(10,
+     np.array([
                 4096,
                 16384,
                 65536,
                 262144,
                 1048576,
                 4194304,
-                16777216]
-    file_name = path + '/' + 'logs/H2D_L1_Bandwidth.csv'
-    header = ['Transfer Size', 'WriteToDeviceDRAMChannel', 'WriteToBuffer', 'EnqueueWriteBuffer']
+                16777216]))]
+)
+def test_pcie_h2d_l1(iteration, test_vector):
+    home_path = os.environ.get('TT_METAL_HOME')
+    log_path = os.path.join(home_path, 'tt_metal/tools/profiler')
+    file_name = os.path.join(log_path, 'logs/H2D_L1_Bandwidth.csv')
+    header = ['Transfer Size', 'WriteToDeviceL1', 'WriteToBuffer', 'EnqueueWriteBuffer']
     data = []
-    iter=10
     for test_point in test_vector:
-        bw_wdd = test_write_device_l1(iter, 1, test_point)
-        bw_wb = test_write_buffer(iter, 1, test_point)
-        bw_ewb = test_enqueue_write_buffer(iter, 1, test_point)
+        bw_wdd = test_write_device_l1(iteration, 1, test_point)
+        bw_wb = test_write_buffer(iteration, 1, test_point)
+        bw_ewb = test_enqueue_write_buffer(iteration, 1, test_point)
         data_entry = [test_point, bw_wdd, bw_wb, bw_ewb]
         data.append(data_entry)
     generate_csv(file_name, header, data)
     return
 
-def test_pcie_d2h_l1(path):
-    test_vector = [
+
+@pytest.mark.parametrize(
+    "iteration, test_vector",
+    [(10,
+     np.array([
                 4096,
                 16384,
                 65536,
                 262144,
                 1048576,
                 4194304,
-                16777216]
-    file_name = path + '/' + 'logs/D2H_L1_Bandwidth.csv'
-    header = ['Transfer Size', 'ReadFromDeviceDRAMChannel', 'ReadFromBuffer', 'EnqueueReadBuffer']
+                16777216]))]
+)
+def test_pcie_d2h_l1(iteration, test_vector):
+    home_path = os.environ.get('TT_METAL_HOME')
+    log_path = os.path.join(home_path, 'tt_metal/tools/profiler')
+    file_name = os.path.join(log_path, 'logs/D2H_L1_Bandwidth.csv')
+    header = ['Transfer Size', 'ReadFromDeviceL1', 'ReadFromBuffer', 'EnqueueReadBuffer']
     data = []
-    iter=10
     for test_point in test_vector:
-        bw_wdd = test_read_device_l1(iter, 1, test_point)
-        bw_wb = test_read_buffer(iter, 1, test_point)
-        bw_ewb = test_enqueue_read_buffer(iter, 1, test_point)
+        bw_wdd = test_read_device_l1(iteration, 1, test_point)
+        bw_wb = test_read_buffer(iteration, 1, test_point)
+        bw_ewb = test_enqueue_read_buffer(iteration, 1, test_point)
         data_entry = [test_point, bw_wdd, bw_wb, bw_ewb]
         data.append(data_entry)
     generate_csv(file_name, header, data)
     return
 
-def test_noc(home_path, log_path):
-    test_vector = [
-                1,
-                8,
-                16,
-                32]
-    process_device_log_param = "-s test_noc"
-    in_file_name = log_path + '/' + '/output/device/device_analysis_data.json'
-    file_name = log_path + '/' + 'logs/NoC_Read_Performance.csv'
+
+@pytest.mark.parametrize(
+    "arch, r, c, nt, test_vector",
+    [
+        ('grayskull', 9, 12, 256, np.array([1, 8, 16, 32])),
+        ('wormhole_b0', 6, 6, 256, np.array([1, 8, 16, 32])),
+    ],
+)
+def test_noc(arch, r, c, nt, test_vector):
+    home_path = os.environ.get('TT_METAL_HOME')
+    log_path = os.path.join(home_path, 'tt_metal/tools/profiler')
+    file_name = os.path.join(log_path, 'logs/NoC_Read_Performance.csv')
     header = ['Requests', 'Local L1 (min)', 'Local L1 (max)', \
             'Global L1 (type A) (min)', 'Global L1 (type A) (max)', \
             'Global L1 (type B) (min)', 'Global L1 (type B) (max)']
     data = []
     for test_point in test_vector:
-        test_noc_local(9, 12, 256, test_point)
-        run_process_device_log(home_path, log_path, process_device_log_param)
-        min_1, max_1 = get_device_noc_data(in_file_name)
-        test_noc_global_type_a(9, 12, 256, test_point)
-        run_process_device_log(home_path, log_path, process_device_log_param)
-        min_2, max_2 = get_device_noc_data(in_file_name)
-        test_noc_global_type_b(9, 12, 256, test_point)
-        run_process_device_log(home_path, log_path, process_device_log_param)
-        min_3, max_3 = get_device_noc_data(in_file_name)
+        test_noc_local(r, c, nt, test_point)
+        min_1, max_1 = profile_noc_results(plot_setup.test_noc())
+        test_noc_global_type_a(r, c, nt, test_point)
+        min_2, max_2 = profile_noc_results(plot_setup.test_noc())
+        test_noc_global_type_b(r, c, nt, test_point)
+        min_3, max_3 = profile_noc_results(plot_setup.test_noc())
         data.append([test_point, min_1, max_1, min_2, max_2, min_3, max_3])
     generate_csv(file_name, header, data)
     return
 
-def test_matmul_dram(home_path, log_path, frequency):
-    test_vector = [
+
+@pytest.mark.parametrize(
+    "arch, freq, r, c, test_vector",
+    [
+        ('grayskull', 1020, 9, 12,
+         np.array([
                 [4608, 6144, 6144],
                 [3456, 4096, 1024],
                 [3456, 3072, 1024],
-                [2304, 3072, 768]]
-    in_file_name = log_path + '/' + '/output/device/device_analysis_data.json'
-    file_name = log_path + '/' + 'logs/Matmul_DRAM.csv'
+                [2304, 3072, 768]])),
+        ('wormhole_b0', 1000, 6, 6,
+         np.array([
+                [2304, 1920, 1024],
+                [2304, 1536, 1024],
+                [1536, 1536, 768]
+                ])),
+    ],
+)
+def test_matmul_dram(arch, freq, r, c, test_vector):
+    home_path = os.environ.get('TT_METAL_HOME')
+    log_path = os.path.join(home_path, 'tt_metal/tools/profiler')
+    file_name = os.path.join(log_path, 'logs/Matmul_DRAM.csv')
     header = ['M', 'N', 'K', 'Cycles', 'Time (ms)', 'TFLOPS']
     data = []
     for vec in test_vector:
         mt = int(vec[0] / 32)
         nt = int(vec[1] / 32)
         kt = int(vec[2] / 32)
-        per_core_mt = int((mt-1) / 9) + 1
-        per_core_nt = int((nt-1) / 12) + 1
-        test_matmul_global(9, 12, mt, nt, kt, per_core_mt, per_core_nt, 0, 0, 0, 2)
-        run_process_device_log(home_path, log_path)
-        cycle = get_device_data(in_file_name)
+        per_core_mt = int((mt-1) / r) + 1
+        per_core_nt = int((nt-1) / c) + 1
+        test_matmul_global(r, c, mt, nt, kt, per_core_mt, per_core_nt, 0, 0, 0, 2)
+        cycle = profile_results(plot_setup.default_setup())
         num_op = vec[0] * vec[1] * vec[2] * 2
-        time = cycle / frequency / 1000.0
+        time = cycle / freq / 1000.0
         throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
         data.append(vec + [cycle, time, throughput])
     generate_csv(file_name, header, data)
     return
 
-def test_matmul_l1(home_path, log_path, frequency):
-    test_vector_global = [
-                [3456, 3072, 1024],
-                [2304, 3072, 768]]
-    test_vector_local = [
-                [2304, 3072, 768]]
-    in_file_name = log_path + '/' + '/output/device/device_analysis_data.json'
-    file_name = log_path + '/' + 'logs/Matmul_SRAM.csv'
+@pytest.mark.parametrize(
+    "arch, freq, r, c, test_vector_global, test_vector_local",
+    [
+        ('grayskull', 1020, 9, 12, np.array([[3456, 3072, 1024], [2304, 3072, 768]]), np.array([[2304, 3072, 768]])),
+        ('wormhole_b0', 1000, 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
+    ],
+)
+def test_matmul_l1(arch, freq, r, c, test_vector_global, test_vector_local):
+    home_path = os.environ.get('TT_METAL_HOME')
+    log_path = os.path.join(home_path, 'tt_metal/tools/profiler')
+    file_name = os.path.join(log_path, 'logs/Matmul_SRAM.csv')
     header = ['M', 'N', 'K', 'Cycles', 'Time (ms)', 'TFLOPS']
     data = []
     for vec in test_vector_global:
         mt = int(vec[0] / 32)
         nt = int(vec[1] / 32)
         kt = int(vec[2] / 32)
-        per_core_mt = int((mt-1) / 9) + 1
-        per_core_nt = int((nt-1) / 12) + 1
-        test_matmul_global(9, 12, mt, nt, kt, per_core_mt, per_core_nt, 1, 1, 1, 4)
-        run_process_device_log(home_path, log_path)
-        cycle = get_device_data(in_file_name)
+        per_core_mt = int((mt-1) / r) + 1
+        per_core_nt = int((nt-1) / c) + 1
+        test_matmul_global(r, c, mt, nt, kt, per_core_mt, per_core_nt, 1, 1, 1, 4)
+        cycle = profile_results(plot_setup.default_setup())
         num_op = vec[0] * vec[1] * vec[2] * 2
-        time = cycle / frequency / 1000.0
+        time = cycle / freq / 1000.0
         throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
         data.append(vec + [cycle, time, throughput])
     for vec in test_vector_local:
         mt = int(vec[0] / 32)
         nt = int(vec[1] / 32)
         kt = int(vec[2] / 32)
-        test_matmul_local(9, 12, mt, nt, kt)
-        run_process_device_log(home_path, log_path)
-        cycle = get_device_data(in_file_name)
+        test_matmul_local(r, c, mt, nt, kt)
+        cycle = profile_results(plot_setup.default_setup())
         num_op = vec[0] * vec[1] * vec[2] * 2
-        time = cycle / frequency / 1000.0
+        time = cycle / freq / 1000.0
         throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
         data.append(vec + [cycle, time, throughput])
     generate_csv(file_name, header, data)
     return
-
-def get_cmdline_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--log_path", default='tt_metal/tools/profiler', help="Timeout in seconds for each test")
-    parser.add_argument("--frequency", default=1202, help="Timeout in seconds for each test")
-    return parser.parse_args()
-
-if __name__ == "__main__":
-
-    home_path = os.environ.get('TT_METAL_HOME')
-    cmdline_args = get_cmdline_args()
-    test_pcie_h2d_dram(home_path + '/' + cmdline_args.log_path)
-    test_pcie_d2h_dram(home_path + '/' + cmdline_args.log_path)
-    test_pcie_h2d_l1(home_path + '/' + cmdline_args.log_path)
-    test_pcie_d2h_l1(home_path + '/' + cmdline_args.log_path)
-    test_noc(home_path, home_path + '/' + cmdline_args.log_path)
-    test_matmul_dram(home_path, home_path + '/' + cmdline_args.log_path, cmdline_args.frequency)
-    test_matmul_l1(home_path, home_path + '/' + cmdline_args.log_path, cmdline_args.frequency)
