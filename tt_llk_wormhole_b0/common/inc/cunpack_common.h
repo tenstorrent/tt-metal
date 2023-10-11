@@ -205,15 +205,13 @@ namespace ckernel::unpacker
       cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, ALU_ACC_CTRL_INT8_math_enabled_MASK>(alu_payload.val);
    }
 
+   template<bool row_pool=false, bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
    inline void configure_unpack_AB(
-     uint unpA_operand_id, 
-     uint unpB_operand_id, 
-     uint unpA_face_r_dim=16,
-     uint unpB_face_r_dim=16,
-     bool row_pool=false,
-     bool transpose_xy_srca_en=false,
-     bool is_fp32_dest_acc_en=false,
-     bool srnd_fpu_en = false,
+     const uint unpA_operand_id, 
+     const uint unpB_operand_id, 
+     const uint unpA_face_r_dim=16,
+     const uint unpB_face_r_dim=16,
+     const bool transpose_xy_srca_en=false,
      const uint unpA_num_faces = 4,
      const uint unpB_num_faces = 4)
    {
@@ -255,25 +253,31 @@ namespace ckernel::unpacker
                                    ((uint)unpack_dst_format[unpA_operand_id] == (uint)DataFormat::Int32) ||
                                    ((uint)unpack_dst_format[unpB_operand_id] == (uint)DataFormat::Int32);
 
+      constexpr uint alu_format_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK;
       alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcA = unpack_dst_format[unpA_operand_id];
       alu_payload.f.ALU_FORMAT_SPEC_REG1_SrcB = row_pool ? ((uint) DataFormat::Float16 | (exp_width<<2)) : unpack_dst_format[unpB_operand_id];
+      
       // FP32 accumulation and SFPU to read dest as FP32
       // NOTE: This assumes these config fields are adjacent and in same register!!
       static_assert(ALU_ACC_CTRL_Fp32_enabled_ADDR32 == ALU_FORMAT_SPEC_REG0_SrcA_ADDR32);
       static_assert(ALU_ACC_CTRL_Fp32_enabled_ADDR32 == ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32);
+      constexpr uint alu_dest_format_mask = ALU_ACC_CTRL_INT8_math_enabled_MASK | ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK | ALU_ACC_CTRL_Fp32_enabled_MASK;
       alu_payload.f.ALU_ACC_CTRL_Fp32_enabled = fp32_dest_acc_en;
       alu_payload.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = fp32_dest_acc_en;
       alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = int8_math_enabled;
+      
+      constexpr uint alu_stoch_rnd_mask = ALU_ROUNDING_MODE_Fpu_srnd_en_MASK | ALU_ROUNDING_MODE_Gasket_srnd_en_MASK | ALU_ROUNDING_MODE_Packer_srnd_en_MASK;
+      constexpr bool stoch_rnd_en = (stoch_rnd_mode == StochRndMode::All);
+      alu_payload.f.ALU_ROUNDING_MODE_Fpu_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndMode::Fpu);
+      alu_payload.f.ALU_ROUNDING_MODE_Gasket_srnd_en = stoch_rnd_en ||(stoch_rnd_mode == StochRndMode::Pack);
+      alu_payload.f.ALU_ROUNDING_MODE_Packer_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndMode::Pack);
 
-      constexpr uint mask1 = ALU_ACC_CTRL_INT8_math_enabled_MASK | ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK | ALU_ACC_CTRL_Fp32_enabled_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_FORMAT_SPEC_REG0_SrcA_MASK;
+      constexpr uint alu_mask = alu_format_mask | alu_dest_format_mask | alu_stoch_rnd_mask;
 
-      cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, mask1>(alu_payload.val);
-
-      cfg_reg_rmw_tensix<ALU_ROUNDING_MODE_Fpu_srnd_en_RMW>(srnd_fpu_en);
+      cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
 
       t6_mutex_release(mutex::REG_RMW);
 
-   
       // Set tile descriptor
       unpack_tile_descriptor_u tile_descriptor;
       for (uint i=0; i<TILE_DESC_SIZE; i++) {

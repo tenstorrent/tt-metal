@@ -39,7 +39,7 @@ inline void llk_unpack_reduce_mop_config() {
     tmp.program(instrn_buffer);
 }
 
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
 inline void llk_unpack_reduce_hw_configure(
     const llk_unpack_reduce_params_t *unpack_reduce_params, const float const_mult) {
 
@@ -48,15 +48,12 @@ inline void llk_unpack_reduce_hw_configure(
     constexpr bool is_row_pool = true;
     constexpr bool transpose_xy_per_face = (ReduceDim::REDUCE_ROW == dim);
 
-    configure_unpack_AB(
+    configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, stoch_rnd_mode>(
         get_operand_id(unpack_reduce_params->unpA_operand),
         get_operand_id(unpack_reduce_params->unpA_operand),
         srca_height,
         srcb_height,
-        is_row_pool,
-        transpose_xy_per_face,
-        is_fp32_dest_acc_en,
-        srnd_fpu_en);
+        transpose_xy_per_face);
 
     if constexpr (type != PoolType::MAX) {
         union {
@@ -68,11 +65,11 @@ inline void llk_unpack_reduce_hw_configure(
     }    
 }
 
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en=false, bool srnd_fpu_en = false>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en=false, StochRndMode stoch_rnd_mode = StochRndMode::None>
 inline void llk_unpack_reduce_hw_configure_disaggregated(const std::uint32_t unpA_operand, const float mult) {
-    TT_LLK_DUMP("llk_unpack_reduce_hw_configure_disaggregated<{}, {}, {}, {}>({}, {})", type, dim, is_fp32_dest_acc_en, srnd_fpu_en, unpA_operand, mult);
+    TT_LLK_DUMP("llk_unpack_reduce_hw_configure_disaggregated<{}, {}, {}, {}>({}, {})", type, dim, is_fp32_dest_acc_en, (uint8_t)stoch_rnd_mode, unpA_operand, mult);
     const llk_unpack_reduce_params_t unpack_reduce_params = {.unpA_operand = unpA_operand};
-    llk_unpack_reduce_hw_configure<type, dim, is_fp32_dest_acc_en, srnd_fpu_en>(&unpack_reduce_params, mult);
+    llk_unpack_reduce_hw_configure<type, dim, is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_reduce_params, mult);
 }
 
 template <PoolType type, ReduceDim dim>

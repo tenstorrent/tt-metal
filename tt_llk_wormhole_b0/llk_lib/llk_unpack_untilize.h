@@ -51,12 +51,19 @@ template <bool is_fp32_dest_acc_en = false>
 inline void llk_unpack_untilize_hw_configure(const llk_unpack_A_params_t *unpack_untilize_params) {
     constexpr bool is_row_pool = false;
     constexpr bool transpose_xy_srca = false;
-    constexpr bool srnd_fpu_en = false;
+    constexpr StochRndMode stoch_rnd_mode = StochRndMode::None;
 
     const uint32_t unpA_operand_id = get_operand_id(unpack_untilize_params->unpA_operand);
     const uint32_t unpA_num_faces = 4;
     const uint32_t unpA_face_r_dim = 16;
-    configure_unpack_AB(unpA_operand_id, unpA_operand_id, unpA_face_r_dim, unpA_face_r_dim, is_row_pool, transpose_xy_srca, is_fp32_dest_acc_en, srnd_fpu_en, unpA_num_faces, unpA_num_faces);
+    configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, stoch_rnd_mode>(
+        unpA_operand_id, 
+        unpA_operand_id, 
+        unpA_face_r_dim, 
+        unpA_face_r_dim, 
+        transpose_xy_srca, 
+        unpA_num_faces, 
+        unpA_num_faces);
 }
 
 inline void llk_unpack_untilize_hw_configure_disaggregated(const std::uint32_t unpA_operand) {

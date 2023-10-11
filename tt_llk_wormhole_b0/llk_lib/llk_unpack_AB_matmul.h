@@ -89,7 +89,7 @@ inline void llk_unpack_AB_matmul_mop_config(const bool transpose, const std::uin
 
 }
 
-template<bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
+template<bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
 inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_t *unpack_AB_params) {
     constexpr bool is_row_pool = false;
     const bool transpose_xy_srca = unpack_AB_params->transpose_xy_srca;
@@ -107,8 +107,14 @@ inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_
     const uint32_t unpA_face_r_dim = get_face_r_dim(unpA_operand_id);
     const uint32_t unpB_face_r_dim = get_face_r_dim(unpB_operand_id);
 
-    configure_unpack_AB(unpA_operand_id, unpB_operand_id, 
-                        unpA_face_r_dim, unpB_face_r_dim, is_row_pool, transpose_xy_srca, is_fp32_dest_acc_en, srnd_fpu_en, unpA_num_faces, unpB_num_faces);
+    configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, stoch_rnd_mode>(
+        unpA_operand_id, 
+        unpB_operand_id, 
+        unpA_face_r_dim, 
+        unpB_face_r_dim, 
+        transpose_xy_srca, 
+        unpA_num_faces, 
+        unpB_num_faces);
 
     // Configure tile size in datums
     const uint32_t unpA_x_end = unpA_num_faces*unpA_face_r_dim*FACE_C_DIM-1;
@@ -123,13 +129,13 @@ inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_
     sync_regfile_write(p_gpr_unpack::TILE_SIZE_B);
 }
 
-template<bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
+template<bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
 inline void llk_unpack_AB_matmul_hw_configure_disaggregated(
     const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose_xy_srca = 0) {
-    TT_LLK_DUMP("llk_unpack_AB_matmul_hw_configure_disaggregated<{}, {}>({}, {}, {})", is_fp32_dest_acc_en, srnd_fpu_en, unpA_operand, unpB_operand, transpose_xy_srca);
+    TT_LLK_DUMP("llk_unpack_AB_matmul_hw_configure_disaggregated<{}, {}>({}, {}, {})", is_fp32_dest_acc_en, (uint8_t)stoch_rnd_mode, unpA_operand, unpB_operand, transpose_xy_srca);
     const llk_unpack_AB_matmul_params_t unpack_AB_matmul_params = {
         .unpA_operand = unpA_operand, .unpB_operand = unpB_operand, .transpose_xy_srca = transpose_xy_srca };
-    llk_unpack_AB_matmul_hw_configure<is_fp32_dest_acc_en, srnd_fpu_en>(&unpack_AB_matmul_params);
+    llk_unpack_AB_matmul_hw_configure<is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_AB_matmul_params);
 }
 
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose=0, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {

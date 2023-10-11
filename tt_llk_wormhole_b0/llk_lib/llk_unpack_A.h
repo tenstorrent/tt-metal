@@ -132,7 +132,7 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces, const std::ui
     }
 }
 
-template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
+template <bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
 inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_params, const int within_face_16x16_transpose = 0) {
     constexpr bool is_row_pool = false;
     const uint32_t unpA_operand_id = get_operand_id(unpack_A_params->unpA_operand);
@@ -141,17 +141,23 @@ inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_para
 
     const uint32_t unpA_face_r_dim = get_face_r_dim(unpA_operand_id);
 
-    configure_unpack_AB(unpA_operand_id, unpA_operand_id,
-        unpA_face_r_dim, unpA_face_r_dim, is_row_pool, within_face_16x16_transpose, is_fp32_dest_acc_en, srnd_fpu_en, unpA_num_faces, unpA_num_faces);
+    configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, stoch_rnd_mode>(
+        unpA_operand_id, 
+        unpA_operand_id,
+        unpA_face_r_dim, 
+        unpA_face_r_dim, 
+        within_face_16x16_transpose, 
+        unpA_num_faces, 
+        unpA_num_faces);
 }
 
-template <bool is_fp32_dest_acc_en = false, bool srnd_fpu_en = false>
+template <bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
 inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose = 0) {
-    TT_LLK_DUMP("llk_unpack_A_hw_configure_disaggregated<{}, {}>({}, {})", is_fp32_dest_acc_en, srnd_fpu_en, unpA_operand, within_face_16x16_transpose);
+    TT_LLK_DUMP("llk_unpack_A_hw_configure_disaggregated<{}, {}>({}, {})", is_fp32_dest_acc_en, (uint8_t)stoch_rnd_mode, unpA_operand, within_face_16x16_transpose);
     const llk_unpack_A_params_t unpack_A_params = {
         .unpA_operand = unpA_operand
     };
-    llk_unpack_A_hw_configure<is_fp32_dest_acc_en, srnd_fpu_en>(&unpack_A_params, within_face_16x16_transpose);
+    llk_unpack_A_hw_configure<is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_A_params, within_face_16x16_transpose);
 }
 
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE, bool unpack_to_dest = false>
