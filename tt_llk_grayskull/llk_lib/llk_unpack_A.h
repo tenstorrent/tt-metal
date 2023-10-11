@@ -162,9 +162,9 @@ inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_para
         get_operand_id(unpack_A_params->unpA_operand), get_operand_id(unpack_A_params->unpA_operand));
 }
 
-template <bool is_fp32_dest_acc_en = false /* unused */, bool srnd_fpu_en = false /* unused */>
+template <bool is_fp32_dest_acc_en = false /* unused */, StochRndMode stoch_rnd_mode = StochRndMode::None /* unused */>
 inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose) {
-    TT_LLK_DUMP("llk_unpack_A_hw_configure_disaggregated<{}, {}>({}, {})", is_fp32_dest_acc_en, srnd_fpu_en, unpA_operand, within_face_16x16_transpose);
+    TT_LLK_DUMP("llk_unpack_A_hw_configure_disaggregated<{}, {}>({}, {})", is_fp32_dest_acc_en, (uint8_t)stoch_rnd_mode, unpA_operand, within_face_16x16_transpose);
 
     const llk_unpack_A_params_t unpack_A_params = {
         .unpA_operand = unpA_operand,

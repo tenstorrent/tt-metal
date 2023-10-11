@@ -57,9 +57,9 @@ inline void llk_unpack_reduce_hw_configure(
     }    
 }
 
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false /* unused */, bool srnd_fpu_en = false /* unused */>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false /* unused */, StochRndMode stoch_rnd_mode = StochRndMode::None>
 inline void llk_unpack_reduce_hw_configure_disaggregated(const std::uint32_t unpA_operand, const float mult) {
-    TT_LLK_DUMP("llk_unpack_reduce_hw_configure_disaggregated<{}, {}, {}, {}>({}, {})", type, dim, is_fp32_dest_acc_en, srnd_fpu_en, unpA_operand, mult);
+    TT_LLK_DUMP("llk_unpack_reduce_hw_configure_disaggregated<{}, {}, {}, {}>({}, {})", type, dim, is_fp32_dest_acc_en, (uint8_t)stoch_rnd_mode, unpA_operand, mult);
     const llk_unpack_reduce_params_t unpack_reduce_params = {.unpA_operand = unpA_operand};
     llk_unpack_reduce_hw_configure<type, dim>(&unpack_reduce_params, mult);
 }
