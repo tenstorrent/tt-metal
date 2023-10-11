@@ -6,9 +6,9 @@ test-list:
         end-shape: [9]
         interval: [1]
         num-shapes: 3
-        num-samples: 8
+        num-samples: 64
+        args-sampling-strategy: "all"
         method: bert_large_mul
-        bcast-batch: True
       datagen:
         function: gen_rand
         args:
@@ -21,5 +21,5 @@ test-list:
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
-        buffer-type: ["DRAM"]
-        out-buffer-type: ["DRAM"]
+        buffer-type: ["DRAM", "L1"]
+        out-buffer-type: ["DRAM", "L1"]
