@@ -86,6 +86,12 @@ void kernel_main() {
         const DataFormat bias_data_format = get_dataformat(cb_id_in3);
 
         uint32_t l1_write_addr_in3;
+
+        const InterleavedAddrGenFast<in3_is_dram> s3 = {
+            .bank_base_address = in3_tensor_addr,
+            .page_size = bias_single_tile_size_bytes,
+            .data_format = bias_data_format
+        };
     #endif
 
     constexpr uint32_t cb_id_in1 = 1;
@@ -101,26 +107,12 @@ void kernel_main() {
     uint32_t l1_write_addr_in1;
 
 
-    #ifndef SKIP_MCAST
-    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
-    *(in1_mcast_receiver_semaphore_addr_ptr) = VALID;
-    // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
-    // to receive the mcast
-    volatile tt_l1_ptr uint32_t* in1_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_sender_semaphore_addr);
-    #endif
     const InterleavedAddrGenFast<in1_is_dram> s1 = {
         .bank_base_address = in1_tensor_addr,
         .page_size = in1_single_tile_size_bytes,
         .data_format = in1_data_format
     };
-    #ifdef FUSE_BIAS
-        const InterleavedAddrGenFast<in3_is_dram> s3 = {
-            .bank_base_address = in3_tensor_addr,
-            .page_size = bias_single_tile_size_bytes,
-            .data_format = bias_data_format
-        };
-    #endif
+
     // WRITER
     const InterleavedAddrGenFast<out_is_dram> s = {
         .bank_base_address = out_tensor_addr,
@@ -129,6 +121,13 @@ void kernel_main() {
     };
 
     #ifndef SKIP_MCAST
+    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
+    volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
+    *(in1_mcast_receiver_semaphore_addr_ptr) = VALID;
+    // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
+    // to receive the mcast
+    volatile tt_l1_ptr uint32_t* in1_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_sender_semaphore_addr);
+
     const uint64_t in1_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
         in1_mcast_dest_noc_start_x,
         in1_mcast_dest_noc_start_y,
