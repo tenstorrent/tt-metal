@@ -59,14 +59,16 @@ def generate_csv(file_name, header, data):
 
 def profile_results(setup):
     os.chdir(profiler_path)
+    setup = plot_setup.default_setup()
     devices_data = import_log_run_stats(setup)
     deviceID = list(devices_data["devices"].keys())[0]
     total_cycle = devices_data['devices'][deviceID]['cores']['DEVICE']['analysis']['T0 -> ANY CORE ANY RISC FW end']['stats']['Average']
     os.chdir(tt_home)
     return total_cycle
 
-def profile_noc_results(setup):
+def profile_noc_results():
     os.chdir(profiler_path)
+    setup = plot_setup.test_noc()
     devices_data = import_log_run_stats(setup)
     deviceID = list(devices_data["devices"].keys())[0]
     min = devices_data['devices'][deviceID]['cores']['DEVICE']['analysis']['NoC For Loop']['stats']['Min']
@@ -319,11 +321,11 @@ def test_noc(arch, r, c, nt, test_vector):
     data = []
     for test_point in test_vector:
         test_noc_local(r, c, nt, test_point)
-        min_1, max_1 = profile_noc_results(plot_setup.test_noc())
+        min_1, max_1 = profile_noc_results()
         test_noc_global_type_a(r, c, nt, test_point)
-        min_2, max_2 = profile_noc_results(plot_setup.test_noc())
+        min_2, max_2 = profile_noc_results()
         test_noc_global_type_b(r, c, nt, test_point)
-        min_3, max_3 = profile_noc_results(plot_setup.test_noc())
+        min_3, max_3 = profile_noc_results()
         data.append([test_point, min_1, max_1, min_2, max_2, min_3, max_3])
     generate_csv(file_name, header, data)
     return
@@ -359,7 +361,7 @@ def test_matmul_dram(arch, freq, r, c, test_vector):
         per_core_mt = int((mt-1) / r) + 1
         per_core_nt = int((nt-1) / c) + 1
         test_matmul_global(r, c, mt, nt, kt, per_core_mt, per_core_nt, 0, 0, 0, 2)
-        cycle = profile_results(plot_setup.default_setup())
+        cycle = profile_results()
         num_op = vec[0] * vec[1] * vec[2] * 2
         time = cycle / freq / 1000.0
         throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
@@ -387,7 +389,7 @@ def test_matmul_l1(arch, freq, r, c, test_vector_global, test_vector_local):
         per_core_mt = int((mt-1) / r) + 1
         per_core_nt = int((nt-1) / c) + 1
         test_matmul_global(r, c, mt, nt, kt, per_core_mt, per_core_nt, 1, 1, 1, 4)
-        cycle = profile_results(plot_setup.default_setup())
+        cycle = profile_results()
         num_op = vec[0] * vec[1] * vec[2] * 2
         time = cycle / freq / 1000.0
         throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
@@ -397,7 +399,7 @@ def test_matmul_l1(arch, freq, r, c, test_vector_global, test_vector_local):
         nt = int(vec[1] / 32)
         kt = int(vec[2] / 32)
         test_matmul_local(r, c, mt, nt, kt)
-        cycle = profile_results(plot_setup.default_setup())
+        cycle = profile_results()
         num_op = vec[0] * vec[1] * vec[2] * 2
         time = cycle / freq / 1000.0
         throughput = num_op / time / 1000.0 / 1000.0 / 1000.0
