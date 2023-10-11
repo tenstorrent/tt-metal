@@ -180,7 +180,10 @@ def test_run_max_pool(
         assert False
     ttact = ttl.tensor.interleaved_to_sharded(ttact, ncores, [in_height // ncores, act_padded.shape[-1]], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,)
 
-    out_untilize = ttl.tensor.untilize_with_halo(ttact, 0xf7ff, out_mem_config)
+    in_h = int(math.sqrt(act_shape_padded[-2]))
+    in_w = in_h
+    assert(in_h * in_w == act_shape_padded[-2])
+    out_untilize = ttl.tensor.untilize_with_halo(ttact, 0xf7ff, in_n, in_h, in_w, out_mem_config)
 
     assert True
 
