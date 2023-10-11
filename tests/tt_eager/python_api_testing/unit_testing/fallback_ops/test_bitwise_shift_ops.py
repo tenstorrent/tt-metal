@@ -29,10 +29,8 @@ class TestBitwiseShiftOps:
         x = torch.randint(low=0, high=100, size=input_shapes)
         # Test on host RM
         t0 = ttl.tensor.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            x,
+            ttl.tensor.DataType.UINT32,
         )
         if on_device:
             t0 = t0.to(device)
@@ -57,19 +55,15 @@ class TestBitwiseShiftOps:
 
         # Test on host RM
         t0 = ttl.tensor.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            x,
+            ttl.tensor.DataType.UINT32,
         )
         if on_device:
             t0 = t0.to(device)
 
         t1 = ttl.tensor.Tensor(
-            y.reshape(-1).tolist(),
-            y.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
+            y,
+            ttl.tensor.DataType.UINT32,
         )
         if on_device:
             t1 = t1.to(device)
