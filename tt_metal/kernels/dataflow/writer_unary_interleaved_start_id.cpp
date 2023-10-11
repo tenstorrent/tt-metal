@@ -14,8 +14,7 @@ void kernel_main() {
 
     #ifdef OUT_SHARDED
     cb_wait_front(cb_id_out, num_tiles);
-    return;
-    #endif
+    #else
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
@@ -36,4 +35,5 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_id_out, onetile);
     }
+    #endif
 }

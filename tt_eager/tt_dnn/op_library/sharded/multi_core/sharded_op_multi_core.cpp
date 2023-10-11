@@ -19,7 +19,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &input, Tensor &output) {
+operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &input, Tensor &output, const CoreCoord& grid_size) {
     tt_metal::Program program{};
 
     uint32_t num_units, num_units_per_shard, unit_size, num_units_per_shard_width, num_units_per_shard_height, num_units_offset, num_units_per_row;
@@ -52,13 +52,9 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
     }
 
     auto all_cores = shard_spec.shard_grid;
-    uint32_t num_cores_x = device->compute_with_storage_grid_size().x;
-    uint32_t num_cores_y = device->compute_with_storage_grid_size().y;
-    uint32_t num_cores = 0;
-    for (const auto& core_range : all_cores.ranges()) {
-        num_cores += core_range.size();
-    }
-
+    uint32_t num_cores_x = grid_size.x;
+    uint32_t num_cores_y = grid_size.y;
+    uint32_t num_cores = num_cores_x * num_cores_y;
     uint32_t out_cb_index = 0;
     uint32_t num_input_units = num_units_per_shard;
     uint32_t page_size = round_up_to_mul32(unit_size);
@@ -123,7 +119,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
         CoreCoord core = rm_orientation ? CoreCoord(i % num_cores_x, i / num_cores_x) : CoreCoord(i / num_cores_y, i % num_cores_y);
 
         if (!all_cores.core_coord_in_core_ranges(core)) {
-            TT_ASSERT("Unexpected sharded layout");
+            continue;
         }
 
         if (input.layout() == Layout::TILE) {
@@ -188,9 +184,15 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
 
         auto dst_buffer = output_tensors.at(0).buffer();
 
+        auto shard_spec = output_tensors.at(0).shard_spec().value();
+        auto all_cores = shard_spec.shard_grid;
+
         for (uint32_t i = 0; i < num_cores; i++){
             CoreCoord core = rm_orientation ? CoreCoord(i % num_cores_x, i / num_cores_x) : CoreCoord(i / num_cores_y, i % num_cores_y);
             {
+                if (!all_cores.core_coord_in_core_ranges(core)) {
+                    continue;
+                }
                 auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
                 SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
@@ -203,7 +205,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &input, Tensor &output) {
+operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &input, Tensor &output, const CoreCoord& grid_size) {
     tt_metal::Program program{};
 
     uint32_t num_units, num_units_per_shard, unit_size, num_units_per_shard_width, num_units_per_shard_height, num_units_offset, num_units_per_row;
@@ -236,12 +238,9 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
     }
 
     auto all_cores = shard_spec.shard_grid;
-    uint32_t num_cores_x = device->compute_with_storage_grid_size().x;
-    uint32_t num_cores_y = device->compute_with_storage_grid_size().y;
-    uint32_t num_cores = 0;
-    for (const auto& core_range : all_cores.ranges()) {
-        num_cores += core_range.size();
-    }
+    uint32_t num_cores_x = grid_size.x;
+    uint32_t num_cores_y = grid_size.y;
+    uint32_t num_cores = num_cores_x * num_cores_y;
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_units = num_units_per_shard;
@@ -310,7 +309,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
         CoreCoord core = rm_orientation ? CoreCoord(i % num_cores_x, i / num_cores_x) : CoreCoord(i / num_cores_y, i % num_cores_y);
 
         if (!all_cores.core_coord_in_core_ranges(core)) {
-            TT_ASSERT("Unexpected sharded layout");
+            continue;
         }
 
         if (input.layout() == Layout::TILE) {
@@ -374,9 +373,15 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
 
         auto dst_buffer = output_tensors.at(0).buffer();
 
+        auto shard_spec = input_tensors.at(0).shard_spec().value();
+        auto all_cores = shard_spec.shard_grid;
+
         for (uint32_t i = 0; i < num_cores; i++){
             CoreCoord core = rm_orientation ? CoreCoord(i % num_cores_x, i / num_cores_x) : CoreCoord(i / num_cores_y, i % num_cores_y);
             {
+                if (!all_cores.core_coord_in_core_ranges(core)) {
+                    continue;
+                }
                 auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
                 SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);

@@ -68,7 +68,7 @@ struct TileSlice : TileSliceHostDev<MAXCOUNT> {
         #endif
         #if defined(TRISC_PACK) || defined(TRISC_UNPACK) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
             this->ptr_ += itile * sizeof(Tile);
-            if (this->ptr_ < 120*1024 || this->ptr_ > 999*1024) { // TODO(AP): magic
+            if (this->ptr_ < 120*1024 || this->ptr_ > 1024*1024) { // TODO(AP): magic
                 this->w0_ = 0xFFFF;
                 return; // bad tile pointer, return
             }
