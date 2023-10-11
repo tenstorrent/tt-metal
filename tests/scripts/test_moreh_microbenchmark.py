@@ -33,6 +33,7 @@ from tests.scripts.common import (
 def run_moreh_single_test(test_name, test_entry):
     full_env = copy.deepcopy(os.environ)
     logger.info(f"========= RUNNING MOREH TEST - {test_name}")
+    print(test_entry)
     result = sp.run(test_entry, shell=True, capture_output=True, env=full_env)
     print(result.stdout.decode('utf-8'))
     print(result.stderr.decode('utf-8'))
@@ -140,34 +141,34 @@ def test_enqueue_read_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
     return bw
 
 # noc
-def test_noc_local(n=9, c=12, nt=256, cb=1):
+def test_noc_local(r=9, c=12, nt=256, cb=1):
     command = "./build/test/tt_metal/perf_microbenchmark/noc/test_noc_read_local_l1 " + \
-                "--n " + str(n) + " --c " + str(c) + " --nt " + str(nt) + " --cb " + str(cb)
+                "--r " + str(r) + " --c " + str(c) + " --nt " + str(nt) + " --cb " + str(cb)
     run_moreh_single_test('noc read local l1', command)
 
-def test_noc_global_type_a(n=9, c=12, nt=256, cb=1):
+def test_noc_global_type_a(r=9, c=12, nt=256, cb=1):
     command = "./build/test/tt_metal/perf_microbenchmark/noc/test_noc_read_global_l1 " + \
-                "--n " + str(n) + " --c " + str(c) + " --nt " + str(nt) + " --cb " + str(cb) + \
+                "--r " + str(r) + " --c " + str(c) + " --nt " + str(nt) + " --cb " + str(cb) + \
                 " --same_buffer_read 1 --one_buffer_share 1"
     run_moreh_single_test('noc read global l1 (type a)', command)
 
-def test_noc_global_type_b(n=9, c=12, nt=256, cb=1):
+def test_noc_global_type_b(r=9, c=12, nt=256, cb=1):
     command = "./build/test/tt_metal/perf_microbenchmark/noc/test_noc_read_global_l1 " + \
-                "--n " + str(n) + " --c " + str(c) + " --nt " + str(nt) + " --cb " + str(cb) + \
+                "--r " + str(r) + " --c " + str(c) + " --nt " + str(nt) + " --cb " + str(cb) + \
                 " --same_buffer_read 1 --one_buffer_share 0"
     run_moreh_single_test('noc read global l1 (type b)', command)
 
 # matmul
-def test_matmul_global(n=9, c=12, mt=72, nt=96, kt=24, per_core_mt=8, per_core_nt=8, l1_in0=0, l1_in1=0, l1_out=0, in0_block_w=4):
+def test_matmul_global(r=9, c=12, mt=72, nt=96, kt=24, per_core_mt=8, per_core_nt=8, l1_in0=0, l1_in1=0, l1_out=0, in0_block_w=4):
     command = "./build/test/tt_metal/perf_microbenchmark/matmul/matmul_global_l1 " + \
-                "--n " + str(n) + " --c " + str(c) + " --mt " + str(mt) + " --nt " + str(nt) + " --kt " + str(kt) + \
+                "--r " + str(r) + " --c " + str(c) + " --mt " + str(mt) + " --nt " + str(nt) + " --kt " + str(kt) + \
                 " --l1_in0 " + str(l1_in0) + " --l1_in1 " + str(l1_in1) + " --l1_out " + str(l1_out) + " --in0_block_w " + str(in0_block_w) + \
                 " --per_core_mt " + str(per_core_mt) + " --per_core_nt " + str(per_core_nt)
     run_moreh_single_test('matmul global l1', command)
 
-def test_matmul_local(n=9, c=12, mt=72, nt=96, kt=24):
+def test_matmul_local(r=9, c=12, mt=72, nt=96, kt=24):
     command = "./build/test/tt_metal/perf_microbenchmark/matmul/matmul_local_l1 " + \
-                "--n " + str(n) + " --c " + str(c) + " --mt " + str(mt) + " --nt " + str(nt) + " --kt " + str(kt)
+                "--r " + str(r) + " --c " + str(c) + " --mt " + str(mt) + " --nt " + str(nt) + " --kt " + str(kt)
     run_moreh_single_test('matmul local l1', command)
 
 
