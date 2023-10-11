@@ -1,6 +1,6 @@
 ---
 test-list:
-  - bert-large-selfout-matmul:
+  - bert-large-ff1-matmul:
       shape:
         start-shape: [9]
         end-shape: [9]
@@ -8,7 +8,7 @@ test-list:
         num-shapes: 3
         num-samples: 64
         args-sampling-strategy: "all"
-        method: bert_selfout
+        method: bert_large_mul
       datagen:
         function: gen_rand
         args:
@@ -17,9 +17,9 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device_bert
-      output-file: bert_large_selfout_matmul_sweep.csv
+      output-file: bert_large_ff1_matmul_sweep.csv
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
-        buffer-type: ["DRAM", "L1"]
+        buffer-type: ["DRAM"]
         out-buffer-type: ["DRAM", "L1"]
