@@ -11,9 +11,10 @@ from functools import partial
 from itertools import chain
 from operator import contains, eq, getitem
 from pathlib import Path
-
+from PIL import Image
+import torchvision.transforms as transforms
 from loguru import logger
-
+import ast
 from tests.scripts.common import run_process_and_get_result
 
 
@@ -303,3 +304,40 @@ def tracy_profile():
 @pytest.fixture
 def input_path(request):
     return request.config.getoption("--input-path")
+
+@pytest.fixture
+def imagenet_label_dict():
+    path = "models/sample_data/imagenet_class_labels.txt"
+    with open(path, "r") as file:
+        class_labels = ast.literal_eval(file.read())
+    return class_labels
+
+
+@pytest.fixture
+def imagenet_sample_input():
+    path = "models/sample_data/ILSVRC2012_val_00048736.JPEG"
+
+    im = Image.open(path)
+    im = im.resize((224, 224))
+    return transforms.ToTensor()(im).unsqueeze(0)
+
+
+@pytest.fixture
+def mnist_sample_input():
+    path = "models/sample_data/torchvision_mnist_digit_7.jpg"
+    im = Image.open(path)
+    return im
+
+
+@pytest.fixture
+def iam_ocr_sample_input():
+    path = "models/sample_data/iam_ocr_image.jpg"
+    im = Image.open(path)
+    return im
+
+
+@pytest.fixture
+def hf_cat_image_sample_input():
+    path = "models/sample_data/huggingface_cat_image.jpg"
+    im = Image.open(path)
+    return im
