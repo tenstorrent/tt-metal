@@ -57,6 +57,10 @@ Tensor untilize_with_unpadding(const Tensor &a, const Shape &output_tensor_start
 // NOTE: UntilizeWithHalo is only for sharded input/output
 struct UntilizeWithHalo {
     const uint32_t pad_val_;
+    const uint32_t in_b;
+    const uint32_t in_h;
+    const uint32_t in_w;
+    const uint32_t out_shard_size_max_per_core;
     const MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
@@ -65,7 +69,7 @@ struct UntilizeWithHalo {
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
-Tensor untilize_with_halo(const Tensor &a, const uint32_t pad_val, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor untilize_with_halo(const Tensor &a, const uint32_t pad_val, const uint32_t &in_b, const uint32_t &in_h, const uint32_t &in_w, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 namespace untilize_helpers {
 uint32_t get_num_cores(CoreCoord grid_size, uint32_t nblocks);
