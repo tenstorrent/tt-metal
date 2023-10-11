@@ -762,7 +762,7 @@ def unary_bitwise_or(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
     | other      | Immediate value                               | int         |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
-    return torch.bitwise_or(input.to(torch.int), other)
+    return torch.bitwise_or(input, other)
 
 
 @convert_tt_tensors_wrapper
@@ -778,7 +778,7 @@ def unary_bitwise_and(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor
     | other      | Immediate value                               | int         |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
-    return torch.bitwise_and(input.to(torch.int), other)
+    return torch.bitwise_and(input, other)
 
 
 @convert_tt_tensors_wrapper
@@ -794,7 +794,7 @@ def unary_bitwise_xor(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor
     | other      | Immediate value                               | int         |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
-    return torch.bitwise_xor(input.to(torch.int), other)
+    return torch.bitwise_xor(input, other)
 
 
 @convert_tt_tensors_wrapper
@@ -809,7 +809,7 @@ def bitwise_not(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
     +------------+-----------------------------------------------+-------------+-----------------+----------+
 
     """
-    return torch.bitwise_not(input.to(torch.int))
+    return torch.bitwise_not(input)
 
 
 @convert_tt_tensors_wrapper
@@ -825,7 +825,7 @@ def binary_bitwise_or(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl
     | other      | Second tensor                                 | Tensor      |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
-    return torch.bitwise_or(input.to(torch.int), other.to(torch.int))
+    return torch.bitwise_or(input, other)
 
 
 @convert_tt_tensors_wrapper
@@ -841,7 +841,7 @@ def binary_bitwise_and(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> tt
     | other      | Second Tensor                                 | Tensor      |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
-    return torch.bitwise_and(input.to(torch.int), other.to(torch.int))
+    return torch.bitwise_and(input, other)
 
 
 @convert_tt_tensors_wrapper
@@ -857,7 +857,7 @@ def binary_bitwise_xor(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> tt
     | other      | Second tensor                                 | Tensor      |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
-    return torch.bitwise_xor(input.to(torch.int), other.to(torch.int))
+    return torch.bitwise_xor(input, other)
 
 
 @convert_tt_tensors_wrapper
@@ -875,7 +875,7 @@ def unary_bitwise_right_shift(input: ttl_tensor.Tensor, other: int) -> ttl_tenso
     | other      | Immediate value                               | int         |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
-    return torch.bitwise_right_shift(input.to(torch.int), other)
+    return torch.bitwise_right_shift(input, other)
 
 
 @convert_tt_tensors_wrapper
@@ -891,7 +891,7 @@ def unary_bitwise_left_shift(input: ttl_tensor.Tensor, other: int) -> ttl_tensor
     | other      | Immediate value                               | int         |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
-    return torch.bitwise_left_shift(input.to(torch.int), other)
+    return torch.bitwise_left_shift(input, other)
 
 
 @convert_tt_tensors_wrapper
@@ -909,7 +909,7 @@ def binary_bitwise_right_shift(input: ttl_tensor.Tensor, other: ttl_tensor.Tenso
     | other      | Second tensor                                 | Tensor      |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
-    return torch.bitwise_right_shift(input.to(torch.int), other.to(torch.int))
+    return torch.bitwise_right_shift(input, other)
 
 
 @convert_tt_tensors_wrapper
@@ -925,4 +925,4 @@ def binary_bitwise_left_shift(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor
     | other      | Second tensor                                 | Tensor      |                 | Yes      |
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
-    return torch.bitwise_left_shift(input.to(torch.int), other.to(torch.int))
+    return torch.bitwise_left_shift(input, other)
