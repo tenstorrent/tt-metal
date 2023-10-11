@@ -443,7 +443,7 @@ namespace tt::tt_metal::detail{
 
         // Sharding ops
         m_tensor.def("interleaved_to_sharded", &interleaved_to_sharded,
-            py::arg("input"), py::arg("num_cores"), py::arg("shard_shape"), py::arg("shard_scheme").noconvert(),
+            py::arg("input"), py::arg("grid_size"), py::arg("shard_shape"), py::arg("shard_scheme").noconvert(), py::arg("shard_layout").noconvert(),
             R"doc(Converts tensor from interleaved to sharded memory layout)doc"
         );
         detail::bind_unary_op(m_tensor, "sharded_to_interleaved", &sharded_to_interleaved, R"doc(Converts tensor from sharded_to_interleaved memory layout)doc");

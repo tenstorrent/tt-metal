@@ -25,6 +25,8 @@ void Sharded::validate(const std::vector<Tensor> &input_tensors) const {
     } else if (this->sharded_op_type == ShardedOpType::SHARDED_TO_INTERLEAVED) {
         TT_ASSERT(input_tensor.memory_config().is_sharded());
     }
+    auto device_grid = input_tensor.device()->compute_with_storage_grid_size();
+    TT_ASSERT(this->grid_size.x <= device_grid.x && this->grid_size.y <= device_grid.y);
     // Divisibility of num_cores and shard size with tensor shape is done in tensor creation, so no need to assert here
 }
 
@@ -47,9 +49,9 @@ operation::ProgramWithCallbacks Sharded::create_program(const std::vector<Tensor
     auto& output_tensor = output_tensors.at(0);
 
     if (this->sharded_op_type == ShardedOpType::INTERLEAVED_TO_SHARDED) {
-        return interleaved_to_sharded_multi_core(input_tensor, output_tensor);
+        return interleaved_to_sharded_multi_core(input_tensor, output_tensor, this->grid_size);
     } else {
-        return sharded_to_interleaved_multi_core(input_tensor, output_tensor);
+        return sharded_to_interleaved_multi_core(input_tensor, output_tensor, this->grid_size);
     }
 }
 

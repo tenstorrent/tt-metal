@@ -116,8 +116,10 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
     TT_ASSERT(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to eltwise binary need to be allocated in buffers on device!");
     TT_ASSERT((input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE), "Inputs to eltwise binary must be tilized");
     if (input_tensor_a.memory_config().is_sharded()) {
-        TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
-        TT_ASSERT(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
+        if (input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+            // If we aren't height sharded, we require all sharding schemes to match until we add blocked reader/writers for width and block sharding
+            TT_ASSERT((input_tensor_b.memory_config().is_sharded() && this->output_mem_config.is_sharded()));
+        }
         if (input_tensor_b.memory_config().is_sharded()) {
             TT_ASSERT(input_tensor_a.memory_config() == input_tensor_b.memory_config());
             TT_ASSERT(input_tensor_a.shard_spec().value() == input_tensor_b.shard_spec().value());
@@ -130,7 +132,6 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
     } else if (input_tensor_b.memory_config().is_sharded()) {
         TT_ASSERT(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
-        TT_ASSERT(input_tensor_b.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
         if (this->output_mem_config.is_sharded()) {
             TT_ASSERT(input_tensor_b.memory_config() == this->output_mem_config);
         } else {

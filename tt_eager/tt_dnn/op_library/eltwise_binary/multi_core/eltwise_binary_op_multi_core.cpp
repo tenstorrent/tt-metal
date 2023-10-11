@@ -57,6 +57,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
     uint32_t block_size_per_core_group_1 = 1, block_size_per_core_group_2 = 1, max_block_size = 1;
     uint32_t block_cnt_per_core_group_1 = num_tiles_per_core_group_1, block_cnt_per_core_group_2 = num_tiles_per_core_group_2;
 
+    bool row_major = true;
     if (shard_spec.has_value()) {
         all_cores = shard_spec.value().shard_grid;
         num_cores = 0;
@@ -72,6 +73,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
 
         block_cnt_per_core_group_1 = num_tiles_per_core_group_1 / block_size_per_core_group_1;
         block_cnt_per_core_group_2 = num_tiles_per_core_group_2 / block_size_per_core_group_2;
+        row_major = shard_spec.value().shard_orientation == ShardOrientation::ROW_MAJOR;
     }
 
     tt_metal::Buffer *dst_buffer = output.buffer();
@@ -163,8 +165,9 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
         tt_metal::ComputeConfig{.defines = eltwise_defines}
     );
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_x * num_cores_y; i++){
-        CoreCoord core = {i % num_cores_x, i / num_cores_x};
+    auto cores = grid_to_cores(num_cores_x * num_cores_y, num_cores_x, num_cores_y, row_major);
+    for (uint32_t i = 0, num_tiles_read = 0; i < cores.size(); i++){
+        CoreCoord core = cores[i];
         uint32_t num_tiles_per_core = 0;
         uint32_t block_cnt_per_core = 0;
         uint32_t block_size_per_core = 0;
@@ -265,6 +268,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
 
         uint32_t block_cnt_per_core_group_1 = num_tiles_per_core_group_1, block_cnt_per_core_group_2 = num_tiles_per_core_group_2;
 
+        bool row_major = true;
         if (shard_spec.has_value()) {
             all_cores = shard_spec.value().shard_grid;
             num_cores = 0;
@@ -280,10 +284,12 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
 
             block_cnt_per_core_group_1 = num_tiles_per_core_group_1 / block_size_per_core_group_1;
             block_cnt_per_core_group_2 = num_tiles_per_core_group_2 / block_size_per_core_group_2;
+            row_major = shard_spec.value().shard_orientation == ShardOrientation::ROW_MAJOR;
         }
 
-        for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_x * num_cores_y; i++){
-            CoreCoord core = {i % num_cores_x, i / num_cores_x};
+        auto cores = grid_to_cores(num_cores_x * num_cores_y, num_cores_x, num_cores_y, row_major);
+        for (uint32_t i = 0, num_tiles_read = 0; i < cores.size(); i++){
+            CoreCoord core = cores[i];
             uint32_t num_tiles_per_core = 0;
             uint32_t block_cnt_per_core = 0;
             uint32_t block_size_per_core = 0;
