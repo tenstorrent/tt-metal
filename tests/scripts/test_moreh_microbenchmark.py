@@ -21,6 +21,7 @@ import sys
 
 tt_home = os.environ.get('TT_METAL_HOME')
 profiler_path = os.path.join(tt_home, 'tt_metal/tools/profiler')
+profiler_log_path = os.path.join(profiler_path, 'logs/profile_log_device.csv')
 sys.path.append(profiler_path)
 
 from process_device_log import import_log_run_stats
@@ -57,23 +58,21 @@ def generate_csv(file_name, header, data):
         writer.writerow(header)
         writer.writerows(data)
 
-def profile_results(setup):
-    os.chdir(profiler_path)
+def profile_results():
     setup = plot_setup.default_setup()
+    setup.deviceInputLog = profiler_log_path
     devices_data = import_log_run_stats(setup)
     deviceID = list(devices_data["devices"].keys())[0]
     total_cycle = devices_data['devices'][deviceID]['cores']['DEVICE']['analysis']['T0 -> ANY CORE ANY RISC FW end']['stats']['Average']
-    os.chdir(tt_home)
     return total_cycle
 
 def profile_noc_results():
-    os.chdir(profiler_path)
     setup = plot_setup.test_noc()
+    setup.deviceInputLog = profiler_log_path
     devices_data = import_log_run_stats(setup)
     deviceID = list(devices_data["devices"].keys())[0]
     min = devices_data['devices'][deviceID]['cores']['DEVICE']['analysis']['NoC For Loop']['stats']['Min']
     max = devices_data['devices'][deviceID]['cores']['DEVICE']['analysis']['NoC For Loop']['stats']['Max']
-    os.chdir(tt_home)
     return min, max
 
 # pcie write
