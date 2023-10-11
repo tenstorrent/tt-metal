@@ -15,7 +15,6 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, con
     enum BufferIndex { BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START };
     enum TimerDataIndex { TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE };
     auto worker_cores_used_in_program = device->worker_cores_from_logical_cores(program.logical_cores());
-    auto cluster = device->cluster();
     auto device_id = device->id();
     uint64_t min_cycle = -1;
     uint64_t max_cycle = 0;
@@ -27,7 +26,7 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, con
             uint32_t end_index;
             uint32_t dropped_marker_counter;
             profile_buffer =
-                tt::llrt::read_hex_vec_from_core(cluster, device_id, worker_core, buffer_addr, PRINT_BUFFER_SIZE);
+                tt::llrt::read_hex_vec_from_core(device_id, worker_core, buffer_addr, PRINT_BUFFER_SIZE);
 
             end_index = profile_buffer[BUFFER_END_INDEX];
             TT_ASSERT(end_index < (PRINT_BUFFER_SIZE / sizeof(uint32_t)));
@@ -58,11 +57,9 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, con
 }
 
 inline int get_tt_npu_clock(tt::tt_metal::Device *device) {
-    auto cluster = device->cluster();
-    auto device_id = device->id();
     int ai_clk = 0;
-    if (cluster->type == tt::TargetDevice::Silicon) {
-        ai_clk = cluster->get_device_aiclk(device->id());
-    }
+#ifdef TT_METAL_VERSIM_DISABLED
+    ai_clk = tt::Cluster::instance().get_device_aiclk(device->id());
+#endif
     return ai_clk;
 }

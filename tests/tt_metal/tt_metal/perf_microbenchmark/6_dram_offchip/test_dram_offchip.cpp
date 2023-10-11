@@ -321,9 +321,10 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, uint32_t> create_program(
   uint32_t cb_tiles = num_reqs_at_a_time;
   uint32_t cb_addr = L1_UNRESERVED_BASE;
   tt_metal::CircularBufferConfig cb_config =
-      tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_index, tile_format}}, cb_addr)
+      tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_index, tile_format}})
           .set_page_size(cb_index, single_tile_size);
   auto cb = tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+
 
   auto reader_kernel = tt_metal::CreateDataMovementKernel(
       program,
