@@ -16,8 +16,8 @@ struct SystemMemoryCQWriteInterface {
     // Equation for fifo size is
     // | fifo_wr_ptr + command size B - fifo_rd_ptr |
     // Space available would just be fifo_limit - fifo_size
-    const u32 fifo_size = ((1024 * 1024 * 1024) - 96) >> 4;
-    const u32 fifo_limit = ((1024 * 1024 * 1024) >> 4) - 1;  // Last possible FIFO address
+    const u32 fifo_size = (HUGE_PAGE_SIZE - 96) >> 4;
+    const u32 fifo_limit = (HUGE_PAGE_SIZE >> 4) - 1;  // Last possible FIFO address
 
     u32 fifo_wr_ptr;
     bool fifo_wr_toggle;

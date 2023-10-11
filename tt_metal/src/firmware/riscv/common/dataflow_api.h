@@ -140,7 +140,7 @@ void setup_cb_read_write_interfaces() {
 // belongs to host
 void setup_cq_read_write_interface() {
     uint fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;  // The fifo starts after the pointer addresses
-    uint fifo_size = ((1024 * 1024 * 1024) >> 4) - fifo_addr;
+    uint fifo_size = ((HUGE_PAGE_SIZE) >> 4) - fifo_addr;
 
     cq_read_interface.fifo_limit = fifo_addr + fifo_size - 1;
     cq_read_interface.fifo_rd_ptr = fifo_addr;
