@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
         uint32_t cb_src0_addr = L1_UNRESERVED_BASE;
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(
-                cb_tiles * single_tile_size, {{cb_src0_index, tt::DataFormat::Float16_b}}, cb_src0_addr)
+                cb_tiles * single_tile_size, {{cb_src0_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_src0_index, single_tile_size);
         auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
         uint32_t cb_src1_addr = cb_src0_addr + cb_tiles * single_tile_size;
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(
-                cb_tiles * single_tile_size, {{cb_src1_index, tt::DataFormat::Float16_b}}, cb_src1_addr)
+                cb_tiles * single_tile_size, {{cb_src1_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_src1_index, single_tile_size);
         auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
