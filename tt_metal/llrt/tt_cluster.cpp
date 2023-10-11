@@ -165,6 +165,7 @@ void Cluster::open_device(
             skip_driver_allocs,
             perform_harvesting);
 
+        this->device_->clean_system_resources();
         this->device_->set_driver_host_address_params(host_address_params);
         this->device_->set_driver_eth_interface_params(eth_interface_params);
     } else if (this->target_type_ == TargetDevice::Versim) {
