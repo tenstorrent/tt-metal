@@ -18,7 +18,39 @@ namespace tt {
 
 namespace tt_metal {
 
-std::vector<enum Device::ActiveState>Device::active_devices_;
+ActiveDevices Device::active_devices_;
+
+ActiveDevices::ActiveDevices() {
+}
+
+ActiveDevices::~ActiveDevices() {
+    for (size_t i = 0; i < active_devices_.size(); i++) {
+        if (active_devices_[i] == ActiveState::ACTIVE) {
+            log_fatal("Process tear down with device {} still active", i);
+        }
+    }
+}
+
+bool ActiveDevices::activate_device(chip_id_t id) {
+    bool already_initialized;
+    const std::lock_guard<std::mutex> lock(lock_);
+    if (this->active_devices_.size() < id + 1) {
+        this->active_devices_.resize(id + 1);
+        already_initialized = false;
+    } else if (this->active_devices_[id] == ActiveState::ACTIVE) {
+        log_fatal("Cannot re-initialize device {}, must first call close()", id);
+    } else {
+        already_initialized = true;
+    }
+    this->active_devices_[id] = ActiveState::ACTIVE;
+
+    return already_initialized;
+}
+
+void ActiveDevices::deactivate_device(chip_id_t id) {
+    const std::lock_guard<std::mutex> lock(lock_);
+    this->active_devices_[id] = ActiveState::INACTIVE;
+}
 
 Device::Device(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id)
 {
@@ -170,26 +202,10 @@ void Device::clear_l1_state() {
     }
 }
 
-bool Device::activate_device_in_list() {
-    bool already_initialized;
-    const std::lock_guard<std::mutex> lock(active_devices_lock_);
-    if (this->active_devices_.size() < this->id_ + 1) {
-        this->active_devices_.resize(this->id_ + 1);
-        already_initialized = false;
-    } else if (this->active_devices_[this->id_] == ActiveState::ACTIVE) {
-        log_fatal("Cannot re-initialize device {}, must first call close()", this->id_);
-    } else {
-        already_initialized = true;
-    }
-    this->active_devices_[this->id_] = ActiveState::ACTIVE;
-
-    return already_initialized;
-}
-
 bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}", this->id_);
-    bool already_initialized = this->activate_device_in_list();
+    bool already_initialized = this->active_devices_.activate_device(this->id_);
     this->initialize_cluster();
     this->initialize_allocator(l1_bank_remap);
     if (!already_initialized) {
@@ -221,8 +237,7 @@ bool Device::close() {
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
 
-    const std::lock_guard<std::mutex> lock(active_devices_lock_);
-    this->active_devices_[this->id_] = ActiveState::INACTIVE;
+    this->active_devices_.deactivate_device(this->id_);
 
     this->initialized_ = false;
     return true;

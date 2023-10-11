@@ -24,6 +24,24 @@ class Program;
 
 using on_close_device_callback = std::function<void ()>;
 
+class ActiveDevices {
+    enum class ActiveState {
+        UNINITIALIZED = 0,
+        INACTIVE = 1,
+        ACTIVE = 2,
+    };
+
+    std::mutex lock_;
+    std::vector<enum ActiveState>active_devices_;
+
+public:
+    ActiveDevices();
+    ~ActiveDevices();
+
+    bool activate_device(chip_id_t id);
+    void deactivate_device(chip_id_t id);
+};
+
 // A physical PCIexpress Tenstorrent device
 class Device {
    public:
@@ -91,11 +109,6 @@ class Device {
     void deallocate_buffers();
 
    private:
-    enum class ActiveState {
-        UNINITIALIZED = 0,
-        INACTIVE = 1,
-        ACTIVE = 2,
-    };
     void check_allocator_is_initialized() const;
 
     // Checks that the given arch is on the given pci_slot and that it's responding
@@ -116,9 +129,7 @@ class Device {
     friend class Program;
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
-    static std::vector<enum ActiveState>active_devices_;
-    bool activate_device_in_list();
-    std::mutex active_devices_lock_;
+    static ActiveDevices active_devices_;
     chip_id_t id_;
     std::unique_ptr<Allocator> allocator_ = nullptr;
     bool initialized_ = false;
