@@ -493,6 +493,74 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M", [1600])
 @pytest.mark.parametrize("N", [1024])
+def test_sharded_matmul_2d(device, in0_sharded, out_sharded, M, N, function_level_defaults):
+    K = 256
+    in0_shape = [1, 1, M, K]
+    in1_shape = [1, 1, K, N]
+    bias_shape = [1, 1, 1, N]
+
+    grid_size = (8, 5)
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+    bias = torch.randn(bias_shape).bfloat16().float()
+
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config)
+    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config)
+    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config)[0]
+
+    output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
+
+    if in0_sharded:
+        in0_t = ttl.tensor.interleaved_to_sharded(
+            in0_t,
+            grid_size,
+            [M // grid_size[1], K // grid_size[0]],
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
+
+    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        per_core_M=10,
+        per_core_N=4,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+    output_t = ttl.operations.primary.matmul(
+        in0_t,
+        in1_t,
+        bias=bias_t,
+        program_config=program_config,
+        output_mem_config=output_mem_config,
+    )
+    if out_sharded:
+        output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+    pt_out = in0 @ in1 + bias
+
+    tt_out = tt2torch_tensor(output_t)
+
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
+    assert passing
+
+
+@pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
+@pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
+@pytest.mark.parametrize("M", [1600])
+@pytest.mark.parametrize("N", [1024])
 def test_sharded_matmul_2d_transposed(device, in0_sharded, out_sharded, M, N, function_level_defaults):
     K = 256
     in0_shape = [1, 1, M, K]
@@ -556,6 +624,7 @@ def test_sharded_matmul_2d_transposed(device, in0_sharded, out_sharded, M, N, fu
     logger.info(output)
     assert passing
 
+
 def test_resharded_binary_to_matmul(device, function_level_defaults):
     grid_size_binary = (12, 9)
     num_cores_binary = 98
@@ -609,7 +678,13 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
 
     output_binary_t = ttl.tensor.add(in0_t, in1_t, output_mem_config=height_sharded_mem_config)
     output_binary_t = ttl.tensor.sharded_to_interleaved(output_binary_t, interleaved_mem_config)
-    output_binary_t = ttl.tensor.interleaved_to_sharded(output_binary_t, grid_size_matmul, [math.ceil((H // 32) / grid_size_matmul[0]) * 32, W // grid_size_matmul[1]], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,ttl.tensor.ShardOrientation.COL_MAJOR,)
+    output_binary_t = ttl.tensor.interleaved_to_sharded(
+        output_binary_t,
+        grid_size_matmul,
+        [math.ceil((H // 32) / grid_size_matmul[0]) * 32, W // grid_size_matmul[1]],
+        ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        ttl.tensor.ShardOrientation.COL_MAJOR,
+    )
     program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size_matmul,
         in0_block_w=2,

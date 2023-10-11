@@ -674,12 +674,16 @@ void Matmul::validate(
                 std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>
             ) {
                 if (input_tensor_a.memory_config().is_sharded()) {
-                    TT_ASSERT(program_config.transpose_mcast == true);
+                    if (program_config.transpose_mcast) {
+                        TT_ASSERT(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::COL_MAJOR);
+                    } else {
+                        TT_ASSERT(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
+                    }
                     TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
                     if (this->output_mem_config.is_sharded()) {
                         TT_ASSERT(input_tensor_a.memory_config() == this->output_mem_config);
                     }
-                    TT_ASSERT(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::COL_MAJOR);
+
                     uint32_t M = input_tensor_a.volume() / input_tensor_a.shape()[-1] / TILE_HEIGHT;
                     uint32_t K = input_tensor_a.shape()[-1] / TILE_WIDTH;
                     uint32_t N = input_tensor_b.shape()[-1] / TILE_WIDTH;
@@ -692,7 +696,6 @@ void Matmul::validate(
 
                 }
                 if (this->output_mem_config.is_sharded()) {
-                    TT_ASSERT(program_config.transpose_mcast == true);
                     TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
                     uint32_t M = input_tensor_a.volume() / input_tensor_a.shape()[-1] / TILE_HEIGHT;
                     uint32_t N = input_tensor_b.shape()[-1] / TILE_WIDTH;
@@ -765,8 +768,16 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
                     auto core_range = input_tensor_a.device()->compute_with_storage_grid_size();
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
-                    CoreRangeSet all_cores({CoreRange{.start={0, 0}, .end={num_blocks_y - 1, num_blocks_x - 1}}});
-                    ShardSpec shard_spec = ShardSpec{.shard_grid=all_cores, .shard_shape={per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, .shard_orientation=ShardOrientation::COL_MAJOR};
+                    CoreRangeSet all_cores({});
+                    ShardOrientation shard_orientation;
+                    if (program_config.transpose_mcast) {
+                        all_cores = CoreRangeSet({CoreRange{.start={0, 0}, .end={num_blocks_y - 1, num_blocks_x - 1}}});
+                        shard_orientation = ShardOrientation::COL_MAJOR;
+                    } else {
+                        all_cores = CoreRangeSet({CoreRange{.start={0, 0}, .end={num_blocks_x - 1, num_blocks_y - 1}}});
+                        shard_orientation = ShardOrientation::ROW_MAJOR;
+                    }
+                    ShardSpec shard_spec = ShardSpec{.shard_grid=all_cores, .shard_shape={per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, .shard_orientation=shard_orientation};
                     return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), this->output_mem_config, shard_spec)};
                 } else {
                     TT_ASSERT(false, "Unsupported op for output sharding");
