@@ -43,9 +43,7 @@ void kernel_main() {
     };
     #endif
 
-    #if defined IN0_SHARDED && defined IN1_SHARDED
-        return;
-    #endif
+    #if !(defined IN0_SHARDED && defined IN1_SHARDED)
 
     constexpr uint32_t onetile = 1;
 
@@ -72,4 +70,5 @@ void kernel_main() {
         cb_push_back(cb_id_in1, onetile);
         #endif
     }
+    #endif
 }
