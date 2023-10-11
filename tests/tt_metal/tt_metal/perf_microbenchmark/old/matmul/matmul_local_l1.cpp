@@ -370,7 +370,7 @@ int main(int argc, char **argv) {
 
     auto mm_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/matmul/kernels/"
+        "tests/tt_metal/tt_metal/perf_microbenchmark/old/matmul/kernels/"
         "compute_local_l1.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4,
