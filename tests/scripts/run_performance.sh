@@ -12,27 +12,27 @@ run_perf_models() {
 
     env pytest tests/models/falcon/tests -m $pipeline_type
 
-    env pytest tests/models/vgg/tests -m $pipeline_type
+    env pytest models/experimental/vgg/tests -m $pipeline_type
 
-    env pytest tests/models/vit/tests -m $pipeline_type
+    env pytest models/experimental/vit/tests -m $pipeline_type
 
-    env pytest tests/models/llama_old -m $pipeline_type
+    env pytest models/experimental/llama_old/tests -m $pipeline_type
 
-    env pytest tests/models/roberta -m $pipeline_type
+    env pytest models/experimental/roberta/tests -m $pipeline_type
 
-    env pytest tests/models/t5/tests -m $pipeline_type
+    env pytest models/experimental/t5/tests -m $pipeline_type
 
     env pytest tests/models/resnet/tests -m $pipeline_type
 
     env pytest models/experimental/metal_BERT_large_15/tests -m $pipeline_type
 
-    env pytest tests/models/deit/tests -m $pipeline_type
+    env pytest models/experimental/deit/tests -m $pipeline_type
 
     env pytest tests/models/stable_diffusion/tests -m $pipeline_type
 
-    env pytest tests/models/whisper -m $pipeline_type
+    env pytest models/experimental/whisper/tests -m $pipeline_type
 
-    env pytest tests/models/bloom -m $pipeline_type
+    env pytest models/experimental/bloom/tests -m $pipeline_type
 
     ## Merge all the generated reports
     env python tests/models/merge_perf_results.py
