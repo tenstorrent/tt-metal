@@ -344,7 +344,7 @@ tt_metal::Program create_program_mcast_in0_in1(
 
   auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
       program,
-      "tests/tt_metal/tt_metal/perf_microbenchmark/matmul/kernels/"
+      "tests/tt_metal/tt_metal/perf_microbenchmark/old/matmul/kernels/"
       "reader_bmm_tile_layout_in0_sender_padding.cpp",
       left_column,
       tt_metal::DataMovementConfig{
@@ -354,7 +354,7 @@ tt_metal::Program create_program_mcast_in0_in1(
 
   auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
       program,
-      "tests/tt_metal/tt_metal/perf_microbenchmark/matmul/kernels/"
+      "tests/tt_metal/tt_metal/perf_microbenchmark/old/matmul/kernels/"
       "reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
       top_row,
       tt_metal::DataMovementConfig{
@@ -365,7 +365,7 @@ tt_metal::Program create_program_mcast_in0_in1(
 
   auto mm_kernel_in1_receiver_writer_id = tt_metal::CreateKernel(
       program,
-      "tests/tt_metal/tt_metal/perf_microbenchmark/matmul/kernels/"
+      "tests/tt_metal/tt_metal/perf_microbenchmark/old/matmul/kernels/"
       "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
       /* in0_sender_in1_receiver, // If not using half-half noc setup */
       (CoreRangeSet)(std::set<CoreRange>){in0_sender_in1_receiver,
@@ -378,7 +378,7 @@ tt_metal::Program create_program_mcast_in0_in1(
 
   auto mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
       program,
-      "tests/tt_metal/tt_metal/perf_microbenchmark/matmul/kernels/"
+      "tests/tt_metal/tt_metal/perf_microbenchmark/old/matmul/kernels/"
       "reader_bmm_tile_layout_in0_receiver.cpp",
       /* in0_receiver_in1_sender, // If not using half-half noc setup */
       (CoreRangeSet)(std::set<CoreRange>){in0_receiver_in1_sender,
@@ -395,7 +395,7 @@ tt_metal::Program create_program_mcast_in0_in1(
     mm_kernel_in1_receiver_writer_other_noc_setup_id =
         tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/perf_microbenchmark/matmul/kernels/"
+            "tests/tt_metal/tt_metal/perf_microbenchmark/old/matmul/kernels/"
             "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
             in0_receiver_in1_receiver_right_half,
             tt_metal::DataMovementConfig{
@@ -408,7 +408,7 @@ tt_metal::Program create_program_mcast_in0_in1(
     mm_kernel_in0_receiver_other_noc_setup_id =
         tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/perf_microbenchmark/matmul/kernels/"
+            "tests/tt_metal/tt_metal/perf_microbenchmark/old/matmul/kernels/"
             "reader_bmm_tile_layout_in0_receiver.cpp",
             in0_receiver_in1_receiver_right_half,
             tt_metal::DataMovementConfig{
@@ -507,7 +507,7 @@ tt_metal::Program create_program_mcast_in0_in1(
   bool math_approx_mode = false;
   auto mm_kernel = tt_metal::CreateKernel(
       program,
-      "tests/tt_metal/tt_metal/perf_microbenchmark/matmul/kernels/"
+      "tests/tt_metal/tt_metal/perf_microbenchmark/old/matmul/kernels/"
       "bmm_large_block_zm_fused_bias_activation.cpp",
       all_cores,
       tt_metal::ComputeConfig{.math_fidelity = math_fidelity,
