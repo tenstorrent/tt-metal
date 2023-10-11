@@ -464,9 +464,19 @@ void print_execution_breakdown(const OpList& op_list, const ModelSummary& model_
     print_border();
 }
 
-int main() {
-    const std::string file_name = "ResNet50-ops-1071fps.csv"; // ensure the file doesn't have ^M at the end of each line, use dos2unix to remove them
-    CSVTable table = read_csv(file_name);
+int main(int argc, char* argv[]) {
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <csv-file-name>" << std::endl;
+        return 1;
+    }
+
+    std::string csv_file_name = argv[1];
+    std::cout << "Processing CSV file: " << csv_file_name << std::endl;
+    
+    //const std::string csv_file_name = "ResNet50-ops-1089fps.csv"; // ensure the file doesn't have ^M at the end of each line, use dos2unix to remove them
+    //const std::string csv_file_name = "ResNet50-ops-1071fps.csv"; // ensure the file doesn't have ^M at the end of each line, use dos2unix to remove them
+
+    CSVTable table = read_csv(csv_file_name);
 
     trim_spaces(table);
    
