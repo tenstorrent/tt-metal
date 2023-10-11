@@ -9,7 +9,7 @@
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
-#include "tt_eager/tt_dnn/op_library/clone/clone_op.hpp"
+#include "tt_eager/tt_dnn/op_library/copy/copy_op.hpp"
 
 namespace tt {
 
