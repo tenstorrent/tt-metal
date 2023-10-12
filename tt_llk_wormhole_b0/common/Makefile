@@ -41,6 +41,7 @@ ifdef HLK_INC
 INCLUDES = \
 	-I$(CKERNEL_DIR)/$(ARCH_NAME)/common/inc \
 	-I$(HLK_INC) \
+	-I$(HLK_LIB_INC) \
 	-I$(CKERNEL_DIR)/$(ARCH_NAME)/llk_lib/ \
 	-I$(CKERNEL_DIR)/$(ARCH_NAME)/buda/llk_io/ \
 	-I$(CKERNEL_DIR)/$(ARCH_NAME)/buda/llk_api/ \
