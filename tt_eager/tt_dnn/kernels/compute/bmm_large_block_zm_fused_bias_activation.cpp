@@ -58,18 +58,20 @@ void MAIN {
                 int in1_index_subblock_offset = 0;
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
 
-                    acquire_dst(tt::DstMode::Half);
-
                     if (enable_reload) {
                         // Reconfigure input
                         copy_tile_to_dst_init_short_with_dt(mm_partials_cb_id);
                         cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
+                        tile_regs_acquire();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             copy_tile(mm_partials_cb_id, i, i);
                         }
                         cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
                         // Reconfigure srcA back
                         mm_init_short_with_dt(mm_partials_cb_id);
+                    } else {
+                        // just acquire
+                        tile_regs_acquire();
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock
@@ -88,17 +90,19 @@ void MAIN {
                         }
                         in0_index_h_offset += in0_block_w;
                     }
+                    tile_regs_commit();
 
                     if (last_out) {
 
                         #ifdef FUSE_BIAS
                             // Move matmul result to interm buffer
                             cb_reserve_back(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
+                            tile_regs_wait();
                             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                                 pack_tile(i, mm_bias_intermediate_cb_id);
                             }
+                            tile_regs_release();
                             cb_push_back(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
-                            release_dst(tt::DstMode::Half);
 
                             // Redundant wait since we know data was just pushed
                             cb_wait_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
@@ -108,7 +112,7 @@ void MAIN {
                             unpack_reconfig_data_format(mm_bias_intermediate_cb_id, bias_cb_id);
                             // reconfigure packer df for out
                             pack_reconfig_data_format(out_cb_id);
-                            acquire_dst(tt::DstMode::Half);
+                            tile_regs_acquire();
                             for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
                                 uint32_t bcast_tile_idx = in1_index_subblock_offset;
                                 for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
@@ -116,6 +120,11 @@ void MAIN {
                                     bcast_tile_idx++;
                                 }
                             }
+                            // if there's no SFPU fusion, we commit the regs so packer can start packing
+                            #ifndef SFPU_OP_INIT_ACTIVATION
+                            tile_regs_commit();
+                            #endif
+
                             cb_pop_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
                             // reconfigure init for matmul
                             mm_init_short();
@@ -126,15 +135,22 @@ void MAIN {
                         // sfpu activation
                        #ifdef SFPU_OP_INIT_ACTIVATION
                              SFPU_OP_INIT_ACTIVATION
+                            // acquire only if there is no bias fusion, because if there is, we already acquired
+                            #ifndef FUSE_BIAS
+                            tile_regs_acquire();
+                            #endif
                             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                               SFPU_OP_FUNC_ACTIVATION
                             }
+                            tile_regs_commit();
                         #endif
                         // Pack out to output buffer
                         cb_reserve_back(out_cb_id, out_subblock_num_tiles);
+                        tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, out_cb_id);
                         }
+                        tile_regs_release();
                         cb_push_back(out_cb_id, out_subblock_num_tiles);
                     } else {
                         // Wait for tiles in output buffer to be written out since interm and output share memory
@@ -144,13 +160,14 @@ void MAIN {
                         }
                         // Move partial result to interm buffer
                         cb_reserve_back(mm_partials_cb_id, out_subblock_num_tiles);
+                        tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, mm_partials_cb_id);
                         }
+                        tile_regs_release();
                         cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
                     }
 
-                    release_dst(tt::DstMode::Half);
                     in1_index_subblock_offset += out_subblock_w;
                 }
                 in0_index_subblock_offset += in0_subblock_num_tiles;
