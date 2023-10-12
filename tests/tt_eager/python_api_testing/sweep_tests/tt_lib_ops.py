@@ -540,16 +540,6 @@ def layernorm_noweights(x, *args, device, dtype, layout, input_mem_config, outpu
 
     return tt2torch_tensor(t1)
 
-@setup_host_and_device
-def groupnorm_noweights(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.groupnorm(
-        t0, 1, 1e-5, None, None, output_mem_config=output_mem_config
-    )
-
-    return tt2torch_tensor(t1)
 
 @setup_host_and_device
 def groupnorm_noweights(
@@ -561,8 +551,6 @@ def groupnorm_noweights(
     )
 
     return tt2torch_tensor(t1)
-
-
 
 
 @setup_host_and_device
@@ -1933,7 +1921,7 @@ def activation_geglu(x, *args, device, dtype, layout, input_mem_config, output_m
 def activation_reglu(
     x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
 ):
-    dim = kwargs.get("dim", -2)
+    dim = kwargs.get("dim", -1)
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.reglu(t0, dim, output_mem_config=output_mem_config)
 
