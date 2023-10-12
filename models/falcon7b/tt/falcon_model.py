@@ -117,10 +117,8 @@ class TtFalconModelShared(torch.nn.Module):
                 tt_dtype=self.model_config["WORD_EMBEDDING_OUTPUT_DTYPE"],
             )
 
-            attention_mask_bool = torch.zeros(batch_size, 1, sequence_size, num_input_tokens, dtype=bool)
-            for i in range(0, num_input_tokens):
-                for j in range(i + 1, num_input_tokens):
-                    attention_mask_bool[:, :, i, j] = True
+            attention_mask_bool = torch.ones(batch_size, 1, sequence_size, num_input_tokens, dtype=bool)
+            attention_mask_bool = attention_mask_bool.triu(diagonal=1)
 
             attention_mask_bool_padded = torch.cat(
                 (
