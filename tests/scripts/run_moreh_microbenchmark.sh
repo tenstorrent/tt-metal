@@ -2,7 +2,7 @@
 # set -x
 set -eo pipefail
 
-run_profiling_test(){
+run_profiling_test() {
   if [[ -z "$ARCH_NAME" ]]; then
     echo "Must provide ARCH_NAME in environment" 1>&2
     exit 1
@@ -13,7 +13,13 @@ run_profiling_test(){
     exit 1
   fi
 
+  if [[ "$TT_METAL_DEVICE_PROFILER" != 1 ]]; then
+    echo "Must set TT_METAL_DEVICE_PROFILER to 1 to run microbenchmarks" 1>&2
+    exit 1
+  fi
+
   echo "Make sure this test runs in a build with ENABLE_PROFILER=1"
+
   source build/python_env/bin/activate
   export PYTHONPATH=$TT_METAL_HOME
 
