@@ -33,6 +33,10 @@ void MAIN {
     binary_op_specific_init<false>(ELTWISE_OP_CODE);
     #endif
 
+    #ifdef PACK_RELU
+    PACK(( llk_pack_relu_config(ReluType::ZERO_RELU) ));
+    #endif
+
     for(uint32_t block = 0; block < per_core_block_cnt; ++block) {
 
         cb_reserve_back(tt::CB::c_out0, per_core_block_size);
