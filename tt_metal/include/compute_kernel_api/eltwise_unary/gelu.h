@@ -25,7 +25,7 @@ ALWI void gelu_tile_init() {
 }
 
 /**
- *  Please refer to documentation for exp_tile.
+ *  Please refer to documentation for relu_tile.
  */
 ALWI void gelu_tile(uint32_t idst, bool fast_and_approx=true) {
     if (fast_and_approx) {
