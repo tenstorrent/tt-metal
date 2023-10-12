@@ -47,6 +47,11 @@ void MAIN {
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
 
+        #ifdef PACK_RELU
+        // for each batch we start we relu disabled so that intermediate results are not relu'd
+        PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
+        #endif
+
         for(uint32_t block = 0; block < num_blocks; block++)
         {
             bool last_out = block == (num_blocks-1);
@@ -96,6 +101,10 @@ void MAIN {
 
                         #ifdef FUSE_BIAS
                             // Move matmul result to interm buffer
+                            #ifdef PACK_RELU
+                            // if last block we pack the final result with relu enabled
+                            PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
+                            #endif
                             cb_reserve_back(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
                             tile_regs_wait();
                             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
@@ -143,6 +152,10 @@ void MAIN {
                               SFPU_OP_FUNC_ACTIVATION
                             }
                             tile_regs_commit();
+                        #endif
+                        #ifdef PACK_RELU
+                        // if last block we pack the final result with relu enabled
+                        PACK(( llk_pack_relu_config(ReluType::ZERO_RELU) ));
                         #endif
                         // Pack out to output buffer
                         cb_reserve_back(out_cb_id, out_subblock_num_tiles);
