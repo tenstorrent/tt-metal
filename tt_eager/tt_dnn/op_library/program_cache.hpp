@@ -18,7 +18,7 @@ namespace program_cache {
 namespace detail {
 
 struct ProgramCache {
-    operation::ProgramWithCallbacks& get_or_create(
+    std::tuple<operation::ProgramWithCallbacks&, bool> get_or_create(
         const operation::DeviceOperation& op,
         const std::vector<Tensor> &input_tensors,
         const std::vector<std::optional<const Tensor>> &optional_input_tensors,
@@ -26,15 +26,16 @@ struct ProgramCache {
         Device* device
     ) {
         auto program_hash = op.compute_program_hash(input_tensors, optional_input_tensors);
-        if (this->cache_.count(program_hash) > 0) {
+        auto cache_hit = this->cache_.count(program_hash) > 0;
+        if (cache_hit) {
             tt::log_debug(tt::LogOp, "Program Cache: HIT - Getting program from the cache \"{}\"", program_hash);
             auto& program = this->cache_.at(program_hash);
-            return program;
+            return {program, cache_hit};
         } else {
             tt::log_debug(tt::LogOp, "Program Cache: MISS - Compiling new program \"{}\"", program_hash);
             this->cache_[program_hash] = op.create_program(input_tensors, optional_input_tensors, output_tensors);
             auto& program = this->cache_[program_hash].program;
-            return this->cache_[program_hash];
+            return {this->cache_[program_hash], cache_hit};
         }
     }
 
@@ -68,7 +69,7 @@ inline ProgramCache PROGRAM_CACHE{};
 }
 
 template<typename ... Args>
-static operation::ProgramWithCallbacks& get_or_create(Args&& ... args) {
+static std::tuple<operation::ProgramWithCallbacks&, bool> get_or_create(Args&& ... args) {
     return detail::PROGRAM_CACHE.get_or_create(std::forward<Args>(args)...);
 }
 
