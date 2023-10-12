@@ -8,10 +8,6 @@
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
-
-
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
 namespace NAMESPACE {
@@ -45,15 +41,23 @@ void MAIN {
         cb_wait_front(tt::CB::c_in0, per_core_block_size);
         cb_reserve_back(cb_inp0, per_core_block_size);
         copy_tile_init(); // need to copy from CB to DST to be able to run sfpu math
-        ACQ();
+
+        tile_regs_acquire();
         SFPU_OP_INIT_PRE_IN0_0
         for(uint32_t i = 0; i < per_core_block_size; ++i)
         {
             copy_tile(tt::CB::c_in0, i, i); // copy from c_in[0] to DST[0]
             SFPU_OP_FUNC_PRE_IN0_0
+        }
+        tile_regs_commit();
+
+        tile_regs_wait();
+        for(uint32_t i = 0; i < per_core_block_size; ++i)
+        {
             pack_tile(i, cb_inp0); // DST[0]->cb
         }
-        REL();
+        tile_regs_release();
+
         cb_pop_front(tt::CB::c_in0, per_core_block_size);
         cb_push_back(cb_inp0, per_core_block_size);
         #endif
@@ -62,15 +66,23 @@ void MAIN {
         cb_wait_front(tt::CB::c_in1, per_core_block_size);
         cb_reserve_back(cb_inp1, per_core_block_size);
         copy_tile_init(); // need to copy from CB to DST to be able to run sfpu math
-        ACQ();
+
+        tile_regs_acquire();
         SFPU_OP_INIT_PRE_IN1_0
         for(uint32_t i = 0; i < per_core_block_size; ++i)
         {
             copy_tile(tt::CB::c_in1, i, i); // copy from c_in[0] to DST[0]
             SFPU_OP_FUNC_PRE_IN1_0
+        }
+        tile_regs_commit();
+
+        tile_regs_wait();
+        for(uint32_t i = 0; i < per_core_block_size; ++i)
+        {
             pack_tile(i, cb_inp1); // DST[0]->cb
         }
-        REL();
+        tile_regs_release();
+
         cb_pop_front(tt::CB::c_in1, per_core_block_size);
         cb_push_back(cb_inp1, per_core_block_size);
         #endif
@@ -81,7 +93,8 @@ void MAIN {
         #if PRE_SCALE
         binary_op_specific_init<true>(ELTWISE_OP_CODE);
         #endif
-        ACQ();
+
+        tile_regs_acquire();
         for(uint32_t i = 0; i < per_core_block_size; ++i)
         {
             ELTWISE_OP(cb_inp0, cb_inp1, i, i, i);
@@ -94,10 +107,16 @@ void MAIN {
             #ifdef SFPU_OP_CHAIN_0
             SFPU_OP_CHAIN_0
             #endif
+        }
+        tile_regs_commit();
 
+        tile_regs_wait();
+        for(uint32_t i = 0; i < per_core_block_size; ++i)
+        {
             pack_tile(i, tt::CB::c_out0);
         }
-        REL();
+        tile_regs_release();
+
         cb_pop_front(cb_inp0, per_core_block_size);
         cb_pop_front(cb_inp1, per_core_block_size);
         cb_push_back(tt::CB::c_out0, per_core_block_size);
