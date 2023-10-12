@@ -153,6 +153,16 @@ run_stress_post_commit_pipeline_tests() {
     done
 }
 
+run_microbenchmarks_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    export TT_METAL_DEVICE_PROFILER=1
+
+    ./tests/scripts/run_moreh_microbenchmark.sh
+}
+
 run_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -176,6 +186,8 @@ run_pipeline_tests() {
         run_models_performance_virtual_machine_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "stress_post_commit" ]]; then
         run_stress_post_commit_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "microbenchmarks" ]]; then
+        run_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     else
         echo "Unknown pipeline: $pipeline_type"
         exit 1

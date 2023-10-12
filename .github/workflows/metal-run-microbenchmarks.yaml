@@ -1,0 +1,40 @@
+name: "metal - Run microbenchmarks"
+
+on:
+  schedule:
+    - cron: "0 1,15 * * *"
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  run-microbenchmarks:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        arch: [grayskull, wormhole_b0]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      # Use BM for microbenchmarks
+      ARCH_NAME: ${{ matrix.arch }}
+    environment: dev
+    runs-on: ["perf-${{ matrix.arch }}", "self-reset"]
+    steps:
+      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
+        with:
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Build tt-metal and libs
+        run: ./scripts/build_scripts/build_with_profiler_opt.sh
+      - name: Build tests
+        run: make tests
+      - name: Run microbenchmark tests
+        run: ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type microbenchmarks
+      - name: Upload microbenchmark report csvs
+        uses: actions/upload-artifact@v3
+        with:
+          name: microbenchmark-report-csv-${{ matrix.arch }}
+          path: tt_metal/tools/profiler/logs
