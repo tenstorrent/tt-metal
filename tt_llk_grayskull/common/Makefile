@@ -42,6 +42,7 @@ ifdef HLK_INC
 INCLUDES = \
 	-I$(CKERNEL_DIR)/$(ARCH_NAME)/common/inc \
 	-I$(HLK_INC) \
+	-I$(HLK_LIB_INC) \
 	-I$(CKERNEL_DIR)/$(ARCH_NAME)/llk_lib/ \
 	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME)/ \
 	-I$(FIRMWARE_RISCV_INC_DIR)/$(ARCH_NAME)/noc \
