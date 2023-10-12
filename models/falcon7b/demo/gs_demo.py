@@ -11,7 +11,7 @@ from transformers import AutoTokenizer
 
 from models.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 
-from models.falcon7b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
+from models.falcon7b.reference.hf_modeling_falcon import FalconConfig
 from models.falcon7b.model_config import (
     get_model_config,
     get_tt_cache_path,
@@ -119,7 +119,7 @@ def test_gs_demo_kv():
     )
 
     # State dict is needed for embeddings
-    state_dict = FalconForCausalLM.from_pretrained(model_version).state_dict()
+    state_dict = {"transformer.word_embeddings.weight": torch.load(tt_cache_path / "embedding.pt")}
 
     logger.info("Loading TT model weights")
     base_url = ""
