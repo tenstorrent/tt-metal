@@ -9,7 +9,6 @@
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
-#include "tt_eager/tt_dnn/op_library/copy/copy_op.hpp"
 
 namespace tt {
 
@@ -894,28 +893,6 @@ Tensor _hypot(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& 
 Tensor hypot(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _hypot)(input_a, input_b, output_mem_config);
-}
-
-// unary assign
-Tensor _assign_unary(const Tensor& input_a, const MemoryConfig& output_mem_config) {
-    Tensor result = clone(input_a, output_mem_config);
-    return result;
-}
-Tensor assign(const Tensor& input_a, const MemoryConfig& output_mem_config)
-{
-    return operation::decorate_as_composite(__func__, _assign_unary)(input_a, output_mem_config);
-}
-
-// binary assign
-Tensor _assign_binary(const Tensor& input_a,const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    TT_ASSERT( (input_a.layout() == input_b.layout()) , "Input tensors layout need to be same");
-    TT_ASSERT( (input_a.shape() == input_b.shape()) , "Input tensors shape need to be same");
-    Tensor result = copy(input_a, input_b);
-    return result;
-}
-Tensor assign(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config)
-{
-    return operation::decorate_as_composite(__func__, _assign_binary)(input_a, input_b, output_mem_config);
 }
 
 //threshold(a,t,v) = (a <= t)*v + (a > t)*a

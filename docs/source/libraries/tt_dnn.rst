@@ -365,6 +365,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.multigammaln
 
+.. autofunction:: tt_lib.tensor.assign
+
 .. autofunction:: tt_lib.tensor.isclose
 
 .. autofunction:: tt_lib.tensor.i0
@@ -660,8 +662,6 @@ Other Operations
 .. autofunction:: tt_lib.tensor.var_hw
 
 .. autofunction:: tt_lib.tensor.logical_noti
-
-.. autofunction:: tt_lib.tensor.assign
 
 .. autofunction:: tt_lib.tensor.std_hw
 

@@ -47,6 +47,17 @@ inline Tensor clone(const Tensor& input_tensor, const MemoryConfig& output_mem_c
     return operation::run(Copy{output_mem_config}, {input_tensor}).at(0);
 }
 
+//unary assign
+inline Tensor assign(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    return operation::run(Copy{output_mem_config}, {input_a}).at(0);
+}
+
+// binary assign
+inline Tensor assign(const Tensor& input_a,const Tensor& input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    operation::run(Copy{input_b.memory_config()}, {input_a, input_b});
+    return input_b;
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt

@@ -676,7 +676,9 @@ def eltwise_assign_binary(
     dtype,
     layout,
     input_mem_config,
-    output_mem_config,
+    output_mem_config=ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+    ),
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
@@ -684,23 +686,6 @@ def eltwise_assign_binary(
     t2 = ttl.tensor.assign(t0, t1, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t2)
-
-
-@setup_host_and_device
-def eltwise_assign_unary(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.assign(t0, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
 
 
 @setup_host_and_device
@@ -1781,6 +1766,7 @@ eltwise_lez = make_unary_op(ttl.tensor.lez)
 eltwise_gez = make_unary_op(ttl.tensor.gez)
 eltwise_nez = make_unary_op(ttl.tensor.nez)
 eltwise_eqz = make_unary_op(ttl.tensor.eqz)
+eltwise_assign_unary = make_unary_op(ttl.tensor.assign)
 zeros_like = make_unary_op(ttl.tensor.zeros_like)
 ones_like = make_unary_op(ttl.tensor.ones_like)
 # eltwise_logical_not = make_unary_op(ttl.tensor.logical_not)
