@@ -190,9 +190,6 @@ std::map<string, string> get_defines_impl(UnaryOpType op_type, std::optional<flo
         {init_def, op_init_and_name.first},
         {func_def, op_init_and_name.second}
     };
-#if defined(PROFILER)
-    defines["UNARY_MICROKERNEL_PROFILER"] = "1";
-#endif
     update_macro_defines(op_type, defines);
     return defines;
 }
