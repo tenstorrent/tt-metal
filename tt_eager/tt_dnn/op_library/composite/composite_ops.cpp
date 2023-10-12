@@ -687,12 +687,7 @@ Tensor addalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const
 
 //nextafter
 Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    float eps;
-    if (is_arch_whb0(input_a.device()->arch())) {
-        eps = 1.19209e-07f;
-    } else {
-        eps = 0.001953125f;
-    }
+    float eps = input_a.device()->sfpu_eps();
     Tensor result(input_a);
     {
         Tensor eps_gt(input_a);
@@ -1143,6 +1138,7 @@ Tensor swiglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig&
 
 //on-device tensor creation with shape and filled with value
 Tensor sfpu_eps(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
+  TT_ASSERT( device, "device parameter should be not a proper Device object");
   float value = device->sfpu_eps();
   return tt::numpy::full(shape, value, DataType::BFLOAT16, layout, device, output_mem_config);
 }

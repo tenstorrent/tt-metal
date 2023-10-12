@@ -12,7 +12,6 @@
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 
 #include "tt_dnn/op_library/auto_format.hpp"
-#include "tt_dnn/op_library/math.hpp"
 
 #include "tt_lib_bindings.hpp"
 #include "tt_lib_bindings_tensor.hpp"

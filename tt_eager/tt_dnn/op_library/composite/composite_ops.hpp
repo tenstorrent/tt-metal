@@ -216,9 +216,6 @@ Tensor hardtanh(const Tensor& a,float low = -1.0f, float high = +1.0f, const Mem
 //clamp
 Tensor clamp(const Tensor& a,float low, float high, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-//machine epsilon
-Tensor eps(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 //logit(input, eps)=log(input / 1 - input)
 Tensor logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
@@ -246,12 +243,6 @@ Tensor acosh(const Tensor& input_a, const MemoryConfig& output_mem_config = oper
 
 //nextafter
 Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-//binary assign
-Tensor assign(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-//unary assign
-Tensor assign(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //atanh[x] = 0.5 * ln((1 + x) / (1 - x))
 Tensor atanh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
@@ -289,7 +280,7 @@ Tensor geglu(const Tensor& input_a, int32_t dim = -1, const MemoryConfig& output
 // Swish based GLU
 Tensor swiglu(const Tensor& input_a, int32_t dim = -1, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-//on-device tensor creation with shape and filled with value
+//on-device tensor creation with shape and filled with value of SFPU machine epsilon
 Tensor sfpu_eps(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config);
 
 } //namespace tt_metal

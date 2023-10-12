@@ -191,7 +191,6 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         "logit",
         "logical_xor",
         "isclose",
-        "assign_binary",
         "nextafter",
     ]:
         num_inputs = 2

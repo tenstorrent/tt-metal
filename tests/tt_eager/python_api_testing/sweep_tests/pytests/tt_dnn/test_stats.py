@@ -64,7 +64,7 @@ class TestStats:
 
 class TestEPS:
     def test_basic_gs(self):
-        assert ttl.tensor.EPS_GS == 0.001953125
+        assert ttl.device.EPS_GS == 0.001953125
 
     def test_basic_whb0(self):
-        assert np.isclose(ttl.tensor.EPS_WHB0, 1.19209e-07)
+        assert np.isclose(ttl.device.EPS_WHB0, 1.19209e-07)
