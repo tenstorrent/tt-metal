@@ -33,6 +33,15 @@ ALWI void acquire_dst(tt::DstMode mode) {
     PACK(( llk_packer_wait_for_math_done()  ));
 }
 
+// new APIs, TODO: migrate all kernels to these
+ALWI void tile_regs_acquire() {
+    MATH(( llk_math_wait_for_dest_available<SYNC>()  ));
+}
+
+ALWI void tile_regs_wait() {
+    PACK(( llk_packer_wait_for_math_done()  ));
+}
+
 /**
  * Releases the exclusive lock on the internal DST register for the current
  * Tensix core. This lock had to be previously acquired with acquire_dst. This
@@ -49,6 +58,15 @@ ALWI void acquire_dst(tt::DstMode mode) {
 ALWI void release_dst(tt::DstMode mode) {
     MATH(( llk_math_dest_section_done<SYNC>()  ));
 
+    PACK(( llk_pack_dest_section_done<SYNC>()  ));
+}
+
+// new APIs, TODO: migrate all kernels to these
+ALWI void tile_regs_commit() {
+    MATH(( llk_math_dest_section_done<SYNC>()  ));
+}
+
+ALWI void tile_regs_release() {
     PACK(( llk_pack_dest_section_done<SYNC>()  ));
 }
 
