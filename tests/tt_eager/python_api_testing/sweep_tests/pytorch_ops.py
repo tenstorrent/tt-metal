@@ -936,7 +936,7 @@ def activation_glu(x, *args, **kwargs):
 
 
 def activation_reglu(x, *args, **kwargs):
-    dim = kwargs.get("dim", 2)
+    dim = kwargs.get("dim", 3)
     a, b = torch.split(x, x.shape[dim] // 2, dim)
     return a * torch.nn.functional.relu(b)
     # return torch.matmul(a,torch.nn.functional.relu(b))
@@ -973,7 +973,7 @@ def bert_large_selfout_matmul(x, y, z, *args, **kwargs):
     ref_bmm = torch.matmul(x, y)
     ref_bmm = ref_bmm + z
     return ref_bmm
-    
+
 def bert_large_ff2_matmul(x, y, z, *args, **kwargs):
     ref_bmm = torch.matmul(x, y)
     ref_bmm = ref_bmm + z
