@@ -137,23 +137,25 @@ std::vector<Tensor> run_with_program_cache(
     auto device = detail::get_device(input_tensors, optional_input_tensors);
     auto output_tensors = operation.create_output_tensors(input_tensors);
 
-    auto& program_with_callbacks = program_cache::get_or_create(
+    auto&& [program_with_callbacks, cache_hit] = program_cache::get_or_create(
         operation, input_tensors, optional_input_tensors, output_tensors, device
     );
     TT_ASSERT(program_with_callbacks.supports_program_cache());
 
     auto& program = program_with_callbacks.program;
-    if (program_with_callbacks.override_addresses_callback.has_value()) {
-        auto override_addresses_callback = program_with_callbacks.override_addresses_callback.value();
-        override_addresses(
-            override_addresses_callback,
-            program, input_tensors, optional_input_tensors, output_tensors
-        );
-    }
+    if (cache_hit) {
+        if (program_with_callbacks.override_addresses_callback.has_value()) {
+            auto override_addresses_callback = program_with_callbacks.override_addresses_callback.value();
+            override_addresses(
+                override_addresses_callback,
+                program, input_tensors, optional_input_tensors, output_tensors
+            );
+        }
 
-    if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
-        auto override_runtime_arguments_callback = program_with_callbacks.override_runtime_arguments_callback.value();
-        operation.override_runtime_arguments(override_runtime_arguments_callback, program, input_tensors, optional_input_tensors, output_tensors);
+        if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
+            auto override_runtime_arguments_callback = program_with_callbacks.override_runtime_arguments_callback.value();
+            operation.override_runtime_arguments(override_runtime_arguments_callback, program, input_tensors, optional_input_tensors, output_tensors);
+        }
     }
 
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
