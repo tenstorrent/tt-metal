@@ -1936,19 +1936,6 @@ def activation_swiglu(x, *args, device, dtype, layout, input_mem_config, output_
 
     return tt2torch_tensor(t1)
 
-@setup_host_and_device
-def bert_large_ff1_matmul(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    if layout[2] == ttl.tensor.Layout.TILE:
-        z = torch.nn.functional.pad(z, (0, 0, 0, 32 - z.shape[2]))
-
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
-
-    t3 = ttl.tensor.bert_large_ff1_matmul(t0, t1, t2, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t3)
-
 
 @setup_host_and_device
 def bert_large_selfout_matmul(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
