@@ -23,6 +23,7 @@ std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<s
     string op_name = "sub_tiles";
     string op_code = "1";
     string idst = "i";
+
     switch (op_type) {
         case BinaryOpType::ADD:
             op_name = "add_tiles";
@@ -83,11 +84,17 @@ std::map<string, string> get_defines(BinaryOpType op_type, const std::optional<s
             break;
         default: TT_ASSERT(false && "Undefined op type");
     }
+
     defines["ELTWISE_OP"] = op_name.c_str();
     defines["ELTWISE_OP_CODE"] = op_code.c_str();
     if (fused_activations.has_value()) {
-        defines.merge(eltwise_unary_op_utils::get_block_defines(fused_activations.value(), "0", idst));
+        if (op_type == BinaryOpType::ADD and fused_activations.value().size() == 1 and fused_activations.value().at(0).op_type == UnaryOpType::RELU) {
+            defines["PACK_RELU"] = "1";
+        } else {
+            defines.merge(eltwise_unary_op_utils::get_block_defines(fused_activations.value(), "0", idst));
+        }
     }
+
     return defines;
 }
 
