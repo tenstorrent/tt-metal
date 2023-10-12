@@ -21,13 +21,20 @@ Compute APIs
   matmul_tiles
 
   exp_tile
+  relu_tile
+  elu_tile
   gelu_tile
+  isinf_tile
+  isnan_tile
+  i0_tile
+  logical_not_unary_tile
   recip_tile
   sqrt_tile
   sigmoid_tile
   log_tile
   log_with_base_tile
   tanh_tile
+  tan_tile
   sin_tile
   cos_tile
   reduce_tile
