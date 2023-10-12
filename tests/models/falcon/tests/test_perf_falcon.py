@@ -353,11 +353,11 @@ def run_test_FalconCausalLM_end_to_end(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
     (
-        ("prefill", 1, 128, 0, 3.40),
-        ("prefill", 1, 256, 0, 3.75),
-        ("decode", 32, 1, 128, 0.36),
-        ("decode", 32, 1, 1024, 0.45),
-        ("decode", 32, 1, 2047, 0.58),
+        ("prefill", 1, 128, 0, .40),
+        ("prefill", 1, 256, 0, .70),
+        ("decode", 32, 1, 128, 0.32),
+        ("decode", 32, 1, 1024, 0.41),
+        ("decode", 32, 1, 2047, 0.56),
     ),
     ids=[
         "prefill_seq128",
