@@ -775,7 +775,7 @@ Tensor logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_co
 Tensor _polygamma(const Tensor &input_a, uint32_t k, const MemoryConfig& output_mem_config) {
 
     float k_der = 1.0f + k;
-    float fact_val = std::tgamma(k+1);
+    float fact_val = std::tgamma(k_der);
     float pos_neg = 1.0f;
     if (k ==2 || k == 4 || k ==6 || k == 8 || k == 10){
         pos_neg =  -1.0f;
