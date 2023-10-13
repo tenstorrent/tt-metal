@@ -80,9 +80,7 @@ class Bottleneck(nn.Module):
         self.base_address = base_address
         self.fold_batchnorm = fold_batchnorm
         self.downsample_conv_on_tt = downsample_conv_on_tt
-        self.norm_layer_after_downsample_conv_on_tt = (
-            norm_layer_after_downsample_conv_on_tt
-        )
+        self.norm_layer_after_downsample_conv_on_tt = norm_layer_after_downsample_conv_on_tt
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         width = int(planes * (base_width / 64.0)) * groups
@@ -94,12 +92,8 @@ class Bottleneck(nn.Module):
         self.bn1 = norm_layer(width)
         self.bn1.weight = nn.Parameter(state_dict[f"{self.base_address}.bn1.weight"])
         self.bn1.bias = nn.Parameter(state_dict[f"{self.base_address}.bn1.bias"])
-        self.bn1.running_mean = nn.Parameter(
-            state_dict[f"{self.base_address}.bn1.running_mean"]
-        )
-        self.bn1.running_var = nn.Parameter(
-            state_dict[f"{self.base_address}.bn1.running_var"]
-        )
+        self.bn1.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_mean"])
+        self.bn1.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_var"])
         self.bn1.num_batches_tracked = nn.Parameter(
             state_dict[f"{self.base_address}.bn1.num_batches_tracked"],
             requires_grad=False,
@@ -112,12 +106,8 @@ class Bottleneck(nn.Module):
         self.bn2 = norm_layer(width)
         self.bn2.weight = nn.Parameter(state_dict[f"{self.base_address}.bn2.weight"])
         self.bn2.bias = nn.Parameter(state_dict[f"{self.base_address}.bn2.bias"])
-        self.bn2.running_mean = nn.Parameter(
-            state_dict[f"{self.base_address}.bn2.running_mean"]
-        )
-        self.bn2.running_var = nn.Parameter(
-            state_dict[f"{self.base_address}.bn2.running_var"]
-        )
+        self.bn2.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_mean"])
+        self.bn2.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_var"])
         self.bn2.num_batches_tracked = nn.Parameter(
             state_dict[f"{self.base_address}.bn2.num_batches_tracked"],
             requires_grad=False,
@@ -130,12 +120,8 @@ class Bottleneck(nn.Module):
         self.bn3 = norm_layer(planes * self.expansion)
         self.bn3.weight = nn.Parameter(state_dict[f"{self.base_address}.bn3.weight"])
         self.bn3.bias = nn.Parameter(state_dict[f"{self.base_address}.bn3.bias"])
-        self.bn3.running_mean = nn.Parameter(
-            state_dict[f"{self.base_address}.bn3.running_mean"]
-        )
-        self.bn3.running_var = nn.Parameter(
-            state_dict[f"{self.base_address}.bn3.running_var"]
-        )
+        self.bn3.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn3.running_mean"])
+        self.bn3.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn3.running_var"])
         self.bn3.num_batches_tracked = nn.Parameter(
             state_dict[f"{self.base_address}.bn3.num_batches_tracked"],
             requires_grad=False,
@@ -147,15 +133,9 @@ class Bottleneck(nn.Module):
         self.stride = stride
 
         if self.fold_batchnorm:
-            conv1_weight, conv1_bias = fold_bn_to_conv_weights_bias(
-                conv1_weight, self.bn1
-            )
-            conv2_weight, conv2_bias = fold_bn_to_conv_weights_bias(
-                conv2_weight, self.bn2
-            )
-            conv3_weight, conv3_bias = fold_bn_to_conv_weights_bias(
-                conv3_weight, self.bn3
-            )
+            conv1_weight, conv1_bias = fold_bn_to_conv_weights_bias(conv1_weight, self.bn1)
+            conv2_weight, conv2_bias = fold_bn_to_conv_weights_bias(conv2_weight, self.bn2)
+            conv3_weight, conv3_bias = fold_bn_to_conv_weights_bias(conv3_weight, self.bn3)
             self.bn1 = nn.Identity()
             self.bn2 = nn.Identity()
             self.bn3 = nn.Identity()
@@ -283,9 +263,7 @@ class BasicBlock(nn.Module):
         self.base_address = base_address
         self.fold_batchnorm = fold_batchnorm
         self.downsample_conv_on_tt = downsample_conv_on_tt
-        self.norm_layer_after_downsample_conv_on_tt = (
-            norm_layer_after_downsample_conv_on_tt
-        )
+        self.norm_layer_after_downsample_conv_on_tt = norm_layer_after_downsample_conv_on_tt
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         if groups != 1 or base_width != 64:
@@ -300,12 +278,8 @@ class BasicBlock(nn.Module):
         self.bn1 = norm_layer(planes)
         self.bn1.weight = nn.Parameter(state_dict[f"{self.base_address}.bn1.weight"])
         self.bn1.bias = nn.Parameter(state_dict[f"{self.base_address}.bn1.bias"])
-        self.bn1.running_mean = nn.Parameter(
-            state_dict[f"{self.base_address}.bn1.running_mean"]
-        )
-        self.bn1.running_var = nn.Parameter(
-            state_dict[f"{self.base_address}.bn1.running_var"]
-        )
+        self.bn1.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_mean"])
+        self.bn1.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn1.running_var"])
         self.bn1.num_batches_tracked = nn.Parameter(
             state_dict[f"{self.base_address}.bn1.num_batches_tracked"],
             requires_grad=False,
@@ -321,12 +295,8 @@ class BasicBlock(nn.Module):
 
         self.bn2.weight = nn.Parameter(state_dict[f"{self.base_address}.bn2.weight"])
         self.bn2.bias = nn.Parameter(state_dict[f"{self.base_address}.bn2.bias"])
-        self.bn2.running_mean = nn.Parameter(
-            state_dict[f"{self.base_address}.bn2.running_mean"]
-        )
-        self.bn2.running_var = nn.Parameter(
-            state_dict[f"{self.base_address}.bn2.running_var"]
-        )
+        self.bn2.running_mean = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_mean"])
+        self.bn2.running_var = nn.Parameter(state_dict[f"{self.base_address}.bn2.running_var"])
         self.bn2.num_batches_tracked = nn.Parameter(
             state_dict[f"{self.base_address}.bn2.num_batches_tracked"],
             requires_grad=False,
@@ -334,12 +304,8 @@ class BasicBlock(nn.Module):
         self.bn2.eval()
 
         if self.fold_batchnorm:
-            conv1_weight, conv1_bias = fold_bn_to_conv_weights_bias(
-                conv1_weight, self.bn1
-            )
-            conv2_weight, conv2_bias = fold_bn_to_conv_weights_bias(
-                conv2_weight, self.bn2
-            )
+            conv1_weight, conv1_bias = fold_bn_to_conv_weights_bias(conv1_weight, self.bn1)
+            conv2_weight, conv2_bias = fold_bn_to_conv_weights_bias(conv2_weight, self.bn2)
             self.bn1 = nn.Identity()
             self.bn2 = nn.Identity()
 
@@ -440,9 +406,7 @@ class ResNet(nn.Module):
     ) -> None:
         super().__init__()
         self.device = device
-        self.base_address_with_dot = (
-            base_address  # this is root layer, no dot is needed
-        )
+        self.base_address_with_dot = base_address  # this is root layer, no dot is needed
         self.state_dict = state_dict
         self.fold_batchnorm = fold_batchnorm
 
@@ -467,18 +431,10 @@ class ResNet(nn.Module):
         conv1_bias = None
 
         self.bn1 = norm_layer(self.inplanes)  # batch norm
-        self.bn1.weight = nn.Parameter(
-            state_dict[f"{self.base_address_with_dot}bn1.weight"]
-        )
-        self.bn1.bias = nn.Parameter(
-            state_dict[f"{self.base_address_with_dot}bn1.bias"]
-        )
-        self.bn1.running_mean = nn.Parameter(
-            state_dict[f"{self.base_address_with_dot}bn1.running_mean"]
-        )
-        self.bn1.running_var = nn.Parameter(
-            state_dict[f"{self.base_address_with_dot}bn1.running_var"]
-        )
+        self.bn1.weight = nn.Parameter(state_dict[f"{self.base_address_with_dot}bn1.weight"])
+        self.bn1.bias = nn.Parameter(state_dict[f"{self.base_address_with_dot}bn1.bias"])
+        self.bn1.running_mean = nn.Parameter(state_dict[f"{self.base_address_with_dot}bn1.running_mean"])
+        self.bn1.running_var = nn.Parameter(state_dict[f"{self.base_address_with_dot}bn1.running_var"])
         self.bn1.num_batches_tracked = nn.Parameter(
             state_dict[f"{self.base_address_with_dot}bn1.num_batches_tracked"],
             requires_grad=False,
@@ -486,9 +442,7 @@ class ResNet(nn.Module):
         self.bn1.eval()
 
         if self.fold_batchnorm:
-            conv1_weight, conv1_bias = fold_bn_to_conv_weights_bias(
-                conv1_weight, self.bn1
-            )
+            conv1_weight, conv1_bias = fold_bn_to_conv_weights_bias(conv1_weight, self.bn1)
             self.bn1 = nn.Identity()
 
         self.conv1_params = [self.inplanes, 3, 7, 7, 2, 2, 3, 3, 1, groups]
@@ -511,12 +465,8 @@ class ResNet(nn.Module):
             )
 
         self.relu = tt_lib.tensor.relu
-        self.maxpool = fallback_ops.MaxPool2d(
-            kernel_size=3, stride=2, padding=1, channels_last=True
-        )
-        self.layer1 = self._make_layer(
-            block, 64, layers[0], name="layer1", state_dict=state_dict
-        )
+        self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True)
+        self.layer1 = self._make_layer(block, 64, layers[0], name="layer1", state_dict=state_dict)
         self.layer2 = self._make_layer(
             block,
             128,
@@ -561,9 +511,7 @@ class ResNet(nn.Module):
             tt_lib.tensor.Layout.ROW_MAJOR,
         ).to(tt_lib.tensor.Layout.TILE)
 
-        self.fc = TtLinear(
-            512 * block.expansion, 1024, fc_weight, fc_bias, self.device
-        )  # num_classes = 1000
+        self.fc = TtLinear(512 * block.expansion, 1024, fc_weight, fc_bias, self.device)  # num_classes = 1000
         # self.fc = nn.Linear(512 * block.expansion, num_classes)
 
     def _make_layer(
@@ -586,32 +534,18 @@ class ResNet(nn.Module):
             stride = 1
         if stride != 1 or self.inplanes != planes * block.expansion:
             nl = norm_layer(planes * block.expansion)
-            nl.weight = nn.Parameter(
-                state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.weight"]
-            )
-            nl.bias = nn.Parameter(
-                state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.bias"]
-            )
+            nl.weight = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.weight"])
+            nl.bias = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.bias"])
             nl.running_mean = nn.Parameter(
-                state_dict[
-                    f"{self.base_address_with_dot}{name}.0.downsample.1.running_mean"
-                ]
+                state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.running_mean"]
             )
-            nl.running_var = nn.Parameter(
-                state_dict[
-                    f"{self.base_address_with_dot}{name}.0.downsample.1.running_var"
-                ]
-            )
+            nl.running_var = nn.Parameter(state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.running_var"])
             nl.num_batches_tracked = nn.Parameter(
-                state_dict[
-                    f"{self.base_address_with_dot}{name}.0.downsample.1.num_batches_tracked"
-                ],
+                state_dict[f"{self.base_address_with_dot}{name}.0.downsample.1.num_batches_tracked"],
                 requires_grad=False,
             )
             nl.eval()
-            downsample_conv_weight = state_dict[
-                f"{self.base_address_with_dot}{name}.0.downsample.0.weight"
-            ]
+            downsample_conv_weight = state_dict[f"{self.base_address_with_dot}{name}.0.downsample.0.weight"]
             downsample_conv_bias = None
 
             if self.fold_batchnorm:
@@ -638,9 +572,7 @@ class ResNet(nn.Module):
                     downsample_conv_weight.reshape(-1).tolist(),
                     self.downsample_params,
                     self.device,
-                    downsample_conv_bias.tolist()
-                    if downsample_conv_bias is not None
-                    else None,
+                    downsample_conv_bias.tolist() if downsample_conv_bias is not None else None,
                 )
                 self.norm_layer_after_downsample_conv_on_tt = nl
             else:
