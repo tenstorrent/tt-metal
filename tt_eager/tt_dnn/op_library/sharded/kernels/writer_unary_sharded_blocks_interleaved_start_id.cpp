@@ -5,12 +5,14 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    uint32_t dst_addr  = get_arg_val<uint32_t>(0);
+    const uint32_t dst_addr  = get_arg_val<uint32_t>(0);
     const uint32_t block_height_tiles = get_arg_val<uint32_t>(1);
     const uint32_t block_width_tiles = get_arg_val<uint32_t>(2);
-    const uint32_t output_width_offset_tiles = get_arg_val<uint32_t>(3); // input width in tiles - block width in tiles
-    const uint32_t block_num_tiles = get_arg_val<uint32_t>(4); // block_height_tiles * block_width_tiles
-    uint32_t start_id = get_arg_val<uint32_t>(5);
+    const uint32_t unpadded_block_height_tiles = get_arg_val<uint32_t>(3);
+    const uint32_t unpadded_block_width_tiles = get_arg_val<uint32_t>(4);
+    const uint32_t output_width_tiles = get_arg_val<uint32_t>(5); // input width in tiles - block width in tiles
+    const uint32_t block_num_tiles = get_arg_val<uint32_t>(6); // block_height_tiles * block_width_tiles
+    const uint32_t start_id = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
@@ -25,17 +27,23 @@ void kernel_main() {
         .data_format = data_format
     };
 
-    uint32_t tile_id = start_id;
+    const uint32_t padded_width_diff = (block_width_tiles - unpadded_block_width_tiles) * tile_bytes;
+
+    uint32_t row_start_tile_id = start_id;
     cb_wait_front(cb_id_out, block_num_tiles);
+    DPRINT<<'a'<<ENDL();
     uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-    for (uint32_t h = 0; h < block_height_tiles; h++) {
-        for (uint32_t w = 0; w < block_width_tiles; w++) {
+    for (uint32_t h = 0; h < unpadded_block_height_tiles; h++) {
+        uint32_t tile_id = row_start_tile_id;
+        for (uint32_t w = 0; w < unpadded_block_width_tiles; w++) {
             noc_async_write_tile(tile_id, s, l1_read_addr);
             tile_id++;
             l1_read_addr += tile_bytes;
             noc_async_write_barrier();
         }
-        tile_id += output_width_offset_tiles;
+        l1_read_addr += padded_width_diff;
+        row_start_tile_id += output_width_tiles;
     }
+    DPRINT<<'b'<<ENDL();
     cb_pop_front(cb_id_out, block_num_tiles);
 }
