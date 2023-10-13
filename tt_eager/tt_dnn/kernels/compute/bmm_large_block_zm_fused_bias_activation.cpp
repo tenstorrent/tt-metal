@@ -102,7 +102,7 @@ void MAIN {
                         #ifdef FUSE_BIAS
                             // Move matmul result to interm buffer
                             #ifdef PACK_RELU
-                            // if last block we pack the final result with relu enabled
+                            // need to have relu disabled when we pack out partial result before adding bias
                             PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
                             #endif
                             cb_reserve_back(mm_bias_intermediate_cb_id, out_subblock_num_tiles);

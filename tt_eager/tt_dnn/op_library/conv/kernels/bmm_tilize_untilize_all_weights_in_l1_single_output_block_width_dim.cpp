@@ -144,6 +144,12 @@ void MAIN {
     for(uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
         bool enable_reload = false;
         uint32_t in1_index_inner_dim_h_offset = 0;
+
+        #ifdef PACK_RELU
+        // for each output block we start we relu disabled so that intermediate results are not relu'd
+        PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
+        #endif
+
         for(uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) { // inner dim of act (w)
             bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
             if (tilize_in0) {
@@ -198,6 +204,10 @@ void MAIN {
                     #ifdef FUSE_BIAS
                         // if bias is to be added, add it to the data in dst before packing into the out cb
                         if (last_out) {
+                             #ifdef PACK_RELU
+                            // need to have relu disabled when we pack out partial result before adding bias
+                            PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
+                            #endif
                             // first move the current result from dst to interim CB
                             pack_matmul_subblock(out_for_bias_cb_id, out_subblock_num_tiles);
                             // reconfig unpacker df for src B
@@ -244,6 +254,12 @@ void MAIN {
                         }
                     #endif
 
+                    #ifdef PACK_RELU
+                        if (last_out) {
+                            // if last block we pack the final result with relu enabled
+                            PACK(( llk_pack_relu_config(ReluType::ZERO_RELU) ));
+                        }
+                    #endif
                     pack_matmul_subblock(last_out
                                             ? (untilize_out
                                                 ? untilize_mode_final_matmul_partials_cb
