@@ -18,7 +18,6 @@
 #include <stdint.h>
 
 #include "circular_buffer.h"
-#include "debug_print.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 #include "src/firmware/riscv/common/risc_attribs.h"

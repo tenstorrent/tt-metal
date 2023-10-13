@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -52,7 +56,7 @@ struct ExecutionConfig {
     int noc_bw_BPC;
     int num_nocs;
     int fw_launch_latency_nano_sec;
-    
+
     int weights_bytes_per_datum;
     int tile_act_bytes_per_datum;
     int row_major_act_bytes_per_datum;
@@ -73,7 +77,7 @@ CSVTable read_csv(const std::string& file_name) {
     std::ifstream file(file_name);
     CSVTable table;
     std::string line;
-    
+
     // Read header and create column index map
     if (std::getline(file, line)) {
         std::stringstream line_stream(line);
@@ -83,7 +87,7 @@ CSVTable read_csv(const std::string& file_name) {
             table.col_index[cell] = index++;
         }
     }
-    
+
     // Read data rows, the header row is skipped automatically
     while (std::getline(file, line)) {
         std::stringstream line_stream(line);
@@ -94,7 +98,7 @@ CSVTable read_csv(const std::string& file_name) {
         }
         table.data.push_back(row);
     }
-    
+
     return table;
 }
 
@@ -111,14 +115,14 @@ void trim_spaces(CSVTable& table) {
             cell = trim(cell);
         }
     }
-    
+
     // Collect updated keys and values in temporary map
     std::unordered_map<std::string, size_t> update_col_index;
     for (const auto& pair : table.col_index) {
         std::string trimmed_key = trim(pair.first);
         update_col_index[trimmed_key] = pair.second;
     }
-    
+
     // Replace the old col_index map with the updated one
     table.col_index.swap(update_col_index);
 }
@@ -163,11 +167,11 @@ void analyze_op(OperationSpec& op_spec, OperationAnalysis& op_analysis, const Ex
     op_spec.output_width = std::floor((op_spec.in0_width - op_spec.filter_width + 2 * op_spec.pad) / op_spec.stride + 1);
 
     // deduct the FW launch latency to get more accurate kernel execution time
-    op_analysis.measured_nano_sec -= exec_config.fw_launch_latency_nano_sec; 
+    op_analysis.measured_nano_sec -= exec_config.fw_launch_latency_nano_sec;
 
     // compute the amout of data that needs to be consumed on in0 (Bytes)
     if (op_spec.op_code == "OptimizedConv" || op_spec.op_code == "MaxPool") {
-        // filter window is only relevant for maxpool/convs, it's 1x1, s1 for all ohter OPs  
+        // filter window is only relevant for maxpool/convs, it's 1x1, s1 for all ohter OPs
         // for each output we gather a filter window of data from input0
         op_analysis.in0_read_bytes = op_spec.output_height * op_spec.output_width * op_spec.in0_channels * op_spec.batch_size * exec_config.row_major_act_bytes_per_datum;
         op_analysis.in0_read_bytes *= op_spec.filter_height * op_spec.filter_width;
@@ -234,7 +238,7 @@ OpList extract_op_list_from_table(const CSVTable& table, const ExecutionConfig& 
             op_spec.gl_cnt = std::stoi(row[table.col_index.at("GL_CNT")]);
             op_spec.in0_height = std::stoi(row[table.col_index.at("INPUT_0_Z")]);
             op_spec.in0_width = std::stoi(row[table.col_index.at("INPUT_0_Y")]);
-            op_spec.batch_size = exec_config.batch_size;  
+            op_spec.batch_size = exec_config.batch_size;
             op_spec.in0_channels = std::stoi(row[table.col_index.at("INPUT_0_X")]);
 
             if (op_spec.op_code == "Matmul" || op_spec.op_code == "OptimizedConv") {
@@ -248,10 +252,10 @@ OpList extract_op_list_from_table(const CSVTable& table, const ExecutionConfig& 
                 op_spec.filter_width = std::stoi(row[table.col_index.at("FILT_W")]);
                 op_spec.stride = std::stoi(row[table.col_index.at("STRIDE")]);
                 op_spec.pad = std::stoi(row[table.col_index.at("PAD")]);
-            } else { 
+            } else {
                 // non-window OPs
                 op_spec.filter_height = 1;
-                op_spec.filter_width = 1; 
+                op_spec.filter_width = 1;
                 op_spec.stride = 1;
                 op_spec.pad = 0;
             }
@@ -280,13 +284,13 @@ void print_op_table(const OpList& op_list, std::unordered_set<std::string> filte
 
     std::vector<std::pair<std::string, int>> headers = {
         {"GL_CNT", 6}, {"OP_CODE", 14}, {"OP_NAME", 15},
-        {"BS", 2}, {"IN_H", 4}, {"IN_W", 4}, {"IN_CH", 5}, 
+        {"BS", 2}, {"IN_H", 4}, {"IN_W", 4}, {"IN_CH", 5},
         {"F_H", 4}, {"F_W", 4}, {"ST", 3}, {"PAD", 4},
         {"OUT_H", 5}, {"OUT_W", 5}, {"OUT_CH", 6},
-        {"MUL_ADDs", 10}, {"IN0_RD_KB", 10}, {"WGHT_KB", 8}, 
+        {"MUL_ADDs", 10}, {"IN0_RD_KB", 10}, {"WGHT_KB", 8},
         {"IDL D CC", 8}, {"IDL D NS", 8}, {"MEAS NS", 7}, {"DEV UTIL", 8}
     };
-    
+
     // Define the color codes
     const std::string RESET_COLOR = "\033[0m";
     const std::string RED = "\033[31m";
@@ -320,10 +324,10 @@ void print_op_table(const OpList& op_list, std::unordered_set<std::string> filte
         if (!filter_ops.empty()) {
             if (inclusive_filtering) {
                 // if inclusive filtering is enabled and the op is not in the filter list, skip it
-                if (filter_ops.find(op_spec.op_code) == filter_ops.end()) continue; 
+                if (filter_ops.find(op_spec.op_code) == filter_ops.end()) continue;
             } else {
                 // if inclusive filtering is disabled and the op is in the filter list, skip it
-                if (filter_ops.find(op_spec.op_code) != filter_ops.end()) continue; 
+                if (filter_ops.find(op_spec.op_code) != filter_ops.end()) continue;
             }
         }
 
@@ -411,7 +415,7 @@ void print_model_summary(const ModelSummary& summary) {
 }
 
 void print_execution_breakdown(const OpList& op_list, const ModelSummary& model_summary, const std::vector<std::unordered_set<std::string>>& op_sets) {
-  
+
     std::vector<long long> op_set_time_nano_sec;
     op_set_time_nano_sec.reserve(op_sets.size());
     long long op_sets_total_nano_sec = 0;
@@ -452,7 +456,7 @@ void print_execution_breakdown(const OpList& op_list, const ModelSummary& model_
         float percentage = (float)(op_set_time_nano_sec[i]) / model_summary.total_measured_nano_sec * 100;
         std::cout << "Pct: " << "\t" << percentage << "%\n";
 
-        ++i;  
+        ++i;
     }
 
     print_border();
@@ -472,14 +476,14 @@ int main(int argc, char* argv[]) {
 
     std::string csv_file_name = argv[1];
     std::cout << "Processing CSV file: " << csv_file_name << std::endl;
-    
+
     //const std::string csv_file_name = "ResNet50-ops-1089fps.csv"; // ensure the file doesn't have ^M at the end of each line, use dos2unix to remove them
     //const std::string csv_file_name = "ResNet50-ops-1071fps.csv"; // ensure the file doesn't have ^M at the end of each line, use dos2unix to remove them
 
     CSVTable table = read_csv(csv_file_name);
 
     trim_spaces(table);
-   
+
     // print_table_data(table);
 
     ExecutionConfig exec_config = {
@@ -492,7 +496,7 @@ int main(int argc, char* argv[]) {
         .noc_bw_BPC = 32,
         .num_nocs = 2,
         .fw_launch_latency_nano_sec = 1500,
-        
+
         .weights_bytes_per_datum = 2,
         .tile_act_bytes_per_datum = 2,
         .row_major_act_bytes_per_datum = 2,
@@ -510,12 +514,12 @@ int main(int argc, char* argv[]) {
     print_op_table(op_list, {"MaxPool", "Reduce"});
     print_op_table(op_list, {"Matmul", "OptimizedConv", "EltwiseBinary", "MaxPool", "Reduce"}, false);
 
-    print_execution_breakdown(op_list, model_summary, {{"Matmul"}, {"OptimizedConv"}, 
+    print_execution_breakdown(op_list, model_summary, {{"Matmul"}, {"OptimizedConv"},
                                        {"EltwiseBinary"}, {"MaxPool", "Reduce"},
                                        {"Untilize", "Tilize","UntileAndUnpad", "Pad", "Unpad"}
                                        });
 
-    print_execution_breakdown(op_list, model_summary, {{"Matmul"}, {"OptimizedConv"}, 
+    print_execution_breakdown(op_list, model_summary, {{"Matmul"}, {"OptimizedConv"},
                                        });
 
     print_model_summary(model_summary);
