@@ -877,7 +877,7 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.maxpool_output_shape,
             batch_size=batch_size,
-            sharded=tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED if sharded is not None else None,
+            sharded=tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
             out_sharded=True,
             act_block_w_equals_input_channels_x_filter_width=True,
         )
@@ -891,7 +891,7 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.layer1_output_shape,
             batch_size=batch_size,
-            sharded=tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED if sharded is not None else None,
+            sharded=tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
             out_sharded=False,
         )
         self.layer3, self.layer3_output_shape = self._make_layer(
@@ -904,7 +904,7 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.layer2_output_shape,
             batch_size=batch_size,
-            sharded=tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED if sharded is not None else None,
+            sharded=tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
             out_sharded=False,
         )
         self.layer4, self.layer4_output_shape = self._make_layer(
@@ -917,7 +917,7 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.layer3_output_shape,
             batch_size=batch_size,
-            sharded=tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED if sharded is not None else None,
+            sharded=tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
             out_sharded=True,
         )
 
