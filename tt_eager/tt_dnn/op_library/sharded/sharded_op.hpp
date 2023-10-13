@@ -18,8 +18,12 @@ namespace tt {
 
 namespace tt_metal {
 
+enum class ShardedOpParallelizationStrategy {
+    MULTI_CORE = 0
+};
+
 enum class ShardedOpType {
-    INTERLEAVED_TO_SHARDED, SHARDED_TO_INTERLEAVED
+    InterleavedToSharded, ShardedToInterleaved
 };
 
 operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &a, Tensor &output, const CoreCoord& grid_size);
@@ -35,6 +39,8 @@ struct Sharded {
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    ShardedOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
+    std::string get_type_name() const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
@@ -53,13 +59,13 @@ inline Tensor interleaved_to_sharded(const Tensor &input_tensor, std::array<uint
     CoreRangeSet grid = num_cores_to_corerange_set(num_cores, {grid_size[0], grid_size[1]}, row_wise);
     auto shard_spec = ShardSpec{.shard_grid=grid, .shard_shape=shard_shape, .shard_orientation=shard_orientation};
     MemoryConfig sharded_mem_config = MemoryConfig{.memory_layout = shard_scheme, .buffer_type = BufferType::L1};
-    return operation::run(Sharded{.grid_size={grid_size[0], grid_size[1]}, .shard_spec=shard_spec, .sharded_op_type=ShardedOpType::INTERLEAVED_TO_SHARDED, sharded_mem_config}, {input_tensor}).at(0);
+    return operation::run(Sharded{.grid_size={grid_size[0], grid_size[1]}, .shard_spec=shard_spec, .sharded_op_type=ShardedOpType::InterleavedToSharded, sharded_mem_config}, {input_tensor}).at(0);
 }
 
 inline Tensor sharded_to_interleaved(const Tensor &input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     TT_ASSERT(input_tensor.memory_config().is_sharded());
     auto shard_spec = input_tensor.shard_spec().value();
-    return operation::run(Sharded{.grid_size=input_tensor.device()->compute_with_storage_grid_size(), .shard_spec=shard_spec, .sharded_op_type=ShardedOpType::SHARDED_TO_INTERLEAVED, .output_mem_config=output_mem_config}, {input_tensor}).at(0);
+    return operation::run(Sharded{.grid_size=input_tensor.device()->compute_with_storage_grid_size(), .shard_spec=shard_spec, .sharded_op_type=ShardedOpType::ShardedToInterleaved, .output_mem_config=output_mem_config}, {input_tensor}).at(0);
 }
 
 }  // namespace tt_metal

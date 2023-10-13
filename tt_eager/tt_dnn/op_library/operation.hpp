@@ -68,6 +68,16 @@ public:
 };
 
 template<class T, class... Args>
+using has_get_type_name_t = decltype(std::declval<T>().get_type_name(std::declval<Args>()...));
+
+template<class T>
+constexpr bool implements_get_type_name() {
+    return std::experimental::is_detected<
+        has_get_type_name_t,
+        T
+    >{};
+}
+template<class T, class... Args>
 using has_validate_t = decltype(std::declval<T>().validate(std::declval<Args>()...));
 
 template<class T>
@@ -252,8 +262,14 @@ struct DeviceOperation {
 
         // Initialize methods
         get_type_name{
-            [] () -> const std::string {
-                return boost::core::demangle(typeid(T).name());
+            [this] () -> const std::string {
+                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+                if constexpr (detail::implements_get_type_name<T>()) {
+                    return operation.get_type_name();
+                }
+                else {
+                    return boost::core::demangle(typeid(T).name());
+                }
             }
         },
         validate{
