@@ -118,7 +118,8 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
     if (input_tensor_a.memory_config().is_sharded()) {
         if (input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
             // If we aren't height sharded, we require all sharding schemes to match until we add blocked reader/writers for width and block sharding
-            TT_ASSERT((input_tensor_b.memory_config().is_sharded() && this->output_mem_config.is_sharded()));
+            TT_ASSERT((input_tensor_b.memory_config().is_sharded()));
+            TT_ASSERT(input_tensor_a.shard_spec().value().shard_grid.ranges().size() == 1);
         }
         if (input_tensor_b.memory_config().is_sharded()) {
             TT_ASSERT(input_tensor_a.memory_config() == input_tensor_b.memory_config());
