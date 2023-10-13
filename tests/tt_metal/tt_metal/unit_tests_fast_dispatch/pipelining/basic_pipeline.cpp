@@ -20,15 +20,40 @@ using namespace tt::tt_metal;
 
 namespace unit_tests::create_pipeline {
 
+<<<<<<< HEAD
 void create_and_run_row_pipeline(tt_metal::Device* device, uint32_t num_cores) {
+=======
+struct PipelineRowConfig {
+    size_t num_cores;
+    size_t num_tiles;
+    size_t block_size_tiles;
+    size_t num_blocks_in_CB;
+    size_t IO_data_in_dram;
+    size_t num_repetitions;
+};
+
+void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConfig& test_config) {
+>>>>>>> #3159: add test vectors for basic_pipeline test, change enqueue r/w buffer to r/w buffer
     CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
     tt_metal::Program program = tt_metal::Program();
 
+<<<<<<< HEAD
     uint32_t num_tiles = 32;
     uint32_t block_size_tiles = 16;
     uint32_t num_blocks_in_CB = 2;
     uint32_t num_repetitions = 1;
+=======
+    // u32 num_tiles = 32;
+    // u32 block_size_tiles = 16;
+    // u32 num_blocks_in_CB = 2;
+    // u32 num_repetitions = 1;
+    u32 num_cores = (u32)test_config.num_cores;
+    u32 num_tiles = (u32)test_config.num_tiles;
+    u32 block_size_tiles = (u32)test_config.block_size_tiles;
+    u32 num_blocks_in_CB = (u32)test_config.num_blocks_in_CB;
+    u32 num_repetitions = (u32)test_config.num_repetitions;
+>>>>>>> #3159: add test vectors for basic_pipeline test, change enqueue r/w buffer to r/w buffer
 
     TT_ASSERT(num_cores >= 2 && num_cores <= 12);  // grayskull
     TT_ASSERT(num_tiles % block_size_tiles == 0);
@@ -74,8 +99,8 @@ void create_and_run_row_pipeline(tt_metal::Device* device, uint32_t num_cores) {
     uint32_t dst_address;
     CoreCoord dst_noc_xy;
 
-    src_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
-    dst_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
+    src_buffer = CreateBuffer(device, buffer_size, buffer_size, test_config.IO_data_in_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1);
+    dst_buffer = CreateBuffer(device, buffer_size, buffer_size, test_config.IO_data_in_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1);
 
     src_address = src_buffer.address();
     src_noc_xy = src_buffer.noc_coordinates();
@@ -199,7 +224,10 @@ void create_and_run_row_pipeline(tt_metal::Device* device, uint32_t num_cores) {
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
-    EnqueueWriteBuffer(cq, src_buffer, src_vec, false);
+
+    log_info(LogTest, "Writing to device buffer...");
+    tt_metal::WriteToBuffer(src_buffer, src_vec);
+    log_info(LogTest, "Writing to device buffer Done.");
 
     EnqueueProgram(cq, program, false);
     Finish(cq);
@@ -207,8 +235,13 @@ void create_and_run_row_pipeline(tt_metal::Device* device, uint32_t num_cores) {
     log_info(LogTest, "Kernels done.");
 
     log_info(LogTest, "Reading results from device...");
+<<<<<<< HEAD
     std::vector<uint32_t> result_vec;
     EnqueueReadBuffer(cq, dst_buffer, result_vec, true);
+=======
+    std::vector<u32> result_vec;
+    tt_metal::ReadFromBuffer(dst_buffer, result_vec);
+>>>>>>> #3159: add test vectors for basic_pipeline test, change enqueue r/w buffer to r/w buffer
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown
@@ -218,17 +251,91 @@ void create_and_run_row_pipeline(tt_metal::Device* device, uint32_t num_cores) {
 
 }  // namespace unit_tests::create_pipeline
 
-TEST_F(CommandQueueFixture, TwoCorePipeline) {
+TEST_F(CommandQueueFixture, TestPipelineAcrossRows) {
     if (this->arch_ != tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
 
-    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, 2);
-}
-TEST_F(CommandQueueFixture, TwelveCorePipeline) {
-    if (this->arch_ != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
+    unit_tests::create_pipeline::PipelineRowConfig test_config;
 
-    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, 12);
+    // // saturate DRAM
+    test_config.num_cores = 12;
+    test_config.num_tiles = 64 * 1024;
+    test_config.block_size_tiles = 16;
+    test_config.num_blocks_in_CB = 2;
+    test_config.IO_data_in_dram = true;
+    test_config.num_repetitions = 1;
+    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+
+    // saturate L1
+    test_config.num_cores = 10;
+    test_config.num_tiles = 64;
+    test_config.block_size_tiles = 16;
+    test_config.num_blocks_in_CB = 2;
+    test_config.IO_data_in_dram = false;
+    test_config.num_repetitions = 64;
+    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+
+    // test #1
+    test_config.num_cores = 12;
+    test_config.num_tiles = 64;
+    test_config.block_size_tiles = 1;
+    test_config.num_blocks_in_CB = 16;
+    test_config.IO_data_in_dram = false;
+    test_config.num_repetitions = 128;
+    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+
+    // test #2
+    test_config.num_cores = 12;
+    test_config.num_tiles = 64;
+    test_config.block_size_tiles = 2;
+    test_config.num_blocks_in_CB = 16;
+    test_config.IO_data_in_dram = false;
+    test_config.num_repetitions = 128;
+    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+
+    // test #3
+    test_config.num_cores = 12;
+    test_config.num_tiles = 64;
+    test_config.block_size_tiles = 4;
+    test_config.num_blocks_in_CB = 16;
+    test_config.IO_data_in_dram = false;
+    test_config.num_repetitions = 128;
+    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+
+    // test #4
+    test_config.num_cores = 12;
+    test_config.num_tiles = 64;
+    test_config.block_size_tiles = 8;
+    test_config.num_blocks_in_CB = 8;
+    test_config.IO_data_in_dram = false;
+    test_config.num_repetitions = 128;
+    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+
+    // test #5
+    test_config.num_cores = 12;
+    test_config.num_tiles = 64;
+    test_config.block_size_tiles = 16;
+    test_config.num_blocks_in_CB = 4;
+    test_config.IO_data_in_dram = false;
+    test_config.num_repetitions = 128;
+    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+
+    // test #6
+    test_config.num_cores = 12;
+    test_config.num_tiles = 64;
+    test_config.block_size_tiles = 32;
+    test_config.num_blocks_in_CB = 4;
+    test_config.IO_data_in_dram = false;
+    test_config.num_repetitions = 128;
+    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
+
+    // test #7
+    test_config.num_cores = 12;
+    test_config.num_tiles = 64;
+    test_config.block_size_tiles = 64;
+    test_config.num_blocks_in_CB = 4;
+    test_config.IO_data_in_dram = false;
+    test_config.num_repetitions = 128;
+    unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
 }
