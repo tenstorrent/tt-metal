@@ -761,3 +761,65 @@ class AdaptiveAvgPool2d(torch.nn.Module):
         if self.channels_last:
             output = torch.permute(output, (0, 2, 3, 1))
         return output
+
+
+@convert_tt_tensors_wrapper
+def ceil(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    """
+    Returns a new tensor with the ceil of the elements of ``input``, the smallest integer greater than or equal to each element.
+
+    +------------+-----------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                             | Data type   | Valid range     | Required |
+    +============+=========================================+=============+=================+==========+
+    | input      | Input tensor for ceil                   | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.ceil(input)
+
+
+@convert_tt_tensors_wrapper
+def floor(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    """
+    Returns a new tensor with the floor of the elements of ``input``, the largest integer less than or equal to each element.
+
+    +------------+-----------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                             | Data type   | Valid range     | Required |
+    +============+=========================================+=============+=================+==========+
+    | input      | Input tensor for floor                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.floor(input)
+
+
+@convert_tt_tensors_wrapper
+def unary_fmod(input: ttl_tensor.Tensor, other: float) -> ttl_tensor.Tensor:
+    """
+    Applies mod operations and the result has the same sign as the dividend ``input`` and
+    its absolute value is less than that of ``other``.
+
+    +------------+-----------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                             | Data type   | Valid range     | Required |
+    +============+=========================================+=============+=================+==========+
+    | input      | Input tensor                            | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------+-------------+-----------------+----------+
+    | Other      | Scalar                                  | float       |                 | Yes      |
+    +------------+-----------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.fmod(input, other)
+
+
+@convert_tt_tensors_wrapper
+def binary_fmod(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    """
+    Applies mod operations and the result has the same sign as the dividend ``input`` and
+    its absolute value is less than that of ``other``.
+
+    +------------+-----------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                             | Data type   | Valid range     | Required |
+    +============+=========================================+=============+=================+==========+
+    | input      | First tensor                            | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------+-------------+-----------------+----------+
+    | Other      | Second tensor                           | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.fmod(input, other)
