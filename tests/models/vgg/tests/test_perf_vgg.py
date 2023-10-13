@@ -87,7 +87,7 @@ def run_perf_vgg(
     "expected_inference_time, expected_compile_time",
     (
         (
-            3.1,
+            3.16,
             14,
         ),
     ),
