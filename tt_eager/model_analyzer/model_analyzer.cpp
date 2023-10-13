@@ -205,7 +205,7 @@ OpList extract_op_list_from_table(const CSVTable& table, const ExecutionConfig& 
     std::unordered_set<std::string> supported_OP_CODE {
         "EltwiseBinary",
         
-        "Sharded",
+        "InterleavedToSharded",
         "Untilize",
         "Unpad",
         "Pad",
@@ -227,7 +227,8 @@ OpList extract_op_list_from_table(const CSVTable& table, const ExecutionConfig& 
 
             std::unordered_map<std::string, std::string> shorten_OP_CODE = {
                 {"tt::operations::primary::Matmul", "Matmul"},
-                {"UntilizeWithUnpadding", "UntileAndUnpad"}
+                {"UntilizeWithUnpadding",           "UntileAndUnpad"},
+                {"InterleavedToSharded",            "IntrlevToShard"}
             };
             if (shorten_OP_CODE.find(op_code) != shorten_OP_CODE.end()) {
                 op_spec.op_code = shorten_OP_CODE.at(op_code);
@@ -520,7 +521,7 @@ int main(int argc, char* argv[]) {
 
     print_execution_breakdown(op_list, model_summary, {{"Matmul"}, {"OptimizedConv"},
                                        {"EltwiseBinary"}, {"MaxPool", "Reduce"},
-                                       {"Untilize", "Tilize","UntileAndUnpad", "Pad", "Unpad", "Sharded"}
+                                       {"Untilize", "Tilize","UntileAndUnpad", "Pad", "Unpad", "IntrlevToShard"}
                                        });
 
     print_execution_breakdown(op_list, model_summary, {{"Matmul"}, {"OptimizedConv"},
