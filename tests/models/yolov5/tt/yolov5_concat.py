@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from tt_lib.fallback_ops import fallback_ops
+import tt_lib as ttl
 
 
 class TtYolov5Concat(torch.nn.Module):
@@ -16,4 +16,4 @@ class TtYolov5Concat(torch.nn.Module):
         self.d = dimension
 
     def forward(self, x):
-        return fallback_ops.concat(x, self.d)
+        return ttl.tensor.concat(x, self.d)
