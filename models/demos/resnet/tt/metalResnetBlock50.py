@@ -712,8 +712,6 @@ class Bottleneck(nn.Module):
         # Relu after conv1 is fused with the 1x1 conv (matmul)
         # out = self.relu(out, self.memory_config)
         # logger.info("Running untilize op")
-        if out.shape() != out.shape_without_padding() and out.memory_config().is_sharded():
-            out = tt_lib.tensor.sharded_to_interleaved(out, self.memory_config)
         out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         out = out.reshape(
             self.conv1_output_shape[0],
