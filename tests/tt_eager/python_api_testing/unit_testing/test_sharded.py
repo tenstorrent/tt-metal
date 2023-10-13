@@ -862,3 +862,70 @@ def test_sharded_binary_padded_shard(in_sharded, out_sharded, device, function_l
     logger.info(output)
 
     assert passing
+
+
+@pytest.mark.parametrize("in_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
+@pytest.mark.parametrize("out_sharded", [False], ids=["out_unsharded"])
+def test_sharded_untilize_with_unpadding(in_sharded, out_sharded, device, function_level_defaults):
+    grid_size = (7, 8)
+    N = 1
+    C = 1
+    H = 416
+    W = 512
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
+
+    x = torch.arange(N * C * H * W).reshape((N, C, H, W)).bfloat16()
+
+    xt = (
+        ttl.tensor.Tensor(
+            x.reshape(-1).tolist(),
+            x.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(
+            device,
+            interleaved_mem_config,
+        )
+    )
+
+    if in_sharded:
+        xt = ttl.tensor.interleaved_to_sharded(
+            xt,
+            grid_size,
+            [math.ceil((xt.shape()[-2] // 32) / grid_size[0]) * 32, xt.shape()[-1] // grid_size[1]],
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttl.tensor.ShardOrientation.COL_MAJOR,
+        )
+
+    yt = ttl.tensor.untilize_with_unpadding(
+        xt,
+        [0, 0, 0, 0],
+        [0, 0, 391, 511],
+        output_mem_config=out_mem_config,
+    )
+
+    if out_sharded:
+        yt = ttl.tensor.sharded_to_interleaved(
+            yt,
+            interleaved_mem_config,
+        )
+
+    tt_got_back = yt.cpu().to_torch()
+
+    y = x[..., :392, :512]
+    passing, output = comp_equal(y, tt_got_back)
+    logger.info(output)
+
+    assert passing
