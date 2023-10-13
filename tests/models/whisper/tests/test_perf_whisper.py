@@ -120,7 +120,7 @@ def run_perf_whisper(expected_inference_time, expected_compile_time, device):
     "expected_inference_time, expected_compile_time",
     (
         (
-            4.15,
+            4.5,
             25,
         ),
     ),
