@@ -6,6 +6,7 @@
 
 
 #include "tt_dnn/op_library/untilize/untilize_op.hpp"
+#include "tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/math.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -172,10 +173,17 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 
     auto grid_size = device->compute_with_storage_grid_size();
     auto [ncores, ncores_x, ncores_x_cliff, ncores_y, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] = split_blocks_across_cores(grid_size, nblocks);
+    bool row_major = true;
+    bool src_block_sharded = false;
+    uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0, num_output_rows_unpadded = 0;
+    CoreCoord end_core;
     if (src_sharded) {
+        auto shard_spec = a.shard_spec().value();
+        src_block_sharded = a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
+        row_major = shard_spec.shard_orientation == ShardOrientation::ROW_MAJOR;
         ncores_x = device->compute_with_storage_grid_size().x;
         ncores_y = device->compute_with_storage_grid_size().y;
-        all_cores = a.shard_spec().value().shard_grid;
+        all_cores = shard_spec.shard_grid;
         uint32_t num_cores = 0;
         for (const auto& core_range : all_cores.ranges()) {
             num_cores += core_range.size();
@@ -183,8 +191,18 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         ncores = num_cores;
         core_range = all_cores;
         core_range_cliff = CoreRangeSet({});
-        nblocks_per_core = a.shard_spec().value().shard_shape[0] / TILE_HEIGHT;
+        ntiles_per_block = shard_spec.shard_shape[1] / TILE_WIDTH;
+        nblocks_per_core = shard_spec.shard_shape[0] / TILE_HEIGHT;
         nblocks_per_core_cliff = 0;
+
+        num_rows_block = shard_spec.shard_shape[0];
+        block_row_size = shard_spec.shard_shape[1] * output.element_size();     // in0_block_w * TILE_WIDTH * dtype_nbytes
+        output_row_size = output.shape()[-1] * output.element_size();    // output row size bytes
+        last_block_row_size_unpadded = block_row_size - (round_up(output.shape()[-1], shard_spec.shard_shape[1]) - output.shape()[-1]) * output.element_size();
+        uint32_t num_output_rows = output.volume() / output.shape()[-1];
+        num_output_rows_unpadded = num_rows_block - (round_up(num_output_rows, shard_spec.shard_shape[0]) - num_output_rows);
+        end_core = (*shard_spec.shard_grid.ranges().begin()).end;
+
     }
     {
         log_debug(LogOp, "ncores: {}", ncores);
@@ -196,7 +214,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     }
 
     uint32_t src0_cb_index = CB::c_in0;
-    uint32_t num_input_tiles = src_sharded ? ntiles_per_block * nblocks_per_core : ntiles_per_block;
+    uint32_t num_input_tiles = src_sharded ? ntiles_per_block * nblocks_per_core : ntiles_per_block * 2;
     tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
         .set_page_size(src0_cb_index, single_tile_size);
     if (src_sharded) {
@@ -205,7 +223,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
     uint32_t output_cb_index = CB::c_out0;
-    uint32_t num_output_tiles = out_sharded ? ntiles_per_block * nblocks_per_core : ntiles_per_block;
+    uint32_t num_output_tiles = out_sharded ? ntiles_per_block * nblocks_per_core : ntiles_per_block * 2;
     tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
         .set_page_size(output_cb_index, single_tile_size);
     if (out_sharded) {
@@ -261,22 +279,36 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_ct_args});
     } else {
         bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-        bool stick_size_is_power_of_two = is_power_of_two_at_least_32(block_size_nbytes);
-        uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t) std::log2(block_size_nbytes) : 0;
-        vector<uint32_t> writer_ct_args = {
-            (uint32_t) out_is_dram,
-            (uint32_t) stick_size_is_power_of_two,
-            (uint32_t) log2_stick_size,
-        };
+        if (src_block_sharded) {
+            vector<uint32_t> writer_ct_args = {
+                (uint32_t) out_is_dram
+            };
+            unary_writer_kernel_id = CreateDataMovementKernel(
+                program,
+                "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank_blocks.cpp",
+                all_cores,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args = writer_ct_args});
+        } else {
+            bool stick_size_is_power_of_two = is_power_of_two_at_least_32(block_size_nbytes);
+            uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t) std::log2(block_size_nbytes) : 0;
+            vector<uint32_t> writer_ct_args = {
+                (uint32_t) out_is_dram,
+                (uint32_t) stick_size_is_power_of_two,
+                (uint32_t) log2_stick_size,
+            };
 
-        unary_writer_kernel_id = CreateDataMovementKernel(
-            program,
-            "tt_metal/kernels/dataflow/writer_unary_stick_layout_split_rows_interleaved.cpp",
-            all_cores,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .compile_args = writer_ct_args});
+            unary_writer_kernel_id = CreateDataMovementKernel(
+                program,
+                "tt_metal/kernels/dataflow/writer_unary_stick_layout_split_rows_interleaved.cpp",
+                all_cores,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args = writer_ct_args});
+        }
     }
 
     /** compute
@@ -309,15 +341,20 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 
     // 1D distribution of blocks across all cores
     uint32_t ncores_full = ncores;
+    auto full_cores = all_cores;
     if (nblocks_per_core_cliff > 0 && nblocks_per_core_cliff < nblocks_per_core) {
         // unequal case with cliff
         ncores_full -= 1;
+        full_cores = core_range;
     }
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
-    for (uint32_t i = 0; i < ncores_full; ++ i) {
-        CoreCoord core = {i % ncores_x, i / ncores_x};
-
+    auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
+    for (uint32_t i = 0; i < cores.size(); i++){
+        CoreCoord core = cores[i];
+        if (!full_cores.core_coord_in_core_ranges(core)) {
+            continue;
+        }
         // reader runtime args
         vector<uint32_t> reader_rt_args;
 
@@ -341,17 +378,57 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
                 ntiles_per_block * nblocks_per_core // ntiles
             };
         } else {
-            writer_rt_args = {
-                dst_buffer->address(),      // dst_addr
-                nblocks_per_core * TILE_HEIGHT,           // nblocks per core
-                block_size_nbytes,          // block_size_nbytes
-                ntiles_per_block,           // ntiles_per_block
-                block_size_nbytes,          // block_size_nbytes
-                1,                          // full blocks in a row
-                0,
-                0,
-                row_start_id
-            };
+            if (src_block_sharded) {
+                uint32_t block_start_row_offset;
+                uint32_t block_start_row_id_offset;
+                uint32_t row_size_unpadded = block_row_size;
+                uint32_t num_rows_unpadded = num_rows_block;
+                if (row_major) {
+                    block_start_row_offset = core.x * block_row_size;
+                    block_start_row_id_offset = core.y * num_rows_block;
+                    if (core.x == end_core.x) {
+                        row_size_unpadded = last_block_row_size_unpadded;
+                    }
+                    if (core.y == end_core.y) {
+                        num_rows_unpadded = num_output_rows_unpadded;
+                    }
+                } else {
+                    block_start_row_offset = core.y * block_row_size;
+                    block_start_row_id_offset = core.x * num_rows_block;
+                    if (core.y == end_core.y) {
+                        row_size_unpadded = last_block_row_size_unpadded;
+                    }
+                    if (core.x == end_core.x) {
+                        num_rows_unpadded = num_output_rows_unpadded;
+                    }
+                }
+
+                writer_rt_args = {
+                    dst_buffer->address(),      // dst_addr
+                    num_rows_block,
+                    block_row_size,
+                    1,
+                    1,
+                    1,
+                    output_row_size,
+                    row_size_unpadded,
+                    num_rows_unpadded,
+                    block_start_row_id_offset,
+                    block_start_row_offset
+                };
+            } else {
+                writer_rt_args = {
+                    dst_buffer->address(),      // dst_addr
+                    nblocks_per_core * TILE_HEIGHT,           // nblocks per core
+                    block_size_nbytes,          // block_size_nbytes
+                    ntiles_per_block,           // ntiles_per_block
+                    block_size_nbytes,          // block_size_nbytes
+                    1,                          // full blocks in a row
+                    0,
+                    0,
+                    row_start_id
+                };
+            }
         }
         // log_debug("writer[{}]: {},{} = {} {}", dst_buffer->address(), core.x, core.y, block_size_nbytes, row_start_id);
 
@@ -374,8 +451,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     }
     if (ncores_full < ncores) {
         // last core is the cliff core with nblocks_per_core_cliff blocks
-        CoreCoord core = { ncores_full % ncores_x, ncores_full / ncores_x};
-
+        CoreCoord core = row_major ? CoreCoord{ ncores_full % ncores_x, ncores_full / ncores_x} : CoreCoord{ ncores_full / ncores_y, ncores_full % ncores_y};
         // reader runtime args
         vector<uint32_t> reader_rt_args;
 
@@ -394,22 +470,61 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 
         // writer runtime args
         vector<uint32_t> writer_rt_args;
-         if (out_sharded) {
+        if (out_sharded) {
             writer_rt_args = {
                 ntiles_per_block * nblocks_per_core_cliff // ntiles
             };
         } else {
-            writer_rt_args = {
-                dst_buffer->address(),      // dst_addr
-                nblocks_per_core_cliff * TILE_HEIGHT,                 // nsticks
-                block_size_nbytes,          // stick_size_nbytes
-                ntiles_per_block,        // ntiles_per_block
-                block_size_nbytes,         // block_width_nbytes
-                1,     // full blocks in a row
-                0,         // UNUSED
-                0,      // UNUSED
-                row_start_id
-            };
+            if (src_block_sharded) {
+                uint32_t block_start_row_offset;
+                uint32_t block_start_row_id_offset;
+                uint32_t row_size_unpadded = block_row_size;
+                uint32_t num_rows_unpadded = num_rows_block;
+                if (row_major) {
+                    block_start_row_offset = core.x * block_row_size;
+                    block_start_row_id_offset = core.y * num_rows_block;
+                    if (core.x == end_core.x) {
+                        row_size_unpadded = last_block_row_size_unpadded;
+                    }
+                    if (core.y == end_core.y) {
+                        num_rows_unpadded = num_output_rows_unpadded;
+                    }
+                } else {
+                    block_start_row_offset = core.y * block_row_size;
+                    block_start_row_id_offset = core.x * num_rows_block;
+                    if (core.y == end_core.y) {
+                        row_size_unpadded = last_block_row_size_unpadded;
+                    }
+                    if (core.x == end_core.x) {
+                        num_rows_unpadded = num_output_rows_unpadded;
+                    }
+                }
+                writer_rt_args = {
+                    dst_buffer->address(),      // dst_addr
+                    num_rows_block,
+                    block_row_size,
+                    1,
+                    1,
+                    1,
+                    output_row_size,
+                    row_size_unpadded,
+                    num_rows_unpadded,
+                    block_start_row_id_offset,
+                    block_start_row_offset
+                };
+            } else {
+                writer_rt_args = {
+                    dst_buffer->address(),      // dst_addr
+                    nblocks_per_core_cliff * TILE_HEIGHT,                 // nsticks
+                    block_size_nbytes,          // stick_size_nbytes
+                    ntiles_per_block,        // ntiles_per_block
+                    block_size_nbytes,         // block_width_nbytes
+                    1,     // full blocks in a row
+                    0,         // UNUSED
+                    0,      // UNUSED
+                    row_start_id
+                };
+            }
         }
         // log_debug("writer: {},{} = {} {}", core.x, core.y, block_size_nbytes, row_start_id);
 
@@ -428,46 +543,16 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         );
     }
 
-    auto override_runtime_args_callback = [
-        reader_kernel_id=unary_reader_kernel_id,
-        writer_kernel_id=unary_writer_kernel_id,
-        ncores=ncores,
-        ncores_x=ncores_x,
-        src_sharded=src_sharded,
-        out_sharded=out_sharded
-    ](
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
-    ) {
-
-        auto src_buffer = input_buffers.at(0);
-        auto dst_buffer = output_buffers.at(0);
-
-        for (uint32_t i = 0; i < ncores; ++ i) {
-            CoreCoord core = {i % ncores_x, i / ncores_x};
-            if (!src_sharded) {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
-                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
-            }
-            if (!out_sharded) {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
-            }
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
-
     auto override_runtime_arguments_callback = [
             reader_kernel_id=unary_reader_kernel_id,
             writer_kernel_id=unary_writer_kernel_id,
             cb_src0=cb_src0,
             cb_output=cb_output,
+            all_cores=all_cores,
             ncores=ncores,
-            ncores_x=ncores_x
+            ncores_x=ncores_x,
+            ncores_y=ncores_y,
+            row_major=row_major
         ]
     (
         const void* operation,
@@ -487,8 +572,12 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
             src0_cb_config.set_globally_allocated_address(src_buffer->address());
         } else {
-            for (uint32_t i = 0; i < ncores; ++ i) {
-                CoreCoord core = {i % ncores_x, i / ncores_x};
+            auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
+            for (uint32_t i = 0; i < cores.size(); i++){
+                CoreCoord core = cores[i];
+                if (!all_cores.core_coord_in_core_ranges(core)) {
+                    continue;
+                }
                 auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
                 SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
@@ -499,8 +588,12 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
             output_cb_config.set_globally_allocated_address(dst_buffer->address());
         } else {
-            for (uint32_t i = 0; i < ncores; ++ i) {
-                CoreCoord core = {i % ncores_x, i / ncores_x};
+            auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
+            for (uint32_t i = 0; i < cores.size(); i++){
+                CoreCoord core = cores[i];
+                if (!all_cores.core_coord_in_core_ranges(core)) {
+                    continue;
+                }
                 auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
                 SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);

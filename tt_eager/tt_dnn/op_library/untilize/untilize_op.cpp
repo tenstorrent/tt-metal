@@ -29,14 +29,16 @@ void Untilize::validate(const std::vector<Tensor> &input_tensors) const {
     TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
 
     if (input_tensor_a.memory_config().is_sharded()) {
-        TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         if (this->output_mem_config.is_sharded()) {
             TT_ASSERT(this->output_mem_config == input_tensor_a.memory_config());
         }
+        if (input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+            TT_ASSERT(input_tensor_a.shard_spec().value().shard_grid.ranges().size() == 1);
+        }
         TT_ASSERT(this->use_multicore == true);
-        TT_ASSERT(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
     } else if (this->output_mem_config.is_sharded()) {
         TT_ASSERT(this->use_multicore == true);
+        TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         uint32_t ntiles = input_tensor_a.volume() / TILE_HW;
         uint32_t ntiles_per_block = input_tensor_a.shape()[3] / TILE_WIDTH;
         uint32_t nblocks = ceil((float) ntiles / ntiles_per_block);
