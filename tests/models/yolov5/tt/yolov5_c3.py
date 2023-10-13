@@ -73,7 +73,7 @@ class TtYolov5C3(torch.nn.Module):
 
     def forward(self, x):
         return self.cv3(
-            tt_lib.fallback_ops.fallback_ops.concat(
+            tt_lib.tensor.concat(
                 (self.m(self.cv1(x)), self.cv2(x)), 1
             )
         )

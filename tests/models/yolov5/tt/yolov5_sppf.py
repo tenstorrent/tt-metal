@@ -4,6 +4,7 @@
 
 import torch
 from tt_lib.fallback_ops import fallback_ops
+import tt_lib as ttl
 from tests.models.yolov5.tt.yolov5_conv import TtYolov5Conv
 
 
@@ -41,4 +42,4 @@ class TtYolov5SPPF(torch.nn.Module):
         y1 = self.m(x)
         y2 = self.m(y1)
 
-        return self.cv2(fallback_ops.concat((x, y1, y2, self.m(y2)), 1))
+        return self.cv2(ttl.tensor.concat((x, y1, y2, self.m(y2)), 1))
