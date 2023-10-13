@@ -444,7 +444,9 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
             in1_num_blocks_w,
             in1_width * out.element_size(),   // output_row_size
             in1_block_w * constants::TILE_WIDTH * out.element_size(), // last block_row_size (same as block row size)
-            in0_height
+            in0_height,
+            0,
+            0
         };
     } else {
         // out is tiled

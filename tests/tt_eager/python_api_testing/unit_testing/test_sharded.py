@@ -676,8 +676,7 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
         ttl.tensor.ShardOrientation.ROW_MAJOR,
     )
 
-    output_binary_t = ttl.tensor.add(in0_t, in1_t, output_mem_config=height_sharded_mem_config)
-    output_binary_t = ttl.tensor.sharded_to_interleaved(output_binary_t, interleaved_mem_config)
+    output_binary_t = ttl.tensor.add(in0_t, in1_t, output_mem_config=interleaved_mem_config)
     output_binary_t = ttl.tensor.interleaved_to_sharded(
         output_binary_t,
         grid_size_matmul,
@@ -710,4 +709,156 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
 
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
+    assert passing
+
+
+@pytest.mark.parametrize("in_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
+@pytest.mark.parametrize("out_sharded", [False], ids=["out_unsharded"])
+def test_sharded_untilize_padded_shard(in_sharded, out_sharded, device, function_level_defaults):
+    grid_size = (10, 8)
+    N = 1
+    C = 1
+    H = 6272
+    W = 256
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
+
+    x = torch.arange(N * C * H * W).reshape((N, C, H, W)).bfloat16()
+
+    xt = (
+        ttl.tensor.Tensor(
+            x.reshape(-1).tolist(),
+            x.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(
+            device,
+            interleaved_mem_config,
+        )
+    )
+
+    if in_sharded:
+        xt = ttl.tensor.interleaved_to_sharded(
+            xt,
+            grid_size,
+            [math.ceil((xt.shape()[-2] // 32) / grid_size[0]) * 32, xt.shape()[-1] // grid_size[1]],
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttl.tensor.ShardOrientation.COL_MAJOR,
+        )
+
+    yt = ttl.tensor.untilize(
+        xt,
+        output_mem_config=out_mem_config,
+        use_multicore=True,
+    )
+
+    if out_sharded:
+        yt = ttl.tensor.sharded_to_interleaved(
+            yt,
+            interleaved_mem_config,
+        )
+
+    tt_got_back = yt.cpu().to_torch()
+
+    passing, output = comp_equal(x, tt_got_back)
+    logger.info(output)
+
+    assert passing
+
+
+@pytest.mark.parametrize("in_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
+@pytest.mark.parametrize("out_sharded", [False], ids=["out_unsharded"])
+def test_sharded_binary_padded_shard(in_sharded, out_sharded, device, function_level_defaults):
+    grid_size = (10, 8)
+    N = 1
+    C = 1
+    H = 1568
+    W = 1024
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
+
+    x = torch.ones((N, C, H, W)).bfloat16()
+    y = torch.ones((N, C, H, W)).bfloat16()
+
+    xt = (
+        ttl.tensor.Tensor(
+            x.reshape(-1).tolist(),
+            x.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(
+            device,
+            interleaved_mem_config,
+        )
+    )
+
+    yt = (
+        ttl.tensor.Tensor(
+            y.reshape(-1).tolist(),
+            y.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(
+            device,
+            interleaved_mem_config,
+        )
+    )
+
+    if in_sharded:
+        xt = ttl.tensor.interleaved_to_sharded(
+            xt,
+            grid_size,
+            [math.ceil((xt.shape()[-2] // 32) / grid_size[0]) * 32, xt.shape()[-1] // grid_size[1]],
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttl.tensor.ShardOrientation.COL_MAJOR,
+        )
+        yt = ttl.tensor.interleaved_to_sharded(
+            yt,
+            grid_size,
+            [math.ceil((xt.shape()[-2] // 32) / grid_size[0]) * 32, xt.shape()[-1] // grid_size[1]],
+            ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+            ttl.tensor.ShardOrientation.COL_MAJOR,
+        )
+
+    zt = ttl.tensor.add(
+        xt,
+        yt,
+        output_mem_config=out_mem_config,
+    )
+
+    if out_sharded:
+        zt = ttl.tensor.sharded_to_interleaved(
+            zt,
+            interleaved_mem_config,
+        )
+
+    tt_got_back = zt.cpu().to_torch()
+
+    passing, output = comp_equal(x + y, tt_got_back)
+    logger.info(output)
+
     assert passing

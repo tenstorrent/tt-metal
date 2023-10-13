@@ -1227,7 +1227,9 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
             num_blocks_weight_w,
             output_channels_padded_to_tile_width*num_bytes_of_df,
             last_block_row_size_bytes,
-            matrix_shape_unpadded[1]
+            matrix_shape_unpadded[1],
+            0,
+            0
         };
     } else {
         assert(false && "Tiled output unsupported");
