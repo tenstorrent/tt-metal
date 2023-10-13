@@ -64,11 +64,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     uint32_t in3_CB_tiles = in3_block_tiles; // No double buffer
     uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
 
-    uint32_t interm1_block_tiles = out_subblock_h * out_subblock_w;
-    uint32_t interm1_CB_tiles = interm1_block_tiles; // No double buffer
-    uint32_t interm1_CB_size = interm1_CB_tiles * output_single_tile_size;
-
-
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
     uint32_t num_cores_c = core_range.x;
@@ -300,11 +295,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         tt_metal::CircularBufferConfig cb_src3_config = tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
 		    .set_page_size(src3_cb_index, bias_single_tile_size);
         auto cb_src3 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
-
-        uint32_t interm1_cb_index = 25;
-        tt_metal::CircularBufferConfig cb_interm1_config = tt_metal::CircularBufferConfig(interm1_CB_size, {{interm1_cb_index, output_data_format}})
-		    .set_page_size(interm1_cb_index, output_single_tile_size);
-        auto cb_interm1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm1_config);
     }
 
     // Parameters for last row, col, or block
@@ -544,11 +534,6 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t in3_block_tiles = per_core_N;
     uint32_t in3_CB_tiles = in3_block_tiles; // No double buffer
     uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
-
-    uint32_t interm1_block_tiles = out_subblock_h * out_subblock_w;
-    uint32_t interm1_CB_tiles = interm1_block_tiles; // No double buffer
-    uint32_t interm1_CB_size = interm1_CB_tiles * output_single_tile_size;
-
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
@@ -818,11 +803,6 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         tt_metal::CircularBufferConfig cb_src3_config = tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
 		    .set_page_size(src3_cb_index, bias_single_tile_size);
         auto cb_src3 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
-
-        uint32_t interm1_cb_index = 25;
-        tt_metal::CircularBufferConfig cb_interm1_config = tt_metal::CircularBufferConfig(interm1_CB_size, {{interm1_cb_index, output_data_format}})
-		    .set_page_size(interm1_cb_index, output_single_tile_size);
-        auto cb_interm1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_interm1_config);
     }
 
     // Parameters for last row, col, or block

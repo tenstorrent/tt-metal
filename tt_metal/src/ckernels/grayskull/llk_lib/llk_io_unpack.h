@@ -12,8 +12,6 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "llk_unpack_common.h"
 
-#include "debug_print.h"
-
 using namespace ckernel;
 
 // "llk_setup_operands" is the old function name that HLKC emits
@@ -35,7 +33,6 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
         num_tiles_recv = tiles_received - cb_interface[input].tiles_acked;
     } while (num_tiles_recv < num_tiles_u);
 
-    //DPRINT << "UNPACKER LLK_W NTR = " << uint32_t(num_tiles_recv) << ENDL();
 }
 
 // Pop N tiles from the incoming stream
