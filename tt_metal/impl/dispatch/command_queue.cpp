@@ -36,7 +36,6 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     /*
         TODO(agrebenisan): Move this logic to compile program
     */
-    vector<pair<u32, u32>> multicast_message_noc_coords;
     vector<transfer_info> program_page_transfers;
     vector<transfer_info> host_page_transfers;
     vector<u32> num_transfers_in_program_pages; // This is a vector that corresponds to the number of transfers within program pages acros all program pages
@@ -94,19 +93,13 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     };
 
     // Step 1: Get the locations of the worker cores and how many worker cores there are in this program
-    for (const CoreRange& core_range : program.get_worker_core_range_set().ranges()) {
-        CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
-        CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
-        multicast_message_noc_coords.push_back(
-            std::make_pair(get_noc_multicast_encoding(physical_start, physical_end), core_range.size()));
-    }
 
     static const map<RISCV, u32> processor_to_l1_arg_base_addr = {
         {RISCV::BRISC, BRISC_L1_ARG_BASE},
         {RISCV::NCRISC, NCRISC_L1_ARG_BASE},
         {RISCV::COMPUTE, TRISC_L1_ARG_BASE},
     };
-    // Step 2: Get transfer info for runtime args (soon to just be host data). We
+    // Step 1: Get transfer info for runtime args (soon to just be host data). We
     // want to send host data first because of the higher latency to pull
     // in host data.
     for (const auto kernel_id : program.kernel_ids()) {
@@ -123,7 +116,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         }
     }
 
-    // Step 3: Continue constructing pages for circular buffer configs
+    // Step 2: Continue constructing pages for circular buffer configs
     for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
         vector<pair<u32, u32>> dst_noc_multicast_info = extract_dst_noc_multicast_info(cb->core_ranges().ranges());
         constexpr static u32 num_bytes = UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(u32);
@@ -151,7 +144,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         {RISCV::TRISC1, MEM_TRISC1_INIT_LOCAL_L1_BASE},
         {RISCV::TRISC2, MEM_TRISC2_INIT_LOCAL_L1_BASE}};
 
-    // Step 4: Determine the transfer information for each program binary
+    // Step 3: Determine the transfer information for each program binary
     src = 0; // Restart src since it begins in a new page
     for (KernelID kernel_id : program.kernel_ids()) {
         const Kernel* kernel = detail::GetKernel(program, kernel_id);
@@ -182,7 +175,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         }
     }
 
-    // Step 5: Continue constructing pages for semaphore configs
+    // Step 4: Continue constructing pages for semaphore configs
     for (const Semaphore& semaphore : program.semaphores()) {
         vector<pair<u32, u32>> dst_noc_multicast_info =
             extract_dst_noc_multicast_info(semaphore.core_range_set().ranges());
@@ -194,6 +187,22 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
             program_page_transfers,
             num_transfers_in_program_pages,
             dst_noc_multicast_info);
+    }
+
+    // Step 5: Continue constructing pages for GO signals
+    for (KernelGroup& kg : program.get_kernel_groups()) {
+        kg.launch_msg.mode = DISPATCH_MODE_DEV;
+        vector<pair<u32, u32>> dst_noc_multicast_info =
+            extract_dst_noc_multicast_info(kg.core_ranges.ranges());
+
+        src = update_program_page_transfers(
+            src,
+            sizeof(launch_msg_t),
+            GET_MAILBOX_ADDRESS_HOST(launch),
+            program_page_transfers,
+            num_transfers_in_program_pages,
+            dst_noc_multicast_info
+        );
     }
 
     if (num_transfers_within_page) {
@@ -219,9 +228,17 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         program_page_idx += 4;
     }
 
+    for (const KernelGroup& kg: program.get_kernel_groups()) {
+        uint32_t *launch_message_data = (uint32_t *)&kg.launch_msg;
+        program_pages[program_page_idx] = launch_message_data[0];
+        program_pages[program_page_idx + 1] = launch_message_data[1];
+        program_pages[program_page_idx + 2] = launch_message_data[2];
+        program_pages[program_page_idx + 3] = launch_message_data[3];
+        program_page_idx += 4;
+    }
+
     return {
         .num_workers = u32(program.logical_cores().size()),
-        .multicast_message_noc_coords = std::move(multicast_message_noc_coords),
         .program_pages = std::move(program_pages),
         .program_page_transfers = std::move(program_page_transfers),
         .host_page_transfers = std::move(host_page_transfers),
@@ -383,13 +400,6 @@ EnqueueProgramCommand::EnqueueProgramCommand(
 const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 host_data_src) {
     DeviceCommand command;
     command.set_num_workers(this->program_to_dev_map.num_workers);
-    command.set_num_multicast_messages(this->program_to_dev_map.multicast_message_noc_coords.size());
-
-    // Set the noc coords for all the worker cores
-    for (const auto& [multicast_message_noc_coord, num_messages] :
-         this->program_to_dev_map.multicast_message_noc_coords) {
-        command.set_multicast_message_noc_coord(multicast_message_noc_coord, num_messages);
-    }
 
     auto populate_program_data_transfer_instructions =
         [&command](const vector<u32>& num_transfers_per_page, const vector<transfer_info>& transfers_in_pages) {

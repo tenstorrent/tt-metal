@@ -93,9 +93,20 @@ void write_program_page(u32 page_addr, volatile u32*& command_ptr) {
 }
 
 FORCE_INLINE
-void write_program(
+void write_and_launch_program(
     u32 num_pages, volatile u32*& command_ptr, u64 producer_noc_encoding, u32 consumer_cb_size, bool db_buf_switch) {
     u32 l1_consumer_fifo_limit = get_read_ptr(db_buf_switch) + consumer_cb_size - 1;
+
+    if (not num_pages) {
+        return;
+    }
+
+    // GO signals are just data within pages, so we need to set
+    // our local 'recv' address value to 0 before we initiate
+    // any transfers
+    volatile tt_l1_ptr uint32_t* message_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(DISPATCH_MESSAGE_ADDR);
+    *message_addr_ptr = 0;
 
     for (u32 page_idx = 0; page_idx < num_pages; page_idx++) {
         multicore_cb_wait_front(db_buf_switch, 1);
@@ -113,29 +124,18 @@ void write_program(
     }
 }
 
-FORCE_INLINE void launch_program(
-    u32 num_workers, u32 num_multicast_messages, volatile tt_l1_ptr u32*& command_ptr, u32 tensix_soft_reset_addr) {
+FORCE_INLINE void wait_for_program_completion(
+    u32 num_workers, volatile tt_l1_ptr u32*& command_ptr, u32 tensix_soft_reset_addr) {
     if (not num_workers)
         return;
 
-    volatile tt_l1_ptr uint32_t* message_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(DISPATCH_MESSAGE_ADDR);
-    *message_addr_ptr = 0;
-
-    for (u32 i = 0; i < num_multicast_messages * 2; i += 2) {
-        u64 worker_core_noc_coord = u64(command_ptr[i]) << 32;
-        u32 num_messages = command_ptr[i + 1];
-        u64 launch_packet_dst_addr = worker_core_noc_coord | (uint32_t)GET_MAILBOX_ADDRESS_DEV(launch);
-        noc_async_write_multicast((uint32_t)&launch_msg, launch_packet_dst_addr, sizeof(launch_msg_t), num_messages);
-    }
-    // noc_async_write_barrier();
-
     // Wait on worker cores to notify me that they have completed
     DEBUG_STATUS('Q', 'W');
-    // DPRINT << "WAIT WORKERS" << ENDL();
-    while (*message_addr_ptr != num_workers) {
-    }
-    // DPRINT << "DONE WORKERS" << ENDL();
+
+    volatile tt_l1_ptr uint32_t* message_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(DISPATCH_MESSAGE_ADDR);
+    while (*message_addr_ptr != num_workers);
+
     DEBUG_STATUS('Q', 'D');
 }
 

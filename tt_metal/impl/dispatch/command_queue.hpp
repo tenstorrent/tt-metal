@@ -41,7 +41,6 @@ struct transfer_info {
 
 struct ProgramMap {
     u32 num_workers;
-    vector<pair<u32, u32>> multicast_message_noc_coords;
     vector<u32> program_pages;
     vector<transfer_info> program_page_transfers;
     vector<transfer_info> host_page_transfers;

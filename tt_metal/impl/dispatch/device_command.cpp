@@ -10,9 +10,7 @@ DeviceCommand::DeviceCommand() {
     for (u32 idx = 0; idx < DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER; idx++) {
         this->desc[idx] = 0;
     }
-
-    this->worker_launch_idx = DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
-    this->buffer_transfer_idx = this->worker_launch_idx + DeviceCommand::NUM_POSSIBLE_GO_SIGNALS;
+    this->buffer_transfer_idx = DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
     this->program_transfer_idx = this->buffer_transfer_idx + DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS *
                                                                       DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
 }
@@ -22,16 +20,6 @@ void DeviceCommand::wrap() { this->desc[this->wrap_idx] = 1; }
 void DeviceCommand::finish() { this->desc[this->finish_idx] = 1; }
 
 void DeviceCommand::set_num_workers(const u32 num_workers) { this->desc.at(this->num_workers_idx) = num_workers; }
-
-void DeviceCommand::set_num_multicast_messages(const u32 num_multicast_messages) {
-    this->desc.at(this->num_multicast_messages_idx) = num_multicast_messages;
-}
-
-void DeviceCommand::set_multicast_message_noc_coord(const u32 noc_coord, const u32 num_messages) {
-    this->desc.at(this->worker_launch_idx) = noc_coord;
-    this->desc.at(this->worker_launch_idx + 1) = num_messages;
-    this->worker_launch_idx += 2;
-}
 
 void DeviceCommand::set_is_program() { this->desc[this->is_program_buffer_idx] = 1; }
 

@@ -22,7 +22,6 @@ class DeviceCommand {
     static constexpr u32 PRODUCER_DATA_BUFFER_SIZE =
         (MEM_L1_SIZE - (NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(u32)) - L1_UNRESERVED_BASE);
     static constexpr u32 CONSUMER_DATA_BUFFER_SIZE = (PRODUCER_DATA_BUFFER_SIZE - NUM_BYTES_IN_DEVICE_COMMAND) / 2;
-    static constexpr u32 NUM_POSSIBLE_GO_SIGNALS = 108;
     static constexpr u32 DEVICE_COMMAND_DATA_ADDR = L1_UNRESERVED_BASE + NUM_BYTES_IN_DEVICE_COMMAND;
     static constexpr u32 NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION = 6;
     static constexpr u32 NUM_POSSIBLE_BUFFER_TRANSFERS = 2;
@@ -35,17 +34,16 @@ class DeviceCommand {
     static constexpr u32 wrap_idx = 0;
     static constexpr u32 finish_idx = 1;
     static constexpr u32 num_workers_idx = 2;
-    static constexpr u32 num_multicast_messages_idx = 3;
-    static constexpr u32 num_buffer_transfers_idx = 4;
-    static constexpr u32 is_program_buffer_idx = 5;
-    static constexpr u32 stall_idx = 6;
-    static constexpr u32 page_size_idx = 7;
-    static constexpr u32 producer_cb_size_idx = 8;
-    static constexpr u32 consumer_cb_size_idx = 9;
-    static constexpr u32 producer_cb_num_pages_idx = 10;
-    static constexpr u32 consumer_cb_num_pages_idx = 11;
-    static constexpr u32 num_pages_idx = 12;
-    static constexpr u32 data_size_idx = 13;
+    static constexpr u32 num_buffer_transfers_idx = 3;
+    static constexpr u32 is_program_buffer_idx = 4;
+    static constexpr u32 stall_idx = 5;
+    static constexpr u32 page_size_idx = 6;
+    static constexpr u32 producer_cb_size_idx = 7;
+    static constexpr u32 consumer_cb_size_idx = 8;
+    static constexpr u32 producer_cb_num_pages_idx = 9;
+    static constexpr u32 consumer_cb_num_pages_idx = 10;
+    static constexpr u32 num_pages_idx = 11;
+    static constexpr u32 data_size_idx = 12;
 
     void wrap();
 
@@ -53,9 +51,6 @@ class DeviceCommand {
 
     void set_num_workers(const u32 num_workers);
 
-    void set_num_multicast_messages(const u32 num_multicast_messages);  // Specifies how many core ranges to deassert
-
-    void set_multicast_message_noc_coord(const u32 core_coord, const u32 num_messages);
 
     void set_is_program();
 
@@ -94,7 +89,6 @@ class DeviceCommand {
 
    private:
     std::array<u32, DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND> desc;
-    u32 worker_launch_idx;
     u32 buffer_transfer_idx;
     u32 program_transfer_idx;
 };
