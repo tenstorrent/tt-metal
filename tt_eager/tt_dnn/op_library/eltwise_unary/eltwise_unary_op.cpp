@@ -108,6 +108,7 @@ std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType op_type
         case UnaryOpType::GELU: op_init_and_name = {"gelu_tile_init();", fmt::format("gelu_tile({}, {}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::RSQRT: op_init_and_name = {"rsqrt_tile_init();",  fmt::format("rsqrt_tile({}, {}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::HEAVISIDE: op_init_and_name = {"heaviside_tile_init();", fmt::format("heaviside_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::EXP: op_init_and_name = {"exp_tile_init();", fmt::format("exp_tile({}, {}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::ERF: op_init_and_name = {"erf_tile_init();", fmt::format("erf_tile({}, {}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::ERFC: op_init_and_name = {"erfc_tile_init();", fmt::format("erfc_tile({}, {}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::RDIV: op_init_and_name = {}; break;
@@ -121,7 +122,6 @@ std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType op_type
 std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, string idst) {
     std::pair<string, string> op_init_and_name;
     switch (op_type) {
-        case UnaryOpType::EXP: op_init_and_name = {"exp_tile_init();", fmt::format("exp_tile({});", idst)}; break;
         case UnaryOpType::RECIP: op_init_and_name = {"recip_tile_init();", fmt::format("recip_tile({});", idst)}; break;
         case UnaryOpType::RELU: op_init_and_name = {"relu_tile_init();", fmt::format("relu_tile({});", idst)}; break;
         case UnaryOpType::SQRT: op_init_and_name = {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)}; break;

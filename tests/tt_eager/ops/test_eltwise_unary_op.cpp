@@ -119,6 +119,18 @@ void test_shape_padding() {
     TT_ASSERT(tt::tt_metal::CloseDevice(device));
 }
 
+namespace tt {
+  namespace tt_metal {
+    template<bool approx_value=false>
+    struct exp_with_param {
+      static
+      Tensor fn(const tt::tt_metal::Tensor& t) {
+	return exp(t,approx_value,operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+      }
+    };
+  }
+}
+
 void test_numerically() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
 
@@ -138,17 +150,22 @@ void test_numerically() {
     }
     {
         auto allclose = run_test<host_function<::detail::exp>>(
-            tt::tt_metal::exp, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
+        exp_with_param<true>::fn, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
+        TT_ASSERT(allclose);
+    }
+    {
+        auto allclose = run_test<host_function<::detail::exp>>(
+        exp_with_param<false>::fn, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
         TT_ASSERT(allclose);
     }
     {
         auto allclose = run_test<host_function<::detail::recip>>(
-            tt::tt_metal::recip, device, shape, 1.0f, 10.0f, 1e-1f, 1e-5f);
+        tt::tt_metal::recip, device, shape, 1.0f, 10.0f, 1e-1f, 1e-5f);
         TT_ASSERT(allclose);
     }
     {
         auto allclose = run_test<host_function<::detail::gelu>>(
-            gelu_fast, device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
+        gelu_fast, device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
         TT_ASSERT(allclose);
     }
     {
@@ -207,7 +224,7 @@ void test_program_cache() {
 
         // Program Cache Miss
         run_test<host_function<::detail::exp>>(
-            tt::tt_metal::exp, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        exp_with_param<false>::fn, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Hit
         run_test<host_function<::detail::sqrt>>(
@@ -219,7 +236,7 @@ void test_program_cache() {
 
         // Program Cache Hit
         run_test<host_function<::detail::exp>>(
-            tt::tt_metal::exp, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
+        exp_with_param<false>::fn, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Miss
         run_test<host_function<::detail::gelu>>(

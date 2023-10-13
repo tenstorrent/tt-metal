@@ -70,6 +70,12 @@ void calculate_exponential(uint exp_base_scale_factor = 0)
 
         if constexpr (APPROXIMATION_MODE)
         {
+
+
+            v_if( val < -87.0f ) {
+	      dst_reg[0] = 0.0f;
+	    } v_else {
+
             // * by 1/ln2 and add convert to 7.3 FxP format
             vFloat vConstLn2Recip = vConstFloatPrgm0;
             vFloat c23_73 = vConstFloatPrgm1;
@@ -92,6 +98,7 @@ void calculate_exponential(uint exp_base_scale_factor = 0)
                 }
                 v_endif;
             }
+	    }  v_endif;
         }
         else
         {
@@ -106,7 +113,8 @@ void calculate_exponential(uint exp_base_scale_factor = 0)
 	    dst_reg[0] = result;
         }
 
-        dst_reg++;
+
+	dst_reg++;
     }
 }
 

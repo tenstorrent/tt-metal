@@ -39,8 +39,6 @@ namespace tt::tt_metal::detail {
 
 
         // *** eltwise unary ***
-
-        detail::bind_unary_op(m_tensor, "exp", exp, R"doc(Returns a new tensor with the exponential of the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "recip", recip, R"doc(Returns a new tensor with the reciprocal of the elements of the input tensor ``recip``.)doc");
         detail::bind_unary_op(m_tensor, "relu", relu, R"doc(Applies the rectified linear unit (ReLU) function to the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "relu6", relu6, R"doc(Returns tensor with the relu6 activation on elements of the input tensor ``{0}``.)doc");
@@ -80,6 +78,25 @@ namespace tt::tt_metal::detail {
         detail::bind_unary_op(m_tensor, "log_sigmoid", &log_sigmoid, R"doc(Applies the logsigmoid function to the elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "erfinv", erfinv, R"doc(Computes inverse error function for all elements of the input tensor ``{0}`` in the range (-1,1) .)doc");
         detail::bind_unary_op(m_tensor, "i0", i0, R"doc(Computes the zeroth order modified Bessel function of the first kind applied on the elements of the input tensor ``{0}``, for the input range -10 to 10.)doc");
+
+
+        m_tensor.def("exp", py::overload_cast<const Tensor&, bool, const MemoryConfig&>(&exp),
+		     py::arg("input"), py::arg("use_approx") = false, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Returns a new tensor with the exponential of the elements of the input tensor ``{0}``
+
+            Input and Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input", "Tensor to exp", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "use_approx", "Use approximation", "bool", "", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+
+        )doc");
+
+        detail::bind_unary_op(m_tensor, "exp", py::overload_cast<const Tensor&, const MemoryConfig&>(exp),
+			      R"doc(Returns a new tensor with the exponential of the elements of the input tensor ``{0}``.)doc");
 
         detail::bind_unary_op_with_param(
             m_tensor, "gelu", &gelu,

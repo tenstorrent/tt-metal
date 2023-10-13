@@ -21,8 +21,11 @@
 namespace ckernel {
 
 
-ALWI void exp_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpu_exponential_init<APPROX>() ));
+ALWI void exp_tile_init(bool use_approx=false) {
+  if ( use_approx )
+    MATH(( llk_math_eltwise_unary_sfpu_exponential_init<true>() ));
+  else
+    MATH(( llk_math_eltwise_unary_sfpu_exponential_init<false>() ));
 }
 
 /**
@@ -36,9 +39,14 @@ ALWI void exp_tile_init() {
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | use_approx     | Should the computation use approximation mode ?                            | bool     |                                                       | False    |
  */
-ALWI void exp_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_exponential<APPROX, SyncHalf>(idst) ));
+ALWI void exp_tile(uint32_t idst, bool use_approx = false) {
+  if ( use_approx )
+    MATH(( llk_math_eltwise_unary_sfpu_exponential<true, SyncHalf>(idst) ));
+  else
+    MATH(( llk_math_eltwise_unary_sfpu_exponential<false, SyncHalf>(idst) ));
 }
 
 } // namespace ckernel
