@@ -7,24 +7,6 @@
 #include "dataflow_api.h"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
-// TODO(pgk) move all this to host/device interface
-// static uint32_t go_packet[4] __attribute__((section("l1_data"))) __attribute__((aligned(16))) = {
-//     RUN_MESSAGE_GO,     // brisc
-//     true,               // enable ncrisc (TODO(pgk))
-//     true,               // enable trisc (TODO(pgk))
-//     0,                  // ncrisc fw size (TODO(pgk))
-// };
-
-static launch_msg_t launch_msg __attribute__((section("l1_data"))) __attribute__((aligned(16))) = {
-    .kernel_group_id = 0,
-    .ncrisc_fw_size = 0,
-    .mode = DISPATCH_MODE_DEV,
-    .enable_brisc = true,
-    .enable_ncrisc = true,
-    .enable_triscs = true,
-    .run = RUN_MSG_GO
-};
-
 static constexpr u32 l1_db_cb_addr_offset = 7 * 16;
 
 FORCE_INLINE

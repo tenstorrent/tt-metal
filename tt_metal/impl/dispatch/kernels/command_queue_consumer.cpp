@@ -25,14 +25,12 @@ void kernel_main() {
 
         // For each instruction, we need to jump to the relevant part of the device command
         u32 command_start_addr = get_command_slot_addr(db_buf_switch);
-        u32 dispatch_go_signal_start_addr = command_start_addr + (DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER * sizeof(u32));
-        u32 buffer_transfer_start_addr = dispatch_go_signal_start_addr + (DeviceCommand::NUM_POSSIBLE_GO_SIGNALS * sizeof(u32));
+        u32 buffer_transfer_start_addr = command_start_addr + (DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER * sizeof(u32));
         u32 program_transfer_start_addr = buffer_transfer_start_addr + ((DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION * DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS) * sizeof(u32));
 
         volatile tt_l1_ptr u32* command_ptr = reinterpret_cast<volatile u32*>(command_start_addr);
         u32 finish = command_ptr[DeviceCommand::finish_idx];       // Whether to notify the host that we have finished
         u32 num_workers = command_ptr[DeviceCommand::num_workers_idx];  // If num_workers > 0, it means we are launching a program
-        u32 num_multicast_messages = command_ptr[DeviceCommand::num_multicast_messages_idx];
         u32 num_buffer_transfers = command_ptr[DeviceCommand::num_buffer_transfers_idx];   // How many WriteBuffer commands we are running
         u32 is_program = command_ptr[DeviceCommand::is_program_buffer_idx];
         u32 page_size = command_ptr[DeviceCommand::page_size_idx];
@@ -41,9 +39,8 @@ void kernel_main() {
 
         if (is_program) {
             command_ptr = reinterpret_cast<volatile tt_l1_ptr u32*>(program_transfer_start_addr);
-            write_program(num_pages, command_ptr, producer_noc_encoding, consumer_cb_size, db_buf_switch);
-            command_ptr = reinterpret_cast<volatile tt_l1_ptr u32*>(dispatch_go_signal_start_addr);
-            launch_program(num_workers, num_multicast_messages, command_ptr, tensix_soft_reset_addr);
+            write_and_launch_program(num_pages, command_ptr, producer_noc_encoding, consumer_cb_size, db_buf_switch);
+            wait_for_program_completion(num_workers, command_ptr, tensix_soft_reset_addr);
         } else {
             command_ptr = reinterpret_cast<volatile tt_l1_ptr u32*>(buffer_transfer_start_addr);
             write_buffers(command_ptr, num_buffer_transfers, consumer_cb_size, producer_noc_encoding, db_buf_switch);

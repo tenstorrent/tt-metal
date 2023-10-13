@@ -81,7 +81,7 @@ void produce(
         the consumer. It continues like this in a loop, context switching between pulling in data and
         writing to the consumer.
     */
-    command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER + DeviceCommand::NUM_POSSIBLE_GO_SIGNALS;
+    command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
     u32 l1_consumer_fifo_limit = get_db_buf_addr(db_buf_switch) + consumer_cb_size - 1;
 
     for (u32 i = 0; i < num_srcs; i++) {
