@@ -54,7 +54,7 @@ BERT Demo can by run via ``pytest`` by running the following
 
 ::
 
-    pytest models/experimental/metal_BERT_large_15/demo/test_demo.py  --input-path="models/experimental/metal_BERT_large_15/demo/input_data.json"
+    pytest models/demos/metal_BERT_large_15/demo/test_demo.py  --input-path="models/demos/metal_BERT_large_15/demo/input_data.json"
 
 This will run inference on the input data provided.
 The model will first execute one time to fill up programm cache and then will proceed to execute inference on the provided data.

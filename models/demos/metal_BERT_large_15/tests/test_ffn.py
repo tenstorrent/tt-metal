@@ -12,8 +12,8 @@ import tt_lib
 
 from tt_lib.utils import pad_activation
 from models.utility_functions import comp_pcc, comp_allclose
-from models.experimental.metal_BERT_large_15.tt.model_config import get_model_config
-from models.experimental.metal_BERT_large_15.tt.ffn import TtFeedForwardModel
+from models.demos.metal_BERT_large_15.tt.model_config import get_model_config
+from models.demos.metal_BERT_large_15.tt.ffn import TtFeedForwardModel
 
 class PytorchFeedForwardModel(torch.nn.Module):
     def __init__(self, hugging_face_reference_model):

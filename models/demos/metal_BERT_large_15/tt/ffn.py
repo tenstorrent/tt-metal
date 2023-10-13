@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from loguru import logger
-
 import torch
 
 import tt_lib as ttl
@@ -40,7 +38,6 @@ def feed_forward(
     # ff2_weighta = [1, 1, 4096, 1024]
     # output = [1, 9, 384, 1024]
     def op14_MM_bias(activation, ff2_weighta, ff2_biasa):
-
         output_plus_bias = ttl.tensor.bert_large_ff2_matmul(
             activation,
             ff2_weighta,
@@ -50,14 +47,12 @@ def feed_forward(
         )
         return output_plus_bias
 
-    def feed_forward_(activation):
+    def feed_forward_(activation: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
         ff1_output_plus_bias_act = op13_MM_bias_gelu(activation, ff1_weighta, ff1_biasa)
 
         # Don't deallocate activations here since it is used by more ops in encoder
 
-        ff2_output_plus_bias = op14_MM_bias(
-            ff1_output_plus_bias_act, ff2_weighta, ff2_biasa
-        )
+        ff2_output_plus_bias = op14_MM_bias(ff1_output_plus_bias_act, ff2_weighta, ff2_biasa)
         ff1_output_plus_bias_act.deallocate()
 
         return ff2_output_plus_bias
@@ -72,16 +67,12 @@ class TtFeedForwardModel(torch.nn.Module):
         # FF1 params
         encoder0_ff1_weight = pad_weight(
             torch.transpose(
-                state_dict[
-                    f"bert.encoder.layer.{encoder_idx}.intermediate.dense.weight"
-                ],
+                state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.weight"],
                 -2,
                 -1,
             )
         )
-        encoder0_ff1_bias = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.bias"]
-        )
+        encoder0_ff1_bias = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.bias"])
 
         encoder0_ff1_weight_shape = encoder0_ff1_weight.shape
         encoder0_ff1_bias_shape = encoder0_ff1_bias.shape
@@ -115,9 +106,7 @@ class TtFeedForwardModel(torch.nn.Module):
                 -1,
             )
         )
-        encoder0_ff2_bias = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.bias"]
-        )
+        encoder0_ff2_bias = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.bias"])
 
         encoder0_ff2_weight_shape = encoder0_ff2_weight.shape
         encoder0_ff2_bias_shape = encoder0_ff2_bias.shape
@@ -153,5 +142,5 @@ class TtFeedForwardModel(torch.nn.Module):
             model_config,
         )
 
-    def forward(self, activation):
+    def forward(self, activation: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
         return self.ffn(activation)

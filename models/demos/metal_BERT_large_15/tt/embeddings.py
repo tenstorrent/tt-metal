@@ -163,7 +163,7 @@ class PytorchEmbeddings(torch.nn.Module):
         # Disable dropout
         self.eval()
 
-    def forward(self, input_ids, token_type_ids=None):
+    def forward(self, input_ids: torch.Tensor, token_type_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
         return self.embeddings(input_ids=input_ids, token_type_ids=token_type_ids)
 
 

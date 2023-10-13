@@ -4,13 +4,12 @@
 
 
 import torch
-
+from typing import Optional
 
 import tt_lib
-from models.experimental.metal_BERT_large_15.tt.mha import TtMultiHeadAttentionModel
-from models.experimental.metal_BERT_large_15.tt.ffn import TtFeedForwardModel
+from models.demos.metal_BERT_large_15.tt.mha import TtMultiHeadAttentionModel
+from models.demos.metal_BERT_large_15.tt.ffn import TtFeedForwardModel
 from tt_lib.utils import pad_weight
-
 
 
 class TtBertEncoder(torch.nn.Module):
@@ -20,15 +19,11 @@ class TtBertEncoder(torch.nn.Module):
         self.model_config = model_config
 
         # MHA sub-graph
-        self.mha = TtMultiHeadAttentionModel(
-            config, encoder_idx, state_dict, device, model_config
-        )
+        self.mha = TtMultiHeadAttentionModel(config, encoder_idx, state_dict, device, model_config)
 
         self.attention_output_weight = pad_weight(
             torch.transpose(
-                state_dict[
-                    f"bert.encoder.layer.{encoder_idx}.attention.output.dense.weight"
-                ],
+                state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.dense.weight"],
                 -2,
                 -1,
             )
@@ -63,12 +58,8 @@ class TtBertEncoder(torch.nn.Module):
         # )
 
         # MHA layernorm
-        gamma0 = state_dict[
-            f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.weight"
-        ]
-        beta0 = state_dict[
-            f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.bias"
-        ]
+        gamma0 = state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.weight"]
+        beta0 = state_dict[f"bert.encoder.layer.{encoder_idx}.attention.output.LayerNorm.bias"]
         mha_gamma = gamma0.reshape(1, 1, -1, 32)
         self.mha_gamma = tt_lib.tensor.Tensor(
             mha_gamma.reshape(-1).tolist(),
@@ -107,9 +98,7 @@ class TtBertEncoder(torch.nn.Module):
 
         self.layer_norm_eps = config.layer_norm_eps
 
-    def op11_mm_plus_bias(
-        self, mha_res, attention_output_weight, attention_output_bias
-    ):
+    def op11_mm_plus_bias(self, mha_res, attention_output_weight, attention_output_bias):
         mha_out = tt_lib.tensor.bert_large_selfout_matmul(
             mha_res,
             attention_output_weight,
@@ -141,7 +130,9 @@ class TtBertEncoder(torch.nn.Module):
         )
         return ffn_out_add_and_norm
 
-    def forward(self, activation, attention_mask=None):
+    def forward(
+        self, activation: tt_lib.tensor.Tensor, attention_mask: Optional[tt_lib.tensor.Tensor] = None
+    ) -> tt_lib.tensor.Tensor:
         activation_shape = activation.shape()
         assert activation_shape == [activation_shape[0], 1, 384, 1024]
 
@@ -149,9 +140,7 @@ class TtBertEncoder(torch.nn.Module):
         mha_res = self.mha(activation, attention_mask)
         # Don't deallocate activations here since it is used by more ops
 
-        mha_out = self.op11_mm_plus_bias(
-            mha_res, self.attention_output_weight, self.attention_output_bias
-        )
+        mha_out = self.op11_mm_plus_bias(mha_res, self.attention_output_weight, self.attention_output_bias)
         mha_res.deallocate()
         mha_out_add_and_norm = self.op12_add_layernorm(activation, mha_out)
         activation.deallocate()
