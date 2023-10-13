@@ -25,7 +25,7 @@ def run_transpose_nh_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_c
     overall_success = True
 
     for i in range(10):
-        x = gen_rand(size = input_shape, low = -100, high = 100)
+        x = gen_rand(size = input_shape, low = -100, high = 100).to(torch.bfloat16)
         # compute ref value
         x_ref = x.detach().clone()
         ref_value = pytorch_ops.transpose(x_ref, dim0=0, dim1=-2)
