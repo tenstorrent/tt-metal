@@ -13,7 +13,9 @@ namespace tt {
 
 namespace tt_metal {
 
-// TODO: Accept parallelization
+enum class UntilizeOpParallelizationStrategy {
+    MULTI_CORE = 0, SINGLE_CORE = 1
+};
 
 struct Untilize {
     const MemoryConfig output_mem_config;
@@ -23,7 +25,12 @@ struct Untilize {
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    UntilizeOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
+};
+
+enum class UntilizeWithUnpaddingOpParallelizationStrategy {
+    MULTI_CORE = 0, SINGLE_CORE = 1
 };
 
 struct UntilizeWithUnpadding {
@@ -35,11 +42,13 @@ struct UntilizeWithUnpadding {
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    UntilizeWithUnpaddingOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
 operation::ProgramWithCallbacks untilize_multi_core(const Tensor &a, Tensor& output);
 operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& output);
+operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end);
 operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end);
 
 Tensor untilize (const Tensor &a, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, bool use_multicore = false);

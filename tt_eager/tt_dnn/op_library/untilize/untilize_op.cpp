@@ -79,10 +79,20 @@ std::vector<Tensor> Untilize::create_output_tensors(const std::vector<Tensor> &i
 operation::ProgramWithCallbacks Untilize::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
+    switch (this->get_parallelization_strategy(input_tensors)) {
+        case UntilizeOpParallelizationStrategy::MULTI_CORE:
+            return untilize_multi_core(input_tensor_a, output_tensor);
+            break;
+        case UntilizeOpParallelizationStrategy::SINGLE_CORE:
+        default: return untilize_single_core(input_tensor_a, output_tensor);
+    }
+}
+
+UntilizeOpParallelizationStrategy Untilize::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     if (this->use_multicore) {
-        return {untilize_multi_core(input_tensor_a, output_tensor)};
+        return UntilizeOpParallelizationStrategy::MULTI_CORE;
     } else {
-        return {untilize_single_core(input_tensor_a, output_tensor)};
+        return UntilizeOpParallelizationStrategy::SINGLE_CORE;
     }
 }
 
@@ -132,6 +142,14 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor> &input_tensors) c
 
     TT_ASSERT(((this->output_tensor_end[3] - this->output_tensor_start[3] + 1) % 2 == 0), "Can only unpad to row major tensor of even width");
 
+    if (input_tensor_a.memory_config().is_sharded()) {
+        TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+        TT_ASSERT(input_tensor_a.shard_spec().value().shard_grid.ranges().size() == 1);
+    } else {
+        TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    }
+    TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+
 }
 std::vector<Shape> UntilizeWithUnpadding::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     Shape output_tensor_shape = {
@@ -150,7 +168,21 @@ std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(const std::vect
 operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    return {untilize_with_unpadding_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end)};
+    switch (this->get_parallelization_strategy(input_tensors)) {
+        case UntilizeWithUnpaddingOpParallelizationStrategy::MULTI_CORE:
+            return untilize_with_unpadding_multi_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
+            break;
+        case UntilizeWithUnpaddingOpParallelizationStrategy::SINGLE_CORE:
+        default: return untilize_with_unpadding_single_core(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
+    }
+}
+
+UntilizeWithUnpaddingOpParallelizationStrategy UntilizeWithUnpadding::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+    if (input_tensors.at(0).memory_config().is_sharded()) {
+        return UntilizeWithUnpaddingOpParallelizationStrategy::MULTI_CORE;
+    } else {
+        return UntilizeWithUnpaddingOpParallelizationStrategy::SINGLE_CORE;
+    }
 }
 
 tt::stl::reflection::Attributes UntilizeWithUnpadding::attributes() const {
