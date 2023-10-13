@@ -620,11 +620,7 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     }
 
     if (fuse_relu) {
-        // auto relu_param = UnaryWithParam{.op_type = UnaryOpType.RELU};
-        compute_defines.merge(eltwise_unary_op_utils::get_defines(UnaryOpType::RELU, nullopt, "ACTIVATION", "i"));
-        if (has_bias) {
-            compute_defines["FUSE_BIAS"] = "1";
-        }
+        compute_defines["PACK_RELU"] = "1";
     }
 
     writer_compile_time_args = {
