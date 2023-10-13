@@ -31,7 +31,7 @@ We developed our models to be run with ``pytest``.
 
 ::
 
-    pytest models/experimental/metal_BERT_large_15/tests/test_bert_batch_dram.py::test_bert_batch_dram
+    pytest models/demos/metal_BERT_large_15/tests/test_bert_batch_dram.py::test_bert_batch_dram
 
 Next steps
 ----------

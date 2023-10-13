@@ -10,9 +10,9 @@ from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 
 import tt_lib
 
-from models.experimental.metal_BERT_large_15.tt.embeddings import TtEmbeddings
-from models.experimental.metal_BERT_large_15.tt.bert_encoder import TtBertEncoder
-from models.experimental.metal_BERT_large_15.tt.model_config import get_model_config
+from models.demos.metal_BERT_large_15.tt.embeddings import TtEmbeddings
+from models.demos.metal_BERT_large_15.tt.bert_encoder import TtBertEncoder
+from models.demos.metal_BERT_large_15.tt.model_config import get_model_config
 
 from tt_lib.utils import pad_activation, pad_weight
 from models.utility_functions import (

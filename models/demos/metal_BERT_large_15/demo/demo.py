@@ -17,8 +17,8 @@ from models.utility_functions import (
 )
 
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
-from models.experimental.metal_BERT_large_15.tt.model_config import get_model_config
-from models.experimental.metal_BERT_large_15.tt.bert_model import TtBertBatchDram
+from models.demos.metal_BERT_large_15.tt.model_config import get_model_config
+from models.demos.metal_BERT_large_15.tt.bert_model import TtBertBatchDram
 
 
 def load_inputs(input_path, batch):
@@ -150,7 +150,7 @@ def run_bert_question_and_answering_inference(
     # extract logits for start and end of answer string
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
     tt_end_logits = tt_untilized_output[..., :, 1].squeeze(1)
-
+    model_answers = {}
     for i in range(batch):
         tt_res = {
             "start": tt_start_logits[i],
@@ -166,27 +166,44 @@ def run_bert_question_and_answering_inference(
         logger.info(f"context: {context[i]}")
         logger.info(f"question: {question[i]}")
         logger.info(f"answer: {tt_answer['answer']}\n")
+        model_answers[i] = tt_answer['answer']
 
 
     profiler.end("processing_output_to_string")
     ##### Output Postprocessing End
 
-    logger.info(f"pre processing duration: {profiler.get('processing_input_one') + profiler.get('processing_input_two')} s")
-    logger.info(f"moving weights to device duration: {profiler.get('move_weights')} s")
-    logger.info(f"compile time: {profiler.get('first_model_run_with_compile') - (profiler.get('model_run_for_inference') / NUM_RUNS)} s")
-    logger.info(f"inference time for single run of model with batch size {batch} without using cache: {profiler.get('first_model_run_with_compile')} s")
-    logger.info(f"inference time for {NUM_RUNS} run(s) of model with batch size {batch} and using cache: {profiler.get('model_run_for_inference')} s")
-    logger.info(f"inference throughput: {(NUM_RUNS * batch) / profiler.get('model_run_for_inference') } inputs/s")
-    logger.info(f"post processing time: {profiler.get('processing_output_to_string')} s")
+    measurements = {
+        "preprocessing": profiler.get('processing_input_one') + profiler.get('processing_input_two'),
+        "moving_weights_to_device": profiler.get('move_weights'),
+        "compile": profiler.get('first_model_run_with_compile') - (profiler.get('model_run_for_inference') / NUM_RUNS),
+        f"inference_for_single_run_batch_{batch}_without_cache": profiler.get('first_model_run_with_compile'),
+        f"inference_for_{NUM_RUNS}_runs_batch_{batch}_without_cache": profiler.get('model_run_for_inference'),
+        "inference_throughput": (NUM_RUNS * batch) / profiler.get('model_run_for_inference'),
+        "post_processing": profiler.get("processing_output_to_string")
+
+    }
+
+    logger.info(f"pre processing duration: {measurements['preprocessing']} s")
+    logger.info(f"moving weights to device duration: {measurements['moving_weights_to_device']} s")
+    logger.info(f"compile time: {measurements['compile']} s")
+    logger.info(f"inference time for single run of model with batch size {batch} without using cache: {measurements[f'inference_for_single_run_batch_{batch}_without_cache']} s")
+    logger.info(f"inference time for {NUM_RUNS} run(s) of model with batch size {batch} and using cache: {measurements[f'inference_for_{NUM_RUNS}_runs_batch_{batch}_without_cache']} s")
+    logger.info(f"inference throughput: {measurements['inference_throughput'] } inputs/s")
+    logger.info(f"post processing time: {measurements['post_processing']} s")
 
     del tt_out
+    return measurements, model_answers
 
-
+@pytest.mark.parametrize(
+    "input_path",
+    (("models/demos/metal_BERT_large_15/demo/input_data.json"),),
+    ids=["default_input"],
+)
 def test_demo(
     input_path,
     model_location_generator,
-    request,
     device,
+    use_program_cache,
 ):
 
     disable_persistent_kernel_cache()
@@ -196,13 +213,13 @@ def test_demo(
         f"tt_metal/tools/profiler/logs/metal_BERT_large_15"
     )
 
-    run_bert_question_and_answering_inference(
+    return run_bert_question_and_answering_inference(
         model_version = "phiyodr/bert-large-finetuned-squad2",
-        batch = 9,
+        batch = 8,
         seq_len = 384,
         return_attention_mask = True,
         return_token_type_ids = True,
-        model_config = get_model_config("BFLOAT16-L1"),
+        model_config = get_model_config("MIXED_PRECISION_BATCH8"),
         NUM_RUNS = 1,
         input_path = input_path,
         model_location_generator = model_location_generator,

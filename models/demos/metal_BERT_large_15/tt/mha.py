@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from loguru import logger
 import math
 import torch
 
-
+from typing import Optional
 import tt_lib
 from tt_lib.utils import pad_weight
 from models.utility_functions import torch2tt_tensor
+
 
 def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
     assert isinstance(num_heads, int) and num_heads > 0
@@ -38,7 +38,6 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
         tt_memory_config=model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"],
         tt_dtype=model_config["OP1_FUSED_QKV_MM_BIAS_DTYPE"],
     )
-
 
     # Used to scale down the input to the softmax
     freciprocal_of_sqrt_hidden_dim = 1 / math.sqrt(hidden_dim // num_heads)
@@ -80,16 +79,12 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
         # Input and output tensors of this fused op is: [9, 1, 6144, 384] instead of [9, 16, 384, 384]
         # No-op reshapes are handled within pre-softmax (op 7) and post-softmax bmms (op 9)
         if attention_mask is not None:
-            attention_scores = (
-                tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
-                    qkt, freciprocal_of_sqrt_hidden_dim, attention_mask
-                )
+            attention_scores = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
+                qkt, freciprocal_of_sqrt_hidden_dim, attention_mask
             )
         else:
             # No pass in mha sub-graph or full bert encoder uses this anymore
-            assert (
-                False
-            ), "Must provide attention_mask to scale_mask_softmax in mha sub-graph!"
+            assert False, "Must provide attention_mask to scale_mask_softmax in mha sub-graph!"
 
         return attention_scores
 
@@ -110,14 +105,11 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
             retval = tt_lib.operations.primary.transformers.concatenate_heads(
                 x,
                 tt_lib.tensor.CoreCoord(12, 9),
-                output_mem_config=model_config[
-                    "OP10_CONCATENATE_ATTENTION_HEADS_OUTPUT_MEMCFG"
-                ],
+                output_mem_config=model_config["OP10_CONCATENATE_ATTENTION_HEADS_OUTPUT_MEMCFG"],
             )
             return retval
 
     def mha_(activation, attention_mask):
-
         qkv = op1_qkv_fused(activation, qkv_weight, qkv_bias)
         # activation.deallocate()
 
@@ -148,24 +140,12 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
 class TtMultiHeadAttentionModel(torch.nn.Module):
     def __init__(self, config, encoder_idx, state_dict, device, model_config):
         super().__init__()
-        qw = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.weight"]
-        )
-        qb = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.bias"]
-        )
-        kw = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.key.weight"]
-        )
-        kb = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.key.bias"]
-        )
-        vw = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.value.weight"]
-        )
-        vb = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.value.bias"]
-        )
+        qw = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.weight"])
+        qb = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.bias"])
+        kw = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.key.weight"])
+        kb = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.key.bias"])
+        vw = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.value.weight"])
+        vb = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.value.bias"])
 
         # Hidden dim
         hidden_dim = qw.shape[-1]
@@ -183,6 +163,8 @@ class TtMultiHeadAttentionModel(torch.nn.Module):
             model_config,
         )
 
-    def forward(self, activation, attention_mask=None):
+    def forward(
+        self, activation: tt_lib.tensor.Tensor, attention_mask: Optional[tt_lib.tensor.Tensor] = None
+    ) -> tt_lib.tensor.Tensor:
         result = self.mha(activation, attention_mask)
         return result

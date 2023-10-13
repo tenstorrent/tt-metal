@@ -3,16 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-
 import torch
-
+from typing import Optional
 import tt_lib
 from tt_lib.utils import pad_activation, pad_weight
 from models.utility_functions import torch2tt_tensor
 
 
-from models.experimental.metal_BERT_large_15.tt.embeddings import PytorchEmbeddings
-from models.experimental.metal_BERT_large_15.tt.bert_encoder import TtBertEncoder
+from models.demos.metal_BERT_large_15.tt.embeddings import PytorchEmbeddings
+from models.demos.metal_BERT_large_15.tt.bert_encoder import TtBertEncoder
 
 
 class TtBertBatchDram(torch.nn.Module):
@@ -27,9 +26,7 @@ class TtBertBatchDram(torch.nn.Module):
 
         self.hidden_states_list = []
         self.tt_attention_mask_list = []
-        self.get_extended_attention_mask = (
-            hugging_face_reference_model.get_extended_attention_mask
-        )
+        self.get_extended_attention_mask = hugging_face_reference_model.get_extended_attention_mask
 
         # Weights and bias tensors for QA Linear (at the end of model)
         # (pad tensor so that last two dimensions are divisible by 32 and convert to TT tensor)
@@ -39,7 +36,7 @@ class TtBertBatchDram(torch.nn.Module):
             device,
             tt_layout=tt_lib.tensor.Layout.TILE,
             tt_memory_config=model_config["QA_LINEAR_WEIGHTS_MEMCFG"],
-            tt_dtype=model_config["QA_LINEAR_WEIGHTS_DTYPE"]
+            tt_dtype=model_config["QA_LINEAR_WEIGHTS_DTYPE"],
         )
         bias = pad_weight(state_dict["qa_outputs.bias"])
         bias = torch2tt_tensor(
@@ -47,14 +44,12 @@ class TtBertBatchDram(torch.nn.Module):
             device,
             tt_layout=tt_lib.tensor.Layout.TILE,
             tt_memory_config=model_config["QA_LINEAR_BIAS_MEMCFG"],
-            tt_dtype=model_config["QA_LINEAR_BIAS_DTYPE"]
+            tt_dtype=model_config["QA_LINEAR_BIAS_DTYPE"],
         )
 
         # QA Linear implementation
         def qa_linear_(activation):
-            output = tt_lib.tensor.matmul(
-                activation, weight, model_config["QA_LINEAR_OUTPUT_MEMCFG"]
-            )
+            output = tt_lib.tensor.matmul(activation, weight, model_config["QA_LINEAR_OUTPUT_MEMCFG"])
             output_plus_bias = tt_lib.tensor.bcast(
                 output,
                 bias,
@@ -65,7 +60,9 @@ class TtBertBatchDram(torch.nn.Module):
             return output_plus_bias
 
         # TT Model definition (Embeddings -> Encoder -> Encoder -> ... -> Encoder -> QA Linear)
-        self.embeddings = PytorchEmbeddings(hugging_face_reference_model) # So far on CPU until we add embeddings support on device
+        self.embeddings = PytorchEmbeddings(
+            hugging_face_reference_model
+        )  # So far on CPU until we add embeddings support on device
         self.encoders = torch.nn.ModuleList(
             [
                 TtBertEncoder(config, encoder_idx, state_dict, device, model_config)
@@ -84,13 +81,11 @@ class TtBertBatchDram(torch.nn.Module):
             self.device,
             tt_layout=tt_lib.tensor.Layout.TILE,
             tt_memory_config=self.model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"],
-            tt_dtype=self.model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"]
+            tt_dtype=self.model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"],
         )
 
         if attention_mask is not None:
-            extended_attention_mask = self.get_extended_attention_mask(
-                attention_mask, input_ids.shape
-            )
+            extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_ids.shape)
             # Limit neg value that goes into exp
             extended_attention_mask = torch.clamp(extended_attention_mask, -100000)
 
@@ -101,15 +96,19 @@ class TtBertBatchDram(torch.nn.Module):
                 self.device,
                 tt_layout=tt_lib.tensor.Layout.TILE,
                 tt_memory_config=self.model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"],
-                tt_dtype=self.model_config["OP8_SOFTMAX_ATTENTION_MASK_DTYPE"]
+                tt_dtype=self.model_config["OP8_SOFTMAX_ATTENTION_MASK_DTYPE"],
             )
         else:
             tt_attention_mask = attention_mask
 
         return tt_embeddings, tt_attention_mask
 
-    def forward(self, NUM_RUNS, tt_embeddings, tt_attention_mask=None):
-
+    def forward(
+        self,
+        NUM_RUNS: int,
+        tt_embeddings: tt_lib.tensor.Tensor,
+        tt_attention_mask: Optional[tt_lib.tensor.Tensor] = None,
+    ) -> tt_lib.tensor.Tensor:
         for i in range(NUM_RUNS):
             hidden_states = tt_embeddings
             attention_mask = tt_attention_mask
