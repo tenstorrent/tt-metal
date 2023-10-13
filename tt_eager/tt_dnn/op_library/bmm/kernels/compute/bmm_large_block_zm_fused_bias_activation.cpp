@@ -110,7 +110,6 @@ void MAIN {
                         }
                         in0_index_h_offset += in0_block_w;
                     }
-                    tile_regs_commit();
 
                     if (last_out) {
                         // If we fuse bias, we will pack out and run bias + optional sfpu in a separate loop
@@ -118,8 +117,8 @@ void MAIN {
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             SFPU_OP_FUNC_ACTIVATION
                         }
-                        tile_regs_commit();
                         #endif
+                        tile_regs_commit();
                         // Pack out to output buffer
                         cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
@@ -129,6 +128,7 @@ void MAIN {
                         tile_regs_release();
                         cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
                     } else {
+                        tile_regs_commit();
                         // Wait for tiles in output buffer to be written out since interm and output share memory
                         if (block == 0) {
                             cb_reserve_back(out_cb_id, out_num_tiles_to_wait);
