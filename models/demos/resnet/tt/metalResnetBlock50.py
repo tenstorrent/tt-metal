@@ -388,9 +388,9 @@ hardcoded_matmul_config_conv = {
         ),
         (1568, 256, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
-            in0_block_w=4, # TODO: Should be 1 once sharding is enabled, Leave for now for better perf
-            out_subblock_h=5,
-            out_subblock_w=1,
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=4,
             per_core_M=5,
             per_core_N=4,
             transpose_mcast=True,
@@ -409,19 +409,19 @@ hardcoded_matmul_config_conv = {
         (1568, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(10, 8),
             in0_block_w=4,
-            out_subblock_h=5,
-            out_subblock_w=1,
+            out_subblock_h=1,
+            out_subblock_w=2,
             per_core_M=5,
             per_core_N=2,
             transpose_mcast=True,
             fused_activation=None,
         ),
         (1568, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(10, 8),
+            compute_with_storage_grid_size=(7, 8),
             in0_block_w=4,
-            out_subblock_h=5,
-            out_subblock_w=1,
-            per_core_M=5,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            per_core_M=7,
             per_core_N=2,
             transpose_mcast=True,
             fused_activation=None,
@@ -514,7 +514,7 @@ class Bottleneck(nn.Module):
         storage_in_dram=True,
         input_shape=[],
         batch_size=1,
-        sharded=False,
+        sharded=None,
         out_sharded=False,
         act_block_w_equals_input_channels_x_filter_width=False,
     ) -> None:
@@ -535,10 +535,8 @@ class Bottleneck(nn.Module):
             self.memory_config = tt_lib.tensor.MemoryConfig(
                 tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
             )
-        if sharded:
-            self.sharded_memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
-            )
+        if sharded is not None:
+            self.sharded_memory_config = tt_lib.tensor.MemoryConfig(sharded, tt_lib.tensor.BufferType.L1)
         else:
             self.sharded_memory_config = self.memory_config
         self.out_memory_config = self.sharded_memory_config if out_sharded else self.memory_config
@@ -714,6 +712,8 @@ class Bottleneck(nn.Module):
         # Relu after conv1 is fused with the 1x1 conv (matmul)
         # out = self.relu(out, self.memory_config)
         # logger.info("Running untilize op")
+        if out.shape() != out.shape_without_padding() and out.memory_config().is_sharded():
+            out = tt_lib.tensor.sharded_to_interleaved(out, self.memory_config)
         out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         out = out.reshape(
             self.conv1_output_shape[0],
@@ -766,6 +766,7 @@ class ResNet(nn.Module):
         self.storage_in_dram = storage_in_dram
         self.conv_input_face_shape_hw = conv_input_face_shape_hw
         self.batch_size = batch_size
+        self.sharded = sharded
         if self.storage_in_dram:
             self.memory_config = tt_lib.tensor.MemoryConfig(
                 tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
@@ -875,7 +876,7 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.maxpool_output_shape,
             batch_size=batch_size,
-            sharded=sharded,
+            sharded=tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
             out_sharded=True,
             act_block_w_equals_input_channels_x_filter_width=True,
         )
@@ -889,7 +890,7 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.layer1_output_shape,
             batch_size=batch_size,
-            sharded=sharded,
+            sharded=tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
             out_sharded=False,
         )
         self.layer3, self.layer3_output_shape = self._make_layer(
@@ -902,7 +903,8 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.layer2_output_shape,
             batch_size=batch_size,
-            sharded=False,
+            sharded=tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
+            out_sharded=False,
         )
         self.layer4, self.layer4_output_shape = self._make_layer(
             block,
@@ -914,7 +916,8 @@ class ResNet(nn.Module):
             state_dict=state_dict,
             layer_input_shape=self.layer3_output_shape,
             batch_size=batch_size,
-            sharded=False,
+            sharded=tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
+            out_sharded=True,
         )
 
         # All modules in RN50 are unrolled here. One variable for each module. Only specific number of modules supported - layers MUST equal to [3, 4, 6, 3]
@@ -975,7 +978,7 @@ class ResNet(nn.Module):
         state_dict=None,
         layer_input_shape=[],
         batch_size=1,
-        sharded=False,
+        sharded=None,
         out_sharded=False,
         act_block_w_equals_input_channels_x_filter_width=False,
     ):
@@ -984,8 +987,8 @@ class ResNet(nn.Module):
         previous_dilation = self.dilation
         self.downsample_conv_on_tt = None
         self.norm_layer_after_downsample_conv_on_tt = None
-        if sharded:
-            self.ds_conv_output_memory_config = self.sharded_memory_config
+        if sharded is not None:
+            self.ds_conv_output_memory_config = tt_lib.tensor.MemoryConfig(sharded, tt_lib.tensor.BufferType.L1)
         else:
             self.ds_conv_output_memory_config = self.memory_config
         if dilate:
@@ -1209,13 +1212,30 @@ class ResNet(nn.Module):
         x = self.layer2_module2(x)
         x = self.layer2_module3(x)
         x = self.layer2_module4(x)
-
+        if self.sharded:
+            grid_size = (10, 8)
+            x = tt_lib.tensor.interleaved_to_sharded(
+                x,
+                grid_size,
+                [math.ceil((x.shape()[-2] // 32) / grid_size[0]) * 32, x.shape()[-1] // grid_size[1]],
+                tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+                tt_lib.tensor.ShardOrientation.COL_MAJOR,
+            )
         x = self.layer3_module1(x)
         x = self.layer3_module2(x)
         x = self.layer3_module3(x)
         x = self.layer3_module4(x)
         x = self.layer3_module5(x)
         x = self.layer3_module6(x)
+        if self.sharded:
+            grid_size = (7, 8)
+            x = tt_lib.tensor.interleaved_to_sharded(
+                x,
+                grid_size,
+                [math.ceil((x.shape()[-2] // 32) / grid_size[0]) * 32, x.shape()[-1] // grid_size[1]],
+                tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+                tt_lib.tensor.ShardOrientation.COL_MAJOR,
+            )
 
         x = self.layer4_module1(x)
         x = self.layer4_module2(x)
