@@ -1036,7 +1036,7 @@ Tensor optimized_conv(const Tensor& a,
     }
     auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (output_mem_config.has_value()) {
-        TT_ASSERT((output_mem_config.value().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || output_mem_config.value() == a.memory_config()));
+        TT_ASSERT((output_mem_config.value().is_sharded() || output_mem_config.value() == a.memory_config()));
     }
     return operation::run_without_autoformat(
         OptimizedConv(conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config.value_or(a.memory_config())
@@ -1052,10 +1052,16 @@ void OptimizedConv::validate(const std::vector<Tensor>& input_tensors, const std
     TT_ASSERT(!input_tensor_a.memory_config().is_sharded());
     TT_ASSERT(!input_tensor_b.memory_config().is_sharded());
     if (this->output_mem_config.is_sharded()) {
-        TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_ASSERT(!this->untilize_out);
+        uint32_t out_block_h_ntiles = block_config.out_block_h_ntiles;
+        auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_opt_conv_activation_as_mm_shape(input_tensor_a.shape(), conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
         uint32_t out_width_ntiles = this->compute_output_shapes(input_tensors).at(0)[-1] / TILE_WIDTH;
-        TT_ASSERT(this->parallelization_config.per_core_weight_matrix_width_ntiles == out_width_ntiles);
-        TT_ASSERT(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
+        if(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            TT_ASSERT(this->parallelization_config.per_core_weight_matrix_width_ntiles == out_width_ntiles);
+            TT_ASSERT(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
+        } else if (this->output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            TT_ASSERT(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
+        }
     }
 }
 
@@ -1098,16 +1104,29 @@ std::vector<Tensor> OptimizedConv::create_output_tensors(const std::vector<Tenso
     const auto& weight_tensor = input_tensors.at(1);
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (this->output_mem_config.is_sharded()) {
-        // Move asserts to validate
-        // Asserts to check for height sharding
         auto output_shape = this->compute_output_shapes(input_tensors).at(0);
-        uint32_t total_height_tiles = tt_metal::compute_volume(output_shape) / output_shape[-1] / TILE_HEIGHT;
-        uint32_t num_cores = total_height_tiles / this->parallelization_config.per_core_out_matrix_height_ntiles;
-        CoreRangeSet shard_grid = num_cores_to_corerange_set(num_cores, this->parallelization_config.grid_size, true);
+        if (this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            uint32_t total_height_tiles = tt_metal::compute_volume(output_shape) / output_shape[-1] / TILE_HEIGHT;
+            uint32_t num_cores = total_height_tiles / this->parallelization_config.per_core_out_matrix_height_ntiles;
+            CoreRangeSet shard_grid = num_cores_to_corerange_set(num_cores, this->parallelization_config.grid_size, true);
 
-        std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, output_shape[-1]};
-        auto shard_spec = ShardSpec{.shard_grid=shard_grid, .shard_shape=shard_shape, .shard_orientation=ShardOrientation::ROW_MAJOR};
-        return {create_sharded_device_tensor(output_shape, input_tensor.dtype(), output_layout, input_tensor.device(), this->output_mem_config, shard_spec)};
+            std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, output_shape[-1]};
+            auto shard_spec = ShardSpec{.shard_grid=shard_grid, .shard_shape=shard_shape, .shard_orientation=ShardOrientation::ROW_MAJOR};
+            return {create_sharded_device_tensor(output_shape, input_tensor.dtype(), output_layout, input_tensor.device(), this->output_mem_config, shard_spec)};
+        } else {
+            auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_opt_conv_activation_as_mm_shape(input_tensor.shape(), conv_params, this->block_config.out_block_h_ntiles, extra_padding_for_32B_alignment);
+            uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
+            uint32_t act_matrix_height_ntiles = act_matrix_height / TILE_HEIGHT;
+            uint32_t total_active_num_cores_per_weight_slice = act_matrix_height_ntiles / this->parallelization_config.per_core_out_matrix_height_ntiles;
+            uint32_t weight_matrix_width = weight_tensor.shape()[-1];
+            uint32_t weight_matrix_width_ntiles = weight_matrix_width / TILE_WIDTH;
+            uint32_t num_weight_slices_width = weight_matrix_width_ntiles / this->parallelization_config.per_core_weight_matrix_width_ntiles ;
+            uint32_t total_active_num_cores = total_active_num_cores_per_weight_slice * num_weight_slices_width;
+            CoreRangeSet shard_grid = num_cores_to_corerange_set(total_active_num_cores, this->parallelization_config.grid_size, true);
+            std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, this->parallelization_config.per_core_weight_matrix_width_ntiles * TILE_WIDTH};
+            auto shard_spec = ShardSpec{.shard_grid=shard_grid, .shard_shape=shard_shape, .shard_orientation=ShardOrientation::COL_MAJOR};
+            return {create_sharded_device_tensor(output_shape, input_tensor.dtype(), output_layout, input_tensor.device(), this->output_mem_config, shard_spec)};
+        }
 
     }
     return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), output_layout, this->output_mem_config);

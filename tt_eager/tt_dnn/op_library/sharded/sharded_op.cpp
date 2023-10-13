@@ -24,6 +24,12 @@ void Sharded::validate(const std::vector<Tensor> &input_tensors) const {
         TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
     } else if (this->sharded_op_type == ShardedOpType::SHARDED_TO_INTERLEAVED) {
         TT_ASSERT(input_tensor.memory_config().is_sharded());
+        if(input_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+            if (input_tensor.shape()[-1] % this->shard_spec.shard_shape[1] != 0
+                || ((input_tensor.volume() / input_tensor.shape()[-1]) % this->shard_spec.shard_shape[0]) != 0) {
+                TT_ASSERT(input_tensor.shard_spec().value().shard_grid.ranges().size() == 1);
+            }
+        }
     }
     auto device_grid = input_tensor.device()->compute_with_storage_grid_size();
     TT_ASSERT(this->grid_size.x <= device_grid.x && this->grid_size.y <= device_grid.y);
