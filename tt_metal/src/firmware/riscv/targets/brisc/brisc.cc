@@ -7,8 +7,10 @@
 #include <unistd.h>
 #include <cstdint>
 
-#include "risc.h"
 #include "risc_common.h"
+#include "tensix.h"
+#include "tensix_types.h"
+#include "noc.h"
 #include "noc_overlay_parameters.h"
 #include "ckernel_structs.h"
 #include "stream_io_map.h"
@@ -52,30 +54,6 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
-}
-
-bool staggered_start_enabled() {
-    uint32_t soft_reset_0 = READ_REG(RISCV_DEBUG_REG_SOFT_RESET_0);
-    return soft_reset_0 & (1u << 31);
-}
-
-void stagger_startup() {
-    if (staggered_start_enabled()) {
-        const uint32_t NOC_ID_MASK = (1 << NOC_ADDR_NODE_ID_BITS) - 1;
-        uint32_t noc_id = noc_local_node_id() & 0xFFF;
-        uint32_t noc_id_x = noc_id & NOC_ID_MASK;
-        uint32_t noc_id_y = (noc_id >> NOC_ADDR_NODE_ID_BITS) & NOC_ID_MASK;
-
-        uint32_t flat_id = (noc_id_y - 1) * 12 + (noc_id_x - 1);
-        // To stagger 120 cores by 500us at 1.5GHz works out to 6250 AICLK per core.
-        // Use an easy-to-multiply constant close to that.
-        uint32_t delay = flat_id * ((1 << 12) | (1 << 11));
-
-        uint64_t end = core.read_wall_clock() + delay;
-
-        while (core.read_wall_clock() < end) { /* empty */
-        }
-    }
 }
 
 void enable_power_management() {
@@ -173,8 +151,6 @@ void device_setup() {
     pc_buf[2] = core.pc_buf_base(2);
 
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-
-    stagger_startup();
 
     // FIXME MT: enable later
     // enable_power_management();
@@ -326,14 +302,14 @@ int main() {
 
         run_ncrisc_trisc();
 
-        uint32_t loading_noc = mailboxes->launch.brisc_noc_id;
+        uint32_t noc_index = mailboxes->launch.brisc_noc_id;
 
         // Run the BRISC kernel
         DEBUG_STATUS('R');
         if (mailboxes->launch.enable_brisc) {
             kernel_init();
         } else {
-            noc_local_state_init(loading_noc);
+            noc_local_state_init(noc_index);
         }
         DEBUG_STATUS('D');
 
@@ -347,7 +323,7 @@ int main() {
         // Notify dispatcher core that it has completed
         if (mailboxes->launch.mode == DISPATCH_MODE_DEV) {
             uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(DISPATCH_CORE_X), NOC_Y(DISPATCH_CORE_Y), DISPATCH_MESSAGE_ADDR);
-            noc_fast_atomic_increment(loading_noc, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
+            noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, 1, 31 /*wrap*/, false /*linked*/);
         }
     }
 

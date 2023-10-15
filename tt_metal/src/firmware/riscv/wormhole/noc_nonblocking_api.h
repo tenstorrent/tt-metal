@@ -231,6 +231,7 @@ inline void noc_init() {
 }
 
 
+// set noc local memory state for a single kernel from the global state
 inline void noc_local_state_init(int noc) {
     noc_reads_num_issued[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
     noc_nonposted_writes_num_issued[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);

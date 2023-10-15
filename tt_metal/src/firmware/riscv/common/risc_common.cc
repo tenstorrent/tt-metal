@@ -44,31 +44,3 @@ void replicate_l1(uint32_t noc_id, uint32_t src_addr, uint64_t dest_addr, uint32
     dest_addr += chunk_size_bytes;
   }
 }
-
-/*
-void tile_header_buffer_init() {
-  const uint32_t TILE_HEADER_BUF_INIT_CHUNK_WORDS = 64;
-  const uint32_t TILE_HEADER_BUF_INIT_CHUNK_BYTES = TILE_HEADER_BUF_INIT_CHUNK_WORDS*16;
-  const uint32_t NUM_TILE_HEADER_BUF_CHUNKS = MAX_TILES_PER_PHASE / TILE_HEADER_BUF_INIT_CHUNK_WORDS;
-  uint32_t header_buf_init_noc = NUM_NOCS-1-loading_noc;
-  volatile uint32_t* l1_page_size_ptr = &(RISC_EPOCH_INFO_PTR->page_size[0]);
-  volatile uint32_t* l1_tile_size_header_buf_addr_ptr = &(RISC_EPOCH_INFO_PTR->tile_size_header_buf_addr[0]);
-  // L1 reads flushed by immediate usage
-  uint32_t num_tile_sizes = RISC_EPOCH_INFO_PTR->num_tile_sizes;
-  for (uint32_t i = 0; i < num_tile_sizes; i++) {
-    uint32_t page_size = *l1_page_size_ptr;
-    uint32_t tile_size_header_buf_addr = *l1_tile_size_header_buf_addr_ptr;
-    l1_page_size_ptr++;
-    l1_tile_size_header_buf_addr_ptr++;
-    volatile uint32_t* l1_header_buf_tile_size_ptr = (volatile uint32_t*)tile_size_header_buf_addr;
-    for (uint32_t j = 0; j < TILE_HEADER_BUF_INIT_CHUNK_WORDS; j++) {
-      l1_header_buf_tile_size_ptr[0] = page_size;
-      l1_header_buf_tile_size_ptr += 4;
-    }
-
-    uint64_t tile_size_header_buf_curr_dest_addr = NOC_XY_ADDR(my_x[header_buf_init_noc], my_y[header_buf_init_noc], (tile_size_header_buf_addr + TILE_HEADER_BUF_INIT_CHUNK_BYTES));
-    replicate_l1(header_buf_init_noc, tile_size_header_buf_addr, tile_size_header_buf_curr_dest_addr, TILE_HEADER_BUF_INIT_CHUNK_BYTES, NUM_TILE_HEADER_BUF_CHUNKS-1);
-  }
-  while (!ncrisc_noc_nonposted_writes_flushed_l1(header_buf_init_noc));
-}
-*/

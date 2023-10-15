@@ -68,7 +68,6 @@ void kernel_main() {
             auto addr = l1_write_addr + (r<<11);
             noc_async_read(src_noc_addr, addr, tile_bytes); // TODO(AP): data type size
         }
-        // DPRINT << uint(my_x[loading_noc]) << ", " << uint(my_y[loading_noc]) << ENDL();
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, rem);
     }

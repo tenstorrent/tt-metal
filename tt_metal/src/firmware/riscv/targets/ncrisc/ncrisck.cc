@@ -19,11 +19,7 @@
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 CQReadInterface cq_read_interface;
 
-#ifdef NOC_INDEX
-uint8_t loading_noc = NOC_INDEX;
-#else
-uint8_t loading_noc = 1;
-#endif
+uint8_t noc_index = NOC_INDEX;
 
 uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
@@ -48,7 +44,7 @@ void kernel_launch() {
     init_dram_bank_to_noc_coord_lookup_tables();
     init_l1_bank_to_noc_coord_lookup_tables();
 
-    noc_local_state_init(loading_noc);
+    noc_local_state_init(noc_index);
 
     kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
     kernel_main();

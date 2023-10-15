@@ -43,11 +43,11 @@ void kernel_main() {
         cb_wait_front(operand, chunk_size_tiles);
         uint32_t l1_read_addr = get_read_ptr(operand);
 
-        ncrisc_noc_fast_write_any_len(loading_noc, NCRISC_WR_REG_CMD_BUF, l1_read_addr, dram_buffer_dst_noc_addr, chunk_size_bytes,
+        ncrisc_noc_fast_write_any_len(noc_index, NCRISC_WR_REG_CMD_BUF, l1_read_addr, dram_buffer_dst_noc_addr, chunk_size_bytes,
                             NOC_UNICAST_WRITE_VC, false, false, 1);
 
         // wait for all the writes to complete (ie acked)
-        while (!ncrisc_noc_nonposted_writes_flushed(loading_noc));
+        while (!ncrisc_noc_nonposted_writes_flushed(noc_index));
 
         cb_pop_front(operand, chunk_size_tiles);
         dram_buffer_dst_addr += chunk_size_bytes;

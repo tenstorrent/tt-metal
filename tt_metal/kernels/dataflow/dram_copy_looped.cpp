@@ -24,8 +24,6 @@ void kernel_main() {
     std::uint32_t dram_buffer_size           = get_arg_val<uint32_t>(7);
     std::uint32_t chunk_size                 = get_arg_val<uint32_t>(8);
 
-    // loading_noc variable is defined by either NCRISC or BRISC to be 0 or 1, depending on which RISC the kernel is running
-
     for (std::uint32_t offset = 0; offset < dram_buffer_size; offset += chunk_size) {
         std::uint32_t dram_buffer_src_addr = dram_buffer_src_addr_base + offset;
         // DRAM NOC src address
