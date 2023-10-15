@@ -37,10 +37,10 @@ def run_perf_bert15(
     tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
     disable_persistent_kernel_cache()
-    first_embedding_key = "first_embedding"
+    first_embedding_key = "first_embedding_preprocessing"
     first_attention_mask_key = "first_attention_mask"
     first_run_key = "first_run"
-    second_embedding_key = "second_embedding"
+    second_embedding_key = "second_embedding_preprocessing"
     second_attention_mask_key = "second_attention_mask"
     second_run_key = "second_run"
     cpu_key = "ref_key"
@@ -76,10 +76,16 @@ def run_perf_bert15(
 
         profiler.start(first_attention_mask_key)
         tt_attention_mask = tt_model.model_attention_mask(**inputs)
+        tt_lib.device.Synchronize()
         profiler.end(first_attention_mask_key, force_enable=True)
 
+        profiler.start(first_embedding_key)
+        tt_embedding_inputs = tt_model.embeddings.preprocess_embedding_inputs(**inputs)
+        tt_lib.device.Synchronize()
+        profiler.end(first_embedding_key, force_enable=True)
+
         profiler.start(first_run_key)
-        tt_embedding = tt_model.model_embedding(**inputs)
+        tt_embedding = tt_model.model_embedding(**tt_embedding_inputs)
         tt_output = tt_model(1, tt_embedding, tt_attention_mask)
         tt_lib.device.Synchronize()
         profiler.end(first_run_key, force_enable=True)
@@ -91,8 +97,13 @@ def run_perf_bert15(
         tt_attention_mask = tt_model.model_attention_mask(**inputs)
         profiler.end(second_attention_mask_key, force_enable=True)
 
+        profiler.start(second_embedding_key)
+        tt_embedding_inputs = tt_model.embeddings.preprocess_embedding_inputs(**inputs)
+        tt_lib.device.Synchronize()
+        profiler.end(second_embedding_key, force_enable=True)
+
         profiler.start(second_run_key)
-        tt_embedding = tt_model.model_embedding(**inputs)
+        tt_embedding = tt_model.model_embedding(**tt_embedding_inputs)
         tt_output = tt_model(1, tt_embedding, tt_attention_mask)
         tt_lib.device.Synchronize()
         profiler.end(second_run_key, force_enable=True)
