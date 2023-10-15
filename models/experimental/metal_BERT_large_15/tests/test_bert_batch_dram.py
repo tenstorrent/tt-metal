@@ -41,8 +41,7 @@ class TtBertBatchDram(torch.nn.Module):
         self.embeddings = TtEmbeddings(
             hugging_face_reference_model,
             device,
-            input_mem_config=model_config["INPUT_EMBEDDINGS_MEMCFG"],
-            output_mem_config=model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
+            model_config=model_config,
         )
 
         self.get_extended_attention_mask = hugging_face_reference_model.get_extended_attention_mask
@@ -94,10 +93,11 @@ class TtBertBatchDram(torch.nn.Module):
 
         self.qa_linear = qa_linear_
 
-    def model_embedding(self, input_ids, attention_mask=None, token_type_ids=None):
-        tt_embeddings = self.embeddings(input_ids, token_type_ids)
+    def model_embedding(self, input_ids, token_type_ids=None, position_ids=None):
+        tt_embeddings = self.embeddings(input_ids, token_type_ids, position_ids)
         embeddings_shape = tt_embeddings.shape()
         if tt_embeddings.dtype() != self.model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"]:
+            logger.warning("Perf warning: On host conversion of dtype after embeddings")
             embeddings = tt_embeddings.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
             tt_embeddings = (
                 tt_lib.tensor.Tensor(
@@ -244,13 +244,15 @@ def run_bert_question_and_answering_inference(
 
     profiler.end("processing_of_input")
 
-    profiler.start("attention_mask")
+    profiler.start("attention_mask_preprocessing")
     tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
-    profiler.end("attention_mask")
+    tt_lib.device.Synchronize()
+    profiler.end("attention_mask_preprocessing")
 
-    profiler.start("embedding_of_input")
-    tt_embedding = tt_bert_model.model_embedding(**bert_input)
-    profiler.end("embedding_of_input")
+    profiler.start("embedding_input_preprocessing")
+    tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
+    tt_lib.device.Synchronize()
+    profiler.end("embedding_input_preprocessing")
 
     profiler.start("hugging_face_reference_model")
     pytorch_out = hugging_face_reference_model(**bert_input)
@@ -261,6 +263,7 @@ def run_bert_question_and_answering_inference(
 
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
+    tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
     tt_out = tt_bert_model(1, tt_embedding, tt_attention_mask)
     tt_lib.device.Synchronize()
     profiler.end("first_model_run_with_compile", force_enable=True)
@@ -268,6 +271,8 @@ def run_bert_question_and_answering_inference(
 
     # Recreate inputs since activations were deallocated
     tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
+    tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
+    tt_lib.device.Synchronize()
     print(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
     enable_persistent_kernel_cache()
@@ -277,7 +282,7 @@ def run_bert_question_and_answering_inference(
     print(f"Running BERT model for perf measurement")
 
     profiler.start(f"model_run_{PERF_CNT}_times_for_inference")
-    tt_embedding = tt_bert_model.model_embedding(**bert_input)
+    tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
     tt_out = tt_bert_model(1, tt_embedding, tt_attention_mask)
     tt_lib.device.Synchronize()
     profiler.end(f"model_run_{PERF_CNT}_times_for_inference", PERF_CNT)
@@ -504,7 +509,7 @@ def test_bert_batch_dram_with_program_cache(
     )
 
     if batch == 8 and model_config_str == "MIXED_PRECISION_BATCH8":
-        assert tt_lib.program_cache.num_entries() == 19
+        assert tt_lib.program_cache.num_entries() == 17
 
     else:
-        assert tt_lib.program_cache.num_entries() == 18
+        assert tt_lib.program_cache.num_entries() == 16
