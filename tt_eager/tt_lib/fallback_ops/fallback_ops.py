@@ -823,3 +823,17 @@ def binary_fmod(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl_tenso
     +------------+-----------------------------------------+-------------+-----------------+----------+
     """
     return torch.fmod(input, other)
+
+@convert_tt_tensors_wrapper
+def bitwise_not(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    """
+    Computes the bitwise NOT of the given ``input`` tensor.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | Input tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+
+    """
+    return torch.bitwise_not(input)
