@@ -539,6 +539,10 @@ These operations are currently not supported on TT accelerator device and will e
 
 .. autoclass:: tt_lib.fallback_ops.binary_fmod
 
+.. autoclass:: tt_lib.fallback_ops.bitwise_not
+
+.. autoclass:: tt_lib.fallback_ops.unary_bitwise_or
+
 Experimental Operations
 =======================
 
