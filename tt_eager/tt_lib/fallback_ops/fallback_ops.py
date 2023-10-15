@@ -869,3 +869,19 @@ def unary_bitwise_and(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
     return torch.bitwise_and(input, other)
+
+
+@convert_tt_tensors_wrapper
+def unary_bitwise_xor(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
+    """
+    Computes the bitwise XOR of ``input`` and ``other``.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | Input tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | other      | Immediate value                               | int         |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.bitwise_xor(input, other)
