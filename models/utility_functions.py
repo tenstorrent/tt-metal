@@ -993,6 +993,12 @@ def run_conv_on_device_wrapper(
         )
 
         logger.info("Going to run conv on tt device")
+        if (x.layout() != tt_lib.tensor.Layout.ROW_MAJOR):
+            x = tt_lib.tensor.untilize(x)
+        else:
+            x_padded_shape = x.shape()
+            x_padded_shape[-1] = roundup(x.shape()[-1], 16)
+            x = tt_lib.tensor.pad(x, x_padded_shape, [0, 0, 0, 0], 0)
         x = conv_on_device(x)
         if channel_transpose:
             x = tt_lib.tensor.transpose(x)
