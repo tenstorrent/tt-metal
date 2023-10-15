@@ -933,3 +933,71 @@ def binary_bitwise_xor(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> tt
     +------------+-----------------------------------------------+-------------+-----------------+----------+
     """
     return torch.bitwise_xor(input, other)
+
+
+@convert_tt_tensors_wrapper
+def unary_bitwise_right_shift(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
+    """
+    Computes the right arithmetic shift of ``input`` by ``other`` bits. The input tensor must be of integral type.
+    In any case, if the value of the right operand is negative or is greater or equal to the number of bits in the
+    promoted left operand, the behavior is undefined.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | Input tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | other      | Immediate value                               | int         |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.bitwise_right_shift(input, other)
+
+
+@convert_tt_tensors_wrapper
+def unary_bitwise_left_shift(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
+    """
+    Computes the left arithmetic shift of ``input`` by ``other`` bits. The input tensor must be of integral type.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | Input tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | other      | Immediate value                               | int         |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.bitwise_left_shift(input, other)
+
+
+@convert_tt_tensors_wrapper
+def binary_bitwise_right_shift(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    """
+    Computes the right arithmetic shift of ``input`` by ``other`` bits. The input tensor must be of integral type.
+    In any case, if the value of the right operand is negative or is greater or equal to the number of bits in the
+    promoted left operand, the behavior is undefined.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | First tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | other      | Second tensor                                 | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.bitwise_right_shift(input, other)
+
+
+@convert_tt_tensors_wrapper
+def binary_bitwise_left_shift(input: ttl_tensor.Tensor, other: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    """
+    Computes the left arithmetic shift of ``input`` by ``other`` bits. The input tensor must be of integral type.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | First tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | other      | Second tensor                                 | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.bitwise_left_shift(input, other)

@@ -553,6 +553,14 @@ These operations are currently not supported on TT accelerator device and will e
 
 .. autoclass:: tt_lib.fallback_ops.binary_bitwise_xor
 
+.. autoclass:: tt_lib.fallback_ops.unary_bitwise_left_shift
+
+.. autoclass:: tt_lib.fallback_ops.unary_bitwise_right_shift
+
+.. autoclass:: tt_lib.fallback_ops.binary_bitwise_left_shift
+
+.. autoclass:: tt_lib.fallback_ops.binary_bitwise_right_shift
+
 Experimental Operations
 =======================
 
