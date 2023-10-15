@@ -3,11 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
 
 import numpy as np
 
@@ -68,7 +63,6 @@ import torch
         (16 * 32, 32, 24, 24, 3, 3, 1, 1, 0, 0),
     ),
 )
-@pytest.mark.skip(reason="Conv disabled in main")
 def test_run_generic_conv(
     use_program_cache,
     run_conv_with_address_map,

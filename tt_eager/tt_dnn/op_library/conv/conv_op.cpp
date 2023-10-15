@@ -1357,7 +1357,6 @@ inline Tensor conv_(const Tensor& a, const Tensor &b, std::optional<const Tensor
 
 Tensor conv(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias, const vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
              uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool has_bias) {
-    TT_ASSERT(false, "Conv disabled");
     return conv_(a, b, bias, conv_params, act_block_h_ntiles, act_block_w_ntiles, weight_block_w_ntiles, out_subblock_h_ntiles, out_subblock_w_ntiles, output_channels, false, false, true, has_bias);
 }
 

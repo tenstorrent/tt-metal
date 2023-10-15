@@ -75,6 +75,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
     out = ttl.tensor.conv_with_address_map(
         A,
         B_tiled,
+        None,
         [R, S, stride_h, stride_w, pad_h, pad_w],
         act_block_h,
         act_block_w,
@@ -101,7 +102,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
     return passing_pcc
 
 
-def test_sweep_conv_tt():
+def test_sweep_conv_tt(device):
     test_bench = generate_conv_tb()
     pytorch_conv_golden_tb = generate_conv_tb_with_pytorch_golden(test_bench)
     passing = True
@@ -129,7 +130,9 @@ def test_sweep_conv_tt():
             assert conv_op_test_params.test_level == TestLevel.OP_FULL_COMPUTE
             full_op_compute_tests += 1
         try:
-            passing_ = run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden)
+            passing_ = run_conv_as_large_matmul(
+                conv_op_test_params, pytorch_inputs_and_golden, device
+            )
             if passing_:
                 passing_tests.append(conv_op_test_params)
             else:

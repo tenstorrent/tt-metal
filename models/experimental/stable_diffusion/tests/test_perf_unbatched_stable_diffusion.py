@@ -310,13 +310,12 @@ def run_perf_unbatched_stable_diffusion(
     logger.info(f"Unbatched Stable Diffusion {comments} compile time: {compile_time}")
 
 
-@disable_conv
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
         (
-            35,
+            50,
             95,
         ),
     ),
@@ -329,13 +328,12 @@ def test_perf_bare_metal(
     )
 
 
-@disable_conv
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
     (
         (
-            45.2, # Temporary
+            53,
             110,
         ),
     ),
