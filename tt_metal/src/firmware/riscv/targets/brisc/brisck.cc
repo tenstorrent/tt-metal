@@ -5,8 +5,10 @@
 #include <unistd.h>
 #include <cstdint>
 
-#include "risc.h"
 #include "risc_common.h"
+#include "tensix.h"
+#include "tensix_types.h"
+#include "noc.h"
 #include "noc_overlay_parameters.h"
 #include "ckernel_structs.h"
 #include "stream_io_map.h"
@@ -26,11 +28,7 @@
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 CQReadInterface cq_read_interface;
 
-#ifdef NOC_INDEX
-uint8_t loading_noc = NOC_INDEX;
-#else
-uint8_t loading_noc = 0;
-#endif
+uint8_t noc_index = NOC_INDEX;
 
 // dram channel to x/y lookup tables
 // The number of banks is generated based off device we are running on --> controlled by allocator
@@ -58,7 +56,7 @@ void kernel_launch() {
     init_dram_bank_to_noc_coord_lookup_tables();  // done by both BRISC / NCRISC
     init_l1_bank_to_noc_coord_lookup_tables();  // done by both BRISC / NCRISC
 
-    noc_local_state_init(loading_noc);
+    noc_local_state_init(noc_index);
 
     kernel_profiler::mark_time(CC_KERNEL_MAIN_START);
     kernel_main();

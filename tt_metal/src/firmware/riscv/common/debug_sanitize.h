@@ -31,7 +31,7 @@ enum debug_sanitize_which_riscv {
 
 #if defined(WATCHER_ENABLED)
 
-extern uint8_t loading_noc;
+extern uint8_t noc_index;
 
 #include "noc_addr_ranges_gen.h"
 #include "noc_parameters.h"
@@ -63,16 +63,16 @@ inline uint32_t debug_sanitize_get_which_riscv()
 
 // Note:
 //  - this isn't racy w/ the host so long as invalid is written last
-//  - this isn't racy between riscvs so long as each gets their own loading_noc
+//  - this isn't racy between riscvs so long as each gets their own noc_index
 inline void debug_sanitize_post_noc_addr_and_hang(uint64_t a, uint32_t l, uint32_t invalid)
 {
     debug_sanitize_noc_addr_msg_t tt_l1_ptr *v = *GET_MAILBOX_ADDRESS_DEV(sanitize_noc);
 
-    if (v[loading_noc].invalid == DebugSanitizeNocInvalidOK) {
-        v[loading_noc].addr = a;
-        v[loading_noc].len = l;
-        v[loading_noc].which = debug_sanitize_get_which_riscv();
-        v[loading_noc].invalid = invalid;
+    if (v[noc_index].invalid == DebugSanitizeNocInvalidOK) {
+        v[noc_index].addr = a;
+        v[noc_index].len = l;
+        v[noc_index].which = debug_sanitize_get_which_riscv();
+        v[noc_index].invalid = invalid;
     }
 
     while(1);

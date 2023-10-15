@@ -113,9 +113,11 @@ KernelGroup::KernelGroup(const Program& program,
     this->riscv1_id = ncrisc_id;
     this->compute_id = trisc_id;
 
-    // Note: validation prior to this confirmed noc state is consistent
+    // The code below sets the brisc_noc_id for use by the device firmware
+    // Use 0 if neither brisc nor trisc specify a noc
     this->launch_msg.brisc_noc_id = 0;
     if (brisc_id) {
+        // Use brisc's noc if brisc specifies a noc
         this->launch_msg.enable_brisc = true;
         this->launch_msg.brisc_noc_id = std::get<DataMovementConfig>(program.get_kernel(brisc_id.value())->config()).noc;
     } else {
@@ -123,6 +125,8 @@ KernelGroup::KernelGroup(const Program& program,
     }
 
     if (ncrisc_id) {
+        // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
+        // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
         this->launch_msg.enable_ncrisc = true;
         this->launch_msg.brisc_noc_id = 1 - std::get<DataMovementConfig>(program.get_kernel(ncrisc_id.value())->config()).noc;
     } else {

@@ -513,13 +513,13 @@ void watcher_attach(void *dev,
 
     if (watcher::enabled) {
         init_device(device_id, get_grid_size, worker_from_logical);
+        log_info(LogLLRuntime, "Watcher attached device {}", device_id);
     }
 
     // Always register the device w/ watcher, even if disabled
     // This allows dump() to be called from debugger
     std::shared_ptr<watcher::WatcherDevice> wdev(new watcher::WatcherDevice(device_id, get_grid_size, worker_from_logical, storage_only_cores));
     watcher::devices.insert(pair<void *, std::shared_ptr<watcher::WatcherDevice>>(dev, wdev));
-    log_info(LogLLRuntime, "Watcher attached device {}", device_id);
 }
 
 void watcher_detach(void *old) {

@@ -261,7 +261,7 @@ struct CompileState {
             for (const auto &[def, val]: kernel_defines) {
                 result += " -D" + def + "=" + val + " ";
             }
-        } 
+        }
 
         if (perf_dump_level != 0 || is_trisc()) // TODO(AP): double check
             result += " -DPERF_DUMP_LEVEL=" + to_string(perf_dump_level);
@@ -273,10 +273,6 @@ struct CompileState {
             result += " -DKERNEL_COMPILE_TIME_ARG_" + to_string(j) + "=" + to_string(compile_time_args[j]);
         if (!is_trisc())
             result += " -DNOC_INDEX=" + to_string(noc_index);
-        const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
-            result += " -DTT_METAL_SLOW_DISPATCH_MODE=1";
-        }
         if (std::getenv("TT_METAL_WATCHER") != nullptr) {
             result += " -DWATCHER_ENABLED";
         }
@@ -440,10 +436,8 @@ static CompileState pre_compile_for_risc(
     // Only modifying dataflow paths, we can make a separate
     // isuue for the compute paths
     if (ctx.is_brisc()) {
-        //cout << "BRISC NOC_INDEX=" << uint32_t(noc_index) << endl;
         ctx.kernel_defines = build_kernel_for_riscv_options->brisc_defines;
     } else if (ctx.is_ncrisc()) {
-        //cout << "NCRISC NOC_INDEX=" << uint32_t(noc_index) << endl;
         ctx.kernel_defines = build_kernel_for_riscv_options->ncrisc_defines;
     }
 
@@ -1177,7 +1171,7 @@ static string generate_noc_addr_ranges_string(
     ss << "     !NOC_DRAM_XY_P(x, y) && \\" << endl;
     ss << "     !NOC_ETH_XY_P(x, y) && \\" << endl;
     ss << "     !NOC_HARVESTED_Y_P(y) && \\" << endl;
-    ss << "     ((loading_noc == 0) ? \\" << endl;
+    ss << "     ((noc_index == 0) ? \\" << endl;
     ss << "      ((x) >= NOC_X((uint32_t)" << 1 << ") && \\" << endl;
     ss << "       (x) <= NOC_X((uint32_t)" << grid_size.x - 1 << ") && \\" << endl;
     ss << "       (y) >= NOC_Y((uint32_t)" << 1 << ") && \\" << endl;

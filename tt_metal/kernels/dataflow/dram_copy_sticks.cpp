@@ -20,7 +20,6 @@ void kernel_main() {
     std::uint32_t num_sticks      = get_arg_val<uint32_t>(4);
     std::uint32_t stick_size      =  get_arg_val<uint32_t>(5);
     for(uint32_t i = 0; i < 1; i++) {
-        // loading_noc variable is defined by either NCRISC or BRISC to be 0 or 1, depending on which RISC the kernel is running
         for(uint32_t stick_id = 0; stick_id < num_sticks; stick_id++) {
             // DRAM NOC src address
             std::uint64_t dram_buffer_src_noc_addr = get_noc_addr(dram_src_noc_x, dram_src_noc_y, dram_buffer_src_addr);
