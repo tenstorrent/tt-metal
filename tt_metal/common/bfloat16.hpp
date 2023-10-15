@@ -156,6 +156,65 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16_0_2(uint32_t 
     return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed); // 0.0f..2.0f
 }
 
+
+inline std::vector<std::uint32_t> create_random_vector2d_of_bfloat16(uint32_t vec_size_x, uint32_t vec_size_y, int rand_max_float, int seed, float offset = 0.0f) {
+    auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
+
+    std::vector<std::uint32_t> vec(vec_size_x * vec_size_y, 0);
+    std::uint32_t idx;
+
+    for (int i = 0; i < vec_size_x; i++) {
+        for (int j = 0; j < vec_size_y; j++) {
+
+            float num_1_float = rand_float() + offset;
+            float num_2_float = rand_float() + offset;
+
+            bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
+            bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
+
+            //std::cout << "num_1_float: " << num_1_float << ", num_1_bfloat16 : " << num_1_bfloat16.to_float() << ", \t\t";
+            //std::cout << "num_2_float: " << num_2_float << ", num_2_bfloat16 : " << num_2_bfloat16.to_float() << std::endl;
+
+            // pack 2 uint16 into uint32
+            idx = j+ (i * vec_size_y);
+            vec.at(idx) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
+        }
+    }
+
+    log_info(tt::LogVerif, "Created a random vector of size {}", vec.size());
+
+    return vec;
+}
+
+/*
+inline std::vector<std::vector<std::uint32_t>> create_random_vector2d_of_bfloat16(uint32_t num_bytes_x, uint32_t num_bytes_y, int rand_max_float, int seed, float offset = 0.0f) {
+    auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
+
+    std::vector<std::vector<std::uint32_t>> vec(num_bytes_x/sizeof(std::uint32_t), vector<std::uint32_t> (num_bytes_y/sizeof(std::uint32_t), 0));
+    for (int i = 0; i < vec.size(); i++) {
+        for (int j = 0; i < vec[0].size(); i++) {
+
+            float num_1_float = rand_float() + offset;
+            float num_2_float = rand_float() + offset;
+
+            bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
+            bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
+
+            //std::cout << "num_1_float: " << num_1_float << ", num_1_bfloat16 : " << num_1_bfloat16.to_float() << ", \t\t";
+            //std::cout << "num_2_float: " << num_2_float << ", num_2_bfloat16 : " << num_2_bfloat16.to_float() << std::endl;
+
+            // pack 2 uint16 into uint32
+            vec.at(i).at(j) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
+        }
+    }
+
+    log_info(tt::LogVerif, "Created a random vector of size {}", vec.size());
+
+    return vec;
+}
+*/
+
+
 /*
  * rk: Still won't handle the case where the number of elements is odd, except
  * if it's 1. Whatever, for now.
