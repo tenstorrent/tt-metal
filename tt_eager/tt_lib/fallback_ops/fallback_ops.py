@@ -837,3 +837,19 @@ def bitwise_not(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
 
     """
     return torch.bitwise_not(input)
+
+
+@convert_tt_tensors_wrapper
+def unary_bitwise_or(input: ttl_tensor.Tensor, other: int) -> ttl_tensor.Tensor:
+    """
+    Computes the bitwise OR of ``input`` and ``other``.
+
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                                   | Data type   | Valid range     | Required |
+    +============+===============================================+=============+=================+==========+
+    | input      | Input tensor                                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    | other      | Immediate value                               | int         |                 | Yes      |
+    +------------+-----------------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.bitwise_or(input, other)
