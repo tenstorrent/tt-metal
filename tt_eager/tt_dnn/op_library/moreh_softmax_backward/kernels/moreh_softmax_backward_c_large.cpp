@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_COL
+#define REDUCE_DIM ReduceDim::REDUCE_ROW
 
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
@@ -17,66 +17,61 @@
 #include "tt_eager/tt_dnn/op_library/moreh_softmax_backward/kernels/common_ckernels.hpp"
 
 namespace NAMESPACE {
+
 void MAIN {
     constexpr uint32_t onetile = 1;
 
     constexpr auto cb_y = tt::CB::c_in0;
     constexpr auto cb_dy = tt::CB::c_in1;
-    constexpr auto cb_bcast_scaler = tt::CB::c_in2;
-    constexpr auto cb_mask = tt::CB::c_in3;
     constexpr auto cb_dx = tt::CB::c_out0;
 
     constexpr auto cb_ydy = tt::CB::c_intermed0;  // y * dy
     constexpr auto cb_sum = tt::CB::c_intermed1;
-    constexpr auto cb_inter2 = tt::CB::c_intermed2;
-    constexpr auto cb_add = tt::CB::c_intermed3;
-
-    binary_op_init_common(cb_y, cb_bcast_scaler);
+    constexpr auto cb_dy_m_sum = tt::CB::c_intermed2;  // dy - sum
 
     uint32_t N = get_compile_time_arg_val(0);
-    uint32_t Ht = get_compile_time_arg_val(1);
+    uint32_t dim_size = get_compile_time_arg_val(1);
 
+    binary_op_init_common(cb_dy, cb_y);
+
+    constexpr int dst0 = 0;
     for (uint32_t n = 0; n < N; ++n) {
-        // step 1, compute y * dy
-        for (uint32_t h = 0; h < Ht; ++h) {
+        // compute sum(y * dy)
+        for (uint32_t i = 0; i < dim_size; ++i) {
             ACQ();
-            if (h == Ht - 1) {
-                mul_tiles_and_mask_tile_to_cb(
-                    cb_y, cb_dy, cb_mask, cb_ydy, 0, 0, 0, /*pop0=*/1, /*pop1=*/1, /*popm=*/0);
-            } else {
-                mul_tiles_to_cb(cb_y, cb_dy, cb_ydy);
-            }
+            mul_tiles_to_cb(cb_y, cb_dy, cb_ydy);
             REL();
 
-            if (h == 0) {
+            if (i == 0) {
                 ACQ();
-                copy_tile_to_cb(cb_ydy, cb_add);
+                copy_tile_to_cb(cb_ydy, cb_sum);
                 REL();
             } else {
                 ACQ();
-                add_tiles_to_cb(cb_add, cb_ydy, cb_add);
+                add_tiles_to_cb(cb_sum, cb_ydy, cb_sum);
                 REL();
             }
         }
 
-        // step 2, compute sum(y * dy)
-        ACQ();
-        reduce_tile_to_cb(REDUCE_OP, REDUCE_DIM, cb_add, cb_bcast_scaler, cb_sum, /*size=*/1, /*pop0=*/1, /*pop1=*/0);
-        REL();
-
-        // step 3, compute final result
-        for (uint32_t h = 0; h < Ht; ++h) {
+        // compute final result
+        for (uint32_t i = 0; i < dim_size; ++i) {
             // dy - sum
             ACQ();
-            sub_tiles_bcast_rows_to_cb(cb_dy, cb_sum, cb_inter2, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            sub_tiles_to_cb(
+                cb_dy,
+                cb_sum,
+                cb_dy_m_sum,
+                /*itile0=*/0,
+                /*itile1=*/0,
+                /*pop0=*/1,
+                /*pop1=*/0);
             REL();
 
             // (dy - sum) * y
             ACQ();
-            mul_tiles_to_cb(cb_y, cb_inter2, cb_dx);
+            mul_tiles_to_cb(cb_dy_m_sum, cb_y, cb_dx);
             REL();
         }
-
         cb_pop_front(cb_sum, onetile);
     }
 }

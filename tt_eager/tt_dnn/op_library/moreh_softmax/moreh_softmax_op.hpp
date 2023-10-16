@@ -20,7 +20,8 @@ enum class MorehSoftmaxOpParallelizationStrategy {
     SMALL_W = 0,
     SMALL_H = 1,
     LARGE_W = 2,
-    LARGE_H = 3
+    LARGE_H = 3,
+    LARGE_C = 4
 };
 
 bool is_moreh_softmax_w_small_available(const Tensor &tensor);
@@ -30,6 +31,7 @@ operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, Tenso
 operation::ProgramWithCallbacks moreh_softmax_w_large(const Tensor &input, Tensor &output, const CoreRange core_range);
 operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, Tensor &output, const CoreRange core_range);
 operation::ProgramWithCallbacks moreh_softmax_h_large(const Tensor &input, Tensor &output, const CoreRange core_range);
+operation::ProgramWithCallbacks moreh_softmax_c_large(const Tensor &input, Tensor &output, uint32_t dim, const CoreRange core_range);
 
 struct MorehSoftmax {
     const uint32_t dim;
