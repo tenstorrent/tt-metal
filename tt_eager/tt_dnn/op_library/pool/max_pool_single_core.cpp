@@ -153,7 +153,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
                                             .noc = NOC::RISCV_1_default,
                                             .compile_args = reader_ct_args};
-    std::string reader_kernel_fname("ttt_eager/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_single_core.cpp");
+    std::string reader_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_single_core.cpp");
     auto reader_kernel = CreateKernel(program,
                                                   reader_kernel_fname,
                                                   cores,
