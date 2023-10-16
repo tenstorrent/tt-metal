@@ -62,9 +62,21 @@ jobs:
       arch: ${{ matrix.arch }}
     secrets:
       CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+  release-run-frequent-slow-dispatch:
+    uses: ./.github/workflows/full-regressions-and-models.yaml
+    secrets: inherit
+  release-run-frequent-fast-dispatch:
+    uses: ./.github/workflows/fast-dispatch-full-regressions-and-models.yaml
+    secrets: inherit
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [create-tag, create-changelog, build-eager-package]
+    needs: [
+      create-tag,
+      create-changelog,
+      build-eager-package,
+      release-run-frequent-slow-dispatch,
+      release-run-frequent-fast-dispatch,
+    ]
     strategy:
       matrix:
         os: [ubuntu-20.04]
