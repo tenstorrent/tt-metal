@@ -2,6 +2,12 @@
 #include "tt_metal/hostdevcommon/common_values.hpp"
 #include "tt_metal/src/firmware/riscv/common/risc_attribs.h"
 
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 
 FORCE_INLINE
 bool cb_producer_space_available(i32 num_pages) {
