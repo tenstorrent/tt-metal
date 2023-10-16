@@ -449,7 +449,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     // CB to store halo data
     // hardcode to store 1 row of tiles
     uint32_t halo_input_cb_index = CB::c_intermed0;
-    uint32_t num_halo_cb_input_tiles = num_input_tiles_in_row;
+    uint32_t num_halo_cb_input_tiles = num_input_tiles_in_row  * 4;
     tt_metal::CircularBufferConfig halo_input_cb_config = tt_metal::CircularBufferConfig(num_halo_cb_input_tiles * single_tile_size, {{halo_input_cb_index, cb_data_format}})
 		.set_page_size(halo_input_cb_index, single_tile_size);
     auto halo_input_cb = tt_metal::CreateCircularBuffer(program, core_range, halo_input_cb_config);
