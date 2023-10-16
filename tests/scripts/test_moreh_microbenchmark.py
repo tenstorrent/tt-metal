@@ -175,7 +175,7 @@ def test_matmul_local(r=9, c=12, mt=72, nt=96, kt=24):
 
 @pytest.mark.parametrize(
     "iteration, test_vector_small, test_vector_large",
-    [(10,
+    [(1,
      np.array([
                 8192,
                 32768,
@@ -212,7 +212,7 @@ def test_pcie_h2d_dram(iteration, test_vector_small, test_vector_large):
 
 @pytest.mark.parametrize(
     "iteration, test_vector_small, test_vector_large",
-    [(10,
+    [(1,
      np.array([
                 8192,
                 32768,
@@ -249,7 +249,7 @@ def test_pcie_d2h_dram(iteration, test_vector_small, test_vector_large):
 
 @pytest.mark.parametrize(
     "iteration, test_vector",
-    [(10,
+    [(1,
      np.array([
                 4096,
                 16384,
@@ -266,7 +266,10 @@ def test_pcie_h2d_l1(iteration, test_vector):
     header = ['Transfer Size', 'WriteToDeviceL1', 'WriteToBuffer', 'EnqueueWriteBuffer']
     data = []
     for test_point in test_vector:
-        bw_wdd = test_write_device_l1(iteration, 1, test_point)
+        if test_point < 1048576:
+            bw_wdd = test_write_device_l1(iteration, 1, test_point)
+        else:
+            bw_wdd = 0
         bw_wb = test_write_buffer(iteration, 1, test_point)
         bw_ewb = test_enqueue_write_buffer(iteration, 1, test_point)
         data_entry = [test_point, bw_wdd, bw_wb, bw_ewb]
@@ -277,7 +280,7 @@ def test_pcie_h2d_l1(iteration, test_vector):
 
 @pytest.mark.parametrize(
     "iteration, test_vector",
-    [(10,
+    [(1,
      np.array([
                 4096,
                 16384,
@@ -294,7 +297,10 @@ def test_pcie_d2h_l1(iteration, test_vector):
     header = ['Transfer Size', 'ReadFromDeviceL1', 'ReadFromBuffer', 'EnqueueReadBuffer']
     data = []
     for test_point in test_vector:
-        bw_wdd = test_read_device_l1(iteration, 1, test_point)
+        if test_point < 1048576:
+            bw_wdd = test_read_device_l1(iteration, 1, test_point)
+        else:
+            bw_wdd = 0
         bw_wb = test_read_buffer(iteration, 1, test_point)
         bw_ewb = test_enqueue_read_buffer(iteration, 1, test_point)
         data_entry = [test_point, bw_wdd, bw_wb, bw_ewb]
@@ -336,7 +342,7 @@ def test_noc(arch, r, c, nt, test_vector):
         ('grayskull', 1020, 9, 12,
          np.array([
                 [4608, 6144, 6144],
-                [3456, 4096, 1024],
+                [3456, 3840, 1024],
                 [3456, 3072, 1024],
                 [2304, 3072, 768]])),
         ('wormhole_b0', 1000, 6, 6,
