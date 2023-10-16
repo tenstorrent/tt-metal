@@ -153,7 +153,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
                                             .noc = NOC::RISCV_1_default,
                                             .compile_args = reader_ct_args};
-    std::string reader_kernel_fname("tt_eager/tt_dnn/kernels/dataflow/reader_max_pool_2d_single_core.cpp");
+    std::string reader_kernel_fname("ttt_eager/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_single_core.cpp");
     auto reader_kernel = CreateKernel(program,
                                                   reader_kernel_fname,
                                                   cores,
@@ -204,7 +204,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     auto writer_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_0,
                                             .noc = NOC::RISCV_0_default,
                                             .compile_args = writer_ct_args};
-    std::string writer_kernel_fname("tt_eager/tt_dnn/kernels/dataflow/writer_max_pool_2d_single_core.cpp");
+    std::string writer_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_single_core.cpp");
     auto writer_kernel = CreateKernel(program,
                                                   writer_kernel_fname,
                                                   cores,
@@ -232,7 +232,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                          nbatch,
                                                          out_h},    // out_h_per_core
                                         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
-    std::string compute_kernel_fname("tt_eager/tt_dnn/kernels/compute/max_pool.cpp");
+    std::string compute_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/compute/max_pool.cpp");
     auto compute_kernel = CreateKernel(program,
                                               compute_kernel_fname,
                                               cores,

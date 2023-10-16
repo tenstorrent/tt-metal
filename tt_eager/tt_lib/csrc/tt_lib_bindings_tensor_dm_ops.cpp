@@ -187,6 +187,14 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
+        m_tensor.def("untilize_with_halo", &untilize_with_halo,
+            py::arg("input").noconvert(),
+            py::arg("pad_val"),
+            py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            R"doc(
+                Untilizes input tiled data to row major format.
+            )doc");
+
         m_tensor.def("untilize_with_unpadding",
             [] (const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const MemoryConfig& output_mem_config) {
                 return untilize_with_unpadding(tensor, output_tensor_shape, input_tensor_start, output_mem_config);

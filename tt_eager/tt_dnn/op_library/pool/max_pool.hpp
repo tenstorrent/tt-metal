@@ -61,6 +61,15 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                                                 uint32_t dilation_h, uint32_t dilation_w,
                                                                 const MemoryConfig& out_mem_config,
                                                                 uint32_t nblocks);
+operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const Tensor &input, Tensor& output,
+                                                                uint32_t in_h, uint32_t in_w,
+                                                                uint32_t out_h, uint32_t out_w,
+                                                                uint32_t kernel_size_h, uint32_t kernel_size_w,
+                                                                uint32_t stride_h, uint32_t stride_w,
+                                                                uint32_t pad_h, uint32_t pad_w,
+                                                                uint32_t dilation_h, uint32_t dilation_w,
+                                                                const MemoryConfig& out_mem_config,
+                                                                uint32_t nblocks);
 Tensor max_pool2d(const Tensor &input,
                   uint32_t in_h, uint32_t in_w,
                   uint32_t kernel_size_h, uint32_t kernel_size_w,
