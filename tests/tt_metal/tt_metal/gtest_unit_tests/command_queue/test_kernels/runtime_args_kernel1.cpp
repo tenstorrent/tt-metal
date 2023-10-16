@@ -2,6 +2,12 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 void kernel_main() {
     uint32_t arg0 = get_arg_val<uint32_t>(0);
     uint32_t arg1 = get_arg_val<uint32_t>(1);

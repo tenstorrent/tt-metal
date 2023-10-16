@@ -1,5 +1,10 @@
 #include "dataflow_api.h"
-// #include "tt_metal/impl/dispatch/device_command.hpp"
+
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 static constexpr u32 PROGRAM_CB_ID = 0;
 
