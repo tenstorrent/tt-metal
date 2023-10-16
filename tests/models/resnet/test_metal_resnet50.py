@@ -20,7 +20,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 from models.utility_functions import is_e75
 
 @pytest.mark.parametrize("batch_size", [1, 2, 8])
-def test_run_resnet50_inference(device, batch_size, imagenet_sample_input):
+def test_run_resnet50_inference(use_program_cache, device, batch_size, imagenet_sample_input):
     if is_e75(device):
         pytest.skip("Resnet50 is not supported on E75")
 
