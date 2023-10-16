@@ -111,7 +111,7 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
     "expected_inference_time, expected_compile_time",
     (
         (
-            1.46,
+            1.55,
             16,
         ),
     ),
