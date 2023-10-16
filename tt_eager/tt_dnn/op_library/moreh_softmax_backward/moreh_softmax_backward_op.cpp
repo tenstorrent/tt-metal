@@ -23,7 +23,7 @@ namespace primary {
 
 void MorehSoftmaxBackward::validate(const std::vector<Tensor> &input_tensors) const {
     TT_ASSERT(input_tensors.size() == 2, "Must have 2 input tensors");
-    TT_ASSERT(this->dim == 2 || this->dim == 3, "Only dim 2 or 3 supported");
+    TT_ASSERT(this->dim >= 0 || this->dim <= 3, "Only dim [0,1,2,3] supported");
     auto& output_tensor = input_tensors.at(0);
     auto& output_grad_tensor = input_tensors.at(1);
     TT_ASSERT(output_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
@@ -65,6 +65,8 @@ operation::ProgramWithCallbacks MorehSoftmaxBackward::create_program(
             return {moreh_softmax_backward_w_large(output, output_grad, input_grad, this->core_range)};
         case MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_H:
             return {moreh_softmax_backward_h_large(output, output_grad, input_grad, this->core_range)};
+        case MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_C:
+            return {moreh_softmax_backward_c_large(output, output_grad, input_grad, this->dim, this->core_range)};
         // default:
         //     break;
     }
@@ -74,6 +76,10 @@ operation::ProgramWithCallbacks MorehSoftmaxBackward::create_program(
 
 MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackward::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     auto& output = input_tensors.at(0);
+
+    if (this->dim == 0 || this->dim == 1) {
+        return MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_C;
+    }
 
     if (is_moreh_softmax_backward_w_small_available(output) && this->dim == 3) {
         log_info(LogTest, "Small tensor algorithm selected");

@@ -7,17 +7,14 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "compute_kernel_api/mask.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/softmax.h"
+#include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/reduce.h"
-
+#include "compute_kernel_api/softmax.h"
+#include "compute_kernel_api/tile_move_copy.h"
 #include "debug_print.h"
-
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
+#include "tt_eager/tt_dnn/op_library/moreh_softmax_backward/kernels/common_ckernels.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -29,98 +26,43 @@ void MAIN {
     constexpr auto cb_mask = tt::CB::c_in3;
     constexpr auto cb_dx = tt::CB::c_out0;
 
-    constexpr auto cb_ydy = tt::CB::c_intermed0; // y * dy
+    constexpr auto cb_ydy = tt::CB::c_intermed0;  // y * dy
     constexpr auto cb_sum = tt::CB::c_intermed1;
     constexpr auto cb_inter2 = tt::CB::c_intermed2;
 
     binary_op_init_common(cb_y, cb_bcast_scaler);
 
-    cb_wait_front(cb_bcast_scaler, onetile); // comes from the reader
-    cb_wait_front(cb_mask, onetile); // comes from the reader
-
     uint32_t N = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
 
-    constexpr int dst0 = 0;
-    for(uint32_t n = 0; n < N; ++n) {
-
+    for (uint32_t n = 0; n < N; ++n) {
         // step 1, compute y * dy
-        for(uint32_t w = 0; w < Wt; ++w)
-        {
+        for (uint32_t w = 0; w < Wt; ++w) {
             ACQ();
-            cb_reserve_back(cb_ydy, onetile);
-
-            cb_wait_front(cb_y, w + 1);
-            cb_wait_front(cb_dy, w + 1);
-
-            mul_tiles_init();
-            mul_tiles(cb_y, cb_dy, w, w, dst0);
-
             if (w == Wt - 1) {
-                constexpr int dst_mask = 1;
-                copy_tile_init();
-                copy_tile(cb_mask, 0, dst_mask);
-
-                mask_tile_init();
-                mask_tile(dst0, dst_mask);
+                mul_tiles_and_mask_tile_to_cb(
+                    cb_y, cb_dy, cb_mask, cb_ydy, w, w, 0, /*pop0=*/0, /*pop1=*/0, /*popm=*/0);
+            } else {
+                mul_tiles_to_cb(cb_y, cb_dy, cb_ydy, w, w, /*pop0=*/0, /*pop1=*/0);
             }
-            pack_tile(dst0, cb_ydy);
-
-            cb_push_back(cb_ydy, onetile);
-
             REL();
         }
 
         // step 2, compute sum(y * dy)
         ACQ();
-        cb_reserve_back(cb_sum, onetile);
-        reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
-        for(uint32_t w = 0; w < Wt; ++w) {
-            cb_wait_front(cb_ydy, w + 1); // must be a cumulative wait for correctness
-
-            constexpr uint32_t bcast_scaler0 = 0; // 0th index from bcast_scaler CB
-            reduce_tile(REDUCE_OP, REDUCE_DIM, cb_ydy, cb_bcast_scaler, w, bcast_scaler0, dst0);
-        }
-        cb_pop_front(cb_ydy, Wt);
-
-        reduce_revert_delta();
-        pack_tile(dst0, cb_sum);
-        cb_push_back(cb_sum, onetile);
+        reduce_tile_to_cb(REDUCE_OP, REDUCE_DIM, cb_ydy, cb_bcast_scaler, cb_sum, Wt);
         REL();
 
         // step 3, compute final result
-        cb_wait_front(cb_sum, onetile); // will reuse Wt times for bcast
         for (uint32_t w = 0; w < Wt; w += onetile) {
             // dy - sum
             ACQ();
-
-            cb_reserve_back(cb_inter2, onetile);
-
-            cb_wait_front(cb_dy, w + 1);
-
-            sub_bcast_cols_init_short();
-            sub_tiles_bcast<BroadcastType::COL>(cb_dy, cb_sum, w, 0, dst0);
-
-            pack_tile(dst0, cb_inter2);
-            cb_push_back(cb_inter2, onetile);
-
+            sub_tiles_bcast_cols_to_cb(cb_dy, cb_sum, cb_inter2, w, 0, /*pop0=*/0, /*pop1=*/0);
             REL();
 
             // (dy - sum) * y
             ACQ();
-
-            cb_reserve_back(cb_dx, onetile);
-            cb_wait_front(cb_y, w + 1);
-            cb_wait_front(cb_inter2, onetile);
-
-            mul_tiles_init();
-            mul_tiles(cb_y, cb_inter2, w, 0, dst0);
-
-            pack_tile(dst0, cb_dx);
-
-            cb_pop_front(cb_inter2, onetile);
-            cb_push_back(cb_dx, onetile);
-
+            mul_tiles_to_cb(cb_y, cb_inter2, cb_dx, w, 0, /*pop0=*/0, /*pop1=*/1);
             REL();
         }
 
@@ -129,4 +71,4 @@ void MAIN {
         cb_pop_front(cb_y, Wt);
     }
 }
-}
+}  // namespace NAMESPACE
