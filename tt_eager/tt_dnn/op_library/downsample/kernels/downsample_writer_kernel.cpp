@@ -25,7 +25,7 @@ inline uint32_t generate_reader_pattern_indices(uint32_t image_height,
                                         uint32_t num_skip_rows_bottom_partial_image,
                                         uint32_t bottom_partial_left_aligned_row_width,
                                         uint32_t skip_bottom_partial_left_aligned_row) {
-    DPRINT << "in generate read pattern" << ENDL();
+    //DPRINT << "in generate read pattern" << ENDL();
     if (!skip_top_partial_middle_aligned_row) {
         for (uint32_t top_partial_middle_row_width_i = 0; top_partial_middle_row_width_i < top_partial_middle_aligned_row_width; top_partial_middle_row_width_i += stride_w) {
             reader_pattern[reader_pattern_index] = img_flat_h_idx + top_partial_middle_row_width_i;
@@ -83,7 +83,7 @@ inline uint32_t generate_reader_pattern_indices(uint32_t image_height,
             reader_pattern_index += 1;
         }
     }
-    DPRINT << "done generate read pattern" << ENDL();
+    //DPRINT << "done generate read pattern" << ENDL();
     return reader_pattern_index;
 }
 
@@ -95,33 +95,33 @@ void kernel_main() {
     uint32_t stride_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t stride_w = get_arg_val<uint32_t>(i); i+=1;
 
-    // args to grab halo data
-    uint32_t halo_read_enabled = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t halo_core_noc_x = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t halo_core_noc_y = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t halo_num_tiles =  get_arg_val<uint32_t>(i); i+=1;
-    uint32_t halo_start_addr =  get_arg_val<uint32_t>(i); i+=1;
-    uint32_t halo_addr_offset =  get_arg_val<uint32_t>(i); i+=1;
-    uint32_t halo_size_bytes =  get_arg_val<uint32_t>(i); i+=1;
+    // halo from prev core region args
+    uint32_t halo_prev_read_enabled = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_core_noc_x = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_core_noc_y = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_num_tiles =  get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_start_addr =  get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_addr_offset =  get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_size_bytes =  get_arg_val<uint32_t>(i); i+=1;
 
-    // halo region args
-    uint32_t halo_read_pattern_offset = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t halo_top_partial_middle_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t halo_skip_top_partial_middle_right_aligned_row = get_arg_val<uint32_t>(i); i+=1;
 
-    uint32_t halo_top_partial_right_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t halo_skip_top_partial_right_aligned_row = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_read_pattern_offset = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_top_partial_middle_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_skip_top_partial_middle_right_aligned_row = get_arg_val<uint32_t>(i); i+=1;
 
-    uint32_t halo_num_rows_top_partial_image = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t halo_num_skip_rows_top_partial_image = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_top_partial_right_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_skip_top_partial_right_aligned_row = get_arg_val<uint32_t>(i); i+=1;
 
-    uint32_t halo_num_full_images = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_num_rows_top_partial_image = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_num_skip_rows_top_partial_image = get_arg_val<uint32_t>(i); i+=1;
 
-    uint32_t halo_num_rows_bottom_partial_image = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t halo_num_skip_rows_bottom_partial_image = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_num_full_images = get_arg_val<uint32_t>(i); i+=1;
 
-    uint32_t halo_bottom_partial_left_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t halo_skip_bottom_partial_left_aligned_row = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_num_rows_bottom_partial_image = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_num_skip_rows_bottom_partial_image = get_arg_val<uint32_t>(i); i+=1;
+
+    uint32_t halo_prev_bottom_partial_left_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_prev_skip_bottom_partial_left_aligned_row = get_arg_val<uint32_t>(i); i+=1;
 
     // local region args
     uint32_t local_read_pattern_offset = get_arg_val<uint32_t>(i); i+=1;
@@ -142,6 +142,34 @@ void kernel_main() {
     uint32_t local_bottom_partial_left_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
     uint32_t local_skip_bottom_partial_left_aligned_row = get_arg_val<uint32_t>(i); i+=1;
 
+    // halo from next core region args
+    uint32_t halo_next_read_enabled = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_next_core_noc_x = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_next_core_noc_y = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_next_num_tiles =  get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_next_start_addr =  get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_next_addr_offset =  get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_next_size_bytes =  get_arg_val<uint32_t>(i); i+=1;
+
+
+    uint32_t halo_next_read_pattern_offset = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_next_top_partial_middle_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_next_skip_top_partial_middle_right_aligned_row = get_arg_val<uint32_t>(i); i+=1;
+
+    uint32_t halo_next_top_partial_right_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_next_skip_top_partial_right_aligned_row = get_arg_val<uint32_t>(i); i+=1;
+
+    uint32_t halo_next_num_rows_top_partial_image = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_next_num_skip_rows_top_partial_image = get_arg_val<uint32_t>(i); i+=1;
+
+    uint32_t halo_next_num_full_images = get_arg_val<uint32_t>(i); i+=1;
+
+    uint32_t halo_next_num_rows_bottom_partial_image = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_next_num_skip_rows_bottom_partial_image = get_arg_val<uint32_t>(i); i+=1;
+
+    uint32_t halo_next_bottom_partial_left_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t halo_next_skip_bottom_partial_left_aligned_row = get_arg_val<uint32_t>(i); i+=1;
+
     // args are for untilizing and tilizing
     uint32_t num_untilized_input_blocks = get_arg_val<uint32_t>(i); i+=1; // input block contains only 1 row of tiles
     uint32_t num_tiles_untilized_input_block = get_arg_val<uint32_t>(i); i+=1;
@@ -158,36 +186,52 @@ void kernel_main() {
     constexpr uint32_t reader_pattern_cb_index = get_compile_time_arg_val(3);
     constexpr uint32_t df_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t conv_act_size_c_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t halo_input_cb_index = get_compile_time_arg_val(6);
-    constexpr uint32_t log_base_2_of_conv_act_size_c_bytes = get_compile_time_arg_val(7);
-    constexpr uint32_t stride_h_x_image_width = get_compile_time_arg_val(8);
+    constexpr uint32_t halo_prev_input_cb_index = get_compile_time_arg_val(6);
+    constexpr uint32_t halo_next_input_cb_index = get_compile_time_arg_val(7);
+    constexpr uint32_t log_base_2_of_conv_act_size_c_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t stride_h_x_image_width = get_compile_time_arg_val(9);
 
     // // checking halo address
     // uint32_t input_cb_address = get_write_ptr(0);
     // DPRINT << "shard_input_address" << "=" << input_cb_address << ENDL();
-    // DPRINT << "halo_start_addr" << "=" << halo_start_addr << ENDL();
-    // DPRINT << "halo_addr_offset" << "=" << halo_addr_offset << ENDL();
-    // DPRINT << "halo_read_offset" << "=" << halo_read_pattern_offset << ENDL();
+    // DPRINT << "halo_prev_start_addr" << "=" << halo_prev_start_addr << ENDL();
+    // DPRINT << "halo_prev_addr_offset" << "=" << halo_prev_addr_offset << ENDL();
+    // DPRINT << "halo_prev_read_offset" << "=" << halo_prev_read_pattern_offset << ENDL();
     // DPRINT << "local_read_offset" << "=" << local_read_pattern_offset << ENDL();
-    // DPRINT << "halo_size_bytes" << "=" << halo_size_bytes << ENDL();
+    // DPRINT << "halo_prev_size_bytes" << "=" << halo_prev_size_bytes << ENDL();
 
     uint32_t img_flat_h_idx = 0;
     uint32_t reader_pattern_l1_addr = get_write_ptr(reader_pattern_cb_index);
     volatile tt_l1_ptr std::uint32_t* reader_pattern = (volatile tt_l1_ptr uint32_t*)(reader_pattern_l1_addr);
     uint32_t reader_pattern_index = 0;
 
-    if (halo_read_enabled) {
+    if (halo_prev_read_enabled) {
         // Read # of row of tiles from previous core into local cb
         // noc_async_read_barrier
         // Push cb to compute for untilizing
-        cb_reserve_back(halo_input_cb_index, halo_num_tiles);
-        uint32_t halo_cb_write_addr = get_write_ptr(halo_input_cb_index);
-        uint32_t halo_addr = halo_start_addr + halo_addr_offset;
-        noc_async_read(get_noc_addr(halo_core_noc_x, halo_core_noc_y, halo_addr), halo_cb_write_addr, halo_size_bytes);
+        cb_reserve_back(halo_prev_input_cb_index, halo_prev_num_tiles);
+        uint32_t halo_prev_cb_write_addr = get_write_ptr(halo_prev_input_cb_index);
+        uint32_t halo_prev_addr = halo_prev_start_addr + halo_prev_addr_offset;
+        noc_async_read(get_noc_addr(halo_prev_core_noc_x, halo_prev_core_noc_y, halo_prev_addr), halo_prev_cb_write_addr, halo_prev_size_bytes);
         noc_async_read_barrier();
-        cb_push_back(halo_input_cb_index, halo_num_tiles);
-        img_flat_h_idx = halo_read_pattern_offset;
-        // generate reader pattern - halo region
+        cb_push_back(halo_prev_input_cb_index, halo_prev_num_tiles);
+    }
+
+    if (halo_next_read_enabled) {
+        // Read # of row of tiles from next core into local cb
+        // noc_async_read_barrier
+        // Push cb to compute for untilizing
+        cb_reserve_back(halo_next_input_cb_index, halo_next_num_tiles);
+        uint32_t halo_next_cb_write_addr = get_write_ptr(halo_next_input_cb_index);
+        uint32_t halo_next_addr = halo_next_start_addr + halo_next_addr_offset;
+        noc_async_read(get_noc_addr(halo_next_core_noc_x, halo_next_core_noc_y, halo_next_addr), halo_next_cb_write_addr, halo_next_size_bytes);
+        noc_async_read_barrier();
+        cb_push_back(halo_next_input_cb_index, halo_next_num_tiles);
+    }
+
+    if (halo_prev_read_enabled) {
+        img_flat_h_idx = halo_prev_read_pattern_offset;
+        // generate reader pattern - halo from prev core region
         reader_pattern_index = generate_reader_pattern_indices(image_height,
                                                                 image_width,
                                                                 stride_h,
@@ -196,20 +240,20 @@ void kernel_main() {
                                                                 stride_h_x_image_width,
                                                                 reader_pattern,
                                                                 reader_pattern_index,
-                                                                halo_top_partial_middle_aligned_row_width,
-                                                                halo_skip_top_partial_middle_right_aligned_row,
-                                                                halo_top_partial_right_aligned_row_width,
-                                                                halo_skip_top_partial_right_aligned_row,
-                                                                halo_num_rows_top_partial_image,
-                                                                halo_num_skip_rows_top_partial_image,
-                                                                halo_num_full_images,
-                                                                halo_num_rows_bottom_partial_image,
-                                                                halo_num_skip_rows_bottom_partial_image,
-                                                                halo_bottom_partial_left_aligned_row_width,
-                                                                halo_skip_bottom_partial_left_aligned_row);
+                                                                halo_prev_top_partial_middle_aligned_row_width,
+                                                                halo_prev_skip_top_partial_middle_right_aligned_row,
+                                                                halo_prev_top_partial_right_aligned_row_width,
+                                                                halo_prev_skip_top_partial_right_aligned_row,
+                                                                halo_prev_num_rows_top_partial_image,
+                                                                halo_prev_num_skip_rows_top_partial_image,
+                                                                halo_prev_num_full_images,
+                                                                halo_prev_num_rows_bottom_partial_image,
+                                                                halo_prev_num_skip_rows_bottom_partial_image,
+                                                                halo_prev_bottom_partial_left_aligned_row_width,
+                                                                halo_prev_skip_bottom_partial_left_aligned_row);
     }
     // halo and local data will be pushed to the same untilize cb
-    // img flat h idx is index within the concatenated halo and local data
+    // img flat h idx is index within the concatenated untilized halo and local data
     // compute reader pattern - local region
     img_flat_h_idx = local_read_pattern_offset;
     reader_pattern_index = generate_reader_pattern_indices(image_height,
@@ -231,6 +275,30 @@ void kernel_main() {
                                                             local_num_skip_rows_bottom_partial_image,
                                                             local_bottom_partial_left_aligned_row_width,
                                                             local_skip_bottom_partial_left_aligned_row);
+
+    if (halo_next_read_enabled) {
+        img_flat_h_idx = halo_next_read_pattern_offset;
+        // generate reader pattern - halo from prev core region
+        reader_pattern_index = generate_reader_pattern_indices(image_height,
+                                                                image_width,
+                                                                stride_h,
+                                                                stride_w,
+                                                                img_flat_h_idx,
+                                                                stride_h_x_image_width,
+                                                                reader_pattern,
+                                                                reader_pattern_index,
+                                                                halo_next_top_partial_middle_aligned_row_width,
+                                                                halo_next_skip_top_partial_middle_right_aligned_row,
+                                                                halo_next_top_partial_right_aligned_row_width,
+                                                                halo_next_skip_top_partial_right_aligned_row,
+                                                                halo_next_num_rows_top_partial_image,
+                                                                halo_next_num_skip_rows_top_partial_image,
+                                                                halo_next_num_full_images,
+                                                                halo_next_num_rows_bottom_partial_image,
+                                                                halo_next_num_skip_rows_bottom_partial_image,
+                                                                halo_next_bottom_partial_left_aligned_row_width,
+                                                                halo_next_skip_bottom_partial_left_aligned_row);
+    }
 
     // wait for untilized blocks from compute, drop rows based on reader_pattern and push to untilize_downsampled_cb_index
     reader_pattern_index = 0;
