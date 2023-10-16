@@ -10,10 +10,7 @@ import subprocess
 import click
 from glob import glob
 from loguru import logger
-from tt_metal.tools.profiler.profile_this import (
-    test_profiler_build,
-    profile_command,
-)
+from tt_metal.tools.profiler.profile_this import test_profiler_build, profile_command
 
 
 ENVS = dict(os.environ)
@@ -21,7 +18,7 @@ TT_METAL_HOME = ENVS["TT_METAL_HOME"]
 LOG_LOCATIONS_RECORD = "tt_metal/tools/profiler/logs/.locations.log"
 
 
-def get_log_locations ():
+def get_log_locations():
     logLocations = []
     with open(LOG_LOCATIONS_RECORD, "r") as recordFile:
         for line in recordFile.readlines():
@@ -67,11 +64,7 @@ def main(directory, result):
         if do_run:
             print(command)
 
-            subprocess.run(
-                ["rm -rf tt_metal/tools/profiler/logs/ops_device"],
-                shell=True,
-                check=True,
-            )
+            subprocess.run(["rm -rf tt_metal/tools/profiler/logs/ops_device"], shell=True, check=True)
             subprocess.run(["rm -rf tt_metal/tools/profiler/logs/ops"], shell=True, check=True)
 
             start = time.time()

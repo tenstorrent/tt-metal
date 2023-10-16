@@ -196,6 +196,7 @@ class test_full_buffer(default_setup):
         }
     }
 
+
 class test_noc(default_setup):
     timerAnalysis = {
         "NoC For Loop": {

@@ -26,8 +26,8 @@ import plot_setup
 OPS_LOGS_DIR = os.path.abspath("logs/ops")
 DEVICE_SIDE_LOG = "profile_log_device.csv"
 HOST_SIDE_LOG = "profile_log_host.csv"
-OUT_FOLDER = "output/ops"
-OUT_NAME = "profile_log_ops"
+OUT_FOLDER = "output"
+OUT_NAME = "ops_perf_results"
 
 OPS_CSV_HEADER = [
     "OP CODE",
@@ -100,7 +100,7 @@ def append_detail_host_time_data(opCandidatePath, call_count, timeDataDict):
                 timeDataDict[functionKey] = int(calls["stats"][stat])
 
 
-def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLogPath = None):
+def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLogPath=None):
     if not deviceLogPath:
         deviceLogPath = os.path.join(opCandidatePath, f"{call_count}", DEVICE_SIDE_LOG)
     if os.path.isfile(deviceLogPath):
@@ -162,10 +162,10 @@ def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLog
         cores.remove("DEVICE")
 
         freq = devicesData["deviceInfo"]["freq"]
-        deviceLevelStats = devicesData["devices"][deviceID]["cores"]["DEVICE"]['analysis']
+        deviceLevelStats = devicesData["devices"][deviceID]["cores"]["DEVICE"]["analysis"]
 
-        fw_delta_time_ns = deviceLevelStats['FW_START->FW_END']['stats']['Average']* 1000 / freq
-        kernel_delta_time_ns = deviceLevelStats['KERNEL_START->KERNEL_END']['stats']['Average']* 1000 / freq
+        fw_delta_time_ns = deviceLevelStats["FW_START->FW_END"]["stats"]["Average"] * 1000 / freq
+        kernel_delta_time_ns = deviceLevelStats["KERNEL_START->KERNEL_END"]["stats"]["Average"] * 1000 / freq
 
         br_kernel_delta_time_ns = 0
         nc_kernel_delta_time_ns = 0
@@ -173,16 +173,26 @@ def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLog
         t1_kernel_delta_time_ns = 0
         t2_kernel_delta_time_ns = 0
 
-        if 'BR_KERNEL_START->BR_KERNEL_END' in deviceLevelStats.keys():
-            br_kernel_delta_time_ns = deviceLevelStats['BR_KERNEL_START->BR_KERNEL_END']['stats']['Average']* 1000 / freq
-        if 'NC_KERNEL_START->NC_KERNEL_END' in deviceLevelStats.keys():
-            nc_kernel_delta_time_ns = deviceLevelStats['NC_KERNEL_START->NC_KERNEL_END']['stats']['Average']* 1000 / freq
-        if 'T0_KERNEL_START->T0_KERNEL_END' in deviceLevelStats.keys():
-            t0_kernel_delta_time_ns = deviceLevelStats['T0_KERNEL_START->T0_KERNEL_END']['stats']['Average']* 1000 / freq
-        if 'T1_KERNEL_START->T1_KERNEL_END' in deviceLevelStats.keys():
-            t1_kernel_delta_time_ns = deviceLevelStats['T1_KERNEL_START->T1_KERNEL_END']['stats']['Average']* 1000 / freq
-        if 'T2_KERNEL_START->T2_KERNEL_END' in deviceLevelStats.keys():
-            t2_kernel_delta_time_ns = deviceLevelStats['T2_KERNEL_START->T2_KERNEL_END']['stats']['Average']* 1000 / freq
+        if "BR_KERNEL_START->BR_KERNEL_END" in deviceLevelStats.keys():
+            br_kernel_delta_time_ns = (
+                deviceLevelStats["BR_KERNEL_START->BR_KERNEL_END"]["stats"]["Average"] * 1000 / freq
+            )
+        if "NC_KERNEL_START->NC_KERNEL_END" in deviceLevelStats.keys():
+            nc_kernel_delta_time_ns = (
+                deviceLevelStats["NC_KERNEL_START->NC_KERNEL_END"]["stats"]["Average"] * 1000 / freq
+            )
+        if "T0_KERNEL_START->T0_KERNEL_END" in deviceLevelStats.keys():
+            t0_kernel_delta_time_ns = (
+                deviceLevelStats["T0_KERNEL_START->T0_KERNEL_END"]["stats"]["Average"] * 1000 / freq
+            )
+        if "T1_KERNEL_START->T1_KERNEL_END" in deviceLevelStats.keys():
+            t1_kernel_delta_time_ns = (
+                deviceLevelStats["T1_KERNEL_START->T1_KERNEL_END"]["stats"]["Average"] * 1000 / freq
+            )
+        if "T2_KERNEL_START->T2_KERNEL_END" in deviceLevelStats.keys():
+            t2_kernel_delta_time_ns = (
+                deviceLevelStats["T2_KERNEL_START->T2_KERNEL_END"]["stats"]["Average"] * 1000 / freq
+            )
 
         timeDataDict["DEVICE FW START CYCLE"] = start_ts
         timeDataDict["DEVICE FW END CYCLE"] = end_ts
@@ -377,9 +387,7 @@ def run_dashbaord_webapp(ops, opsFolder, port=None):
                 ),
                 mode="markers",
                 marker_size=5,
-                hoverlabel=dict(
-                    bgcolor="white",
-                ),
+                hoverlabel=dict(bgcolor="white"),
                 marker_color="black",
                 hoverinfo="x",
                 showlegend=True,
@@ -387,25 +395,13 @@ def run_dashbaord_webapp(ops, opsFolder, port=None):
             )
         )
         fig.update_layout(
-            xaxis=dict(
-                range=[-1e7, maxDiff + 1e7],
-                rangeslider=dict(
-                    visible=True,
-                ),
-            ),
-            yaxis=dict(
-                visible=False,
-            ),
+            xaxis=dict(range=[-1e7, maxDiff + 1e7], rangeslider=dict(visible=True)), yaxis=dict(visible=False)
         )
 
     external_stylesheets = ["https://codepen.io/chriddyp/pen/bWLwgP.css"]
     app = Dash(__name__, external_stylesheets=external_stylesheets)
     app.layout = html.Div(
-        [
-            html.H5(f"OPs:", id="text"),
-            dcc.Graph(figure=fig, id="plot"),
-            dcc.Graph(figure=go.Figure(), id="plot-2"),
-        ]
+        [html.H5(f"OPs:", id="text"), dcc.Graph(figure=fig, id="plot"), dcc.Graph(figure=go.Figure(), id="plot-2")]
     )
 
     @app.callback(Output("plot-2", "figure"), [Input("plot", "hoverData")])
@@ -438,25 +434,36 @@ def run_dashbaord_webapp(ops, opsFolder, port=None):
 
 
 def print_ops_csv(ops, opsFolder, outputFolder, date, nameAppend):
+    logger.info(f"OPs' perf analysis is finised! Generating csv ...")
     outFolder = OUT_FOLDER
     if outputFolder:
         outFolder = outputFolder
 
+    name = OUT_NAME
     outFolder = os.path.abspath(outFolder)
-
-    os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
-
-    if date:
-        name = f"{datetime.now().strftime('%Y_%d_%m_%H_%M')}"
-    else:
-        name = OUT_NAME
 
     if nameAppend:
         name += f"_{nameAppend}"
+        outFolder = os.path.join(outFolder, nameAppend)
 
-    opsCSVPath = f"{outFolder}/{name}.csv"
+    testName = opsFolder.split("/")[-1]
+    outFolder = os.path.join(outFolder, testName)
 
-    os.system(f"cd {opsFolder} && tar -czf ../{name}.tgz . && mv ../{name}.tgz {outFolder}")
+    if date:
+        dateStr = f"{datetime.now().strftime('%Y_%d_%m_%H_%M_%S')}"
+        name += f"_{dateStr}"
+        outFolder = os.path.join(outFolder, dateStr)
+
+    os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
+
+    opsCSVPath = os.path.join(outFolder, f"{name}.csv")
+
+    if os.path.isdir(f"{opsFolder}_device"):
+        os.system(
+            f"mv {opsFolder} ops && mv {opsFolder}_device ops_device && tar -czf {name}.tgz ops ops_device && rm -rf ops ops_device && mv {name}.tgz {outFolder}"
+        )
+    else:
+        os.system(f"mv {opsFolder} ops && tar -czf {name}.tgz ops && rm -rf ops && mv {name}.tgz {outFolder}")
 
     with open(opsCSVPath, "w") as opsCSV:
         opsWriter = csv.writer(opsCSV, delimiter=",")
@@ -522,14 +529,11 @@ def print_ops_csv(ops, opsFolder, outputFolder, date, nameAppend):
                         opRow.append("0")
             opsWriter.writerow(opRow)
 
+    logger.info(f"Perf CSV: {opsCSVPath}")
+
 
 @click.command()
-@click.option(
-    "-i",
-    "--ops-folder",
-    type=click.Path(exists=True, dir_okay=True),
-    help="Ops profiler logs folder",
-)
+@click.option("-i", "--ops-folder", type=click.Path(exists=True, dir_okay=True), help="Ops profiler logs folder")
 @click.option("-o", "--output-folder", type=click.Path(), help="Output folder for artifacts")
 @click.option("-n", "--name-append", type=str, help="Name to be appended to default csv name")
 @click.option("-p", "--port", type=int, help="Dashboard webapp port")
