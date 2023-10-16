@@ -3,18 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import sys
 import torch
-from pathlib import Path
 from functools import partial
 from math import pi
 import copy
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
@@ -163,23 +155,23 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @pytest.mark.parametrize("fast_and_appx", [True, False])
+    @pytest.mark.parametrize("fast_and_approx", [True, False])
     def test_run_eltwise_gelu_op(
         self,
         input_shapes,
-        fast_and_appx,
+        fast_and_approx,
         device,
         function_level_defaults,
         input_mem_config,
         output_mem_config,
     ):
-        if is_wormhole_b0() and fast_and_appx:
+        if is_wormhole_b0() and fast_and_approx:
             pytest.skip("Gelu appx mode not working for WH b0")
         datagen_func = [
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args["fast_and_appx"] = fast_and_appx
+        test_args["fast_and_approx"] = fast_and_approx
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-gelu",
@@ -190,11 +182,11 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @pytest.mark.parametrize("fast_and_appx", [True, False])
+    @pytest.mark.parametrize("fast_and_approx", [True, False])
     def test_run_eltwise_rsqrt_op(
         self,
         input_shapes,
-        fast_and_appx,
+        fast_and_approx,
         device,
         function_level_defaults,
         input_mem_config,
@@ -204,7 +196,7 @@ class TestEltwiseUnary:
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=1, high=1e8), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args["fast_and_appx"] = fast_and_appx
+        test_args["fast_and_approx"] = fast_and_approx
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-rsqrt",
@@ -215,11 +207,11 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @pytest.mark.parametrize("fast_and_appx", [True, False])
+    @pytest.mark.parametrize("fast_and_approx", [True, False])
     def test_run_eltwise_i0_op(
         self,
         input_shapes,
-        fast_and_appx,
+        fast_and_approx,
         device,
         function_level_defaults,
         input_mem_config,
@@ -229,7 +221,7 @@ class TestEltwiseUnary:
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-10, high=10), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args["fast_and_appx"] = fast_and_appx
+        test_args["fast_and_approx"] = fast_and_approx
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
             f"eltwise-i0",
@@ -252,15 +244,27 @@ class TestEltwiseUnary:
             (
                 "exp",
                 {"low": -5e6, "high": -0.85e6},
-                partial(comparison_funcs.comp_allclose, atol=5e-6, rtol=0),
+                partial(comparison_funcs.comp_allclose, atol=3e-29, rtol=0),
+            ),
+            (
+                "exp",
+                {"low": -5e6, "high": -0.85e6},
+                partial(comparison_funcs.comp_allclose, atol=3e-29, rtol=0),
+            ),
+            (
+                "exp",
+                {"low": -70, "high": -66},
+                partial(comparison_funcs.comp_allclose, atol=3e-29, rtol=0),
             ),
         ),
     )
+    @pytest.mark.parametrize("fast_and_approx", [True, False])
     def test_run_eltwise_exp_ops(
         self,
         input_shapes,
         exp_type,
         input_range,
+        fast_and_approx,
         comparison_func,
         device,
         function_level_defaults,
@@ -273,12 +277,21 @@ class TestEltwiseUnary:
                 torch.float32,
             )
         ]
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args.update(
+            {
+                "input_mem_config": [input_mem_config],
+                "output_mem_config": output_mem_config,
+                "fast_and_approx": fast_and_approx,
+            }
+        )
         run_single_pytorch_test(
             f"eltwise-{exp_type}",
             input_shapes,
             datagen_func,
             comparison_func,
             device,
+            test_args,
         )
 
     @pytest.mark.parametrize(
@@ -799,12 +812,12 @@ class TestEltwiseUnary:
         )
 
     @pytest.mark.parametrize("fn_kind", ["erf", "erfc"])
-    @pytest.mark.parametrize("fast_and_appx", [True, False])
+    @pytest.mark.parametrize("fast_and_approx", [True, False])
     def test_run_eltwise_erf_ops(
         self,
         input_shapes,
         fn_kind,
-        fast_and_appx,
+        fast_and_approx,
         device,
         function_level_defaults,
         input_mem_config,
@@ -814,7 +827,7 @@ class TestEltwiseUnary:
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args["fast_and_appx"] = fast_and_appx
+        test_args["fast_and_approx"] = fast_and_approx
         test_args.update(
             {
                 "input_mem_config": [input_mem_config],

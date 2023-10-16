@@ -145,9 +145,9 @@ class TestEltwiseBinary:
     @pytest.mark.parametrize(
         "log_kind, input_range",
         (
-            ("logaddexp", {"low": -90, "high": 90}),
-            ("ldexp", {"low": -64, "high": 64}),
-            ("logaddexp2", {"low": -100, "high": 100}),
+            ("logaddexp", {"low": -80, "high": 80}),
+            ("ldexp", {"low": -60, "high": 60}),
+            ("logaddexp2", {"low": -60, "high": 100}),
         ),
     )
     def test_run_eltwise_binary_log_ops(

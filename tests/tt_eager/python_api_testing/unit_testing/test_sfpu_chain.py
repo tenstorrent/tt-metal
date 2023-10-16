@@ -2,11 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
 
 import torch
 
@@ -14,6 +9,7 @@ import tt_lib as ttl
 from models.utility_functions import comp_pcc
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
+
 
 @skip_for_wormhole_b0
 def test_eltwise_unary_chain(device):
@@ -38,7 +34,7 @@ def test_eltwise_unary_chain(device):
         xt,
         [
             ttl.tensor.FusibleActivation.RELU,
-            ttl.tensor.FusibleActivation.EXP,
+            [ttl.tensor.FusibleActivation.EXP, False],
             [ttl.tensor.FusibleActivation.POWER, 2],
         ],
     )
@@ -51,6 +47,7 @@ def test_eltwise_unary_chain(device):
     passing, out = comp_pcc(pt_ref, tt_got_back)
     logger.info(out)
     assert passing
+
 
 @skip_for_wormhole_b0
 def test_eltwise_binary_fused(device):

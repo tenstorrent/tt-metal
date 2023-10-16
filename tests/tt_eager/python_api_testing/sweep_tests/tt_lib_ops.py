@@ -122,12 +122,11 @@ def move(
 
     return tt2torch_tensor(t1)
 
-
 @setup_host_and_device
-def eltwise_erf(
+def eltwise_exp(
     x,
     *args,
-    fast_and_appx,
+    fast_and_approx,
     device,
     dtype,
     layout,
@@ -136,7 +135,24 @@ def eltwise_erf(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.erf(t0, fast_and_appx, output_mem_config=output_mem_config)
+    t1 = ttl.tensor.exp(t0, fast_and_approx, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t1)
+
+@setup_host_and_device
+def eltwise_erf(
+    x,
+    *args,
+    fast_and_approx,
+    device,
+    dtype,
+    layout,
+    input_mem_config,
+    output_mem_config,
+    **kwargs,
+):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.erf(t0, fast_and_approx, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -145,7 +161,7 @@ def eltwise_erf(
 def eltwise_erfc(
     x,
     *args,
-    fast_and_appx,
+    fast_and_approx,
     device,
     dtype,
     layout,
@@ -154,7 +170,7 @@ def eltwise_erfc(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.erfc(t0, fast_and_appx, output_mem_config=output_mem_config)
+    t1 = ttl.tensor.erfc(t0, fast_and_approx, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -291,7 +307,7 @@ def eltwise_elu(
 def eltwise_gelu(
     x,
     *args,
-    fast_and_appx,
+    fast_and_approx,
     device,
     dtype,
     layout,
@@ -300,7 +316,7 @@ def eltwise_gelu(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.gelu(t0, fast_and_appx, output_mem_config=output_mem_config)
+    t1 = ttl.tensor.gelu(t0, fast_and_approx, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -337,7 +353,7 @@ def eltwise_scale_mask_softmax_in_place(
 def eltwise_rsqrt(
     x,
     *args,
-    fast_and_appx,
+    fast_and_approx,
     device,
     dtype,
     layout,
@@ -346,7 +362,7 @@ def eltwise_rsqrt(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.rsqrt(t0, fast_and_appx, output_mem_config=output_mem_config)
+    t1 = ttl.tensor.rsqrt(t0, fast_and_approx, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -1770,7 +1786,6 @@ eltwise_deg2rad = make_unary_op(ttl.tensor.deg2rad)
 eltwise_sign = make_unary_op(ttl.tensor.sign)
 eltwise_signbit = make_unary_op(ttl.tensor.signbit)
 eltwise_abs = make_unary_op(ttl.tensor.abs)
-eltwise_exp = make_unary_op(ttl.tensor.exp)
 eltwise_exp2 = make_unary_op(ttl.tensor.exp2)
 eltwise_expm1 = make_unary_op(ttl.tensor.expm1)
 eltwise_neg = make_unary_op(ttl.tensor.neg)

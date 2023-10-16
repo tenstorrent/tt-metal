@@ -15,7 +15,7 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_fast_and_appx_args
+      args-gen: gen_fast_and_approx_args
       output-file: eltwise_rsqrt_sweep.csv
       args:
         data-layout: ["TILE"]
@@ -37,7 +37,7 @@ test-list:
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_fast_and_appx_args
+      args-gen: gen_fast_and_approx_args
       output-file: eltwise_rsqrt_sweep.csv
       args:
         data-layout: ["ROW_MAJOR"]
