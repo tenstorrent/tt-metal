@@ -56,26 +56,24 @@
 
 namespace ckernel {
 
-ALWI void rsqrt_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpu_rsqrt_init<APPROX>() ));
+ALWI void rsqrt_tile_init(bool fast_and_approx=true) {
+    if (fast_and_approx) {
+        MATH(( llk_math_eltwise_unary_sfpu_rsqrt_init<true>() ));
+    } else {
+        MATH(( llk_math_eltwise_unary_sfpu_rsqrt_init<false>() ));
+    }
 }
 
 /**
  *  Please refer to documentation for exp_tile.
  */
-ALWI void rsqrt_tile(uint32_t idst,bool fast_and_approx=true) {
+ALWI void rsqrt_tile(uint32_t idst, bool fast_and_approx=true) {
   if (fast_and_approx) {
     MATH(( llk_math_eltwise_unary_sfpu_rsqrt<true, SyncHalf>(idst) ));
   } else {
     MATH(( llk_math_eltwise_unary_sfpu_rsqrt<false, SyncHalf>(idst) ));
   }
 }
-
-//for these files include eltwise_uanry/erf_erfc.h
-//ALWI void erf_tile_init() {
-//ALWI void erf_tile(uint32_t idst,bool fast_and_approx=true) {
-//ALWI void erfc_tile_init() {
-//ALWI void erfc_tile(uint32_t idst,bool fast_and_approx=true) {
 
 ALWI void sigmoid_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_sigmoid_init<APPROX>() )); // TODO(AP): move out init

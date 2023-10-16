@@ -65,16 +65,16 @@ inline void calculate_exponential(int16_t exp_base_scale_factor = 0)
     {
         vFloat val = dst_reg[0];
 
-        if constexpr(SCALE_EN){
+        if constexpr(SCALE_EN) {
             val = val * s2vFloat16a(exp_base_scale_factor);
             dst_reg[0] = val;
         }
         if constexpr (APPROXIMATION_MODE)
         {
-            v_if (val>=89){
+            v_if (val >= 89) {
                 vFloat val_inf = std::numeric_limits<float>::infinity();
                 dst_reg[0] = val_inf;
-            } v_elseif(val<-42){
+            } v_elseif(val < -42) {
                 dst_reg[0] = 0.0f;
             } v_else {
                 // * by 1/ln2 and add convert to 7.3 FxP format
@@ -131,26 +131,24 @@ sfpi_inline vFloat calculate_exponential_body(vFloat in)
 
     if constexpr (APPROXIMATION_MODE)
     {
-        // * by 1/ln2 and add convert to 7.3 FxP format
-        vFloat val = in * vConst1p4424 + p_exp::C23_73;
+        v_if (in >= 89) {
+            vFloat val_inf = std::numeric_limits<float>::infinity();
+            out = val_inf;
+        } v_elseif(in < -42) {
+            out = 0.0f;
+        } v_else {
+            // * by 1/ln2 and add convert to 7.3 FxP format
+            vFloat val = in * vConst1p4424 + p_exp::C23_73;
 
-        // Remove Exponent of 7 and bias the Mantissa to 127.
-        // LREG2 already holds 2's complement value so we simply do REG2 + REG3
-        vInt val_short = p_exp::ADJ_EXP + reinterpret<vInt>(val);
+            // Remove Exponent of 7 and bias the Mantissa to 127.
+            // LREG2 already holds 2's complement value so we simply do REG2 + REG3
+            vInt val_short = p_exp::ADJ_EXP + reinterpret<vInt>(val);
 
-        // SHL to move integer bits to exponent
-        val_short <<= 10 - p_exp::FRAC_BITS;
-        out = reinterpret<vFloat>(val_short);
-
-        // Needed for fused kernels such as math_row_softmax_tables which call calculate_exponential()
-        // without using Relu in Packer to clamp -ve Infinity to 0.
-        if constexpr (ZERO_NEGATIVE)
-        {
-            v_if (val_short < 0) {
-                out = vConst0;
-            }
-            v_endif;
+            // SHL to move integer bits to exponent
+            val_short <<= 10 - p_exp::FRAC_BITS;
+            out = reinterpret<vFloat>(val_short);
         }
+        v_endif;
     }
     else
     {
@@ -180,30 +178,26 @@ sfpi_inline vFloat calculate_exponential_body_improved(vFloat in)
 
     if constexpr (APPROXIMATION_MODE)
     {
-
         vInt adj_exp;
         adj_exp = l_reg[LRegs::LReg2];
+        v_if (in >= 89) {
+            vFloat val_inf = std::numeric_limits<float>::infinity();
+            out = val_inf;
+        } v_elseif(in < -42.0f) {
+            out = 0.0f;
+        } v_else {
+            // * by 1/ln2 and add convert to 7.3 FxP format
+            vFloat val = in * vConst1p4424 + s2vFloat16b(p_exp::C23_73);
 
-        // * by 1/ln2 and add convert to 7.3 FxP format
-        vFloat val = in * vConst1p4424 + s2vFloat16b(p_exp::C23_73);
+            // Remove Exponent of 7 and bias the Mantissa to 127.
+            // LREG2 already holds 2's complement value so we simply do REG2 + REG3
+            vInt val_short =  adj_exp + reinterpret<vInt>(val);
 
-        // Remove Exponent of 7 and bias the Mantissa to 127.
-        // LREG2 already holds 2's complement value so we simply do REG2 + REG3
-        vInt val_short =  adj_exp + reinterpret<vInt>(val);
-
-        // SHL to move integer bits to exponent
-        val_short <<= 10 - p_exp::FRAC_BITS;
-        out = reinterpret<vFloat>(val_short);
-
-        // Needed for fused kernels such as math_row_softmax_tables which call calculate_exponential()
-        // without using Relu in Packer to clamp -ve Infinity to 0.
-        if constexpr (ZERO_NEGATIVE)
-        {
-            v_if (val_short < 0) {
-                out = vConst0;
-            }
-            v_endif;
+            // SHL to move integer bits to exponent
+            val_short <<= 10 - p_exp::FRAC_BITS;
+            out = reinterpret<vFloat>(val_short);
         }
+        v_endif;
         l_reg[LRegs::LReg2] = adj_exp;
     }
     else

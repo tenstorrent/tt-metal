@@ -19,7 +19,13 @@ namespace ckernel {
 
 /************** ERF *****************/
 
-ALWI void erf_tile_init() { MATH((llk_math_eltwise_unary_sfpu_erf_init<APPROX>())); }
+ALWI void erf_tile_init(bool fast_and_approx = true) {
+    if (fast_and_approx) {
+        MATH((llk_math_eltwise_unary_sfpu_erf_init<true>()));
+    } else {
+        MATH((llk_math_eltwise_unary_sfpu_erf_init<false>()));
+    }
+}
 
 
 /**
@@ -44,7 +50,13 @@ ALWI void erf_tile(uint32_t idst, bool fast_and_approx = true) {
 
 /************** ERFC *****************/
 
-ALWI void erfc_tile_init() { MATH((llk_math_eltwise_unary_sfpu_erfc_init<APPROX>())); }
+ALWI void erfc_tile_init(bool fast_and_approx = true) {
+    if (fast_and_approx) {
+        MATH((llk_math_eltwise_unary_sfpu_erfc_init<true>()));
+    } else {
+        MATH((llk_math_eltwise_unary_sfpu_erfc_init<false>()));
+    }
+}
 
 
 /**

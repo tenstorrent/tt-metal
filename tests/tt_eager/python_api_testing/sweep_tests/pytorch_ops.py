@@ -318,8 +318,8 @@ def sqrt(x, *args, **kwargs):
 
 
 def gelu(x, *args, **kwargs):
-    fast_and_appx = kwargs.pop("fast_and_appx")
-    approximate = "tanh" if fast_and_appx else "none"
+    fast_and_approx = kwargs.pop("fast_and_approx")
+    approximate = "tanh" if fast_and_approx else "none"
     return torch.nn.functional.gelu(x, approximate=approximate)
 
 
@@ -1000,4 +1000,3 @@ def eltwise_rsub(x, *args, **kwargs):
 def eltwise_rdiv(x, *args, **kwargs):
     dim = kwargs["factor"]
     return dim / x
-

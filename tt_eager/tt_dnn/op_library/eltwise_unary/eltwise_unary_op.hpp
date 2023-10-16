@@ -39,6 +39,7 @@ bool is_parametrized_type(T val) {
     case UnaryOpType::ERFC:
     case UnaryOpType::RSUB:
     case UnaryOpType::RDIV:
+    case UnaryOpType::EXP:
         return true;
     default:
         return false;
@@ -105,7 +106,6 @@ inline Tensor relu_without_autoformat(const Tensor& input_tensor, const MemoryCo
 }
 
 constexpr auto sqrt = make_eltwise_unary<UnaryOpType::SQRT>{};
-constexpr auto exp = make_eltwise_unary<UnaryOpType::EXP>{};
 constexpr auto recip = make_eltwise_unary<UnaryOpType::RECIP>{};
 constexpr auto relu = make_eltwise_unary<UnaryOpType::RELU>{};
 constexpr auto relu6 = make_eltwise_unary<UnaryOpType::RELU6>{};
@@ -147,6 +147,13 @@ constexpr auto leaky_relu = make_eltwise_unary_with_param<UnaryOpType::LEAKY_REL
 constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
 constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};
+
+inline Tensor exp(const Tensor &input_tensor, bool fast_and_approx=false, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+   return make_eltwise_unary_with_param<UnaryOpType::EXP>{}(input_tensor, fast_and_approx, output_mem_config);
+}
+inline Tensor exp(const Tensor &input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+   return exp(input_tensor, false, output_mem_config);
+}
 
 inline Tensor erf(const Tensor &input_tensor, bool fast_and_approx=true, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return make_eltwise_unary_with_param<UnaryOpType::ERF>{}(input_tensor, fast_and_approx, output_mem_config);

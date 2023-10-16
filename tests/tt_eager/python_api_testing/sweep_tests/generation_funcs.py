@@ -1208,7 +1208,7 @@ def gen_elu_args(
         yield input_info
 
 
-def gen_gelu_args(input_shapes, dtypes, layouts, mem_configs):
+def gen_fast_and_approx_args(input_shapes, dtypes, layouts, mem_configs):
     for input_info in gen_dtype_layout_device(
         input_shapes,
         dtypes,
@@ -1216,25 +1216,10 @@ def gen_gelu_args(input_shapes, dtypes, layouts, mem_configs):
         mem_configs,
     ):
         if input_info is not None:
-            input_info.update({"fast_and_appx": True})
+            input_info.update({"fast_and_approx": True})
             yield input_info
 
-            input_info.update({"fast_and_appx": False})
-            yield input_info
-
-
-def gen_fast_and_appx_args(input_shapes, dtypes, layouts, mem_configs):
-    for input_info in gen_dtype_layout_device(
-        input_shapes,
-        dtypes,
-        layouts,
-        mem_configs,
-    ):
-        if input_info is not None:
-            input_info.update({"fast_and_appx": True})
-            yield input_info
-
-            input_info.update({"fast_and_appx": False})
+            input_info.update({"fast_and_approx": False})
             yield input_info
 
 
