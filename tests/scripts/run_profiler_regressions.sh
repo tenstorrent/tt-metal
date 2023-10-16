@@ -17,12 +17,18 @@ run_profiling_test(){
 
         rm -rf $TT_METAL_HOME/tt_metal/tools/profiler/logs/
         rm -rf $TT_METAL_HOME/tt_metal/tools/profiler/output/
+        rm -rf $TT_METAL_HOME/.profiler
+
         $TT_METAL_HOME/tt_metal/tools/profiler/profile_this.py -c "pytest -svvv $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_composite.py::test_run_eltwise_composite_test[lerp_binary-input_shapes0]"
 
-        ls $TT_METAL_HOME/tt_metal/tools/profiler/output/ops/default/profile_log_ops.csv
+        runDate=$(ls $TT_METAL_HOME/.profiler/ops/)
+
+        ls $TT_METAL_HOME/.profiler/ops/$runDate/ops_perf_results_$runDate.csv
+        ls $TT_METAL_HOME/.profiler/ops/$runDate/ops_perf_results_$runDate.tgz
 
         rm -rf $TT_METAL_HOME/tt_metal/tools/profiler/logs/
         rm -rf $TT_METAL_HOME/tt_metal/tools/profiler/output/
+        rm -rf $TT_METAL_HOME/.profiler
 }
 
 run_post_proc_test(){

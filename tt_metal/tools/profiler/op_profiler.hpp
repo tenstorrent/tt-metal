@@ -356,10 +356,7 @@ namespace op_profiler {
 
                     if (std::filesystem::is_directory(profileFolder))
                     {
-                        auto tmpFolder = profileFolder;
-                        profileFolder = "";
-                        TT_ASSERT (false,
-                                fmt::format("Folder {} exists. Either rename or remove it", tmpFolder));
+                        std::filesystem::remove_all(profileFolder);
                     }
 #endif
                 }
