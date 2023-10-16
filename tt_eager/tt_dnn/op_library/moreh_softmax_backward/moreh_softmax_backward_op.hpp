@@ -20,7 +20,8 @@ enum class MorehSoftmaxBackwardOpParallelizationStrategy {
     SMALL_W = 0,
     SMALL_H = 1,
     LARGE_W = 2,
-    LARGE_H = 3
+    LARGE_H = 3,
+    LARGE_C = 4
 };
 
 bool is_moreh_softmax_backward_w_small_available(const Tensor &tensor);
@@ -30,6 +31,7 @@ operation::ProgramWithCallbacks moreh_softmax_backward_w_small(const Tensor &out
 operation::ProgramWithCallbacks moreh_softmax_backward_w_large(const Tensor &output, const Tensor &output_grad, Tensor& input_grad, const CoreRange core_range);
 operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &output, const Tensor &output_grad, Tensor& input_grad, const CoreRange core_range);
 operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &output, const Tensor &output_grad, Tensor& input_grad, const CoreRange core_range);
+operation::ProgramWithCallbacks moreh_softmax_backward_c_large(const Tensor &output, const Tensor &output_grad, Tensor& input_grad, uint32_t dim, const CoreRange core_range);
 
 struct MorehSoftmaxBackward {
     const uint32_t dim;
