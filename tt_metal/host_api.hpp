@@ -352,23 +352,35 @@ void DumpDeviceProfileResults(Device *device, const Program &program);
 
 // Proposed new APIs and changes to existing APIs -----
 
-Event CreateEvent (  ..  , .. )
+Event CreateEvent ();
+
+template <typename T>
+void WriteToBuffer(const Buffer &buffer, const std::vector<T> &host_buffer);
+
+template <typename T>
+void WriteToBuffer(const Buffer &buffer, const T & buf, size_t buf_sz);
+
+template <typename T>
+void ReadFromBuffer(const Buffer &buffer, std::vector<T> &host_buffer);
+
+template <typename T>
+void ReadFromBuffer(const Buffer &buffer, T & buf, size_t buf_sz);
+
+void Wait( const Event & event);
 void WaitForEvents(const std::vector< std::reference_wrapper<const Event> > & events);
 
-Event EnqueueMarkerWithWaitList(CommandQueue & command_queue,
-                                 const std::vector< std::reference_wrapper<const Event> > & events);
+void EnqueueMarkerWithWaitList(CommandQueue & command_queue,
+                                 const std::vector< std::reference_wrapper<const Event> > & events = {},
+                                 std::optional< std::reference_wrapper<Event> > event = std::nullopt );
 
 
-Event EnqueueProgramAsync(CommandQueue& cq, Program& program);
+void EnqueueProgram(CommandQueue& cq, Program& program, Event & event, const std::vector< std::reference_wrapper<const Event> > & events = {}, std::optional< std::reference_wrapper<Event> > = std::nullopt);
 
-void EnqueueProgram(CommandQueue& cq, Program& program);
+template <typename T>
+void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, const T& buf, size_t buf_size, const std::vector< std::reference_wrapper<const Event> > & events = {}, std::optional< std::reference_wrapper<Event> > = std::nullopt );
 
-Event EnqueueWriteBufferAsync(CommandQueue& cq, Buffer& buffer, vector<u32>& src);
-
-void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src);
-
-Event EnqueueReadBufferAsync(CommandQueue& cq, Buffer& buffer, vector<u32>& dst);
-void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& dst);
+template <typename T>
+void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, T& buf, size_t buf_size, const std::vector< std::reference_wrapper<const Event> > & events = {}, std::optional< std::reference_wrapper<Event> > = std::nullopt );
 
 }  // namespace tt_metal
 
