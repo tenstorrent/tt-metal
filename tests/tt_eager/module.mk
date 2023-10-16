@@ -30,7 +30,7 @@ TT_EAGER_TESTS += \
 TT_EAGER_TESTS_SRCS = $(addprefix tests/tt_eager/, $(addsuffix .cpp, $(TT_EAGER_TESTS:tests/%=%)))
 
 TT_EAGER_TESTS_INCLUDES = $(TEST_INCLUDES) $(TT_EAGER_INCLUDES)
-TT_EAGER_TESTS_LDFLAGS = -ltensor -ltt_dnn -ldtx $(TT_METAL_TESTS_LDFLAGS)
+TT_EAGER_TESTS_LDFLAGS = $(TT_METAL_TESTS_LDFLAGS) $(TT_LIB_LDFLAGS)
 
 TT_EAGER_TESTS_OBJS = $(addprefix $(OBJDIR)/, $(TT_EAGER_TESTS_SRCS:.cpp=.o))
 TT_EAGER_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(TT_EAGER_TESTS_SRCS:.cpp=.d))
@@ -43,7 +43,7 @@ tests/tt_eager/%: $(TESTDIR)/tt_eager/%;
 .PRECIOUS: $(TESTDIR)/tt_eager/%
 $(TESTDIR)/tt_eager/%: $(OBJDIR)/tt_eager/tests/%.o $(TT_DNN_LIB)
 	@mkdir -p $(@D)
-	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_EAGER_TESTS_INCLUDES) -o $@ $^ $(LDFLAGS) $(TT_EAGER_TESTS_LDFLAGS)
+	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_EAGER_TESTS_INCLUDES) -o $@ $^ $(TT_EAGER_TESTS_LDFLAGS)
 
 .PRECIOUS: $(OBJDIR)/tt_eager/tests/%.o
 $(OBJDIR)/tt_eager/tests/%.o: tests/tt_eager/%.cpp
