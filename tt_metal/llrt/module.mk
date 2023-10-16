@@ -3,7 +3,6 @@
 LLRT_LIB = $(LIBDIR)/libllrt.a
 LLRT_DEFINES =
 LLRT_INCLUDES = $(COMMON_INCLUDES) -I$(TT_METAL_HOME)/tt_metal/llrt
-LLRT_LDFLAGS = -L$(TT_METAL_HOME) -ltt_gdb -ldevice -lcommon
 LLRT_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
 LLRT_SRCS_RELATIVE = \

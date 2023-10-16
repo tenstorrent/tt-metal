@@ -1,6 +1,5 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 TT_METAL_DETAIL_LIB = $(LIBDIR)/libtt_metal_detail.a
-TT_METAL_DETAIL_LDFLAGS = -L$(TT_METAL_HOME) -lcommon -lllrt
 TT_METAL_DETAIL_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
 TT_METAL_DETAIL_SRCS = \

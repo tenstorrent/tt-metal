@@ -26,7 +26,6 @@ endif
 COMMON_LIB = $(LIBDIR)/libcommon.a
 COMMON_DEFINES =
 COMMON_INCLUDES += -I$(TT_METAL_HOME)/tt_metal/common/.
-COMMON_LDFLAGS = -lyaml-cpp -ldevice
 COMMON_CFLAGS = $(CFLAGS) -Werror
 
 COMMON_SRCS += \
@@ -46,4 +45,4 @@ $(COMMON_LIB): umd_device $(TRACY_LIB) $(COMMON_OBJS)
 
 $(OBJDIR)/tt_metal/common/%.o: tt_metal/common/%.cpp
 	@mkdir -p $(@D)
-	$(CXX) $(COMMON_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(COMMON_INCLUDES) $(COMMON_DEFINES) -c -o $@ $(COMMON_LDFLAGS) $<
+	$(CXX) $(COMMON_CFLAGS) $(CXXFLAGS) $(STATIC_LIB_FLAGS) $(COMMON_INCLUDES) $(COMMON_DEFINES) -c -o $@ $<
