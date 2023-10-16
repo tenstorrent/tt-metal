@@ -26,6 +26,3 @@ constexpr static std::uint32_t NOTIFY_HOST_KERNEL_COMPLETE_VALUE = 512;
 // DRAM_buffer_addr % 32 == L1_buffer_addr % 32, or
 // DRAM_buffer_addr % 32 == L1_buffer_addr % 32 == 0
 constexpr static std::uint32_t ADDRESS_ALIGNMENT = 32;
-
-constexpr static std::uint32_t BARRIER_SET = 42;
-constexpr static std::uint32_t BARRIER_RESET = 1;

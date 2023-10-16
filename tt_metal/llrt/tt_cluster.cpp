@@ -11,15 +11,12 @@
 #include <string>
 
 #include "device_data.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/debug_print_common.h"
 #include "rtoptions.hpp"
 #include "third_party/umd/device/tt_silicon_driver_common.hpp"
 #include "tools/profiler/profiler.hpp"
 #include "tt_metal/third_party/umd/device/util.hpp"
 #include "watcher.hpp"
-// XXXX TODO(PGK): fix include paths so device can export interfaces
-#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
 
 using std::cout;
 using std::endl;
@@ -171,7 +168,8 @@ void Cluster::open_device(
     } else if (this->target_type_ == TargetDevice::Versim) {
         this->device_ = std::make_unique<tt_VersimDevice>(sdesc_path, ndesc_path);
     }
-    this->device_->set_device_l1_address_params(l1_fw_params);
+    this->device_->set_device_dram_address_params(dram_address_params);
+    this->device_->set_device_l1_address_params(l1_address_params);
 
     this->sdesc_per_chip_ = get_metal_desc_from_tt_desc(
         this->device_->get_virtual_soc_descriptors(), this->device_->get_harvesting_masks_for_soc_descriptors());
@@ -526,90 +524,25 @@ void Cluster::verify_sw_fw_versions(
     }
 }
 
-// This barrier mimics a DRAM flush since there is no flush available for PCIe device
-// It is used to ensure all previous writes to DRAM have been posted by writing to a specific address in DRAM and then
-// polling until the written value is successfully readback
-void Cluster::set_dram_barrier(chip_id_t chip_id, uint32_t barrier_value) const {
-    tt_driver_atomics::sfence();  // Flush any existing writes to PCIe
-
-    // Write a value to reserved address in DRAM that is used for host-to-device synchronization
-    std::vector<uint32_t> barrier_vec = {barrier_value};
-    for (int channel = 0; channel < this->get_soc_desc(chip_id).get_num_dram_channels(); channel++) {
-        this->write_dram_vec(barrier_vec, tt_target_dram{chip_id, channel, 0}, DRAM_BARRIER_BASE);
-    }
-
-    // sfence is sufficient to flush WC buffers, ensures the reads from barrier are not just hitting the cache
-    tt_driver_atomics::sfence();
-
-    // Loop until value written is readback from each DRAM bank
-    bool barrier_val_propagated = false;
-    while (not barrier_val_propagated) {
-        barrier_val_propagated = true;
-        for (int channel = 0; channel < this->get_soc_desc(chip_id).get_num_dram_channels(); channel++) {
-            vector<std::uint32_t> barrier_val;
-            this->read_dram_vec(barrier_val, tt_target_dram{chip_id, channel, 0}, DRAM_BARRIER_BASE, sizeof(uint32_t));
-            barrier_val_propagated &= (barrier_val[0] == barrier_value);
-        }
-    }
-}
-
-// Set DRAM barrier address to a known value
-void Cluster::initialize_dram_barrier(chip_id_t chip_id) const { this->set_dram_barrier(chip_id, BARRIER_RESET); }
-
 // DRAM barrier is used to implement host-to-device synchronization and should be used when all previous writes to DRAM
 // need to be flushed This is needed because writes to device are not blocking unless strict TLB ordering is used
 // (default ordering is posted) This barrier is intended to prevent races caused by out of order writes, specifically to
 // ensure metadata and data to compute on are committed before launching kernels
 void Cluster::dram_barrier(chip_id_t chip_id) const {
-    this->set_dram_barrier(chip_id, BARRIER_SET);
-    this->set_dram_barrier(chip_id, BARRIER_RESET);
-}
-
-// This barrier mimics a L1 flush since there is no flush available for PCIe device
-// It is used to ensure all previous writes to L1 have been posted by writing to a specific address in L1 and then
-// polling until the written value is successfully readback
-void Cluster::set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value) const {
-    tt_driver_atomics::sfence();  // Flush any existing writes to PCIe
-    const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
-
-    // Write a value to mailbox in L1 that is exclusively used for host-to-device synchronization
-    std::vector<CoreCoord> cores_written;
-    std::vector<uint32_t> barrier_vec = {barrier_value};
-    for (const CoreCoord &physical_worker_core : soc_desc.physical_workers) {
-        this->write_dram_vec(
-            barrier_vec, tt_cxy_pair(chip_id, physical_worker_core), GET_MAILBOX_ADDRESS_HOST(l1_barrier));
+    std::unordered_set<uint32_t> dram_channels;
+    for (uint32_t channel = 0; channel < this->get_soc_desc(chip_id).get_num_dram_channels(); channel++) {
+        dram_channels.insert(channel);
     }
-
-    // sfence is sufficient to flush WC buffers, ensures the reads from barrier are not just hitting the cache
-    tt_driver_atomics::sfence();
-
-    // Loop until value written to L1 mailbox is readback from each L1
-    bool barrier_value_propagated = false;
-    while (not barrier_value_propagated) {
-        barrier_value_propagated = true;
-        for (const CoreCoord &physical_worker_core : soc_desc.physical_workers) {
-            vector<std::uint32_t> barrier_val;
-            this->read_dram_vec(
-                barrier_val,
-                tt_cxy_pair(chip_id, physical_worker_core),
-                GET_MAILBOX_ADDRESS_HOST(l1_barrier),
-                sizeof(uint32_t));
-            barrier_value_propagated &= (barrier_val[0] == barrier_value);
-        }
-    }
+    this->device_->dram_membar(chip_id, "LARGE_WRITE_TLB", dram_channels);
 }
-
-// Set L1 barrier mailbox to a known value
-void Cluster::initialize_l1_barrier(chip_id_t chip_id) const { this->set_l1_barrier(chip_id, BARRIER_RESET); }
 
 // L1 barrier is used to implement host-to-device synchronization and should be used when all previous writes to L1 need
 // to be flushed This is needed because writes to device are not blocking unless strict TLB ordering is used (default
 // ordering is posted) This barrier is intended to prevent races caused by out of order writes, specifically to ensure
 // binaries, metadata, and data to compute on are committed before launching kernels
 void Cluster::l1_barrier(chip_id_t chip_id) const {
-    this->set_l1_barrier(chip_id, BARRIER_SET);
-    // Resets L1 mailbox to a known value
-    this->set_l1_barrier(chip_id, BARRIER_RESET);
+    // Sets and resets L1 barrier of all tensix cores and ethernet cores
+    this->device_->l1_membar(chip_id, "LARGE_WRITE_TLB");
 }
 
 }  // namespace tt

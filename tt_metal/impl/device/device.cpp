@@ -74,8 +74,6 @@ void Device::initialize_cluster() {
     log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
 #endif
     tt::Cluster::instance().assert_risc_reset(this->id_);
-    tt::Cluster::instance().initialize_dram_barrier(this->id_);
-    tt::Cluster::instance().initialize_l1_barrier(this->id_);
 }
 
 void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {

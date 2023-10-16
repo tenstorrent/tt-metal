@@ -13,6 +13,7 @@
 #include "common/test_common.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "host_mem_address_map.h"
+#include "hostdevcommon/common_runtime_address_map.h"
 #include "third_party/umd/device/device_api.h"
 #include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
@@ -24,6 +25,8 @@
 #include "dev_mem_map.h"
 #include "noc/noc_parameters.h"
 #include "tt_metal/third_party/umd/src/firmware/riscv/wormhole/eth_interface.h"
+// XXXX TODO(PGK): fix include paths so device can export interfaces
+#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
@@ -86,11 +89,6 @@ class Cluster {
     // (using tt_start_debug_print_server)
     void reset_debug_print_server_buffers() const;
 
-    // Writes BARRIER_RESET to all DRAM banks
-    void initialize_dram_barrier(chip_id_t chip_id) const;
-    // Writes BARRIER_RESET to all L1 banks
-    void initialize_l1_barrier(chip_id_t chip_id) const;
-
     void dram_barrier(chip_id_t chip_id) const;
     void l1_barrier(chip_id_t chip_id) const;
 
@@ -105,8 +103,6 @@ class Cluster {
 
     tt_cxy_pair convert_physical_cxy_to_virtual(const tt_cxy_pair &physical_cxy) const;
     void configure_static_tlbs(const std::uint32_t &chip);
-    void set_dram_barrier(chip_id_t chip_id, uint32_t barrier_value) const;
-    void set_l1_barrier(chip_id_t chip_id, uint32_t barrier_value) const;
 
     ARCH arch_;
     TargetDevice target_type_;
@@ -120,13 +116,20 @@ class Cluster {
 
     std::set<chip_id_t> target_device_ids_;
 
-    tt_device_l1_address_params l1_fw_params = {
+    tt_device_dram_address_params dram_address_params = {
+        DRAM_BARRIER_BASE
+    };
+
+    tt_device_l1_address_params l1_address_params = {
         (uint32_t)MEM_NCRISC_INIT_IRAM_L1_BASE,
         (uint32_t)MEM_BRISC_FIRMWARE_BASE,
         (uint32_t)MEM_TRISC0_SIZE,
         (uint32_t)MEM_TRISC1_SIZE,
         (uint32_t)MEM_TRISC2_SIZE,
-        (uint32_t)MEM_TRISC0_BASE};
+        (uint32_t)MEM_TRISC0_BASE,
+        (uint32_t)GET_MAILBOX_ADDRESS_HOST(l1_barrier),
+        (uint32_t)GET_MAILBOX_ADDRESS_HOST(l1_barrier)   // ethernet and tensix cores share same barrier address
+    };
 
     tt_driver_host_address_params host_address_params = {
         host_mem::address_map::ETH_ROUTING_BLOCK_SIZE, host_mem::address_map::ETH_ROUTING_BUFFERS_START};
