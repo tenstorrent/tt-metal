@@ -29,9 +29,9 @@ def run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, dat
     device = ttl.device.CreateDevice(0)
 
     try:
-        t0 = setup_tt_tensor(x, device, dlayout[0], ttl.tensor.MemoryConfig(True, buffer_type[0]), dtype[0])
-        t1 = setup_tt_tensor(y, device, dlayout[1], ttl.tensor.MemoryConfig(True, buffer_type[1]), dtype[1])
-        t2 = setup_tt_tensor(z, device, dlayout[2], ttl.tensor.MemoryConfig(True, buffer_type[2]), dtype[2])
+        t0 = setup_tt_tensor(x, device, dlayout[0], ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, buffer_type[0]), dtype[0])
+        t1 = setup_tt_tensor(y, device, dlayout[1], ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, buffer_type[1]), dtype[1])
+        t2 = setup_tt_tensor(z, device, dlayout[2], ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, buffer_type[2]), dtype[2])
         t3 = ttl.tensor.addcdiv(t0, t1, t2, scalar, output_mem_config)
 
         y = tt2torch_tensor(t3)
@@ -50,17 +50,17 @@ test_sweep_args=[
      [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
      [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
      [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.L1, ttl.tensor.BufferType.DRAM],
-     ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1), 10406825, -42.25),
+     ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), 10406825, -42.25),
     ((3, 10, 73, 388),
      [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
      [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
      [ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.L1],
-     ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1), 8405597, -61.75),
+     ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), 8405597, -61.75),
     ((2, 24, 39, 462),
      [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
      [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
      [ttl.tensor.BufferType.L1, ttl.tensor.BufferType.DRAM, ttl.tensor.BufferType.L1],
-     ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1), 10406825, -42.25),
+     ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), 10406825, -42.25),
 ]
 
 @skip_for_wormhole_b0

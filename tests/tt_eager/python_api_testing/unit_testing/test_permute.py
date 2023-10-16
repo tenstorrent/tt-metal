@@ -32,7 +32,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import permute as 
 
 
 all_permutations = list(permutations([0, 1, 2, 3]))
-in_mememory_configs = [ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.L1)]
+in_mememory_configs = [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)]
 all_layouts = [ttl.tensor.Layout.TILE, ttl.tensor.Layout.ROW_MAJOR]
 
 def run_permute_tests(
@@ -77,7 +77,7 @@ def run_permute_tests(
 
 
 test_sweep_args=[
-    ((1, 10, 192, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.MemoryConfig(True, ttl.tensor.BufferType.DRAM)),
+    ((1, 10, 192, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
 ]
 
 @skip_for_wormhole_b0
