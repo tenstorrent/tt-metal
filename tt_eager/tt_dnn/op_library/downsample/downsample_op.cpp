@@ -27,7 +27,26 @@ void Downsample::validate(const std::vector<Tensor> &input_tensors) const {
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Can only downsample tile major data");
 
     TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
-    TT_ASSERT(input_tensor_a.memory_config().is_sharded() && this->output_mem_config.is_sharded());
+    TT_ASSERT(input_tensor_a.memory_config().is_sharded());
+    TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+}
+
+std::pair<uint32_t, uint32_t> get_num_cores_height_width_sliced(CoreRangeSet all_cores, TensorMemoryLayout memory_layout, ShardOrientation shard_orientation) {
+    TT_ASSERT(memory_layout ==  TensorMemoryLayout::HEIGHT_SHARDED || memory_layout ==  TensorMemoryLayout::BLOCK_SHARDED);
+    if (memory_layout ==  TensorMemoryLayout::HEIGHT_SHARDED) {
+        TT_ASSERT(shard_orientation == ShardOrientation::ROW_MAJOR);
+    } else {
+        TT_ASSERT(shard_orientation == ShardOrientation::COL_MAJOR);
+        TT_ASSERT(all_cores.ranges().size() == 1);
+    }
+    uint32_t num_cores = 0;
+    for (const auto& core_range : all_cores.ranges()) {
+        num_cores += core_range.size();
+    }
+    auto first_core_range = *all_cores.ranges().begin();
+    uint32_t num_cores_height_sliced = memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ? num_cores : first_core_range.end.x+1;
+    uint32_t num_cores_width_sliced = memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ? 1 : first_core_range.end.y+1; // width is not sliced when height sharded
+    return {num_cores_height_sliced, num_cores_width_sliced};
 }
 
 std::vector<Shape> Downsample::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -35,21 +54,27 @@ std::vector<Shape> Downsample::compute_output_shapes(const std::vector<Tensor> &
     TT_ASSERT(input_tensor_a.shape()[0] == 1 && input_tensor_a.shape()[1] == 1);
     uint32_t input_height = input_tensor_a.shape()[2];
     auto [input_height_size_z, input_height_size_y, input_height_size_x, height_y_stride, height_x_stride] = this->downsample_params;
-    TT_ASSERT(input_height == input_height_size_z * input_height_size_y * input_height_size_x);
-    uint32_t output_height = (input_height_size_z * ceil(input_height_size_y / height_y_stride) * ceil(input_height_size_x / height_x_stride));
+    TT_ASSERT(input_height >= input_height_size_z * input_height_size_y * input_height_size_x);
+    auto [num_cores_height_sliced, not_used] = get_num_cores_height_width_sliced(input_tensor_a.shard_spec().value().shard_grid,
+                                            input_tensor_a.memory_config().memory_layout,
+                                            input_tensor_a.shard_spec().value().shard_orientation);
+    uint32_t output_height = round_up((input_height_size_z * ceil(input_height_size_y / height_y_stride) * ceil(input_height_size_x / height_x_stride)), num_cores_height_sliced * TILE_HEIGHT);
     uint32_t output_width = input_tensor_a.shape()[3];
     return {Shape({1, 1, output_height, output_width})};
 }
 
 std::vector<Tensor> Downsample::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto input_shard_spec = input_tensor.shard_spec().value();
-    auto input_shard_height = input_shard_spec.shard_shape[0];
-    TT_ASSERT(input_shard_height % (this->downsample_params[3] * this->downsample_params[4]) == 0);
-    uint32_t output_shard_height = input_shard_height / (this->downsample_params[3] * this->downsample_params[4]);
-    auto output_shard_width = input_shard_spec.shard_shape[1];
-    auto output_shard_grid = input_shard_spec.shard_grid;
-    return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.dtype(), Layout::TILE, input_tensor.device(), this->output_mem_config, ShardSpec{output_shard_grid, std::array<uint32_t, 2>{{output_shard_height, output_shard_width}}})};
+    auto output_shape = this->compute_output_shapes(input_tensors).at(0);
+    auto [num_cores_height_sliced, num_cores_width_sliced] = get_num_cores_height_width_sliced(input_tensor.shard_spec().value().shard_grid,
+                                            input_tensor.memory_config().memory_layout,
+                                            input_tensor.shard_spec().value().shard_orientation);
+    cout << "output_shape[2]=" << output_shape[2] << " output_shape[3]=" << output_shape[3] << endl;
+    cout << "num_cores_height_sliced=" << num_cores_height_sliced << "num_cores_width_sliced=" << num_cores_width_sliced << endl;
+    TT_ASSERT(output_shape[2] % num_cores_height_sliced == 0 && output_shape[3] % num_cores_width_sliced == 0); // for height sharding, num_cores_width_siced = 1
+    uint32_t output_shard_height = output_shape[2] / num_cores_height_sliced;
+    uint32_t output_shard_width = output_shape[3] / num_cores_width_sliced;
+    return {create_sharded_device_tensor(output_shape, input_tensor.dtype(), Layout::TILE, input_tensor.device(), input_tensor.memory_config(), ShardSpec{input_tensor.shard_spec().value().shard_grid, std::array<uint32_t, 2>{{output_shard_height, output_shard_width}}})};
 }
 
 operation::ProgramWithCallbacks Downsample::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -60,13 +85,12 @@ operation::ProgramWithCallbacks Downsample::create_program(const std::vector<Ten
 
 tt::stl::reflection::Attributes Downsample::attributes() const {
     return {
-        {"output_mem_config", this->output_mem_config},
         {"downsample_params", this->downsample_params}
     };
 }
 
-Tensor downsample(const Tensor &input_tensor_a, std::array<uint32_t, 5> downsample_params, const MemoryConfig& mem_config) {
-    return operation::run_without_autoformat(Downsample{mem_config, downsample_params}, {input_tensor_a}).at(0);
+Tensor downsample(const Tensor &input_tensor_a, std::array<uint32_t, 5> downsample_params) {
+    return operation::run_without_autoformat(Downsample{downsample_params}, {input_tensor_a}).at(0);
 }
 
 struct DownsampleReadPatternParams {
@@ -362,18 +386,30 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Sanity check of output size
     TT_ASSERT(output.volume() % TILE_HW == 0);
-    TT_ASSERT(ceil(a.volume() / (height_y_stride * height_x_stride)) == output.volume());
+    uint32_t unpadded_input_volume = input_height_size_z * input_height_size_y * input_height_size_x;
+    TT_ASSERT(a.volume() >= unpadded_input_volume);
+    uint32_t unpadded_output_volume = ceil((double) unpadded_input_volume / (double) (height_y_stride * height_x_stride));
+    TT_ASSERT(output.volume() >= unpadded_output_volume);
 
 
     uint32_t ncores_x_full_grid = device->compute_with_storage_grid_size().x;
-    uint32_t ncores_y_full_grid = device->compute_with_storage_grid_size().y;
+    auto [num_cores_height_sliced, num_cores_width_sliced] = get_num_cores_height_width_sliced(a.shard_spec().value().shard_grid,
+                                        a.memory_config().memory_layout,
+                                        a.shard_spec().value().shard_orientation);
+    uint32_t num_cores = num_cores_height_sliced * num_cores_width_sliced;
     auto all_cores = a.shard_spec().value().shard_grid;
+    auto memory_layout = a.memory_config().memory_layout;
     TT_ASSERT(all_cores == output.shard_spec().value().shard_grid);
-    uint32_t num_cores = 0;
-    for (const auto& core_range : all_cores.ranges()) {
-        num_cores += core_range.size();
+    TT_ASSERT(memory_layout == output.memory_config().memory_layout);
+    TT_ASSERT(memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+    if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        TT_ASSERT(all_cores.ranges().size() == 1);
+    } else {
+        TT_ASSERT(num_cores_width_sliced == 1);
     }
-    uint32_t ncores = num_cores;
+    uint32_t num_cores_x = memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ? ncores_x_full_grid : num_cores_height_sliced;
+    cout << "num_cores_x=" << num_cores_x << endl;
+
     auto core_range = all_cores;
 
     uint32_t input_height = a.shape()[2]; // input height == flattened face of input image, multiple images are stacked in H dim
@@ -383,23 +419,23 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     TT_ASSERT(input_width == output_width);
 
     uint32_t input_shard_height = a.shard_spec().value().shard_shape[0];
-    TT_ASSERT(input_shard_height * num_cores == input_height);
+    TT_ASSERT(input_shard_height * num_cores_height_sliced == input_height);
     uint32_t input_shard_width = a.shard_spec().value().shard_shape[1];
-    TT_ASSERT(input_shard_width == input_width); // tensor is sharded across height dim only
+    TT_ASSERT(input_shard_width * num_cores_width_sliced == input_width);
 
     uint32_t output_shard_height = output.shard_spec().value().shard_shape[0];
     uint32_t output_shard_width = output.shard_spec().value().shard_shape[1];
-    TT_ASSERT(output_shard_width == output_width);
+    TT_ASSERT(output_shard_width == input_shard_width);
 
-    uint32_t input_width_bytes = input_width * a.element_size();
 
-    TT_ASSERT(input_width % TILE_WIDTH == 0);
-    uint32_t num_input_tiles_in_row = input_width / TILE_WIDTH;
+    uint32_t input_shard_width_bytes = input_shard_width * a.element_size();
+
+    TT_ASSERT(input_shard_width % TILE_WIDTH == 0);
+    uint32_t num_input_tiles_in_row = input_shard_width / TILE_WIDTH;
     TT_ASSERT(input_shard_height % TILE_HEIGHT == 0);
     uint32_t num_rows_of_input_tiles = input_shard_height / TILE_HEIGHT;
 
-    TT_ASSERT(output_width % TILE_WIDTH == 0);
-    uint32_t num_output_tiles_in_row = output_width / TILE_WIDTH;
+    uint32_t num_output_tiles_in_row = num_input_tiles_in_row;
     TT_ASSERT(output_shard_height % TILE_HEIGHT == 0);
     uint32_t num_rows_of_output_tiles = output_shard_height / TILE_HEIGHT;
 
@@ -409,15 +445,15 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
 		.set_page_size(input_cb_index, single_tile_size);
     input_cb_config = input_cb_config.set_globally_allocated_address(a.buffer()->address());
     auto input_cb = tt_metal::CreateCircularBuffer(program, core_range, input_cb_config);
-
+    cout << "done input cb" << endl;
     // CB to store halo data
     // hardcode to store 1 row of tiles
     uint32_t halo_input_cb_index = CB::c_intermed0;
-    uint32_t num_halo_cb_input_tiles = num_input_tiles_in_row * 4;
+    uint32_t num_halo_cb_input_tiles = num_input_tiles_in_row;
     tt_metal::CircularBufferConfig halo_input_cb_config = tt_metal::CircularBufferConfig(num_halo_cb_input_tiles * single_tile_size, {{halo_input_cb_index, cb_data_format}})
 		.set_page_size(halo_input_cb_index, single_tile_size);
     auto halo_input_cb = tt_metal::CreateCircularBuffer(program, core_range, halo_input_cb_config);
-
+    cout << "done halo input cb" << endl;
     // CB to store reader pattern array
     // read pattern array size == output_height
     uint32_t reader_pattern_array_size = output_shard_height;
@@ -425,32 +461,32 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     tt_metal::CircularBufferConfig reader_pattern_array_cb_config = tt_metal::CircularBufferConfig(reader_pattern_array_size * 4, {{reader_pattern_array_cb_index, DataFormat::Float16_b}})
 		.set_page_size(reader_pattern_array_cb_index, 4);
     auto reader_pattern_array_cb = tt_metal::CreateCircularBuffer(program, core_range, reader_pattern_array_cb_config);
-
+        cout << "done read pattern cb" << endl;
     // untilized CB has size - [32, full width]
     uint32_t untilize_cb_index = CB::c_intermed2;
     uint32_t num_tiles_untilize_cb = num_input_tiles_in_row;
     tt_metal::CircularBufferConfig untilize_cb_config = tt_metal::CircularBufferConfig(num_tiles_untilize_cb * single_tile_size, {{untilize_cb_index, cb_data_format}})
 		.set_page_size(untilize_cb_index, single_tile_size);
     auto untilize_cb = tt_metal::CreateCircularBuffer(program, core_range, untilize_cb_config);
-
+    cout << "done untilize cb" << endl;
     uint32_t num_output_tiles_all_cores =  output.volume() / TILE_HW;
     assert(num_output_tiles_all_cores % num_cores == 0);
     assert((num_output_tiles_all_cores / num_cores) == num_output_tiles_in_row * num_rows_of_output_tiles);
-    uint32_t num_output_tiles = (num_output_tiles_all_cores / num_cores);
+    uint32_t num_output_tiles = (num_output_tiles_all_cores / num_cores_height_sliced);
     uint32_t untilize_downsampled_cb_index = CB::c_intermed3;
     uint32_t num_tiles_untilize_downsampled_cb = num_output_tiles; // untilize downsampled cb size == output size per core
     tt_metal::CircularBufferConfig untilize_downsampled_cb_config = tt_metal::CircularBufferConfig(num_tiles_untilize_downsampled_cb * single_tile_size, {{untilize_downsampled_cb_index, cb_data_format}})
 		.set_page_size(untilize_downsampled_cb_index, single_tile_size);
     auto untilize_downsampled_cb = tt_metal::CreateCircularBuffer(program, core_range, untilize_downsampled_cb_config);
-
+        cout << "done untilize downsampled cb" << endl;
     uint32_t final_tilize_output_cb_index = CB::c_out0;
     uint32_t num_tiles_final_tilize_output_cb = num_output_tiles; // final output cb size == output size per core
     tt_metal::CircularBufferConfig final_tilize_output_cb_config = tt_metal::CircularBufferConfig(num_tiles_final_tilize_output_cb * single_tile_size, {{final_tilize_output_cb_index, cb_data_format}})
 		.set_page_size(final_tilize_output_cb_index, single_tile_size);
     final_tilize_output_cb_config = final_tilize_output_cb_config.set_globally_allocated_address(output.buffer()->address());
     auto final_tilize_output_cb = tt_metal::CreateCircularBuffer(program, core_range, final_tilize_output_cb_config);
-
-    uint32_t log_base_2_of_conv_act_size_c_bytes = (uint32_t) std::log2((float) input_width_bytes);
+    cout << "final output cb" << endl;
+    uint32_t log_base_2_of_conv_act_size_c_bytes = (uint32_t) std::log2((float) input_shard_width_bytes);
     uint32_t stride_h_x_image_width = height_y_stride * input_height_size_x;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) untilize_cb_index,
@@ -458,7 +494,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
         (std::uint32_t) final_tilize_output_cb_index,
         (std::uint32_t) reader_pattern_array_cb_index,
         (std::uint32_t) a.element_size(),
-        (std::uint32_t) input_width_bytes,
+        (std::uint32_t) input_shard_width_bytes,
         (std::uint32_t) halo_input_cb_index,
         log_base_2_of_conv_act_size_c_bytes,
         stride_h_x_image_width
@@ -501,7 +537,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
 
     // !!ASSUMPTION!! in determining core coordinate is that all 12 cores in x dim are used
     for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i % ncores_x_full_grid, i / ncores_x_full_grid};
+        CoreCoord core = {i % num_cores_x, i / num_cores_x};
         //cout << "i=" << i << endl;
 
 
@@ -525,7 +561,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
             uint32_t halo_start_tile_id_h = v.input_flat_h / TILE_HEIGHT;
             TT_ASSERT(input_shard_height - v.input_flat_h <= TILE_HEIGHT * 4); // halo input cb is hardcoded to store only 4 rows of tiles for now. TODO: allocate bigger CB or read in blocks
             // get halo size
-            halo_size_bytes = (input_shard_height - (halo_start_tile_id_h * TILE_HEIGHT)) * input_width * a.element_size();
+            halo_size_bytes = (input_shard_height - (halo_start_tile_id_h * TILE_HEIGHT)) * input_shard_width * a.element_size();
             TT_ASSERT(halo_size_bytes % single_tile_size == 0);
             halo_num_tiles = halo_size_bytes / single_tile_size;
             TT_ASSERT(halo_num_tiles <= num_halo_cb_input_tiles);
@@ -632,7 +668,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
         final_tilize_output_cb=final_tilize_output_cb,
         downsample_writer_kernel_id=downsample_writer_kernel_id,
         num_cores=num_cores,
-        ncores_x_full_grid=ncores_x_full_grid
+        num_cores_x=num_cores_x
     ](
         const void* operation,
         Program& program,
@@ -649,7 +685,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
         auto& final_tilize_output_cb_config = GetCircularBufferConfig(program, final_tilize_output_cb);
         final_tilize_output_cb_config.set_globally_allocated_address(dst_buffer->address());
         for (uint32_t i = 0; i < num_cores; i++) {
-            CoreCoord core = {i % ncores_x_full_grid, i / ncores_x_full_grid};
+            CoreCoord core = {i % num_cores_x, i / num_cores_x};
             if (i != 0) {
                 auto runtime_args = GetRuntimeArgs(program, downsample_writer_kernel_id, core);
                 runtime_args[8] = src_buffer->address();
