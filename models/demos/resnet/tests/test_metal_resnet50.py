@@ -15,7 +15,7 @@ from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
 
 @pytest.mark.parametrize("batch_size", [1, 2, 8])
-def test_run_resnet50_inference(device, batch_size, imagenet_sample_input):
+def test_run_resnet50_inference(use_program_cache, device, batch_size, imagenet_sample_input):
     if is_e75(device):
         pytest.skip("Resnet50 is not supported on E75")
 
