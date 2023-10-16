@@ -178,11 +178,6 @@ bool CloseDevice(Device *device) {
 KernelID CreateDataMovementKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::optional<DataMovementConfig> &config) {
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     auto dm_config = detail::GetDataMovementConfig(program, file_name, core_ranges, config);
-    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
-        // This triggers the firmware to do logic only needed for slow dispatch
-        dm_config.defines["TT_METAL_SLOW_DISPATCH_MODE"] = "1";
-    }
     auto kernel = new DataMovementKernel(file_name, core_ranges, dm_config);
     detail::AddKernel(program, kernel);
     return kernel->id();
@@ -191,11 +186,6 @@ KernelID CreateDataMovementKernel(Program &program, const std::string &file_name
 KernelID CreateComputeKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::optional<ComputeConfig> &config) {
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     auto compute_config = config.has_value() ? config.value() : ComputeConfig{};
-    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
-        // This triggers the firmware to do logic only needed for fast dispatch
-        compute_config.defines["TT_METAL_SLOW_DISPATCH_MODE"] = "1";
-    }
     auto kernel = new ComputeKernel(file_name, core_ranges, compute_config);
     detail::AddKernel(program, kernel);
     return kernel->id();
