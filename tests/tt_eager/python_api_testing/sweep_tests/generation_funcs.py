@@ -1566,3 +1566,12 @@ def gen_rop_args(
         factor = random.randint(1, 10)
         input_info.update({"factor": factor})
         yield input_info
+
+
+def gen_embeddings_args(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    mem_configs=[supported_mem_configs],
+):
+    return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)

@@ -32,6 +32,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.op_map import op_map
 DTYPES_TT_DICT = {
     "BFLOAT16": tt_lib.tensor.DataType.BFLOAT16,
     "BFLOAT8_B": tt_lib.tensor.DataType.BFLOAT8_B,
+    "UINT32": tt_lib.tensor.DataType.UINT32,
 }
 
 LAYOUTS_TT_DICT = {

@@ -359,6 +359,26 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(start_shape, end_shape, interval, _gen_conv_shapes):
                 yield shapes, datagen_funcs, test_args
 
+        elif method == "embeddings":
+            # start-shape and end-shape are lists of two shapes
+            # Only supports dim = 4; for the second shape, only the last dim is used
+            assert (len(start_shape) == 4)
+            assert (len(end_shape) == 4)
+
+            def _gen_embeddings_shapes(shape):
+                batch_size = shape[0]
+                num_rows = shape[1]
+                num_embeddings = shape[2]
+                embedding_dim = shape[3]
+
+                input_rows_shape = [batch_size, 1, num_rows, 1]
+                weights_shape = [1, 1, num_embeddings, embedding_dim]
+
+                return [input_rows_shape, weights_shape]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(start_shape, end_shape, interval, _gen_embeddings_shapes):
+                yield shapes, datagen_funcs, test_args
+
         elif method == "bert_qkv":
             assert num_shapes == 3
 
