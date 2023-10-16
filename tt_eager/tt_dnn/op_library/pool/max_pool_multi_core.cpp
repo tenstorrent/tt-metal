@@ -1060,7 +1060,8 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
     }
     auto core_range = all_cores;
     auto core_range_cliff = CoreRangeSet({});
-    uint32_t in_nhw_per_core = input.shard_spec().value().shard_shape[0];
+    uint32_t shard_size_per_core = input.shard_spec().value().shard_shape[0];
+    uint32_t in_nhw_per_core = in_h * in_w / ncores;
     uint32_t in_nhw_per_core_cliff = 0;
     uint32_t out_nhw_per_core = out_nhw / ncores;
     uint32_t out_nhw_per_core_cliff = 0;
@@ -1088,8 +1089,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
     auto in_scalar_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config);
 
     // incoming data is the input cb instead of raw l1/dram addr
+    // this input shard has halo and padding inserted.
     auto raw_in_cb_id = CB::c_in2;
-    uint32_t raw_in_cb_npages = in_nhw_per_core;
+    // uint32_t raw_in_cb_npages = in_nhw_per_core;
+    uint32_t raw_in_cb_npages = input.shard_spec().value().shard_shape[0];
     uint32_t raw_in_cb_pagesize = in_nbytes_c;
     CircularBufferConfig raw_in_cb_config = CircularBufferConfig(
                                                 raw_in_cb_npages * raw_in_cb_pagesize,
@@ -1127,17 +1130,21 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
     if (output.memory_config().is_sharded()) {
         uint32_t sharded_out_cb_id = CB::c_out1;            // output rows in RM
 
+        auto shard_shape = output.shard_spec().value().shard_shape;
         uint32_t sharded_out_num_pages = output.shard_spec().value().shard_shape[0];
 
         uint32_t sharded_out_cb_page_size = output.shard_spec().value().shard_shape[1] * out_nbytes;    // there is just one row of channels after reduction
         CircularBufferConfig cb_sharded_out_config = CircularBufferConfig(sharded_out_num_pages * sharded_out_cb_page_size, {{sharded_out_cb_id, out_df}})
             .set_page_size(sharded_out_cb_id, sharded_out_cb_page_size).set_globally_allocated_address(output.buffer()->address());
         cb_sharded_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_out_config);
+
+        log_debug(LogOp, "OUTPUT SHARD: {} {}", shard_shape[0], shard_shape[1]);
+        log_debug(LogOp, "OUTPUT CB: {} {}", sharded_out_cb_page_size, sharded_out_num_pages);
     }
 
     uint32_t reader_indices_cb_id = CB::c_intermed1;
     uint32_t reader_indices_cb_pagesize = 4;    // uint32_t
-    uint32_t reader_indices_cb_npages = in_nhw_per_core;
+    uint32_t reader_indices_cb_npages = shard_size_per_core;
     CircularBufferConfig cb_reader_indices_config = CircularBufferConfig(
                                                         reader_indices_cb_pagesize * reader_indices_cb_npages,
                                                         {{reader_indices_cb_id, in_df}})
@@ -1182,7 +1189,6 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
         log_debug("out_nbytes_c: {}", out_nbytes_c);
         log_debug("in_h: {}", in_h);
         log_debug("in_w: {}", in_w);
-        log_debug("in_hw: {}", input_shape[2]);
         log_debug("in_hw_padded: {}", in_hw);
         log_debug("in_c: {}", input_shape[3]);
         log_debug("out_hw_padded: {}", out_hw);
@@ -1289,14 +1295,16 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
                                             0,                  // left_in_stick_start,
                                             0,                  // right_in_stick_end,
                                             0,                  // my_core
-                                            0,                  // partial_first_row_nsticks    // 65
+                                            0,                  // initial_skip         // 65
+                                            0,                  // partial_first_row_nsticks
                                             0,                  // partial_first_row_skip
                                             0,                  // partial_top_image_nrows
                                             0,                  // partial_top_image_skip
-                                            0,                  // full_nimages
-                                            0,                  // full_images_skip             // 70
+                                            0,                  // full_nimages         // 70
+                                            0,                  // full_images_skip
                                             0,                  // partial_bottom_image_nrows
                                             0,                  // partial_last_row_nsticks
+                                            0,                  // start_stick
                                             };
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_0,
                                             .noc = NOC::RISCV_0_default,
@@ -1369,6 +1377,21 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
                                                         core_range_cliff,
                                                         compute_config);
     }
+
+    PoolConfig pc {
+        .in_w = in_w,
+        .in_h = in_h,
+        .out_w = out_w,
+        .out_h = out_h,
+        .stride_w = stride_w,
+        .stride_h = stride_h,
+        .pad_w = pad_w,
+        .pad_h = pad_h,
+        .window_w = kernel_size_w,
+        .window_h = kernel_size_h,
+        .dilation_w = dilation_w,
+        .dilation_h = dilation_h
+    };
 
     // calculate and set the start/end h_i for each core
     // for all but last core (cliff)
@@ -1450,35 +1473,56 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
                 reader_rt_args[52] = 0;
             }
 
-            ShardingConfig sc = get_specs_for_sharding_partition(curr_in_stick_id, curr_in_stick_id + in_nhw_per_core, in_h, in_w, kernel_size_w, pad_h, pad_w);
+            int32_t initial_offset = 0;
 
-            uint32_t partial_first_row_nsticks = sc.first_partial_right_aligned_row_width;
-            uint32_t partial_top_image_nrows = sc.first_partial_image_num_rows;
-            uint32_t full_nimages = sc.num_full_images;
-            uint32_t partial_bottom_image_nrows = sc.last_partial_image_num_rows;
-            uint32_t partial_last_row_nsticks = sc.last_partial_left_aligned_row_width;
-            uint32_t partial_first_row_skip = sc.skip_after_partial_right_aligned_row;
-            uint32_t partial_top_image_skip = sc.skip_after_first_partial_image_row;
-            uint32_t full_image_skip = sc.skip_after_full_image;
+            // first, given the start out stick id, figure out the start in stick id.
+            int32_t start_out_stick_id = curr_out_stick_id;
+            int32_t start_batch_i = start_out_stick_id / out_hw;
+            int32_t start_out_w_i = start_out_stick_id % out_w;
+            int32_t start_out_h_i = (start_out_stick_id % out_hw) / out_w;
+            int32_t start_in_w_i = start_out_w_i * stride_w;
+            int32_t start_in_h_i = start_out_h_i * stride_h;
+            int32_t start_center_in_stick_id = start_in_h_i * in_w + start_in_w_i;
 
-            // uint32_t partial_first_row_nsticks = (in_w - (curr_in_stick_id % in_w)) % in_w;
-            // uint32_t batch = curr_in_stick_id / in_hw;
-            // uint32_t partial_top_image_nrows = (batch * in_h - (uint32_t) ceil((float) curr_in_stick_id / in_w)) % in_h;
-            // uint32_t full_nimages = (in_nhw_per_core - (partial_first_row_nsticks + (partial_top_image_nrows * in_w))) / in_hw;
-            // uint32_t rem_nsticks = in_nhw_per_core - (partial_first_row_nsticks + partial_top_image_nrows * in_w + full_nimages * in_hw);
-            // uint32_t partial_bottom_image_nrows = rem_nsticks / in_w;
-            // uint32_t partial_last_row_nsticks = rem_nsticks % in_w;
+            int32_t end_out_stick_id = start_out_stick_id + out_nhw_per_core - 1;
+            int32_t end_batch_i = end_out_stick_id / out_hw;
+            int32_t end_out_w_i = end_out_stick_id % out_w;
+            int32_t end_out_h_i = (end_out_stick_id % out_hw) / out_w;
+            int32_t end_in_w_i = end_out_w_i * stride_w;
+            int32_t end_in_h_i = end_out_h_i * stride_h;
+            int32_t end_center_in_stick_id = end_in_h_i * in_w + end_in_w_i + (end_batch_i - start_batch_i) * in_hw;
 
-            reader_rt_args[65] = partial_first_row_nsticks;
-            reader_rt_args[66] = partial_first_row_skip;    // 2 * pad_h;
-            reader_rt_args[67] = partial_top_image_nrows;
-            reader_rt_args[68] = partial_top_image_skip;    // in_w + 2 * pad_h;
-            reader_rt_args[69] = full_nimages;
-            reader_rt_args[70] = full_image_skip;           // in_w + 2 * pad_h;
-            reader_rt_args[71] = partial_bottom_image_nrows;
-            reader_rt_args[72] = partial_last_row_nsticks;
+            NewShardingConfig sc = get_shard_specs_with_halo(start_center_in_stick_id, end_center_in_stick_id, pc);
 
-            // log_debug("CORE: {},{} :: 37 = {}, 38 = {}, 39 = {}, 41 = {}", core.x, core.y, reader_rt_args[37], reader_rt_args[38], reader_rt_args[39], reader_rt_args[41]);
+            if (0) {
+                log_debug(LogOp, "++++ CORE: {}", i);
+                log_debug(LogOp, " + out_stick_id range: {} {}", start_out_stick_id, end_out_stick_id);
+                log_debug(LogOp, " + end_out: {} {}", end_out_w_i, end_out_h_i);
+                log_debug(LogOp, " + center_in_stick range: {} {}", start_center_in_stick_id, end_center_in_stick_id);
+                log_debug(LogOp, " + end_in: {} {}", end_in_w_i, end_in_h_i);
+                log_debug(LogOp, " + partial_first_row_nsticks: {}", sc.first_partial_right_aligned_row_width);
+                log_debug(LogOp, " + partial_top_image_nrows: {}", sc.first_partial_image_num_rows);
+                log_debug(LogOp, " + full_nimages: {}", sc.num_full_images);
+                log_debug(LogOp, " + partial_bottom_image_nrows: {}", sc.last_partial_image_num_rows);
+                log_debug(LogOp, " + partial_last_row_nsticks: {}", sc.last_partial_left_aligned_row_width);
+                log_debug(LogOp, " + skip_after_partial_right_aligned_row: {}", sc.skip_after_partial_right_aligned_row);
+                log_debug(LogOp, " + skip_after_first_partial_image_row: {}", sc.skip_after_first_partial_image_row);
+                log_debug(LogOp, " + skip_after_full_image: {}", sc.skip_after_full_image);
+                log_debug(LogOp, " + initial_skip: {}", sc.initial_skip);
+                log_debug(LogOp, " + start_stick: {}", sc.start_stick);
+            }
+
+            reader_rt_args[65] = sc.initial_skip;
+            reader_rt_args[66] = sc.first_partial_right_aligned_row_width;
+            reader_rt_args[67] = sc.skip_after_partial_right_aligned_row;
+            reader_rt_args[68] = sc.first_partial_image_num_rows;
+            reader_rt_args[69] = sc.skip_after_first_partial_image_row;
+            reader_rt_args[70] = sc.num_full_images;
+            reader_rt_args[71] = sc.skip_after_full_image;
+            reader_rt_args[72] = sc.last_partial_image_num_rows;
+            reader_rt_args[73] = sc.last_partial_left_aligned_row_width;
+            reader_rt_args[74] = sc.start_stick;
+
             SetRuntimeArgs(program, reader_kernel, core, reader_rt_args);
             std::vector<uint32_t> writer_rt_args = reader_rt_args;
             SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
