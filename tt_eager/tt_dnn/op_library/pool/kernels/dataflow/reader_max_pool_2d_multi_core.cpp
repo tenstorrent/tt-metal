@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-// #include "debug_print.h"
+#include "debug_print.h"
 
 // SliceRange srr = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 };
 // SliceRange srt = SliceRange{ .h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1 };
@@ -126,6 +126,9 @@ void kernel_main() {
     // kernel_profiler::mark_time(8);
 
     // NOTE: batch is folded in
+
+    DPRINT << "NOC coords 0: " << (uint) my_x[0] << "," << (uint) my_y[0] << ENDL();
+    DPRINT << "NOC coords 1: " << (uint) my_x[1] << "," << (uint) my_y[1] << ENDL();
 
     uint32_t core_out_w_i_start = get_arg_val<int32_t>(38);
     uint32_t core_out_h_i_start = get_arg_val<int32_t>(39);
