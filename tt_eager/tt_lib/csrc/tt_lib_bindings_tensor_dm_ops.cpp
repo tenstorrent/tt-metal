@@ -193,6 +193,7 @@ namespace tt::tt_metal::detail{
             py::arg("in_b").noconvert(),
             py::arg("in_h").noconvert(),
             py::arg("in_w").noconvert(),
+            py::arg("stride") = 1,
             py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             R"doc(
                 Untilizes input tiled data to row major format.
