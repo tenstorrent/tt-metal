@@ -2081,3 +2081,33 @@ def bert_large_ff1_matmul(x, y, z, *args, device, dtype, layout, input_mem_confi
     t3 = ttl.tensor.bert_large_ff1_matmul(t0, t1, t2, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t3)
+
+@setup_host_and_device
+def embeddings(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+
+    x = x.int()
+    x_shape = x.shape
+
+    y_shape = y.shape
+
+    batch_size = x_shape[0]
+    num_rows = x_shape[2]
+    num_embeddings = y_shape[2]
+    embedding_dim = y_shape[3]
+
+
+    t0 = ttl.tensor.Tensor(x, dtype[0]).to(
+        device, input_mem_config[0]
+    )
+
+    t1 = ttl.tensor.Tensor(y, dtype[1]).to(device, input_mem_config[1])
+
+    t2 = ttl.tensor.embeddings(t0, t1, False, False, output_mem_config=output_mem_config)
+
+    tt_data = t2.cpu().to_torch()
+
+    tt_got_back = torch.Tensor(tt_data).reshape(
+        (batch_size, 1, num_rows, embedding_dim)
+    )
+
+    return tt_got_back

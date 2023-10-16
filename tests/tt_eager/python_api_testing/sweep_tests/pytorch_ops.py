@@ -1008,3 +1008,19 @@ def eltwise_rsub(x, *args, **kwargs):
 def eltwise_rdiv(x, *args, **kwargs):
     dim = kwargs["factor"]
     return dim / x
+
+def embeddings(x, y, *args, **kwargs):
+    x = x.int()
+    x_shape = x.shape
+    y_shape = y.shape
+
+    batch_size = x_shape[0]
+    num_rows = x_shape[2]
+    num_embeddings = y_shape[2]
+    embedding_dim = y_shape[3]
+
+    z = torch.nn.functional.embedding(
+        x.reshape((batch_size, num_rows)),
+        y.reshape((num_embeddings, embedding_dim)),
+    ).reshape((batch_size, 1, num_rows, embedding_dim))
+    return z

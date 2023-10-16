@@ -869,4 +869,8 @@ op_map = {
         "tt_lib_op": tt_lib_ops.bert_large_ff2_matmul,
         "pytorch_op": pytorch_ops.bert_large_ff2_matmul,
     },
+    "embeddings": {
+        "tt_lib_op": tt_lib_ops.embeddings,
+        "pytorch_op": pytorch_ops.embeddings,
+    },
 }
