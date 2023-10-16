@@ -32,7 +32,12 @@ void MaxPool::validate(const std::vector<Tensor> &input_tensors) const {
               "Total padding along a dim should be less than kernel/window size along same dim");
     TT_ASSERT(out_w_ % nblocks_ == 0, "Make sure out_w is divisible by nblocks for now.");
 
-    TT_ASSERT(input.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    if (input.memory_config().is_sharded()) {
+        TT_ASSERT(input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_ASSERT(this->use_multicore_);
+    } else {
+        TT_ASSERT(input.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    }
     if (this->out_mem_config_.is_sharded()) {
         TT_ASSERT(this->out_mem_config_.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         TT_ASSERT(this->use_multicore_);
@@ -113,6 +118,15 @@ operation::ProgramWithCallbacks MaxPool::create_program(const std::vector<Tensor
                                        dilation_h_, dilation_w_,
                                        out_mem_config_,
                                        nblocks_)};
+        //return {max_pool_2d_multi_core_sharded_with_halo(input, output,
+        //                               in_h_, in_w_,
+        //                               out_h_, out_w_,
+        //                               kernel_size_h_, kernel_size_w_,
+        //                               stride_h_, stride_w_,
+        //                               pad_h_, pad_w_,
+        //                               dilation_h_, dilation_w_,
+        //                               out_mem_config_,
+        //                               nblocks_)};
     }
 }
 
