@@ -167,11 +167,22 @@ def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLog
         fw_delta_time_ns = deviceLevelStats['FW_START->FW_END']['stats']['Average']* 1000 / freq
         kernel_delta_time_ns = deviceLevelStats['KERNEL_START->KERNEL_END']['stats']['Average']* 1000 / freq
 
-        br_kernel_delta_time_ns = deviceLevelStats['BR_KERNEL_START->BR_KERNEL_END']['stats']['Average']* 1000 / freq
-        nc_kernel_delta_time_ns = deviceLevelStats['NC_KERNEL_START->NC_KERNEL_END']['stats']['Average']* 1000 / freq
-        t0_kernel_delta_time_ns = deviceLevelStats['T0_KERNEL_START->T0_KERNEL_END']['stats']['Average']* 1000 / freq
-        t1_kernel_delta_time_ns = deviceLevelStats['T1_KERNEL_START->T1_KERNEL_END']['stats']['Average']* 1000 / freq
-        t2_kernel_delta_time_ns = deviceLevelStats['T2_KERNEL_START->T2_KERNEL_END']['stats']['Average']* 1000 / freq
+        br_kernel_delta_time_ns = 0
+        nc_kernel_delta_time_ns = 0
+        t0_kernel_delta_time_ns = 0
+        t1_kernel_delta_time_ns = 0
+        t2_kernel_delta_time_ns = 0
+
+        if 'BR_KERNEL_START->BR_KERNEL_END' in deviceLevelStats.keys():
+            br_kernel_delta_time_ns = deviceLevelStats['BR_KERNEL_START->BR_KERNEL_END']['stats']['Average']* 1000 / freq
+        if 'NC_KERNEL_START->NC_KERNEL_END' in deviceLevelStats.keys():
+            nc_kernel_delta_time_ns = deviceLevelStats['NC_KERNEL_START->NC_KERNEL_END']['stats']['Average']* 1000 / freq
+        if 'T0_KERNEL_START->T0_KERNEL_END' in deviceLevelStats.keys():
+            t0_kernel_delta_time_ns = deviceLevelStats['T0_KERNEL_START->T0_KERNEL_END']['stats']['Average']* 1000 / freq
+        if 'T1_KERNEL_START->T1_KERNEL_END' in deviceLevelStats.keys():
+            t1_kernel_delta_time_ns = deviceLevelStats['T1_KERNEL_START->T1_KERNEL_END']['stats']['Average']* 1000 / freq
+        if 'T2_KERNEL_START->T2_KERNEL_END' in deviceLevelStats.keys():
+            t2_kernel_delta_time_ns = deviceLevelStats['T2_KERNEL_START->T2_KERNEL_END']['stats']['Average']* 1000 / freq
 
         timeDataDict["DEVICE FW START CYCLE"] = start_ts
         timeDataDict["DEVICE FW END CYCLE"] = end_ts

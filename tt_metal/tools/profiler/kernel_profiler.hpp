@@ -33,6 +33,23 @@ namespace kernel_profiler{
         wIndex = MARKER_DATA_START;
         buffer [BUFFER_END_INDEX] = wIndex;
         buffer [DROPPED_MARKER_COUNTER] = 0;
+#if defined(COMPILE_FOR_BRISC)
+        buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PRINT_BUFFER_NC);
+        buffer [BUFFER_END_INDEX] = wIndex;
+        buffer [DROPPED_MARKER_COUNTER] = 0;
+
+        buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PRINT_BUFFER_T0);
+        buffer [BUFFER_END_INDEX] = wIndex;
+        buffer [DROPPED_MARKER_COUNTER] = 0;
+
+        buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PRINT_BUFFER_T1);
+        buffer [BUFFER_END_INDEX] = wIndex;
+        buffer [DROPPED_MARKER_COUNTER] = 0;
+
+        buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PRINT_BUFFER_T2);
+        buffer [BUFFER_END_INDEX] = wIndex;
+        buffer [DROPPED_MARKER_COUNTER] = 0;
+#endif
 #endif //PROFILE_KERNEL
     }
 
