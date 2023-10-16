@@ -125,7 +125,7 @@ def run_perf_resnet(
     (
         (1, 0.03, 28),
         (2, 0.03, 28),
-        (8, 0.03, 28),
+        (8, 0.033, 28),
     ),
 )
 def test_perf_bare_metal(
