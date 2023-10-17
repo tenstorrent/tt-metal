@@ -113,3 +113,9 @@ env pytest models/experimental/nanogpt/tests -k nanogpt_model_real
 
 env pytest tests/models/resnet/test_metal_resnet50.py -k "not 8"
 env pytest tests/models/resnet/test_metal_resnet50.py::test_run_resnet50_inference[8]
+
+env pytest models/experimental/mistral/tests/test_mistral_attention.py
+env pytest models/experimental/mistral/tests/test_mistral_feed_forward.py
+env pytest models/experimental/mistral/tests/test_mistral_rms_norm.py
+env pytest models/experimental/mistral/tests/test_mistral_transformer_block.py
+env pytest models/experimental/mistral/tests/test_mistral_transformer.py
