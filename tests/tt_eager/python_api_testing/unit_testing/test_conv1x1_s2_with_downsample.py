@@ -24,6 +24,9 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_bias_tensor,
     create_conv_weight_tensor_special_padding,
 )
+from tests.tt_eager.python_api_testing.sweep_tests.common import (
+    skip_for_wormhole_b0,
+)
 import torch
 
 @pytest.mark.parametrize(
@@ -34,6 +37,7 @@ import torch
         (8, 64, 64, 56, 56, 2, 2, 98, (12,9)),
     ),
 )
+@skip_for_wormhole_b0
 def test_run_downsample(
     use_program_cache,
     batch_size,
