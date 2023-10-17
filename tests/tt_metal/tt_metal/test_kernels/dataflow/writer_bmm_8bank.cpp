@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 
-//#include "debug_print.h"
+#include "debug_print.h"
 
 void kernel_main() {
     // same arg indices as in reader_bmm_8bank for reuse
@@ -36,9 +36,14 @@ void kernel_main() {
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
         noc_async_write_tile(itileC, s, l1_read_addr);
         noc_async_write_barrier();
+        uint32_t debug_cb_id = 16;
+        for (int32_t r = 0; r < 32; ++ r) {
+            SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+            DPRINT << (uint)r << " --WRITE--cout-- " << TileSlice(debug_cb_id, 0, sr, true, false) << ENDL();
+        }
         cb_pop_front(cb_id_out0, onetile);
-        //DPRINT << 'W' << 'C' << itileC << ' ' << 'a' << dst_addr << ENDL();
-        //DPRINT << itileC << ' ' << uint32_t(dst_noc_addr) << ENDL();
+        DPRINT << 'W' << "C " << itileC << ' ' << "a=" << dst_addr << ENDL();
+        DPRINT << itileC << ' ' << uint32_t(l1_read_addr) << ENDL();
         itileC ++;
     }
 }
