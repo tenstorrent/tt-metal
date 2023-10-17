@@ -120,7 +120,7 @@ def run_perf_llama(expected_inference_time, expected_compile_time, device):
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
-    ((0.175, 10),),
+    ((0.160, 10),),
 )
 def test_perf_bare_metal(
     use_program_cache, expected_inference_time, expected_compile_time, device

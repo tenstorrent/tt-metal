@@ -99,7 +99,7 @@ def run_perf_roberta(expected_inference_time, expected_compile_time, device):
     "expected_inference_time, expected_compile_time",
     (
         (
-            0.45,
+            0.425,
             17,
         ),
     ),

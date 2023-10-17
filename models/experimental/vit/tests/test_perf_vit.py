@@ -90,7 +90,7 @@ def run_perf_vit(
     "expected_inference_time, expected_compile_time",
     (
         (
-            2.14,
+            2.1,
             16,
         ),
     ),
