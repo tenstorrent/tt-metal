@@ -58,9 +58,12 @@ std::vector<Shape> Downsample::compute_output_shapes(const std::vector<Tensor> &
     auto [num_cores_height_sliced, not_used] = get_num_cores_height_width_sliced(input_tensor_a.shard_spec().value().shard_grid,
                                             input_tensor_a.memory_config().memory_layout,
                                             input_tensor_a.shard_spec().value().shard_orientation);
-    uint32_t output_height = round_up((input_height_size_z * ceil(input_height_size_y / height_y_stride) * ceil(input_height_size_x / height_x_stride)), num_cores_height_sliced * TILE_HEIGHT);
+    uint32_t output_height_unpadded = input_height_size_z * ceil( (double) input_height_size_y / (double) height_y_stride) * ceil( (double) input_height_size_x / (double) height_x_stride);
+    uint32_t output_height = round_up(output_height_unpadded, num_cores_height_sliced * TILE_HEIGHT);
     uint32_t output_width = input_tensor_a.shape()[3];
-    return {Shape({1, 1, output_height, output_width})};
+    auto output_padding = Padding({{0, 0}, {0, 0}, {0, (output_height - output_height_unpadded)}, {0, 0}}, Padding::PadValue::Any);
+    auto output_tensor_shape = Shape({1, 1, output_height, output_width}, output_padding);
+    return {output_tensor_shape};
 }
 
 std::vector<Tensor> Downsample::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
@@ -116,7 +119,7 @@ struct ImgTrackingVars {
     uint32_t output_flat_h = 0; // index within sharded output
 };
 
-DownsampleReadPatternParams generate_downsample_read_pattern(ImgTrackingVars & v, uint32_t img_height, uint32_t img_width, uint32_t img_stride_h, uint32_t img_stride_w, uint32_t input_shard_height, uint32_t output_shard_height) {
+DownsampleReadPatternParams generate_downsample_read_pattern(ImgTrackingVars & v, uint32_t img_height, uint32_t img_width, uint32_t img_stride_h, uint32_t img_stride_w, uint32_t input_end_flat_h, uint32_t output_end_flat_h) {
     // Sanity checks at the start for local data
     TT_ASSERT(v.next_img_h >= v.img_h);
     TT_ASSERT(v.next_img_w == v.img_w); // assumption that the start is picked and not skipped by stride
@@ -126,18 +129,15 @@ DownsampleReadPatternParams generate_downsample_read_pattern(ImgTrackingVars & v
     bool current_region_is_halo_from_prev_core = false;
     if (v.input_flat_h != 0) {
         current_region_is_halo_from_prev_core = true;
-        //cout << "GENERATING READ PATTERN FOR HALO REGION FROM PREVIOUS CORE" << endl;
+        cout << "GENERATING READ PATTERN FOR HALO REGION FROM PREVIOUS CORE" << endl;
         TT_ASSERT(v.output_flat_h == 0);
     } else {
-        //cout << "GENERATING READ FOR LOCAL REGION" << endl;
+        cout << "GENERATING READ FOR LOCAL REGION" << endl;
     }
 
-    //cout << "img_h=" << v.img_h << ", img_w=" << v.img_w << ", next_img_h=" << v.next_img_h << ", next_img_w=" << v.img_w << endl;
+    cout << "img_h=" << v.img_h << ", img_w=" << v.img_w << ", next_img_h=" << v.next_img_h << ", next_img_w=" << v.img_w << endl;
+    cout << "v.input_flat_h=" << v.input_flat_h << ", input_end_flat_h=" << input_end_flat_h << ", v.output_flat_h=" << v.output_flat_h << ", output_end_flat_h=" << output_end_flat_h << endl;
 
-
-    // constant input and output shard per core
-    uint32_t input_end_flat_h = input_shard_height - 1;
-    uint32_t output_end_flat_h = output_shard_height - 1;
     TT_ASSERT(v.input_flat_h < input_end_flat_h);
     TT_ASSERT(v.output_flat_h < output_end_flat_h);
 
@@ -165,7 +165,7 @@ DownsampleReadPatternParams generate_downsample_read_pattern(ImgTrackingVars & v
             v.input_flat_h += top_partial_right_aligned_row_width;
             if (!skip_top_partial_right_aligned_row) {
                 v.output_flat_h += std::ceil((double) top_partial_right_aligned_row_width / (double) img_stride_w);
-                TT_ASSERT(v.output_flat_h < output_shard_height);
+                TT_ASSERT(v.output_flat_h <= output_end_flat_h);
             }
             v.img_w = 0;
             v.next_img_w = 0;
@@ -189,7 +189,7 @@ DownsampleReadPatternParams generate_downsample_read_pattern(ImgTrackingVars & v
             v.input_flat_h += top_partial_middle_aligned_row_width;
             if (!skip_top_partial_middle_aligned_row) {
                 v.output_flat_h += std::ceil((double) top_partial_middle_aligned_row_width / (double) img_stride_w);
-                TT_ASSERT(v.output_flat_h < output_shard_height);
+                TT_ASSERT(v.output_flat_h <= output_end_flat_h);
             }
             uint32_t img_w_start = v.img_w;
             while(v.img_w < img_w_start + top_partial_middle_aligned_row_width) {
@@ -418,14 +418,28 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     uint32_t output_width = output.shape()[3];
     TT_ASSERT(input_width == output_width);
 
+    uint32_t input_height_unpadded = input_height_size_z * input_height_size_y * input_height_size_x;
+    TT_ASSERT(input_height >= input_height_unpadded);
+    uint32_t output_height_unpadded = input_height_size_z * std::ceil((double) (input_height_size_y * input_height_size_x) / (double) (height_y_stride * height_x_stride));
+    TT_ASSERT(output_height >= output_height_unpadded);
+
     uint32_t input_shard_height = a.shard_spec().value().shard_shape[0];
     TT_ASSERT(input_shard_height * num_cores_height_sliced == input_height);
     uint32_t input_shard_width = a.shard_spec().value().shard_shape[1];
     TT_ASSERT(input_shard_width * num_cores_width_sliced == input_width);
 
+    uint32_t input_height_padding = input_height - input_height_unpadded;
+    TT_ASSERT(input_height_padding < input_shard_height); // last core has padding
+    uint32_t last_core_input_shard_height_unpadded = input_shard_height - input_height_padding;
+
+
     uint32_t output_shard_height = output.shard_spec().value().shard_shape[0];
     uint32_t output_shard_width = output.shard_spec().value().shard_shape[1];
     TT_ASSERT(output_shard_width == input_shard_width);
+
+    uint32_t output_height_padding = output_height - output_height_unpadded;
+    TT_ASSERT(output_height_padding < output_shard_height);
+    uint32_t last_core_output_shard_height_unpadded = output_shard_height - output_height_padding;
 
 
     uint32_t input_shard_width_bytes = input_shard_width * a.element_size();
@@ -472,7 +486,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     uint32_t num_output_tiles_all_cores =  output.volume() / TILE_HW;
     assert(num_output_tiles_all_cores % num_cores == 0);
     assert((num_output_tiles_all_cores / num_cores) == num_output_tiles_in_row * num_rows_of_output_tiles);
-    uint32_t num_output_tiles = (num_output_tiles_all_cores / num_cores_height_sliced);
+    uint32_t num_output_tiles = (num_output_tiles_all_cores / num_cores);
     uint32_t untilize_downsampled_cb_index = CB::c_intermed3;
     uint32_t num_tiles_untilize_downsampled_cb = num_output_tiles; // untilize downsampled cb size == output size per core
     tt_metal::CircularBufferConfig untilize_downsampled_cb_config = tt_metal::CircularBufferConfig(num_tiles_untilize_downsampled_cb * single_tile_size, {{untilize_downsampled_cb_index, cb_data_format}})
@@ -535,11 +549,12 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
 
     CoreCoord prev_core = {0,0};
 
-    // !!ASSUMPTION!! in determining core coordinate is that all 12 cores in x dim are used
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
-        //cout << "i=" << i << endl;
+        cout << "i=" << i << endl;
 
+        uint32_t input_end_flat_h = input_shard_height - 1;
+        uint32_t output_end_flat_h = output_shard_height - 1;
 
         bool halo_read_enabled = false;
         DownsampleReadPatternParams halo_read_pattern_params;
@@ -552,6 +567,23 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
         uint32_t halo_input_num_rows_of_tiles = 0;
         uint32_t halo_read_pattern_offset = 0;
         uint32_t local_read_pattern_offset = 0;
+        uint32_t current_core_input_end_flat_h = input_end_flat_h;
+        if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            if (i % num_cores_x == 0) {
+                // first core in row
+                // reset
+                v.input_flat_h = 0;
+                v.output_flat_h = 0;
+            } else if (i % num_cores_x == num_cores_x - 1) {
+                // set unpadded height as end index for last core in row
+                current_core_input_end_flat_h = last_core_input_shard_height_unpadded - 1;
+                output_end_flat_h = last_core_output_shard_height_unpadded - 1;
+            }
+        } else if (i == num_cores - 1) {
+            // for height sharding, set unpadded height as end index for last core
+            current_core_input_end_flat_h = last_core_input_shard_height_unpadded - 1;
+            output_end_flat_h = last_core_output_shard_height_unpadded - 1;
+        }
         if (v.input_flat_h != 0) {
             // halo region of previous core
             TT_ASSERT(i != 0);
@@ -576,12 +608,12 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
             TT_ASSERT(v.input_flat_h >= halo_start_tile_id_h * TILE_HEIGHT);
             halo_read_pattern_offset = v.input_flat_h - (halo_start_tile_id_h * TILE_HEIGHT);
             local_read_pattern_offset = halo_input_num_rows_of_tiles * TILE_HEIGHT;
-            halo_read_pattern_params = generate_downsample_read_pattern(v, img_height, img_width, img_stride_h, img_stride_w, input_shard_height, output_shard_height);
+            halo_read_pattern_params = generate_downsample_read_pattern(v, img_height, img_width, img_stride_h, img_stride_w, input_end_flat_h, output_end_flat_h);
         }
         // local core
         TT_ASSERT(v.input_flat_h == 0);
         TT_ASSERT(v.output_flat_h < output_shard_height);
-        DownsampleReadPatternParams local_read_pattern_params = generate_downsample_read_pattern(v, img_height, img_width, img_stride_h, img_stride_w, input_shard_height, output_shard_height);
+        DownsampleReadPatternParams local_read_pattern_params = generate_downsample_read_pattern(v, img_height, img_width, img_stride_h, img_stride_w, current_core_input_end_flat_h, output_end_flat_h);
         uint32_t local_input_num_rows_of_tiles = num_rows_of_input_tiles;
         if (v.input_flat_h != 0) {
             local_input_num_rows_of_tiles = std::ceil( (double) v.input_flat_h / (double) TILE_HEIGHT);

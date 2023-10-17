@@ -29,10 +29,11 @@ import torch
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, stride_h, stride_w, num_cores, grid_size, height_sharded",
     (
-        #(20, 64, 64, 16, 16, 2, 2, 20, (10,2, True),
+        (10, 64, 64, 16, 16, 2, 2, 20, (10,2), False),
+        #(10, 64, 64, 16, 16, 1, 1, 20, (10,2), False),
         #(8, 64, 64, 56, 56, 1, 1, 98, (12,9), True),
         #(8, 64, 64, 56, 56, 2, 2, 98, (12,9), True),
-        (8, 512, 512, 28, 28, 2, 2, 80, (10,8), False),
+        #(8, 512, 512, 28, 28, 2, 2, 80, (10,8), False),
     ),
 )
 def test_run_downsample(
@@ -76,7 +77,8 @@ def test_run_downsample(
     a_activation_shape_nhwc = [batch_size, input_height, input_width, input_channels]
     A_cl_host = ttl.tensor.Tensor(A_pyt_nhwc, ttl.tensor.DataType.BFLOAT16).reshape(1, 1, batch_size*input_height*input_width, input_channels)
     num_cores_height_slices = num_cores if height_sharded else grid_size[0]
-    A_cl_host = A_cl_host.pad([1, 1, _nearest_y(batch_size*input_height*input_width, num_cores_height_slices*32), input_channels], (0,0,0,0), 0.0)
+    input_shape = [1, 1, _nearest_y(batch_size*input_height*input_width, num_cores_height_slices*32), input_channels]
+    A_cl_host = A_cl_host.pad(input_shape, (0,0,0,0), 0.0)
     A_interleaved = A_cl_host.to(ttl.tensor.Layout.TILE).to(device, ttl.tensor.MemoryConfig(
                 memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
                 buffer_type=ttl.tensor.BufferType.L1,
@@ -119,9 +121,11 @@ def test_run_downsample(
     A_downampled_sharded = ttl.tensor.downsample(A_sharded, downsample_params)
     A_downsampled = ttl.tensor.sharded_to_interleaved(A_downampled_sharded, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1))
     out = A_downsampled
-    out_shape = [1, 1, batch_size*output_height*output_width, input_channels]
+    out_shape = [1, 1, _nearest_y(batch_size*output_height*output_width, num_cores_height_slices*32), input_channels]
     assert out_shape == out.shape()
-    out = ttl.tensor.format_output_tensor(out, out.shape(), device, ttl.tensor.Layout.ROW_MAJOR)
+    out_shape_unpadded = [1, 1, batch_size*output_height*output_width, input_channels]
+    assert out_shape_unpadded == out.shape_without_padding()
+    out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
     out = out.cpu()
 
     out_debug = out
@@ -136,11 +140,11 @@ def test_run_downsample(
     #         print(f"out_result_2d_nhwc[{i}][{j}]={out_debug[0][0][i][j]}")
 
     num_errors = 0
-    core_idx = 1
+    core_idx = 0
     start_i = core_idx * output_shard_height
     end_i = start_i + output_shard_height
     for i in range(start_i, end_i):
-        for j in range(input_2d_width):
+        for j in range(input_shard_width):
             calculated = torch.tensor(out_golden_2d_nhwc[0][0][i][j])
             golden = torch.tensor(out_debug[0][0][i][j])
             atol_delta = torch.abs(golden - calculated).item()
@@ -192,4 +196,4 @@ def test_run_downsample(
     print("Passing=", passing_allclose_and_pcc)
     print("Output info=", output_info)
     passing_pcc_ds, _ = comp_pcc(out_golden, out_result, pcc=0.9998) # For LowFi we need 0.99976
-    #assert passing_pcc_ds
+    assert passing_pcc_ds
