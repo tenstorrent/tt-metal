@@ -363,9 +363,9 @@ ALWI void reduce_tile_to_cb(
         reduce_tile(reduce_op, dim, icb0, icb1, x, bcast_scaler0, dst0);
     }
     if (pop0)
-        cb_pop_front(icb0, size);
+        cb_pop_front(icb0, pop0);
     if (pop1)
-        cb_pop_front(icb1, onetile);
+        cb_pop_front(icb1, pop1);
 
     reduce_revert_delta();
     pack_tile(dst0, ocb);
@@ -395,9 +395,9 @@ ALWI void reduce_tile_and_recip_tile_to_cb(
         reduce_tile(reduce_op, dim, icb0, icb1, x, bcast_scaler0, dst0);
     }
     if (pop0)
-        cb_pop_front(icb0, size);
+        cb_pop_front(icb0, pop0);
     if (pop1)
-        cb_pop_front(icb1, onetile);
+        cb_pop_front(icb1, pop1);
 
     reduce_revert_delta();
 
