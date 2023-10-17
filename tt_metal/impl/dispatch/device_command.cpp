@@ -41,6 +41,10 @@ void DeviceCommand::set_data_size(const u32 data_size) { this->desc[this->data_s
 
 u32 DeviceCommand::get_data_size() const { return this->desc[this->data_size_idx]; }
 
+void DeviceCommand::set_producer_consumer_transfer_num_pages(const u32 producer_consumer_transfer_num_pages) {
+    this->desc[this->producer_consumer_transfer_num_pages_idx] = producer_consumer_transfer_num_pages;
+}
+
 void DeviceCommand::add_buffer_transfer_instruction(
     const u32 src,
     const u32 dst,

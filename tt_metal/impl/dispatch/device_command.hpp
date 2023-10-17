@@ -44,6 +44,7 @@ class DeviceCommand {
     static constexpr u32 consumer_cb_num_pages_idx = 10;
     static constexpr u32 num_pages_idx = 11;
     static constexpr u32 data_size_idx = 12;
+    static constexpr u32 producer_consumer_transfer_num_pages_idx = 13;
 
     void wrap();
 
@@ -69,6 +70,8 @@ class DeviceCommand {
     void set_num_pages(const u32 num_pages);
 
     void set_data_size(const u32 data_size);
+
+    void set_producer_consumer_transfer_num_pages(const u32 producer_consumer_transfer_num_pages);
 
     u32 get_data_size() const;
 

@@ -49,7 +49,9 @@ FORCE_INLINE void write_buffers(
     volatile tt_l1_ptr u32* command_ptr,
     u32 num_destinations,
     u32 consumer_cb_size,
+    u32 consumer_cb_num_pages,
     u64 producer_noc_encoding,
+    u32 producer_consumer_transfer_num_pages,
     bool db_buf_switch) {
     for (u32 i = 0; i < num_destinations; i++) {
         const u32 bank_base_address = command_ptr[1];
@@ -58,18 +60,25 @@ FORCE_INLINE void write_buffers(
         const u32 dst_buf_type = command_ptr[5];
         Buffer buffer((BufferType)dst_buf_type, bank_base_address, page_size);
 
-        u32 num_to_write = 1;
-
+        u32 num_to_write;
         u32 src_addr = *reinterpret_cast<volatile u32*>(get_db_cb_rd_ptr_addr(db_buf_switch)) << 4;
         u32 l1_consumer_fifo_limit = src_addr + consumer_cb_size - 1;
-        for (u32 id = 0; id < num_pages; id += num_to_write) {
+
+        for (u32 id = 0; id < num_pages;) {
+            num_to_write = min(num_pages - id, producer_consumer_transfer_num_pages);
             multicore_cb_wait_front(db_buf_switch, num_to_write);
             u32 src_addr = get_read_ptr(db_buf_switch);
             buffer.noc_async_write_buffer(src_addr, id, num_to_write, 0);
             noc_async_write_barrier();
             multicore_cb_pop_front(
-                producer_noc_encoding, db_buf_switch, l1_consumer_fifo_limit, consumer_cb_size, num_to_write, page_size);
+                producer_noc_encoding,
+                db_buf_switch,
+                l1_consumer_fifo_limit,
+                consumer_cb_size,
+                num_to_write,
+                page_size);
             noc_async_write_barrier();
+            id += num_to_write;
         }
     }
 }
@@ -99,7 +108,13 @@ void write_program_page(u32 page_addr, volatile u32*& command_ptr) {
 
 FORCE_INLINE
 void write_and_launch_program(
-    u32 num_pages, volatile u32*& command_ptr, u64 producer_noc_encoding, u32 consumer_cb_size, bool db_buf_switch) {
+    u32 num_pages,
+    volatile u32*& command_ptr,
+    u64 producer_noc_encoding,
+    u32 consumer_cb_size,
+    u32 consumer_cb_num_pages,
+    u32 producer_consumer_transfer_num_pages,
+    bool db_buf_switch) {
     u32 l1_consumer_fifo_limit = get_read_ptr(db_buf_switch) + consumer_cb_size - 1;
 
     if (not num_pages) {
@@ -113,17 +128,22 @@ void write_and_launch_program(
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(DISPATCH_MESSAGE_ADDR);
     *message_addr_ptr = 0;
 
-    for (u32 page_idx = 0; page_idx < num_pages; page_idx++) {
-        multicore_cb_wait_front(db_buf_switch, 1);
+    for (u32 page_idx = 0; page_idx < num_pages;) {
+        u32 num_to_write = min(num_pages - page_idx, producer_consumer_transfer_num_pages);
+        multicore_cb_wait_front(db_buf_switch, num_to_write);
         u32 src_addr = get_read_ptr(db_buf_switch);
-        write_program_page(src_addr, command_ptr);
+        for (u32 i = 0; i < num_to_write; i++) {
+            write_program_page(src_addr, command_ptr);
+            src_addr += DeviceCommand::PROGRAM_PAGE_SIZE;
+        }
+        page_idx += num_to_write;
         noc_async_write_barrier();
         multicore_cb_pop_front(
             producer_noc_encoding,
             db_buf_switch,
             l1_consumer_fifo_limit,
             consumer_cb_size,
-            1,
+            num_to_write,
             DeviceCommand::PROGRAM_PAGE_SIZE);
         noc_async_write_barrier();  // Flush barrier, not an ack barrier
     }
@@ -139,7 +159,8 @@ FORCE_INLINE void wait_for_program_completion(
 
     volatile tt_l1_ptr uint32_t* message_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(DISPATCH_MESSAGE_ADDR);
-    while (*message_addr_ptr != num_workers);
+    while (*message_addr_ptr != num_workers)
+        ;
 
     DEBUG_STATUS('Q', 'D');
 }

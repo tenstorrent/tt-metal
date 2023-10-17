@@ -35,15 +35,17 @@ void kernel_main() {
         u32 is_program = command_ptr[DeviceCommand::is_program_buffer_idx];
         u32 page_size = command_ptr[DeviceCommand::page_size_idx];
         u32 consumer_cb_size = command_ptr[DeviceCommand::consumer_cb_size_idx];
+        u32 consumer_cb_num_pages = command_ptr[DeviceCommand::consumer_cb_num_pages_idx];
         u32 num_pages = command_ptr[DeviceCommand::num_pages_idx];
+        u32 producer_consumer_transfer_num_pages = command_ptr[DeviceCommand::producer_consumer_transfer_num_pages_idx];
 
         if (is_program) {
             command_ptr = reinterpret_cast<volatile tt_l1_ptr u32*>(program_transfer_start_addr);
-            write_and_launch_program(num_pages, command_ptr, producer_noc_encoding, consumer_cb_size, db_buf_switch);
+            write_and_launch_program(num_pages, command_ptr, producer_noc_encoding, consumer_cb_size, consumer_cb_num_pages, producer_consumer_transfer_num_pages, db_buf_switch);
             wait_for_program_completion(num_workers, command_ptr, tensix_soft_reset_addr);
         } else {
             command_ptr = reinterpret_cast<volatile tt_l1_ptr u32*>(buffer_transfer_start_addr);
-            write_buffers(command_ptr, num_buffer_transfers, consumer_cb_size, producer_noc_encoding, db_buf_switch);
+            write_buffers(command_ptr, num_buffer_transfers, consumer_cb_size, consumer_cb_num_pages, producer_noc_encoding, producer_consumer_transfer_num_pages, db_buf_switch);
         }
 
         if (finish) {

@@ -92,8 +92,6 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         return dst_noc_multicast_info;
     };
 
-    // Step 1: Get the locations of the worker cores and how many worker cores there are in this program
-
     static const map<RISCV, u32> processor_to_l1_arg_base_addr = {
         {RISCV::BRISC, BRISC_L1_ARG_BASE},
         {RISCV::NCRISC, NCRISC_L1_ARG_BASE},
@@ -259,6 +257,7 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst_ad
 
     u32 padded_page_size = align(this->buffer.page_size(), 32);
     u32 data_size_in_bytes = padded_page_size * this->buffer.num_pages();
+
     command.add_buffer_transfer_instruction(
         this->buffer.address(),
         dst_address,
@@ -267,10 +266,19 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst_ad
         (u32)this->buffer.buffer_type(),
         u32(BufferType::SYSTEM_MEMORY));
 
-    u32 producer_cb_num_pages = (DeviceCommand::PRODUCER_DATA_BUFFER_SIZE / padded_page_size);
     u32 consumer_cb_num_pages = (DeviceCommand::CONSUMER_DATA_BUFFER_SIZE / padded_page_size);
-    u32 producer_cb_size = producer_cb_num_pages * padded_page_size;
+
+    if (consumer_cb_num_pages >= 4) {
+        consumer_cb_num_pages = (consumer_cb_num_pages / 4) * 4;
+        command.set_producer_consumer_transfer_num_pages(consumer_cb_num_pages / 4);
+    } else {
+        command.set_producer_consumer_transfer_num_pages(1);
+    }
+
     u32 consumer_cb_size = consumer_cb_num_pages * padded_page_size;
+    u32 producer_cb_num_pages = consumer_cb_num_pages * 2;
+    u32 producer_cb_size = producer_cb_num_pages * padded_page_size;
+
     command.set_stall();
     command.set_page_size(padded_page_size);
     command.set_producer_cb_size(producer_cb_size);
@@ -329,13 +337,20 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(u32 src_a
         this->buffer.num_pages(),
         padded_page_size,
         (u32) BufferType::SYSTEM_MEMORY,
-        (u32)this->buffer.buffer_type());
-
-    u32 producer_cb_num_pages = (DeviceCommand::PRODUCER_DATA_BUFFER_SIZE / padded_page_size);
-    u32 producer_cb_size = producer_cb_num_pages * padded_page_size;
+        (u32) this->buffer.buffer_type());
 
     u32 consumer_cb_num_pages = (DeviceCommand::CONSUMER_DATA_BUFFER_SIZE / padded_page_size);
+
+    if (consumer_cb_num_pages >= 4) {
+        consumer_cb_num_pages = (consumer_cb_num_pages / 4) * 4;
+        command.set_producer_consumer_transfer_num_pages(consumer_cb_num_pages / 4);
+    } else {
+        command.set_producer_consumer_transfer_num_pages(1);
+    }
+
     u32 consumer_cb_size = consumer_cb_num_pages * padded_page_size;
+    u32 producer_cb_num_pages = consumer_cb_num_pages * 2;
+    u32 producer_cb_size = producer_cb_num_pages * padded_page_size;
 
     command.set_page_size(padded_page_size);
     command.set_producer_cb_size(producer_cb_size);
@@ -471,6 +486,9 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(u32 host_data
     if (this->stall) {
         command.set_stall();
     }
+
+    // This needs to be quite small, since programs are small
+    command.set_producer_consumer_transfer_num_pages(4);
 
     return command;
 }
