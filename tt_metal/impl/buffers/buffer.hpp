@@ -26,7 +26,7 @@ class Buffer {
    public:
     Buffer() : device_(nullptr) {}
 
-    Buffer(Device *device, u64 size, u64 page_size, const BufferType buffer_type);
+    Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferType buffer_type);
 
     Buffer(const Buffer &other);
     Buffer& operator=(const Buffer &other);
@@ -38,27 +38,27 @@ class Buffer {
 
     Device *device() const { return device_; }
 
-    u32 size() const { return static_cast<u32>(size_); }
+    uint32_t size() const { return static_cast<uint32_t>(size_); }
 
     // Returns address of buffer in the first bank
-    u32 address() const { return static_cast<u32>(address_); }
+    uint32_t address() const { return static_cast<uint32_t>(address_); }
 
-    u32 page_size() const { return page_size_; }
+    uint32_t page_size() const { return page_size_; }
 
-    u32 num_pages() const { return this->size() / this->page_size(); }
+    uint32_t num_pages() const { return this->size() / this->page_size(); }
 
     BufferType buffer_type() const { return buffer_type_; }
 
-    u32 dram_channel_from_bank_id(u32 bank_id) const;
+    uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
 
-    CoreCoord logical_core_from_bank_id(u32 bank_id) const;
+    CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
 
-    CoreCoord noc_coordinates(u32 bank_id) const;
+    CoreCoord noc_coordinates(uint32_t bank_id) const;
 
     // returns NoC coordinates of first bank buffer is in
     CoreCoord noc_coordinates() const;
 
-    u64 page_address(u32 bank_id, u32 page_index) const;
+    uint64_t page_address(uint32_t bank_id, uint32_t page_index) const;
 
    private:
     void allocate();
@@ -67,9 +67,9 @@ class Buffer {
     friend void DeallocateBuffer(Buffer &buffer);
 
     Device *device_;
-    u64 size_;                 // Size in bytes
-    u64 address_;              // Address of buffer
-    u64 page_size_;            // Size of unit being interleaved. For non-interleaved buffers: size == page_size
+    uint64_t size_;                 // Size in bytes
+    uint64_t address_;              // Address of buffer
+    uint64_t page_size_;            // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type_;
 };
 

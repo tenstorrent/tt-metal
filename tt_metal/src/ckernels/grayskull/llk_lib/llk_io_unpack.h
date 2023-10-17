@@ -66,7 +66,7 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
         num_tiles_recv = tiles_received - cb_interface[input].tiles_acked;
     } while (num_tiles_recv < num_tiles_u);
 
-    //DPRINT << "UNPACKER LLK_W NTR = " << U32(num_tiles_recv) << ENDL();
+    //DPRINT << "UNPACKER LLK_W NTR = " << uint32_t(num_tiles_recv) << ENDL();
 }
 
 // Pop N tiles from the incoming stream

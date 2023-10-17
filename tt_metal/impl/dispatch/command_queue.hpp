@@ -32,20 +32,20 @@ using std::tuple;
 using std::unique_ptr;
 
 struct transfer_info {
-    u32 size_in_bytes;
-    u32 dst;
-    u32 dst_noc_multicast_encoding;
-    u32 num_receivers;
+    uint32_t size_in_bytes;
+    uint32_t dst;
+    uint32_t dst_noc_multicast_encoding;
+    uint32_t num_receivers;
     bool last_multicast_in_group;
 };
 
 struct ProgramMap {
-    u32 num_workers;
-    vector<u32> program_pages;
+    uint32_t num_workers;
+    vector<uint32_t> program_pages;
     vector<transfer_info> program_page_transfers;
     vector<transfer_info> host_page_transfers;
-    vector<u32> num_transfers_in_program_pages;
-    vector<u32> num_transfers_in_host_data_pages;
+    vector<uint32_t> num_transfers_in_program_pages;
+    vector<uint32_t> num_transfers_in_host_data_pages;
 };
 
 // Only contains the types of commands which are enqueued onto the device
@@ -57,7 +57,7 @@ string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 #define NOC_X(x) x
 #define NOC_Y(y) y
 
-u32 noc_coord_to_u32(CoreCoord coord);
+uint32_t noc_coord_to_u32(CoreCoord coord);
 
 class Command {
     EnqueueCommandType type_ = EnqueueCommandType::INVALID;
@@ -66,22 +66,22 @@ class Command {
     Command() {}
     virtual void process(){};
     virtual EnqueueCommandType type() = 0;
-    virtual const DeviceCommand assemble_device_command(u32 buffer_size) = 0;
+    virtual const DeviceCommand assemble_device_command(uint32_t buffer_size) = 0;
 };
 
 class EnqueueReadBufferCommand : public Command {
    private:
     Device* device;
     SystemMemoryWriter& writer;
-    vector<u32>& dst;
+    vector<uint32_t>& dst;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_READ_BUFFER;
 
    public:
     Buffer& buffer;
-    u32 read_buffer_addr;
-    EnqueueReadBufferCommand(Device* device, Buffer& buffer, vector<u32>& dst, SystemMemoryWriter& writer);
+    uint32_t read_buffer_addr;
+    EnqueueReadBufferCommand(Device* device, Buffer& buffer, vector<uint32_t>& dst, SystemMemoryWriter& writer);
 
-    const DeviceCommand assemble_device_command(u32 dst);
+    const DeviceCommand assemble_device_command(uint32_t dst);
 
     void process();
 
@@ -94,13 +94,13 @@ class EnqueueWriteBufferCommand : public Command {
     Buffer& buffer;
 
     SystemMemoryWriter& writer;
-    vector<u32>& src;
+    vector<uint32_t>& src;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_WRITE_BUFFER;
 
    public:
-    EnqueueWriteBufferCommand(Device* device, Buffer& buffer, vector<u32>& src, SystemMemoryWriter& writer);
+    EnqueueWriteBufferCommand(Device* device, Buffer& buffer, vector<uint32_t>& src, SystemMemoryWriter& writer);
 
-    const DeviceCommand assemble_device_command(u32 src_address);
+    const DeviceCommand assemble_device_command(uint32_t src_address);
 
     void process();
 
@@ -112,15 +112,15 @@ class EnqueueProgramCommand : public Command {
     Device* device;
     Buffer& buffer;
     ProgramMap& program_to_dev_map;
-    vector<u32>& host_data;
+    vector<uint32_t>& host_data;
     SystemMemoryWriter& writer;
     bool stall;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_PROGRAM;
 
    public:
-    EnqueueProgramCommand(Device*, Buffer&, ProgramMap&, SystemMemoryWriter&, vector<u32>& host_data, bool stall);
+    EnqueueProgramCommand(Device*, Buffer&, ProgramMap&, SystemMemoryWriter&, vector<uint32_t>& host_data, bool stall);
 
-    const DeviceCommand assemble_device_command(u32);
+    const DeviceCommand assemble_device_command(uint32_t);
 
     void process();
 
@@ -139,7 +139,7 @@ class FinishCommand : public Command {
    public:
     FinishCommand(Device* device, SystemMemoryWriter& writer);
 
-    const DeviceCommand assemble_device_command(u32);
+    const DeviceCommand assemble_device_command(uint32_t);
 
     void process();
 
@@ -155,7 +155,7 @@ class EnqueueWrapCommand : public Command {
    public:
     EnqueueWrapCommand(Device* device, SystemMemoryWriter& writer);
 
-    const DeviceCommand assemble_device_command(u32);
+    const DeviceCommand assemble_device_command(uint32_t);
 
     void process();
 
@@ -176,16 +176,16 @@ class CommandQueue {
     TSQueue<shared_ptr<Command>>
         processing_thread_queue;  // These are commands that have not been placed in system memory
     // thread processing_thread;
-    map<u64, unique_ptr<Buffer>>
+    map<uint64_t, unique_ptr<Buffer>>
         program_to_buffer;
 
-    map<u64, ProgramMap> program_to_dev_map;
+    map<uint64_t, ProgramMap> program_to_dev_map;
 
     void enqueue_command(shared_ptr<Command> command, bool blocking);
 
-    void enqueue_read_buffer(Buffer& buffer, vector<u32>& dst, bool blocking);
+    void enqueue_read_buffer(Buffer& buffer, vector<uint32_t>& dst, bool blocking);
 
-    void enqueue_write_buffer(Buffer& buffer, vector<u32>& src, bool blocking);
+    void enqueue_write_buffer(Buffer& buffer, vector<uint32_t>& src, bool blocking);
 
     void enqueue_program(Program& program, bool blocking);
 
@@ -193,8 +193,8 @@ class CommandQueue {
 
     void wrap();
 
-    friend void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& dst, bool blocking);
-    friend void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<u32>& src, bool blocking);
+    friend void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& dst, bool blocking);
+    friend void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& src, bool blocking);
     friend void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
     friend void Finish(CommandQueue& cq);
 };

@@ -24,7 +24,7 @@ namespace allocator {
 
 void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const AllocatorConfig &alloc_config);
 
-u64 alloc_at_addr_in_compute_and_storage(const AllocatorConfig &config, BankManager &bank_manager, u64 size, u64 page_size, u64 relative_address);
+uint64_t alloc_at_addr_in_compute_and_storage(const AllocatorConfig &config, BankManager &bank_manager, uint64_t size, uint64_t page_size, uint64_t relative_address);
 
 }   // namespace allocator
 

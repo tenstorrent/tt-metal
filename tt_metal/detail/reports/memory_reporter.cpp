@@ -13,7 +13,7 @@ namespace tt::tt_metal {
 
 namespace detail {
 
-using bank_to_statistics = std::map<u32, allocator::Statistics>;
+using bank_to_statistics = std::map<uint32_t, allocator::Statistics>;
 
 std::atomic<bool> MemoryReporter::is_enabled_ = false;
 

@@ -15,7 +15,7 @@
 
 #include <optional>
 
-using u32 = std::uint32_t;
+using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -42,15 +42,15 @@ operation::ProgramWithCallbacks layernorm_(
 ) {
 
     const auto shape = a.shape();
-    u32 W = shape[3], H = shape[2];
-    u32 HW = H*W;
-    u32 NC = a.volume() / HW;
+    uint32_t W = shape[3], H = shape[2];
+    uint32_t HW = H*W;
+    uint32_t NC = a.volume() / HW;
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
     const auto& a_dtype = a.dtype();
 
-    u32 Wt = W/TILE_WIDTH;
-    u32 Ht = H/TILE_HEIGHT;
+    uint32_t Wt = W/TILE_WIDTH;
+    uint32_t Ht = H/TILE_HEIGHT;
 
     uint32_t num_tensor_tiles = a.volume() / TILE_HW;
 

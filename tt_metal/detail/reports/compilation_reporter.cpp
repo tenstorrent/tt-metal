@@ -109,8 +109,8 @@ void CompilationReporter::flush_program_entry(const Program &program, bool persi
     }
 
     auto get_num_compute_and_data_movement_kernels = [&]() {
-        u32 num_compute = 0;
-        u32 num_data_movement = 0;
+        uint32_t num_compute = 0;
+        uint32_t num_data_movement = 0;
         for (auto kernel_id : program.kernel_ids()) {
             const auto kernel = detail::GetKernel(program, kernel_id);
             if (kernel->processor() == tt::RISCV::BRISC or kernel->processor() == tt::RISCV::NCRISC) {

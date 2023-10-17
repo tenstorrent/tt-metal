@@ -17,8 +17,8 @@
 using namespace tt;
 using namespace constants;
 
-using u32 = std::uint32_t;
-using u16 = std::uint16_t;
+using std::uint32_t;
+using std::uint16_t;
 using std::vector;
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -54,12 +54,12 @@ int main(int argc, char **argv) {
 
         vector<uint32_t> shape = {1, 3, 17*TILE_HEIGHT, 19*TILE_WIDTH};
         //vector<uint32_t> shape = {1, 1, 17*TILE_HEIGHT, 19*TILE_WIDTH};
-        u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0];
-        u32 HW = H*W;
+        uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0];
+        uint32_t HW = H*W;
         TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
         TT_ASSERT(H > 0 && W > 0 && NC > 0);
-        u32 Wt = W/TILE_WIDTH;
-        u32 Ht = H/TILE_HEIGHT;
+        uint32_t Wt = W/TILE_WIDTH;
+        uint32_t Ht = H/TILE_HEIGHT;
         float scaler = do_max ? 1.0f : 1.0f/W;
         uint32_t num_tensor_tiles = NC*H*W / (TILE_WIDTH*TILE_HEIGHT);
 
@@ -198,12 +198,12 @@ int main(int argc, char **argv) {
 
         // recover a linear view of input vector for consumption by gold_ function
         auto u16_src0_vec = u16_from_u32_vector(src0_vec);
-        vector<u16> src_linear = convert_layout<u16>(u16_src0_vec, shape, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
-        vector<u16> gold_reduced = gold_reduce_w(src_linear, shape, scaler, do_max ? true : false); // result is u16 untilized
+        vector<uint16_t> src_linear = convert_layout<uint16_t>(u16_src0_vec, shape, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
+        vector<uint16_t> gold_reduced = gold_reduce_w(src_linear, shape, scaler, do_max ? true : false); // result is uint16_t untilized
 
-        // Tilize from row major and convert to pairs (u32)
+        // Tilize from row major and convert to pairs (uint32_t)
         vector<uint32_t> shapeR{shape[0], shape[1], shape[2], 32};
-        auto gold_4f_u32 = u32_from_u16_vector(convert_layout<u16>(gold_reduced, shapeR, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES));
+        auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(gold_reduced, shapeR, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES));
 
         pass &= packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
         if (!pass)

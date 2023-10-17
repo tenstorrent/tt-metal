@@ -62,7 +62,7 @@ class Program {
 
     void construct_core_range_set_for_worker_cores();
 
-    const u64 get_id() const { return this->id; }
+    const uint64_t get_id() const { return this->id; }
 
     std::vector<KernelID> kernel_ids() const { return kernel_ids_; }
 
@@ -124,8 +124,8 @@ class Program {
         void reset_available_addresses() { this->l1_regions = {{L1_UNRESERVED_BASE, L1_UNRESERVED_BASE}}; }
     };
 
-    u64 id; // Need to make non-const due to move constructor
-    static std::atomic<u64> program_counter;
+    uint64_t id; // Need to make non-const due to move constructor
+    static std::atomic<uint64_t> program_counter;
     std::vector<KernelID> kernel_ids_;
     std::unordered_map<KernelID, Kernel *> kernel_by_id_;
     CoreCoord grid_extent_;

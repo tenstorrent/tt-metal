@@ -173,14 +173,14 @@ int main(int argc, char **argv) {
     log_info(LogTest, "core range {},{} - {},{}", start_core.x, start_core.y,
              end_core.x, end_core.y);
 
-    u32 dst_cb_index = 0;
-    u32 dst_cb_addr = 120 * 1024;
-    u32 cb_tiles = cb_n;  // cb can be smaller than l1 buffer.
+    uint32_t dst_cb_index = 0;
+    uint32_t dst_cb_addr = 120 * 1024;
+    uint32_t cb_tiles = cb_n;  // cb can be smaller than l1 buffer.
     tt_metal::CircularBufferConfig cb_dst_config = tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{dst_cb_index, data_format}})
       .set_page_size(dst_cb_index, single_tile_size);
     auto cb_dst = tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
 
-    u32 activations_addr = dst_cb_addr + (cb_tiles * single_tile_size);
+    uint32_t activations_addr = dst_cb_addr + (cb_tiles * single_tile_size);
 
     uint32_t total_tiles_size_bytes = Nt * single_tile_size;
     if (one_buffer_share) {

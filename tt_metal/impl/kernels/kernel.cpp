@@ -90,8 +90,8 @@ std::vector<uint32_t> const &Kernel::runtime_args(const CoreCoord &logical_core)
     return this->core_to_runtime_args_[logical_core];
 }
 
-std::pair<u64, u64> DataMovementKernel::get_runtime_args_range() const {
-    std::pair<u64, u64> arg_base_to_result_base;
+std::pair<uint64_t, uint64_t> DataMovementKernel::get_runtime_args_range() const {
+    std::pair<uint64_t, uint64_t> arg_base_to_result_base;
     switch (this->config_.processor) {
         case DataMovementProcessor::RISCV_0: {
             arg_base_to_result_base = {BRISC_L1_ARG_BASE, BRISC_L1_RESULT_BASE};
@@ -108,8 +108,8 @@ std::pair<u64, u64> DataMovementKernel::get_runtime_args_range() const {
     return arg_base_to_result_base;
 }
 
-std::pair<u64, u64> ComputeKernel::get_runtime_args_range() const {
-    std::pair<u64, u64> arg_base_to_result_base = {TRISC_L1_ARG_BASE, TRISC_L1_ARG_BASE + 1024};
+std::pair<uint64_t, uint64_t> ComputeKernel::get_runtime_args_range() const {
+    std::pair<uint64_t, uint64_t> arg_base_to_result_base = {TRISC_L1_ARG_BASE, TRISC_L1_ARG_BASE + 1024};
     return arg_base_to_result_base;
 }
 

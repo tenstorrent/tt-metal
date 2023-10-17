@@ -15,24 +15,24 @@ using namespace tt::tt_metal;
 
 struct BufferStressTestConfig {
     // Used for normal write/read tests
-    u32 seed;
-    u32 num_pages_total;
+    uint32_t seed;
+    uint32_t num_pages_total;
 
-    u32 page_size;
-    u32 max_num_pages_per_buffer;
+    uint32_t page_size;
+    uint32_t max_num_pages_per_buffer;
 
     // Used for wrap test
-    u32 num_iterations;
-    u32 num_unique_vectors;
+    uint32_t num_iterations;
+    uint32_t num_unique_vectors;
 };
 
 namespace local_test_functions {
 
-vector<u32> generate_arange_vector(u32 size_bytes) {
-    TT_ASSERT(size_bytes % sizeof(u32) == 0);
-    vector<u32> src(size_bytes / sizeof(u32), 0);
+vector<uint32_t> generate_arange_vector(uint32_t size_bytes) {
+    TT_ASSERT(size_bytes % sizeof(uint32_t) == 0);
+    vector<uint32_t> src(size_bytes / sizeof(uint32_t), 0);
 
-    for (u32 i = 0; i < src.size(); i++) {
+    for (uint32_t i = 0; i < src.size(); i++) {
         src.at(i) = i;
     }
     return src;
@@ -42,10 +42,10 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, CommandQueue&
     size_t buf_size = config.num_pages * config.page_size;
     Buffer bufa(device, buf_size, config.page_size, config.buftype);
 
-    vector<u32> src = generate_arange_vector(bufa.size());
+    vector<uint32_t> src = generate_arange_vector(bufa.size());
 
     EnqueueWriteBuffer(cq, bufa, src, false);
-    vector<u32> result;
+    vector<uint32_t> result;
     EnqueueReadBuffer(cq, bufa, result, true);
 
     return src == result;
@@ -55,15 +55,15 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     Device* device, CommandQueue& cq, const BufferStressTestConfig& config) {
     srand(config.seed);
     bool pass = true;
-    u32 num_pages_left = config.num_pages_total;
+    uint32_t num_pages_left = config.num_pages_total;
     while (num_pages_left) {
-        u32 num_pages = std::min(rand() % (config.max_num_pages_per_buffer) + 1, num_pages_left);
+        uint32_t num_pages = std::min(rand() % (config.max_num_pages_per_buffer) + 1, num_pages_left);
         num_pages_left -= num_pages;
 
-        u32 buf_size = num_pages * config.page_size;
-        vector<u32> src(buf_size / sizeof(u32), 0);
+        uint32_t buf_size = num_pages * config.page_size;
+        vector<uint32_t> src(buf_size / sizeof(uint32_t), 0);
 
-        for (u32 i = 0; i < src.size(); i++) {
+        for (uint32_t i = 0; i < src.size(); i++) {
             src.at(i) = i;
         }
 
@@ -75,7 +75,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
         Buffer buf(device, buf_size, config.page_size, buftype);
         EnqueueWriteBuffer(cq, buf, src, false);
 
-        vector<u32> res;
+        vector<uint32_t> res;
         EnqueueReadBuffer(cq, buf, res, true);
         pass &= src == res;
     }
@@ -85,7 +85,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
 bool test_EnqueueWrap_on_EnqueueReadBuffer(Device* device, CommandQueue& cq, const BufferConfig& config) {
     auto [buffer, src] = EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 
-    vector<u32> dst;
+    vector<uint32_t> dst;
     EnqueueReadBuffer(cq, buffer, dst, true);
 
     return src == dst;
@@ -96,18 +96,18 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
 
     srand(config.seed);
 
-    vector<vector<u32>> unique_vectors;
-    for (u32 i = 0; i < config.num_unique_vectors; i++) {
-        u32 num_pages = rand() % (config.max_num_pages_per_buffer) + 1;
+    vector<vector<uint32_t>> unique_vectors;
+    for (uint32_t i = 0; i < config.num_unique_vectors; i++) {
+        uint32_t num_pages = rand() % (config.max_num_pages_per_buffer) + 1;
         size_t buf_size = num_pages * config.page_size;
         unique_vectors.push_back(create_random_vector_of_bfloat16(
             buf_size, 100, std::chrono::system_clock::now().time_since_epoch().count()));
     }
 
     vector<Buffer> bufs;
-    u32 start = 0;
-    for (u32 i = 0; i < config.num_iterations; i++) {
-        size_t buf_size = unique_vectors[i % unique_vectors.size()].size() * sizeof(u32);
+    uint32_t start = 0;
+    for (uint32_t i = 0; i < config.num_iterations; i++) {
+        size_t buf_size = unique_vectors[i % unique_vectors.size()].size() * sizeof(uint32_t);
         try {
             bufs.push_back(CreateBuffer(device, buf_size, config.page_size, BufferType::DRAM));
         } catch (const std::exception& e) {
@@ -121,8 +121,8 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
 
     tt::log_info("Comparing {} buffers", bufs.size());
     bool pass = true;
-    vector<u32> dst;
-    u32 idx = start;
+    vector<uint32_t> dst;
+    uint32_t idx = start;
     for (Buffer& buffer : bufs) {
         EnqueueReadBuffer(cq, buffer, dst, true);
         pass &= dst == unique_vectors[idx % unique_vectors.size()];
@@ -145,7 +145,7 @@ TEST_F(CommandQueueFixture, WriteOneTileToDramBank0) {
 
 TEST_F(CommandQueueFixture, WriteOneTileToAllDramBanks) {
     BufferConfig config = {
-        .num_pages = u32(this->device_->num_banks(BufferType::DRAM)),
+        .num_pages = uint32_t(this->device_->num_banks(BufferType::DRAM)),
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 
@@ -153,7 +153,7 @@ TEST_F(CommandQueueFixture, WriteOneTileToAllDramBanks) {
 }
 
 TEST_F(CommandQueueFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
-    constexpr u32 num_round_robins = 2;
+    constexpr uint32_t num_round_robins = 2;
     BufferConfig config = {
         .num_pages = num_round_robins * (this->device_->num_banks(BufferType::DRAM)),
         .page_size = 2048,
@@ -222,7 +222,7 @@ TEST_F(CommandQueueFixture, WriteOneTileToL1Bank0) {
 TEST_F(CommandQueueFixture, WriteOneTileToAllL1Banks) {
     auto compute_with_storage_grid = this->device_->compute_with_storage_grid_size();
     BufferConfig config = {
-        .num_pages = u32(compute_with_storage_grid.x * compute_with_storage_grid.y),
+        .num_pages = uint32_t(compute_with_storage_grid.x * compute_with_storage_grid.y),
         .page_size = 2048,
         .buftype = BufferType::L1};
 
@@ -232,7 +232,7 @@ TEST_F(CommandQueueFixture, WriteOneTileToAllL1Banks) {
 TEST_F(CommandQueueFixture, WriteOneTileToAllL1BanksTwiceRoundRobin) {
     auto compute_with_storage_grid = this->device_->compute_with_storage_grid_size();
     BufferConfig config = {
-        .num_pages = 2 * u32(compute_with_storage_grid.x * compute_with_storage_grid.y),
+        .num_pages = 2 * uint32_t(compute_with_storage_grid.x * compute_with_storage_grid.y),
         .page_size = 2048,
         .buftype = BufferType::L1};
 
@@ -256,10 +256,10 @@ TEST_F(CommandQueueFixture, TestBackToBackNon32BAlignedPageSize) {
     auto src_b = local_test_functions::generate_arange_vector(bufb.size());
     EnqueueWriteBuffer(*tt::tt_metal::detail::GLOBAL_CQ, bufb, src_b, false);
 
-    vector<u32> result_a;
+    vector<uint32_t> result_a;
     EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, bufa, result_a, true);
 
-    vector<u32> result_b;
+    vector<uint32_t> result_b;
     EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, bufb, result_b, true);
 
     EXPECT_EQ(src_a, result_a);

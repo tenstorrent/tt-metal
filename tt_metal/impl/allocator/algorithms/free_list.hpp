@@ -24,19 +24,19 @@ class FreeList : public Algorithm {
         FIRST = 1
     };
 
-    FreeList(u64 max_size_bytes, u64 offset_bytes, u64 min_allocation_size, u64 alignment, SearchPolicy search_policy);
+    FreeList(uint64_t max_size_bytes, uint64_t offset_bytes, uint64_t min_allocation_size, uint64_t alignment, SearchPolicy search_policy);
 
     ~FreeList();
 
     void init();
 
-    std::vector<std::pair<u64, u64>> available_addresses(u64 size_bytes) const;
+    std::vector<std::pair<uint64_t, uint64_t>> available_addresses(uint64_t size_bytes) const;
 
-    std::optional<u64> allocate(u64 size_bytes, bool bottom_up=true);
+    std::optional<uint64_t> allocate(uint64_t size_bytes, bool bottom_up=true);
 
-    std::optional<u64> allocate_at_address(u64 absolute_start_address, u64 size_bytes);
+    std::optional<uint64_t> allocate_at_address(uint64_t absolute_start_address, uint64_t size_bytes);
 
-    void deallocate(u64 absolute_address);
+    void deallocate(uint64_t absolute_address);
 
     void clear();
 
@@ -46,8 +46,8 @@ class FreeList : public Algorithm {
 
    private:
     struct Block {
-        u64 address;
-        u64 size;
+        uint64_t address;
+        uint64_t size;
         Block *prev_block = nullptr;
         Block *next_block = nullptr;
         Block *prev_free = nullptr;
@@ -58,11 +58,11 @@ class FreeList : public Algorithm {
 
     bool is_allocated(const Block *block) const;
 
-    Block *search_best(u64 size_bytes, bool bottom_up);
+    Block *search_best(uint64_t size_bytes, bool bottom_up);
 
-    Block *search_first(u64 size_bytes, bool bottom_up);
+    Block *search_first(uint64_t size_bytes, bool bottom_up);
 
-    Block *search(u64 size_bytes, bool bottom_up);
+    Block *search(uint64_t size_bytes, bool bottom_up);
 
     void allocate_entire_free_block(Block *free_block_to_allocate);
 
@@ -70,15 +70,15 @@ class FreeList : public Algorithm {
 
     void update_right_aligned_allocated_block_connections(Block *free_block, Block *allocated_block);
 
-    Block *allocate_slice_of_free_block(Block *free_block, u64 offset, u64 size_bytes);
+    Block *allocate_slice_of_free_block(Block *free_block, uint64_t offset, uint64_t size_bytes);
 
-    Block *find_block(u64 address);
+    Block *find_block(uint64_t address);
 
     void reset();
 
     void update_lowest_occupied_address();
 
-    void update_lowest_occupied_address(u64 address);
+    void update_lowest_occupied_address(uint64_t address);
 
     SearchPolicy search_policy_;
     Block *block_head_;

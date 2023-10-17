@@ -9,7 +9,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
-u32 NUM_TILES = 2048;
+uint32_t NUM_TILES = 2048;
 
 tt_metal::Program generate_eltwise_unary_program(Device *device) {
     // TODO(agrebenisan): This is directly copy and pasted from test_eltwise_binary.
@@ -85,9 +85,9 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
     tt_metal::Program program = create_program(device);
 
     CoreCoord worker_core(0, 0);
-    vector<u32> inp = create_random_vector_of_bfloat16(NUM_TILES * 2048, 100, 0);
+    vector<uint32_t> inp = create_random_vector_of_bfloat16(NUM_TILES * 2048, 100, 0);
 
-    vector<u32> out_vec;
+    vector<uint32_t> out_vec;
     {
         CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 

@@ -7,12 +7,12 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    for (u32 i = 0; i < 20; i++) {
-        u32 load = *reinterpret_cast<volatile tt_l1_ptr u32*>(400 * 1024);
-        u32 local_load1 = *reinterpret_cast<volatile u32*>(MEM_LOCAL_BASE);
-        u32 local_load2 = *reinterpret_cast<volatile u32*>(MEM_LOCAL_BASE);
-        u32 local_load3 = *reinterpret_cast<volatile u32*>(MEM_LOCAL_BASE);
-        u32 local_load4 = *reinterpret_cast<volatile u32*>(MEM_LOCAL_BASE);
-        u32 local_load5 = *reinterpret_cast<volatile u32*>(MEM_LOCAL_BASE);
+    for (uint32_t i = 0; i < 20; i++) {
+        uint32_t load = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(400 * 1024);
+        uint32_t local_load1 = *reinterpret_cast<volatile uint32_t*>(MEM_LOCAL_BASE);
+        uint32_t local_load2 = *reinterpret_cast<volatile uint32_t*>(MEM_LOCAL_BASE);
+        uint32_t local_load3 = *reinterpret_cast<volatile uint32_t*>(MEM_LOCAL_BASE);
+        uint32_t local_load4 = *reinterpret_cast<volatile uint32_t*>(MEM_LOCAL_BASE);
+        uint32_t local_load5 = *reinterpret_cast<volatile uint32_t*>(MEM_LOCAL_BASE);
     }
 }

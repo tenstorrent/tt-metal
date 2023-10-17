@@ -20,21 +20,21 @@ using namespace tt::tt_metal;
 
 namespace unit_tests::create_pipeline {
 
-void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
+void create_and_run_row_pipeline(tt_metal::Device* device, uint32_t num_cores) {
     CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
     tt_metal::Program program = tt_metal::Program();
 
-    u32 num_tiles = 32;
-    u32 block_size_tiles = 16;
-    u32 num_blocks_in_CB = 2;
-    u32 num_repetitions = 1;
+    uint32_t num_tiles = 32;
+    uint32_t block_size_tiles = 16;
+    uint32_t num_blocks_in_CB = 2;
+    uint32_t num_repetitions = 1;
 
     TT_ASSERT(num_cores >= 2 && num_cores <= 12);  // grayskull
     TT_ASSERT(num_tiles % block_size_tiles == 0);
 
     std::vector<CoreCoord> cores;
-    for (u32 i = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         cores.push_back({i, 0});
     }
 
@@ -44,20 +44,20 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     log_info(LogTest, "num_blocks_in_CB: {}", num_blocks_in_CB);
     log_info(LogTest, "num_repetitions: {}", num_repetitions);
 
-    u32 single_tile_size = 2 * 1024;
-    u32 block_size_bytes = block_size_tiles * single_tile_size;
+    uint32_t single_tile_size = 2 * 1024;
+    uint32_t block_size_bytes = block_size_tiles * single_tile_size;
     log_info(LogTest, "block_size_bytes: {}", block_size_bytes);
     log_info(LogTest, "CB size: {}", block_size_bytes * num_blocks_in_CB);
 
     // source and destination buffers
-    u32 buffer_size = single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    u32 total_bytes_moved = buffer_size * num_repetitions;
+    uint32_t buffer_size = single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    uint32_t total_bytes_moved = buffer_size * num_repetitions;
     log_info(LogTest, "total_bytes_moved: {}", total_bytes_moved);
 
     // circular buffers in L1
-    u32 cb_index = 8;
-    u32 cb_size_tiles = num_blocks_in_CB * block_size_tiles;
-    u32 cb_size_bytes = cb_size_tiles * single_tile_size;
+    uint32_t cb_index = 8;
+    uint32_t cb_size_tiles = num_blocks_in_CB * block_size_tiles;
+    uint32_t cb_size_bytes = cb_size_tiles * single_tile_size;
 
     for (auto core : cores) {
         tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(cb_size_bytes, {{cb_index, tt::DataFormat::Float16_b}})
@@ -69,9 +69,9 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     tt_metal::Buffer src_buffer;
     tt_metal::Buffer dst_buffer;
 
-    u32 src_address;
+    uint32_t src_address;
     CoreCoord src_noc_xy;
-    u32 dst_address;
+    uint32_t dst_address;
     CoreCoord dst_noc_xy;
 
     src_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
@@ -93,7 +93,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
             receiver_kernel_name = "tt_metal/kernels/dataflow/receiver_intermediate_stage.cpp";
         }
 
-        std::vector<u32> receiver_kernel_compile_time_args = {cb_index, block_size_tiles};
+        std::vector<uint32_t> receiver_kernel_compile_time_args = {cb_index, block_size_tiles};
         receiver_kernels.push_back(tt_metal::CreateDataMovementKernel(
             program,
             receiver_kernel_name,
@@ -109,7 +109,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
         } else {
             sender_kernel_name = "tt_metal/kernels/dataflow/sender_intermediate_stage.cpp";
         }
-        std::vector<u32> sender_kernel_compile_time_args = {cb_index, block_size_tiles};
+        std::vector<uint32_t> sender_kernel_compile_time_args = {cb_index, block_size_tiles};
         sender_kernels.push_back(tt_metal::CreateDataMovementKernel(
             program,
             sender_kernel_name,
@@ -157,18 +157,18 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
                 program,
                 receiver_kernels.at(core_id),
                 core,
-                {src_address, (u32)src_noc_xy.x, (u32)src_noc_xy.y, (u32)num_tiles, (u32)num_repetitions});
+                {src_address, (uint32_t)src_noc_xy.x, (uint32_t)src_noc_xy.y, (uint32_t)num_tiles, (uint32_t)num_repetitions});
         } else {
             SetRuntimeArgs(
                 program,
                 receiver_kernels.at(core_id),
                 core,
-                {(u32)device->worker_core_from_logical_core(cores[core_id - 1]).x,
-                 (u32)device->worker_core_from_logical_core(cores[core_id - 1]).y,
-                 (u32)num_tiles,
-                 (u32)sender_semaphore_addr,
-                 (u32)receiver_semaphore_addr,
-                 (u32)num_repetitions});
+                {(uint32_t)device->worker_core_from_logical_core(cores[core_id - 1]).x,
+                 (uint32_t)device->worker_core_from_logical_core(cores[core_id - 1]).y,
+                 (uint32_t)num_tiles,
+                 (uint32_t)sender_semaphore_addr,
+                 (uint32_t)receiver_semaphore_addr,
+                 (uint32_t)num_repetitions});
         }
 
         if (core_id == num_cores - 1) {
@@ -176,19 +176,19 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
                 program,
                 sender_kernels.at(core_id),
                 core,
-                {dst_address, (u32)dst_noc_xy.x, (u32)dst_noc_xy.y, (u32)num_tiles, (u32)num_repetitions});
+                {dst_address, (uint32_t)dst_noc_xy.x, (uint32_t)dst_noc_xy.y, (uint32_t)num_tiles, (uint32_t)num_repetitions});
         } else {
             SetRuntimeArgs(
                 program,
                 sender_kernels.at(core_id),
                 core,
-                {(u32)device->worker_core_from_logical_core(cores[core_id + 1]).x,
-                 (u32)device->worker_core_from_logical_core(cores[core_id + 1]).y,
-                 (u32)num_tiles,
-                 (u32)sender_semaphore_addr,
-                 (u32)receiver_semaphore_addr,
-                 (u32)l1_valid_value_addr,
-                 (u32)num_repetitions});
+                {(uint32_t)device->worker_core_from_logical_core(cores[core_id + 1]).x,
+                 (uint32_t)device->worker_core_from_logical_core(cores[core_id + 1]).y,
+                 (uint32_t)num_tiles,
+                 (uint32_t)sender_semaphore_addr,
+                 (uint32_t)receiver_semaphore_addr,
+                 (uint32_t)l1_valid_value_addr,
+                 (uint32_t)num_repetitions});
         }
     }
 
@@ -196,7 +196,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
     // send input data to the device
-    std::vector<u32> src_vec =
+    std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     EnqueueWriteBuffer(cq, src_buffer, src_vec, false);
@@ -207,7 +207,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     log_info(LogTest, "Kernels done.");
 
     log_info(LogTest, "Reading results from device...");
-    std::vector<u32> result_vec;
+    std::vector<uint32_t> result_vec;
     EnqueueReadBuffer(cq, dst_buffer, result_vec, true);
 
     ////////////////////////////////////////////////////////////////////////////

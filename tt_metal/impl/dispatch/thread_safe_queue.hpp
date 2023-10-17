@@ -12,7 +12,7 @@ template <class T>
 class TSQueue {
     public:
         TSQueue();
-        TSQueue(u32 capacity);
+        TSQueue(uint32_t capacity);
 
         void push(T e);
         T peek();
@@ -22,7 +22,7 @@ class TSQueue {
         std::queue<T> q;
         std::condition_variable empty_condition;
         std::condition_variable full_condition;
-        u32 capacity;
+        uint32_t capacity;
 
     private:
         std::mutex m;
@@ -30,7 +30,7 @@ class TSQueue {
 
 
 template <class T>
-TSQueue<T>::TSQueue(u32 capacity) {
+TSQueue<T>::TSQueue(uint32_t capacity) {
     this->q = std::queue<T>();
     this->capacity = capacity;
 }

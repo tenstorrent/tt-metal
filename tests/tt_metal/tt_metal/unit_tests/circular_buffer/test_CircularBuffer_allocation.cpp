@@ -17,8 +17,8 @@ namespace basic_tests::circular_buffer {
 void validate_cb_address(Program &program, Device *device, const CoreRangeSet &cr_set, const std::map<CoreCoord, std::map<uint8_t, uint32_t>> &core_to_address_per_buffer_index) {
     LaunchProgram(device, program);
 
-    vector<u32> cb_config_vector;
-    u32 cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(u32);
+    vector<uint32_t> cb_config_vector;
+    uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const CoreRange &core_range : cr_set.ranges()) {
         for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
@@ -74,15 +74,15 @@ TEST_F(DeviceFixture, TestCircularBufferSequentialAcrossAllCores) {
     CoreCoord core1{.x = 0, .y = 1};
     CoreCoord core2{.x = 0, .y = 2};
 
-    const static std::map<CoreCoord, u32> core_to_num_cbs = {{core0, 3}, {core1, 0}, {core2, 5}};
+    const static std::map<CoreCoord, uint32_t> core_to_num_cbs = {{core0, 3}, {core1, 0}, {core2, 5}};
     std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
 
-    u32 max_num_cbs = 0;
+    uint32_t max_num_cbs = 0;
     for (const auto &[core, num_cbs] : core_to_num_cbs) {
         auto expected_cb_addr = L1_UNRESERVED_BASE;
         max_num_cbs = std::max(max_num_cbs, num_cbs);
         std::map<uint8_t, uint32_t> expected_addresses;
-        for (u32 buffer_id = 0; buffer_id < num_cbs; buffer_id++) {
+        for (uint32_t buffer_id = 0; buffer_id < num_cbs; buffer_id++) {
             CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_id, cb_config.data_format}}).set_page_size(buffer_id, cb_config.page_size);
             auto cb = CreateCircularBuffer(program, core, config1);
             expected_addresses[buffer_id] = expected_cb_addr;
@@ -119,7 +119,7 @@ TEST_F(DeviceFixture, TestValidCircularBufferAddress) {
     CoreRangeSet cr_set({cr});
     std::vector<uint8_t> buffer_indices = {16, 24};
 
-    u32 expected_cb_addr = l1_buffer.address();
+    uint32_t expected_cb_addr = l1_buffer.address();
     CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_indices[0], cb_config.data_format}, {buffer_indices[1], cb_config.data_format}}, expected_cb_addr)
         .set_page_size(buffer_indices[0], cb_config.page_size)
         .set_page_size(buffer_indices[1], cb_config.page_size);
@@ -148,8 +148,8 @@ TEST_F(DeviceFixture, TestInvalidCircularBufferAddress) {
     CBConfig cb_config;
 
     CoreCoord core0{.x = 0, .y = 0};
-    const static u32 core0_num_cbs = 3;
-    for (u32 buffer_id = 0; buffer_id < core0_num_cbs; buffer_id++) {
+    const static uint32_t core0_num_cbs = 3;
+    for (uint32_t buffer_id = 0; buffer_id < core0_num_cbs; buffer_id++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_id, cb_config.data_format}}).set_page_size(buffer_id, cb_config.page_size);
         auto cb = CreateCircularBuffer(program, core0, config1);
     }
@@ -157,7 +157,7 @@ TEST_F(DeviceFixture, TestInvalidCircularBufferAddress) {
     CoreRange cr = {.start = {0, 0}, .end = {0, 1}};
     CoreRangeSet cr_set({cr});
 
-    constexpr u32 multi_core_cb_index = core0_num_cbs + 1;
+    constexpr uint32_t multi_core_cb_index = core0_num_cbs + 1;
     uint32_t invalid_requested_address = L1_UNRESERVED_BASE;
 
     CircularBufferConfig config2 = CircularBufferConfig(cb_config.page_size, {{multi_core_cb_index, cb_config.data_format}}, invalid_requested_address).set_page_size(multi_core_cb_index, cb_config.page_size);
@@ -184,7 +184,7 @@ TEST_F(DeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
 
     uint32_t num_pages = (l1_buffer.address() - L1_UNRESERVED_BASE) / NUM_CIRCULAR_BUFFERS / page_size + 1;
     CBConfig cb_config = {.num_pages=num_pages};
-    for (u32 buffer_id = 0; buffer_id < NUM_CIRCULAR_BUFFERS; buffer_id++) {
+    for (uint32_t buffer_id = 0; buffer_id < NUM_CIRCULAR_BUFFERS; buffer_id++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size * cb_config.num_pages, {{buffer_id, cb_config.data_format}}).set_page_size(buffer_id, cb_config.page_size);
         auto cb = CreateCircularBuffer(program, core, config1);
     }
@@ -204,11 +204,11 @@ TEST_F(DeviceFixture, TestValidUpdateCircularBufferSize) {
 
     initialize_program(program, cr_set);
 
-    const u32 core0_num_cbs = 2;
+    const uint32_t core0_num_cbs = 2;
     std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
     std::vector<CircularBufferID> cb_ids;
     auto expected_cb_addr = L1_UNRESERVED_BASE;
-    for (u32 buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
+    for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}}).set_page_size(buffer_idx, cb_config.page_size);
         auto cb = CreateCircularBuffer(program, core0, config1);
         golden_addresses_per_core[core0][buffer_idx] = expected_cb_addr;
@@ -237,11 +237,11 @@ TEST_F(DeviceFixture, TestInvalidUpdateCircularBufferSize) {
 
     initialize_program(program, cr_set);
 
-    const u32 core0_num_cbs = 2;
+    const uint32_t core0_num_cbs = 2;
     std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
     std::vector<CircularBufferID> cb_ids;
     auto expected_cb_addr = L1_UNRESERVED_BASE;
-    for (u32 buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
+    for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}}).set_page_size(buffer_idx, cb_config.page_size);
         auto cb = CreateCircularBuffer(program, core0, config1);
         golden_addresses_per_core[core0][buffer_idx] = expected_cb_addr;
@@ -270,11 +270,11 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferAddress) {
 
     initialize_program(program, cr_set);
 
-    const u32 core0_num_cbs = 2;
+    const uint32_t core0_num_cbs = 2;
     std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
     std::vector<CircularBufferID> cb_ids;
     auto expected_cb_addr = L1_UNRESERVED_BASE;
-    for (u32 buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
+    for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}}).set_page_size(buffer_idx, cb_config.page_size);
         auto cb = CreateCircularBuffer(program, core0, config1);
         golden_addresses_per_core[core0][buffer_idx] = expected_cb_addr;
@@ -301,12 +301,12 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferPageSize) {
 
     initialize_program(program, cr_set);
 
-    const u32 core0_num_cbs = 2;
+    const uint32_t core0_num_cbs = 2;
     std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
     std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_num_pages_per_core;
     std::vector<CircularBufferID> cb_ids;
     auto expected_cb_addr = L1_UNRESERVED_BASE;
-    for (u32 buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
+    for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}}).set_page_size(buffer_idx, cb_config.page_size);
         auto cb = CreateCircularBuffer(program, core0, config1);
         golden_addresses_per_core[core0][buffer_idx] = expected_cb_addr;
@@ -317,8 +317,8 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferPageSize) {
 
     LaunchProgram(this->devices_.at(id), program);
 
-    vector<u32> cb_config_vector;
-    u32 cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(u32);
+    vector<uint32_t> cb_config_vector;
+    uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const CoreRange &core_range : cr_set.ranges()) {
         for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
