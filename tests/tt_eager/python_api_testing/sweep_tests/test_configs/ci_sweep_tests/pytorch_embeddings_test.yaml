@@ -2,9 +2,9 @@
 test-list:
   - embeddings:
       shape:
-        start-shape: [1, 32, 2048, 4096]
-        end-shape: [1, 32, 2048, 4096]
-        interval: [1, 1, 1, 1]
+        start-shape: [1, 32, 512, 2048]
+        end-shape: [1, 512, 2048, 4096]
+        interval: [1, 32, 32, 32]
         num-shapes: 2
         num-samples: 64
         method: embeddings
@@ -21,7 +21,7 @@ test-list:
       args:
         inputs:
           - input-1:
-            data-layout: ["TILE"]
+            data-layout: ["TILE", "ROW_MAJOR"]
             data-type: ["UINT32"]
             buffer-type: ["DRAM"]
           - input-2:
