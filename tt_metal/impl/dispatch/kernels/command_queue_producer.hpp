@@ -79,7 +79,7 @@ void relay_command(bool db_buf_switch, u64 consumer_noc_encoding) {
 
 void produce(
     volatile tt_l1_ptr u32* command_ptr, u32 num_srcs, u32 page_size, u32 producer_cb_size, u32 producer_cb_num_pages,
-    u32 consumer_cb_size, u64 consumer_noc_encoding, bool db_buf_switch) {
+    u32 consumer_cb_size, u32 consumer_cb_num_pages, u64 consumer_noc_encoding, u32 producer_consumer_transfer_num_pages, bool db_buf_switch) {
     /*
         This API prefetches data from host memory and writes data to the consumer core. On the consumer,
         we partition the data space into 2 via double-buffering. There are two command slots, and two
@@ -99,16 +99,14 @@ void produce(
         command_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
 
         Buffer src_buffer((BufferType)src_buf_type, bank_base_address, page_size);
-        u32 quarter_of_producer_cb_num_pages = producer_cb_num_pages / 4;
-        u32 consumer_cb_num_pages = get_db_cb_num_pages_addr(db_buf_switch);
+        u32 fraction_of_producer_cb_num_pages = consumer_cb_num_pages / 2;
 
-        u32 num_to_read = min(num_pages, quarter_of_producer_cb_num_pages);
-        u32 num_to_write = 1; // This must be a bigger number for perf.
+        u32 num_to_read = min(num_pages, fraction_of_producer_cb_num_pages);
+        u32 num_to_write = min(num_pages, producer_consumer_transfer_num_pages); // This must be a bigger number for perf.
         u32 num_reads_issued = 0;
         u32 num_reads_completed = 0;
         u32 num_writes_completed = 0;
 
-        u32 num_producer_cb_pages_left = producer_cb_num_pages;
         while (num_writes_completed != num_pages) {
             // Context switch between reading in pages and sending them to the consumer.
             // These APIs are non-blocking to allow for context switching.
@@ -119,12 +117,7 @@ void produce(
                 num_reads_issued += num_to_read;
 
                 u32 num_pages_left = num_pages - num_reads_issued;
-                num_producer_cb_pages_left -= num_to_read;
-                if (num_producer_cb_pages_left == 0) {
-                    num_producer_cb_pages_left = producer_cb_num_pages;
-                }
-                num_to_read = min(num_pages_left, quarter_of_producer_cb_num_pages);
-                num_to_read = min(num_to_read, num_producer_cb_pages_left);
+                num_to_read = min(num_pages_left, fraction_of_producer_cb_num_pages);
             }
 
             if (num_reads_issued > num_writes_completed and cb_consumer_space_available(db_buf_switch, num_to_write)) {
@@ -141,6 +134,7 @@ void produce(
                 noc_async_write_barrier();
                 cb_pop_front(0, num_to_write);
                 num_writes_completed += num_to_write;
+                num_to_write = min(num_pages - num_writes_completed, producer_consumer_transfer_num_pages);
             }
         }
     }

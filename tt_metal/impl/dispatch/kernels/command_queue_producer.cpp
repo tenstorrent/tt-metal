@@ -10,9 +10,7 @@ static constexpr u32 COMMAND_START_ADDR =
     L1_UNRESERVED_BASE;  // Space between UNRESERVED_BASE -> data_start is for commands
 
 FORCE_INLINE
-void program_local_cb(
-    u32 num_pages, u32 page_size, u32 cb_size) {
-
+void program_local_cb(u32 num_pages, u32 page_size, u32 cb_size) {
     u32 cb_id = 0;
     u32 fifo_addr = DeviceCommand::DATA_SECTION_ADDRESS >> 4;
     u32 fifo_limit = fifo_addr + (cb_size >> 4) - 1;
@@ -27,8 +25,7 @@ void program_local_cb(
 }
 
 FORCE_INLINE
-void program_consumer_cb(
-    bool db_buf_switch, u64 consumer_noc_encoding, u32 num_pages, u32 page_size, u32 cb_size) {
+void program_consumer_cb(bool db_buf_switch, u64 consumer_noc_encoding, u32 num_pages, u32 page_size, u32 cb_size) {
     /*
         This API programs the double-buffered CB space of the consumer. This API should be called
         before notifying the consumer that data is available.
@@ -52,7 +49,7 @@ void program_consumer_cb(
 
     u32 cb_base = get_db_cb_l1_base(db_buf_switch);
     noc_async_write(cb_base, consumer_noc_encoding | cb_base, 7 * 16);
-    noc_async_write_barrier(); // barrier for now
+    noc_async_write_barrier();  // barrier for now
 }
 
 void kernel_main() {
@@ -88,32 +85,45 @@ void kernel_main() {
         u32 consumer_cb_num_pages = command_ptr[DeviceCommand::consumer_cb_num_pages_idx];
         u32 num_pages = command_ptr[DeviceCommand::num_pages_idx];
         u32 wrap = command_ptr[DeviceCommand::wrap_idx];
+        u32 producer_consumer_transfer_num_pages = command_ptr[DeviceCommand::producer_consumer_transfer_num_pages_idx];
 
         if (wrap) {
             // Basically popfront without the extra conditional
-            cq_read_interface.fifo_rd_ptr = CQ_START >> 4; // Head to beginning of command queue
+            cq_read_interface.fifo_rd_ptr = CQ_START >> 4;  // Head to beginning of command queue
             notify_host_of_cq_read_toggle();
             notify_host_of_cq_read_pointer();
             continue;
         }
 
         program_local_cb(producer_cb_num_pages, page_size, producer_cb_size);
-        while(db_semaphore_addr[0] == 0); // Check that there is space in the consumer
+        while (db_semaphore_addr[0] == 0)
+            ;  // Check that there is space in the consumer
         program_consumer_cb(db_buf_switch, consumer_noc_encoding, consumer_cb_num_pages, page_size, consumer_cb_size);
         relay_command(db_buf_switch, consumer_noc_encoding);
         if (stall) {
-            while(*db_semaphore_addr != 2);
+            while (*db_semaphore_addr != 2)
+                ;
         }
         // Decrement the semaphore value
-        noc_semaphore_inc(producer_noc_encoding | u32(db_semaphore_addr), -1); // Two's complement addition
+        noc_semaphore_inc(producer_noc_encoding | u32(db_semaphore_addr), -1);  // Two's complement addition
         noc_async_write_barrier();
 
         // Notify the consumer
         noc_semaphore_inc(consumer_noc_encoding | get_semaphore(0), 1);
-        noc_async_write_barrier(); // Barrier for now
+        noc_async_write_barrier();  // Barrier for now
 
         // Fetch data and send to the consumer
-        produce(command_ptr, num_buffer_transfers, page_size, producer_cb_size, producer_cb_num_pages, consumer_cb_size, consumer_noc_encoding, db_buf_switch);
+        produce(
+            command_ptr,
+            num_buffer_transfers,
+            page_size,
+            producer_cb_size,
+            producer_cb_num_pages,
+            consumer_cb_size,
+            consumer_cb_num_pages,
+            consumer_noc_encoding,
+            producer_consumer_transfer_num_pages,
+            db_buf_switch);
         cq_pop_front(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size);
 
         db_buf_switch = not db_buf_switch;
