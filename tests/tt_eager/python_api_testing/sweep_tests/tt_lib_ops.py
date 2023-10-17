@@ -2087,14 +2087,11 @@ def embeddings(x, y, *args, device, dtype, layout, input_mem_config, output_mem_
 
     x = x.int()
     x_shape = x.shape
-
     y_shape = y.shape
 
     batch_size = x_shape[0]
     num_rows = x_shape[2]
-    num_embeddings = y_shape[2]
     embedding_dim = y_shape[3]
-
 
     t0 = ttl.tensor.Tensor(x, dtype[0]).to(
         device, input_mem_config[0]
