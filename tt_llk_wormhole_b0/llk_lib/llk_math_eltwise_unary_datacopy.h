@@ -15,7 +15,7 @@ inline void eltwise_unary_configure_addrmod();
 
 template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, DstSync Dst = DstSync::SyncFull, bool is_fp32_dest_acc_en = false, bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy(uint dst_index) {
-    TT_LLK_DUMP("llk_math_eltwise_unary_datacopy<{}, {}, {}, {}>({})", type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, dst_index);
+    TT_LLK_DUMP("llk_math_eltwise_unary_datacopy<{}, {}, {}, {}, {}>({})", type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, unpack_to_dest, dst_index);
     
     if constexpr (unpack_to_dest) {
         math_unpack_to_dest_math_ready();
