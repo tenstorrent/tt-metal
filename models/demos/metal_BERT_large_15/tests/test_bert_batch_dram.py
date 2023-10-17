@@ -139,27 +139,26 @@ class TtBertBatchDram(torch.nn.Module):
             tt_attention_mask = attention_mask
         return tt_attention_mask
 
-    def forward(self, PERF_CNT, tt_embeddings, tt_attention_mask=None):
+    def forward(self, tt_embeddings, tt_attention_mask=None):
         print(f"Num encoders {len(self.encoders)}")
 
-        for i in range(PERF_CNT):
-            print(f"Running BERT model {i}")
-            # profiler.start("_run_encoders")
-            hidden_states = tt_embeddings
-            attention_mask = tt_attention_mask
 
-            for encoder in self.encoders:
-                # profiler.start("__one_encoder")
-                hidden_states = encoder(hidden_states, attention_mask)
-                if self.model_config["MOVE_ENCODER_OUTPUT_BOOL"]:
-                    hidden_states = tt_lib.tensor.move(hidden_states)
-                # profiler.end("__one_encoder")
+        # profiler.start("_run_encoders")
+        hidden_states = tt_embeddings
+        attention_mask = tt_attention_mask
 
-            # profiler.end("_run_encoders")
+        for encoder in self.encoders:
+            # profiler.start("__one_encoder")
+            hidden_states = encoder(hidden_states, attention_mask)
+            if self.model_config["MOVE_ENCODER_OUTPUT_BOOL"]:
+                hidden_states = tt_lib.tensor.move(hidden_states)
+            # profiler.end("__one_encoder")
 
-            # profiler.start("_qa_linear")
-            res = self.qa_linear(hidden_states)
-            # profiler.end("_qa_linear")
+        # profiler.end("_run_encoders")
+
+        # profiler.start("_qa_linear")
+        res = self.qa_linear(hidden_states)
+        # profiler.end("_qa_linear")
 
         return res
 
@@ -264,7 +263,7 @@ def run_bert_question_and_answering_inference(
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
     tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
-    tt_out = tt_bert_model(1, tt_embedding, tt_attention_mask)
+    tt_out = tt_bert_model(tt_embedding, tt_attention_mask)
     tt_lib.device.Synchronize()
     profiler.end("first_model_run_with_compile", force_enable=True)
     del tt_out
@@ -283,7 +282,7 @@ def run_bert_question_and_answering_inference(
 
     profiler.start(f"model_run_{PERF_CNT}_times_for_inference")
     tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
-    tt_out = tt_bert_model(1, tt_embedding, tt_attention_mask)
+    tt_out = tt_bert_model(tt_embedding, tt_attention_mask)
     tt_lib.device.Synchronize()
     profiler.end(f"model_run_{PERF_CNT}_times_for_inference", PERF_CNT)
 
@@ -412,7 +411,7 @@ def test_bert_batch_dram(
     # Then it will enable cache and run BERT-Large PERF_CNT number of times.
     # Performance is reported only for PERF_CNT number of runs.
     PERF_CNT = 1
-
+    assert PERF_CNT == 1, "Bert does not support internal perf count no more."
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 

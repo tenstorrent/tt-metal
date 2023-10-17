@@ -86,7 +86,7 @@ def run_perf_bert15(
 
         profiler.start(first_run_key)
         tt_embedding = tt_model.model_embedding(**tt_embedding_inputs)
-        tt_output = tt_model(1, tt_embedding, tt_attention_mask)
+        tt_output = tt_model(tt_embedding, tt_attention_mask)
         tt_lib.device.Synchronize()
         profiler.end(first_run_key, force_enable=True)
 
@@ -104,7 +104,7 @@ def run_perf_bert15(
 
         profiler.start(second_run_key)
         tt_embedding = tt_model.model_embedding(**tt_embedding_inputs)
-        tt_output = tt_model(1, tt_embedding, tt_attention_mask)
+        tt_output = tt_model(tt_embedding, tt_attention_mask)
         tt_lib.device.Synchronize()
         profiler.end(second_run_key, force_enable=True)
 

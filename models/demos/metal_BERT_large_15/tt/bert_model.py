@@ -105,19 +105,18 @@ class TtBertBatchDram(torch.nn.Module):
 
     def forward(
         self,
-        NUM_RUNS: int,
         tt_embeddings: tt_lib.tensor.Tensor,
         tt_attention_mask: Optional[tt_lib.tensor.Tensor] = None,
     ) -> tt_lib.tensor.Tensor:
-        for i in range(NUM_RUNS):
-            hidden_states = tt_embeddings
-            attention_mask = tt_attention_mask
 
-            for encoder in self.encoders:
-                hidden_states = encoder(hidden_states, attention_mask)
-                if self.model_config["MOVE_ENCODER_OUTPUT_BOOL"]:
-                    hidden_states = tt_lib.tensor.move(hidden_states)
+        hidden_states = tt_embeddings
+        attention_mask = tt_attention_mask
 
-            res = self.qa_linear(hidden_states)
+        for encoder in self.encoders:
+            hidden_states = encoder(hidden_states, attention_mask)
+            if self.model_config["MOVE_ENCODER_OUTPUT_BOOL"]:
+                hidden_states = tt_lib.tensor.move(hidden_states)
+
+        res = self.qa_linear(hidden_states)
 
         return res

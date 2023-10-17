@@ -118,22 +118,31 @@ def run_bert_question_and_answering_inference(
 
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
-    tt_out = tt_bert_model(1, *tt_bert_input)
+    tt_out = tt_bert_model(*tt_bert_input)
     tt_lib.device.Synchronize()
     profiler.end("first_model_run_with_compile", force_enable=True)
+    tt_out.deallocate()
     del tt_out
 
     # Recreate inputs since activations were deallocated
     tt_bert_input = tt_bert_model.model_preprocessing(**bert_input)
+
     profiler.enable()
     enable_persistent_kernel_cache()
 
     ##### Run Forward on TT Model Start
     profiler.start(f"model_run_for_inference")
-    tt_out = tt_bert_model(NUM_RUNS, *tt_bert_input)
+    tt_out = tt_bert_model(*tt_bert_input)
     tt_lib.device.Synchronize()
     profiler.end(f"model_run_for_inference")
 
+    # running in a loop
+    for i in range(NUM_RUNS):
+        tt_bert_input = tt_bert_model.model_preprocessing(**bert_input)
+        _tt_out = tt_bert_model(*tt_bert_input)
+        tt_lib.device.Synchronize()
+        _tt_out.deallocate()
+        del _tt_out
 
 
     ##### Output Postprocessing Start
@@ -171,14 +180,14 @@ def run_bert_question_and_answering_inference(
 
     profiler.end("processing_output_to_string")
     ##### Output Postprocessing End
-
+    SINGLE_RUN = 1
     measurements = {
         "preprocessing": profiler.get('processing_input_one') + profiler.get('processing_input_two'),
         "moving_weights_to_device": profiler.get('move_weights'),
-        "compile": profiler.get('first_model_run_with_compile') - (profiler.get('model_run_for_inference') / NUM_RUNS),
+        "compile": profiler.get('first_model_run_with_compile') - (profiler.get('model_run_for_inference') / SINGLE_RUN),
         f"inference_for_single_run_batch_{batch}_without_cache": profiler.get('first_model_run_with_compile'),
-        f"inference_for_{NUM_RUNS}_runs_batch_{batch}_without_cache": profiler.get('model_run_for_inference'),
-        "inference_throughput": (NUM_RUNS * batch) / profiler.get('model_run_for_inference'),
+        f"inference_for_{SINGLE_RUN}_run_batch_{batch}_without_cache": profiler.get('model_run_for_inference'),
+        "inference_throughput": (SINGLE_RUN * batch) / profiler.get('model_run_for_inference'),
         "post_processing": profiler.get("processing_output_to_string")
 
     }
@@ -187,7 +196,7 @@ def run_bert_question_and_answering_inference(
     logger.info(f"moving weights to device duration: {measurements['moving_weights_to_device']} s")
     logger.info(f"compile time: {measurements['compile']} s")
     logger.info(f"inference time for single run of model with batch size {batch} without using cache: {measurements[f'inference_for_single_run_batch_{batch}_without_cache']} s")
-    logger.info(f"inference time for {NUM_RUNS} run(s) of model with batch size {batch} and using cache: {measurements[f'inference_for_{NUM_RUNS}_runs_batch_{batch}_without_cache']} s")
+    logger.info(f"inference time for {SINGLE_RUN} run(s) of model with batch size {batch} and using cache: {measurements[f'inference_for_{SINGLE_RUN}_run_batch_{batch}_without_cache']} s")
     logger.info(f"inference throughput: {measurements['inference_throughput'] } inputs/s")
     logger.info(f"post processing time: {measurements['post_processing']} s")
 
@@ -195,12 +204,13 @@ def run_bert_question_and_answering_inference(
     return measurements, model_answers
 
 @pytest.mark.parametrize(
-    "input_path",
-    (("models/demos/metal_BERT_large_15/demo/input_data.json"),),
+    "input_path, NUM_RUNS",
+    (("models/demos/metal_BERT_large_15/demo/input_data.json", 1),),
     ids=["default_input"],
 )
 def test_demo(
     input_path,
+    NUM_RUNS,
     model_location_generator,
     device,
     use_program_cache,
@@ -220,7 +230,7 @@ def test_demo(
         return_attention_mask = True,
         return_token_type_ids = True,
         model_config = get_model_config("MIXED_PRECISION_BATCH8"),
-        NUM_RUNS = 1,
+        NUM_RUNS = NUM_RUNS,
         input_path = input_path,
         model_location_generator = model_location_generator,
         device = device,

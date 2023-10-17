@@ -28,7 +28,8 @@ def test_demo(
         6: "1992,",
         7: "statocyst,",
     }
-    measurements, answers = demo(input_path, model_location_generator, device, use_program_cache)
+    NUM_RUNS = 1000
+    measurements, answers = demo(input_path, NUM_RUNS, model_location_generator, device, use_program_cache)
     logger.info(measurements)
 
     logger.info(answers)
