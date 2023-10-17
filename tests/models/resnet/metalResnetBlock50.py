@@ -428,6 +428,16 @@ hardcoded_matmul_config_conv = {
             transpose_mcast=True,
             fused_activation=None,
         ),
+        (1568, 512, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(10, 8),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            per_core_M=5,
+            per_core_N=4,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
         (1568, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(7, 8),
             in0_block_w=4,
@@ -919,6 +929,7 @@ class ResNet(nn.Module):
             batch_size=batch_size,
             sharded=tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
             out_sharded=False,
+            use_downsample_op_and_mm_for_conv1x1_s2=True if sharded else False,
         )
         self.layer4, self.layer4_output_shape = self._make_layer(
             block,
@@ -1105,7 +1116,8 @@ class ResNet(nn.Module):
                     downsample_op_params, # used by downsample op
                     self.device,
                     downsample_conv_bias.tolist(),
-                    matmul_config
+                    matmul_config,
+                    self.ds_conv_output_memory_config
                 )
             else:
                 assert (

@@ -29,11 +29,12 @@ import torch
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, stride_h, stride_w, num_cores, grid_size, height_sharded",
     (
-        (10, 64, 64, 16, 16, 2, 2, 20, (10,2), False),
+        #(10, 64, 64, 16, 16, 2, 2, 20, (10,2), False),
         #(10, 64, 64, 16, 16, 1, 1, 20, (10,2), False),
         #(8, 64, 64, 56, 56, 1, 1, 98, (12,9), True),
-        #(8, 64, 64, 56, 56, 2, 2, 98, (12,9), True),
-        #(8, 512, 512, 28, 28, 2, 2, 80, (10,8), False),
+        (8, 64, 64, 56, 56, 2, 2, 98, (12,9), True),
+        (8, 512, 512, 28, 28, 2, 2, 80, (10,8), False),
+        #(8, 1024, 1024, 14, 14, 2, 2, 56, (7,8), False),
     ),
 )
 def test_run_downsample(
@@ -77,7 +78,7 @@ def test_run_downsample(
     a_activation_shape_nhwc = [batch_size, input_height, input_width, input_channels]
     A_cl_host = ttl.tensor.Tensor(A_pyt_nhwc, ttl.tensor.DataType.BFLOAT16).reshape(1, 1, batch_size*input_height*input_width, input_channels)
     num_cores_height_slices = num_cores if height_sharded else grid_size[0]
-    input_shape = [1, 1, _nearest_y(batch_size*input_height*input_width, num_cores_height_slices*32), input_channels]
+    input_shape = [1, 1, _nearest_y(batch_size*input_height*input_width, 32), input_channels]
     A_cl_host = A_cl_host.pad(input_shape, (0,0,0,0), 0.0)
     A_interleaved = A_cl_host.to(ttl.tensor.Layout.TILE).to(device, ttl.tensor.MemoryConfig(
                 memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
@@ -88,9 +89,10 @@ def test_run_downsample(
     # image flattened params
     input_2d_height = A_interleaved.shape()[2]
     input_2d_width = A_interleaved.shape()[3]
-    input_shard_height = (int) (input_2d_height / num_cores_height_slices)
-    output_2d_height = _nearest_y(batch_size * output_height * output_width, num_cores_height_slices * 32)
-    output_shard_height = (int) (output_2d_height / num_cores_height_slices)
+    input_2d_height_padded = _nearest_y(input_2d_height, num_cores_height_slices * 32)
+    input_shard_height = (int) (input_2d_height_padded / num_cores_height_slices)
+    output_2d_height_padded = _nearest_y(batch_size * output_height * output_width, num_cores_height_slices * 32)
+    output_shard_height = (int) (output_2d_height_padded / num_cores_height_slices)
     print("input_2d_height=", input_2d_height)
     print("input_2d_width=", input_2d_width)
     sharded_memory_layout = ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED if height_sharded else ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED
@@ -121,7 +123,7 @@ def test_run_downsample(
     A_downampled_sharded = ttl.tensor.downsample(A_sharded, downsample_params)
     A_downsampled = ttl.tensor.sharded_to_interleaved(A_downampled_sharded, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1))
     out = A_downsampled
-    out_shape = [1, 1, _nearest_y(batch_size*output_height*output_width, num_cores_height_slices*32), input_channels]
+    out_shape = [1, 1, _nearest_y(batch_size*output_height*output_width, 32), input_channels]
     assert out_shape == out.shape()
     out_shape_unpadded = [1, 1, batch_size*output_height*output_width, input_channels]
     assert out_shape_unpadded == out.shape_without_padding()

@@ -283,7 +283,7 @@ def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, ac
 
     return conv_
 
-def resnet50_1x1_conv_s2_as_downsample_and_matmul(weight: List[Union[int, float]], conv_params, downsample_params, device, bias, matmul_config):
+def resnet50_1x1_conv_s2_as_downsample_and_matmul(weight: List[Union[int, float]], conv_params, downsample_params, device, bias, matmul_config, out_sharded_mem_config):
     """
     Returns a function that performs a Convolution. Bias is fused with matmul.
     """
@@ -330,15 +330,12 @@ def resnet50_1x1_conv_s2_as_downsample_and_matmul(weight: List[Union[int, float]
     else:
         matmul_program_config = matmul_config
 
-    # input and output must be sharded
-    sharded_memory_config = tensor.MemoryConfig(
-                tensor.TensorMemoryLayout.HEIGHT_SHARDED, tensor.BufferType.L1
-            )
     def conv_(activation):
         # downsample op
-        output = tensor.downsample (activation, downsample_params, sharded_memory_config)
+        output = tensor.downsample (activation, downsample_params)
+        print("ds output shape - " , output.shape())
         output = operations.primary.matmul(output, weight_on_device, bias=bias_on_device, program_config=matmul_program_config,
-                                            output_mem_config=sharded_memory_config,
+                                            output_mem_config=out_sharded_mem_config,
                                             output_dtype=activation.dtype(),
                                             math_fidelity=tensor.MathFidelity.HiFi4)
 
