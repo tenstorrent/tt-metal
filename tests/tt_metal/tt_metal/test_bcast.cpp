@@ -18,8 +18,8 @@
 using namespace tt;
 using namespace constants;
 
-using u32 = std::uint32_t;
-using u16 = std::uint16_t;
+using std::uint32_t;
+using std::uint16_t;
 using std::vector;
 
 
@@ -98,12 +98,12 @@ int main(int argc, char **argv) {
         CoreCoord core = {0, 0};
 
         vector<uint32_t> shape = {2, 4, 2*TILE_HEIGHT, 3*TILE_WIDTH};
-        u32 W = shape[3], H = shape[2], NC = shape[1]*shape[0], N = shape[0], C = shape[1];
-        u32 HW = H*W;
+        uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0], N = shape[0], C = shape[1];
+        uint32_t HW = H*W;
         TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
         TT_ASSERT(H > 0 && W > 0 && NC > 0);
-        u32 Wt = W/TILE_WIDTH;
-        u32 Ht = H/TILE_HEIGHT;
+        uint32_t Wt = W/TILE_WIDTH;
+        uint32_t Ht = H/TILE_HEIGHT;
         uint32_t num_tensor_tiles = NC*H*W / (32*32);
 
         uint32_t single_tile_bytes = 2 * 1024;
@@ -154,7 +154,7 @@ int main(int argc, char **argv) {
                 // add something not too large but different between tiles
                 ref_bcast_values[j] = bfloat16(bcast_1value+(j%7)).to_uint16();
             // convert the reference broadcast tensor to tiled format
-            tiled_bcast_values = convert_layout<u16>(
+            tiled_bcast_values = convert_layout<uint16_t>(
                 ref_bcast_values, ref_bcast_shape, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
             TT_ASSERT(tiled_bcast_values[0] == bcast_1value16);
             // restore ref values and shape to 1
@@ -174,7 +174,7 @@ int main(int argc, char **argv) {
             for (int j = 0; j < NC*W; j++)
                 // add something not too large but different between tiles
                 ref_bcast_values[j] = bfloat16(bcast_1value+(j%7)).to_uint16();
-            tiled_bcast_values = convert_layout<u16>(
+            tiled_bcast_values = convert_layout<uint16_t>(
                 ref_bcast_values, ref_bcast_shape, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
             num_bcast_tiles = NC*Wt;
             // restore values and shape to W
@@ -185,7 +185,7 @@ int main(int argc, char **argv) {
             for (int j = 0; j < NC*H; j++)
                 // add something not too large but different between tiles
                 ref_bcast_values[j] = bfloat16(bcast_1value+(j%7)).to_uint16();
-            tiled_bcast_values = convert_layout<u16>(
+            tiled_bcast_values = convert_layout<uint16_t>(
                 ref_bcast_values, ref_bcast_shape, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
             num_bcast_tiles = NC*Ht;
         }
@@ -296,15 +296,15 @@ int main(int argc, char **argv) {
 
         // recover a linear view of input vector for consumption by gold_ function
         auto u16_src0_vec = u16_from_u32_vector(src0_vec);
-        vector<u16> src_linear = convert_layout<u16>(
+        vector<uint16_t> src_linear = convert_layout<uint16_t>(
             u16_src0_vec, shape, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
-        vector<u16> gold_added = gold_bcast_op(
-            src_linear, shape, ref_bcast_values, bcast_dim, bcast_op); // result is u16 untilized
+        vector<uint16_t> gold_added = gold_bcast_op(
+            src_linear, shape, ref_bcast_values, bcast_dim, bcast_op); // result is uint16_t untilized
 
-        // Tilize from row major and convert to pairs (u32)
+        // Tilize from row major and convert to pairs (uint32_t)
         vector<uint32_t> shapeR{shape[0], shape[1], shape[2], shape[3]};
         auto gold_4f_u32 = u32_from_u16_vector(
-            convert_layout<u16>(
+            convert_layout<uint16_t>(
                 gold_added, shapeR, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES));
 
         pass &= packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);

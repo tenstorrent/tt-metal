@@ -6,21 +6,21 @@
 #include "dataflow_api.h"
 #include "debug_print.h"
 
-using u32 = std::uint32_t;
+using uint32_t = std::uint32_t;
 
 // This kernel is a part of the test for device debug prints.
 void kernel_main() {
 
-    u32 dram_buffer_src_addr  = *((volatile u32*)(L1_ARG_BASE));
-    u32 dram_src_noc_x        = *((volatile u32*)(L1_ARG_BASE+4));
-    u32 dram_src_noc_y        = *((volatile u32*)(L1_ARG_BASE+8));
-    u32 ARG0                  = *((volatile u32*)(L1_ARG_BASE+12));
-    u32 ARG1                  = *((volatile u32*)(L1_ARG_BASE+16));
-    u32 ARG2                  = *((volatile u32*)(L1_ARG_BASE+20));
-    u32 ARG3                  = *((volatile u32*)(L1_ARG_BASE+24));
-    u32 x                     = *((volatile u32*)(L1_ARG_BASE+28));
-    u32 y                     = *((volatile u32*)(L1_ARG_BASE+32));
-    u32 X                     = *((volatile u32*)(L1_ARG_BASE+36));
+    uint32_t dram_buffer_src_addr  = *((volatile uint32_t*)(L1_ARG_BASE));
+    uint32_t dram_src_noc_x        = *((volatile uint32_t*)(L1_ARG_BASE+4));
+    uint32_t dram_src_noc_y        = *((volatile uint32_t*)(L1_ARG_BASE+8));
+    uint32_t ARG0                  = *((volatile uint32_t*)(L1_ARG_BASE+12));
+    uint32_t ARG1                  = *((volatile uint32_t*)(L1_ARG_BASE+16));
+    uint32_t ARG2                  = *((volatile uint32_t*)(L1_ARG_BASE+20));
+    uint32_t ARG3                  = *((volatile uint32_t*)(L1_ARG_BASE+24));
+    uint32_t x                     = *((volatile uint32_t*)(L1_ARG_BASE+28));
+    uint32_t y                     = *((volatile uint32_t*)(L1_ARG_BASE+32));
+    uint32_t X                     = *((volatile uint32_t*)(L1_ARG_BASE+36));
 
     if (ARG3 == 0xFFFF) {
         // special value for testing buffer overflow error message
@@ -35,8 +35,8 @@ void kernel_main() {
         // This bit of code ensures that we print in the expected order (wrap around in x, incrementing y)
         // in the multi-core test
         if (ARG2 > 0 && x+y != 2) { // exclude {1,1} since it doesn't need to wait
-            u32 wait_x = x-1;
-            u32 wait_y = y;
+            uint32_t wait_x = x-1;
+            uint32_t wait_y = y;
             if (wait_x == 0) {
                 // wrap around
                 wait_x = X-1;
@@ -54,7 +54,7 @@ void kernel_main() {
         DPRINT << SETP(4) << F32(0.123456f) << ENDL();
         DPRINT << FIXP() << F32(0.12f) << ENDL();
         DPRINT << BF16(0x3dfb) << ENDL(); // 0.12255859375
-        for (u32 a = 0; a < ARG3; a++)
+        for (uint32_t a = 0; a < ARG3; a++)
             DPRINT << '_';
         DPRINT << ENDL();
     }
@@ -66,9 +66,9 @@ void kernel_main() {
     // for(;;);
 
     // still need to produce one tile for the TR/reader
-    constexpr u32 onetile = 1;
-    constexpr u32 operand0 = 0;
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t operand0 = 0;
     cb_reserve_back(operand0, onetile);
-    u32 dest_tr0_l1 = get_write_ptr(operand0);
+    uint32_t dest_tr0_l1 = get_write_ptr(operand0);
     cb_push_back(operand0, onetile);
 }

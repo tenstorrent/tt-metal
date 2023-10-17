@@ -67,7 +67,7 @@ std::map<std::string, std::string> get_defines(BcastOpDim bcast_dim, BcastOpMath
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
-using u32 = std::uint32_t;
+using uint32_t = std::uint32_t;
 
 
 namespace tt {

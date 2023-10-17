@@ -246,8 +246,8 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderOnly) {
         TT_ASSERT(this->devices_.at(id)->num_banks(BufferType::L1) % 2 == 0);
         size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1) / 2;
         size_t tile_increment = num_tiles;
-        u32 num_iterations = 3;
-        u32 index = 0;
+        uint32_t num_iterations = 3;
+        uint32_t index = 0;
         while (index < num_iterations) {
             test_config.num_tiles = num_tiles;
             test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
@@ -271,8 +271,8 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1WriterOnly) {
         TT_ASSERT(this->devices_.at(id)->num_banks(BufferType::L1) % 2 == 0);
         size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1) / 2;
         size_t tile_increment = num_tiles;
-        u32 num_iterations = 3;
-        u32 index = 0;
+        uint32_t num_iterations = 3;
+        uint32_t index = 0;
         while (index < num_iterations) {
             test_config.num_tiles = num_tiles;
             test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
@@ -296,8 +296,8 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderAndWriter) {
         size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
         TT_ASSERT(num_tiles % 2 == 0);
         size_t tile_increment = num_tiles / 2;
-        u32 num_iterations = 6;
-        u32 index = 0;
+        uint32_t num_iterations = 6;
+        uint32_t index = 0;
         while (index < num_iterations) {
             test_config.num_tiles = num_tiles;
             test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
@@ -324,8 +324,8 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedDramReaderAndL1Writer) {
         size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
         TT_ASSERT(num_tiles % 2 == 0);
         size_t tile_increment = num_tiles / 2;
-        u32 num_iterations = 6;
-        u32 index = 0;
+        uint32_t num_iterations = 6;
+        uint32_t index = 0;
         while (index < num_iterations) {
             test_config.num_tiles = num_tiles;
             test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
@@ -352,8 +352,8 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderAndDramWriter) {
         size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
         TT_ASSERT(num_tiles % 2 == 0);
         size_t tile_increment = num_tiles / 2;
-        u32 num_iterations = 6;
-        u32 index = 0;
+        uint32_t num_iterations = 6;
+        uint32_t index = 0;
         while (index < num_iterations) {
             test_config.num_tiles = num_tiles;
             test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
@@ -370,8 +370,8 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderDataCopyL1Writer) {
         size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
         TT_ASSERT(num_tiles % 2 == 0);
         size_t tile_increment = num_tiles / 2;
-        u32 num_iterations = 6;
-        u32 index = 0;
+        uint32_t num_iterations = 6;
+        uint32_t index = 0;
         test_config.logical_core = this->devices_.at(id)->logical_core_from_bank_id(0);
         while (index < num_iterations) {
             test_config.num_tiles = num_tiles;

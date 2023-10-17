@@ -12,23 +12,23 @@
 using namespace tt::tt_metal;
 
 struct CBConfig {
-    u32 cb_id;
-    u32 num_pages;
-    u32 page_size;
+    uint32_t cb_id;
+    uint32_t num_pages;
+    uint32_t page_size;
     tt::DataFormat data_format;
 };
 
 struct DummyProgramConfig {
     CoreRangeSet cr_set;
     CBConfig cb_config;
-    u32 num_cbs;
-    u32 num_sems;
+    uint32_t num_cbs;
+    uint32_t num_sems;
 };
 
 struct DummyProgramMultiCBConfig {
     CoreRangeSet cr_set;
     std::vector<CBConfig> cb_config_vector;
-    u32 num_sems;
+    uint32_t num_sems;
 };
 
 
@@ -52,8 +52,8 @@ bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & prog
 
     // Need to use old APIs to read since we cannot allocate a buffer in the reserved space we're trying
     // to read from
-    vector<u32> cb_config_vector;
-    u32 cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(u32);
+    vector<uint32_t> cb_config_vector;
+    uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         CoresInCoreRangeGenerator core_range_generator(core_range, device->logical_grid_size());
@@ -66,11 +66,11 @@ bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & prog
             tt::tt_metal::detail::ReadFromDeviceL1(
                 device, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
 
-            u32 cb_addr = L1_UNRESERVED_BASE;
-            for (u32 i = 0; i < program_config.cb_config_vector.size(); i ++) {
-                u32 index = program_config.cb_config_vector[i].cb_id * sizeof(u32);
-                u32 cb_num_pages = program_config.cb_config_vector[i].num_pages;
-                u32 cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
+            uint32_t cb_addr = L1_UNRESERVED_BASE;
+            for (uint32_t i = 0; i < program_config.cb_config_vector.size(); i ++) {
+                uint32_t index = program_config.cb_config_vector[i].cb_id * sizeof(uint32_t);
+                uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
+                uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
                 bool addr_match = cb_config_vector.at(index) == ((cb_addr) >> 4);
                 bool size_match = cb_config_vector.at(index + 1) == (cb_size >> 4);
                 bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
@@ -93,12 +93,12 @@ bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyP
     Program program;
 
 
-    for (u32 i = 0; i < program_config.cb_config_vector.size(); i++) {
-        u32 cb_id = program_config.cb_config_vector[i].cb_id;
-        u32 cb_num_pages = program_config.cb_config_vector[i].num_pages;
-        u32 cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
+    for (uint32_t i = 0; i < program_config.cb_config_vector.size(); i++) {
+        uint32_t cb_id = program_config.cb_config_vector[i].cb_id;
+        uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
+        uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
         auto df = program_config.cb_config_vector[i].data_format;
-        u32 page_size = program_config.cb_config_vector[i].page_size;
+        uint32_t page_size = program_config.cb_config_vector[i].page_size;
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, {{cb_id, df}}).set_page_size(cb_id, page_size);
         auto cb = CreateCircularBuffer(program, program_config.cr_set, cb_config);
     }
@@ -118,12 +118,12 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
 
 
     std::vector<CircularBufferID> cb_ids;
-    for (u32 i = 0; i < program_config.cb_config_vector.size(); i++) {
-        u32 cb_id = program_config.cb_config_vector[i].cb_id;
-        u32 cb_num_pages = program_config.cb_config_vector[i].num_pages;
-        u32 cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
+    for (uint32_t i = 0; i < program_config.cb_config_vector.size(); i++) {
+        uint32_t cb_id = program_config.cb_config_vector[i].cb_id;
+        uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
+        uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
         auto df = program_config.cb_config_vector[i].data_format;
-        u32 page_size = program_config.cb_config_vector[i].page_size;
+        uint32_t page_size = program_config.cb_config_vector[i].page_size;
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, {{cb_id, df}}).set_page_size(cb_id, page_size);
         auto cb = CreateCircularBuffer(program, program_config.cr_set, cb_config);
         cb_ids.push_back(cb);
@@ -136,7 +136,7 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
     DummyProgramMultiCBConfig program_config_2 = program_config;
     for (auto & cb_config: program_config_2.cb_config_vector)
         cb_config.num_pages *=2;
-    for (u32 buffer_id = 0; buffer_id < program_config.cb_config_vector.size(); buffer_id++) {
+    for (uint32_t buffer_id = 0; buffer_id < program_config.cb_config_vector.size(); buffer_id++) {
         auto cb_size = program_config_2.cb_config_vector[buffer_id].num_pages * program_config_2.cb_config_vector[buffer_id].page_size;
         GetCircularBufferConfig(program, cb_ids[buffer_id]).set_total_size(cb_size);
     }
@@ -157,15 +157,15 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
 
     Program program;
 
-    for (u32 sem_id = 0; sem_id < program_config.num_sems; sem_id++) {
+    for (uint32_t sem_id = 0; sem_id < program_config.num_sems; sem_id++) {
         CreateSemaphore(program, program_config.cr_set, sem_id);
     }
 
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
-    vector<u32> sem_vector;
-    u32 sem_buffer_size = program_config.num_sems * SEMAPHORE_ALIGNMENT;
+    vector<uint32_t> sem_vector;
+    uint32_t sem_buffer_size = program_config.num_sems * SEMAPHORE_ALIGNMENT;
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         CoresInCoreRangeGenerator core_range_generator(core_range, device->logical_grid_size());
@@ -177,8 +177,8 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
             terminate = terminate_;
             tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord, SEMAPHORE_BASE, sem_buffer_size, sem_vector);
 
-            u32 sem_id = 0;
-            for (u32 i = 0; i < sem_vector.size(); i += sizeof(u32)) {
+            uint32_t sem_id = 0;
+            for (uint32_t i = 0; i < sem_vector.size(); i += sizeof(uint32_t)) {
 
                 bool sem_match = sem_vector.at(i) == sem_id;
                 sem_id++;
@@ -205,8 +205,8 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
 
     auto dummy_compute_kernel = CreateComputeKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set);
 
-    vector<u32> dummy_kernel0_args = {0, 1, 2, 3, 4, 5, 6, 7, 8};
-    vector<u32> dummy_kernel1_args = {9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20};
+    vector<uint32_t> dummy_kernel0_args = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    vector<uint32_t> dummy_kernel1_args = {9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20};
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         CoresInCoreRangeGenerator core_range_generator(core_range, tt::Cluster::instance().get_soc_desc(0).worker_grid_size);
@@ -234,14 +234,14 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
             auto [core_coord, terminate_] = core_range_generator();
             terminate = terminate_;
 
-            vector<u32> dummy_kernel0_args_readback;
+            vector<uint32_t> dummy_kernel0_args_readback;
             tt::tt_metal::detail::ReadFromDeviceL1(
-                device, core_coord, BRISC_L1_ARG_BASE, dummy_kernel0_args.size() * sizeof(u32), dummy_kernel0_args_readback);
+                device, core_coord, BRISC_L1_ARG_BASE, dummy_kernel0_args.size() * sizeof(uint32_t), dummy_kernel0_args_readback);
             pass &= (dummy_kernel0_args == dummy_kernel0_args_readback);
 
-            vector<u32> dummy_kernel1_args_readback;
+            vector<uint32_t> dummy_kernel1_args_readback;
             tt::tt_metal::detail::ReadFromDeviceL1(
-                device, core_coord, NCRISC_L1_ARG_BASE, dummy_kernel1_args.size() * sizeof(u32), dummy_kernel1_args_readback);
+                device, core_coord, NCRISC_L1_ARG_BASE, dummy_kernel1_args.size() * sizeof(uint32_t), dummy_kernel1_args_readback);
             pass &= (dummy_kernel1_args == dummy_kernel1_args_readback);
         } while (not terminate);
     }
@@ -258,9 +258,9 @@ bool test_EnqueueWrap_on_EnqueueWriteBuffer(Device* device, CommandQueue& cq, co
     size_t buf_size = config.num_pages * config.page_size;
     Buffer buffer(device, buf_size, config.page_size, config.buftype);
 
-    vector<u32> src(buf_size / sizeof(u32), 0);
+    vector<uint32_t> src(buf_size / sizeof(uint32_t), 0);
 
-    for (u32 i = 0; i < src.size(); i++) {
+    for (uint32_t i = 0; i < src.size(); i++) {
         src.at(i) = i;
     }
     EnqueueWriteBuffer(cq, buffer, src, false);
@@ -353,16 +353,16 @@ TEST_F(CommandQueueFixture, TestMultiCBSharedAddressSpaceSentSingleCore) {
     CoreRange cr = {.start = {0, 0}, .end = {0, 0}};
     CoreRangeSet cr_set({cr});
 
-    u32 intermediate_cb = 24;
-    u32 out_cb = 16;
+    uint32_t intermediate_cb = 24;
+    uint32_t out_cb = 16;
     std::map<uint8_t, tt::DataFormat> intermediate_and_out_data_format_spec = {
         {intermediate_cb, tt::DataFormat::Float16_b},
         {out_cb, tt::DataFormat::Float16_b}
     };
-    u32 num_bytes_for_df = 2;
-    u32 single_tile_size = num_bytes_for_df * 1024;
-    u32 num_tiles = 2;
-    u32 cb_size = num_tiles * single_tile_size;
+    uint32_t num_bytes_for_df = 2;
+    uint32_t single_tile_size = num_bytes_for_df * 1024;
+    uint32_t num_tiles = 2;
+    uint32_t cb_size = num_tiles * single_tile_size;
 
     Program program;
     CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
@@ -374,14 +374,14 @@ TEST_F(CommandQueueFixture, TestMultiCBSharedAddressSpaceSentSingleCore) {
     EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
 
     Finish(*tt::tt_metal::detail::GLOBAL_CQ);
-    vector<u32> cb_config_vector;
-    u32 cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(u32);
+    vector<uint32_t> cb_config_vector;
+    uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     CoreCoord core_coord(0,0);
     tt::tt_metal::detail::ReadFromDeviceL1(
         this->device_, core_coord, CIRCULAR_BUFFER_CONFIG_BASE, cb_config_buffer_size, cb_config_vector);
-    u32 cb_addr = L1_UNRESERVED_BASE;
-    u32 intermediate_index = intermediate_cb * sizeof(u32);
+    uint32_t cb_addr = L1_UNRESERVED_BASE;
+    uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
     bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == ((cb_addr) >> 4);
     bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == (cb_size >> 4);
@@ -389,7 +389,7 @@ TEST_F(CommandQueueFixture, TestMultiCBSharedAddressSpaceSentSingleCore) {
     bool pass_intermediate = (addr_match_intermediate and size_match_intermediate and num_pages_match_intermediate);
     EXPECT_TRUE(pass_intermediate);
 
-    u32 out_index = out_cb * sizeof(u32);
+    uint32_t out_index = out_cb * sizeof(uint32_t);
     bool addr_match_out = cb_config_vector.at(out_index) == ((cb_addr) >> 4);
     bool size_match_out = cb_config_vector.at(out_index + 1) == (cb_size >> 4);
     bool num_pages_match_out = cb_config_vector.at(out_index + 2) == num_tiles;

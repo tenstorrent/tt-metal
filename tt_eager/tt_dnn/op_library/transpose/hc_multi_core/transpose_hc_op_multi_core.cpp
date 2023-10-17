@@ -9,7 +9,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 
-using u32 = std::uint32_t;
+using uint32_t = std::uint32_t;
 using namespace tt::constants;
 
 namespace tt {
@@ -37,17 +37,17 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
     auto input_shape = input_tensor.shape();
     auto output_shape = output_tensor.shape();
 
-    u32 W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
-    u32 HW = H*W;
-    u32 HW_bytes = HW * input_tensor.element_size();
-    u32 CHW = C*H*W;
-    u32 CHW_bytes = CHW * input_tensor.element_size();
+    uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
+    uint32_t HW = H*W;
+    uint32_t HW_bytes = HW * input_tensor.element_size();
+    uint32_t CHW = C*H*W;
+    uint32_t CHW_bytes = CHW * input_tensor.element_size();
 
-    u32 Wt = W/TILE_WIDTH;
-    u32 Ht = H/TILE_HEIGHT;
-    u32 Ct = C/TILE_HEIGHT;
-    u32 CtHWt = Ct*H*Wt;
-    u32 CtWt = Ct * Wt;
+    uint32_t Wt = W/TILE_WIDTH;
+    uint32_t Ht = H/TILE_HEIGHT;
+    uint32_t Ct = C/TILE_HEIGHT;
+    uint32_t CtHWt = Ct*H*Wt;
+    uint32_t CtWt = Ct * Wt;
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > ret_val(num_cores_total);
 
@@ -103,7 +103,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
     const auto shape = a.shape();
 
 
-    u32 sub_tile_line_bytes = 16 * a.element_size();
+    uint32_t sub_tile_line_bytes = 16 * a.element_size();
 
     uint32_t num_tensor_tiles = a.volume() / TILE_HW;
 

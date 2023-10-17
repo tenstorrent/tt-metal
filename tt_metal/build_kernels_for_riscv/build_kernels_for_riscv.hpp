@@ -97,9 +97,9 @@ void generate_bank_to_noc_coord_descriptor(
     tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
     string out_dir_path,
     std::vector<CoreCoord>& dram_bank_map,
-    std::vector<i32>& dram_bank_offset_map,
+    std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
-    std::vector<i32>& l1_bank_offset_map
+    std::vector<int32_t>& l1_bank_offset_map
 );
 
 void generate_noc_addr_ranges_header(

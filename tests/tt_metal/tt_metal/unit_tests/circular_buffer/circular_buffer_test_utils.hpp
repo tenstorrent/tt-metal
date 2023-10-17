@@ -15,8 +15,8 @@ using namespace tt::tt_metal::detail;
 namespace basic_tests::circular_buffer {
 
 struct CBConfig {
-    const u32 num_pages = 1;
-    const u32 page_size = TileSize(tt::DataFormat::Float16_b);
+    const uint32_t num_pages = 1;
+    const uint32_t page_size = TileSize(tt::DataFormat::Float16_b);
     const tt::DataFormat data_format = tt::DataFormat::Float16_b;
 };
 

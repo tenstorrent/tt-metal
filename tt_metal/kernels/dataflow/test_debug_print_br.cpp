@@ -5,19 +5,19 @@
 #include "dataflow_api.h"
 #include "debug_print.h"
 
-using u32 = std::uint32_t;
+using uint32_t = std::uint32_t;
 
 void kernel_main() {
-    u32 dram_buffer_dst_addr  = *((volatile u32*)(L1_ARG_BASE));
-    u32 dram_dst_noc_x        = *((volatile u32*)(L1_ARG_BASE+4));
-    u32 dram_dst_noc_y        = *((volatile u32*)(L1_ARG_BASE+8));
-    u32 num_tiles             = *((volatile u32*)(L1_ARG_BASE+12));
-    u32 ARG0                  = *((volatile u32*)(L1_ARG_BASE+16));
-    u32 x                     = *((volatile u32*)(L1_ARG_BASE+20));
-    u32 y                     = *((volatile u32*)(L1_ARG_BASE+24));
-    u32 do_raise              = *((volatile u32*)(L1_ARG_BASE+28));
+    uint32_t dram_buffer_dst_addr  = *((volatile uint32_t*)(L1_ARG_BASE));
+    uint32_t dram_dst_noc_x        = *((volatile uint32_t*)(L1_ARG_BASE+4));
+    uint32_t dram_dst_noc_y        = *((volatile uint32_t*)(L1_ARG_BASE+8));
+    uint32_t num_tiles             = *((volatile uint32_t*)(L1_ARG_BASE+12));
+    uint32_t ARG0                  = *((volatile uint32_t*)(L1_ARG_BASE+16));
+    uint32_t x                     = *((volatile uint32_t*)(L1_ARG_BASE+20));
+    uint32_t y                     = *((volatile uint32_t*)(L1_ARG_BASE+24));
+    uint32_t do_raise              = *((volatile uint32_t*)(L1_ARG_BASE+28));
 
-    u32 operand = 16;
+    uint32_t operand = 16;
 
     DPRINT << WAIT{x*5 + y*1000}; // wait for a coreid-based signal to be raised by _nc kernel to ensure debug print ordering
 
@@ -25,7 +25,7 @@ void kernel_main() {
     // std::vector<uint32_t> hex_vec = get_risc_binary(hex_file_path, riscv_id);
     DPRINT << "TestStr";
     DPRINT << 'B' << 'R' << '{' << x << ',' << y << '}' << ENDL();
-    for (u32 a = 0; a < ARG0; a++)
+    for (uint32_t a = 0; a < ARG0; a++)
         DPRINT << '+';
     DPRINT << ENDL();
     if (do_raise)

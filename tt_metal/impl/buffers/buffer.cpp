@@ -15,14 +15,14 @@ namespace tt {
 
 namespace tt_metal {
 
-void validate_buffer_size_and_page_size(u64 size, u64 page_size, const BufferType &buffer_type) {
+void validate_buffer_size_and_page_size(uint64_t size, uint64_t page_size, const BufferType &buffer_type) {
     TT_ASSERT(size != 0 and page_size != 0, "Buffer size and page size should be larger than 0 bytes!");
     bool valid_page_size = (size % page_size == 0);
     TT_ASSERT(valid_page_size, "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers page size should be divisible by buffer size", page_size, size);
-    TT_ASSERT(page_size % sizeof(u32) == 0, "Page size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values");
+    TT_ASSERT(page_size % sizeof(uint32_t) == 0, "Page size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values");
 }
 
-Buffer::Buffer(Device *device, u64 size, u64 page_size, const BufferType buffer_type)
+Buffer::Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferType buffer_type)
     : device_(device), size_(size), page_size_(page_size), buffer_type_(buffer_type) {
     TT_ASSERT(this->device_ != nullptr and this->device_->allocator_ != nullptr);
     validate_buffer_size_and_page_size(size, page_size, buffer_type);
@@ -70,17 +70,17 @@ void Buffer::allocate() {
     this->address_ = allocator::allocate_buffer(*this->device_->allocator_, this->size_, this->page_size_, this->buffer_type_, bottom_up);
 }
 
-u32 Buffer::dram_channel_from_bank_id(u32 bank_id) const {
+uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
     TT_ASSERT(this->buffer_type_ == BufferType::DRAM, "Expected DRAM buffer!");
     return this->device_->dram_channel_from_bank_id(bank_id);
 }
 
-CoreCoord Buffer::logical_core_from_bank_id(u32 bank_id) const {
+CoreCoord Buffer::logical_core_from_bank_id(uint32_t bank_id) const {
     TT_ASSERT(this->buffer_type_ == BufferType::L1, "Expected L1 buffer!");
     return this->device_->logical_core_from_bank_id(bank_id);
 }
 
-CoreCoord Buffer::noc_coordinates(u32 bank_id) const {
+CoreCoord Buffer::noc_coordinates(uint32_t bank_id) const {
     switch (this->buffer_type_) {
         case BufferType::DRAM: {
             auto dram_channel = this->dram_channel_from_bank_id(bank_id);
@@ -105,12 +105,12 @@ CoreCoord Buffer::noc_coordinates() const {
     return this->noc_coordinates(0);
 }
 
-u64 Buffer::page_address(u32 bank_id, u32 page_index) const {
+uint64_t Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
     auto num_banks = this->device_->num_banks(this->buffer_type_);
     TT_ASSERT(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
 
     // DRAM readers and writers in Cluster add DRAM bank offset before doing a read but L1 readers and writers do not
-    u64 base_page_address = this->buffer_type_ == BufferType::DRAM ?
+    uint64_t base_page_address = this->buffer_type_ == BufferType::DRAM ?
         this->address_ :
         this->address_ + this->device_->l1_bank_offset_from_bank_id(bank_id);
 

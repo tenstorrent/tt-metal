@@ -84,7 +84,7 @@ auto Program::semaphores_on_core(const CoreCoord &core) const {
     return semaphores;
 }
 
-std::atomic<u64> Program::program_counter = 0;
+std::atomic<uint64_t> Program::program_counter = 0;
 
 Program::Program(): id(program_counter++),worker_crs_({}), compile_needed_(false), circular_buffer_allocation_needed_(false) {}
 
@@ -273,7 +273,7 @@ std::vector<std::string> Program::cores_to_ops() const {
     return ops;
 }
 
-void Program::CircularBufferAllocator::add_index(u32 index) {
+void Program::CircularBufferAllocator::add_index(uint32_t index) {
     if (index > NUM_CIRCULAR_BUFFERS) {
         log_fatal(tt::LogMetal, "Invalid circular buffer index: {} should be between 0 and {}", index, NUM_CIRCULAR_BUFFERS);
     }
@@ -284,11 +284,11 @@ void Program::CircularBufferAllocator::add_index(u32 index) {
 }
 
 // CBs on a core are sequential so the next available address for a local buffer is the end of the last
-u64 Program::CircularBufferAllocator::get_address_candidate() const {
+uint64_t Program::CircularBufferAllocator::get_address_candidate() const {
     return this->l1_regions.back().second;
 }
 
-void Program::CircularBufferAllocator::mark_address(u64 address, u64 size) {
+void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t size) {
     auto &last_region = this->l1_regions.back();
     log_assert(address >= last_region.second, "Local buffer address {} has to append to last L1 region [{}, {}) or be at a higher address", address, last_region.first, last_region.second);
     if (address == last_region.second) {
@@ -404,12 +404,12 @@ void Program::allocate_circular_buffers() {
 void Program::validate_circular_buffer_region(const Device *device, std::optional<CoreCoord> logical_core) const {
     auto highest_cb_l1_region = [&](const CoreCoord &core) {
         if (this->per_core_cb_allocator_.find(core) == this->per_core_cb_allocator_.end()) {
-            return std::make_pair((u64)L1_UNRESERVED_BASE, (u64)L1_UNRESERVED_BASE);
+            return std::make_pair((uint64_t)L1_UNRESERVED_BASE, (uint64_t)L1_UNRESERVED_BASE);
         }
         return this->per_core_cb_allocator_.at(core).l1_regions.back();
     };
 
-    auto validate_cb_space_and_l1_buffer_space_disjoint = [&](const CoreCoord &core, const std::pair<u64, u64> &cb_space) {
+    auto validate_cb_space_and_l1_buffer_space_disjoint = [&](const CoreCoord &core, const std::pair<uint64_t, uint64_t> &cb_space) {
         if (cb_space.second > device->l1_size_per_core()) {
             log_fatal(tt::LogMetal, "Local buffers on core {} grow to {} B which is beyond max L1 size of {} B", core.str(), cb_space.second, device->l1_size_per_core());
         }
@@ -427,7 +427,7 @@ void Program::validate_circular_buffer_region(const Device *device, std::optiona
         }
     };
 
-    auto validate_globally_allocated_cb_space_in_l1_buffer_space = [&](const CoreCoord &core, const std::pair<u64, u64> &cb_space) {
+    auto validate_globally_allocated_cb_space_in_l1_buffer_space = [&](const CoreCoord &core, const std::pair<uint64_t, uint64_t> &cb_space) {
         if (cb_space.second > device->l1_size_per_core()) {
             log_fatal(tt::LogMetal, "Globally allocated circular buffer on core {} grow to {} B which is beyond max L1 size of {} B", core.str(), cb_space.second, device->l1_size_per_core());
         }

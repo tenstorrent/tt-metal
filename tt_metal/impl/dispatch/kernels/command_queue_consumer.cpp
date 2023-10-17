@@ -9,14 +9,14 @@
 
 
 void kernel_main() {
-    constexpr u32 tensix_soft_reset_addr = get_compile_time_arg_val(0);
+    constexpr uint32_t tensix_soft_reset_addr = get_compile_time_arg_val(0);
     bool db_buf_switch = false;
-    volatile u32* db_semaphore_addr = reinterpret_cast<volatile u32*>(SEMAPHORE_BASE);
+    volatile uint32_t* db_semaphore_addr = reinterpret_cast<volatile uint32_t*>(SEMAPHORE_BASE);
 
-    static constexpr u32 command_start_addr = L1_UNRESERVED_BASE; // Space between L1_UNRESERVED_BASE -> data_start is for commands
+    static constexpr uint32_t command_start_addr = L1_UNRESERVED_BASE; // Space between L1_UNRESERVED_BASE -> data_start is for commands
 
-    u64 producer_noc_encoding = u64(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y)) << 32;
-    u64 consumer_noc_encoding = u64(NOC_XY_ENCODING(my_x[0], my_y[0])) << 32;
+    uint64_t producer_noc_encoding = uint64_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y)) << 32;
+    uint64_t consumer_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0])) << 32;
 
     // TODO(agrebenisan): Add wrap/dispatch functionality back in
     while (true) {
@@ -24,27 +24,27 @@ void kernel_main() {
         db_acquire(db_semaphore_addr, consumer_noc_encoding);
 
         // For each instruction, we need to jump to the relevant part of the device command
-        u32 command_start_addr = get_command_slot_addr(db_buf_switch);
-        u32 buffer_transfer_start_addr = command_start_addr + (DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER * sizeof(u32));
-        u32 program_transfer_start_addr = buffer_transfer_start_addr + ((DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION * DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS) * sizeof(u32));
+        uint32_t command_start_addr = get_command_slot_addr(db_buf_switch);
+        uint32_t buffer_transfer_start_addr = command_start_addr + (DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER * sizeof(uint32_t));
+        uint32_t program_transfer_start_addr = buffer_transfer_start_addr + ((DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION * DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS) * sizeof(uint32_t));
 
-        volatile tt_l1_ptr u32* command_ptr = reinterpret_cast<volatile u32*>(command_start_addr);
-        u32 finish = command_ptr[DeviceCommand::finish_idx];       // Whether to notify the host that we have finished
-        u32 num_workers = command_ptr[DeviceCommand::num_workers_idx];  // If num_workers > 0, it means we are launching a program
-        u32 num_buffer_transfers = command_ptr[DeviceCommand::num_buffer_transfers_idx];   // How many WriteBuffer commands we are running
-        u32 is_program = command_ptr[DeviceCommand::is_program_buffer_idx];
-        u32 page_size = command_ptr[DeviceCommand::page_size_idx];
-        u32 consumer_cb_size = command_ptr[DeviceCommand::consumer_cb_size_idx];
-        u32 consumer_cb_num_pages = command_ptr[DeviceCommand::consumer_cb_num_pages_idx];
-        u32 num_pages = command_ptr[DeviceCommand::num_pages_idx];
-        u32 producer_consumer_transfer_num_pages = command_ptr[DeviceCommand::producer_consumer_transfer_num_pages_idx];
+        volatile tt_l1_ptr uint32_t* command_ptr = reinterpret_cast<volatile uint32_t*>(command_start_addr);
+        uint32_t finish = command_ptr[DeviceCommand::finish_idx];       // Whether to notify the host that we have finished
+        uint32_t num_workers = command_ptr[DeviceCommand::num_workers_idx];  // If num_workers > 0, it means we are launching a program
+        uint32_t num_buffer_transfers = command_ptr[DeviceCommand::num_buffer_transfers_idx];   // How many WriteBuffer commands we are running
+        uint32_t is_program = command_ptr[DeviceCommand::is_program_buffer_idx];
+        uint32_t page_size = command_ptr[DeviceCommand::page_size_idx];
+        uint32_t consumer_cb_size = command_ptr[DeviceCommand::consumer_cb_size_idx];
+        uint32_t consumer_cb_num_pages = command_ptr[DeviceCommand::consumer_cb_num_pages_idx];
+        uint32_t num_pages = command_ptr[DeviceCommand::num_pages_idx];
+        uint32_t producer_consumer_transfer_num_pages = command_ptr[DeviceCommand::producer_consumer_transfer_num_pages_idx];
 
         if (is_program) {
-            command_ptr = reinterpret_cast<volatile tt_l1_ptr u32*>(program_transfer_start_addr);
+            command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(program_transfer_start_addr);
             write_and_launch_program(num_pages, command_ptr, producer_noc_encoding, consumer_cb_size, consumer_cb_num_pages, producer_consumer_transfer_num_pages, db_buf_switch);
             wait_for_program_completion(num_workers, command_ptr, tensix_soft_reset_addr);
         } else {
-            command_ptr = reinterpret_cast<volatile tt_l1_ptr u32*>(buffer_transfer_start_addr);
+            command_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer_transfer_start_addr);
             write_buffers(command_ptr, num_buffer_transfers, consumer_cb_size, consumer_cb_num_pages, producer_noc_encoding, producer_consumer_transfer_num_pages, db_buf_switch);
         }
 

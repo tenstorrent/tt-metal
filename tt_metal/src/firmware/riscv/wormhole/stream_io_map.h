@@ -47,12 +47,12 @@ inline __attribute__((always_inline)) volatile uint32_t* get_cq_write_ptr() {
     return reinterpret_cast<volatile uint32_t*>(CQ_WRITE_PTR);
 }
 
-inline __attribute__((always_inline)) volatile u32* get_cq_read_toggle() {
-    return reinterpret_cast<volatile u32*>(CQ_READ_TOGGLE);
+inline __attribute__((always_inline)) volatile uint32_t* get_cq_read_toggle() {
+    return reinterpret_cast<volatile uint32_t*>(CQ_READ_TOGGLE);
 }
 
-inline __attribute__((always_inline)) volatile u32* get_cq_write_toggle() {
-    return reinterpret_cast<volatile u32*>(CQ_WRITE_TOGGLE);
+inline __attribute__((always_inline)) volatile uint32_t* get_cq_write_toggle() {
+    return reinterpret_cast<volatile uint32_t*>(CQ_WRITE_TOGGLE);
 }
 
 inline __attribute__((always_inline)) volatile uint32_t* get_cq_finish_ptr() {

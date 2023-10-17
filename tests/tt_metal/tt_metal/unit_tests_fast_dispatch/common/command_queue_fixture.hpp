@@ -14,7 +14,7 @@ class CommandQueueFixture : public ::testing::Test {
    protected:
     tt::ARCH arch_;
     Device* device_;
-    u32 pcie_id;
+    uint32_t pcie_id;
 
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");

@@ -46,11 +46,11 @@ class Kernel {
 
     std::vector<ll_api::memory> const &binaries() const;
 
-    std::vector<u32> compile_time_args() const { return compile_time_args_; }
+    std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
 
-    std::map<CoreCoord, std::vector<u32>> const &runtime_args() const { return core_to_runtime_args_; }
+    std::map<CoreCoord, std::vector<uint32_t>> const &runtime_args() const { return core_to_runtime_args_; }
 
-    std::vector<u32> const &runtime_args(const CoreCoord &logical_core);
+    std::vector<uint32_t> const &runtime_args(const CoreCoord &logical_core);
 
     std::map<std::string, std::string> defines() const { return defines_; }
 
@@ -67,7 +67,7 @@ class Kernel {
     void set_binaries(std::vector<ll_api::memory> &&binaries);
     virtual void read_binaries(int device_id) = 0;
 
-    void set_runtime_args(const CoreCoord &logical_core, const std::vector<u32> &runtime_args);
+    void set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
 
    protected:
     const uintptr_t id_;
@@ -75,8 +75,8 @@ class Kernel {
     CoreRangeSet core_range_set_;
     std::string binary_path_;
     std::vector<ll_api::memory> binaries_;              // DataMovement kernels have one binary each and Compute kernels have three binaries
-    std::vector<u32> compile_time_args_;
-    std::map<CoreCoord, std::vector<u32>> core_to_runtime_args_;
+    std::vector<uint32_t> compile_time_args_;
+    std::map<CoreCoord, std::vector<uint32_t>> core_to_runtime_args_;
     std::map<std::string, std::string> defines_;        // preprocessor defines. this is to be able to generate generic instances.
     std::set<CoreCoord> logical_cores_;
 
@@ -84,7 +84,7 @@ class Kernel {
 
     virtual std::string config_hash() const = 0;
 
-    virtual std::pair<u64, u64> get_runtime_args_range() const = 0;
+    virtual std::pair<uint64_t, uint64_t> get_runtime_args_range() const = 0;
 };
 
 class DataMovementKernel : public Kernel {
@@ -110,7 +110,7 @@ class DataMovementKernel : public Kernel {
 
     std::string config_hash() const;
 
-    std::pair<u64, u64> get_runtime_args_range() const;
+    std::pair<uint64_t, uint64_t> get_runtime_args_range() const;
 };
 
 class ComputeKernel : public Kernel {
@@ -136,7 +136,7 @@ class ComputeKernel : public Kernel {
 
     std::string config_hash() const;
 
-    std::pair<u64, u64> get_runtime_args_range() const;
+    std::pair<uint64_t, uint64_t> get_runtime_args_range() const;
 };
 
 std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor);

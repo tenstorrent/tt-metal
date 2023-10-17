@@ -13,7 +13,7 @@
 
 #include <optional>
 
-using u32 = std::uint32_t;
+using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -31,11 +31,11 @@ inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DR
 operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, const Tensor &output_tensor, const std::optional<const Tensor> mask, std::optional<float> scale) {
 
     const auto shape = input_tensor.shape();
-    u32 W = shape[-1], H = (input_tensor.volume() / (shape[0] * shape[-1])), NC = shape[0];
-    u32 HW = H*W;
+    uint32_t W = shape[-1], H = (input_tensor.volume() / (shape[0] * shape[-1])), NC = shape[0];
+    uint32_t HW = H*W;
 
-    u32 Wt = W/TILE_WIDTH;
-    u32 Ht = H/TILE_HEIGHT;
+    uint32_t Wt = W/TILE_WIDTH;
+    uint32_t Ht = H/TILE_HEIGHT;
 
     Program program = Program();
 
@@ -231,11 +231,11 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
         auto dst_buffer_address = output_tensors.size() == 1 ? output_tensors.at(0).buffer()->address() : src_buffer_address;
 
         const auto shape = input_tensors.at(0).shape();
-        u32 W = shape[-1], H = (input_tensors.at(0).volume() / (shape[0] * shape[-1])), NC = shape[0];
-        u32 HW = H*W;
+        uint32_t W = shape[-1], H = (input_tensors.at(0).volume() / (shape[0] * shape[-1])), NC = shape[0];
+        uint32_t HW = H*W;
 
-        u32 Wt = W/TILE_WIDTH;
-        u32 Ht = H/TILE_HEIGHT;
+        uint32_t Wt = W/TILE_WIDTH;
+        uint32_t Ht = H/TILE_HEIGHT;
 
         int32_t num_tiles = input_tensors.at(0).volume()/TILE_HW;
         uint32_t block_size = find_max_divisor(Wt, 8);

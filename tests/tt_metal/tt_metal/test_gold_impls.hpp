@@ -14,7 +14,7 @@
 
 using std::vector; // TODO(AP)
 using std::uint32_t;
-using u16 = std::uint16_t;
+using std::uint16_t;
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Reference CPU implementation of reduce_H
@@ -23,12 +23,12 @@ using u16 = std::uint16_t;
 // input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized
 // result is also untilized
-inline vector<u16> gold_transpose_wh(std::vector<u16> src_vec, vector<uint32_t> shape) {
+inline vector<uint16_t> gold_transpose_wh(std::vector<uint16_t> src_vec, vector<uint32_t> shape) {
     vector<uint32_t> shapeT{shape[0], shape[1], shape[3], shape[2]};
     TensAddr addr(shape);
     TensAddr addrt(shapeT);
 
-    vector<u16> transposed(src_vec.size());
+    vector<uint16_t> transposed(src_vec.size());
     for (int n = 0; n < shape[0]; n++)
     for (int c = 0; c < shape[1]; c++)
     for (int h = 0; h < shape[2]; h++)
@@ -46,12 +46,12 @@ inline vector<u16> gold_transpose_wh(std::vector<u16> src_vec, vector<uint32_t> 
 // src_vec is expected to be untilized
 // result is also untilized
 // TODO(AP) - move to gold header
-inline vector<u16> gold_transpose_hc(std::vector<u16> src_vec, vector<uint32_t> shape) {
+inline vector<uint16_t> gold_transpose_hc(std::vector<uint16_t> src_vec, vector<uint32_t> shape) {
     vector<uint32_t> shapeT{shape[0], shape[2], shape[1], shape[3]};
     TensAddr addr(shape);
     TensAddr addrt(shapeT);
 
-    vector<u16> transposed(src_vec.size());
+    vector<uint16_t> transposed(src_vec.size());
     for (int n = 0; n < shape[0]; n++)
     for (int c = 0; c < shape[1]; c++)
     for (int h = 0; h < shape[2]; h++)
@@ -69,7 +69,7 @@ inline vector<u16> gold_transpose_hc(std::vector<u16> src_vec, vector<uint32_t> 
 // input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized
 // result is also untilized
-inline vector<u16> gold_reduce_hw(vector<u16> src_vec, vector<uint32_t> shape, float scaler, bool red_max = false, bool zeropad = true) {
+inline vector<uint16_t> gold_reduce_hw(vector<uint16_t> src_vec, vector<uint32_t> shape, float scaler, bool red_max = false, bool zeropad = true) {
     vector<uint32_t> shape_dst{shape[0], shape[1], 1, 1};
     if (zeropad) {
         shape_dst[2] = 32;
@@ -78,7 +78,7 @@ inline vector<u16> gold_reduce_hw(vector<u16> src_vec, vector<uint32_t> shape, f
     TensAddr addr(shape);
     TensAddr addr_dst(shape_dst);
 
-    vector<u16> reduced(addr_dst.numel());
+    vector<uint16_t> reduced(addr_dst.numel());
     std::fill(reduced.begin(), reduced.end(), 0);
     for (int n = 0; n < shape[0]; n++)
     for (int c = 0; c < shape[1]; c++) {
@@ -103,7 +103,7 @@ inline vector<u16> gold_reduce_hw(vector<u16> src_vec, vector<uint32_t> shape, f
 // input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized
 // result is also untilized
-inline vector<u16> gold_reduce_h(vector<u16> src_vec, vector<uint32_t> shape, float scaler, bool red_max = false, bool zeropad = true) {
+inline vector<uint16_t> gold_reduce_h(vector<uint16_t> src_vec, vector<uint32_t> shape, float scaler, bool red_max = false, bool zeropad = true) {
     vector<uint32_t> shape_dst{shape[0], shape[1], 1, shape[3]};
     TT_ASSERT(shape[2] > 0);
     if (zeropad)
@@ -111,7 +111,7 @@ inline vector<u16> gold_reduce_h(vector<u16> src_vec, vector<uint32_t> shape, fl
     TensAddr addr(shape);
     TensAddr addr_dst(shape_dst);
 
-    vector<u16> reduced(addr_dst.numel());
+    vector<uint16_t> reduced(addr_dst.numel());
     std::fill(reduced.begin(), reduced.end(), 0);
     for (int n = 0; n < shape[0]; n++)
     for (int c = 0; c < shape[1]; c++)
@@ -134,14 +134,14 @@ inline vector<u16> gold_reduce_h(vector<u16> src_vec, vector<uint32_t> shape, fl
 // input shape.x is assumed to have the full number of elements in bfloat16
 // src_vec is expected to be untilized
 // result is also untilized
-inline vector<u16> gold_reduce_w(vector<u16> src_vec, vector<uint32_t> shape, float scaler, bool red_max = false, bool zeropad = true) {
+inline vector<uint16_t> gold_reduce_w(vector<uint16_t> src_vec, vector<uint32_t> shape, float scaler, bool red_max = false, bool zeropad = true) {
     vector<uint32_t> shape_dst{shape[0], shape[1], shape[2], 1};
     if (zeropad)
         shape_dst[3] = 32;
     TensAddr addr(shape);
     TensAddr addr_dst(shape_dst);
 
-    vector<u16> reduced(addr_dst.numel());
+    vector<uint16_t> reduced(addr_dst.numel());
     std::fill(reduced.begin(), reduced.end(), 0);
     for (int n = 0; n < shape[0]; n++)
     for (int c = 0; c < shape[1]; c++)
@@ -190,10 +190,10 @@ struct BcastOp {
 // result is also untilized
 // bcast_vals for hw mode is expected to have size 1
 // bcast_vals for h or w mode is supposed to have h or w elements
-inline vector<u16> gold_bcast_op(
-    const vector<u16>& src_vec,
+inline vector<uint16_t> gold_bcast_op(
+    const vector<uint16_t>& src_vec,
     const vector<uint32_t>& shape,
-    const vector<u16>& bcast_vals,
+    const vector<uint16_t>& bcast_vals,
     BcastDim::Enum bcast_dim,
     BcastOp::Enum bcast_op
 ) {
@@ -204,7 +204,7 @@ inline vector<u16> gold_bcast_op(
 
     vector<uint32_t> shape_dst{N, C, H, W};
     TensAddr addr(shape);
-    vector<u16> result(addr.numel());
+    vector<uint16_t> result(addr.numel());
     std::fill(result.begin(), result.end(), 0);
     for (int n = 0; n < N; n++)
     for (int c = 0; c < C; c++)
@@ -238,11 +238,11 @@ inline vector<u16> gold_bcast_op(
 // Basic gold batch matmul implementation.
 // Returns C=A*B, A and B are row-major untilized
 // Accumulates in FP32
-inline vector<u16> gold_bmm(
+inline vector<uint16_t> gold_bmm(
     const vector<uint32_t> shapeA,
-    const vector<u16>& A,
+    const vector<uint16_t>& A,
     const vector<uint32_t>& shapeB,
-    const vector<u16>& B,
+    const vector<uint16_t>& B,
     bool acc16 = false
     )
 {
@@ -256,7 +256,7 @@ inline vector<u16> gold_bmm(
     TensAddr addrC(shapeC);
     TensAddr addrA(shapeA);
     TensAddr addrB(shapeB);
-    vector<u16> result(addrC.numel());
+    vector<uint16_t> result(addrC.numel());
     vector<float> resultf(addrC.numel());
     std::fill(resultf.begin(), resultf.end(), 0);
 

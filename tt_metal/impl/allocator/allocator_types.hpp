@@ -29,7 +29,7 @@ enum class AllocCoreType {
     Invalid,
 };
 
-using BankMapping = std::vector<u32>;
+using BankMapping = std::vector<uint32_t>;
 
 //! Allocator configuration -- decouples allocation from soc-desc - Up to user to populate from soc_desc
 struct AllocatorConfig {
@@ -62,7 +62,7 @@ namespace allocator {
 
 struct InitAndAllocFuncs {
     std::function<void(Allocator &, const AllocatorConfig &)> init;
-    std::function<u64(const AllocatorConfig &, BankManager &, u64, u64, bool)> alloc;
+    std::function<uint64_t(const AllocatorConfig &, BankManager &, uint64_t, uint64_t, bool)> alloc;
 };
 
 // Holds callback functions required by allocators that specify how to initialize the bank managers and what the allocation scheme
@@ -77,7 +77,7 @@ struct Statistics {
     size_t total_allocated_bytes = 0;
     size_t total_free_bytes = 0;
     size_t largest_free_block_bytes = 0;
-    std::vector<u32> largest_free_block_addrs;  // addresses (relative to bank) that can hold the largest_free_block_bytes
+    std::vector<uint32_t> largest_free_block_addrs;  // addresses (relative to bank) that can hold the largest_free_block_bytes
 };
 
 }

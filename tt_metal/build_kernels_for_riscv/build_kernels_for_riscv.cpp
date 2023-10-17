@@ -1017,9 +1017,9 @@ void generate_math_approx_mode_descriptor(build_kernel_for_riscv_options_t* buil
 
 std::string generate_bank_to_noc_coord_descriptor_string(
     std::vector<CoreCoord>& dram_bank_map,
-    std::vector<i32>& dram_bank_offset_map,
+    std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
-    std::vector<i32>& l1_bank_offset_map
+    std::vector<int32_t>& l1_bank_offset_map
 ) {
     stringstream ss;
     bool is_dram_pow2 = ceil(log2(dram_bank_map.size())) == log2(dram_bank_map.size());
@@ -1071,9 +1071,9 @@ void generate_bank_to_noc_coord_descriptor(
     build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
     string out_dir_path,
     std::vector<CoreCoord>& dram_bank_map,
-    std::vector<i32>& dram_bank_offset_map,
+    std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
-    std::vector<i32>& l1_bank_offset_map
+    std::vector<int32_t>& l1_bank_offset_map
 ) {
     string output_string = generate_bank_to_noc_coord_descriptor_string(dram_bank_map, dram_bank_offset_map, l1_bank_map, l1_bank_offset_map);
 

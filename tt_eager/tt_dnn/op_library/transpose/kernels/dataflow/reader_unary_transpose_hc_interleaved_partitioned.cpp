@@ -7,33 +7,33 @@
 
 #include "debug_print.h"
 
-using u32 = std::uint32_t;
+using uint32_t = std::uint32_t;
 
 // tile index to address
-inline u32 TADDR(u32 ti) {
+inline uint32_t TADDR(uint32_t ti) {
     return ti << 11;
 }
 
 void kernel_main() {
-    u32 src0_addr = get_arg_val<uint32_t>(0);
-    u32 WT = get_arg_val<uint32_t>(1);
-    u32 H = get_arg_val<uint32_t>(2);
-    u32 CT = get_arg_val<uint32_t>(3);
-    u32 HW_bytes = get_arg_val<uint32_t>(4);
-    u32 CHW_bytes = get_arg_val<uint32_t>(5);
-    u32 start_id  = get_arg_val<uint32_t>(6);
-    u32 num_tiles = get_arg_val<uint32_t>(7);
-    u32 batch_addr = get_arg_val<uint32_t>(8);
-    u32 h = get_arg_val<uint32_t>(9);
-    u32 htWT = get_arg_val<uint32_t>(10);
-    u32 ct = get_arg_val<uint32_t>(11);
-    u32 ctoffs = get_arg_val<uint32_t>(12);
-    u32 wt = get_arg_val<uint32_t>(13);
+    uint32_t src0_addr = get_arg_val<uint32_t>(0);
+    uint32_t WT = get_arg_val<uint32_t>(1);
+    uint32_t H = get_arg_val<uint32_t>(2);
+    uint32_t CT = get_arg_val<uint32_t>(3);
+    uint32_t HW_bytes = get_arg_val<uint32_t>(4);
+    uint32_t CHW_bytes = get_arg_val<uint32_t>(5);
+    uint32_t start_id  = get_arg_val<uint32_t>(6);
+    uint32_t num_tiles = get_arg_val<uint32_t>(7);
+    uint32_t batch_addr = get_arg_val<uint32_t>(8);
+    uint32_t h = get_arg_val<uint32_t>(9);
+    uint32_t htWT = get_arg_val<uint32_t>(10);
+    uint32_t ct = get_arg_val<uint32_t>(11);
+    uint32_t ctoffs = get_arg_val<uint32_t>(12);
+    uint32_t wt = get_arg_val<uint32_t>(13);
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr u32 SUBTILE_LINE_BYTES = get_compile_time_arg_val(1);
+    constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(1);
 
-    constexpr u32 onetile = 1;
+    constexpr uint32_t onetile = 1;
     constexpr uint32_t cb_id_in0 = 0;
 
 
@@ -50,7 +50,7 @@ void kernel_main() {
         .data_format = data_format
     };
 
-    for (u32 t = 0; t < num_tiles; t++){
+    for (uint32_t t = 0; t < num_tiles; t++){
         auto h32 = (h&31);
         // what is the source address for the current tile?
         // c32 = intra-C-tile loop
@@ -59,12 +59,12 @@ void kernel_main() {
 
         cb_reserve_back(cb_id_in0, onetile);
 
-        u32 dest_tr0_l1 = get_write_ptr(cb_id_in0);
-        // u32 save_dest = dest_tr0_l1;
-        u32 cSubtileOffs = 0;
-        for (u32 sub = 0; sub < 4; sub++) {
-            u32 c16offs = cSubtileOffs;
-            for (u32 c16 = 0; c16 < 16; c16++) {
+        uint32_t dest_tr0_l1 = get_write_ptr(cb_id_in0);
+        // uint32_t save_dest = dest_tr0_l1;
+        uint32_t cSubtileOffs = 0;
+        for (uint32_t sub = 0; sub < 4; sub++) {
+            uint32_t c16offs = cSubtileOffs;
+            for (uint32_t c16 = 0; c16 < 16; c16++) {
                 // In this loop sub, c16 are source subtile, c16
                 // dest in this loop is varying h implicitly via dest address increment
 
@@ -99,7 +99,7 @@ void kernel_main() {
                 noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
 
                 //if (h == 0 && ct == 0 && wt == 0)
-                //    DPRINT << U32( reinterpret_cast<uint16_t*>( dest_tr0_l1 )[0] ) << ENDL();
+                //    DPRINT << uint32_t( reinterpret_cast<uint16_t*>( dest_tr0_l1 )[0] ) << ENDL();
 
                 // the output address is just linearly incremented
                 dest_tr0_l1 += SUBTILE_LINE_BYTES;

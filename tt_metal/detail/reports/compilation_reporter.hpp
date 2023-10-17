@@ -65,8 +65,8 @@ class CompilationReporter {
     static std::atomic<bool> enable_compile_reports_;
     std::mutex mutex_;
     size_t total_num_compile_programs_ = 0;
-    std::unordered_map<u64, cache_counters> program_id_to_cache_hit_counter_;
-    std::unordered_map<u64, std::vector<string>> program_id_to_kernel_stats_;
+    std::unordered_map<uint64_t, cache_counters> program_id_to_cache_hit_counter_;
+    std::unordered_map<uint64_t, std::vector<string>> program_id_to_kernel_stats_;
     std::ofstream detailed_report_;
     std::ofstream summary_report_;
 };

@@ -11,7 +11,7 @@
 
 
 
-using u32 = std::uint32_t;
+using uint32_t = std::uint32_t;
 using namespace tt::constants;
 
 
@@ -34,11 +34,11 @@ std::vector< std::vector< std::vector<uint32_t> > > get_runtime_args(const Tenso
     auto input_shape = input_tensor.shape();
     auto output_shape = output_tensor.shape();
 
-    u32 W = input_shape[3], H = input_shape[2], NC = input_shape[1]*input_shape[0];
-    u32 HW = H*W;
+    uint32_t W = input_shape[3], H = input_shape[2], NC = input_shape[1]*input_shape[0];
+    uint32_t HW = H*W;
 
-    u32 Wt = W/TILE_WIDTH;
-    u32 Ht = H/TILE_HEIGHT;
+    uint32_t Wt = W/TILE_WIDTH;
+    uint32_t Ht = H/TILE_HEIGHT;
 
     uint32_t num_tensor_tiles = input_tensor.volume() / TILE_HW;
 

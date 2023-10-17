@@ -10,7 +10,7 @@
 #include "tt_metal/detail/util.hpp"
 
 using namespace tt::constants;
-using u32 = uint32_t;
+using uint32_t = uint32_t;
 
 namespace tt {
 
@@ -49,7 +49,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
 
     tt_metal::SetRuntimeArgs(
         program, binary_reader_kernel_id, core,
-        { dst_buffer->address(), u32(N*C), u32(H), u32(W), u32(hFill), u32(wFill), u32(bfloat16(val_hi).to_uint16()), u32(bfloat16(val_lo).to_uint16()) }
+        { dst_buffer->address(), uint32_t(N*C), uint32_t(H), uint32_t(W), uint32_t(hFill), uint32_t(wFill), uint32_t(bfloat16(val_hi).to_uint16()), uint32_t(bfloat16(val_lo).to_uint16()) }
     );
 
     auto override_runtime_args_callback = [kernel_id=binary_reader_kernel_id](

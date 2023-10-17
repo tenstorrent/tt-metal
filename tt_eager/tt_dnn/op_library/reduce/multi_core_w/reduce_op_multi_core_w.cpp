@@ -11,7 +11,7 @@
 #include "tt_metal/detail/util.hpp"
 
 using namespace tt::constants;
-using u32 = std::uint32_t;
+using uint32_t = std::uint32_t;
 
 namespace tt {
 

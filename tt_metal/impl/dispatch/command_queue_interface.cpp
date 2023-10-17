@@ -4,14 +4,14 @@
 
 #include "command_queue_interface.hpp"
 
-u32 get_cq_rd_ptr(chip_id_t chip_id) {
-    vector<u32> recv;
+uint32_t get_cq_rd_ptr(chip_id_t chip_id) {
+    vector<uint32_t> recv;
     tt::Cluster::instance().read_sysmem_vec(recv, HOST_CQ_READ_PTR, 4, chip_id);
     return recv.at(0);
 }
 
-u32 get_cq_rd_toggle(chip_id_t chip_id) {
-    vector<u32> recv;
+uint32_t get_cq_rd_toggle(chip_id_t chip_id) {
+    vector<uint32_t> recv;
     tt::Cluster::instance().read_sysmem_vec(recv, HOST_CQ_READ_TOGGLE_PTR, 4, chip_id);
     return recv.at(0);
 }
@@ -22,11 +22,11 @@ SystemMemoryWriter::SystemMemoryWriter() {
 }
 
 // Ensure that there is enough space to push to the queue first
-void SystemMemoryWriter::cq_reserve_back(Device* device, u32 cmd_size_B) {
-    u32 cmd_size_16B = (((cmd_size_B - 1) | 31) + 1) >> 4; // Terse way to find next multiple of 32 in 16B words
+void SystemMemoryWriter::cq_reserve_back(Device* device, uint32_t cmd_size_B) {
+    uint32_t cmd_size_16B = (((cmd_size_B - 1) | 31) + 1) >> 4; // Terse way to find next multiple of 32 in 16B words
 
-    u32 rd_ptr;
-    u32 rd_toggle;
+    uint32_t rd_ptr;
+    uint32_t rd_toggle;
     do {
         rd_ptr = get_cq_rd_ptr(device->id());
         rd_toggle = get_cq_rd_toggle(device->id());
@@ -39,13 +39,13 @@ void SystemMemoryWriter::cq_reserve_back(Device* device, u32 cmd_size_B) {
 }
 
 // Ideally, data should be an array or pointer, but vector for time-being
-void SystemMemoryWriter::cq_write(Device* device, vector<u32>& data, u32 write_ptr) {
+void SystemMemoryWriter::cq_write(Device* device, vector<uint32_t>& data, uint32_t write_ptr) {
     tt::Cluster::instance().write_sysmem_vec(data, write_ptr, device->id());
 }
 
 void SystemMemoryWriter::send_write_ptr(Device* device) {
     static CoreCoord dispatch_core = device->worker_core_from_logical_core(*device->dispatch_cores().begin());
-    u32 chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
+    uint32_t chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
 
     tt_driver_atomics::sfence();
 
@@ -56,7 +56,7 @@ void SystemMemoryWriter::send_write_ptr(Device* device) {
 
 void SystemMemoryWriter::send_write_toggle(Device* device) {
     static CoreCoord dispatch_core = device->worker_core_from_logical_core(*device->dispatch_cores().begin());
-    u32 chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
+    uint32_t chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
 
     tt_driver_atomics::sfence();
 
@@ -65,10 +65,10 @@ void SystemMemoryWriter::send_write_toggle(Device* device) {
     tt_driver_atomics::sfence();
 }
 
-void SystemMemoryWriter::cq_push_back(Device* device, u32 push_size_B) {
+void SystemMemoryWriter::cq_push_back(Device* device, uint32_t push_size_B) {
 
     // All data needs to be 32B aligned
-    u32 push_size_16B = (((push_size_B - 1) | 31) + 1) >> 4; // Terse way to find next multiple of 32 in 16B words
+    uint32_t push_size_16B = (((push_size_B - 1) | 31) + 1) >> 4; // Terse way to find next multiple of 32 in 16B words
 
     this->cq_write_interface.fifo_wr_ptr += push_size_16B;
 

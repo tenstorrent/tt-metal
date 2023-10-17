@@ -7,7 +7,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
-using u32 = std::uint32_t;
+using uint32_t = std::uint32_t;
 using namespace tt::constants;
 
 namespace tt {
@@ -19,8 +19,8 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to transpose need to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr , "Operands to transpose need to be allocated in buffers on device!");
     const auto shape = input_tensor.shape();
-    u32 W = shape[3], H = shape[2], C = shape[1], N = shape[0];
-    u32 HW = H*W;
+    uint32_t W = shape[3], H = shape[2], C = shape[1], N = shape[0];
+    uint32_t HW = H*W;
     TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
     TT_ASSERT(input_tensor.volume() % TILE_HW == 0);
     if (this->dim == TransposeOpDim::HC) {

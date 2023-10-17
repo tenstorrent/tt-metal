@@ -7,29 +7,29 @@
 
 #include "debug_print.h"
 
-using u32 = std::uint32_t;
+using uint32_t = std::uint32_t;
 
 // tile index to address
-inline u32 TADDR(u32 ti) {
+inline uint32_t TADDR(uint32_t ti) {
     return ti << 11;
 }
 
 void kernel_main() {
-    u32 src0_addr    = get_arg_val<uint32_t>(0);
-    u32 input_Wt     = get_arg_val<uint32_t>(1);
-    u32 output_N     = get_arg_val<uint32_t>(2);
-    u32 output_C     = get_arg_val<uint32_t>(3);
-    u32 output_Ht    = get_arg_val<uint32_t>(4);
-    u32 output_Wt    = get_arg_val<uint32_t>(5);
+    uint32_t src0_addr    = get_arg_val<uint32_t>(0);
+    uint32_t input_Wt     = get_arg_val<uint32_t>(1);
+    uint32_t output_N     = get_arg_val<uint32_t>(2);
+    uint32_t output_C     = get_arg_val<uint32_t>(3);
+    uint32_t output_Ht    = get_arg_val<uint32_t>(4);
+    uint32_t output_Wt    = get_arg_val<uint32_t>(5);
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
 
-    u32 num_sticks_per_input_tile_row = input_Wt << 5; // Tile height is 32
-    u32 num_sticks_per_output_tile_row = output_Wt << 5;
+    uint32_t num_sticks_per_input_tile_row = input_Wt << 5; // Tile height is 32
+    uint32_t num_sticks_per_output_tile_row = output_Wt << 5;
 
-    constexpr u32 SUBTILE_LINE_BYTES = (16<<1);
-    constexpr u32 onetile = 1;
-    constexpr u32 cb_id_in0 = 0;
+    constexpr uint32_t SUBTILE_LINE_BYTES = (16<<1);
+    constexpr uint32_t onetile = 1;
+    constexpr uint32_t cb_id_in0 = 0;
 
 
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);

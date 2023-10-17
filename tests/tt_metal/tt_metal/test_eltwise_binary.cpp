@@ -164,7 +164,7 @@ int main(int argc, char** argv) {
 
             EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
 
-            vector<u32> reader_args = {
+            vector<uint32_t> reader_args = {
                 dram_buffer_src0_addr,
                 (std::uint32_t)dram_src0_noc_xy.x,
                 (std::uint32_t)dram_src0_noc_xy.y,
@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
                 num_tiles,
                 0};
 
-            vector<u32> writer_args = {
+            vector<uint32_t> writer_args = {
                 dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, num_tiles};
 
             SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
