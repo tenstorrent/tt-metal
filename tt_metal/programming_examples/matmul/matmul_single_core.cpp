@@ -14,26 +14,73 @@ using namespace std;
 using namespace tt;
 using namespace tt::tt_metal;
 
-
-void golden_matmul(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t>& output,
+/*
+void golden_matmul(vector<bfloat16> a, vector<bfloat16> b, vector<bfloat16>& output,
                         uint32_t M, uint32_t N, uint32_t K, uint32_t B) {
     std::uint32_t idx_c = 0;
     std::uint32_t idx_a = 0;
     std::uint32_t idx_b = 0;
+
+    vector<float> c_f(M * N, 0);
     for (int i = 0; i < M; i++) {
         for (int j = 0; j < N; j++) {
             idx_c = j+ (i * N);
-            output[idx_c] = 0;
+            //c_f.at(idx_c) = 0;
             idx_a = i * K;
             idx_b = j * M;
             for (int k_m = 0; k_m < K; k_m++) {
                 idx_a += 1;
                 idx_b += K;
-                output[idx_c] += a[idx_a] * b[idx_b];
+                c_f.at(idx_c) += a[idx_a].to_float() * b[idx_b].to_float();
             }
+            output[idx_c] = bfloat16(c_f.at(idx_c));
         }
     }
+}
+*/
 
+uint32_t FloatToUint(float n)
+{
+    return (uint32_t)(*(uint32_t*)&n);
+}
+
+void golden_matmul(vector<bfloat16> a, vector<bfloat16> b, vector<uint32_t>& output,
+                        uint32_t M, uint32_t N, uint32_t K, uint32_t B) {
+    std::uint32_t idx_c = 0;
+    std::uint32_t idx_a = 0;
+    std::uint32_t idx_b = 0;
+
+    //vector<float> c_f(M * N, 0);
+    float c_f;
+    float float_tmp;
+    vector<bfloat16> c_bf(M * N, 0);
+
+    for (int i = 0; i < M; i++) {
+        for (int j = 0; j < N; j++) {
+            idx_c = j+ (i * N);
+            //c_f.at(idx_c) = 0;
+            idx_a = i * K;
+            idx_b = j;
+            c_f = 0;
+            for (int k_m = 0; k_m < K; k_m++) {
+                //c_f.at(idx_c) += a[idx_a].to_float() * b[idx_b].to_float();
+                float_tmp = a[idx_a].to_float() * b[idx_b].to_float();
+                uint32_t* int_tmp = (uint32_t*) &float_tmp;
+                *int_tmp &= 0xffff0000 ;
+                c_f += float_tmp;
+                //cout << "C_F " << c_f << "--" << i << " --" << j << " --" << k_m  << " --" << idx_a << " --" << idx_b << endl;
+                idx_a += 1;
+                idx_b += K;
+            }
+            //c_f &= 0xffff0000 ;
+            c_bf.at(idx_c) = bfloat16(c_f);
+            if (idx_c < 32) {
+                cout << "GG " << c_f << " .. " << c_bf.at(idx_c) << endl;
+            }
+            //output[idx_c] = (uint32_t)c_bf.to_uint16() | ((uint32_t)c_bf.to_uint16() << 16);
+        }
+    }
+    output = pack_bfloat16_vec_into_uint32_vec(c_bf);
 }
 
 void matmul_single_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t>& output, bool bcast_batch,
@@ -60,13 +107,14 @@ void matmul_single_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_
     * Writing data from input vectors to source buffers
     */
     DataFormat cb_data_format = DataFormat::Float16_b;
-    uint32_t single_tile_size = detail::TileSize(cb_data_format);
+    //uint32_t single_tile_size = detail::TileSize(cb_data_format);
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     uint32_t single_datum_size = sizeof(std::uint32_t);
+    uint32_t single_tile_size = 2 * 1024;
 
-    uint32_t dram_buffer_A_size = single_datum_size * M * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_B_size = single_datum_size * N * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-    uint32_t dram_buffer_C_size = single_datum_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    uint32_t dram_buffer_A_size = single_tile_size * Mt * Kt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
     Buffer src0_dram_buffer = CreateBuffer(device, dram_buffer_A_size, dram_buffer_A_size, BufferType::DRAM);
     Buffer src1_dram_buffer = CreateBuffer(device, dram_buffer_B_size, dram_buffer_B_size, BufferType::DRAM);
@@ -203,16 +251,31 @@ int main(int argc, char **argv) {
         Device *device = CreateDevice(device_id);
 
         /* Create source data */
-        constexpr uint32_t M = 640;
-        constexpr uint32_t N = 640;
-        constexpr uint32_t K = 640;
+        constexpr uint32_t M = 32;
+        constexpr uint32_t N = 32;
+        constexpr uint32_t K = 32;
         constexpr uint32_t B = 1;
 
+        uint32_t Mt = M / TILE_HEIGHT;
+        uint32_t Kt = K / TILE_WIDTH;
+        uint32_t Nt = N / TILE_WIDTH;
+
+        constexpr uint32_t single_tile_size = 2 * 1024;
+        uint32_t dram_buffer_A_size = single_tile_size * Mt * Kt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+        uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+        uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+
         /* input vectors with row-major config */
-        std::vector<uint32_t> src0_vec = create_random_vector2d_of_bfloat16(
-            M, K, 1, std::chrono::system_clock::now().time_since_epoch().count());
-        std::vector<uint32_t> src1_vec = create_random_vector2d_of_bfloat16(
-            K, N, 1, std::chrono::system_clock::now().time_since_epoch().count());
+
+        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
+            dram_buffer_A_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
+        std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(
+            dram_buffer_B_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
+
+        //constexpr float val_to_add = 1.0f;
+        //std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(dram_buffer_A_size, val_to_add);
+        //std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_B_size, val_to_add);
+
 
         /* Calling the MatMul host program. Read in result into a host vector */
         vector<uint32_t> result_vec;
@@ -223,18 +286,24 @@ int main(int argc, char **argv) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(result_vec.at(i));
             float a1 = as.first.to_float();
             float a2 = as.second.to_float();
-            cout << a1<< "  " << a2 << endl;
+            cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << result_vec.at(i) << endl;
         }
 
-        vector<uint32_t> golden_vec(M * N);
-        golden_matmul(src0_vec, src1_vec, golden_vec, M, N, K, B);
+        //vector<bfloat16> golden_vec_bfp16(M * N);
+        //golden_matmul(unpack_uint32_vec_into_bfloat16_vec(src0_vec), unpack_uint32_vec_into_bfloat16_vec(src1_vec), golden_vec_bfp16, M, N, K, B);
+        //cout << "GGG " <<  golden_vec_bfp16.size() << endl;
+        //vector<uint32_t> golden_vec = pack_bfloat16_vec_into_uint32_vec(golden_vec_bfp16);
+        vector<uint32_t> golden_vec;
+        golden_matmul(unpack_uint32_vec_into_bfloat16_vec(src0_vec), unpack_uint32_vec_into_bfloat16_vec(src1_vec), golden_vec, M, N, K, B);
+
+
         cout << "----g--" << endl;
         cout << golden_vec.size() << endl;
         for (int i = 0; i < 32; i++) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(golden_vec.at(i));
             float a1 = as.first.to_float();
             float a2 = as.second.to_float();
-            cout << a1 << "  " << a2 << endl;
+            cout << "-- " << i << " -- " << a1 << "  " << a2 << "---" << golden_vec.at(i) << endl;
         }
 
         constexpr float abs_tolerance = 0.01f;

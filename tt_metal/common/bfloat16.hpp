@@ -436,6 +436,8 @@ inline bool packed_uint32_t_vector_comparison(
         float a2 = as.second.to_float();
         float b2 = bs.second.to_float();
 
+        //cout << "COMPARE " << i << " == " << a1 << "--" << b1 << " ------" << a2 << " --" << b2  << endl;
+
         if (not (comparison_function(a1, b1) and comparison_function(a2, b2)))  {
             if (argfail)
                 *argfail = i;
