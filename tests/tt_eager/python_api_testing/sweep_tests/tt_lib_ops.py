@@ -4,7 +4,7 @@
 
 import torch
 import tt_lib as ttl
-from tests.models.helper_funcs import Linear as tt_Linear
+from models.helper_funcs import Linear as tt_Linear
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
