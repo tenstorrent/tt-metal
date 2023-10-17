@@ -53,9 +53,9 @@ std::vector<Shape> Downsample::compute_output_shapes(const std::vector<Tensor> &
     const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.shape()[0] == 1 && input_tensor_a.shape()[1] == 1);
     uint32_t input_height = input_tensor_a.shape()[2];
-    auto [input_height_size_z, input_height_size_y, input_height_size_x, height_y_stride, height_x_stride] = this->downsample_params;
-    TT_ASSERT(input_height >= input_height_size_z * input_height_size_y * input_height_size_x);
-    uint32_t output_height_unpadded = input_height_size_z * ceil( (double) input_height_size_y / (double) height_y_stride) * ceil( (double) input_height_size_x / (double) height_x_stride);
+    auto [img_batch_size, img_height, img_width, img_stride_h, img_stride_w] = this->downsample_params;
+    TT_ASSERT(input_height >= img_batch_size * img_height * img_width);
+    uint32_t output_height_unpadded = img_batch_size * ceil( (double) img_height / (double) img_stride_h) * ceil( (double) img_width / (double) img_stride_w);
     uint32_t output_height = round_up(output_height_unpadded, TILE_HEIGHT);
     uint32_t output_width = input_tensor_a.shape()[3];
     auto output_padding = Padding({{0, 0}, {0, 0}, {0, (output_height - output_height_unpadded)}, {0, 0}}, Padding::PadValue::Any);
@@ -370,7 +370,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
-    auto [input_height_size_z, input_height_size_y, input_height_size_x, height_y_stride, height_x_stride] = downsample_params;
+    auto [img_batch_size, img_height, img_width, img_stride_h, img_stride_w] = downsample_params;
     tt_metal::Buffer *src0_buffer = a.buffer();
 
     TT_ASSERT(a.shape()[0] == 1 && a.shape()[1] == 1);
@@ -382,9 +382,9 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Sanity check of output size
     TT_ASSERT(output.volume() % TILE_HW == 0);
-    uint32_t unpadded_input_volume = input_height_size_z * input_height_size_y * input_height_size_x;
+    uint32_t unpadded_input_volume = img_batch_size * img_height * img_width;
     TT_ASSERT(a.volume() >= unpadded_input_volume);
-    uint32_t unpadded_output_volume = ceil((double) unpadded_input_volume / (double) (height_y_stride * height_x_stride));
+    uint32_t unpadded_output_volume = ceil((double) unpadded_input_volume / (double) (img_stride_h * img_stride_w));
     TT_ASSERT(output.volume() >= unpadded_output_volume);
 
 
@@ -414,9 +414,9 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     uint32_t output_width = output.shape()[3];
     TT_ASSERT(input_width == output_width);
 
-    uint32_t input_height_unpadded = input_height_size_z * input_height_size_y * input_height_size_x;
+    uint32_t input_height_unpadded = img_batch_size * img_height * img_width;
     TT_ASSERT(input_height >= input_height_unpadded);
-    uint32_t output_height_unpadded = input_height_size_z * std::ceil((double) (input_height_size_y * input_height_size_x) / (double) (height_y_stride * height_x_stride));
+    uint32_t output_height_unpadded = img_batch_size * std::ceil((double) (img_height * img_width) / (double) (img_stride_h * img_stride_w));
     TT_ASSERT(output_height >= output_height_unpadded);
 
     uint32_t input_shard_height = a.shard_spec().value().shard_shape[0];
@@ -500,7 +500,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     auto final_tilize_output_cb = tt_metal::CreateCircularBuffer(program, core_range, final_tilize_output_cb_config);
     cout << "final output cb" << endl;
     uint32_t log_base_2_of_conv_act_size_c_bytes = (uint32_t) std::log2((float) input_shard_width_bytes);
-    uint32_t stride_h_x_image_width = height_y_stride * input_height_size_x;
+    uint32_t stride_h_x_image_width = img_stride_h * img_width;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) untilize_cb_index,
         (std::uint32_t) untilize_downsampled_cb_index,
@@ -540,12 +540,6 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
 
     // track img h, img w, across cores
     ImgTrackingVars v;
-    uint32_t img_height = input_height_size_y;
-    uint32_t img_width = input_height_size_x;
-
-    uint32_t img_stride_h = height_y_stride;
-    uint32_t img_stride_w = height_x_stride;
-
     CoreCoord prev_core = {0,0};
 
     for (uint32_t i = 0; i < num_cores; i++) {
@@ -636,10 +630,10 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
 
         // Writer runtime args
         vector<uint32_t> writer_kernel_args = {
-            (uint32_t) input_height_size_y,
-            (uint32_t) input_height_size_x,
-            (uint32_t) height_y_stride,
-            (uint32_t) height_x_stride,
+            (uint32_t) img_height,
+            (uint32_t) img_width,
+            (uint32_t) img_stride_h,
+            (uint32_t) img_stride_w,
 
             // halo args
             halo_read_enabled,
