@@ -10,7 +10,7 @@ fi
 run_perf_models() {
     local pipeline_type=$1
 
-    env pytest tests/models/falcon/tests -m $pipeline_type
+    env pytest models/demos/falcon7b/tests -m $pipeline_type
 
     env pytest models/experimental/vgg/tests -m $pipeline_type
 

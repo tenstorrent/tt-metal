@@ -61,8 +61,8 @@ env pytest models/experimental/llama_old/tests -k llama_mlp
 env pytest models/experimental/llama_old/tests -k llama_attention
 env pytest models/experimental/llama_old/tests -k llama_decoder
 
-env pytest tests/models/falcon/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT16-L1-falcon_7b-layers_32-prefill_seq128]
-env pytest tests/models/falcon/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT16-L1-falcon_7b-layers_32-decode_batch32]
+env pytest models/demos/falcon7b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT16-L1-falcon_7b-layers_32-prefill_seq128]
+env pytest models/demos/falcon7b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT16-L1-falcon_7b-layers_32-decode_batch32]
 
 env pytest models/experimental/lenet/tests -k test_lenet_inference
 env pytest models/experimental/convnet_mnist/tests -k mnist_inference
