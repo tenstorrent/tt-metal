@@ -322,7 +322,7 @@ For example to profile a bert unit test you can run the following:
 
 ..  code-block:: sh
 
-    python -m tracy -m pytest tests/models/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_fused_qkv_and_split_heads_with_program_cache
+    python -m tracy -m pytest models/experimental/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_fused_qkv_and_split_heads_with_program_cache
 
 
 Python programs can also be partially profiled by instrumenting parts of the code intended to be profiled and run them with the `-p` option of the `tracy` module set.
@@ -341,7 +341,7 @@ Running the `tracy` module with the `-p` option to do partial profiling:
 
 ..  code-block:: sh
 
-    python -m tracy -p -m pytest tests/models/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_fused_qkv_and_split_heads_with_program_cache
+    python -m tracy -p -m pytest models/experimental/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_fused_qkv_and_split_heads_with_program_cache
 
 Instead of profiling the entirety of the pytest run, python functions only called as part of the `test_split_fused_qkv_and_split_heads_with_program_cache` functions are profiled in
 tracy.
@@ -380,7 +380,7 @@ The same pytest example above will be profiled line by line by adding the `-l` o
 
 ..  code-block:: sh
 
-    python -m tracy -p -l -m pytest tests/models/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_fused_qkv_and_split_heads_with_program_cache
+    python -m tracy -p -l -m pytest models/experimental/bert_large_performant/unit_tests/test_bert_large_split_and_transform_qkv_heads.py::test_split_fused_qkv_and_split_heads_with_program_cache
 
 
 GUI
