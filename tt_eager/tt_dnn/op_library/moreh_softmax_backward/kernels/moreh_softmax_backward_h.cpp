@@ -50,7 +50,7 @@ void MAIN {
 
         // step 2, compute sum(y * dy)
         ACQ();
-        reduce_tile_to_cb(REDUCE_OP, REDUCE_DIM, cb_ydy, cb_bcast_scaler, cb_sum, Ht);
+        reduce_tile_to_cb(REDUCE_OP, REDUCE_DIM, cb_ydy, cb_bcast_scaler, cb_sum, Ht, /*pop0=*/Ht, /*pop=1*/0);
         REL();
 
         // step 3, compute final result
