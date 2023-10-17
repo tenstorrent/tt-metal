@@ -297,13 +297,17 @@ class CoreRangeSet {
     const std::set<CoreRange>& ranges() const { return this->ranges_; }
 
     std::string str() const {
-      std::string core_range_set_str = "{";
-      for (auto core_range : this->ranges_) {
-        core_range_set_str += core_range.str() + ", ";
+      if (this->ranges().size() > 0) {
+        std::string core_range_set_str = "{";
+        for (auto core_range : this->ranges_) {
+          core_range_set_str += core_range.str() + ", ";
+        }
+        core_range_set_str[core_range_set_str.length() - 2] = '}';
+        core_range_set_str.pop_back();
+        return core_range_set_str;
+      } else {
+        return "{}";
       }
-      core_range_set_str[core_range_set_str.length() - 2] = '}';
-      core_range_set_str.pop_back();
-      return core_range_set_str;
     }
 
   private:
