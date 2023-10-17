@@ -36,7 +36,7 @@ void MAIN {
     constexpr uint32_t bias_cb_id = tt::CB::c_in3;
 
     #ifdef FUSE_BIAS
-    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(mm_partials_cb_id, bias_cb_id);
+    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(mm_partials_cb_id, bias_cb_id, out_cb_id);
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
     #else
     constexpr uint32_t mm_out_cb_id = out_cb_id;
@@ -165,7 +165,6 @@ void MAIN {
         unpack_reconfig_data_format(mm_partials_cb_id, bias_cb_id);
         // reconfigure packer df for out
         pack_reconfig_data_format(out_cb_id);
-        int in0_index_subblock_offset = 0;
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
             int in1_index_subblock_offset = 0;
             for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
@@ -207,7 +206,6 @@ void MAIN {
 
                 in1_index_subblock_offset += out_subblock_w;
             }
-            in0_index_subblock_offset += in0_subblock_num_tiles;
         }
         if constexpr(spill and batch > 1) {
             // reconfigure init for matmul
