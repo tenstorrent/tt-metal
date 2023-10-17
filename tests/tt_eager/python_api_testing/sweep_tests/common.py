@@ -161,8 +161,8 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
                     getattr(generation_funcs, _datagen_dict["function"]),
                     **_datagen_dict["args"],
                 ),
-                generation_funcs.supported_dtypes[datagen_dict.get("dtype", "float32")],
-                datagen_dict.get("tilize", False),
+                generation_funcs.supported_dtypes[_datagen_dict.get("dtype", "float32")],
+                _datagen_dict.get("tilize", False),
             )
             for _datagen_dict in datagen_dict
         ]
