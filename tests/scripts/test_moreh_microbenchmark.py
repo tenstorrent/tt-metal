@@ -175,7 +175,7 @@ def test_matmul_local(r=9, c=12, mt=72, nt=96, kt=24):
 
 @pytest.mark.parametrize(
     "iteration, test_vector_small, test_vector_large",
-    [(1,
+    [(2,
      np.array([
                 8192,
                 32768,
@@ -212,7 +212,7 @@ def test_pcie_h2d_dram(iteration, test_vector_small, test_vector_large):
 
 @pytest.mark.parametrize(
     "iteration, test_vector_small, test_vector_large",
-    [(1,
+    [(2,
      np.array([
                 8192,
                 32768,
@@ -248,25 +248,36 @@ def test_pcie_d2h_dram(iteration, test_vector_small, test_vector_large):
 
 
 @pytest.mark.parametrize(
-    "iteration, test_vector",
-    [(1,
-     np.array([
-                4096,
-                16384,
-                65536,
-                262144,
-                1048576,
-                4194304,
-                16777216]))]
+    "arch, iteration, L1_size, test_vector",
+    [
+        ('grayskull', 2, 1048576,
+        np.array([
+                    4096,
+                    16384,
+                    65536,
+                    262144,
+                    1048576,
+                    4194304,
+                    16777216])),
+        ('wormhole_b0', 2, 1499136,
+        np.array([
+                    4096,
+                    16384,
+                    65536,
+                    262144,
+                    1048576,
+                    4194304,
+                    16777216])),
+    ]
 )
-def test_pcie_h2d_l1(iteration, test_vector):
+def test_pcie_h2d_l1(arch, iteration, L1_size, test_vector):
     home_path = os.environ.get('TT_METAL_HOME')
     log_path = os.path.join(home_path, 'tt_metal/tools/profiler')
     file_name = os.path.join(log_path, 'logs/H2D_L1_Bandwidth.csv')
     header = ['Transfer Size', 'WriteToDeviceL1', 'WriteToBuffer', 'EnqueueWriteBuffer']
     data = []
     for test_point in test_vector:
-        if test_point < 1048576:
+        if test_point < L1_size:
             bw_wdd = test_write_device_l1(iteration, 1, test_point)
         else:
             bw_wdd = 0
@@ -279,25 +290,36 @@ def test_pcie_h2d_l1(iteration, test_vector):
 
 
 @pytest.mark.parametrize(
-    "iteration, test_vector",
-    [(1,
-     np.array([
-                4096,
-                16384,
-                65536,
-                262144,
-                1048576,
-                4194304,
-                16777216]))]
+    "arch, iteration, L1_size, test_vector",
+    [
+        ('grayskull', 2, 1048576,
+        np.array([
+                    4096,
+                    16384,
+                    65536,
+                    262144,
+                    1048576,
+                    4194304,
+                    16777216])),
+        ('wormhole_b0', 2, 1499136,
+        np.array([
+                    4096,
+                    16384,
+                    65536,
+                    262144,
+                    1048576,
+                    4194304,
+                    16777216])),
+    ]
 )
-def test_pcie_d2h_l1(iteration, test_vector):
+def test_pcie_d2h_l1(arch, iteration, L1_size, test_vector):
     home_path = os.environ.get('TT_METAL_HOME')
     log_path = os.path.join(home_path, 'tt_metal/tools/profiler')
     file_name = os.path.join(log_path, 'logs/D2H_L1_Bandwidth.csv')
     header = ['Transfer Size', 'ReadFromDeviceL1', 'ReadFromBuffer', 'EnqueueReadBuffer']
     data = []
     for test_point in test_vector:
-        if test_point < 1048576:
+        if test_point < L1_size:
             bw_wdd = test_read_device_l1(iteration, 1, test_point)
         else:
             bw_wdd = 0

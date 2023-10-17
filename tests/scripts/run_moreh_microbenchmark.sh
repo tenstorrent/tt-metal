@@ -25,8 +25,8 @@ run_profiling_test() {
 
     pytest $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_pcie_h2d_dram
     pytest $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_pcie_d2h_dram
-    pytest $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_pcie_h2d_l1
-    pytest $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_pcie_d2h_l1
+    pytest $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_pcie_h2d_l1 -k $ARCH_NAME
+    pytest $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_pcie_d2h_l1 -k $ARCH_NAME
     pytest $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_noc -k $ARCH_NAME
     pytest $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_matmul_dram -k $ARCH_NAME
     pytest $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_matmul_l1 -k $ARCH_NAME
