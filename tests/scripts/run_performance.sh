@@ -35,7 +35,7 @@ run_perf_models() {
     env pytest models/experimental/bloom/tests -m $pipeline_type
 
     ## Merge all the generated reports
-    env python tests/models/merge_perf_results.py
+    env python models/merge_perf_results.py
 }
 
 main() {
