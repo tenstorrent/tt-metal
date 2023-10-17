@@ -9,7 +9,7 @@ from typing import Optional, Tuple
 
 import tt_lib
 
-from models.falcon7b.tt.falcon_model import TtFalconModelShared
+from models.demos.falcon7b.tt.falcon_model import TtFalconModelShared
 from models.utility_functions import torch2tt_tensor
 
 

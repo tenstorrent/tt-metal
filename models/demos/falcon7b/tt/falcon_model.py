@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 
 import tt_lib
 
-from models.falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
+from models.demos.falcon7b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.utility_functions import (
     torch2tt_tensor,
     pad_by_zero,

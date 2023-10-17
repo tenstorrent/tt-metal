@@ -5,15 +5,18 @@
 import torch
 import pytest
 from loguru import logger
+
 import tt_lib
-from models.falcon7b.reference.hf_modeling_falcon import (
+from models.demos.falcon7b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
-from models.falcon7b.tt.falcon_model import TtFalconModel
-from models.falcon7b.model_config import (
+from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
+
+from models.demos.falcon7b.tt.model_config import (
     get_model_config,
     get_tt_cache_path,
 )
+
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
     comp_pcc,
@@ -21,11 +24,13 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
-class PytorchFalconModel(torch.nn.Module):
+class PytorchFalconCausalLM(torch.nn.Module):
     def __init__(self, hf_reference_model, num_layers):
         super().__init__()
-        self.model = hf_reference_model.transformer
-        self.model.h = self.model.h[:num_layers]
+        self.model = hf_reference_model
+        self.model.transformer.h = self.model.transformer.h[:num_layers]
+
+        # Disable dropout
         self.model.eval()
 
     def forward(self, input_ids, past_key_values, use_cache):
@@ -39,7 +44,7 @@ class PytorchFalconModel(torch.nn.Module):
         return result
 
 
-def run_test_FalconModel_inference(
+def run_test_FalconCausalLM_inference(
     device,
     model_version,
     llm_mode,
@@ -53,14 +58,16 @@ def run_test_FalconModel_inference(
     model_location_generator,
 ):
     model_name = model_location_generator(model_version, model_subdir="Falcon")
+
     hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name)
+
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
 
     # Prepare input ------------------------------------------------------------------------
     torch.manual_seed(0)
-    base_url = "transformer"
+    base_url = ""
     max_position_embeddings = 2048
     head_dim = configuration.hidden_size // configuration.n_head
     use_cache = True
@@ -114,14 +121,17 @@ def run_test_FalconModel_inference(
         )
 
     # Prepare output -----------------------------------------------------------------------
-    pytorch_FalconModel = PytorchFalconModel(hugging_face_reference_model, num_layers)
-    pytorch_out, pytorch_layer_present = pytorch_FalconModel(
+    pytorch_FalconCausalLM = PytorchFalconCausalLM(
+        hugging_face_reference_model, num_layers
+    )
+    pytorch_out, pytorch_layer_present = pytorch_FalconCausalLM(
         input_ids=model_input, past_key_values=past_key_values, use_cache=use_cache
     )
+
     # NOTE: Passing in pytorch tensor here instead of ll buda tensor
     # since we don't yet have embedding support on device
     # device, state_dict, base_url, max_position_embeddings, config, num_decoders
-    tt_FalconModel = TtFalconModel(
+    tt_FalconCausalLM = TtFalconCausalLM(
         device,
         state_dict,
         base_url,
@@ -131,18 +141,19 @@ def run_test_FalconModel_inference(
         model_config,
         tt_cache_path,
     )
+
     # TODO: Generate embeddings and attention_mask on device
     if llm_mode == "prefill":
         tt_outs = []
         model_inputs = torch.split(model_input, 1)
         tt_embeddings, tt_attention_mask = zip(
             *[
-                tt_FalconModel.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
+                tt_FalconCausalLM.model_preprocessing(llm_mode, m_i, kv_cache_len, num_input_tokens=seq_len)
                 for m_i in model_inputs
             ]
         )
         for user_id in range(batch):
-            tt_out, tt_layer_present = tt_FalconModel(
+            tt_out, tt_layer_present = tt_FalconCausalLM(
                 input_embeddings=tt_embeddings[user_id],
                 llm_mode=llm_mode,
                 attention_mask=tt_attention_mask[user_id],
@@ -155,10 +166,10 @@ def run_test_FalconModel_inference(
         tt_out = torch.vstack(tt_outs)
 
     elif llm_mode == "decode":
-        tt_embeddings, tt_attention_mask = tt_FalconModel.model_preprocessing(
+        tt_embeddings, tt_attention_mask = tt_FalconCausalLM.model_preprocessing(
             llm_mode, model_input, kv_cache_len, num_input_tokens=kv_len
         )
-        tt_out, tt_layer_present = tt_FalconModel(
+        tt_out, tt_layer_present = tt_FalconCausalLM(
             input_embeddings=tt_embeddings,
             llm_mode=llm_mode,
             attention_mask=tt_attention_mask,
@@ -205,9 +216,9 @@ def run_test_FalconModel_inference(
         does_pass = does_pass and does_pass2
 
     if does_pass:
-        logger.info("Falcon Model Passed!")
+        logger.info("Falcon CausalLM Passed!")
     else:
-        logger.warning("Falcon Model Failed!")
+        logger.warning("Falcon CausalLM Failed!")
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
@@ -217,11 +228,11 @@ def run_test_FalconModel_inference(
         ("prefill", 2, 128, 0),
         ("decode", 32, 1, 128),
     ),
-    ids=["prefill_seq128_batch32", "decode_batch32"],
+    ids=["prefill_seq128", "decode_batch32"],
 )
 @pytest.mark.parametrize(
     "num_layers, pcc",
-    ((2, 0.98), (32, 0.98)),
+    ((2, 0.98), (32, 0.86)),
     ids=["layers_2", "layers_32"],
 )
 @pytest.mark.parametrize(
@@ -230,7 +241,7 @@ def run_test_FalconModel_inference(
     ids=["falcon_7b"],
 )
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
-def test_FalconModel_inference(
+def test_FalconCausalLM_inference(
     model_version,
     llm_mode,
     batch,
@@ -238,13 +249,19 @@ def test_FalconModel_inference(
     kv_cache_len,
     num_layers,
     pcc,
+    request,
     model_config_str,
     model_location_generator,
     device,
 ):
     model_config = get_model_config(model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
-    run_test_FalconModel_inference(
+
+    tt_lib.profiler.set_profiler_location(
+        f"tt_metal/tools/profiler/logs/falcon-7b_{request.node.callspec.id}"
+    )
+
+    run_test_FalconCausalLM_inference(
         device,
         model_version,
         llm_mode,

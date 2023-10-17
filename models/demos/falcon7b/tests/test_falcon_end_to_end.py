@@ -7,17 +7,17 @@ import pytest
 from loguru import logger
 
 import tt_lib
-from models.falcon7b.reference.hf_modeling_falcon import (
+from models.demos.falcon7b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
-from models.falcon7b.tt.falcon_causallm import TtFalconCausalLM
+from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 
 # TODO: Remove this?
-from models.falcon7b.tt.falcon_common import (
+from models.demos.falcon7b.tt.falcon_common import (
     PytorchFalconCausalLM,
 )
 
-from models.falcon7b.model_config import (
+from models.demos.falcon7b.tt.model_config import (
     get_model_config,
     get_tt_cache_path,
 )
@@ -25,12 +25,10 @@ from models.falcon7b.model_config import (
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     profiler,
-    prep_report,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     disable_compilation_reports,
@@ -50,11 +48,7 @@ def run_test_FalconCausalLM_end_to_end(
     model_config,
     tt_cache_path,
     model_location_generator,
-    expected_inference_time,
 ):
-    # Clear global profiler state before starting measurements
-    profiler.clear()
-
     model_name = model_location_generator(model_version, model_subdir="Falcon")
 
     profiler.start("hugging_face_model_setup")
@@ -71,10 +65,10 @@ def run_test_FalconCausalLM_end_to_end(
     torch.manual_seed(0)
     base_url = ""
     max_position_embeddings = 2048
-    head_dim = configuration.hidden_size // configuration.num_attention_heads
+    head_dim = configuration.hidden_size // configuration.n_head
     use_cache = True
 
-    if True:
+    if 1:
         model_input = torch.arange(seq_len * batch).reshape(batch, seq_len)
     else:
         # batch identical sequences for debugging
@@ -84,8 +78,8 @@ def run_test_FalconCausalLM_end_to_end(
 
     # Generate dummy kv_cache --------------------------------------------------------------
     if llm_mode == "prefill":
-        kv_len = seq_len
-        assert seq_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
+        q_len, kv_len = seq_len, seq_len
+        assert q_len % 32 == 0, "For prefill, seq_len must be multiple of 32!"
         assert kv_cache_len == 0, "For prefill, no kv_cache is passed in!"
 
         past_key_values = None
@@ -98,9 +92,9 @@ def run_test_FalconCausalLM_end_to_end(
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
     elif llm_mode == "decode":
-        kv_len = kv_cache_len + 1
+        q_len, kv_len = seq_len, kv_cache_len + 1
         assert batch % 32 == 0, "For decode, batch must be multiple of 32!"
-        assert seq_len == 1, "For decode, seq_len must be 1!"
+        assert q_len == 1, "For decode, q_len must be 1!"
 
         past_key_values = ()
         tt_layer_past = ()
@@ -321,71 +315,34 @@ def run_test_FalconCausalLM_end_to_end(
 
     profiler.print()
 
-    comment = f"kv_cache_len={kv_cache_len}_seq_len={seq_len}_num_layers={num_layers}_config=L1-bf16"
-    cpu_time = profiler.get("hugging_face_reference_model")
-    first_iter_time = profiler.get("first_model_run_with_compile")
-    second_iter_time = profiler.get("model_run_for_inference")
-    expected_compile_time = 30
-    prep_report(
-        model_name=f"Falcon_{llm_mode}_{comment}",
-        batch_size=batch,
-        inference_and_compile_time=first_iter_time,
-        inference_time=second_iter_time,
-        expected_compile_time=expected_compile_time,
-        expected_inference_time=expected_inference_time,
-        comments=comment,
-        inference_time_cpu=cpu_time,
-    )
 
-    compile_time = first_iter_time - second_iter_time
-    logger.info(f"falcon {comment} inference time: {second_iter_time}")
-    logger.info(f"falcon {comment} compile time: {compile_time}")
-
-    if does_pass:
-        logger.info("Falcon CausalLM Passed!")
-    else:
-        logger.warning("Falcon CausalLM Failed!")
-        # TODO: Fix PCC for decode and uncomment this
-        # assert does_pass, f"PCC value is lower than {pcc}"
-
-
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
+    "llm_mode, batch, seq_len, kv_cache_len",
     (
-        ("prefill", 1, 128, 0, .38),
-        ("prefill", 1, 256, 0, .50),
-        ("decode", 32, 1, 128, 0.32),
-        ("decode", 32, 1, 1024, 0.41),
-        ("decode", 32, 1, 2047, 0.56),
+        ("prefill", 2, 128, 0),
+        ("decode", 32, 1, 128),
+        ("decode", 32, 1, 1024),
     ),
-    ids=[
-        "prefill_seq128",
-        "prefill_seq256",
-        "decode_batch32",
-        "decode_batch32_1024",
-        "decode_batch32_2047",
-    ],
+    ids=["prefill_seq128", "decode_batch32", "decode_batch32_1024"],
 )
 @pytest.mark.parametrize(
     "num_layers, pcc",
-    ((32, 0.86),),
-    ids=["layers_32"],
+    ((2, 0.98), (32, 0.86)),
+    ids=["layers_2", "layers_32"],
 )
 @pytest.mark.parametrize(
     "model_version",
     ("tiiuae/falcon-7b-instruct",),
     ids=["falcon_7b"],
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-L1",))
-def test_perf_bare_metal(
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
+def test_FalconCausalLM_end_to_end_with_program_cache(
     use_program_cache,
     model_version,
     llm_mode,
     batch,
     seq_len,
     kv_cache_len,
-    expected_inference_time,
     num_layers,
     pcc,
     request,
@@ -415,71 +372,4 @@ def test_perf_bare_metal(
         model_config,
         tt_cache_path,
         model_location_generator,
-        expected_inference_time,
-    )
-
-
-@pytest.mark.models_performance_virtual_machine
-@pytest.mark.parametrize(
-    "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
-    (
-        ("prefill", 1, 128, 0, 4.0),
-        ("decode", 32, 1, 128, 10.56),
-        # ("prefill", 1, 256, 0, 0.40),
-        # ("decode", 32, 1, 1024, 0.36),
-        # ("decode", 32, 1, 2047, 0.47),
-    ),
-    ids=[
-        "prefill_seq128",
-        "decode_batch32",
-    ],  # "prefill_seq256","decode_batch32_1024", "decode_batch32_2047"],
-)
-@pytest.mark.parametrize(
-    "num_layers, pcc",
-    ((32, 0.86),),
-    ids=["layers_32"],
-)
-@pytest.mark.parametrize(
-    "model_version",
-    ("tiiuae/falcon-7b-instruct",),
-    ids=["falcon_7b"],
-)
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-L1",))
-def test_perf_virtual_machine(
-    use_program_cache,
-    model_version,
-    llm_mode,
-    batch,
-    seq_len,
-    kv_cache_len,
-    expected_inference_time,
-    num_layers,
-    pcc,
-    request,
-    model_config_str,
-    model_location_generator,
-    device,
-):
-    model_config = get_model_config(model_config_str)
-    tt_cache_path = get_tt_cache_path(model_version)
-    disable_persistent_kernel_cache()
-    disable_compilation_reports()
-
-    tt_lib.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/falcon-7b_{request.node.callspec.id}"
-    )
-
-    run_test_FalconCausalLM_end_to_end(
-        device,
-        model_version,
-        llm_mode,
-        batch,
-        seq_len,
-        kv_cache_len,
-        num_layers,
-        pcc,
-        model_config,
-        tt_cache_path,
-        model_location_generator,
-        expected_inference_time,
     )
