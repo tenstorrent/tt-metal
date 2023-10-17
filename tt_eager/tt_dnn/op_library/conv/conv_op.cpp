@@ -8,7 +8,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/common/constants.hpp"
-// #include "test/tt_metal/llrt/test_libs/debug_mailbox.hpp"
 
 #include "tt_stl/reflection.hpp"
 
@@ -25,7 +24,6 @@ const uint32_t matmul_partials_cb                     = CB::c_intermed0;
 const uint32_t tilize_mode_tilized_act_cb             = CB::c_intermed1;
 const uint32_t untilize_mode_final_matmul_partials_cb = CB::c_intermed2;
 const uint32_t untilize_mode_reblock_cb               = CB::c_intermed3;
-const uint32_t out_for_bias_cb                        = CB::c_intermed4;
 const uint32_t out0_cb                                = CB::c_out0;
 
 pair<uint32_t, uint32_t> compute_conv_output_face_shape(uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w) {
@@ -124,10 +122,6 @@ void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
 		    .set_page_size(bias_cb, bias_pagesize);
         auto cb_bias = CreateCircularBuffer(program, core, cb_bias_config);
 
-        // intermed mm output
-        CircularBufferConfig cb_out_for_bias_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{out_for_bias_cb, tt::DataFormat::Float16_b}})
-		    .set_page_size(out_for_bias_cb, single_tile_size);
-        auto cb_out_for_bias = CreateCircularBuffer(program, core, cb_out_for_bias_config);
         log_debug("BIAS CBs: {} {} {}", bias_cb, bias_ntiles, bias_pagesize);
     }
 }
