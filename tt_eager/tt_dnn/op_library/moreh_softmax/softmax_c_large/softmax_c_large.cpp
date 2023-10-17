@@ -13,7 +13,6 @@
 
 #include <optional>
 
-using u32 = std::uint32_t;
 using namespace tt::constants;
 using namespace std;
 using namespace tt::tt_metal;
@@ -108,12 +107,12 @@ operation::ProgramWithCallbacks moreh_softmax_c_large(const Tensor &input, Tenso
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        vector<u32> reader_args = {
+        vector<uint32_t> reader_args = {
             input.buffer()->address(), num_tiles_per_core, tile_offset,
             outer_stride, inner_size,
             dim_size};
 
-        vector<u32> writer_args = {output.buffer()->address(), num_tiles_per_core, tile_offset,
+        vector<uint32_t> writer_args = {output.buffer()->address(), num_tiles_per_core, tile_offset,
             outer_stride, inner_size,
             dim_size};
 
