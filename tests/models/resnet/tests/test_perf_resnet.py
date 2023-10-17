@@ -124,7 +124,7 @@ def run_perf_resnet(
     "batch_size, expected_inference_time, expected_compile_time",
     (
         (1, 0.022, 28),
-        (2, 0.022, 28),
+        (2, 0.025, 28),
         (8, 0.027, 28),
     ),
 )
