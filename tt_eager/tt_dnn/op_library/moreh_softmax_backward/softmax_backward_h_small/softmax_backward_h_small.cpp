@@ -13,7 +13,6 @@
 
 #include <optional>
 
-using u32 = std::uint32_t;
 using namespace tt::constants;
 using namespace std;
 using namespace tt::tt_metal;
@@ -123,12 +122,12 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &out
         float scaler = 1.0f;
         uint32_t mask_h = shape.without_padding()[2] % TILE_HEIGHT;
         if(mask_h == 0) mask_h = TILE_HEIGHT;
-        vector<u32> reader_args = {
+        vector<uint32_t> reader_args = {
             output.buffer()->address(),
             output_grad.buffer()->address(),
             num_tiles_per_core, tile_offset, Ht, Wt, *reinterpret_cast<uint32_t *>(&scaler), mask_h};
 
-        vector<u32> writer_args = {input_grad.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt};
+        vector<uint32_t> writer_args = {input_grad.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
