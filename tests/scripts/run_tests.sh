@@ -81,11 +81,6 @@ run_frequent_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
 
-    if [[ $tt_arch != "grayskull" ]]; then
-        echo "Full frequent pipeline only available for grayskull right now"
-        exit 1
-    fi
-
     make tests
 
     source build/python_env/bin/activate
