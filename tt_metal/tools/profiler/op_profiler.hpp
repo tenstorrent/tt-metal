@@ -114,7 +114,7 @@ namespace op_profiler {
 
             vector<string> inputs = {};
             vector<string> outputs = {};
-            string mathFidelity = "";
+            vector<string> mathFidelities = {};
             string parlStrategy = "";
             string preferredName = "";
 
@@ -205,7 +205,7 @@ namespace op_profiler {
                     additionalFields.push_back({"Stack Size", to_string(opData.stackSize)});
                     additionalFields.push_back({"Inputs", join_vector(opData.inputs)});
                     additionalFields.push_back({"Outputs", join_vector(opData.outputs)});
-                    additionalFields.push_back({"Math Fidelity", opData.mathFidelity});
+                    additionalFields.push_back({"Math Fidelity", join_vector(opData.mathFidelities)});
                     additionalFields.push_back({"Parallelization Strategy", opData.parlStrategy});
                     additionalFields.push_back({"Preferred Name", opData.preferredName});
                     additionalFields.push_back({"Meta Data", join_vector(opData.metaDataVector)});
@@ -294,10 +294,10 @@ namespace op_profiler {
 #endif
                 }
 
-                void set_math_fidelity (const string& fidelity)
+                void append_math_fidelity (const string& fidelity)
                 {
 #if defined(PROFILER)
-                    get_op_data().mathFidelity = replace_comma(fidelity);
+                    get_op_data().mathFidelities.push_back(replace_comma(fidelity));
 #endif
                 }
 
@@ -516,10 +516,17 @@ namespace op_profiler {
 #endif
     }
 
-    static void set_math_fidelity (const string& fidelity)
+    static void append_math_fidelities (const Program& program)
     {
 #if defined(PROFILER)
-        detail::operationProfiler.set_math_fidelity(fidelity);
+        for (const auto& kernel_id : program.kernel_ids()) {
+            Kernel * kernel = tt::tt_metal::detail::GetKernel(program, kernel_id);
+            if (kernel->processor() == RISCV::COMPUTE) {
+                ComputeKernel * compute_kernel = static_cast<ComputeKernel*>(kernel);
+                MathFidelity math_fidelity = std::get<ComputeConfig>(compute_kernel->config()).math_fidelity;
+                detail::operationProfiler.append_math_fidelity(fmt::format("{}", magic_enum::enum_name(math_fidelity)));
+            }
+        }
 #endif
     }
 
