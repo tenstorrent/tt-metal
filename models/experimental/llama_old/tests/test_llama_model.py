@@ -8,7 +8,7 @@ import pytest
 
 
 
-from models.llama.llama_utils import *
+from models.experimental.llama.llama_utils import *
 
 from transformers import (
     AutoTokenizer,
