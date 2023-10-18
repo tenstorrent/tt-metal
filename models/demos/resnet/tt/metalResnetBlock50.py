@@ -48,6 +48,7 @@ def ResnetLinear(
     output_mem_config=tt_lib.tensor.MemoryConfig(
         tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
     ),
+    model_config=None,
     device=None,
     batch_size=None,
 ):
@@ -83,8 +84,8 @@ def ResnetLinear(
                 bias=bias,
                 program_config=matmul_config,
                 output_mem_config=output_mem_config,
-                output_dtype=None,
-                math_fidelity=tt_lib.tensor.MathFidelity.LoFi,
+                output_dtype=model_config["ACTIVATIONS_DTYPE"],
+                math_fidelity=model_config["MATH_FIDELITY"],
             )
         return output
 
@@ -585,6 +586,7 @@ class Bottleneck(nn.Module):
         act_block_w_equals_input_channels_x_filter_width=False,
         use_downsample_op_and_mm_for_conv1x1_s2=False,
         conv_halo=False,
+        model_config=None,
     ) -> None:
         super().__init__()
         self.device = device
@@ -685,6 +687,9 @@ class Bottleneck(nn.Module):
             matmul_config,
             fuse_relu=True,
             output_mem_config=self.sharded_memory_config,
+            weights_dtype=model_config["WEIGHTS_DTYPE"],
+            output_dtype=model_config["ACTIVATIONS_DTYPE"],
+            math_fidelity=model_config["MATH_FIDELITY"],
         )
 
         self.conv2_params = [width, width, 3, 3, stride, stride, 1, 1, dilation, groups]
@@ -726,6 +731,9 @@ class Bottleneck(nn.Module):
             True,
             output_mem_config=self.sharded_memory_config,
             input_tensor_shape=self.conv1_output_shape,
+            weights_dtype=model_config["WEIGHTS_DTYPE"],
+            output_dtype=model_config["ACTIVATIONS_DTYPE"],
+            math_fidelity=model_config["MATH_FIDELITY"],
         )
 
         self.conv3_params = [planes * self.expansion, width, 1, 1, 1, 1, 0, 0, dilation, groups]
@@ -749,6 +757,9 @@ class Bottleneck(nn.Module):
             conv3_bias.tolist(),
             matmul_config,
             output_mem_config=self.sharded_memory_config,
+            weights_dtype=model_config["WEIGHTS_DTYPE"],
+            output_dtype=model_config["ACTIVATIONS_DTYPE"],
+            math_fidelity=model_config["MATH_FIDELITY"],
         )
         self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
 
@@ -839,6 +850,7 @@ class ResNet(nn.Module):
         storage_in_dram=True,
         conv_input_face_shape_hw=[224, 224],
         batch_size=1,
+        model_config=None,
         sharded=False,
     ) -> None:
         super().__init__()
@@ -936,6 +948,9 @@ class ResNet(nn.Module):
             8,
             fuse_relu=True,
             out_mem_config=self.height_sharded_memory_config if sharded else None,
+            weights_dtype=model_config["WEIGHTS_DTYPE"],
+            output_dtype=model_config["ACTIVATIONS_DTYPE"],
+            math_fidelity=model_config["MATH_FIDELITY"],
         )
         self.conv1_output_shape = compute_conv_output_shape(
             self.conv1_params,
@@ -970,6 +985,7 @@ class ResNet(nn.Module):
             out_sharded=True,
             act_block_w_equals_input_channels_x_filter_width=True,
             conv_halo=True if sharded else False,
+            model_config=model_config,
         )
         self.layer2, self.layer2_output_shape = self._make_layer(
             block,
@@ -985,6 +1001,7 @@ class ResNet(nn.Module):
             out_sharded=False,
             use_downsample_op_and_mm_for_conv1x1_s2=True if sharded else False,
             conv_halo=True if sharded else False,
+            model_config=model_config,
         )
         self.layer3, self.layer3_output_shape = self._make_layer(
             block,
@@ -999,6 +1016,7 @@ class ResNet(nn.Module):
             sharded=tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
             out_sharded=False,
             use_downsample_op_and_mm_for_conv1x1_s2=True if sharded else False,
+            model_config=model_config,
         )
         self.layer4, self.layer4_output_shape = self._make_layer(
             block,
@@ -1013,6 +1031,7 @@ class ResNet(nn.Module):
             sharded=tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED if sharded else None,
             out_sharded=True,
             use_downsample_op_and_mm_for_conv1x1_s2=True if sharded else False,
+            model_config=model_config,
         )
 
         # All modules in RN50 are unrolled here. One variable for each module. Only specific number of modules supported - layers MUST equal to [3, 4, 6, 3]
@@ -1044,12 +1063,12 @@ class ResNet(nn.Module):
         fc_weight = tt_lib.tensor.Tensor(
             fc_weight.reshape(-1).tolist(),
             fc_weight.shape,
-            tt_lib.tensor.DataType.BFLOAT16,
+            model_config["WEIGHTS_DTYPE"],
             tt_lib.tensor.Layout.ROW_MAJOR,
         ).to(tt_lib.tensor.Layout.TILE)
         fc_bias = pad_weight(state_dict[f"{self.base_address_with_dot}fc.bias"])
         fc_bias = tt_lib.tensor.Tensor(
-            fc_bias.reshape(-1).tolist(), fc_bias.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.ROW_MAJOR
+            fc_bias.reshape(-1).tolist(), fc_bias.shape, model_config["WEIGHTS_DTYPE"], tt_lib.tensor.Layout.ROW_MAJOR
         ).to(tt_lib.tensor.Layout.TILE)
         self.fc = ResnetLinear(
             512 * block.expansion,
@@ -1058,6 +1077,7 @@ class ResNet(nn.Module):
             fc_bias,
             transpose=False,
             output_mem_config=self.width_sharded_memory_config,
+            model_config=model_config,
             device=self.device,
             batch_size=batch_size,
         )  # num_classes = 1000
@@ -1079,6 +1099,7 @@ class ResNet(nn.Module):
         act_block_w_equals_input_channels_x_filter_width=False,
         use_downsample_op_and_mm_for_conv1x1_s2=False,
         conv_halo=False,
+        model_config=None,
     ):
         norm_layer = self._norm_layer
         downsample = None
@@ -1169,6 +1190,9 @@ class ResNet(nn.Module):
                     downsample_conv_bias.tolist(),
                     matmul_config,
                     output_mem_config=self.ds_conv_output_memory_config,
+                    weights_dtype=model_config["WEIGHTS_DTYPE"],
+                    output_dtype=model_config["ACTIVATIONS_DTYPE"],
+                    math_fidelity=model_config["MATH_FIDELITY"],
                 )
             elif use_downsample_op_and_mm_for_conv1x1_s2:
                 assert (
@@ -1190,6 +1214,9 @@ class ResNet(nn.Module):
                     downsample_conv_bias.tolist(),
                     matmul_config,
                     self.ds_conv_output_memory_config,
+                    weights_dtype=model_config["WEIGHTS_DTYPE"],
+                    output_dtype=model_config["ACTIVATIONS_DTYPE"],
+                    math_fidelity=model_config["MATH_FIDELITY"],
                 )
             else:
                 assert (
@@ -1226,6 +1253,9 @@ class ResNet(nn.Module):
                     per_core_weight_w_ntiles,
                     downsample_conv_bias.tolist(),
                     output_mem_config=self.ds_conv_output_memory_config,
+                    weights_dtype=model_config["WEIGHTS_DTYPE"],
+                    output_dtype=model_config["ACTIVATIONS_DTYPE"],
+                    math_fidelity=model_config["MATH_FIDELITY"],
                 )
             self.norm_layer_after_downsample_conv_on_tt = nl
 
@@ -1255,6 +1285,7 @@ class ResNet(nn.Module):
                 act_block_w_equals_input_channels_x_filter_width=act_block_w_equals_input_channels_x_filter_width,
                 use_downsample_op_and_mm_for_conv1x1_s2=use_downsample_op_and_mm_for_conv1x1_s2,
                 conv_halo=conv_halo if stride == 1 else False,
+                model_config=model_config,
             )
         )
         self.inplanes = planes * block.expansion
@@ -1279,6 +1310,7 @@ class ResNet(nn.Module):
                     out_sharded=True if block_num != blocks - 1 else out_sharded,
                     act_block_w_equals_input_channels_x_filter_width=act_block_w_equals_input_channels_x_filter_width,
                     conv_halo=conv_halo,
+                    model_config=model_config,
                 )
             )
         last_layer_shape = layers[-1].conv3_output_shape
