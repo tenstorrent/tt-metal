@@ -134,8 +134,6 @@ operation::ProgramWithCallbacks moreh_softmax_backward_w_small(const Tensor &out
         tile_offset += num_tiles_per_core * Wt;
     }
 
-    CoreGridDesc grid(input_grad.device());
-
     auto override_runtime_args_callback = [
             reader_kernel_id=reader_kernel_id,
             writer_kernel_id=writer_kernel_id,

@@ -122,8 +122,6 @@ operation::ProgramWithCallbacks moreh_softmax_c_large(const Tensor &input, Tenso
         tile_offset += num_tiles_per_core;
     }
 
-    CoreGridDesc grid(input.device());
-
     auto override_runtime_args_callback = [
             reader_kernel_id=reader_kernel_id,
             writer_kernel_id=writer_kernel_id,
