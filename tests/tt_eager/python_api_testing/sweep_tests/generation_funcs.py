@@ -1541,8 +1541,6 @@ def gen_polygamma_args(
         input_info.update({"k": k_order})
         yield input_info
 
-
-
 def gen_rop_args(
     input_shapes,
     supported_dtypes,
@@ -1566,7 +1564,6 @@ def gen_rop_args(
         factor = random.randint(1, 10)
         input_info.update({"factor": factor})
         yield input_info
-
 
 def gen_embeddings_args(
     input_shapes,
