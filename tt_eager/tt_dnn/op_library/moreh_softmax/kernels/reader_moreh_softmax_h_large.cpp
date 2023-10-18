@@ -3,12 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-
 #include "tt_eager/tt_dnn/op_library/moreh_softmax_backward/kernels/common.hpp"
 
 void kernel_main() {
-
-    uint32_t src_addr  = get_arg_val<uint32_t>(0);
+    uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t N = get_arg_val<uint32_t>(1);
     uint32_t tile_offset = get_arg_val<uint32_t>(2);
     uint32_t Ht = get_arg_val<uint32_t>(3);
@@ -30,10 +28,7 @@ void kernel_main() {
     constexpr bool in_is_dram = get_compile_time_arg_val(0) == 1;
 
     const InterleavedAddrGenFast<in_is_dram> src_in = {
-        .bank_base_address = src_addr,
-        .page_size = src_in_tile_bytes,
-        .data_format = src_in_data_format
-    };
+        .bank_base_address = src_addr, .page_size = src_in_tile_bytes, .data_format = src_in_data_format};
 
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
     generate_bcast_scaler(cb_scaler, scaler);
@@ -41,11 +36,11 @@ void kernel_main() {
 
     // read ublocks from src0 to CB0, then push ublocks to compute (unpacker)
     uint32_t curr_tile = tile_offset;
-    for (uint32_t i=0; i< N; i += onetile) {
+    for (uint32_t i = 0; i < N; i += onetile) {
         uint32_t w_idx = curr_tile % Wt;
         uint32_t nc_idx = curr_tile / Wt;
         uint32_t tile_idx = nc_idx * Ht * Wt + w_idx;
-        for(uint32_t h = 0 ; h < Ht; h++){
+        for (uint32_t h = 0; h < Ht; h++) {
             cb_reserve_back(cb_in, onetile);
             l1_write_addr_in = get_write_ptr(cb_in);
             noc_async_read_tile(tile_idx, src_in, l1_write_addr_in);
@@ -57,7 +52,7 @@ void kernel_main() {
         w_idx = curr_tile % Wt;
         nc_idx = curr_tile / Wt;
         tile_idx = nc_idx * Ht * Wt + w_idx;
-        for(uint32_t h = 0 ; h < Ht; h++){
+        for (uint32_t h = 0; h < Ht; h++) {
             cb_reserve_back(cb_in, onetile);
             l1_write_addr_in = get_write_ptr(cb_in);
             noc_async_read_tile(tile_idx, src_in, l1_write_addr_in);
