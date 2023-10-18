@@ -3,12 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-
 #include "tt_eager/tt_dnn/op_library/moreh_softmax_backward/kernels/common.hpp"
 
 void kernel_main() {
-    uint32_t y_addr  = get_arg_val<uint32_t>(0);
-    uint32_t dy_addr  = get_arg_val<uint32_t>(1);
+    uint32_t y_addr = get_arg_val<uint32_t>(0);
+    uint32_t dy_addr = get_arg_val<uint32_t>(1);
 
     uint32_t N = get_arg_val<uint32_t>(2);
     uint32_t tile_offset = get_arg_val<uint32_t>(3);
@@ -37,16 +36,10 @@ void kernel_main() {
     constexpr bool dy_is_dram = get_compile_time_arg_val(1) == 1;
 
     const InterleavedAddrGenFast<y_is_dram> y_in = {
-        .bank_base_address = y_addr,
-        .page_size = y_tile_bytes,
-        .data_format = y_data_format
-    };
+        .bank_base_address = y_addr, .page_size = y_tile_bytes, .data_format = y_data_format};
 
     const InterleavedAddrGenFast<dy_is_dram> dy_in = {
-        .bank_base_address = dy_addr,
-        .page_size = dy_tile_bytes,
-        .data_format = dy_data_format
-    };
+        .bank_base_address = dy_addr, .page_size = dy_tile_bytes, .data_format = dy_data_format};
 
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
     generate_bcast_scaler(cb_scaler, scaler);
@@ -54,13 +47,11 @@ void kernel_main() {
 
     // read ublocks from src0 to CB0, then push ublocks to compute (unpacker)
     uint32_t curr_tile = tile_offset;
-    for (uint32_t i = 0; i < N; i += onetile)
-    {
+    for (uint32_t i = 0; i < N; i += onetile) {
         uint32_t w_idx = curr_tile % Wt;
         uint32_t nc_idx = curr_tile / Wt;
         uint32_t tile_idx = nc_idx * Ht * Wt + w_idx;
-        for (uint32_t h = 0; h < Ht; h++)
-        {
+        for (uint32_t h = 0; h < Ht; h++) {
             // read y
             cb_reserve_back(cb_y, onetile);
             l1_write_addr_in = get_write_ptr(cb_y);
