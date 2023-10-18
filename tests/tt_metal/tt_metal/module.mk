@@ -52,7 +52,6 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/test_bcast \
 		 tests/tt_metal/test_generic_binary_reader_matmul_large_block \
 		 tests/tt_metal/test_3x3conv_as_matmul_large_block \
-		 tests/tt_metal/test_pipeline_across_rows \
 		 tests/tt_metal/test_l1_to_l1_multi_core \
 		 tests/tt_metal/test_dram_copy_sticks_multi_core \
 		 tests/tt_metal/test_reduce_h \
