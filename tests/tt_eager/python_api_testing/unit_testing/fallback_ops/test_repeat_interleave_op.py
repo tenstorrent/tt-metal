@@ -12,9 +12,7 @@ from loguru import logger
 import pytest
 
 
-@pytest.mark.parametrize(
-    "input_shape", [torch.Size([1, 1, 32, 32]), torch.Size([2, 3, 5, 6])]
-)
+@pytest.mark.parametrize("input_shape", [torch.Size([1, 1, 32, 32]), torch.Size([2, 3, 5, 6])])
 @pytest.mark.parametrize("repeats", [1, 2, 3])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
 @pytest.mark.parametrize("on_device", [False, True])
