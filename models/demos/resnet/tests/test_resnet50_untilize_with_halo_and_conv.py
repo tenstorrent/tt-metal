@@ -421,7 +421,7 @@ hardcoded_conv_blocking_and_parallelization_config = {
     (
         # unique convs in rn50 (complete list)
         # layer1
-        # (64, 64, 56, 56, 3, 3, 1, 1, 1, 1), # not supported yet
+        (64, 64, 56, 56, 3, 3, 1, 1, 1, 1), # not supported yet
         # layer2
         # (512, 256, 56, 56, 1, 1, 2, 2, 0, 0), # not supported yet
         # (128, 128, 56, 56, 3, 3, 2, 2, 1, 1), # not supported yet
@@ -593,7 +593,7 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
         conv_input_on_device = tt_lib.tensor.interleaved_to_sharded(
             conv_input_on_device,
             grid_size,
-            [act_block_h_datums, act_block_w_datums],
+            [act_block_h_datums, weight_block_w_datums], # act_block_w_datums may include reads of multiple pixels in window
             tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             tt_lib.tensor.ShardOrientation.ROW_MAJOR,
         )

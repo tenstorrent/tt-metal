@@ -56,6 +56,9 @@ void kernel_main() {
     uint32_t last_partial_image_num_rows           = get_arg_val<uint32_t>(i); i+=1;
     uint32_t last_partial_left_aligned_row_width   = get_arg_val<uint32_t>(i); i+=1;
 
+    uint32_t window_outer                          = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t window_inner                          = get_arg_val<uint32_t>(i); i+=1;
+
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
     if(noop) {
         return;
@@ -145,32 +148,47 @@ void kernel_main() {
         reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
     }
 
-    //DPRINT << "num indices: " << reader_idx << ENDL();
-    //for (uint32_t i = 0; i < reader_idx; i++) {
-        //DPRINT << reader_indices_ptr[i] << ENDL();
-    //}
 
+    // DUMMY LOOP TO FILL READER OFFSETS
+    /* We can add another loop to read chunks of a stick as well.
+     * - Duplicate reader_offset for same stick X times (window_inner must be 1)
+     * - New loop between outer and inner that loops X times reading from same stick
+     * - Read conv_act_size_c_bytes / X each time
+     * - Update l1_write_addr_act by conv_act_size_c_bytes
+     */
+    constexpr uint32_t cb_reader_offsets = tt::CB::c_intermed5;
+    volatile tt_l1_ptr uint32_t* reader_offsets_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_offsets));
     uint32_t reader_offset = 0; // Constant offset for each pixel within filter window
-    uint32_t act_l1_offset = 0;
-    uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
+    uint32_t reader_offset_idx = 0;
     for (uint32_t channel_stick_h = 0; channel_stick_h < weight_size_h; channel_stick_h++) {
         for (uint32_t channel_stick_w = 0; channel_stick_w < weight_size_w; channel_stick_w++) {
-            // Reset reader_idx to finish act_block_h_datums
-            reader_idx = 0;
-            cb_reserve_back(cb_id_act, act_block_num_tiles);
-            uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
-            for (uint32_t bh = 0; bh < act_block_h_datums; bh++) {
-                // local read from reader_indices_ptr[reader_idx + reader_offset];
-                act_l1_offset = (reader_indices_ptr[reader_idx] + reader_offset) << log_base_2_of_conv_act_size_c_bytes;
-                noc_async_read(get_noc_addr(act_l1_read_addr + act_l1_offset), l1_write_addr_act, conv_act_size_c_bytes);
-                l1_write_addr_act += conv_act_size_c_bytes;
-                reader_idx++;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_id_act, act_block_num_tiles);
-            reader_offset++;
+            reader_offsets_ptr[reader_offset_idx++] = reader_offset++;
         }
         // -1 to go back to previous reader_offset
         reader_offset += conv_act_size_w - 1; // Assuming (weight_size_w - 1) / 2 == pad_w
+    }
+
+    reader_offset_idx = 0;
+    uint32_t act_l1_offset = 0;
+    uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
+    for (uint32_t outer = 0; outer < window_outer; outer++) {
+        // Reset reader_idx to finish act_block_h_datums
+        reader_idx = 0;
+        cb_reserve_back(cb_id_act, act_block_num_tiles);
+        uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
+        for (uint32_t bh = 0; bh < act_block_h_datums; bh++) {
+            for (uint32_t inner = 0; inner < window_inner; inner++) {
+                // local read from reader_index + reader_offset;
+                act_l1_offset = (reader_indices_ptr[reader_idx] + reader_offsets_ptr[reader_offset_idx + inner]) << log_base_2_of_conv_act_size_c_bytes;
+                noc_async_read(get_noc_addr(act_l1_read_addr + act_l1_offset), l1_write_addr_act, conv_act_size_c_bytes);
+                l1_write_addr_act += conv_act_size_c_bytes;
+
+            }
+            reader_idx++;
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_id_act, act_block_num_tiles);
+
+        reader_offset_idx += window_inner;
     }
 }
