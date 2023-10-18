@@ -101,7 +101,7 @@ Tensor falcon_lm_head_matmul (const Tensor &input_tensor_a, const Tensor &input_
 /**
  * Resnet matmul for linear
  */
-Tensor resnet_matmul(const Tensor& input_a, const Tensor& input_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype = std::nullopt);
+Tensor resnet_matmul(const Tensor& input_a, const Tensor& input_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype = std::nullopt, const MathFidelity math_fidelity = MathFidelity::LoFi);
 
 
 /**
