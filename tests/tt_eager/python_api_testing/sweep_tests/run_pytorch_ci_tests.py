@@ -37,7 +37,7 @@ def run_single_pytorch_test(
 ):
     assert test_name in op_map.keys()
 
-    default_env_dict = {"TT_PCI_DMA_BUF_SIZE": "1048576"}
+    default_env_dict = {}
     # Get env variables from CLI
     args_env_dict = {}
     if env != "":
