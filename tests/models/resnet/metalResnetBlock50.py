@@ -932,6 +932,7 @@ class ResNet(nn.Module):
             sharded=tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
             out_sharded=True,
             act_block_w_equals_input_channels_x_filter_width=True,
+            conv_halo=True if sharded else False,
         )
         self.layer2, self.layer2_output_shape = self._make_layer(
             block,
@@ -1215,7 +1216,7 @@ class ResNet(nn.Module):
                 out_sharded=sharded,
                 act_block_w_equals_input_channels_x_filter_width=act_block_w_equals_input_channels_x_filter_width,
                 use_downsample_op_and_mm_for_conv1x1_s2=use_downsample_op_and_mm_for_conv1x1_s2,
-                # TODO: Add conv_halo=conv_halo once stride 2 is supported
+                conv_halo=conv_halo if stride == 1 else False,
             )
         )
         self.inplanes = planes * block.expansion
