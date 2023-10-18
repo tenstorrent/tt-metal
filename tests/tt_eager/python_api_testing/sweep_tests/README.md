@@ -74,6 +74,29 @@ test-list:
 - _output-file_: Name of the output csv dumped inside the output folder. You can write results for additional tests to the same file if you provide the same output file path.
 
 
+### _datagen_ section of test configs notes
+
+_datagen_ section can be written for each input separately as well. Eg:
+
+```
+  ...
+  datagen:
+    - input_1:
+      function: gen_rand
+      args:
+        low: -100
+        high: 100
+    - input_2:
+      function: gen_rand
+      args:
+        low: -10
+        high: 10
+  ...
+```
+
+
+### _args_ section of test configs notes
+
 _args_ section can be written for each input separately as well. Eg:
 
 ```
