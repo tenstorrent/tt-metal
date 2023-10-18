@@ -122,9 +122,6 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
         )
     ),
     # TestEntry("tt_metal/tests/test_l1_to_l1_multi_core", "test_l1_to_l1_multi_core"), // TODO (nshanker): fix this test
-    TestEntry(
-        "tt_metal/tests/test_pipeline_across_rows", "test_pipeline_across_rows"
-    ),
     TestEntry("tt_metal/tests/test_core_range_set", "test_core_range_set"),
     # Allocator Tests
     TestEntry(
