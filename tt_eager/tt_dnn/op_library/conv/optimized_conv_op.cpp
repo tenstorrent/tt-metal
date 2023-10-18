@@ -33,6 +33,7 @@ const uint32_t tilize_mode_tilized_act_cb             = CB::c_intermed1;
 const uint32_t untilize_mode_final_matmul_partials_cb = CB::c_intermed2;
 const uint32_t untilize_mode_reblock_cb               = CB::c_intermed3;
 const uint32_t cb_for_reader_indices                  = CB::c_intermed4;
+const uint32_t cb_for_reader_offsets                  = CB::c_intermed5;
 const uint32_t out0_cb                                = CB::c_out0;
 
 pair<uint32_t, uint32_t> compute_opt_conv_output_face_shape(uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w, uint32_t padding_for_32B_alignment=0) {
@@ -586,22 +587,27 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
             assert(num_blocks_act_w == (conv_act_size_c / act_block_w_datums));
         }
         else {
-            // non 1x1 conv
-            if (act_block_w_equals_input_channels_x_filter_width) {
-                reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_act_block_w_equals_channels_X_filter_width.cpp";
-            }
-            else {
-                assert(act_block_w_datums == conv_act_size_c);
-                assert(num_blocks_act_w == weight_size_w * weight_size_h);
+            // If sharded input, always use reader kernel for input shard with halo and padding
+            if (a.memory_config().is_sharded() && weight_size_h == 3 && weight_size_w == 3 && stride_h == 1 && not weight_width_sliced) {
+                reader_with_indices = true;
+                reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_padded_with_halo_3x3_weights.cpp";
 
-                if (a.memory_config().is_sharded() && weight_size_h == 3 && weight_size_w == 3 && stride_h == 1 && not weight_width_sliced) {
-                    reader_with_indices = true;
-                    reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_padded_with_halo_3x3_weights.cpp";
+                // Local L1 to store array for reader indices
+                CircularBufferConfig cb_for_reader_indices_config = CircularBufferConfig(act_block_h_datums * 4, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
+		            .set_page_size(cb_for_reader_indices, 4);
+                auto cb_for_reader_indices_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_indices_config);
 
-                    CircularBufferConfig cb_for_reader_indices_config = CircularBufferConfig(act_block_h_datums * 4, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
-		                .set_page_size(cb_for_reader_indices, 4);
-                    auto cb_for_reader_indices_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_indices_config);
+                // Local L1 to store array for reader offsets
+                CircularBufferConfig cb_for_reader_offsets_config = CircularBufferConfig(weight_size_h * weight_size_w * 4, {{cb_for_reader_offsets, tt::DataFormat::Float16_b}})
+		            .set_page_size(cb_for_reader_offsets, 4);
+                auto cb_for_reader_offsets_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_offsets_config);
+            } else {
+                // non 1x1 conv
+                if (act_block_w_equals_input_channels_x_filter_width) {
+                    reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_act_block_w_equals_channels_X_filter_width.cpp";
                 } else {
+                    assert(act_block_w_datums == conv_act_size_c);
+                    assert(num_blocks_act_w == weight_size_w * weight_size_h);
                     reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_for_col_major_conv_out_blocks.cpp";
                 }
             }
@@ -868,6 +874,7 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
                 out_w_start,
                 total_h_start,
 
+                // Specs for reader indices
                 first_partial_right_aligned_row_width,
                 skip_after_partial_right_aligned_row,
                 first_partial_image_num_rows,
@@ -876,6 +883,10 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
                 skip_after_full_image,
                 last_partial_image_num_rows,
                 last_partial_left_aligned_row_width,
+
+                // Specs for reader offsets
+                num_blocks_act_w, // window_outer
+                weight_size_h * weight_size_w / num_blocks_act_w, // window_inner
 
                 (uint32_t) noop_core
             };
