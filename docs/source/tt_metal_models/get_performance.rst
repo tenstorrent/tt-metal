@@ -18,11 +18,6 @@ Each model ready for profiling comes with a perf file, typically found under ``m
 
     pytest tests/python_api_testing/models/YOUR_MODEL/tests/perf_YOUR_MODEL.py
 
-such as
-
-::
-
-    pytest tests/python_api_testing/models/vit/tests/perf_vit.py
 
 Perf files will write the results in a csv file ``perf_YOUR_MODEL_date.csv``. This file contains a table with two rows, headers and results
 

@@ -25,13 +25,11 @@ Set ``PYTHONPATH`` to the root for running models. This is a common practice.
 Running an example model
 ------------------------
 
-Let's run the TT-Metal version of BERT.
-
 We developed our models to be run with ``pytest``.
 
 ::
 
-    pytest models/demos/metal_BERT_large_15/tests/test_bert_batch_dram.py::test_bert_batch_dram
+    pytest <path_to_test_file>::<test_in_file>
 
 Next steps
 ----------
