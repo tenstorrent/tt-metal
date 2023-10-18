@@ -82,7 +82,6 @@ def run_pytorch_test(args):
     pytorch_test_list = pytorch_test_configs_yaml["test-list"]
 
     default_env_dict = {
-        "TT_PCI_DMA_BUF_SIZE": "1048576",
     }
     # Get env variables from CLI
     args_env_dict = {}
