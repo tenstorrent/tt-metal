@@ -59,7 +59,7 @@ pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape
 }
 
 
-CircularBufferID create_CBs(tt_metal::Program &program,
+tuple<CircularBufferID, CircularBufferID> create_CBs(tt_metal::Program &program,
                                 const Tensor& input,
                                 CoreRange core,
                                 uint32_t num_cb0_tiles,
@@ -82,13 +82,14 @@ CircularBufferID create_CBs(tt_metal::Program &program,
 		.set_page_size(act_cb, single_tile_size);
     auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
 
+    auto cb_sharded_act = 0;
     if (input.memory_config().is_sharded()) {
         auto shard_shape = input.shard_spec().value().shard_shape;
         CircularBufferConfig cb_sharded_act_config = CircularBufferConfig(shard_shape[0] * shard_shape[1] * num_bytes_for_df, {{sharded_act_cb, tt::DataFormat::Float16_b}})
 		    .set_page_size(sharded_act_cb, shard_shape[1] * num_bytes_for_df);
         // incoming data is the input cb instead of raw l1/dram addr
         cb_sharded_act_config.set_globally_allocated_address(input.buffer()->address());
-        auto cb_sharded_act = tt_metal::CreateCircularBuffer(program, core, cb_sharded_act_config);
+        cb_sharded_act = tt_metal::CreateCircularBuffer(program, core, cb_sharded_act_config);
     }
 
     CircularBufferConfig cb_weight_config = CircularBufferConfig(num_cb1_tiles * single_tile_size, {{weight_cb, tt::DataFormat::Float16_b}})
@@ -100,7 +101,7 @@ CircularBufferID create_CBs(tt_metal::Program &program,
 		.set_page_size(tilize_mode_tilized_act_cb, single_tile_size);
     auto cb_src0_tilized = tt_metal::CreateCircularBuffer(program, core, cb_src0_tilized_config);
 
-    CircularBufferID cb_output;
+    CircularBufferID cb_output = 0;
     if (untilize_out) {
         CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{matmul_partials_cb, tt::DataFormat::Float16_b}})
 		    .set_page_size(matmul_partials_cb, single_tile_size);
@@ -148,7 +149,7 @@ CircularBufferID create_CBs(tt_metal::Program &program,
         log_debug("BIAS CBs: {} {} {}", bias_cb, bias_ntiles, bias_pagesize);
     }
 
-    return cb_output;
+    return {cb_sharded_act, cb_output};
 }
 
 operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity,
@@ -551,7 +552,7 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     if (output.memory_config().is_sharded()) {
         output_cb_address = output.buffer()->address();
     }
-    auto cb_output = create_CBs(
+    auto [cb_sharded_act, cb_output] = create_CBs(
             program,
             a,
             all_cores,
@@ -1057,6 +1058,7 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     auto override_runtime_arguments_callback = [
             reader_kernel_ids=reader_ids,
             writer_kernel_ids=writer_ids,
+            cb_sharded_act=cb_sharded_act,
             cb_output=cb_output,
             total_num_cores=total_num_cores,
             num_cores_x=num_cores_x,
@@ -1076,6 +1078,7 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
 
         auto src_buffer_a = input_tensors.at(0).buffer();
         auto src_buffer_b = input_tensors.at(1).buffer();
+        auto src_a_is_sharded = input_tensors.at(0).memory_config().is_sharded();
 
         auto dst_buffer = output_tensors.at(0).buffer();
         bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
@@ -1084,7 +1087,8 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
             uint32_t core_x_i = core_i % num_cores_x;
             uint32_t core_y_i = core_i / num_cores_x;
             CoreCoord core = {core_x_i, core_y_i};
-            {
+
+            if (!src_a_is_sharded) {
                 auto runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_i], core);
                 runtime_args[0] = src_buffer_a->address();
                 SetRuntimeArgs(program, reader_kernel_ids[core_i], core, runtime_args);
@@ -1102,6 +1106,12 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
                 SetRuntimeArgs(program, writer_kernel_ids[core_i], core, runtime_args);
             }
         }
+
+        if (src_a_is_sharded) {
+            auto& sharded_act_cb_config = GetCircularBufferConfig(program, cb_sharded_act);
+            sharded_act_cb_config.set_globally_allocated_address(src_buffer_a->address());
+        }
+
         if (out_sharded) {
             auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
             output_cb_config.set_globally_allocated_address(dst_buffer->address());
