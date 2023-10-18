@@ -158,7 +158,7 @@ Tensor subalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const
 Tensor addalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //repeat interleave
-Tensor repeat_interleave(const Tensor& input_a, uint32_t repeat, int32_t dim, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor repeat_interleave(const Tensor& input_a, int repeat, int dim, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //lerp(input, end, weight) = start + weight * (end - start), weight is float
 Tensor lerp(const Tensor& input_a, const Tensor& input_b, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
@@ -299,10 +299,10 @@ Tensor swiglu(const Tensor& input_a, int32_t dim = -1, const MemoryConfig& outpu
 Tensor sfpu_eps(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config);
 
 //tril : select lower triangular region of input matrix
-Tensor tril(const Tensor& input_a, int32_t diag = 0, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor tril(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //triu : select upper triangular region of input matrix
-Tensor triu(const Tensor& input_a, int32_t diag = 0, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor triu(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 } //namespace tt_metal
 
