@@ -720,6 +720,10 @@ def addalpha(x, y, *args, alpha, **kwargs):
     return torch.add(x, y, alpha=alpha)
 
 
+def repeat_interleave(x, *args, repeat, dim, **kwargs):
+    return torch.repeat_interleave(x, repeats=repeat, dim=dim)
+
+
 def lte(x, y, *args, **kwargs):
     return x <= y
 

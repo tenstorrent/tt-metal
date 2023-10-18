@@ -691,3 +691,5 @@ Other Operations
 .. autofunction:: tt_lib.tensor.embeddings
 
 .. autofunction:: tt_lib.tensor.nextafter
+
+.. autofunction:: tt_lib.tensor.repeat_interleave

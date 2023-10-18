@@ -7,6 +7,7 @@ import random
 from itertools import permutations, product
 from functools import lru_cache
 import tt_lib as ttl
+import numpy as np
 from tt_lib.utils import _nearest_32 as nearest_32, tilize
 
 # torch.testing.get_all_dtypes()
@@ -36,11 +37,7 @@ supported_mem_configs = [
 
 # Wrapper around gen functions to include casting
 def gen_func_with_cast(gen_func, dtype, tilize_input=False):
-    return (
-        lambda size: tilize(gen_func(size).to(dtype))
-        if tilize_input
-        else gen_func(size).to(dtype)
-    )
+    return lambda size: tilize(gen_func(size).to(dtype)) if tilize_input else gen_func(size).to(dtype)
 
 
 def gen_zeros(size):
@@ -88,9 +85,7 @@ def gen_rand_along_dim(size, low=0, high=100, dim=-1):
     num_subel = size[dim]
     for i in range(0, numel, num_subel):
         subrange = torch.Tensor(size=(2,)).uniform_(low, high)
-        output[i : i + num_subel] = torch.Tensor(size=(num_subel,)).uniform_(
-            torch.min(subrange), torch.max(subrange)
-        )
+        output[i : i + num_subel] = torch.Tensor(size=(num_subel,)).uniform_(torch.min(subrange), torch.max(subrange))
 
     # Reshape the flat tensor where the specified dim and last dim are swapped
     swapped_size = size.copy()
@@ -201,21 +196,15 @@ def gen_identity(size):
 #################### test_args ####################
 ###################################################
 
-def gen_tensor_pad_args(
-    input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None
-):
+
+def gen_tensor_pad_args(input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
     test_args = {}
 
     pad_sizes = (64, 64, 64, 64)
-    output_tensor_shape = [
-        random.randint(input_shapes[0][i], input_shapes[0][i] + pad_sizes[i])
-        for i in range(4)
-    ]
-    input_tensor_start = [
-        random.randint(0, output_tensor_shape[i] - input_shapes[0][i]) for i in range(4)
-    ]
+    output_tensor_shape = [random.randint(input_shapes[0][i], input_shapes[0][i] + pad_sizes[i]) for i in range(4)]
+    input_tensor_start = [random.randint(0, output_tensor_shape[i] - input_shapes[0][i]) for i in range(4)]
     pad_value = random.uniform(-100, 100)
     # Cast to bfloat16 then back to float for exact match
     pad_value = torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
@@ -237,16 +226,12 @@ def gen_tensor_pad_args(
     return [test_args]
 
 
-def gen_tensor_unpad_args(
-    input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None
-):
+def gen_tensor_unpad_args(input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
     test_args = {}
     output_tensor_start = [random.randint(0, input_shapes[0][i] - 1) for i in range(4)]
-    output_tensor_end = [
-        random.randint(output_tensor_start[i], input_shapes[0][i] - 1) for i in range(4)
-    ]
+    output_tensor_end = [random.randint(output_tensor_start[i], input_shapes[0][i] - 1) for i in range(4)]
 
     test_args.update(
         {
@@ -264,9 +249,7 @@ def gen_tensor_unpad_args(
     return [test_args]
 
 
-def gen_pad_to_tile_args(
-    input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None
-):
+def gen_pad_to_tile_args(input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
 
@@ -279,15 +262,15 @@ def gen_pad_to_tile_args(
         "dtype": [ttl.tensor.DataType.BFLOAT16],
         "layout": [ttl.tensor.Layout.ROW_MAJOR],
         "input_mem_config": [None],
-        "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        "output_mem_config": ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+        ),
     }
 
     return [test_args]
 
 
-def gen_unpad_from_tile_args(
-    input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None
-):
+def gen_unpad_from_tile_args(input_shapes, supported_dtypes=None, supported_layouts=None, mem_configs=None):
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
     assert input_shapes[0][-2] % 32 == 0
@@ -304,22 +287,24 @@ def gen_unpad_from_tile_args(
         "dtype": [ttl.tensor.DataType.BFLOAT16],
         "layout": [ttl.tensor.Layout.ROW_MAJOR],
         "input_mem_config": [None],
-        "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        "output_mem_config": ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+        ),
     }
 
     return [test_args]
 
 
-def gen_default_dtype_layout_device(
-    input_shapes, dtypes=None, layouts=None, mem_configs=None
-):
+def gen_default_dtype_layout_device(input_shapes, dtypes=None, layouts=None, mem_configs=None):
     dtype = []
     layout = []
     input_mem_config = []
 
     for input_shape in input_shapes:
         dtype.append(ttl.tensor.DataType.BFLOAT16)
-        input_mem_config.append(ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM))
+        input_mem_config.append(
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+        )
 
         if input_shape[-2] % 32 == 0 and input_shape[-1] % 32 == 0:
             layout.append(ttl.tensor.Layout.TILE)
@@ -338,15 +323,18 @@ def gen_default_dtype_layout_device(
     ]
 
 
-def gen_default_dtype_layout_rm_device(
-    input_shapes, dtypes=None, layouts=None, mem_configs=None
-):
+def gen_default_dtype_layout_rm_device(input_shapes, dtypes=None, layouts=None, mem_configs=None):
     return [
         {
             "dtype": [ttl.tensor.DataType.BFLOAT16] * len(input_shapes),
             "layout": [ttl.tensor.Layout.ROW_MAJOR] * len(input_shapes),
-            "input_mem_config": [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)] * len(input_shapes),
-            "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            "input_mem_config": [
+                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+            ]
+            * len(input_shapes),
+            "output_mem_config": ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            ),
         }
     ]
 
@@ -357,8 +345,7 @@ def sanitize_args(input_shapes, input_setup):
 
         if (
             (
-                input_setup[i]["layout"] == ttl.tensor.Layout.TILE
-                and (shape[2] % 32 != 0 or shape[3] % 32 != 0)
+                input_setup[i]["layout"] == ttl.tensor.Layout.TILE and (shape[2] % 32 != 0 or shape[3] % 32 != 0)
             )  # Shape cannot be tilized
             or (
                 input_setup[i]["layout"] == ttl.tensor.Layout.ROW_MAJOR
@@ -378,7 +365,7 @@ def gen_dtype_layout_device(
     input_shapes,
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs], # mem_configs[-1] is output_mem_config
+    mem_configs=[supported_mem_configs],  # mem_configs[-1] is output_mem_config
     do_sanitize_args=True,
 ):
     # last buffer_types option is for output buffer
@@ -392,9 +379,7 @@ def gen_dtype_layout_device(
             layouts[i],
             mem_configs[i],
         ):
-            dtype_mem_config_layout.append(
-                {"dtype": dtype, "layout": layout, "input_mem_config": input_mem_config}
-            )
+            dtype_mem_config_layout.append({"dtype": dtype, "layout": layout, "input_mem_config": input_mem_config})
 
         dtype_mem_config_layouts.append(dtype_mem_config_layout)
 
@@ -429,13 +414,24 @@ def gen_dtype_layout_device(
     return result
 
 
-def sanitize_args_layernorm(input_shapes, input_setup, runtime_tile_padding_layernorm=False, runtime_tile_padding_add_layernorm=False):
+def sanitize_args_layernorm(
+    input_shapes, input_setup, runtime_tile_padding_layernorm=False, runtime_tile_padding_add_layernorm=False
+):
     for i in range(len(input_shapes)):
         shape = input_shapes[i]
         if (
             (
                 input_setup[i]["layout"] == ttl.tensor.Layout.TILE
-                and (   (shape[2] % 32 != 0 and not runtime_tile_padding_layernorm and not runtime_tile_padding_add_layernorm) or (runtime_tile_padding_layernorm and i>0 and shape[2]!=1) or (runtime_tile_padding_add_layernorm and i>1 and shape[2]!=1)  or (shape[3] % 32 != 0) )
+                and (
+                    (
+                        shape[2] % 32 != 0
+                        and not runtime_tile_padding_layernorm
+                        and not runtime_tile_padding_add_layernorm
+                    )
+                    or (runtime_tile_padding_layernorm and i > 0 and shape[2] != 1)
+                    or (runtime_tile_padding_add_layernorm and i > 1 and shape[2] != 1)
+                    or (shape[3] % 32 != 0)
+                )
             )  # Shape cannot be tilized
             or (
                 input_setup[i]["layout"] == ttl.tensor.Layout.ROW_MAJOR
@@ -478,7 +474,12 @@ def gen_dtype_layout_device_layernorm(
 
     for out_mem_config in mem_configs[-1]:
         for input_setup_combination in product(*input_setups):
-            out = sanitize_args_layernorm(input_shapes, input_setup_combination, runtime_tile_padding_layernorm, runtime_tile_padding_add_layernorm)
+            out = sanitize_args_layernorm(
+                input_shapes,
+                input_setup_combination,
+                runtime_tile_padding_layernorm,
+                runtime_tile_padding_add_layernorm,
+            )
 
             if out is not None:
                 dtype = []
@@ -490,12 +491,14 @@ def gen_dtype_layout_device_layernorm(
                     layout.append(x["layout"])
                     input_mem_config.append(x["input_mem_config"])
 
-                result.append({
-                    "dtype": dtype,
-                    "layout": layout,
-                    "input_mem_config": input_mem_config,
-                    "output_mem_config": out_mem_config,
-                })
+                result.append(
+                    {
+                        "dtype": dtype,
+                        "layout": layout,
+                        "input_mem_config": input_mem_config,
+                        "output_mem_config": out_mem_config,
+                    }
+                )
 
     return result
 
@@ -506,7 +509,14 @@ def gen_layernorm_args(
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
 ):
-    return gen_dtype_layout_device_layernorm(input_shapes, dtypes, layouts, mem_configs, runtime_tile_padding_layernorm = True, runtime_tile_padding_add_layernorm=False)
+    return gen_dtype_layout_device_layernorm(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        runtime_tile_padding_layernorm=True,
+        runtime_tile_padding_add_layernorm=False,
+    )
 
 
 def gen_add_layernorm_args(
@@ -515,7 +525,14 @@ def gen_add_layernorm_args(
     layouts=[supported_tt_layouts],
     mem_configs=[supported_mem_configs],
 ):
-    return gen_dtype_layout_device_layernorm(input_shapes, dtypes, layouts, mem_configs, runtime_tile_padding_layernorm = False, runtime_tile_padding_add_layernorm=True)
+    return gen_dtype_layout_device_layernorm(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        runtime_tile_padding_layernorm=False,
+        runtime_tile_padding_add_layernorm=True,
+    )
 
 
 def gen_bert_qkv_args(
@@ -549,9 +566,7 @@ def gen_fill_rm_args(input_shapes, dtypes, layouts, mem_configs):
     H = input_shapes[0][-2]
     W = input_shapes[0][-1]
 
-    for input_info in gen_dtype_layout_device(
-        input_shapes, dtypes, layouts, mem_configs
-    ):
+    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
         if input_info is not None:
             input_info["hOnes"] = random.randint(1, H)
             input_info["wOnes"] = random.randint(1, W)
@@ -566,9 +581,7 @@ def gen_fill_ones_rm_args(input_shapes, dtypes, layouts, mem_configs):
     H = input_shapes[0][-2]
     W = input_shapes[0][-1]
 
-    for input_info in gen_dtype_layout_device(
-        input_shapes, dtypes, layouts, mem_configs
-    ):
+    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
         if input_info is not None:
             input_info["hOnes"] = random.randint(1, H)
             input_info["wOnes"] = random.randint(1, W)
@@ -604,12 +617,7 @@ def gen_reshape_args(
     mem_configs=[[ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)]],
     max_out_shapes=2,
 ):
-    vol = (
-        input_shapes[0][0]
-        * input_shapes[0][1]
-        * input_shapes[0][2]
-        * input_shapes[0][3]
-    )
+    vol = input_shapes[0][0] * input_shapes[0][1] * input_shapes[0][2] * input_shapes[0][3]
 
     out_shapes = _gen_reshape_args_from_volume(vol, step=1)
     random.shuffle(out_shapes)
@@ -648,9 +656,7 @@ def gen_tilize_with_val_padding_args(
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
 
-    for input_info in gen_dtype_layout_device(
-        input_shapes, dtypes, layouts, mem_configs
-    ):
+    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
         if input_info is not None:
             pad_sizes = (10, 10, 64, 64)
             output_tensor_shape = [
@@ -666,9 +672,7 @@ def gen_tilize_with_val_padding_args(
             input_tensor_start = [0, 0, 0, 0]
             pad_value = random.uniform(-100, 100)
             # Cast to bfloat16 then back to float for exact match
-            pad_value = (
-                torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
-            )
+            pad_value = torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
 
             input_info.update(
                 {
@@ -691,15 +695,10 @@ def gen_untilize_with_unpadding_args(
     assert input_shapes[0][-2] % 32 == 0
     assert input_shapes[0][-1] % 32 == 0
 
-    for input_info in gen_dtype_layout_device(
-        input_shapes, dtypes, layouts, mem_configs
-    ):
+    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
         if input_info is not None:
             output_tensor_start = [0, 0, 0, 0]
-            output_tensor_end = [
-                random.randrange(output_tensor_start[i], input_shapes[0][i], 1)
-                for i in range(4)
-            ]
+            output_tensor_end = [random.randrange(output_tensor_start[i], input_shapes[0][i], 1) for i in range(4)]
             if output_tensor_end[-1] % 2 == 0:
                 output_tensor_end[-1] += 1
             input_info.update(
@@ -720,26 +719,19 @@ def gen_pad_args(
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
 
-    for input_info in gen_dtype_layout_device(
-        input_shapes, dtypes, layouts, mem_configs
-    ):
+    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
         if input_info is not None:
             if input_info["layout"][0] == ttl.tensor.Layout.ROW_MAJOR:
                 pad_sizes = (10, 10, 64, 64)
                 output_tensor_shape = [
-                    random.randint(
-                        input_shapes[0][i], input_shapes[0][i] + pad_sizes[i]
-                    )
-                    for i in range(4)
+                    random.randint(input_shapes[0][i], input_shapes[0][i] + pad_sizes[i]) for i in range(4)
                 ]
                 if output_tensor_shape[-1] % 2 != 0:
                     output_tensor_shape[-1] += 1
                 input_tensor_start = [0, 0, 0, 0]
                 pad_value = random.uniform(-100, 100)
                 # Cast to bfloat16 then back to float for exact match
-                pad_value = (
-                    torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
-                )
+                pad_value = torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
 
                 input_info.update(
                     {
@@ -763,9 +755,7 @@ def gen_pad_args(
                 input_tensor_start = [0, 0, 0, 0]
                 pad_value = random.uniform(-100, 100)
                 # Cast to bfloat16 then back to float for exact match
-                pad_value = (
-                    torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
-                )
+                pad_value = torch.Tensor([pad_value]).to(torch.bfloat16).to(torch.float).item()
 
                 input_info.update(
                     {
@@ -787,16 +777,11 @@ def gen_unpad_args(
     assert len(input_shapes) == 1
     assert len(input_shapes[0]) == 4
 
-    for input_info in gen_dtype_layout_device(
-        input_shapes, dtypes, layouts, mem_configs
-    ):
+    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
         if input_info is not None:
             if input_info["layout"][0] == ttl.tensor.Layout.ROW_MAJOR:
                 output_tensor_start = [0, 0, 0, 0]
-                output_tensor_end = [
-                    random.randrange(output_tensor_start[i], input_shapes[0][i], 1)
-                    for i in range(4)
-                ]
+                output_tensor_end = [random.randrange(output_tensor_start[i], input_shapes[0][i], 1) for i in range(4)]
                 if output_tensor_end[-1] % 2 == 0:
                     output_tensor_end[-1] += 1
                 input_info.update(
@@ -807,10 +792,7 @@ def gen_unpad_args(
                 )
             elif input_info["layout"][0] == ttl.tensor.Layout.TILE:
                 output_tensor_start = [0, 0, 0, 0]
-                output_tensor_end = [
-                    random.randrange(output_tensor_start[i], input_shapes[0][i], 1)
-                    for i in range(4)
-                ]
+                output_tensor_end = [random.randrange(output_tensor_start[i], input_shapes[0][i], 1) for i in range(4)]
                 output_tensor_end[-2] = max(nearest_32(output_tensor_end[-2]), 32) - 1
                 output_tensor_end[-1] = max(nearest_32(output_tensor_end[-1]), 32) - 1
                 input_info.update(
@@ -832,9 +814,7 @@ def gen_scalar_args(
     high=100,
     dtype=torch.bfloat16,
 ):
-    for input_info in gen_dtype_layout_device(
-        input_shapes, dtypes, layouts, mem_configs
-    ):
+    for input_info in gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs):
         if input_info is not None:
             if dtype.is_floating_point:
                 scalar = torch.tensor(1, dtype=dtype).uniform_(low, high).item()
@@ -869,9 +849,7 @@ def gen_conv_scalar_args(
     arg0_name="conv_params",
     dtype=torch.bfloat16,
 ):
-    for input_info in gen_dtype_layout_device(
-        input_shapes, supported_dtypes, supported_layouts, mem_configs
-    ):
+    for input_info in gen_dtype_layout_device(input_shapes, supported_dtypes, supported_layouts, mem_configs):
         lowStride = 1
         highStride = 4
         padH = 0
@@ -989,9 +967,7 @@ def gen_relu_max_args(
 def gen_scale_mask_softmax_in_place_args(
     input_shapes, dtypes, layouts, mem_configs, low=1, high=100, dtype=torch.bfloat16
 ):
-    for input_info in gen_scalar_args(
-        input_shapes, dtypes, layouts, mem_configs, "scale", low, high, dtype
-    ):
+    for input_info in gen_scalar_args(input_shapes, dtypes, layouts, mem_configs, "scale", low, high, dtype):
         yield input_info
 
 
@@ -1004,9 +980,7 @@ def gen_lerp_binary_args(
     high=100,
     dtype=torch.bfloat16,
 ):
-    for input_info in gen_scalar_args(
-        input_shapes, dtypes, layouts, mem_configs, "weight", low, high, dtype
-    ):
+    for input_info in gen_scalar_args(input_shapes, dtypes, layouts, mem_configs, "weight", low, high, dtype):
         yield input_info
 
 
@@ -1302,12 +1276,8 @@ def gen_threshold_args(
         yield input_info
 
 
-def gen_hardtanh_args(
-    input_shapes, dtypes, layouts, mem_configs, low=-10, high=10, dtype=torch.bfloat16
-):
-    for input_info in gen_two_scalar_args(
-        input_shapes, dtypes, layouts, mem_configs, "low", "high", low, high, dtype
-    ):
+def gen_hardtanh_args(input_shapes, dtypes, layouts, mem_configs, low=-10, high=10, dtype=torch.bfloat16):
+    for input_info in gen_two_scalar_args(input_shapes, dtypes, layouts, mem_configs, "low", "high", low, high, dtype):
         if input_info["low"] > input_info["high"]:
             input_info["low"], input_info["high"] = (
                 input_info["high"],
@@ -1333,9 +1303,7 @@ def gen_polyval_args(
         mem_configs,
     ):
         if input_info is not None:
-            num_coeffs = (
-                torch.tensor(1, dtype=torch.int).random_(1, max_num_coeffs + 1).item()
-            )
+            num_coeffs = torch.tensor(1, dtype=torch.int).random_(1, max_num_coeffs + 1).item()
             coeffs = torch.Tensor(num_coeffs).uniform_(low, high).tolist()
             input_info.update({"coeffs": coeffs})
             yield input_info
@@ -1361,12 +1329,11 @@ def gen_arange_args(input_shapes, dtypes, layouts, mem_configs, low=-100, high=1
         elif input_info["start"] == input_info["end"]:
             input_info["end"] += 1
         input_info["step"] = (
-            torch.tensor(1, dtype=torch.int)
-            .random_(1, input_info["end"] - input_info["start"] + 1)
-            .item()
+            torch.tensor(1, dtype=torch.int).random_(1, input_info["end"] - input_info["start"] + 1).item()
         )
 
         yield input_info
+
 
 def gen_logical_immediate_args(
     input_shapes,
@@ -1390,7 +1357,6 @@ def gen_logical_immediate_args(
         yield input_info
 
 
-
 def gen_logit_args(
     input_shapes,
     supported_dtypes,
@@ -1412,6 +1378,7 @@ def gen_logit_args(
     ):
         yield input_info
 
+
 def gen_geglu_args(input_shapes, dtypes, layouts, mem_configs):
     for input_info in gen_dtype_layout_device(
         input_shapes,
@@ -1423,8 +1390,8 @@ def gen_geglu_args(input_shapes, dtypes, layouts, mem_configs):
             input_info.update({"dim": -1})
             yield input_info
 
-def gen_tilize_args(input_shapes, dtypes, layouts, mem_configs):
 
+def gen_tilize_args(input_shapes, dtypes, layouts, mem_configs):
     input_info = gen_dtype_layout_device(
         input_shapes,
         dtypes,
@@ -1452,16 +1419,13 @@ def sanitize_args_bert(input_shapes, input_setup):
         shape = input_shapes[i]
 
         if (
-            (
-                input_setup[i]["layout"] == ttl.tensor.Layout.ROW_MAJOR
-                and input_setup[i]["input_mem_config"] != None
-                and shape[3] % 2 != 0
-            )  # Shape cannot be placed as row major on device
-            or (
-                input_setup[i]["dtype"] == ttl.tensor.DataType.BFLOAT8_B
-                and input_setup[i]["layout"] != ttl.tensor.Layout.TILE
-            )  # BFLOAT8_B must be tile layout
-        ):
+            input_setup[i]["layout"] == ttl.tensor.Layout.ROW_MAJOR
+            and input_setup[i]["input_mem_config"] != None
+            and shape[3] % 2 != 0
+        ) or (  # Shape cannot be placed as row major on device
+            input_setup[i]["dtype"] == ttl.tensor.DataType.BFLOAT8_B
+            and input_setup[i]["layout"] != ttl.tensor.Layout.TILE
+        ):  # BFLOAT8_B must be tile layout
             return None
     return input_setup
 
@@ -1470,7 +1434,7 @@ def gen_dtype_layout_device_bert(
     input_shapes,
     dtypes=[supported_tt_dtypes],
     layouts=[supported_tt_layouts],
-    mem_configs=[supported_mem_configs], # mem_configs[-1] is outpu_mem_config
+    mem_configs=[supported_mem_configs],  # mem_configs[-1] is outpu_mem_config
 ):
     # last buffer_types option is for output buffer
     dtype_mem_config_layouts = []
@@ -1483,9 +1447,7 @@ def gen_dtype_layout_device_bert(
             layouts[i],
             mem_configs[i],
         ):
-            dtype_mem_config_layout.append(
-                {"dtype": dtype, "layout": layout, "input_mem_config": input_mem_config}
-            )
+            dtype_mem_config_layout.append({"dtype": dtype, "layout": layout, "input_mem_config": input_mem_config})
 
         dtype_mem_config_layouts.append(dtype_mem_config_layout)
 
@@ -1541,6 +1503,7 @@ def gen_polygamma_args(
         input_info.update({"k": k_order})
         yield input_info
 
+
 def gen_rop_args(
     input_shapes,
     supported_dtypes,
@@ -1565,6 +1528,7 @@ def gen_rop_args(
         input_info.update({"factor": factor})
         yield input_info
 
+
 def gen_embeddings_args(
     input_shapes,
     dtypes=[supported_tt_dtypes],
@@ -1572,3 +1536,29 @@ def gen_embeddings_args(
     mem_configs=[supported_mem_configs],
 ):
     return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
+
+
+def gen_repeat_interleave_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=-100,
+    high=100,
+    dtype=torch.bfloat16,
+):
+    for input_info in gen_two_scalar_args(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        "repeat",
+        "dim",
+        low,
+        high,
+        dtype,
+    ):
+        repeats = np.random.randint(1, 5)
+        dims = np.random.choice([0, 2])
+        input_info.update({"repeat": repeats, "dim": dims})
+        yield input_info

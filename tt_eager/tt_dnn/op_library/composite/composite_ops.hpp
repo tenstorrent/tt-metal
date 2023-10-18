@@ -157,6 +157,9 @@ Tensor subalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const
 //addalpha(input, other, alpha) = input + (alpha * other)
 Tensor addalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+//repeat interleave
+Tensor repeat_interleave(const Tensor& input_a, uint32_t repeat, int32_t dim, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 //lerp(input, end, weight) = start + weight * (end - start), weight is float
 Tensor lerp(const Tensor& input_a, const Tensor& input_b, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 

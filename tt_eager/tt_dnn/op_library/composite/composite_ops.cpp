@@ -6,6 +6,8 @@
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/reshape/reshape_op.hpp"
+#include "tt_dnn/op_library/concat/concat_op.hpp"
+#include "tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
@@ -683,6 +685,47 @@ Tensor _addalpha(const Tensor& input_a, const Tensor& input_b, float alpha, cons
 Tensor addalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _addalpha)(input_a, input_b, alpha, output_mem_config);
+}
+
+//repeat interleave supports repeats as 1 to inf, dim between 0 to 2
+Tensor _repeat_interleave(const Tensor& input_a, uint32_t repeat, int32_t dim, const MemoryConfig& output_mem_config) {
+
+    std::vector<Tensor> combined_tensors;
+    combined_tensors.reserve(repeat);
+    auto shape_wh = input_a.shape();
+    // normalizing the negative dim
+    uint32_t normalized_dim = input_a.shape().get_normalized_index(dim);
+    // check if dim is 3
+    TT_ASSERT( normalized_dim != 3, "dim 3 is not supported ");
+
+    if (normalized_dim <= 1){
+        for (int i = 0; i < repeat; i++) {
+            combined_tensors.push_back(input_a);
+        }
+        // TODO: For dim = 1 facing issue with concat_op
+        if (normalized_dim){
+            Tensor concat_out = concat(combined_tensors, 2, output_mem_config);
+            return reshape (concat_out, shape_wh[0], shape_wh[1]*repeat, shape_wh[2], shape_wh[3], output_mem_config);
+        }
+        else {
+            Tensor concat_out = concat(combined_tensors, 1, output_mem_config);
+            return reshape (concat_out, shape_wh[0]*repeat, shape_wh[1], shape_wh[2], shape_wh[3], output_mem_config);
+        }
+    }
+    else{
+        Tensor reshape_out = reshape (input_a, 1, 1, shape_wh[0]*shape_wh[1]*shape_wh[2], shape_wh[3], output_mem_config);
+        for (int i = 0; i < repeat; i++) {
+            combined_tensors.push_back(reshape_out);
+        }
+        Tensor concat_out = concat(combined_tensors, 1, output_mem_config);
+        std::vector<int64_t> permute_dims = {0, 2, 1, 3};
+        Tensor permute_out = permute(concat_out, permute_dims, output_mem_config);
+        return reshape (permute_out, shape_wh[0], shape_wh[1], shape_wh[2]*repeat, shape_wh[3], output_mem_config);
+    }
+}
+Tensor repeat_interleave(const Tensor& input_a, uint32_t repeat, int32_t dim, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _repeat_interleave)(input_a, repeat, dim, output_mem_config);
 }
 
 //nextafter
