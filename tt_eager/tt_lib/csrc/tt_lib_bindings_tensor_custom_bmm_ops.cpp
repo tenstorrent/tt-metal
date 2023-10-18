@@ -136,7 +136,7 @@ namespace tt::tt_metal::detail
 
         // Custom Resnet matmuls
         m_tensor.def("resnet_matmul", &resnet_matmul,
-            py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
+            py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("math_fidelity").noconvert() = MathFidelity::LoFi, R"doc(
             Perform a resnet_matmul with fused bias.
         )doc");
     }

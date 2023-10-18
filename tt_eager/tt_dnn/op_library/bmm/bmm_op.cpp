@@ -548,9 +548,9 @@ Tensor falcon_lm_head_matmul(const Tensor &input_tensor_a, const Tensor &input_t
 /**
  * Resnet50 matmul with fused batch
  */
-Tensor resnet_matmul(const Tensor& input_a, const Tensor& input_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config,std::optional<const DataType> output_dtype) {
+Tensor resnet_matmul(const Tensor& input_a, const Tensor& input_b, std::optional<const Tensor> bias, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype, const MathFidelity math_fidelity) {
     auto program_config = bmm_op_utils::get_mcast_1d_config(input_a, input_b, true);
-    return operations::primary::matmul_1d(input_a, input_b, bias, program_config, mem_config, output_dtype);
+    return operations::primary::matmul_1d(input_a, input_b, bias, program_config, mem_config, output_dtype, math_fidelity);
 }
 
 
