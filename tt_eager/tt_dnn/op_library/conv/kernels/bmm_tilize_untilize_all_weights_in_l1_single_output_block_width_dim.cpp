@@ -130,7 +130,6 @@ void MAIN {
     #ifdef FUSE_BIAS
     uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
     constexpr uint32_t bias_cb_id                           = tt::CB::c_in2;
-    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(matmul_partials_cb, bias_cb_id, out_cb_id);
     constexpr uint32_t mm_out_cb_id = matmul_partials_cb;
     #else
     constexpr uint32_t mm_out_cb_id = out_cb_id;

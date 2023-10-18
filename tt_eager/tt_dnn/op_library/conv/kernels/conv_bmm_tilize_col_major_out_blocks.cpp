@@ -145,7 +145,6 @@ void MAIN {
     #ifdef FUSE_BIAS
     uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
     constexpr uint32_t bias_cb_id                           = tt::CB::c_in2;
-    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(matmul_partials_cb, bias_cb_id, out_cb_id);
     uint32_t bias_block_offset = 0;
     constexpr uint32_t mm_out_cb_id = matmul_partials_cb;
     #else
@@ -305,10 +304,6 @@ void MAIN {
                     #endif
                     // do not pop front bias as it may be used again for subsequent blocks
                     cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
-                    // reconfig for matmul
-
-                    // reconfig unpacker df for srcB
-                    // unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
 
                     #ifdef SFPU_OP_INIT_ACTIVATION
                     for (uint32_t i = 0; i < out_subblock_num_tiles; ++ i) {
@@ -321,7 +316,7 @@ void MAIN {
                     in1_index_subblock_offset += out_subblock_w;
                 } // for in1_num_subblocks
             }
-            if constexpr(in1_num_blocks_w > 1 && in0_num_blocks_h > 1 && !tilize_in0) {
+            if constexpr((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
                 mm_init_short();
             }
             #endif
