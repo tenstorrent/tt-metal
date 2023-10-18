@@ -1,6 +1,6 @@
 ---
 test-list:
-  - eltwise-rsub:
+  - eltwise-rdiv:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [12, 24, 512, 512]
@@ -27,8 +27,8 @@ test-list:
             data-type: ["BFLOAT16", "BFLOAT8_B"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
-      output-file: eltwise_rsub_sweep.csv
-  - eltwise-rsub:
+      output-file: eltwise_rdiv_sweep.csv
+  - eltwise-rdiv:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [12, 24, 512, 512]
@@ -55,4 +55,4 @@ test-list:
             data-type: ["BFLOAT16"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
-      output-file: eltwise_rsub_sweep.csv
+      output-file: eltwise_rdiv_sweep.csv
