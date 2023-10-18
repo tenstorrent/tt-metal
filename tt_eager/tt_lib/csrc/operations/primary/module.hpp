@@ -4,14 +4,17 @@
 
 #pragma once
 
-#include "transformers/module.hpp"
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
+#include "transformers/module.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 
 namespace py = pybind11;
 
@@ -20,15 +23,12 @@ namespace operations {
 namespace primary {
 
 void py_module(py::module& m_primary) {
-
-
     auto m_transformers = m_primary.def_submodule("transformers", "Primary transformers operations");
     transformers::py_module(m_transformers);
 
     py::class_<MatmulProgramConfig>(m_primary, "MatmulProgramConfig");
 
-    py::class_<MatmulDefaultProgramConfig>(m_primary, "MatmulDefaultProgramConfig")
-        .def(py::init<>());
+    py::class_<MatmulDefaultProgramConfig>(m_primary, "MatmulDefaultProgramConfig").def(py::init<>());
 
     py::class_<MatmulMultiCoreReuseProgramConfig>(m_primary, "MatmulMultiCoreReuseProgramConfig")
         .def(
@@ -39,8 +39,7 @@ void py_module(py::module& m_primary) {
             py::arg("out_subblock_h").noconvert(),
             py::arg("out_subblock_w").noconvert(),
             py::arg("per_core_M").noconvert(),
-            py::arg("per_core_N").noconvert()
-        );
+            py::arg("per_core_N").noconvert());
     py::class_<MatmulMultiCoreReuseMultiCastProgramConfig>(m_primary, "MatmulMultiCoreReuseMultiCastProgramConfig")
         .def(
             py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t, bool, std::optional<UnaryWithParam>>(),
@@ -68,8 +67,7 @@ void py_module(py::module& m_primary) {
             py::arg("per_core_N").noconvert(),
             py::arg("fuse_batch").noconvert(),
             py::arg("fused_activation"),
-            py::arg("mcast_in0").noconvert()
-        )
+            py::arg("mcast_in0").noconvert())
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fused_activation);
 
     m_primary.def(
@@ -80,13 +78,33 @@ void py_module(py::module& m_primary) {
         py::arg("fuse_batch").noconvert() = false,
         py::arg("fused_activation") = std::nullopt,
         py::arg("mcast_in0").noconvert() = true,
-        py::arg("out_sharded").noconvert() = false
-    );
+        py::arg("out_sharded").noconvert() = false);
 
-    // TODO(arakhmati): delete redundant matmul overrides by figuring out how to pass in MatmulProgramConfig (which is a std::variant)
+    // TODO(arakhmati):
+    // delete
+    // redundant
+    // matmul
+    // overrides
+    // by
+    // figuring
+    // out
+    // how
+    // to
+    // pass
+    // in
+    // MatmulProgramConfig
+    // (which
+    // is
+    // a
+    // std::variant)
     m_primary.def(
         "matmul",
-        [](const Tensor& input_tensor_a, const Tensor& input_tensor_b, const MatmulDefaultProgramConfig& program_config, const MemoryConfig& out_mem_config, std::optional<DataType> output_dtype, const MathFidelity math_fidelity) {
+        [](const Tensor& input_tensor_a,
+           const Tensor& input_tensor_b,
+           const MatmulDefaultProgramConfig& program_config,
+           const MemoryConfig& out_mem_config,
+           std::optional<DataType> output_dtype,
+           const MathFidelity math_fidelity) {
             return matmul(input_tensor_a, input_tensor_b, program_config, out_mem_config, output_dtype, math_fidelity);
         },
         py::arg("input_tensor_a").noconvert(),
@@ -107,12 +125,16 @@ void py_module(py::module& m_primary) {
                 "program_config",    "",                                                       "MatmulDefaultProgramConfig",          "",                                                               "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig",                               "Default is interleaved in DRAM",                                 "No"
                 "output_dtype",      "Output Data Type",                                       "DataType",                                   "By default it will be set to the data type of `input_tensor_a`", "No"
-        )doc"
-    );
+        )doc");
 
     m_primary.def(
         "matmul",
-        [](const Tensor& input_tensor_a, const Tensor& input_tensor_b, const MatmulMultiCoreReuseProgramConfig& program_config, const MemoryConfig& out_mem_config, std::optional<DataType> output_dtype, const MathFidelity math_fidelity) {
+        [](const Tensor& input_tensor_a,
+           const Tensor& input_tensor_b,
+           const MatmulMultiCoreReuseProgramConfig& program_config,
+           const MemoryConfig& out_mem_config,
+           std::optional<DataType> output_dtype,
+           const MathFidelity math_fidelity) {
             return matmul(input_tensor_a, input_tensor_b, program_config, out_mem_config, output_dtype, math_fidelity);
         },
         py::arg("input_tensor_a").noconvert(),
@@ -133,13 +155,19 @@ void py_module(py::module& m_primary) {
                 "program_config",    "",                                                       "MatmulMultiCoreReuseProgramConfig",          "",                                                               "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig",                               "Default is interleaved in DRAM",                                 "No"
                 "output_dtype",      "Output Data Type",                                       "DataType",                                   "By default it will be set to the data type of `input_tensor_a`", "No"
-        )doc"
-    );
+        )doc");
 
     m_primary.def(
         "matmul",
-        [](const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<const Tensor> bias, const MatmulDefaultProgramConfig& program_config, const MemoryConfig& out_mem_config, std::optional<DataType> output_dtype, const MathFidelity math_fidelity) {
-            return matmul(input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity);
+        [](const Tensor& input_tensor_a,
+           const Tensor& input_tensor_b,
+           std::optional<const Tensor> bias,
+           const MatmulDefaultProgramConfig& program_config,
+           const MemoryConfig& out_mem_config,
+           std::optional<DataType> output_dtype,
+           const MathFidelity math_fidelity) {
+            return matmul(
+                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -161,13 +189,19 @@ void py_module(py::module& m_primary) {
                 "program_config",    "",                                                       "MatmulDefaultProgramConfig", "",                                                               "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig",                               "Default is interleaved in DRAM",                                 "No"
                 "output_dtype",      "Output Data Type",                                       "DataType",                                   "By default it will be set to the data type of `input_tensor_a`", "No"
-        )doc"
-    );
+        )doc");
 
     m_primary.def(
         "matmul",
-        [](const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<const Tensor> bias, const MatmulMultiCoreReuseMultiCastProgramConfig& program_config, const MemoryConfig& out_mem_config, std::optional<DataType> output_dtype, const MathFidelity math_fidelity) {
-            return matmul(input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity);
+        [](const Tensor& input_tensor_a,
+           const Tensor& input_tensor_b,
+           std::optional<const Tensor> bias,
+           const MatmulMultiCoreReuseMultiCastProgramConfig& program_config,
+           const MemoryConfig& out_mem_config,
+           std::optional<DataType> output_dtype,
+           const MathFidelity math_fidelity) {
+            return matmul(
+                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -189,13 +223,19 @@ void py_module(py::module& m_primary) {
                 "program_config",    "",                                                       "MatmulMultiCoreReuseMultiCastProgramConfig", "",                                                               "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig",                               "Default is interleaved in DRAM",                                 "No"
                 "output_dtype",      "Output Data Type",                                       "DataType",                                   "By default it will be set to the data type of `input_tensor_a`", "No"
-        )doc"
-    );
+        )doc");
 
     m_primary.def(
         "matmul",
-        [](const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<const Tensor> bias, const MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config, const MemoryConfig& out_mem_config, std::optional<DataType> output_dtype, const MathFidelity math_fidelity) {
-            return matmul(input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity);
+        [](const Tensor& input_tensor_a,
+           const Tensor& input_tensor_b,
+           std::optional<const Tensor> bias,
+           const MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
+           const MemoryConfig& out_mem_config,
+           std::optional<DataType> output_dtype,
+           const MathFidelity math_fidelity) {
+            return matmul(
+                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -217,13 +257,19 @@ void py_module(py::module& m_primary) {
                 "program_config",    "",                                                       "MatmulMultiCoreReuseMultiCast1DProgramConfig", "",                                                             "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig",                               "Default is interleaved in DRAM",                                 "No"
                 "output_dtype",      "Output Data Type",                                       "DataType",                                   "By default it will be set to the data type of `input_tensor_a`", "No"
-        )doc"
-    );
+        )doc");
 
     m_primary.def(
         "matmul_1d",
-        [](const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<const Tensor> bias, const std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig>& program_config, const MemoryConfig& out_mem_config, std::optional<DataType> output_dtype, const MathFidelity math_fidelity) {
-            return matmul_1d(input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity);
+        [](const Tensor& input_tensor_a,
+           const Tensor& input_tensor_b,
+           std::optional<const Tensor> bias,
+           const std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig>& program_config,
+           const MemoryConfig& out_mem_config,
+           std::optional<DataType> output_dtype,
+           const MathFidelity math_fidelity) {
+            return matmul_1d(
+                input_tensor_a, input_tensor_b, bias, program_config, out_mem_config, output_dtype, math_fidelity);
         },
         py::arg("input_tensor_a").noconvert(),
         py::arg("input_tensor_b").noconvert(),
@@ -245,9 +291,7 @@ void py_module(py::module& m_primary) {
                 "program_config",    "",                                                       "MatmulMultiCoreReuseMultiCast1DProgramConfig", "Config will be automatically determined if not passed",        "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig",                               "Default is interleaved in DRAM",                                 "No"
                 "output_dtype",      "Output Data Type",                                       "DataType",                                   "By default it will be set to the data type of `input_tensor_a`", "No"
-        )doc"
-    );
-
+        )doc");
 
     m_primary.def(
         "layernorm",
@@ -259,8 +303,7 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
             Performs a layernorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
-        )doc"
-    );
+        )doc");
 
     m_primary.def(
         "add_layernorm",
@@ -273,15 +316,32 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
             Performs a layernorm(a+b)*gamma + beta operation.
-        )doc"
-    );
+        )doc");
+
+    // moreh_matmul
+    m_primary.def(
+        "moreh_matmul",
+        &moreh_matmul,
+        py::arg("input_tensor_a").noconvert(),
+        py::arg("input_tensor_b").noconvert(),
+        py::kw_only(),
+        py::arg("transpose_a").noconvert() = false,
+        py::arg("transpose_b").noconvert() = false,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a moreh_matmul operation.");
 
     // softmax
-    m_primary.def("softmax_in_place", &softmax_in_place,
-        "Performs a softmax operation on the last tensor dimension. Returns a reference to the input tensor modified in place.");
+    m_primary.def(
+        "softmax_in_place",
+        &softmax_in_place,
+        "Performs a softmax operation on the last tensor dimension. Returns a reference to the input tensor modified "
+        "in place.");
 
 }
 
-}  // namespace primary
-}  // namespace operations
-}  // namespace tt
+}  // namespace
+   // primary
+}  // namespace
+   // operations
+}  // namespace
+   // tt
