@@ -14,8 +14,8 @@ using namespace ckernel;
 inline void eltwise_unary_configure_addrmod();
 
 template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, DstSync Dst = DstSync::SyncFull, bool is_fp32_dest_acc_en = false, bool unpack_to_dest = false>
-inline void llk_math_eltwise_unary_datacopy(uint dst_index, uint stream) {
-    TT_LLK_DUMP("llk_math_eltwise_unary_datacopy<{}, {}, {}, {}, {}>({})", type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, unpack_to_dest, dst_index);
+inline void llk_math_eltwise_unary_datacopy(uint dst_index, uint stream = 0) {
+    TT_LLK_DUMP("llk_math_eltwise_unary_datacopy<{}, {}, {}, {}, {}>({}, {})", type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, unpack_to_dest, dst_index, stream);
     
     if (unpack_to_dest && is_32bit_input(get_operand_id(stream))) {
         math_unpack_to_dest_math_ready();
