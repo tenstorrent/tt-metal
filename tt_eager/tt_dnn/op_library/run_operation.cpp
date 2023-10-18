@@ -115,6 +115,8 @@ std::vector<Tensor> run_without_program_cache(
     auto program_with_callbacks = operation.create_program(input_tensors, optional_input_tensors, output_tensors);
     auto& program = program_with_callbacks.program;
 
+    op_profiler::append_math_fidelities(program);
+
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
@@ -157,6 +159,8 @@ std::vector<Tensor> run_with_program_cache(
             operation.override_runtime_arguments(override_runtime_arguments_callback, program, input_tensors, optional_input_tensors, output_tensors);
         }
     }
+
+    op_profiler::append_math_fidelities(program);
 
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
