@@ -211,6 +211,7 @@ OpList extract_op_list_from_table(const CSVTable& table, const ExecutionConfig& 
         "Pad",
         "Tilize",
         "UntilizeWithUnpadding",
+        "Downsample",
         
         "Reduce",
         "MaxPool",
@@ -521,7 +522,7 @@ int main(int argc, char* argv[]) {
 
     print_execution_breakdown(op_list, model_summary, {{"Matmul"}, {"OptimizedConv"},
                                        {"EltwiseBinary"}, {"MaxPool", "Reduce"},
-                                       {"Untilize", "Tilize","UntileAndUnpad", "Pad", "Unpad", "IntrlevToShard"}
+                                       {"Untilize", "Tilize","UntileAndUnpad", "Pad", "Unpad", "IntrlevToShard", "Downsample"}
                                        });
 
     print_execution_breakdown(op_list, model_summary, {{"Matmul"}, {"OptimizedConv"},
