@@ -102,40 +102,11 @@ bool test_load_write_read_trisc_binary(
 // subchannel hard-coded to 0 for now
 CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id = 0);
 
-enum class TensixRiscsOptions : std::uint32_t {
-    NONE = 0,
-    BRISC_ONLY = static_cast<std::uint32_t>(1 << 1),
-    BRISC_NCRISC = static_cast<std::uint32_t>(1 << 2),
-    BRISC_TRISCS = static_cast<std::uint32_t>(1 << 3),
-    ALL_RISCS = static_cast<std::uint32_t>(1 << 4)
-};
-
-inline bool operator!=(const TensixRiscsOptions lhs, const TensixRiscsOptions rhs) {
-    return static_cast<std::underlying_type<TensixRiscsOptions>::type>(lhs) !=
-           static_cast<std::underlying_type<TensixRiscsOptions>::type>(rhs);
-}
-
-inline bool deduce_if_involves_triscs(const TensixRiscsOptions &riscs_options) {
-    return riscs_options == TensixRiscsOptions::BRISC_TRISCS || riscs_options == TensixRiscsOptions::ALL_RISCS;
-}
-
-inline bool deduce_if_involves_ncrisc(const TensixRiscsOptions &riscs_options) {
-    return riscs_options == TensixRiscsOptions::BRISC_NCRISC || riscs_options == TensixRiscsOptions::ALL_RISCS;
-}
-
 namespace internal_ {
-
-void assert_enable_core_mailbox_is_valid_for_core(chip_id_t chip_id, const CoreCoord &core);
 
 void wait_until_cores_done(chip_id_t device_id,
                            int run_state,
                            std::unordered_set<CoreCoord>& not_done_phys_cores);
-
-void dispatch(
-    chip_id_t chip_id,
-    const TensixRiscsOptions riscs_option,
-    const std::vector<CoreCoord> &dispatch_cores,
-    uint32_t dispatch_done_addr);
 
 }  // namespace internal_
 
