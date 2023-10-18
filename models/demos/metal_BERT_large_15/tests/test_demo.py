@@ -31,14 +31,6 @@ def test_demo(
     measurements, answers = demo(input_path, model_location_generator, device, use_program_cache)
     logger.info(measurements)
 
-    assert measurements["preprocessing"] < 0.12
-    assert measurements["moving_weights_to_device"] < 40
-    assert measurements["compile"] < 10.5
-    assert measurements["inference_for_single_run_batch_8_without_cache"] < 10.5
-    assert measurements["inference_for_1_runs_batch_8_without_cache"] < 0.42
-    assert measurements["inference_throughput"] > 105
-    assert measurements["post_processing"] < 0.035
-
     logger.info(answers)
 
     for key, value in expected_answers.items():

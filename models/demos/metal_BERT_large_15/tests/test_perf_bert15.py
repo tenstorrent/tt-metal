@@ -149,7 +149,7 @@ def test_perf_virtual_machine(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
-    ([0.09, 10],),
+    ([0.072, 10],),
 )
 def test_perf_bare_metal(
     use_program_cache,
