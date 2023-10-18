@@ -62,7 +62,7 @@ env pytest models/experimental/bloom/tests -k bloom_causal_lm
 
 # GRAYSKULL ONLY
 
-if [[ $tt_arch == "grayskull" ]]; then
+if [[ $ARCH_NAME == "grayskull" ]]; then
   env pytest tests/models/stable_diffusion/tests/test_embedding.py
 
   # Bad tests, don't enable: Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301
