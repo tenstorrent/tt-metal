@@ -189,7 +189,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
     auto out_cb_config = CircularBufferConfig(out_shard_size_max_per_core * out_cb_pagesize, {{out_cb_id, cb_df}})
                             .set_page_size(out_cb_id, out_cb_pagesize)
                             .set_globally_allocated_address(output.buffer()->address());
-    auto cb_out = CreateCircularBuffer(program, all_cores, out_cb_config);
+    auto out_cb = CreateCircularBuffer(program, all_cores, out_cb_config);
 
     /** reader
      */
@@ -598,27 +598,27 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
         TT_ASSERT(false);
     }
 
-    auto override_runtime_args_callback = [
-        reader_kernel_id=reader_kernel_id,
-        writer_kernel_id=writer_kernel_id,
-        ncores=ncores,
-        ncores_x=ncores_x
+    auto override_runtime_arguments_callback = [
+        src_cb=src_cb,
+        out_cb=out_cb
     ](
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<Tensor>& output_tensors
     ) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
 
-        auto src_buffer = input_buffers.at(0);
-        auto dst_buffer = output_buffers.at(0);
+        auto& src_cb_config = GetCircularBufferConfig(program, src_cb);
+        src_cb_config.set_globally_allocated_address(src_buffer->address());
 
-        for (uint32_t i = 0; i < ncores; ++ i) {
-            CoreCoord core = {i % ncores_x, i / ncores_x};
-            // in and out are sharded
-        }
+        auto& output_cb_config = GetCircularBufferConfig(program, out_cb);
+        output_cb_config.set_globally_allocated_address(dst_buffer->address());
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
 void UntilizeWithHalo::validate(const std::vector<Tensor> &input_tensors) const {
