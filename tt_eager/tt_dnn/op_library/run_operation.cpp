@@ -93,7 +93,7 @@ void setup_profiler(const HostOperation& operation, const std::vector<Tensor>& i
     }
 }
 
-void setup_profiler(const DeviceOperation& operation, const std::vector<Tensor>& input_tensors) {
+void setup_profiler(const DeviceOperation& operation, const std::vector<Tensor>& input_tensors, const Program& program) {
     auto profiler_info = operation.create_profiler_info(input_tensors);
     if (profiler_info.preferred_name.has_value()) {
         op_profiler::set_preferred_name(profiler_info.preferred_name.value());
@@ -101,6 +101,8 @@ void setup_profiler(const DeviceOperation& operation, const std::vector<Tensor>&
     if (profiler_info.parallelization_strategy.has_value()) {
         op_profiler::set_parallelization_strategy(profiler_info.parallelization_strategy.value());
     }
+
+    op_profiler::append_math_fidelities(program);
 }
 
 std::vector<Tensor> run_without_program_cache(
@@ -114,6 +116,9 @@ std::vector<Tensor> run_without_program_cache(
 
     auto program_with_callbacks = operation.create_program(input_tensors, optional_input_tensors, output_tensors);
     auto& program = program_with_callbacks.program;
+
+    auto do_profile = op_profiler::get_profiler_flag();
+    if (do_profile) { detail::setup_profiler(operation, input_tensors, program); }
 
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
@@ -157,6 +162,9 @@ std::vector<Tensor> run_with_program_cache(
             operation.override_runtime_arguments(override_runtime_arguments_callback, program, input_tensors, optional_input_tensors, output_tensors);
         }
     }
+
+    auto do_profile = op_profiler::get_profiler_flag();
+    if (do_profile) { detail::setup_profiler(operation, input_tensors, program); }
 
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
@@ -202,8 +210,6 @@ std::vector<Tensor> run(
     log_operation(operation, input_tensors, optional_input_tensors);
 
     auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
-    auto do_profile = op_profiler::get_profiler_flag();
-    if (do_profile) { detail::setup_profiler(operation, input_tensors); }
 
     operation.validate(input_tensors, optional_input_tensors);
 
