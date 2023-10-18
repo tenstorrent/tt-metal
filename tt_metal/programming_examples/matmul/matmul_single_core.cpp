@@ -8,40 +8,40 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "common/bfloat16.hpp"
+#include "common/test_tiles.hpp"
 
 using namespace tt::constants;
 using namespace std;
 using namespace tt;
 using namespace tt::tt_metal;
 
-/*
-void golden_matmul(vector<bfloat16> a, vector<bfloat16> b, vector<bfloat16>& output,
-                        uint32_t M, uint32_t N, uint32_t K, uint32_t B) {
-    std::uint32_t idx_c = 0;
-    std::uint32_t idx_a = 0;
-    std::uint32_t idx_b = 0;
-
-    vector<float> c_f(M * N, 0);
-    for (int i = 0; i < M; i++) {
-        for (int j = 0; j < N; j++) {
-            idx_c = j+ (i * N);
-            //c_f.at(idx_c) = 0;
-            idx_a = i * K;
-            idx_b = j * M;
-            for (int k_m = 0; k_m < K; k_m++) {
-                idx_a += 1;
-                idx_b += K;
-                c_f.at(idx_c) += a[idx_a].to_float() * b[idx_b].to_float();
-            }
-            output[idx_c] = bfloat16(c_f.at(idx_c));
-        }
-    }
-}
-*/
-
 uint32_t FloatToUint(float n)
 {
     return (uint32_t)(*(uint32_t*)&n);
+}
+
+template <typename T>
+std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
+    TT_ASSERT(rows % 32 == 0);
+    TT_ASSERT(cols % 32 == 0);
+    int num_tiles_r = rows / 32;
+    int num_tiles_c = cols / 32;
+    std::vector<T> result;
+    for(auto r = 0; r < num_tiles_r; r++) {
+        for(auto c = 0; c < num_tiles_c; c++) {
+            for(auto j = 0; j < 32; j++) { // tile rows
+                for(auto i = 0; i < 32; i++) { // tile cols
+                    // each row of tiles is 32x32 * num_tiles_c
+                    // each row within the row of tiles is cols
+                    // each col of tiles is 32
+                    // pick row of tiles, pick the row within the tile, pick col tile
+                    int index = r * 32 * 32 * num_tiles_c + j * cols + c * 32 + i;
+                    result.push_back(data.at(index));
+                }
+            }
+        }
+    }
+    return convert_to_tile_layout(result);
 }
 
 void golden_matmul(vector<bfloat16> a, vector<bfloat16> b, vector<uint32_t>& output,
@@ -65,14 +65,12 @@ void golden_matmul(vector<bfloat16> a, vector<bfloat16> b, vector<uint32_t>& out
             for (int k_m = 0; k_m < K; k_m++) {
                 //c_f.at(idx_c) += a[idx_a].to_float() * b[idx_b].to_float();
                 float_tmp = a[idx_a].to_float() * b[idx_b].to_float();
-                uint32_t* int_tmp = (uint32_t*) &float_tmp;
-                *int_tmp &= 0xffff0000 ;
+                // uint32_t* int_tmp = (uint32_t*) &float_tmp;
+                // *int_tmp &= 0xffff0000 ;
                 c_f += float_tmp;
-                //cout << "C_F " << c_f << "--" << i << " --" << j << " --" << k_m  << " --" << idx_a << " --" << idx_b << endl;
                 idx_a += 1;
                 idx_b += K;
             }
-            //c_f &= 0xffff0000 ;
             c_bf.at(idx_c) = bfloat16(c_f);
             if (idx_c < 32) {
                 cout << "GG " << c_f << " .. " << c_bf.at(idx_c) << endl;
@@ -272,14 +270,16 @@ int main(int argc, char **argv) {
         std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(
             dram_buffer_B_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
 
-        //constexpr float val_to_add = 1.0f;
-        //std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(dram_buffer_A_size, val_to_add);
-        //std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_B_size, val_to_add);
+        // constexpr float val_to_add = 1.0f;
+        // std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(dram_buffer_A_size, false);
+        // std::vector<uint32_t> src1_vec = create_arange_vector_of_bfloat16(dram_buffer_B_size, false);
 
+        std::vector<uint32_t> tilized_src0_vec = pack_bfloat16_vec_into_uint32_vec(tilize(unpack_uint32_vec_into_bfloat16_vec(src0_vec), M, K));
+        std::vector<uint32_t> tilized_src1_vec = pack_bfloat16_vec_into_uint32_vec(tilize(unpack_uint32_vec_into_bfloat16_vec(src1_vec), K, N));
 
         /* Calling the MatMul host program. Read in result into a host vector */
         vector<uint32_t> result_vec;
-        matmul_single_core(src0_vec, src1_vec, result_vec, false, M, N, K, B, device);
+        matmul_single_core(tilized_src0_vec, tilized_src1_vec, result_vec, false, M, N, K, B, device);
         cout << "----m--" << endl;
         cout << result_vec.size() << endl;
         for (int i = 0; i < 32; i++) {
@@ -295,7 +295,7 @@ int main(int argc, char **argv) {
         //vector<uint32_t> golden_vec = pack_bfloat16_vec_into_uint32_vec(golden_vec_bfp16);
         vector<uint32_t> golden_vec;
         golden_matmul(unpack_uint32_vec_into_bfloat16_vec(src0_vec), unpack_uint32_vec_into_bfloat16_vec(src1_vec), golden_vec, M, N, K, B);
-
+        golden_vec = pack_bfloat16_vec_into_uint32_vec(tilize(unpack_uint32_vec_into_bfloat16_vec(golden_vec), M, N));
 
         cout << "----g--" << endl;
         cout << golden_vec.size() << endl;
