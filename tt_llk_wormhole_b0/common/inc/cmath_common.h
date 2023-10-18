@@ -229,6 +229,11 @@ inline uint32_t get_operand_id(uint32_t operand)
     return (operand>=INTERMEDIATE_BASE_ID) ? operand - 8 : operand - OPERAND_BASE_ID;
 }
 
+inline constexpr bool is_32bit_input(const std::uint32_t operand_id) {
+    const uint input_df = unpack_src_format[operand_id];
+    return (input_df == (uint)DataFormat::Int32) || (input_df == (uint)DataFormat::Float32);
+}
+
 inline constexpr uint32_t get_num_faces(const std::uint32_t operand_id)
 {
    return math_tile_num_faces[operand_id];

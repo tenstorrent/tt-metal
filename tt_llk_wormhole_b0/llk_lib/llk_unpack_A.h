@@ -45,7 +45,7 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces, const std::ui
         static constexpr uint srcb_clear_z = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001); // set srcB ch0_z = 0
     #endif
     
-    if constexpr (unpack_to_dest) {
+    if (unpack_to_dest && is_32bit_input(operand_id)) {
         const uint32_t outerloop = num_faces;   
         constexpr uint32_t innerloop = 1;   
         ckernel_template tmp(outerloop, innerloop, unpack_srca_to_dest);
@@ -216,10 +216,11 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
         }
     }
 
-    if constexpr (unpack_to_dest) {
+    const bool unpack_to_dest_int = unpack_to_dest && is_32bit_input(input);
+    if (unpack_to_dest_int) {
         set_dst_write_addr(unp_cfg_context, input);
         wait_for_dest_available();
-    }    
+    }
 
     // Run MOP
     ckernel::ckernel_template::run(instrn_buffer);
@@ -227,7 +228,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-    if constexpr (unpack_to_dest) {
+    if (unpack_to_dest_int) {
         unpack_to_dest_tile_done(unp_cfg_context);
     }
 
