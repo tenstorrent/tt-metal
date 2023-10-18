@@ -687,13 +687,14 @@ Tensor addalpha(const Tensor& input_a, const Tensor& input_b, float alpha, const
     return operation::decorate_as_composite(__func__, _addalpha)(input_a, input_b, alpha, output_mem_config);
 }
 
-//repeat interleave supports repeats as 1 to inf, dim between 0 to 2
-Tensor _repeat_interleave(const Tensor& input_a, uint32_t repeat, int32_t dim, const MemoryConfig& output_mem_config) {
+//repeat interleave supports repeats as 0 to inf, dim between 0 to 2
+Tensor _repeat_interleave(const Tensor& input_a, int repeat, int dim, const MemoryConfig& output_mem_config) {
 
     std::vector<Tensor> combined_tensors;
-    combined_tensors.reserve(repeat);
     auto shape_wh = input_a.shape();
+    uint32_t normalized_dim = dim;
     // normalizing the negative dim
+
     uint32_t normalized_dim = input_a.shape().get_normalized_index(dim);
     // check if dim is 1 or 3
     TT_ASSERT( normalized_dim != 3 || normalized_dim != 1, "dim 1 & 3 is not supported ");
@@ -702,6 +703,7 @@ Tensor _repeat_interleave(const Tensor& input_a, uint32_t repeat, int32_t dim, c
         for (int i = 0; i < repeat; i++) {
             combined_tensors.push_back(input_a);
         }
+        combined_tensors.reserve(repeat);
         // TODO: For dim = 1 facing issue with concat_op
         if (normalized_dim){
             Tensor concat_out = concat(combined_tensors, 2, output_mem_config);
@@ -717,13 +719,14 @@ Tensor _repeat_interleave(const Tensor& input_a, uint32_t repeat, int32_t dim, c
         for (int i = 0; i < repeat; i++) {
             combined_tensors.push_back(reshape_out);
         }
+        combined_tensors.reserve(repeat);
         Tensor concat_out = concat(combined_tensors, 1, output_mem_config);
         std::vector<int64_t> permute_dims = {0, 2, 1, 3};
         Tensor permute_out = permute(concat_out, permute_dims, output_mem_config);
         return reshape (permute_out, shape_wh[0], shape_wh[1], shape_wh[2]*repeat, shape_wh[3], output_mem_config);
     }
 }
-Tensor repeat_interleave(const Tensor& input_a, uint32_t repeat, int32_t dim, const MemoryConfig& output_mem_config)
+Tensor repeat_interleave(const Tensor& input_a, int repeat, int dim, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _repeat_interleave)(input_a, repeat, dim, output_mem_config);
 }
@@ -1195,14 +1198,14 @@ Tensor sfpu_eps(const Shape shape, Layout layout, Device * device, const MemoryC
 }
 
 //tril : select lower triangular region of input matrix
-Tensor tril(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_config) {
-  Tensor index_l = tt::numpy::index_tril<bfloat16>(input_a.shape(), diag, DataType::BFLOAT16);
+Tensor tril(const Tensor& input_a, const MemoryConfig& output_mem_config) {
+  Tensor index_l = tt::numpy::index_tril<bfloat16>(input_a.shape(), DataType::BFLOAT16);
   return mul(input_a,index_l,std::nullopt,output_mem_config);
 }
 
 //triu : select upper triangular region of input matrix
-Tensor triu(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_config) {
-  Tensor index_u = tt::numpy::index_triu<bfloat16>(input_a.shape(), diag, DataType::BFLOAT16);
+Tensor triu(const Tensor& input_a, const MemoryConfig& output_mem_config) {
+  Tensor index_u = tt::numpy::index_triu<bfloat16>(input_a.shape(), DataType::BFLOAT16);
   return mul(input_a,index_u,std::nullopt,output_mem_config);
 }
 
