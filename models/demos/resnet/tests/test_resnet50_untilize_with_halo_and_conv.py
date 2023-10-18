@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
+
 import torch
 import pytest
 import tt_lib
@@ -402,7 +404,7 @@ hardcoded_conv_blocking_and_parallelization_config = {
     },
     8: {
         (25088, 64): [64 * 3, 256, 64, 128, 64, 256, (12, 9), 256, 64],
-        (6272, 128): [128, 64, 128, 64, 128, 64, (12, 9), 64, 128], # Untilize with halo
+        (6272, 128): [128, 64, 128, 64, 128, 64, (12, 9), 64, 128],  # Untilize with halo
         (1568, 256): [256, 160, 32, 32, 32, 160, (10, 8), 160, 32],
         (416, 512): [512, 96, 64, 32, 32, 96, (5, 8), 96, 64],
         # bypass convs
@@ -417,61 +419,27 @@ hardcoded_conv_blocking_and_parallelization_config = {
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
-        # 1x1 convs in rn50
-        (64, 64, 56, 56, 1, 1, 1, 1, 0, 0),
-        (
-            256,
-            64,
-            56,
-            56,
-            1,
-            1,
-            1,
-            1,
-            0,
-            0,
-        ),  # slow with new_matmul but less than bias computation time
-        (64, 256, 56, 56, 1, 1, 1, 1, 0, 0),
-        (64, 256, 56, 56, 1, 1, 1, 1, 0, 0),
-        (128, 256, 56, 56, 1, 1, 1, 1, 0, 0),
-        (512, 128, 28, 28, 1, 1, 1, 1, 0, 0),
-        (128, 512, 28, 28, 1, 1, 1, 1, 0, 0),
-        (256, 512, 28, 28, 1, 1, 1, 1, 0, 0),
-        (1024, 256, 14, 14, 1, 1, 1, 1, 0, 0),
-        (256, 1024, 14, 14, 1, 1, 1, 1, 0, 0),
-        (512, 1024, 14, 14, 1, 1, 1, 1, 0, 0),
-        (2048, 512, 7, 7, 1, 1, 1, 1, 0, 0),
-        (
-            512,
-            2048,
-            7,
-            7,
-            1,
-            1,
-            1,
-            1,
-            0,
-            0,
-        ),  # slightly slower with new matmul but less than old matmul + bias computation time
         # unique convs in rn50 (complete list)
         # layer1
-        (64, 64, 56, 56, 3, 3, 1, 1, 1, 1),
+        # (64, 64, 56, 56, 3, 3, 1, 1, 1, 1), # not supported yet
         # layer2
-        (512, 256, 56, 56, 1, 1, 2, 2, 0, 0),
-        (128, 128, 56, 56, 3, 3, 2, 2, 1, 1),
-        (128, 128, 28, 28, 3, 3, 1, 1, 1, 1),  # Untilize with halo
+        # (512, 256, 56, 56, 1, 1, 2, 2, 0, 0), # not supported yet
+        # (128, 128, 56, 56, 3, 3, 2, 2, 1, 1), # not supported yet
+        (128, 128, 28, 28, 3, 3, 1, 1, 1, 1),
         # layer3
-        (256, 256, 28, 28, 3, 3, 2, 2, 1, 1),
-        (1024, 512, 28, 28, 1, 1, 2, 2, 0, 0),
-        (256, 256, 14, 14, 3, 3, 1, 1, 1, 1),
+        # (256, 256, 28, 28, 3, 3, 2, 2, 1, 1), # not supported yet
+        # (1024, 512, 28, 28, 1, 1, 2, 2, 0, 0), # not supported yet
+        # (256, 256, 14, 14, 3, 3, 1, 1, 1, 1), # not supported yet
         # layer4
-        (512, 512, 14, 14, 3, 3, 2, 2, 1, 1),
-        (2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0),
-        (512, 512, 7, 7, 3, 3, 1, 1, 1, 1),
+        # (512, 512, 14, 14, 3, 3, 2, 2, 1, 1), # not supported yet
+        # (2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0), # not supported yet
+        # (512, 512, 7, 7, 3, 3, 1, 1, 1, 1), # not supported yet
     ),
 )
 def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w):
-    in_mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1)
+    in_mem_config = tt_lib.tensor.MemoryConfig(
+        tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
+    )
     out_memory_config = tt_lib.tensor.MemoryConfig(
         tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
     )
@@ -503,68 +471,106 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
 
         conv_params = [K, C, R, S, stride_h, stride_w, pad_h, pad_w, 1, 1]
         conv_output_shape = compute_conv_output_shape(conv_params, conv_input_shape_nhwc)
-        print("Conv output shape - ", conv_output_shape)
+        logger.info(f"Conv output shape - {conv_output_shape}")
         conv_as_mm_padded_act_height = _nearest_32(conv_output_shape[0] * conv_output_shape[1] * conv_output_shape[2])
 
-        if is_1x1_conv:
-            pytest.skip("1x1 conv not unsupported!")
-            matmul_config = None
-            assert (conv_as_mm_padded_act_height, C, K) in hardcoded_matmul_config_conv[N]
-            print("Setting matmul config for 1x1 conv")
-            matmul_config = hardcoded_matmul_config_conv[N][(conv_as_mm_padded_act_height, C, K)]
-            # 1x1 conv with stride 1 padding 0 is run using regular matmul
-            conv = resnet50_1x1_conv_as_matmul(
-                conv_weight_pyt.reshape(-1).tolist(),
-                conv_params,
-                device,
-                conv_bias_pyt.reshape(-1).tolist(),
-                matmul_config,
-            )
+        assert (conv_as_mm_padded_act_height, K) in hardcoded_conv_blocking_and_parallelization_config[N]
+        conv_blocking_and_parallelization_config = hardcoded_conv_blocking_and_parallelization_config[N][
+            (conv_as_mm_padded_act_height, K)
+        ]
+        assert len(conv_blocking_and_parallelization_config) == 9
+
+        [
+            act_block_w_datums,
+            act_block_h_datums,
+            weight_block_w_datums,
+            out_subblock_h_datums,
+            out_subblock_w_datums,
+            out_block_h_datums,
+            grid_size,
+            per_core_out_matrix_h,
+            per_core_weight_matrix_w,
+        ] = conv_blocking_and_parallelization_config
+        if R == 1 and S == 1:
+            assert C % act_block_w_datums == 0
         else:
-            assert (conv_as_mm_padded_act_height, K) in hardcoded_conv_blocking_and_parallelization_config[N]
-            conv_blocking_and_parallelization_config = hardcoded_conv_blocking_and_parallelization_config[N][
-                (conv_as_mm_padded_act_height, K)
-            ]
-            assert len(conv_blocking_and_parallelization_config) == 9
+            assert act_block_w_datums == C or act_block_w_datums == C * S
+        assert act_block_w_datums % 32 == 0
+        assert act_block_h_datums % 32 == 0
+        assert weight_block_w_datums % 32 == 0
+        assert per_core_out_matrix_h % 32 == 0
+        per_core_out_matrix_h_ntiles = (int)(per_core_out_matrix_h / 32)
+        per_core_weight_matrix_w_ntiles = (int)(per_core_weight_matrix_w / 32)
 
-            [
-                act_block_w_datums,
-                act_block_h_datums,
-                weight_block_w_datums,
-                out_subblock_h_datums,
-                out_subblock_w_datums,
-                out_block_h_datums,
-                grid_size,
-                per_core_out_matrix_h,
-                per_core_weight_matrix_w,
-            ] = conv_blocking_and_parallelization_config
-            if R == 1 and S == 1:
-                assert C % act_block_w_datums == 0
-            else:
-                assert act_block_w_datums == C or act_block_w_datums == C * S
-            assert act_block_w_datums % 32 == 0
-            assert act_block_h_datums % 32 == 0
-            assert weight_block_w_datums % 32 == 0
-            assert per_core_out_matrix_h % 32 == 0
-            per_core_out_matrix_h_ntiles = (int)(per_core_out_matrix_h / 32)
-            per_core_weight_matrix_w_ntiles = (int)(per_core_weight_matrix_w / 32)
-            conv = resnet50_optimized_conv(
-                conv_weight_pyt.reshape(-1).tolist(),
-                conv_params,
-                device,
-                [act_block_h_datums, act_block_w_datums],
-                [act_block_w_datums, weight_block_w_datums],
-                [out_subblock_h_datums, out_subblock_w_datums],
-                out_block_h_datums,
-                grid_size,
-                per_core_out_matrix_h_ntiles,
-                per_core_weight_matrix_w_ntiles,
-                conv_bias_pyt.reshape(-1).tolist(),
-                output_mem_config=out_memory_config,
-                input_tensor_shape=conv_input_shape_nhwc,
-            )
+        ###############################################
+        # Directly run old conv (row major input)
+        # NOTE: New conv should have identical output
+        ###############################################
+        conv = resnet50_optimized_conv(
+            conv_weight_pyt.reshape(-1).tolist(),
+            conv_params,
+            device,
+            [act_block_h_datums, act_block_w_datums],
+            [act_block_w_datums, weight_block_w_datums],
+            [out_subblock_h_datums, out_subblock_w_datums],
+            out_block_h_datums,
+            grid_size,
+            per_core_out_matrix_h_ntiles,
+            per_core_weight_matrix_w_ntiles,
+            conv_bias_pyt.reshape(-1).tolist(),
+            output_mem_config=interleaved_mem_config,
+        )
 
+        conv_input_on_device = tt_lib.tensor.Tensor(
+            conv_input_pyt_nhwc.reshape(-1).tolist(),
+            conv_input_pyt_nhwc.shape,
+            tt_lib.tensor.DataType.BFLOAT16,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+        ).to(device, interleaved_mem_config)
+
+        output_on_device = conv(conv_input_on_device)
+
+        # convert tiled output to RM
+        assert output_on_device.layout() == tt_lib.tensor.Layout.TILE
+        output_on_device = format_tensor(
+            output_on_device, tt_lib.tensor.Layout.ROW_MAJOR, device, interleaved_mem_config
+        )
+        output_on_device = output_on_device.reshape(
+            conv_output_shape[0],
+            conv_output_shape[1],
+            conv_output_shape[2],
+            conv_output_shape[3],
+        )
+
+        # Copy to host
+        out = output_on_device.cpu()
+        assert out.layout() == tt_lib.tensor.Layout.ROW_MAJOR
+
+        out_result = out.to_torch()
+        # NHWC to NCHW
+        out_result = torch.transpose(out_result, 2, 3)
+        out_result_baseline = torch.transpose(out_result, 1, 2)
+
+        ########################################################
+        # Tilize, untilize_with_halo, conv with reader indices
         # Create interleaved input on device
+        ########################################################
+        conv = resnet50_optimized_conv(
+            conv_weight_pyt.reshape(-1).tolist(),
+            conv_params,
+            device,
+            [act_block_h_datums, act_block_w_datums],
+            [act_block_w_datums, weight_block_w_datums],
+            [out_subblock_h_datums, out_subblock_w_datums],
+            out_block_h_datums,
+            grid_size,
+            per_core_out_matrix_h_ntiles,
+            per_core_weight_matrix_w_ntiles,
+            conv_bias_pyt.reshape(-1).tolist(),
+            output_mem_config=out_memory_config,
+            input_tensor_shape=conv_input_shape_nhwc,
+        )
+
         conv_input_on_device = tt_lib.tensor.Tensor(
             conv_input_pyt_nhwc.reshape(-1).tolist(),
             conv_input_pyt_nhwc.shape,
@@ -579,7 +585,9 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
             conv_input_shape_nhwc[0] * conv_input_shape_nhwc[1] * conv_input_shape_nhwc[2],
             conv_input_shape_nhwc[3],
         )
-        conv_input_on_device = format_tensor(conv_input_on_device, tt_lib.tensor.Layout.TILE, device, interleaved_mem_config)
+        conv_input_on_device = format_tensor(
+            conv_input_on_device, tt_lib.tensor.Layout.TILE, device, interleaved_mem_config
+        )
 
         # Convert interleaved to sharded
         conv_input_on_device = tt_lib.tensor.interleaved_to_sharded(
@@ -593,17 +601,6 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
         # Untilize with halo concat
         conv_input_on_device = tt_lib.tensor.untilize_with_halo(conv_input_on_device, 0x0, N, H, W, in_mem_config)
 
-        if is_1x1_conv:
-            pytest.skip("1x1 conv not unsupported!")
-            # convert activation RM to tile layout
-            conv_input_on_device = conv_input_on_device.reshape(
-                1,
-                1,
-                conv_input_shape_nhwc[0] * conv_input_shape_nhwc[1] * conv_input_shape_nhwc[2],
-                conv_input_shape_nhwc[3],
-            )
-            conv_input_on_device = format_tensor(conv_input_on_device, tt_lib.tensor.Layout.TILE, device, memory_config)
-
         # Conv with new reader for sharded untilized with halo inputs
         output_on_device = conv(conv_input_on_device)
 
@@ -612,7 +609,9 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
 
         # convert tiled output to RM
         assert output_on_device.layout() == tt_lib.tensor.Layout.TILE
-        output_on_device = format_tensor(output_on_device, tt_lib.tensor.Layout.ROW_MAJOR, device, interleaved_mem_config)
+        output_on_device = format_tensor(
+            output_on_device, tt_lib.tensor.Layout.ROW_MAJOR, device, interleaved_mem_config
+        )
         output_on_device = output_on_device.reshape(
             conv_output_shape[0],
             conv_output_shape[1],
@@ -620,7 +619,7 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
             conv_output_shape[3],
         )
 
-        # Copy to host and Compare against pytorch
+        # Copy to host and compare against pytorch
         out = output_on_device.cpu()
         assert out.layout() == tt_lib.tensor.Layout.ROW_MAJOR
 
@@ -629,9 +628,19 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
         out_result = torch.transpose(out_result, 2, 3)
         out_result = torch.transpose(out_result, 1, 2)
 
-        # Compare against golden
+        # Compare baseline against golden
+        assert out_result_baseline.shape == out_golden.shape
+        passing_pcc_baseline, output_pcc_baseline = comp_pcc(out_golden, out_result, 0.99)
+        logger.info(f"Passing baseline={passing_pcc_baseline}")
+        logger.info(f"Output pcc baseline={output_pcc_baseline}")
+
+        # Compare out result against golden
         assert out_result.shape == out_golden.shape
         passing_pcc, output_pcc = comp_pcc(out_golden, out_result, 0.99)
-        print("Passing=", passing_pcc)
-        print("Output pcc=", output_pcc)
-        #assert passing_pcc
+        logger.info(f"Passing={passing_pcc}")
+        logger.info(f"Output pcc={output_pcc}")
+
+        # Compare baseline to output (should be identical)
+        assert torch.equal(out_result_baseline, out_result), "Output should be identical to old conv!"
+        assert passing_pcc
+        assert passing_pcc == passing_pcc_baseline, "Output pcc should be identical to old conv pcc!"
