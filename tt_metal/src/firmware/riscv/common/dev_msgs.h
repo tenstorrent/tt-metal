@@ -78,10 +78,11 @@ struct debug_sanitize_noc_addr_msg_t {
 };
 
 enum debug_sanitize_noc_invalid_enum {
-    DebugSanitizeNocInvalidOK         = 0,
-    DebugSanitizeNocInvalidL1         = 1,
-    DebugSanitizeNocInvalidUnicast    = 2,
-    DebugSanitizeNocInvalidMulticast  = 3,
+    // 0 and 1 are a common stray values to write, so don't use those
+    DebugSanitizeNocInvalidOK         = 2,
+    DebugSanitizeNocInvalidL1         = 3,
+    DebugSanitizeNocInvalidUnicast    = 4,
+    DebugSanitizeNocInvalidMulticast  = 5,
 };
 
 constexpr int num_riscv_per_core = 5;
