@@ -48,8 +48,12 @@ def run_perf_resnet(
     torch_resnet50.eval()
 
     state_dict = torch_resnet50.state_dict()
+    dtype = tt_lib.tensor.DataType.BFLOAT16
+    math_fidelity = tt_lib.tensor.MathFidelity.HiFi4
     sharded = False
     if batch_size == 8:
+        dtype = tt_lib.tensor.DataType.BFLOAT16
+        math_fidelity = tt_lib.tensor.MathFidelity.LoFi
         sharded = True
     tt_resnet50 = ResNet(
         Bottleneck,
@@ -60,6 +64,8 @@ def run_perf_resnet(
         fold_batchnorm=True,
         storage_in_dram=False,
         batch_size=batch_size,
+        dtype=dtype,
+        math_fidelity=math_fidelity,
         sharded=sharded,
     )
 
