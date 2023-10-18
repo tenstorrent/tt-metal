@@ -69,11 +69,11 @@ ALWI void matmul_tiles(uint32_t c_in0, uint32_t c_in1, uint32_t itile0, uint32_t
 ALWI void mm_init_short_with_dt(uint32_t cbid, const uint32_t transpose=0) {
     #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_AB_matmul_init(transpose) ));
-    UNPACK(( llk_unpack_reconfig_data_format(cbid, 1, 0, 0) ));
+    UNPACK(( llk_unpack_reconfig_data_format_srca(cbid, 1) ));
     MATH(( llk_math_matmul_init<MATH_FIDELITY>(transpose) ));
     #else
     UNPACK(( llk_unpack_AB_matmul_init(cbid, 1) ));
-    UNPACK(( llk_unpack_reconfig_data_format(cbid, 1, 0, 0) ));
+    UNPACK(( llk_unpack_reconfig_data_format_srca(cbid, 1) ));
     MATH(( llk_math_matmul_init<MATH_FIDELITY>(cbid, 1) ));
     #endif
 }

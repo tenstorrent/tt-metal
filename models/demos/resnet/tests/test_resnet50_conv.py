@@ -390,7 +390,7 @@ hardcoded_conv_blocking_and_parallelization_config = {
 }
 
 
-@pytest.mark.parametrize("N", (1, 2, 8))
+@pytest.mark.parametrize("N", (1, 2, 8), ids=["batch_1", "batch_2", "batch_8"])
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
@@ -447,7 +447,19 @@ hardcoded_conv_blocking_and_parallelization_config = {
         (512, 512, 7, 7, 3, 3, 1, 1, 1, 1),
     ),
 )
-def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w):
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    ids=["weights_BFLOAT16", "weights_BFLOAT8_B"],
+)
+@pytest.mark.parametrize(
+    "output_dtype",
+    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    ids=["output_BFLOAT16", "output_BFLOAT8_B"],
+)
+def test_resnet50_conv(
+    use_program_cache, device, N, K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w, weights_dtype, output_dtype
+):
     output_mem_config = tt_lib.tensor.MemoryConfig(
         tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
     )
@@ -495,9 +507,9 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
                 conv_bias_pyt.reshape(-1).tolist(),
                 matmul_config,
                 output_mem_config=output_mem_config,
-                weights_dtype=tt_lib.tensor.DataType.BFLOAT16,
-                output_dtype=tt_lib.tensor.DataType.BFLOAT16,
-                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4
+                weights_dtype=weights_dtype,
+                output_dtype=output_dtype,
+                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
             )
         else:
             assert (conv_as_mm_padded_act_height, K) in hardcoded_conv_blocking_and_parallelization_config[N]
@@ -536,9 +548,9 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
                 per_core_weight_matrix_w_ntiles,
                 conv_bias_pyt.reshape(-1).tolist(),
                 output_mem_config=output_mem_config,
-                weights_dtype=tt_lib.tensor.DataType.BFLOAT16,
-                output_dtype=tt_lib.tensor.DataType.BFLOAT16,
-                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4
+                weights_dtype=weights_dtype,
+                output_dtype=output_dtype,
+                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
             )
 
         conv_input_on_device = tt_lib.tensor.Tensor(
