@@ -42,20 +42,20 @@ operation::ProgramWithCallbacks moreh_dot_single_core(const Tensor &a, const Ten
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
             .set_page_size(src0_cb_index, src0_single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-    uint32_t src1_cb_index = CB::c_in1;
+    uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})
             .set_page_size(src1_cb_index, src1_single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-    uint32_t output_cb_index = CB::c_out0;  // output operands start at index 16
+    uint32_t output_cb_index = 16;  // output operands start at index 16
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
@@ -67,13 +67,13 @@ operation::ProgramWithCallbacks moreh_dot_single_core(const Tensor &a, const Ten
             .set_page_size(CB::c_in2, dst_single_tile_size);
     auto cb_src2 = tt_metal::CreateCircularBuffer(program, core, cb_scaler_config);
 
-    uint32_t interm0_cb_index = CB::c_intermed0;
+    uint32_t interm0_cb_index = 24;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(dst_single_tile_size, {{interm0_cb_index, dst_cb_data_format}})
             .set_page_size(interm0_cb_index, dst_single_tile_size);
     auto cb_interm0 = tt_metal::CreateCircularBuffer(program, core, interm0_cb_config);
 
-    uint32_t interm1_cb_index = CB::c_intermed1;
+    uint32_t interm1_cb_index = 25;
     tt_metal::CircularBufferConfig interm1_cb_config =
         tt_metal::CircularBufferConfig(dst_single_tile_size, {{interm1_cb_index, dst_cb_data_format}})
             .set_page_size(interm1_cb_index, dst_single_tile_size);
@@ -87,18 +87,18 @@ operation::ProgramWithCallbacks moreh_dot_single_core(const Tensor &a, const Ten
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
-    KernelID binary_reader_kernel_id = tt_metal::CreateKernel(
+    KernelID binary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_dot/single_core/kernels/reader_moreh_dot.cpp",
+        "tt_eager/tt_dnn/op_library/moreh_dot/single_core/kernels/reader_binary_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args});
 
-    KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
+    KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_dot/single_core/kernels/writer_moreh_dot.cpp",
+        "tt_eager/tt_dnn/op_library/moreh_dot/single_core/kernels/writer_unary_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -109,10 +109,12 @@ operation::ProgramWithCallbacks moreh_dot_single_core(const Tensor &a, const Ten
     std::map<string, string> defines;
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
+    // defines["ELTWISE_OP"] = "mul_tiles";
+    // defines["ELTWISE_OP_CODE"] = "2";
 
-    auto dot_kernel = tt_metal::CreateKernel(
+    auto dot_kernel = tt_metal::CreateComputeKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_dot/single_core/kernels/moreh_dot.cpp",
+        "tt_eager/tt_dnn/op_library/moreh_dot/single_core/kernels/dot.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines});
 

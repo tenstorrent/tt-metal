@@ -1,6 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
+/*
+ * SPDX-FileCopyrightText:
+ * © 2023
+ * Tenstorrent
+ * Inc.
+ *
+ * SPDX-License-Identifier:
+ * Apache-2.0
+ */
 
 #pragma once
 
@@ -14,14 +20,10 @@
 #include "tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
-#include "tt_dnn/op_library/moreh_linear/moreh_linear_op.hpp"
-#include "tt_dnn/op_library/moreh_linear_backward/moreh_linear_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
-#include "tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 #include "tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
-#include "tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 
 namespace py = pybind11;
 
@@ -39,18 +41,49 @@ void py_module(py::module& m_primary) {
 
     py::class_<MatmulMultiCoreReuseProgramConfig>(m_primary, "MatmulMultiCoreReuseProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t>(),
+            py::init<>([](std::tuple<std::size_t, std::size_t> compute_with_storage_grid_size,
+                          std::size_t in0_block_w,
+                          std::size_t out_subblock_h,
+                          std::size_t out_subblock_w,
+                          std::size_t per_core_M,
+                          std::size_t per_core_N) {
+                return MatmulMultiCoreReuseProgramConfig{
+                    .compute_with_storage_grid_size =
+                        {std::get<0>(compute_with_storage_grid_size), std::get<1>(compute_with_storage_grid_size)},
+                    .in0_block_w = in0_block_w,
+                    .out_subblock_h = out_subblock_h,
+                    .out_subblock_w = out_subblock_w,
+                    .per_core_M = per_core_M,
+                    .per_core_N = per_core_N,
+                };
+            }),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("in0_block_w").noconvert(),
             py::arg("out_subblock_h").noconvert(),
             py::arg("out_subblock_w").noconvert(),
             py::arg("per_core_M").noconvert(),
-            py::arg("per_core_N").noconvert()
-        );
+            py::arg("per_core_N").noconvert());
     py::class_<MatmulMultiCoreReuseMultiCastProgramConfig>(m_primary, "MatmulMultiCoreReuseMultiCastProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t, bool, std::optional<UnaryWithParam>>(),
+            py::init<>([](std::tuple<std::size_t, std::size_t> compute_with_storage_grid_size,
+                          std::size_t in0_block_w,
+                          std::size_t out_subblock_h,
+                          std::size_t out_subblock_w,
+                          std::size_t per_core_M,
+                          std::size_t per_core_N,
+                          std::optional<UnaryWithParam> fused_activation) {
+                return MatmulMultiCoreReuseMultiCastProgramConfig{
+                    .compute_with_storage_grid_size =
+                        {std::get<0>(compute_with_storage_grid_size), std::get<1>(compute_with_storage_grid_size)},
+                    .in0_block_w = in0_block_w,
+                    .out_subblock_h = out_subblock_h,
+                    .out_subblock_w = out_subblock_w,
+                    .per_core_M = per_core_M,
+                    .per_core_N = per_core_N,
+                    .fused_activation = fused_activation,
+                };
+            }),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("in0_block_w").noconvert(),
@@ -58,14 +91,31 @@ void py_module(py::module& m_primary) {
             py::arg("out_subblock_w").noconvert(),
             py::arg("per_core_M").noconvert(),
             py::arg("per_core_N").noconvert(),
-            py::arg("transpose_mcast").noconvert(),
-            py::arg("fused_activation")
-        )
-        .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastProgramConfig::fused_activation);
+            py::arg("fused_activation"));
 
     py::class_<MatmulMultiCoreReuseMultiCast1DProgramConfig>(m_primary, "MatmulMultiCoreReuseMultiCast1DProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t, bool, std::optional<UnaryWithParam>, bool>(),
+            py::init<>([](std::tuple<std::size_t, std::size_t> compute_with_storage_grid_size,
+                          std::size_t in0_block_w,
+                          std::size_t out_subblock_h,
+                          std::size_t out_subblock_w,
+                          std::size_t per_core_M,
+                          std::size_t per_core_N,
+                          bool fuse_batch,
+                          std::optional<UnaryWithParam> fused_activation,
+                          bool mcast_in0) {
+                return MatmulMultiCoreReuseMultiCast1DProgramConfig{
+                    .compute_with_storage_grid_size =
+                        {std::get<0>(compute_with_storage_grid_size), std::get<1>(compute_with_storage_grid_size)},
+                    .in0_block_w = in0_block_w,
+                    .out_subblock_h = out_subblock_h,
+                    .out_subblock_w = out_subblock_w,
+                    .per_core_M = per_core_M,
+                    .per_core_N = per_core_N,
+                    .fuse_batch = fuse_batch,
+                    .fused_activation = fused_activation,
+                    .mcast_in0 = mcast_in0};
+            }),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("in0_block_w").noconvert(),
@@ -326,84 +376,17 @@ void py_module(py::module& m_primary) {
             Performs a layernorm(a+b)*gamma + beta operation.
         )doc");
 
-    // moreh_bmm
-    m_primary.def(
-        "moreh_bmm",
-        &moreh_bmm,
-        py::arg("input").noconvert(),
-        py::arg("mat2").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        "Performs a moreh_bmm operation.
-    )doc");
-
-    // moreh_bmm_backward
-    m_primary.def(
-        "moreh_bmm_backward",
-        &moreh_bmm_backward,
-        py::arg("output_grad").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("mat2").noconvert(),
-        py::arg("input_grad").noconvert() = std::nullopt,
-        py::arg("mat2_grad").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        "Performs a moreh_bmm_backward operation.
-    )doc");
-
-    // moreh_linear
-    m_primary.def(
-        "moreh_linear",
-        &moreh_linear,
-        py::arg("input").noconvert(),
-        py::arg("weight").noconvert(),
-        py::arg("bias").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        "Performs a moreh_linear operation.
-    )doc");
-
-    // moreh_linear_backward
-    m_primary.def(
-        "moreh_linear_backward",
-        &moreh_linear_backward,
-        py::arg("output_grad").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("weight").noconvert(),
-        py::arg("input_grad").noconvert() = std::nullopt,
-        py::arg("weight_grad").noconvert() = std::nullopt,
-        py::arg("bias_grad").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        "Performs a moreh_linear_backward operation.
-    )doc");
-
     // moreh_matmul
     m_primary.def(
         "moreh_matmul",
         &moreh_matmul,
-        py::arg("input_tensor").noconvert(),
-        py::arg("other_tensor").noconvert(),
+        py::arg("input_tensor_a").noconvert(),
+        py::arg("input_tensor_b").noconvert(),
         py::kw_only(),
-        py::arg("output_tensor").noconvert() = std::nullopt,
-        py::arg("transpose_input").noconvert() = false,
-        py::arg("transpose_other").noconvert() = false,
+        py::arg("transpose_a").noconvert() = false,
+        py::arg("transpose_b").noconvert() = false,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a moreh_matmul operation.");
-
-    // moreh_matmul_backward
-    m_primary.def(
-        "moreh_matmul_backward",
-        &moreh_matmul_backward,
-        py::arg("output_grad").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("other").noconvert(),
-        py::arg("input_grad").noconvert() = std::nullopt,
-        py::arg("other_grad").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        "Performs a moreh_matmul_backward operation.
-    )doc");
 
     // moreh_layernorm
     m_primary.def(
@@ -444,22 +427,6 @@ void py_module(py::module& m_primary) {
         "Performs a softmax operation on the last tensor dimension. Returns a reference to the input tensor modified "
         "in place.");
 
-    py::enum_<MorehSoftmaxOpParallelizationStrategy>(m_primary, "MorehSoftmaxOpParallelizationStrategy")
-        .value("NONE", MorehSoftmaxOpParallelizationStrategy::NONE)
-        .value("SMALL_W", MorehSoftmaxOpParallelizationStrategy::SMALL_W)
-        .value("SMALL_H", MorehSoftmaxOpParallelizationStrategy::SMALL_H)
-        .value("LARGE_W", MorehSoftmaxOpParallelizationStrategy::LARGE_W)
-        .value("LARGE_H", MorehSoftmaxOpParallelizationStrategy::LARGE_H)
-        .value("LARGE_C", MorehSoftmaxOpParallelizationStrategy::LARGE_C);
-
-    py::enum_<MorehSoftmaxBackwardOpParallelizationStrategy>(m_primary, "MorehSoftmaxBackwardOpParallelizationStrategy")
-        .value("NONE", MorehSoftmaxBackwardOpParallelizationStrategy::NONE)
-        .value("SMALL_W", MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W)
-        .value("SMALL_H", MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H)
-        .value("LARGE_W", MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_W)
-        .value("LARGE_H", MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_H)
-        .value("LARGE_C", MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_C);
-
     m_primary.def(
         "moreh_softmax",
         &moreh_softmax,
@@ -469,8 +436,11 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a softmax operation. Returns a output tensor.");
 
-    m_primary.def("moreh_softmax", &moreh_softmax,
-        py::arg("input_tensors").noconvert(),
+    m_primary.def(
+        "moreh_softmax_backward",
+        &moreh_softmax_backward,
+        py::arg("output_tensor").noconvert(),
+        py::arg("output_grad_tensor").noconvert(),
         py::arg("dim").noconvert(),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a softmax operation. Returns a output tensor.");

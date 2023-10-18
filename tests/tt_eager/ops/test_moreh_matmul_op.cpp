@@ -16,15 +16,23 @@ using namespace tt;
 using namespace tt_metal;
 using namespace constants;
 
-Tensor diagonal(const Shape &shape, float value) {
-    Tensor tensor = tt::numpy::zeros(shape);
-    auto buffer = owned_buffer::get_as<bfloat16>(tensor);
-    for (int i = 0; i < shape[0] * shape[1]; ++i) {
-        for (int j = 0; j < std::min(shape[2], shape[3]); j++) {
-            buffer[i * shape[2] * shape[3] + j * shape[3] + j] = bfloat16(value);
+inline std::vector<bfloat16> create_identity_matrix(int b, int rows, int cols, int num_ones) {
+    std::vector<bfloat16> vec(b * rows * cols, (float)0);
+    int rows_x_cols = rows * cols;
+    // b = b1 x b2
+    for (int i = 0; i < b; ++i) {
+        for (int j = 0; j < num_ones; j++) {
+            vec.at(i * rows_x_cols + j * cols + j) = bfloat16((float)1);
         }
     }
-    return tensor;
+    return vec;
+}
+
+Tensor get_identity_tensor(const Shape &shape) {
+    std::vector<bfloat16> identity_bf16_vec =
+        create_identity_matrix(shape[0] * shape[1], shape[2], shape[3], std::min(shape[2], shape[3]));
+    auto owned_buffer = owned_buffer::create<bfloat16>(std::move(identity_bf16_vec));
+    return Tensor(OwnedStorage{owned_buffer}, shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
 }
 
 static bool nearly_equal(float a, float b, float epsilon = 1e-5f, float abs_threshold = 1e-5f) {
@@ -154,8 +162,8 @@ int main(int argc, char **argv) {
 
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = tt::numpy::random::random(shapea).to(Layout::TILE).to(device);
-        Tensor b = diagonal(shapeb, 1.0f).to(Layout::TILE).to(device);
-        Tensor out_cpu = tt::operations::primary::moreh_matmul(a, b, std::nullopt, false, static_cast<bool>(transpose_b)).cpu();
+        Tensor b = get_identity_tensor(shapeb).to(Layout::TILE).to(device);
+        Tensor out_cpu = tt::operations::primary::moreh_matmul(a, b, false, static_cast<bool>(transpose_b)).cpu();
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
@@ -194,7 +202,7 @@ int main(int argc, char **argv) {
     if (pass) {
         log_info(LogTest, "Test Passed");
     } else {
-        TT_THROW("Test Failed");
+        log_fatal(LogTest, "Test Failed");
     }
 
     TT_ASSERT(pass);

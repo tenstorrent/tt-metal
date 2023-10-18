@@ -16,10 +16,20 @@ namespace operations {
 
 namespace primary {
 
-using namespace tt_metal;
-
 std::tuple<bool, bool> get_bcast_batch(const Shape &input0_shape, const Shape &input1_shape) {
-    return {(input0_shape[1] < input1_shape[1]), (input0_shape[1] > input1_shape[1])};
+    bool in0_bcast_batch = false;
+    bool in1_bcast_batch = false;
+
+    // TODO: revise check code
+    if (input0_shape[1] > input1_shape[1]) {
+        in1_bcast_batch = true;
+    } else if (input0_shape[1] < input1_shape[1]) {
+        in0_bcast_batch = true;
+    } else {
+        in0_bcast_batch = false;
+        in1_bcast_batch = false;
+    }
+    return {in0_bcast_batch, in1_bcast_batch};
 }
 
 operation::ProgramWithCallbacks moreh_matmul_multi_core(
@@ -31,6 +41,8 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     uint32_t a_start_tile_id,
     uint32_t b_start_tile_id,
     uint32_t output_start_tile_id) {
+    TT_ASSERT(!(transpose_a == true && transpose_b == true));
+
     tt_metal::Program program{};
     const auto &ashape = a.shape(), bshape = b.shape();
 
@@ -112,38 +124,38 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     uint32_t src1_addr = src1_buffer->address();
     uint32_t dst_addr = dst_buffer->address();
 
-    uint32_t src0_cb_index = CB::c_in0;
+    uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(num_input_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
-    uint32_t src1_cb_index = CB::c_in1;
+    uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(num_input_tiles * in1_single_tile_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
-    uint32_t interm0_cb_index = CB::c_intermed0;
+    uint32_t interm0_cb_index = 24;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(in1_single_tile_size, {{interm0_cb_index, in1_data_format}})
             .set_page_size(interm0_cb_index, in1_single_tile_size);
     auto cb_interm0 = tt_metal::CreateCircularBuffer(program, all_cores, interm0_cb_config);
 
-    uint32_t interm1_cb_index = CB::c_intermed1;
+    uint32_t interm1_cb_index = 25;
     tt_metal::CircularBufferConfig interm1_cb_config =
         tt_metal::CircularBufferConfig(in1_single_tile_size, {{interm1_cb_index, in1_data_format}})
             .set_page_size(interm1_cb_index, in1_single_tile_size);
     auto cb_interm1 = tt_metal::CreateCircularBuffer(program, all_cores, interm1_cb_config);
 
-    uint32_t interm2_cb_index = CB::c_intermed2;
+    uint32_t interm2_cb_index = 26;
     tt_metal::CircularBufferConfig interm2_cb_config =
         tt_metal::CircularBufferConfig(in1_single_tile_size, {{interm2_cb_index, in1_data_format}})
             .set_page_size(interm2_cb_index, in1_single_tile_size);
     auto cb_interm2 = tt_metal::CreateCircularBuffer(program, all_cores, interm2_cb_config);
 
-    uint32_t output_cb_index = CB::c_out0;  // output operands start at index 16
+    uint32_t output_cb_index = 16;  // output operands start at index 16
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(
@@ -158,18 +170,18 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
-    auto reader_id = tt_metal::CreateKernel(
+    auto reader_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/kernels/reader_moreh_matmul.cpp",
+        "tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/kernels/reader_matmul_8bank_output_tiles_partitioned.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args});
 
-    auto writer_id = tt_metal::CreateKernel(
+    auto writer_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/kernels/writer_moreh_matmul.cpp",
+        "tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/kernels/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -185,9 +197,9 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
         uint32_t(transpose_b)};  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1
                                  // large loop, so only set Nt for simplicity
 
-    auto eltwise_binary_kernel_group_1_id = tt_metal::CreateKernel(
+    auto eltwise_binary_kernel_group_1_id = tt_metal::CreateComputeKernel(
         program,
-        "tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/kernels/moreh_matmul.cpp",
+        "tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/kernels/matmul.cpp",
         core_group_1,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_1});
 
@@ -201,9 +213,9 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
             uint32_t(transpose_b)};  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1
                                      // large loop, so only set Nt for simplicity
 
-        auto eltwise_binary_kernel_group_2_id = tt_metal::CreateKernel(
+        auto eltwise_binary_kernel_group_2_id = tt_metal::CreateComputeKernel(
             program,
-            "tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/kernels/moreh_matmul.cpp",
+            "tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/kernels/matmul.cpp",
             core_group_2,
             tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_2});
     }
