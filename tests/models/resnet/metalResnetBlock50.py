@@ -16,7 +16,12 @@ from tt_lib.fused_ops.average_pool import run_avg_pool_on_device_wrapper as TtAv
 from tt_lib.fused_ops.max_pool import run_max_pool_on_device_wrapper as TtMaxPool
 from tt_lib.fused_ops.max_pool import compute_max_pool_shape
 from tt_lib.fused_ops.softmax import softmax as TtSoftmax
-from tt_lib.fused_ops.conv import resnet50_first_conv, resnet50_1x1_conv_as_matmul, resnet50_optimized_conv, resnet50_1x1_conv_s2_as_downsample_and_matmul
+from tt_lib.fused_ops.conv import (
+    resnet50_first_conv,
+    resnet50_1x1_conv_as_matmul,
+    resnet50_optimized_conv,
+    resnet50_1x1_conv_s2_as_downsample_and_matmul,
+)
 from models.utility_functions import _nearest_32, profiler
 from tt_lib.fallback_ops import fallback_ops
 
@@ -549,7 +554,7 @@ class Bottleneck(nn.Module):
         sharded=None,
         out_sharded=False,
         act_block_w_equals_input_channels_x_filter_width=False,
-        use_downsample_op_and_mm_for_conv1x1_s2=False
+        use_downsample_op_and_mm_for_conv1x1_s2=False,
     ) -> None:
         super().__init__()
         self.device = device
@@ -719,7 +724,9 @@ class Bottleneck(nn.Module):
         if self.downsample_or_noop is None:
             self.downsample_or_noop = do_nothing_op
         else:
-            if (not use_downsample_op_and_mm_for_conv1x1_s2) and (self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0):
+            if (not use_downsample_op_and_mm_for_conv1x1_s2) and (
+                self.downsample_params[2] != 1 or self.downsample_params[4] != 1 or self.downsample_params[6] != 0
+            ):
                 # this downsample conv requires row major input
                 def downsample_conv_op_wrapper(op):
                     def downsample_conv_op_with_formatting(x):
@@ -1120,15 +1127,15 @@ class ResNet(nn.Module):
                 ]
                 assert stride == 2
                 downsample_op_params = [batch_size, layer_input_shape[1], layer_input_shape[2], stride, stride]
-                #print("Calling ds op and matmul op, input shape - ", layer_input_shape)
+                # print("Calling ds op and matmul op, input shape - ", layer_input_shape)
                 self.downsample_conv_on_tt = resnet50_1x1_conv_s2_as_downsample_and_matmul(
                     downsample_conv_weight.reshape(-1).tolist(),
                     self.downsample_params,
-                    downsample_op_params, # used by downsample op
+                    downsample_op_params,  # used by downsample op
                     self.device,
                     downsample_conv_bias.tolist(),
                     matmul_config,
-                    self.ds_conv_output_memory_config
+                    self.ds_conv_output_memory_config,
                 )
             else:
                 assert (
@@ -1192,7 +1199,7 @@ class ResNet(nn.Module):
                 sharded=sharded,
                 out_sharded=sharded,
                 act_block_w_equals_input_channels_x_filter_width=act_block_w_equals_input_channels_x_filter_width,
-                use_downsample_op_and_mm_for_conv1x1_s2=use_downsample_op_and_mm_for_conv1x1_s2
+                use_downsample_op_and_mm_for_conv1x1_s2=use_downsample_op_and_mm_for_conv1x1_s2,
             )
         )
         self.inplanes = planes * block.expansion
@@ -1317,12 +1324,11 @@ class ResNet(nn.Module):
         x = self.layer4_module3(x)
 
         unpadded_shape = x.shape_without_padding()
-        x = tt_lib.tensor.untilize(x, self.memory_config, use_multicore=True)
-        x = tt_lib.tensor.unpad(
+        x = tt_lib.tensor.untilize_with_unpadding(
             x,
             (0, 0, 0, 0),
             (unpadded_shape[0] - 1, unpadded_shape[1] - 1, unpadded_shape[2] - 1, unpadded_shape[3] - 1),
-            output_mem_config=self.memory_config,
+            self.memory_config,
         )
 
         x = x.reshape(self.batch_size, x.shape()[1], (int)(x.shape()[2] / self.batch_size), x.shape()[3])
