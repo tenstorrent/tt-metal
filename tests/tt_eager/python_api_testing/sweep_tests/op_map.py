@@ -432,6 +432,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_erf,
         "pytorch_op": pytorch_ops.erf,
     },
+    "eltwise-repeat_interleave": {
+        "tt_lib_op": tt_lib_ops.eltwise_repeat_interleave,
+        "pytorch_op": pytorch_ops.repeat_interleave,
+    },
     "eltwise-erfc": {
         "tt_lib_op": tt_lib_ops.eltwise_erfc,
         "pytorch_op": pytorch_ops.erfc,

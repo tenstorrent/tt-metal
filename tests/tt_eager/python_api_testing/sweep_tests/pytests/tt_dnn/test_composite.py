@@ -39,6 +39,7 @@ def custom_compare(*args, **kwargs):
         "logical_not",
         "logical_andi",
         "is_close",
+        "repeat_interleave",
     ]:
         comparison_func = comparison_funcs.comp_equal
     elif function in ["empty"]:
@@ -111,6 +112,7 @@ if is_wormhole_b0():
                 "multigammaln",
                 "polygamma",
                 "nextafter",
+                "repeat_interleave",
             ),
             shapes,
         )
@@ -225,6 +227,13 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
                 "rtol": random.choice([1e-3, 1e-5, 1e-7]),
                 "atol": random.choice([1e-2, 1e-4, 1e-6]),
                 "equal_nan": random.choice([False, True]),
+            }
+        )
+    elif fn in ["repeat_interleave"]:
+        test_args.update(
+            {
+                "repeat": np.random.randint(1, 10),
+                "dim": np.random.randint(2, 3),  # Dim 2
             }
         )
     run_single_pytorch_test(
