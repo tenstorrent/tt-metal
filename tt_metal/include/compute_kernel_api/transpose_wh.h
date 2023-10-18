@@ -49,6 +49,21 @@ ALWI void transpose_wh_init(uint32_t icb)
     #endif
 }
 
+ALWI void transpose_wh_init_short(uint32_t icb)
+{
+    #ifdef ARCH_GRAYSKULL
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, true>() ));
+    #else
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(true, true, icb) ));
+    #endif
+
+    #ifdef ARCH_GRAYSKULL
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, true, false>() ));
+    #else
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::NONE>(true, true)  ));
+    #endif
+}
+
 /**
  * Performs a 32x32 transpose operation *B[w,h] = A[h,w]* on a tile in the CB
  * at a given index and writes the result to the DST register at index
