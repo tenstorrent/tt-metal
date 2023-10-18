@@ -34,15 +34,15 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
 
     tt_metal::Program program = tt_metal::Program();
 
-    // u32 num_tiles = 32;
-    // u32 block_size_tiles = 16;
-    // u32 num_blocks_in_CB = 2;
-    // u32 num_repetitions = 1;
-    u32 num_cores = (u32)test_config.num_cores;
-    u32 num_tiles = (u32)test_config.num_tiles;
-    u32 block_size_tiles = (u32)test_config.block_size_tiles;
-    u32 num_blocks_in_CB = (u32)test_config.num_blocks_in_CB;
-    u32 num_repetitions = (u32)test_config.num_repetitions;
+    // uint32_t num_tiles = 32;
+    // uint32_t block_size_tiles = 16;
+    // uint32_t num_blocks_in_CB = 2;
+    // uint32_t num_repetitions = 1;
+    uint32_t num_cores = (uint32_t)test_config.num_cores;
+    uint32_t num_tiles = (uint32_t)test_config.num_tiles;
+    uint32_t block_size_tiles = (uint32_t)test_config.block_size_tiles;
+    uint32_t num_blocks_in_CB = (uint32_t)test_config.num_blocks_in_CB;
+    uint32_t num_repetitions = (uint32_t)test_config.num_repetitions;
 
     TT_ASSERT(num_cores >= 2 && num_cores <= 12);  // grayskull
     TT_ASSERT(num_tiles % block_size_tiles == 0);
@@ -224,7 +224,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
     log_info(LogTest, "Kernels done.");
 
     log_info(LogTest, "Reading results from device...");
-    std::vector<u32> result_vec;
+    std::vector<uint32_t> result_vec;
     tt_metal::ReadFromBuffer(dst_buffer, result_vec);
 
     ////////////////////////////////////////////////////////////////////////////
