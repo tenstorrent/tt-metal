@@ -20,7 +20,7 @@ env pytest models/experimental/whisper -k whisper_model
 env pytest models/experimental/whisper -k whisper_for_audio_classification
 env pytest models/experimental/whisper -k whisper_for_conditional_generation
 
-env pytest tests/models/stable_diffusion/tests/test_embedding.py
+env pytest models/experimental/stable_diffusion/tests/test_embedding.py
 
 # Bad tests, don't enable: Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301
 # env pytest tests/models/stable_diffusion/tests/test_cross_attn_down_block.py -k test_run_cross_attn_down_block_real_input_inference
