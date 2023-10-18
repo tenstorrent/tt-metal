@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 
 import tt_lib as ttl
+from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
 
 
 # TODO(seunghwan100): Support Nd Tensor.
@@ -70,6 +71,7 @@ TILE_WIDTH = 32
     [2, 2, TILE_HEIGHT + 13, TILE_WIDTH + 13],
     [2, 2, 8 * TILE_HEIGHT + 15, 32 * TILE_WIDTH - 15],
 ))
+@skip_for_wormhole_b0
 def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps,
                          device):
     torch.manual_seed(2023)
@@ -153,6 +155,7 @@ def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps,
     [2, 2, TILE_HEIGHT - 9, TILE_WIDTH - 9],
     [2, 2, TILE_HEIGHT + 13, TILE_WIDTH + 13],
 ))
+@skip_for_wormhole_b0
 def test_moreh_layernorm_with_autoformat(input_shape, normalized_dims,
                                          elementwise_affine, eps, device):
     torch.manual_seed(2023)
