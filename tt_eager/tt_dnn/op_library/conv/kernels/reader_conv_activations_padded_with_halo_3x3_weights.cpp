@@ -103,7 +103,7 @@ void kernel_main() {
 
 
     // DUMMY LOOP TO FILL READER INDICES
-    constexpr uint32_t cb_reader_indices = tt::CB::c_intermed4;
+    constexpr uint32_t cb_reader_indices = tt::CB::c_in4;
     volatile tt_l1_ptr uint32_t* reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
     uint32_t weights_top_left_corner_idx = 0;
@@ -156,7 +156,7 @@ void kernel_main() {
      * - Read conv_act_size_c_bytes / X each time
      * - Update l1_write_addr_act by conv_act_size_c_bytes
      */
-    constexpr uint32_t cb_reader_offsets = tt::CB::c_intermed5;
+    constexpr uint32_t cb_reader_offsets = tt::CB::c_in5;
     volatile tt_l1_ptr uint32_t* reader_offsets_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_offsets));
     uint32_t reader_offset = 0; // Constant offset for each pixel within filter window
     uint32_t reader_offset_idx = 0;

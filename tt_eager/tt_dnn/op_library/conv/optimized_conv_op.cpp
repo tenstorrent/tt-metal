@@ -7,9 +7,8 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/detail/util.hpp"
 #include "tt_metal/common/constants.hpp"
-// #include "test/tt_metal/llrt/test_libs/debug_mailbox.hpp"
-#include "llrt/tt_debug_print_server.hpp"
 
 #include "tt_stl/reflection.hpp"
 
@@ -28,12 +27,11 @@ const uint32_t act_cb                                 = CB::c_in0;
 const uint32_t weight_cb                              = CB::c_in1;
 const uint32_t bias_cb                                = CB::c_in2;
 const uint32_t sharded_act_cb                         = CB::c_in3;
+const uint32_t cb_for_reader_indices                  = CB::c_in4;
+const uint32_t cb_for_reader_offsets                  = CB::c_in5;
 const uint32_t matmul_partials_cb                     = CB::c_intermed0;
 const uint32_t tilize_mode_tilized_act_cb             = CB::c_intermed1;
-const uint32_t untilize_mode_final_matmul_partials_cb = CB::c_intermed2;
-const uint32_t untilize_mode_reblock_cb               = CB::c_intermed3;
-const uint32_t cb_for_reader_indices                  = CB::c_intermed4;
-const uint32_t cb_for_reader_offsets                  = CB::c_intermed5;
+const uint32_t untilize_mode_reblock_cb               = CB::c_intermed2;
 const uint32_t out0_cb                                = CB::c_out0;
 
 pair<uint32_t, uint32_t> compute_opt_conv_output_face_shape(uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w, uint32_t padding_for_32B_alignment=0) {
@@ -69,58 +67,61 @@ tuple<CircularBufferID, CircularBufferID> create_CBs(tt_metal::Program &program,
                                 uint32_t num_output_tiles,
                                 uint32_t num_reblock_cb_tiles,
                                 uint32_t num_writer_output_tiles,
-                                uint32_t num_bytes_for_df,
                                 bool untilize_out,
+                                DataFormat act_df,
+                                DataFormat weight_df,
+                                DataFormat tilized_act_df,
+                                DataFormat out_df,
+                                DataFormat bias_df,
                                 uint32_t bias_ntiles = 0,
                                 bool with_bias = false,
                                 std::optional<uint32_t> output_cb_address = std::nullopt
 ) {
 
-    uint32_t single_tile_size = num_bytes_for_df * 1024;
+    uint32_t act_tile_size = tt_metal::detail::TileSize(act_df);
+    uint32_t weight_tile_size = tt_metal::detail::TileSize(weight_df);
+    uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
+    uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
 
     // Invariants
-    CircularBufferConfig cb_act_config = CircularBufferConfig(num_cb0_tiles * single_tile_size, {{act_cb, tt::DataFormat::Float16_b}})
-		.set_page_size(act_cb, single_tile_size);
+    CircularBufferConfig cb_act_config = CircularBufferConfig(num_cb0_tiles * act_tile_size, {{act_cb, act_df}})
+		.set_page_size(act_cb, act_tile_size);
     auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
 
     auto cb_sharded_act = 0;
     if (input.memory_config().is_sharded()) {
+        uint32_t num_bytes_for_df = datum_size(act_df);
         auto shard_shape = input.shard_spec().value().shard_shape;
-        CircularBufferConfig cb_sharded_act_config = CircularBufferConfig(shard_shape[0] * shard_shape[1] * num_bytes_for_df, {{sharded_act_cb, tt::DataFormat::Float16_b}})
+        CircularBufferConfig cb_sharded_act_config = CircularBufferConfig(shard_shape[0] * shard_shape[1] * num_bytes_for_df, {{sharded_act_cb, act_df}})
 		    .set_page_size(sharded_act_cb, shard_shape[1] * num_bytes_for_df);
         // incoming data is the input cb instead of raw l1/dram addr
         cb_sharded_act_config.set_globally_allocated_address(input.buffer()->address());
         cb_sharded_act = tt_metal::CreateCircularBuffer(program, core, cb_sharded_act_config);
     }
 
-    CircularBufferConfig cb_weight_config = CircularBufferConfig(num_cb1_tiles * single_tile_size, {{weight_cb, tt::DataFormat::Float16_b}})
-		.set_page_size(weight_cb, single_tile_size);
+    CircularBufferConfig cb_weight_config = CircularBufferConfig(num_cb1_tiles * weight_tile_size, {{weight_cb, weight_df}})
+		.set_page_size(weight_cb, weight_tile_size);
     auto cb_weight = tt_metal::CreateCircularBuffer(program, core, cb_weight_config);
 
     // Used for placing tilized activations
-    CircularBufferConfig cb_src0_tilized_config = CircularBufferConfig(num_cb0_tilized_tiles * single_tile_size, {{tilize_mode_tilized_act_cb, tt::DataFormat::Float16_b}})
-		.set_page_size(tilize_mode_tilized_act_cb, single_tile_size);
+    CircularBufferConfig cb_src0_tilized_config = CircularBufferConfig(num_cb0_tilized_tiles * tilized_act_tile_size, {{tilize_mode_tilized_act_cb, tilized_act_df}})
+		.set_page_size(tilize_mode_tilized_act_cb, tilized_act_tile_size);
     auto cb_src0_tilized = tt_metal::CreateCircularBuffer(program, core, cb_src0_tilized_config);
 
     CircularBufferID cb_output = 0;
     if (untilize_out) {
-        CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{matmul_partials_cb, tt::DataFormat::Float16_b}})
-		    .set_page_size(matmul_partials_cb, single_tile_size);
+        CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * out_tile_size, {{matmul_partials_cb, out_df}})
+		    .set_page_size(matmul_partials_cb, out_tile_size);
         auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
-
-        // Shares same address space as matmul partials
-        CircularBufferConfig cb_final_matmul_partials_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{untilize_mode_final_matmul_partials_cb, tt::DataFormat::Float16_b}})
-		    .set_page_size(untilize_mode_final_matmul_partials_cb, single_tile_size);
-        auto cb_final_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_final_matmul_partials_config);
 
         // Supposed to be a small CB only responsible for reorganizing
         // the output blocks to fill the whole "per core output block width"
-        CircularBufferConfig cb_reblock_config = CircularBufferConfig(num_reblock_cb_tiles * single_tile_size, {{untilize_mode_reblock_cb, tt::DataFormat::Float16_b}})
-		    .set_page_size(untilize_mode_reblock_cb, single_tile_size);
+        CircularBufferConfig cb_reblock_config = CircularBufferConfig(num_reblock_cb_tiles * out_tile_size, {{untilize_mode_reblock_cb, out_df}})
+		    .set_page_size(untilize_mode_reblock_cb, out_tile_size);
         auto cb_reblock = tt_metal::CreateCircularBuffer(program, core, cb_reblock_config);
 
-        CircularBufferConfig cb_output_config = CircularBufferConfig(num_writer_output_tiles * single_tile_size, {{out0_cb, tt::DataFormat::Float16_b}})
-		    .set_page_size(out0_cb, single_tile_size);
+        CircularBufferConfig cb_output_config = CircularBufferConfig(num_writer_output_tiles * out_tile_size, {{out0_cb, out_df}})
+		    .set_page_size(out0_cb, out_tile_size);
         if (output_cb_address.has_value()) {
             cb_output_config = cb_output_config.set_globally_allocated_address(output_cb_address.value());
         }
@@ -128,12 +129,12 @@ tuple<CircularBufferID, CircularBufferID> create_CBs(tt_metal::Program &program,
     } else {
         CoreRangeSet cores(std::set<CoreRange>({core}));
         std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {
-            {out0_cb, tt::DataFormat::Float16_b},
-            {matmul_partials_cb, tt::DataFormat::Float16_b}
+            {out0_cb, out_df},
+            {matmul_partials_cb, out_df}
         };
-        CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * single_tile_size, cb_output_data_format_spec)
-		    .set_page_size(out0_cb, single_tile_size)
-            .set_page_size(matmul_partials_cb, single_tile_size);
+        CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * out_tile_size, cb_output_data_format_spec)
+		    .set_page_size(out0_cb, out_tile_size)
+            .set_page_size(matmul_partials_cb, out_tile_size);
         if (output_cb_address.has_value()) {
             cb_matmul_partials_config = cb_matmul_partials_config.set_globally_allocated_address(output_cb_address.value());
         }
@@ -141,9 +142,10 @@ tuple<CircularBufferID, CircularBufferID> create_CBs(tt_metal::Program &program,
     }
 
     if (with_bias) {
+        uint32_t bias_tile_size = tt_metal::detail::TileSize(bias_df);
         // bias input
-        uint32_t bias_pagesize = single_tile_size;
-        CircularBufferConfig cb_bias_config = CircularBufferConfig(bias_ntiles * bias_pagesize, {{bias_cb, tt::DataFormat::Float16_b}})
+        uint32_t bias_pagesize = bias_tile_size;
+        CircularBufferConfig cb_bias_config = CircularBufferConfig(bias_ntiles * bias_pagesize, {{bias_cb, bias_df}})
 		    .set_page_size(bias_cb, bias_pagesize);
         auto cb_bias = tt_metal::CreateCircularBuffer(program, core, cb_bias_config);
 
@@ -161,7 +163,6 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     tt_metal::Device *device = a.device();
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_ASSERT(output_channels <= b.shape()[3], "Invalid weight shape. Incorrect weight tensor.");
-    uint32_t num_bytes_of_df = 2; // 2 bytes for bfloat16
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     uint32_t weight_block_w_ntiles = block_config.weight_block_w_ntiles;
@@ -206,7 +207,7 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
         TT_ASSERT(bias.value().buffer() != nullptr);
         auto bias_shape_without_padding = bias.value().shape().without_padding();
         TT_ASSERT(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
-        TT_ASSERT(bias_shape_without_padding[1] == 1 && bias_shape_without_padding[2] == 1, "Bias should have H == W == 1");
+        // TT_ASSERT(bias_shape_without_padding[1] == 1 && bias_shape_without_padding[2] == 1, "Bias should have H == W == 1");
         TT_ASSERT(bias_shape_without_padding[3] == output_channels, "Bias should have output_channels");
     }
 
@@ -272,26 +273,27 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     uint32_t num_blocks_output_w = (uint32_t) ceil((double) output_channels_padded_to_tile_width / (double) weight_block_w_datums);
     uint32_t last_block_width_datums = (output_channels_padded_to_tile_width % weight_block_w_datums == 0) ? weight_block_w_datums : (output_channels_padded_to_tile_width % weight_block_w_datums);
     assert(last_block_width_datums % TILE_WIDTH == 0);
-    uint32_t output_row_size_bytes = output_channels_padded_to_tile_width * num_bytes_of_df;
-    uint32_t last_block_row_size_bytes = last_block_width_datums * num_bytes_of_df;
+
     // sanity check
     assert(num_blocks_output_w == num_blocks_weight_w);
     tt_metal::Program program = tt_metal::Program();
     //CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
     //CoreRange core = {.start={0, 0}, .end={0, 0}};
-    //tt_start_debug_print_server();
 
-    uint32_t single_tile_size = num_bytes_of_df * TILE_HEIGHT * TILE_WIDTH;
+    DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    DataFormat weight_df = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    DataFormat bias_df = has_bias ? tt_metal::datatype_to_dataformat_converter(bias.value().dtype()) : DataFormat::Float16_b;
+    DataFormat tilized_act_df = out_df;
+
     tt_metal::Buffer *src0_dram_buffer = a.buffer();
     tt_metal::Buffer *src1_dram_buffer = b.buffer();
-    TT_ASSERT(src1_dram_buffer->size() % single_tile_size == 0, "Buffer size of tensor b must be divisible by single_tile_size (aka divisible by sizeof(df) * 1024)");
 
     tt_metal::Buffer *dst_dram_buffer = output.buffer();
     TT_ASSERT(dst_dram_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // out
     uint32_t out_dram_addr = dst_dram_buffer->address();
-    uint32_t out_row_size = weight_matrix_width * num_bytes_of_df;
     uint32_t out_subblock_num_tiles = out_subblock_h_ntiles * out_subblock_w_ntiles;
     TT_ASSERT(out_subblock_num_tiles <= 8, "Need to ensure that matmul partials fit in dst");
 
@@ -318,13 +320,11 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     // bias
     Buffer *bias_buffer = nullptr;
     uint32_t bias_dram_addr = 0;
-    uint32_t bias_ntiles = 0, bias_tile_nbytes = 0, bias_log2_of_pagesize = 0;
+    uint32_t bias_ntiles = 0;
     if (has_bias) {
         bias_buffer = bias.value().buffer();
         bias_dram_addr = bias_buffer->address();
         bias_ntiles = bias.value().shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
-        bias_tile_nbytes = single_tile_size;
-        bias_log2_of_pagesize = (uint32_t) std::log2((float) bias_tile_nbytes);
     }
 
     //uint32_t conv_output_size_h = ((conv_act_size_h - weight_size_h + (2 * pad_h)) / stride_h) + 1;
@@ -344,15 +344,9 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
 
     uint32_t src_dram_act_buffer_size_bytes = src0_dram_buffer->size();
     uint32_t src_dram_weight_buffer_size_bytes = src1_dram_buffer->size();
-    uint32_t dst_l1_act_buffer_size_bytes = act_block_h_ntiles * act_block_w_ntiles * single_tile_size;
-    uint32_t dst_l1_weight_buffer_size_bytes = weight_block_h_ntiles * weight_block_w_ntiles * single_tile_size;
+    uint32_t dst_l1_act_buffer_size_bytes = act_block_h_ntiles * act_block_w_ntiles * tt::tt_metal::detail::TileSize(act_df);
+    uint32_t dst_l1_weight_buffer_size_bytes = weight_block_h_ntiles * weight_block_w_ntiles * tt::tt_metal::detail::TileSize(weight_df);
 
-    // more args for writer
-    uint32_t out_block_row_size_bytes = weight_block_w_ntiles*TILE_WIDTH*num_bytes_of_df;
-    uint32_t out_row_size_bytes = output_channels_padded_to_tile_width*num_bytes_of_df;
-
-    // output data format
-    const auto out_df = datatype_to_dataformat_converter(a.dtype());
 
     // For debug
     {
@@ -390,7 +384,6 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
         log_debug(tt::LogOp, "bias_dram_addr: {}", bias_dram_addr);
         log_debug(tt::LogOp, "bias_ntiles: {}", bias_ntiles);
         log_debug(tt::LogOp, "out_dram_addr: {}", out_dram_addr);
-        log_debug(tt::LogOp, "out_row_size: {}", out_row_size);
         log_debug(tt::LogOp, "out_subblock_h_ntiles: {}", out_subblock_h_ntiles);
         log_debug(tt::LogOp, "out_subblock_w_ntiles: {}", out_subblock_w_ntiles);
         log_debug(tt::LogOp, "out_subblock_num_tiles: {}", out_subblock_num_tiles);
@@ -563,8 +556,12 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
             writer_output_block_num_tiles, // math output cb
             weight_block_w_ntiles, // reblock cb
             writer_output_block_num_tiles, // writer output cb, double bufferred
-            num_bytes_of_df,
             untilize_out,
+            act_df,
+            weight_df,
+            tilized_act_df,
+            out_df,
+            bias_df,
             bias_ntiles_per_core,
             has_bias,
             output_cb_address);
@@ -617,7 +614,6 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
         writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
     }
     TT_ASSERT(!(conv_act_size_c & (conv_act_size_c - 1))); // channel depth power of 2 is supported only
-    TT_ASSERT(!(out_row_size_bytes & (out_row_size_bytes - 1))); // output channels power of 2 is supported only
 
     std::vector<uint32_t> reader_rt_args;
     std::vector<uint32_t> reader_compile_time_args;
@@ -626,8 +622,8 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
 
     reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
             (uint32_t) stride_h, (uint32_t) stride_w, (uint32_t) conv_act_size_w, (uint32_t) conv_output_size_w,
-            (uint32_t) conv_act_size_c * num_bytes_of_df, (uint32_t) std::log2(conv_act_size_c * num_bytes_of_df), extra_padding_for_32B_alignment,
-            (uint32_t) (conv_act_size_c/act_block_w_datums), act_block_w_datums * num_bytes_of_df};
+            (uint32_t) conv_act_size_c * a.element_size(), (uint32_t) std::log2(conv_act_size_c * a.element_size()), extra_padding_for_32B_alignment,
+            (uint32_t) (conv_act_size_c/act_block_w_datums), act_block_w_datums * a.element_size()};
 
     // define for bias
     std::map<string, string> writer_defines;
@@ -655,8 +651,6 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
         out0_cb,
         weight_cb,
         bias_cb,
-        bias_log2_of_pagesize,
-        bias_tile_nbytes,
         (uint32_t) (bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0))};
 
     vector<uint32_t> compute_kernel_args = {
@@ -709,7 +703,6 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
             .defines = writer_defines});
     }
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(a.dtype());
     auto reader_id = CreateKernel(
         program,
         reader_kernel,
@@ -1144,6 +1137,7 @@ Tensor optimized_conv(const Tensor& a,
             const OptimizedConvBlockConfig& block_config,
             uint32_t extra_padding_for_32B_alignment,
             std::optional<MemoryConfig> output_mem_config,
+            std::optional<DataType> output_dtype,
             std::optional<std::array<std::uint32_t, 4>> input_tensor_shape
 ) {
     TT_ASSERT(!untilize_out, "Optimized conv only supports tiled out");
@@ -1161,7 +1155,7 @@ Tensor optimized_conv(const Tensor& a,
         TT_ASSERT((output_mem_config.value().is_sharded() || output_mem_config.value() == a.memory_config()));
     }
     return operation::run_without_autoformat(
-        OptimizedConv(conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config.value_or(a.memory_config()), ashape
+        OptimizedConv(conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config.value_or(a.memory_config()), output_dtype.value_or(a.dtype()), ashape
         ),
         {a, b},
         {bias}).at(0);
@@ -1172,6 +1166,9 @@ void OptimizedConv::validate(const std::vector<Tensor>& input_tensors, const std
     const auto& input_tensor_b = input_tensors.at(1);
     // TODO: ...
     TT_ASSERT(!input_tensor_b.memory_config().is_sharded());
+    if (this->untilize_out) {
+        TT_ASSERT(this->output_dtype == DataType::BFLOAT16);
+    }
     if (this->output_mem_config.is_sharded()) {
         TT_ASSERT(!this->untilize_out);
         uint32_t out_block_h_ntiles = block_config.out_block_h_ntiles;
@@ -1233,7 +1230,7 @@ std::vector<Tensor> OptimizedConv::create_output_tensors(const std::vector<Tenso
 
             std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, output_shape[-1]};
             auto shard_spec = ShardSpec{.shard_grid=shard_grid, .shard_shape=shard_shape, .shard_orientation=ShardOrientation::ROW_MAJOR};
-            return {create_sharded_device_tensor(output_shape, input_tensor.dtype(), output_layout, input_tensor.device(), this->output_mem_config, shard_spec)};
+            return {create_sharded_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), this->output_mem_config, shard_spec)};
         } else {
             auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_opt_conv_activation_as_mm_shape(input_tensor.shape(), conv_params, this->block_config.out_block_h_ntiles, extra_padding_for_32B_alignment);
             uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
@@ -1246,11 +1243,11 @@ std::vector<Tensor> OptimizedConv::create_output_tensors(const std::vector<Tenso
             CoreRangeSet shard_grid = num_cores_to_corerange_set(total_active_num_cores, this->parallelization_config.grid_size, true);
             std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, this->parallelization_config.per_core_weight_matrix_width_ntiles * TILE_WIDTH};
             auto shard_spec = ShardSpec{.shard_grid=shard_grid, .shard_shape=shard_shape, .shard_orientation=ShardOrientation::COL_MAJOR};
-            return {create_sharded_device_tensor(output_shape, input_tensor.dtype(), output_layout, input_tensor.device(), this->output_mem_config, shard_spec)};
+            return {create_sharded_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), this->output_mem_config, shard_spec)};
         }
 
     }
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), output_layout, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, output_layout, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<Tensor>& input_tensors,
@@ -1274,6 +1271,9 @@ tt::stl::reflection::Attributes OptimizedConv::attributes() const {
         {"has_bias", this->has_bias},
         {"fuse_relu", this->fuse_relu},
         {"math_fidelity", this->math_fidelity},
+        {"extra_padding_for_32B_alignment", this->extra_padding_for_32B_alignment},
+        {"output_mem_config", this->output_mem_config},
+        {"output_dtype", this->output_dtype},
     };
 }
 

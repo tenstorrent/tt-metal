@@ -12,7 +12,7 @@ namespace tt_metal {
 
 
     template <typename T>
-    Tensor to_weight_special_padding_tile_layout(const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w) {
+    Tensor to_weight_special_padding_tile_layout(const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype) {
         auto w_shape = conv_weight_tensor.shape();
         auto input_buffer = owned_buffer::get_as<T>(conv_weight_tensor);
         uint32_t in1_block_h_datums = in1_block_h * constants::TILE_HEIGHT;
@@ -39,13 +39,24 @@ namespace tt_metal {
                 }
             }
         }
-        auto rm_tensor = Tensor(OwnedStorage{output_buffer}, output_shape, conv_weight_tensor.dtype(), Layout::ROW_MAJOR);
+        if constexpr (std::is_same<T, float>::value) {
+            if (output_dtype == DataType::BFLOAT8_B) {
+                auto output_float_data = output_buffer.get();
+                auto output_packed_data = pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+                auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
+                return rm_tensor.to(Layout::TILE);
+            }
+        } else {
+            TT_ASSERT(output_dtype != DataType::BFLOAT8_B);
+        }
+        auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
         return rm_tensor.to(Layout::TILE);
     }
 
 
     template <typename T>
-    Tensor to_weight_tile_layout(const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w) {
+    Tensor to_weight_tile_layout(const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype) {
         auto w_shape = conv_weight_tensor.shape();
         auto input_buffer = owned_buffer::get_as<T>(conv_weight_tensor);
         auto weight_matrix_cols = w_shape[0];
@@ -67,38 +78,63 @@ namespace tt_metal {
                 for(auto c = 0; c < w_shape[1]; c++) {
                     for(auto k = 0; k < w_shape[0]; k++) {
                         auto matrix_idx = k + c * weight_matrix_cols + s * w_shape[1] * weight_matrix_cols + r * w_shape[3] * w_shape[1] * weight_matrix_cols;
-			auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
-			output_buffer[matrix_idx] = input_buffer[idx];
+                        auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
+                        output_buffer[matrix_idx] = input_buffer[idx];
                     }
                 }
             }
         }
-        auto rm_tensor = Tensor(OwnedStorage{output_buffer}, output_shape, conv_weight_tensor.dtype(), Layout::ROW_MAJOR);
+        if constexpr (std::is_same<T, float>::value) {
+            if (output_dtype == DataType::BFLOAT8_B) {
+                auto output_float_data = output_buffer.get();
+                auto output_packed_data = pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false);
+                auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+                auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_uint32_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
+                return rm_tensor.to(Layout::TILE);
+            }
+        } else {
+            TT_ASSERT(output_dtype != DataType::BFLOAT8_B);
+        }
+        auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(output_buffer)}), output_shape, output_dtype, Layout::ROW_MAJOR);
         return rm_tensor.to(Layout::TILE);
     }
 
     // Converts convolution weights to tilized 2d matrix layout.
     // Returns a new tensor with layout=Tile
-    Tensor convert_conv_weight_tensor_to_tiled_layout(Tensor conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w) {
+    Tensor convert_conv_weight_tensor_to_tiled_layout(Tensor conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, std::optional<DataType> output_dtype) {
         TT_ASSERT(conv_weight_tensor.layout() == Layout::ROW_MAJOR && "Convolution weights should be in row major layout for conversion to tilized layout.");
-        const static std::map<DataType, std::function<Tensor(const Tensor &, uint32_t in1_block_h, uint32_t in1_block_w)>> to_w_tile_layout_map = {
+        const static std::map<DataType, std::function<Tensor(const Tensor &, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype)>> to_w_tile_layout_map = {
             {DataType::BFLOAT16, &to_weight_tile_layout<bfloat16>},
             {DataType::FLOAT32, &to_weight_tile_layout<float>},
-            {DataType::UINT32, &to_weight_tile_layout<uint32_t>}
+            {DataType::UINT32, &to_weight_tile_layout<uint32_t>},
         };
-        return to_w_tile_layout_map.at(conv_weight_tensor.dtype())(conv_weight_tensor, in1_block_h, in1_block_w);
+        if (output_dtype.has_value()) {
+            if (output_dtype == DataType::BFLOAT8_B) {
+                TT_ASSERT(conv_weight_tensor.dtype() == DataType::FLOAT32);
+            } else {
+                TT_ASSERT(conv_weight_tensor.dtype() == conv_weight_tensor.dtype());
+            }
+        }
+        return to_w_tile_layout_map.at(conv_weight_tensor.dtype())(conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.dtype()));
     }
 
     // Converts convolution weights to tilized 2d matrix layout.
     // Returns a new tensor with layout=Tile
-    Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(Tensor conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w) {
+    Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(Tensor conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, std::optional<DataType> output_dtype) {
         TT_ASSERT(conv_weight_tensor.layout() == Layout::ROW_MAJOR && "Convolution weights should be in row major layout for conversion to tilized layout.");
-        const static std::map<DataType, std::function<Tensor(const Tensor &, uint32_t in1_block_h, uint32_t in1_block_w)>> to_w_tile_layout_map = {
+        const static std::map<DataType, std::function<Tensor(const Tensor &, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype)>> to_w_tile_layout_map = {
             {DataType::BFLOAT16, &to_weight_special_padding_tile_layout<bfloat16>},
             {DataType::FLOAT32, &to_weight_special_padding_tile_layout<float>},
             {DataType::UINT32, &to_weight_special_padding_tile_layout<uint32_t>}
         };
-        return to_w_tile_layout_map.at(conv_weight_tensor.dtype())(conv_weight_tensor, in1_block_h, in1_block_w);
+        if (output_dtype.has_value()) {
+            if (output_dtype == DataType::BFLOAT8_B) {
+                TT_ASSERT(conv_weight_tensor.dtype() == DataType::FLOAT32);
+            } else {
+                TT_ASSERT(conv_weight_tensor.dtype() == conv_weight_tensor.dtype());
+            }
+        }
+        return to_w_tile_layout_map.at(conv_weight_tensor.dtype())(conv_weight_tensor, in1_block_h, in1_block_w, output_dtype.value_or(conv_weight_tensor.dtype()));
     }
 
 const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume) {

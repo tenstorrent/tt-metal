@@ -87,22 +87,23 @@ void kernel_main() {
     const uint32_t tile_nbytes = get_tile_size(cb_id_out0);
     const DataFormat out_df = get_dataformat(cb_id_out0);
 
-    constexpr uint32_t tile_size_pow2_exponent = 11;    // == 2^11 = 2048 = 2 * 32 * 32 (assuming dtype = 2 bytes)
-    const InterleavedPow2AddrGen<out_in_dram> s = {
+    const InterleavedAddrGenFast<out_in_dram> s = {
         .bank_base_address = out_addr,
-        .log_base_2_of_page_size = tile_size_pow2_exponent
+        .page_size = tile_nbytes,
+        .data_format = out_df
     };
 
     // read in bias if enabled (done only once for all batches)
     #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t bias_log2_of_pagesize = get_compile_time_arg_val(4);
-    constexpr uint32_t bias_pagesize = get_compile_time_arg_val(5);
-    constexpr uint32_t bias_in_dram = get_compile_time_arg_val(6) == 1;
+    constexpr uint32_t bias_in_dram = get_compile_time_arg_val(4) == 1;
 
-    const InterleavedPow2AddrGenFast<bias_in_dram> s_bias = {
+    const uint32_t bias_pagesize = get_tile_size(bias_cb_id);
+    const DataFormat bias_df = get_dataformat(bias_cb_id);
+    const InterleavedAddrGenFast<bias_in_dram> s_bias = {
         .bank_base_address = bias_addr,
-        .log_base_2_of_page_size = bias_log2_of_pagesize
+        .page_size = bias_pagesize,
+        .data_format = bias_df
     };
 
     bool load_bias = true;
@@ -131,9 +132,11 @@ void kernel_main() {
     // DPRINT << "out_width_num_tiles - " << out_width_num_tiles << ENDL();
 
     const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
-    const InterleavedPow2AddrGen<true> s_weight = {
+    const DataFormat weight_df = get_dataformat(cb_id_weight);
+    const InterleavedAddrGenFast<true> s_weight = {
         .bank_base_address = weight_addr_dram_base,
-        .log_base_2_of_page_size = tile_size_pow2_exponent
+        .page_size = weight_tile_nbytes,
+        .data_format = weight_df
     };
 
     // const InterleavedAddrGenFast<true> s = {
@@ -172,9 +175,8 @@ void kernel_main() {
                     uint32_t weight_tile_id = weight_row_start_tile_id;
                     // loop over weight block tiles along w
                     for(uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
-                        uint64_t weight_tile_noc_addr = get_noc_addr(weight_tile_id, s_weight);
                         //DPRINT << "weight_tile_id=" << weight_tile_id << ENDL();
-                        noc_async_read(weight_tile_noc_addr, weight_write_l1_addr, weight_tile_nbytes);
+                        s_weight.noc_async_read_tile(weight_tile_id, weight_write_l1_addr);
                         weight_write_l1_addr += weight_tile_nbytes;
                         weights_block_size_bytes += weight_tile_nbytes;
                         weight_tile_id += 1;
@@ -221,7 +223,7 @@ void kernel_main() {
                 uint32_t bias_start_address = bias_l1_addr;
                 uint32_t bias_block_size_bytes = 0;
                 for (uint32_t bias_tile = bias_tile_offset; bias_tile < bias_tile_offset + bias_ntiles; ++ bias_tile) {
-                    s_bias.noc_async_read_page(bias_tile, bias_l1_addr);
+                    s_bias.noc_async_read_tile(bias_tile, bias_l1_addr);
                     bias_l1_addr += bias_pagesize;
                     bias_block_size_bytes += bias_pagesize;
                 }
