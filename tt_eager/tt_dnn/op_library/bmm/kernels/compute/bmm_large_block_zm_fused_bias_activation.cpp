@@ -79,7 +79,8 @@ void MAIN {
 
                     if (enable_reload) {
                         // Reconfigure input
-                        copy_tile_to_dst_init_short_with_dt(mm_partials_cb_id);
+                        copy_tile_to_dst_init_short();
+                        unpack_reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
                         cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
                         tile_regs_acquire();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
@@ -87,7 +88,8 @@ void MAIN {
                         }
                         cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
                         // Reconfigure srcA back
-                        mm_init_short_with_dt(mm_partials_cb_id);
+                        mm_init_short();
+                        unpack_reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
                     } else {
                         // just acquire
                         tile_regs_acquire();
@@ -161,7 +163,7 @@ void MAIN {
         #endif
         add_bcast_rows_init_short();
         // reconfigure unpacker df for src B
-        unpack_reconfig_data_format(mm_partials_cb_id, bias_cb_id);
+        unpack_reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
         cb_wait_front(bias_cb_id, in1_per_core_w);
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
             int in1_index_subblock_offset = 0;
@@ -208,7 +210,7 @@ void MAIN {
             // reconfigure init for matmul
             mm_init_short();
             // reconfigure unpacker df for src B
-            unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
+            unpack_reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_cb_id, in0_cb_id);
         }
         #endif
     }

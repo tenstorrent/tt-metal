@@ -57,4 +57,11 @@ ALWI void pack_reconfig_data_format(const uint32_t new_operand) {
     // NOTE: For wormhole_b0, packer data format reconfig functions don;t yet exist. So skip.
 }
 
+ALWI void pack_reconfig_data_format(const uint32_t old_operand, const uint32_t new_operand) {
+    #ifdef ARCH_GRAYSKULL
+        PACK(( llk_pack_reconfig_data_format(old_operand, new_operand) ));
+    #endif
+    // NOTE: For wormhole_b0, packer data format reconfig functions don;t yet exist. So skip.
+}
+
 }

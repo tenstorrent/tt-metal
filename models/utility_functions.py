@@ -215,7 +215,7 @@ def torch_to_tt_tensor(py_tensor, device):
 ### Padding / Unpadding ###
 def pad_by_zero(
     x: torch.Tensor,
-    device,
+    device=None,
     tt_memory_config=tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED),
     tt_dtype=tt_lib.tensor.DataType.BFLOAT16,
 ):
@@ -236,7 +236,9 @@ def pad_by_zero(
             ),
         )
         x = tt_lib.tensor.Tensor(x, tt_dtype)
-        x = x.to(tt_lib.tensor.Layout.TILE).to(device)
+        x = x.to(tt_lib.tensor.Layout.TILE)
+        if device is not None:
+            x = x.to(device, tt_memory_config)
 
     else:
         x = torch2tt_tensor(

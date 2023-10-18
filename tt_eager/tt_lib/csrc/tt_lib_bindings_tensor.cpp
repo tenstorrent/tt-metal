@@ -276,7 +276,7 @@ void TensorModule(py::module &m_tensor) {
                  py::arg().noconvert(), py::arg().noconvert(), py::arg("bias").noconvert() = std::nullopt,
                  py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(),
                  py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert(), py::arg().noconvert() = 0,
-                 py::arg("output_mem_config").noconvert() = std::nullopt, py::arg("input_tensor_shape").noconvert() = std::nullopt, R"doc(
+                 py::arg("output_mem_config").noconvert() = std::nullopt, py::arg("output_dtype").noconvert() = std::nullopt, py::arg("input_tensor_shape").noconvert() = std::nullopt, R"doc(
         Perform a conv ``A x B`` with two tensors
         This op tilizes tensor A and untilizes the output
 
@@ -452,9 +452,10 @@ void TensorModule(py::module &m_tensor) {
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
 
     )doc");
-    m_tensor.def("convert_conv_weight_tensor_to_tiled_layout", &convert_conv_weight_tensor_to_tiled_layout, R"doc(
-       Converts convolution weights to 2d matrix tiled layout on host
-       Returns a new tensor with the converted layout.
+    m_tensor.def("convert_conv_weight_tensor_to_tiled_layout", &convert_conv_weight_tensor_to_tiled_layout,
+        py::arg("conv_weight_tensor").noconvert(), py::arg("in1_block_h"), py::arg("in1_block_w"), py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
+        Converts convolution weights to 2d matrix tiled layout on host
+        Returns a new tensor with the converted layout.
 
         +----------+----------------------+-----------+-------------+----------+
         | Argument | Description          | Data type | Valid range | Required |
@@ -463,7 +464,8 @@ void TensorModule(py::module &m_tensor) {
         +----------+----------------------+-----------+-------------+----------+
     )doc");
 
-    m_tensor.def("convert_conv_weight_tensor_to_special_padding_tiled_layout", &convert_conv_weight_tensor_to_special_padding_tiled_layout, R"doc(
+    m_tensor.def("convert_conv_weight_tensor_to_special_padding_tiled_layout", &convert_conv_weight_tensor_to_special_padding_tiled_layout,
+        py::arg("conv_weight_tensor").noconvert(), py::arg("in1_block_h"), py::arg("in1_block_w"), py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
        Converts convolution weights to 2d matrix tiled layout on host with special block height padding
        Returns a new tensor with the converted layout.
 
