@@ -497,6 +497,9 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
                 conv_bias_pyt.reshape(-1).tolist(),
                 matmul_config,
                 output_mem_config=output_mem_config,
+                weights_dtype=tt_lib.tensor.DataType.BFLOAT16,
+                output_dtype=tt_lib.tensor.DataType.BFLOAT16,
+                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4
             )
         else:
             assert (conv_as_mm_padded_act_height, K) in hardcoded_conv_blocking_and_parallelization_config[N]
@@ -535,6 +538,9 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
                 per_core_weight_matrix_w_ntiles,
                 conv_bias_pyt.reshape(-1).tolist(),
                 output_mem_config=output_mem_config,
+                weights_dtype=tt_lib.tensor.DataType.BFLOAT16,
+                output_dtype=tt_lib.tensor.DataType.BFLOAT16,
+                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4
             )
 
         conv_input_on_device = tt_lib.tensor.Tensor(

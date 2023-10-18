@@ -76,7 +76,7 @@ def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
 
     return conv_
 
-def resnet50_1x1_conv_as_matmul(weight: List[Union[int, float]], conv_params, device, bias, matmul_config, fuse_relu=False, output_mem_config=None):
+def resnet50_1x1_conv_as_matmul(weight: List[Union[int, float]], conv_params, device, bias, matmul_config, fuse_relu=False, output_mem_config=None, weights_dtype=None, output_dtype=None, math_fidelity=None):
     """
     Returns a function that performs a Convolution. Bias is fused with matmul.
     """
@@ -129,15 +129,15 @@ def resnet50_1x1_conv_as_matmul(weight: List[Union[int, float]], conv_params, de
         # conv1x1 stride 1 padding 0, use matmul op
         output = operations.primary.matmul(activation, weight_on_device, bias=bias_on_device, program_config=matmul_program_config,
                                             output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
-                                            output_dtype=activation.dtype(),
-                                            math_fidelity=tensor.MathFidelity.HiFi4)
+                                            output_dtype=output_dtype,
+                                            math_fidelity=math_fidelity)
 
         return output
 
     return conv_
 
 def resnet50_optimized_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, out_block_shape_h,
-                            grid_size, per_core_out_matrix_h_ntiles, per_core_weight_matrix_w_ntiles, bias, fuse_relu=False, output_mem_config=None, input_tensor_shape=None):
+                            grid_size, per_core_out_matrix_h_ntiles, per_core_weight_matrix_w_ntiles, bias, fuse_relu=False, output_mem_config=None, input_tensor_shape=None, weights_dtype=None, output_dtype=None, math_fidelity=None):
     """
     Returns a function that performs a Convolution. Bias is fused with conv.
     """
@@ -197,7 +197,7 @@ def resnet50_optimized_conv(weight: List[Union[int, float]], conv_params, device
 
     def conv_(activation):
         #assert(activation.layout() == tensor.Layout.ROW_MAJOR)
-        output = tensor.optimized_conv(activation, weight_on_device, bias_on_device, [R,S,U,V,P_H,P_W], K, False, True, fuse_relu, tensor.MathFidelity.HiFi4,
+        output = tensor.optimized_conv(activation, weight_on_device, bias_on_device, [R,S,U,V,P_H,P_W], K, False, True, fuse_relu, math_fidelity,
                                        tensor.OptimizedConvParallelizationConfig(grid_size=grid_size, per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles, per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles),
                                        tensor.OptimizedConvBlockConfig(act_block_h_ntiles=act_block_h,
                                                 act_block_w_ntiles=act_block_w,
@@ -212,7 +212,7 @@ def resnet50_optimized_conv(weight: List[Union[int, float]], conv_params, device
 
     return conv_
 
-def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, out_block_shape_h, grid_size, per_core_out_matrix_h_ntiles, bias, padded_filter_window_width, fuse_relu=False, out_mem_config=None):
+def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, act_block_shape_hw, weight_block_shape_hw, outsubblock_shape_hw, out_block_shape_h, grid_size, per_core_out_matrix_h_ntiles, bias, padded_filter_window_width, fuse_relu=False, out_mem_config=None, weights_dtype=None, output_dtype=None, math_fidelity=None):
     """
     Returns a function that performs a Convolution. Bias is fused with conv.
     """
@@ -269,7 +269,7 @@ def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, ac
     P_W = 0
     def conv_(activation):
         #assert(activation.layout() == tensor.Layout.ROW_MAJOR)
-        output_plus_bias = tensor.optimized_conv(activation, weight_on_device, bias_on_device, [R,padded_filter_window_width,U,V,P_H,P_W], K, False, True, fuse_relu, tensor.MathFidelity.HiFi4,
+        output_plus_bias = tensor.optimized_conv(activation, weight_on_device, bias_on_device, [R,padded_filter_window_width,U,V,P_H,P_W], K, False, True, fuse_relu, math_fidelity,
                                        tensor.OptimizedConvParallelizationConfig(grid_size=grid_size, per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles, per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles),
                                        tensor.OptimizedConvBlockConfig(act_block_h_ntiles=act_block_h,
                                                 act_block_w_ntiles=act_block_w,
@@ -284,7 +284,7 @@ def resnet50_first_conv(weight: List[Union[int, float]], conv_params, device, ac
 
     return conv_
 
-def resnet50_1x1_conv_s2_as_downsample_and_matmul(weight: List[Union[int, float]], conv_params, downsample_params, device, bias, matmul_config, out_sharded_mem_config):
+def resnet50_1x1_conv_s2_as_downsample_and_matmul(weight: List[Union[int, float]], conv_params, downsample_params, device, bias, matmul_config, out_sharded_mem_config, weights_dtype, output_dtype, math_fidelity):
     """
     Returns a function that performs a Convolution. Bias is fused with matmul.
     """
@@ -336,8 +336,8 @@ def resnet50_1x1_conv_s2_as_downsample_and_matmul(weight: List[Union[int, float]
         output = tensor.downsample (activation, downsample_params)
         output = operations.primary.matmul(output, weight_on_device, bias=bias_on_device, program_config=matmul_program_config,
                                             output_mem_config=out_sharded_mem_config,
-                                            output_dtype=activation.dtype(),
-                                            math_fidelity=tensor.MathFidelity.HiFi4)
+                                            output_dtype=output_dtype,
+                                            math_fidelity=math_fidelity)
 
         return output
 
