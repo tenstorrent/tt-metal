@@ -178,7 +178,7 @@ TILE_WIDTH = 32
         [2, 2, TILE_HEIGHT + 13, TILE_WIDTH + 13],
         [2, 2, 8 * TILE_HEIGHT + 15, 32 * TILE_WIDTH - 15],
         # Test large algorithm.
-        [2, 2, TILE_HEIGHT + 13, 250 * TILE_WIDTH + 17],
+        [2, 2, TILE_HEIGHT + 13, 1000 * TILE_WIDTH + 17],
     ])
 @skip_for_wormhole_b0
 def test_moreh_layernorm_backward(input_shape, normalized_dims,
