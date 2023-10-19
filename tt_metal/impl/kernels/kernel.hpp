@@ -11,6 +11,7 @@
 #include <optional>
 #include <variant>
 #include <type_traits>
+#include <memory>
 
 #include "build_kernels_for_riscv/build_kernel_options.hpp"
 #include "common/base_types.hpp"
@@ -70,8 +71,11 @@ class Kernel {
 
     void set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
 
+    int get_watcher_kernel_id() { return watcher_kernel_id_; }
+
    protected:
     const uintptr_t id_;
+    const int watcher_kernel_id_;
     std::string kernel_path_file_name_;                 // Full kernel path and file name
     CoreRangeSet core_range_set_;
     std::string binary_path_;

@@ -120,7 +120,9 @@ KernelGroup::KernelGroup(const Program& program,
         // Use brisc's noc if brisc specifies a noc
         this->launch_msg.enable_brisc = true;
         this->launch_msg.brisc_noc_id = std::get<DataMovementConfig>(program.get_kernel(brisc_id.value())->config()).noc;
+        this->launch_msg.brisc_watcher_kernel_id = program.get_kernel(brisc_id.value())->get_watcher_kernel_id();
     } else {
+        this->launch_msg.brisc_watcher_kernel_id = 0;
         this->launch_msg.enable_brisc = false;
     }
 
@@ -131,11 +133,19 @@ KernelGroup::KernelGroup(const Program& program,
         this->launch_msg.enable_ncrisc = true;
         this->launch_msg.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
         this->launch_msg.ncrisc_kernel_size16 = kernel->get_binary_size16();
+        this->launch_msg.ncrisc_watcher_kernel_id = program.get_kernel(ncrisc_id.value())->get_watcher_kernel_id();
     } else {
+        this->launch_msg.ncrisc_watcher_kernel_id = 0;
         this->launch_msg.enable_ncrisc = false;
     }
 
-    this->launch_msg.enable_triscs = trisc_id ? true : false;
+    if (trisc_id) {
+        this->launch_msg.enable_triscs = true;
+        this->launch_msg.triscs_watcher_kernel_id = program.get_kernel(trisc_id.value())->get_watcher_kernel_id();
+    } else {
+        this->launch_msg.triscs_watcher_kernel_id = 0;
+        this->launch_msg.enable_triscs = false;
+    }
 
     this->launch_msg.run = RUN_MSG_GO;
 }

@@ -215,7 +215,7 @@ debug.  It:
 - logs "waypoints" during execution on each core to help determine where a
   hang occured
 - watches L1 address 0 to look for memory corruption
-- sanitizes all transactions and reports invalid X,Y and addresses.  Further,
+- sanitizes all NOC transactions and reports invalid X,Y and addresses.  Further,
   any core with an invalid transaction will soft hang at the point of that
   transaction
 
@@ -225,7 +225,13 @@ It is enabled with:
 - optionally ``export TT_METAL_WATCHER_APPEND=1`` to append to the end of the file instead (useful for tests which construct/destruct devices in a loop)
 - optionally ``export TT_METAL_WATCHER_DUMP_ALL=1`` to dump, eg, CB sync registers.  Note that reading these registesrs while a kernel is running can induce a hang so only set this if needed and use a time interval large enough to ensure the kernel is hung when the watcher polls
 
-The output file contains a legend to help with deciphering the results.  The contents contain the last waypoint of each of the 5 riscvs encountered as a string of up to 4 characters.  These way points can be inserted into kernel/firmware code with the following, eg:
+When enabled, the watcher both dumps status updates to a log file and stops
+execution if a fatal error (e.g., bad NOC address) is encountered.  The log
+file contains one line for each core with a cryptic status.  The top of the
+log file includes a legend to help with deciphering the results.  One datum
+is the last "waypoint" each of the 5 riscvs encountered as a string of up to 4
+characters.  These way points can be inserted into kernel/firmware code with
+the following, eg:
 
 - ``DEBUG_STATUS('I');``
 - ``DEBUG_STATUS('D', 'E', 'A', 'D');``
@@ -245,20 +251,18 @@ Examples:
 
 .. code-block::
 
-    Core (x=1,y=1):     CWFW,NARW,R,R,R noc1:ncrisc{(02,08) 0x0065de40, 64}  rmb:R cb[1](rcv 1!=ack 0)
+    Core (x=1,y=1):    CWFW,CRBW,R,R,R rmsg:D0G|BNT smsg:GGGG k_ids:4|3|5
 
 - The hang above originated on core (1,1) in physical coords (ie, the top left
   core)
-- BRISC last hit way point CWFW (CB Wait Front Wait), NCRISC hit NARW (Noc
-  Async Read Wait) and each Trisc is in the Run state (running a kernel).
+- BRISC last hit way point CWFW (CB Wait Front Wait), NCRISC hit CRBW (NOC
+  CB Reserve Back Wait) and each Trisc is in the Run state (running a kernel).
   Look in the source (dataflow_api.h primarily) to decode the obscure
-  names,search for DEBUG_STATUS
-- There was an error on noc1 on NCRISC. Based on the waypoint, it was *reading*
-  64 bytes from core (2,8) from an illegal L1 address of 0x65de40
-- The printed bad noc state includes an X,Y location and since this was a
-  read, it is clear that the bad address was the read address.  The address
-  being written to would be local and so wouldn't include an X,Y if it was at
-  fault
-- The run mailbox says brisc was running
-- Circular buffer #1 receive and acknowledge counts mismatch which matches
-  that BRISC is stopped in CB Wait Front.  The ``cb`` info only comes with ``TT_METAL_WATCHER_DUMP_ALL``
+  names, search for DEBUG_STATUS
+- The run message (rmsg) says the kernel was Device dispatched (D), brisc is
+  using NOC 0, the host run state is Go (G) and each of Brisc, NCrisc and
+  Trisc kernels are running (capital BNT.  lowercase signfies not kernel
+  running).
+- The slave messages (smsg) are all Go
+- The kernel ids that are running are 4 on Brisc, 3 on NCrisc and 5 on Trisc,
+  look futher down the log file to see the names and paths to those kernels.

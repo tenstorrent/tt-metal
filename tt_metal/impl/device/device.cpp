@@ -165,9 +165,9 @@ void Device::initialize_and_launch_firmware() {
     ZoneScoped;
 
     launch_msg_t launch_msg = {
-        .brisc_kernel_id = 0,
-        .ncrisc_kernel_id = 0,
-        .trisc_kernel_id = 0,
+        .brisc_watcher_kernel_id = 0,
+        .ncrisc_watcher_kernel_id = 0,
+        .triscs_watcher_kernel_id = 0,
         .ncrisc_kernel_size16 = 0,
         .mode = DISPATCH_MODE_HOST,
         .brisc_noc_id = 0,
