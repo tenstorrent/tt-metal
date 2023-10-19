@@ -3,11 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 import torch
 import torch.nn as nn
+import copy
 from typing import Optional, Tuple
 import tt_lib
 from tt_lib import fallback_ops
 from models.mistral.tt.mistral_configuration import TtModelArgs
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, torch_to_tt_tensor
 from models.helper_funcs import Linear as TtLinear
 
 
@@ -100,7 +101,7 @@ class TtAttention(nn.Module):
         xv = tt_to_torch_tensor(xv).to(torch.float32)
 
         freqs_cis = tt_to_torch_tensor(freqs_cis).squeeze(0).squeeze(0)
-        xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
+        xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis, device=self.device)
 
         # The cache is a rotating buffer
         positions = tt_to_torch_tensor(positions).squeeze(0).squeeze(0).squeeze(0)
@@ -146,29 +147,53 @@ class TtAttention(nn.Module):
         return self.wo(output)
 
 
-def _reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+def _reshape_for_broadcast(freqs_cis: torch.Tensor,x_shape,x_ndim) -> torch.Tensor:
     """
     freqs_cis: complex - (seq_len, head_dim / 2)
     x: complex - (bsz, seq_len, head_dim / 2)
     """
-    ndim = x.ndim
+    ndim = x_ndim
     assert 1 < ndim
-    assert freqs_cis.shape == (x.shape[1], x.shape[-1]), (
+    assert freqs_cis.shape == (x_shape[1], x_shape[-1]), (
         freqs_cis.shape,
-        (x.shape[1], x.shape[-1]),
+        (x.shape[1], x_shape[-1]),
     )
-    shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
+    shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x_shape)]
     return freqs_cis.view(*shape)
 
 
-def apply_rotary_emb(
+def old_apply_rotary_emb(
     xq: torch.Tensor,
     xk: torch.Tensor,
     freqs_cis: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
     xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    freqs_cis = _reshape_for_broadcast(freqs_cis, xq_)
+    freqs_cis = _reshape_for_broadcast(freqs_cis, xq_.shape,xq_.ndim)
     xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
     xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
     return xq_out.type_as(xq), xk_out.type_as(xk)
+
+def apply_rotary_emb(
+    t_xq: torch.Tensor,
+    t_xk: torch.Tensor,
+    freqs_cis: torch.Tensor,
+    device
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    xq_shape = list(copy.deepcopy(t_xq.shape))
+    xq_shape[-1] = xq_shape[-1]//2
+    freqs_cis = _reshape_for_broadcast(freqs_cis, xq_shape,4)
+    freqs_cis = torch_to_tt_tensor_rm(freqs_cis,device)
+
+    freqs_cis = tt_lib.tensor.concat([freqs_cis,freqs_cis],-1)
+    xq = torch_to_tt_tensor_rm(t_xq,device)
+    xk = torch_to_tt_tensor_rm(t_xk,device)
+
+    BCH = tt_lib.tensor.BcastOpDim.H
+    BCMUL = tt_lib.tensor.BcastOpMath.MUL
+    xq_out = tt_lib.tensor.bcast(xq,freqs_cis,BCMUL,BCH)
+    xk_out = tt_lib.tensor.bcast(xk,freqs_cis,BCMUL,BCH)
+
+    xq, xk = tt_to_torch_tensor(xq_out), tt_to_torch_tensor(xk_out)
+
+    return xq.type_as(xq), xk.type_as(xk)
