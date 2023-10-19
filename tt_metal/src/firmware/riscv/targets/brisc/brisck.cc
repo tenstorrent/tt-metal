@@ -40,9 +40,6 @@ uint8_t l1_bank_to_noc_x[NUM_L1_BANKS];
 uint8_t l1_bank_to_noc_y[NUM_L1_BANKS];
 uint32_t l1_bank_to_noc_xy[NUM_L1_BANKS];
 
-extern uint64_t dispatch_addr;
-extern uint8_t kernel_noc_id_var;
-
 void kernel_launch() {
 
     firmware_kernel_common_init((void tt_l1_ptr *)MEM_BRISC_INIT_LOCAL_L1_BASE);
