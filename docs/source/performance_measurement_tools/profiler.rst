@@ -182,8 +182,7 @@ covered by ``ttl.profiler``.
 Post-processing ops profiler
 ----------------------------
 
-1. Follow the tt-metal :ref:`Getting Started<Getting Started>` and
-   :ref:`Getting Started for Devs<Getting started for devs>` guides and make sure ``PYTHONPATH``
+1. Follow the tt-metal :ref:`Getting Started<Getting Started>` guide and README and make sure ``PYTHONPATH``
    and other tt-metal environment variables are set. Activate the python environment as suggested by the guides.
 
 2. Run ops profiler script on default ops' logs folder ``$TT_METAL_HOME/tt_metal/tools/profiler/logs/ops/`` with:
@@ -239,8 +238,7 @@ Sample generated csv for a run on core 0,0:
 Post-processing device profiler
 -------------------------------
 
-1. Follow the tt-metal :ref:`Getting Started<Getting Started>` and
-   :ref:`Getting Started for Devs<Getting started for devs>` guides and make sure ``PYTHONPATH``
+1. Follow the tt-metal :ref:`Getting Started<Getting Started>` guide and README and make sure ``PYTHONPATH``
    and other tt-metal environment variables are set. Activate the python environment as suggested by the guides.
 
 2. Run plotter webapp with:
