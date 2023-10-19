@@ -10,31 +10,41 @@ The full example program is in
 ``tt_metal/programming_examples/matmul/matmul_single_core.cpp``
 
 
-Main function
+Host Code
 ----------------
 - Create Device
 - Set input and output vector variables, using the user-defined parameters (M, N, K, B)
-- Call matmul_single_core() program and retrieve output results
+- Call matmul_single_core() program and retrieve output results (details in next section)
 - Validate the device compuation results vs. golden results on cpu
 - Close Device
-
     .. code-block:: cpp
 
         /* Create source data */
-        constexpr uint32_t M = 640;
-        constexpr uint32_t N = 640;
-        constexpr uint32_t K = 640;
-        constexpr uint32_t B = 1;
+        constexpr uint32_t M = 640;  // user-defined
+        constexpr uint32_t N = 640;  // user-defined
+        constexpr uint32_t K = 640;  // user-defined
+        constexpr uint32_t B = 1;  // user-defined
+        uint32_t Mt = M / TILE_HEIGHT;
+        uint32_t Kt = K / TILE_WIDTH;
+        uint32_t Nt = N / TILE_WIDTH;
+        constexpr uint32_t single_tile_size = 2 * 1024;
+        uint32_t dram_buffer_A_size = single_tile_size * Mt * Kt; // num_tiles of FP16_B
+        uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt; // num_tiles of FP16_B
+        uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B
 
-        /* input vectors with row-major config */
-        std::vector<uint32_t> src0_vec = create_random_vector2d_of_bfloat16(
-            M, K, 1, std::chrono::system_clock::now().time_since_epoch().count());
-        std::vector<uint32_t> src1_vec = create_random_vector2d_of_bfloat16(
-            K, N, 1, std::chrono::system_clock::now().time_since_epoch().count());
+        /* input vectors */std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
+            dram_buffer_A_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
+        std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(
+            dram_buffer_B_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
+
+        /* Calling the MatMul host program. Read in result into a host vector */
+        std::vector<uint32_t> tilized_src0_vec = pack_bfloat16_vec_into_uint32_vec(tilize(unpack_uint32_vec_into_bfloat16_vec(src0_vec), M, K));
+        std::vector<uint32_t> tilized_src1_vec = pack_bfloat16_vec_into_uint32_vec(tilize(unpack_uint32_vec_into_bfloat16_vec(src1_vec), K, N));
 
         /* Calling the MatMul host program. Read in result into a host vector */
         vector<uint32_t> result_vec;
-        matmul_single_core(src0_vec, src1_vec, result_vec, false, M, N, K, B, device);
+        matmul_single_core(tilized_src0_vec, tilized_src1_vec, result_vec, false, M, N, K, B, device);
+
         CloseDevice(device);
 
 Keeping all code details inside matmul_single_core(), allowing for calling consecutive functions in the main function
@@ -51,19 +61,24 @@ matmul_single_core function details
 Create DRAM buffers & Circular buffers
 --------------------------------------
 
-In terms of DRAM buffers, We just need two source buffers and one destination buffer.
+In terms of DRAM buffers, We need two source buffers and one destination buffer.
 Writing data from input vectors to source buffers
-
     .. code-block:: cpp
+
+        // MN = MK*KN
+        uint32_t Mt = M / TILE_HEIGHT;
+        uint32_t Kt = K / TILE_WIDTH;
+        uint32_t Nt = N / TILE_WIDTH;
 
         DataFormat cb_data_format = DataFormat::Float16_b;
         uint32_t single_tile_size = detail::TileSize(cb_data_format);
         MathFidelity math_fidelity = MathFidelity::HiFi4;
-        uint32_t single_datum_size = sizeof(std::uint32_t);
+        //uint32_t single_tile_size = detail::TileSize(cb_data_format);
+        uint32_t single_tile_size = 2 * 1024;
 
-        uint32_t dram_buffer_A_size = single_datum_size * M * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        uint32_t dram_buffer_B_size = single_datum_size * N * K; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        uint32_t dram_buffer_C_size = single_datum_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+        uint32_t dram_buffer_A_size = single_tile_size * Mt * Kt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+        uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+        uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         Buffer src0_dram_buffer = CreateBuffer(device, dram_buffer_A_size, dram_buffer_A_size, BufferType::DRAM);
         Buffer src1_dram_buffer = CreateBuffer(device, dram_buffer_B_size, dram_buffer_B_size, BufferType::DRAM);
@@ -79,7 +94,6 @@ Writing data from input vectors to source buffers
 We need to declare three circular buffers to enable data transfer
 between the reader, compute, and writer engines.
 Input tiles count is = 2 because it's single tile process, and double-buffer
-
     .. code-block:: cpp
 
         uint32_t src0_cb_index = 0;
@@ -103,7 +117,6 @@ Input tiles count is = 2 because it's single tile process, and double-buffer
 
 Compile-time kernels arguments
 ------------------------------
-
     .. code-block:: cpp
 
         bool src0_is_dram = src0_dram_buffer.buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -112,6 +125,7 @@ Compile-time kernels arguments
 
         bool dst_is_dram = dst_dram_buffer.buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
         std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
+
         vector<uint32_t> compute_args = {
             B, // B
             Mt, // Mt
@@ -125,7 +139,6 @@ parameters here will suffice.
 
 Compute kernel declaration and compile-time defines
 ---------------------------------------------------
-
     .. code-block:: cpp
 
         auto reader_id = tt_metal::CreateDataMovementKernel(
@@ -147,11 +160,9 @@ Compute kernel declaration and compile-time defines
             tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args}
         );
 
-We will declare what kind of compute kernel we're using.
 
-Extra runtime arguments and program launch
+Runtime arguments and program launch
 -----------------------------------------
-Runtime arguments:
     .. code-block:: cpp
 
         tt_metal::SetRuntimeArgs(
@@ -166,7 +177,6 @@ Runtime arguments:
 
 
 Launch program & read in output buffer result into the host vector.
-
     .. code-block:: cpp
 
         LaunchProgram(device, program);
