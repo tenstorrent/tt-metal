@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import pytest
 import torch
 import torch.nn.functional as F
@@ -42,71 +41,6 @@ def torch_layernorm_backward(input,
         beta_grad = beta.grad
 
     return input.grad, gamma_grad, beta_grad
-
-
-# TODO(seunghwan): Support non lastdim case.
-def layernorm_backward_impl(input,
-                            output_grad,
-                            normalized_dims=(3, ),
-                            gamma=None,
-                            beta=None,
-                            eps=1e-5):
-    mean = input.mean(dim=-1, keepdim=True)
-    var = ((input - mean)**2).mean(dim=-1, keepdim=True)
-    rstd = (var + eps).sqrt()
-
-    y = (input - mean) / rstd
-    dy = None
-    if gamma is not None:
-        dy = output_grad * gamma
-    else:
-        dy = output_grad
-
-    normalized_shape = output_grad.shape[-len(normalized_dims):]
-    normalized_numel = math.prod(normalized_shape)
-
-    a = 1.0 / (normalized_numel * rstd)
-    b = normalized_numel * dy - dy.sum(dim=-1, keepdim=True)
-    c = y * (dy * y).sum(dim=-1, keepdim=True)
-    input_grad = a * (b - c)
-
-    gamma_grad, beta_grad = None, None
-    if gamma is not None:
-        gamma_grad = (y * output_grad).sum(dim=(0, 1, 2))
-    if beta is not None:
-        beta_grad = output_grad.sum(dim=(0, 1, 2))
-
-    return input_grad, gamma_grad, beta_grad
-
-
-# You can check with the following code to see if this is the right way.
-# python tests/tt_eager/python_api_testing/unit_testing/test_moreh_layernorm_backward.py
-if __name__ == "__main__":
-    torch.manual_seed(2023)
-    x_shape = [2, 2, 2, 3]
-    gamma_beta_shape = [1, 1, 1, x_shape[-1]]
-    eps = 1e-5
-    x = torch.randint(-9, 10, x_shape, dtype=torch.float32)
-    dy = torch.rand(x_shape, dtype=torch.float32) * 2 - 1.05
-    gamma = torch.rand(gamma_beta_shape, dtype=torch.float32) * 2 - 1.05
-    beta = torch.rand(gamma_beta_shape, dtype=torch.float32) * 2 - 1.05
-    # gamma, beta = None, None
-    dx1, dg1, db1 = torch_layernorm_backward(x.clone(),
-                                             dy.clone(),
-                                             gamma=gamma,
-                                             beta=beta,
-                                             eps=eps)
-    dx2, dg2, db2 = layernorm_backward_impl(x.clone(),
-                                            dy.clone(),
-                                            gamma=gamma,
-                                            beta=beta,
-                                            eps=eps)
-    print(torch.allclose(dx2, dx1, rtol=0.1, atol=0.1))
-    print('=============================================')
-    print(torch.allclose(dg2, dg1, rtol=0.1, atol=0.1))
-    print('=============================================')
-    print(torch.allclose(db2, db1, rtol=0.1, atol=0.1))
-    print('=============================================')
 
 
 def make_tensors(input_shape, normalized_dims, elementwise_affine, eps, device,
