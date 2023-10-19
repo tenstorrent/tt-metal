@@ -56,6 +56,23 @@ def gen_rand(size, low=0, high=100):
     return torch.Tensor(size=size).uniform_(low, high)
 
 
+def gen_rand_with_pad(size, low=0, high=100):
+    TILE_WIDTH = 32
+    TILE_HEIGHT = 32
+
+    input_tensor = torch.Tensor(size=size).uniform_(low, high)
+
+    height, width = input_tensor.size(0), input_tensor.size(1)
+
+    pad_height = (TILE_HEIGHT - (height % TILE_HEIGHT)) % TILE_HEIGHT
+    pad_width = (TILE_WIDTH - (width % TILE_WIDTH)) % TILE_WIDTH
+
+    # print(pad_height, pad_width)
+    # Pad the tensor
+    padded_tensor = torch.nn.functional.pad(input_tensor, (0, pad_width, 0, pad_height))
+    return padded_tensor
+
+
 def gen_bin(size, probabilityones=0.5):
     element_count = 1
     for i in size:

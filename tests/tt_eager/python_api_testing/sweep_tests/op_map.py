@@ -841,10 +841,6 @@ op_map = {
         "tt_lib_op": tt_lib_ops.conv,
         "pytorch_op": pytorch_ops.conv,
     },
-    "repeat_interleave": {
-        "tt_lib_op": tt_lib_ops.repeat_interleave,
-        "pytorch_op": pytorch_ops.repeat_interleave,
-    },
     "activation_glu": {
         "tt_lib_op": tt_lib_ops.activation_glu,
         "pytorch_op": pytorch_ops.activation_glu,
