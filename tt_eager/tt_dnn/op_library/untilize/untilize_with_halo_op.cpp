@@ -191,6 +191,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
                             .set_globally_allocated_address(output.buffer()->address());
     auto out_cb = CreateCircularBuffer(program, all_cores, out_cb_config);
 
+    // CB for pad val buffer (stick sized)
+    uint32_t pad_cb_id = CB::c_in1;
+    uint32_t pad_cb_pagesize = in_stick_nbytes;
+    uint32_t pad_cb_npages = 1;
+    auto pad_cb_config = CircularBufferConfig(pad_cb_pagesize * pad_cb_npages, {{pad_cb_id, cb_df}})
+                            .set_page_size(pad_cb_id, pad_cb_pagesize);
+    auto pad_cb = CreateCircularBuffer(program, all_cores, pad_cb_config);
+
     /** reader
      */
 
@@ -211,7 +219,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
      */
     std::vector<uint32_t> writer_ct_args = {
         (std::uint32_t) untilize_out_cb_id,
-        (std::uint32_t) out_cb_id
+        (std::uint32_t) out_cb_id,
+        (std::uint32_t) pad_cb_id,
+        (std::uint32_t) pad_val,
+        (std::uint32_t) in_c    // stick len
     };
     KernelID writer_kernel_id = CreateDataMovementKernel(
         program,
@@ -235,17 +246,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
         all_cores,
         ComputeConfig{
             .compile_args = compute_args});
-
-    // const buffer with pad value (-INF)
-    uint32_t const_buffer_size = input_shape[3];
-    auto const_buffer = owned_buffer::create(std::vector<bfloat16>(const_buffer_size, bfloat16(uint16_t(pad_val))));
-    const Tensor const_tensor = Tensor(OwnedStorage{const_buffer},
-                                       Shape({1, 1, 1, const_buffer_size}),
-                                       DataType::BFLOAT16,
-                                       Layout::ROW_MAJOR)
-                                    .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED,
-                                                             .buffer_type = BufferType::L1});
-    auto const_tensor_addr = const_tensor.buffer()->address();
 
     // 1D distribution of blocks across all cores
     uint32_t ncores_full = ncores;
@@ -306,7 +306,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
         0,  // partial_top_image_skip
         0,  // full_image_skip
         0,  // initial_pad_nsticks             // 45
-        const_tensor_addr,
+        0,  // UNUSED
     };
 
     uint32_t writer_noc = 0;
