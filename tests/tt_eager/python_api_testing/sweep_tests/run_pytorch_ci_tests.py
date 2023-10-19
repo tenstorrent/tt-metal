@@ -72,7 +72,6 @@ def run_single_pytorch_test(
         input_shapes,
         datagen_funcs,
         comparison_func,
-        device.id(),
         test_args,
         device=device,
         plot_func=plot_func,
