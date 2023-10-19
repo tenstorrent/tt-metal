@@ -27,14 +27,12 @@ def get_test_fieldnames(test_args=[]):
         "pass/fail",
     ]
 
-# TODO: Deprecate pcie_slot arg after run_pytorch_test is uplifted to pytest and device fixture
 def run_tt_lib_test(
     tt_lib_op,
     pytorch_op,
     input_shapes,
     data_gen_funcs,
     output_comparison_func,
-    device_id,
     test_args,
     device=None,
     plot_func=None,
@@ -48,7 +46,7 @@ def run_tt_lib_test(
         tensor_inputs.append(tensor_input)
 
     tt_lib_out = tt_lib_op(
-        *tensor_inputs, device_id=device_id, device=device, **test_args
+        *tensor_inputs, device=device, **test_args
     )
     pytorch_out = pytorch_op(*tensor_inputs, **test_args)
 
@@ -195,7 +193,7 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
         method = shape_dict.get("method", "default")
         num_samples = shape_dict.get("num-samples", "all")
 
-        # Helper method. Generates shaeps and argument. Used in various methods.
+        # Helper method. Generates shapes and arguments. Used in various methods.
         def _gen_shapes_and_args(start_shape, end_shape, interval, shape_transformator):
             num_dims = len(start_shape)
 

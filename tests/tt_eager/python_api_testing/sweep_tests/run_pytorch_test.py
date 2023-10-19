@@ -248,7 +248,6 @@ def run_pytorch_test(args):
                         input_shapes,
                         datagen_funcs,
                         comparison_func,
-                        device_id,
                         generated_test_args,
                         device,
                     )
