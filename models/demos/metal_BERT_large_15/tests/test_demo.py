@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.demos.metal_BERT_large_15.demo.demo import test_demo as demo
+from models.demos.metal_BERT_large_15.demo.demo import test_demo as demo_json
+from models.demos.metal_BERT_large_15.demo.demo import test_demo_squadv2 as demo_squadv2
 import pytest
 from loguru import logger
 
@@ -29,10 +30,20 @@ def test_demo(
         7: "statocyst,",
     }
     NUM_RUNS = 1000
-    measurements, answers = demo(input_path, NUM_RUNS, model_location_generator, device, use_program_cache)
+    measurements, answers = demo_json(input_path, NUM_RUNS, model_location_generator, device, use_program_cache)
     logger.info(measurements)
 
     logger.info(answers)
 
     for key, value in expected_answers.items():
         assert value == answers[key]
+
+def test_demo_squadv2(
+    model_location_generator,
+    device,
+    use_program_cache):
+    loop_count = 100
+    evals = demo_squadv2(model_location_generator, device, use_program_cache, loop_count)
+
+    assert evals['exact'] > 80
+    assert evals['f1'] > 88

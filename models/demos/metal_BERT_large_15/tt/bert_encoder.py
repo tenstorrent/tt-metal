@@ -134,7 +134,7 @@ class TtBertEncoder(torch.nn.Module):
         self, activation: tt_lib.tensor.Tensor, attention_mask: Optional[tt_lib.tensor.Tensor] = None
     ) -> tt_lib.tensor.Tensor:
         activation_shape = activation.shape()
-        assert activation_shape == [activation_shape[0], 1, 384, 1024]
+        assert activation_shape == [activation_shape[0], 1, 384, 1024], activation.shape()
 
         # MHA - OP1 - OP10 ------------------------------->
         mha_res = self.mha(activation, attention_mask)
