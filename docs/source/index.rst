@@ -33,7 +33,6 @@ Welcome to TT-Metal documentation!
 .. toctree::
    :caption: Developer Notes
 
-   dev_onboarding/get_started
    dev_onboarding/sfpu_operators
 
 .. toctree::

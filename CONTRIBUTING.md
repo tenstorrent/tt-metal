@@ -1,9 +1,14 @@
 <!-- toc -->
 
+Table of Contents
+=================
+
    * [Contributing to tt-metal](#contributing-to-tt-metal)
    * [Machine setup](#machine-setup)
       * [Hugepages setup](#hugepages-setup)
    * [Developing tt-metal](#developing-tt-metal)
+      * [Setting up Git](#setting-up-git)
+      * [Setting logger level](#setting-logger-level)
       * [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
       * [Cleaning the dev environment with make nuke](#cleaning-the-dev-environment-with-make-nuke)
    * [Running tests on tt-metal](#running-tests-on-tt-metal)
@@ -77,6 +82,27 @@ set up for users.
 Please refer to the [README](README.md) for source installation and environment
 setup instructions, then please read the the [developer's
 page](docs/source/dev_onboarding/get_started.rst).
+
+### Setting up Git
+
+We use `#` as a special character to denote issue numbers in our commit
+messages. Please change your comment character in your Git to not conflict with
+this:
+
+```
+git config core.commentchar ">"
+```
+
+### Setting logger level
+
+In order to get debug level log messages, set the environment variable
+`TT_METAL_LOGGER_LEVEL=Debug`.
+
+For example,
+
+```
+TT_METAL_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
+```
 
 ### Building and viewing the documentation locally
 
@@ -265,7 +291,8 @@ If you are using a machine with bare metal machine specs, please use
 
 ### Resetting an accelerator board
 
-If a Tenstorrent chip seems to hang, you may try a software reset.
+If a Tenstorrent chip seems to hang and/or is producing unexpected behaviour,
+you may try a software reset of the board.
 
 For Grayskull: `tt-smi -tr all`
 
