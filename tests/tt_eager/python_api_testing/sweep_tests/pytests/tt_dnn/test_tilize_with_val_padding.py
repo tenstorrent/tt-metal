@@ -19,20 +19,13 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, gene
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 import tt_lib as ttl
 
-from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
-
-
 params = [
     pytest.param([[5, 5, 50, 50]], tilize_with_val_padding_args)
-    for tilize_with_val_padding_args in generation_funcs.gen_tilize_with_val_padding_args(
-        [[5, 5, 50, 50]]
-    )
+    for tilize_with_val_padding_args in generation_funcs.gen_tilize_with_val_padding_args([[5, 5, 50, 50]])
 ]
 params += [
     pytest.param([[5, 5, 64, 96]], tilize_with_val_padding_args)
-    for tilize_with_val_padding_args in generation_funcs.gen_tilize_with_val_padding_args(
-        [[5, 5, 64, 96]]
-    )
+    for tilize_with_val_padding_args in generation_funcs.gen_tilize_with_val_padding_args([[5, 5, 64, 96]])
 ]
 params += [
     pytest.param(
@@ -40,8 +33,12 @@ params += [
         {
             "dtype": [ttl.tensor.DataType.BFLOAT16],
             "layout": [ttl.tensor.Layout.ROW_MAJOR],
-            "input_mem_config": [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
-            "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            "input_mem_config": [
+                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+            ],
+            "output_mem_config": ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            ),
             "output_tensor_shape": [1, 1, 128, 7328],
             "input_tensor_start": [0, 0, 0, 0],
             "pad_value": 10,
@@ -49,17 +46,11 @@ params += [
     )
 ]
 
-@skip_for_wormhole_b0
-@pytest.mark.parametrize(
-    "input_shapes, tilize_with_val_padding_args", params
-)
-def test_run_tilize_with_val_padding_test(
-    input_shapes, tilize_with_val_padding_args, device, function_level_defaults
-):
+
+@pytest.mark.parametrize("input_shapes, tilize_with_val_padding_args", params)
+def test_run_tilize_with_val_padding_test(input_shapes, tilize_with_val_padding_args, device, function_level_defaults):
     datagen_func = [
-        generation_funcs.gen_func_with_cast(
-            partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
-        )
+        generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
     ]
     comparison_func = comparison_funcs.comp_equal
     run_single_pytorch_test(

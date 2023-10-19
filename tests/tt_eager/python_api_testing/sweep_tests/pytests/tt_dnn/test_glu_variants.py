@@ -17,28 +17,13 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.common import (
-    skip_for_wormhole_b0,
-    is_wormhole_b0,
-)
 
 shapes = [
     [[1, 1, 32, 64]],  # Single core
     [[1, 3, 320, 32 * 8]],  # Multi core
 ]
 input_mem_cfgs = copy.copy(generation_funcs.supported_mem_configs)
-del input_mem_cfgs[1:]
 output_mem_cfgs = copy.copy(generation_funcs.supported_mem_configs)
-if is_wormhole_b0():
-    shapes = [
-        shapes[0],
-    ]
-    input_mem_cfgs = [
-        input_mem_cfgs[0],
-    ]
-    output_mem_cfgs = [
-        output_mem_cfgs[0],
-    ]
 
 
 @pytest.mark.parametrize(
@@ -48,7 +33,6 @@ if is_wormhole_b0():
 @pytest.mark.parametrize("input_mem_config", input_mem_cfgs)
 @pytest.mark.parametrize("output_mem_config", output_mem_cfgs)
 class TestGLUVariants:
-    @skip_for_wormhole_b0
     @pytest.mark.parametrize("fn_kind", ["glu", "reglu", "geglu", "swiglu"])
     def test_all_glu_ops(
         self,
