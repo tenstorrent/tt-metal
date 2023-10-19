@@ -18,19 +18,8 @@ def setup_tt_tensor(x, device, layout, input_mem_config, dtype):
 # pcie slot arg will eventually be fully deprecated in favour of pytest uplift
 # and passing device from fixture
 def setup_host_and_device(func):
-    def wrap(*args, device_id, device=None, **kwargs):
-        output = None
-        if device is None:
-            device = ttl.device.CreateDevice(device_id)
-
-            ttl.device.SetDefaultDevice(device)
-            try:
-                output = func(*args, device=device, **kwargs)
-            finally:
-                ttl.device.CloseDevice(device)
-        else:
-            output = func(*args, device=device, **kwargs)
-
+    def wrap(*args, device, **kwargs):
+        output = func(*args, device=device, **kwargs)
         ttl.device.DeallocateBuffers(device)
         return output
 
