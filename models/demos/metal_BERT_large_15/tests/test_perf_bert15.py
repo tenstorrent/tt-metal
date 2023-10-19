@@ -10,7 +10,7 @@ from transformers import BertForQuestionAnswering, BertTokenizer
 
 import tt_lib
 
-from models.demos.metal_BERT_large_15.tests.test_bert_batch_dram import TtBertBatchDram
+from models.demos.metal_BERT_large_15.tt.bert_model import TtBertBatchDram
 from models.demos.metal_BERT_large_15.tt.model_config import get_model_config
 from models.utility_functions import (
     enable_persistent_kernel_cache,

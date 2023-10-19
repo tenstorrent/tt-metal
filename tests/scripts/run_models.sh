@@ -39,7 +39,8 @@ env pytest models/demos/metal_BERT_large_15/tests/test_bert_batch_dram.py::test_
 env pytest models/demos/metal_BERT_large_15/tests/test_bert_batch_dram.py::test_bert_batch_dram -k BFLOAT16
 env pytest models/demos/metal_BERT_large_15/tests/test_bert_batch_dram.py::test_bert_batch_dram -k MIXED_PRECISION
 env pytest models/demos/metal_BERT_large_15/tests/test_bert_batch_dram.py::test_bert_batch_dram_with_program_cache
-env pytest models/demos/metal_BERT_large_15/tests/test_demo.py
+env pytest models/demos/metal_BERT_large_15/tests/test_demo.py::test_demo
+env pytest models/demos/metal_BERT_large_15/tests/test_demo.py::test_demo_squadv2
 
 env pytest models/experimental/t5/tests -k t5_dense_act_dense
 env pytest models/experimental/t5/tests -k t5_layer_norm

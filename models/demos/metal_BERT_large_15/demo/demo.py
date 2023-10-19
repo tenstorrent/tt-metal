@@ -20,6 +20,10 @@ from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 from models.demos.metal_BERT_large_15.tt.model_config import get_model_config
 from models.demos.metal_BERT_large_15.tt.bert_model import TtBertBatchDram
 
+from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
+
+import evaluate
+
 
 def load_inputs(input_path, batch):
     with open(input_path) as f:
@@ -33,6 +37,104 @@ def load_inputs(input_path, batch):
             question.append(input_data[i]["question"])
 
         return context, question
+
+
+def run_bert_question_and_answering_inference_squadv2(model_version,
+        batch,
+        seq_len,
+        return_attention_mask,
+        return_token_type_ids,
+        model_config,
+        model_location_generator,
+        device,
+        loop_count):
+    BATCH_SIZE = batch
+    comments = "Large"
+    seq_len = 384
+    real_input = True
+    attention_mask = True
+    token_type_ids = True
+
+
+    # set up huggingface model - TT model will use weights from this model
+    model_name = str(model_location_generator(model_version, model_subdir="Bert"))
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
+        model_name, torchscript=False
+    )
+    hugging_face_reference_model.eval()
+
+    # set up tokenizer
+    tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
+    tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
+    nlp = pipeline(
+        "question-answering",
+        model=hugging_face_reference_model,
+        tokenizer=tokenizer,
+    )
+
+    context = BATCH_SIZE * [
+        "Johann Joachim Winckelmann was a German art historian and archaeologist. He was a pioneering Hellenist who first articulated the difference between Greek, Greco-Roman and Roman art. The prophet and founding hero of modern archaeology, Winckelmann was one of the founders of scientific archaeology and first applied the categories of style on a large, systematic basis to the history of art."
+    ]
+    question = BATCH_SIZE * ["What discipline did Winkelmann create?"]
+
+    inputs = tokenizer.batch_encode_plus(
+        zip(question, context),
+        max_length=seq_len,
+        padding="max_length",
+        #truncation=True,
+        truncation= 'only_second',
+        return_attention_mask=attention_mask,
+        return_token_type_ids=token_type_ids,
+        return_tensors="pt",
+    )
+
+    #SQUaD-v2 - 1000 samples
+    inputs_squadv2  = squadv2_1K_samples_input(tokenizer, seq_len, attention_mask, token_type_ids, BATCH_SIZE)
+    squad_metric = evaluate.load("squad_v2")
+
+    tt_bert_model = TtBertBatchDram(
+        hugging_face_reference_model.config,
+        hugging_face_reference_model,
+        device,
+        model_config,
+    )
+    with torch.no_grad():
+        pred_labels = []
+        cpu_pred_labels = []
+        true_labels = []
+        i = 0
+        for batch in inputs_squadv2:
+            if (i < loop_count):
+                logger.info(f"BATCH: {i}")
+                batch_data = batch[0]
+                cpu_output = hugging_face_reference_model(**batch_data)
+                tt_attention_mask = tt_bert_model.model_attention_mask(**batch_data)
+                tt_lib.device.Synchronize()
+                tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**batch_data)
+                tt_lib.device.Synchronize()
+                tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
+
+                # tt_batch = tt_bert_model.model_preprocessing(**batch_data)
+                # tt_output = tt_bert_model(*tt_batch)
+                tt_output = tt_bert_model(tt_embedding, tt_attention_mask)
+
+                tt_untilized_output = tt_output.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch().reshape(BATCH_SIZE, 1, seq_len, -1).to(torch.float32)
+                references = batch[1]
+                question = batch[2]
+                context = batch[3]
+                cpu_predictions, tt_predictions = squadv2_answer_decode_batch(hugging_face_reference_model, tokenizer, nlp, references, cpu_output, tt_untilized_output, BATCH_SIZE, question, context)
+                pred_labels.extend(tt_predictions)
+                cpu_pred_labels.extend(cpu_predictions)
+                true_labels.extend(references)
+            i += 1
+        eval_score = squad_metric.compute( predictions=pred_labels, references=true_labels)
+        cpu_eval_score = squad_metric.compute(predictions=cpu_pred_labels, references=true_labels)
+        logger.info(f"\tTT_Eval: exact: {eval_score['exact']} --  F1: {eval_score['f1']}")
+        logger.info(f"\tCPU_Eval: exact: {cpu_eval_score['exact']} -- F1:  {cpu_eval_score['f1']}")
+
+        tt_lib.device.Synchronize()
+
+        return eval_score
 
 def run_bert_question_and_answering_inference(
     model_version,
@@ -110,36 +212,55 @@ def run_bert_question_and_answering_inference(
 
     # create inputs for TT model
     profiler.start(f"processing_input_two")
-    tt_bert_input = tt_bert_model.model_preprocessing(**bert_input)
+    profiler.start("attention_mask_preprocessing")
+    tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
+    tt_lib.device.Synchronize()
+    profiler.end("attention_mask_preprocessing")
+
+    profiler.start("embedding_input_preprocessing")
+    tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
+    tt_lib.device.Synchronize()
+    profiler.end("embedding_input_preprocessing")
     profiler.end(f"processing_input_two")
+
+    # profiler.start(f"processing_input_two")
+    # tt_bert_input = tt_bert_model.model_preprocessing(**bert_input)
+    # profiler.end(f"processing_input_two")
 
     ##### Run TT Model to Fill Cache Start
     profiler.disable()
 
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
-    tt_out = tt_bert_model(*tt_bert_input)
+    tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
+    tt_out = tt_bert_model(tt_embedding, tt_attention_mask)
     tt_lib.device.Synchronize()
     profiler.end("first_model_run_with_compile", force_enable=True)
     tt_out.deallocate()
     del tt_out
 
     # Recreate inputs since activations were deallocated
-    tt_bert_input = tt_bert_model.model_preprocessing(**bert_input)
+    tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
+    tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
+    tt_lib.device.Synchronize()
 
     profiler.enable()
     enable_persistent_kernel_cache()
 
     ##### Run Forward on TT Model Start
     profiler.start(f"model_run_for_inference")
-    tt_out = tt_bert_model(*tt_bert_input)
+    tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
+    tt_out = tt_bert_model(tt_embedding, tt_attention_mask)
     tt_lib.device.Synchronize()
     profiler.end(f"model_run_for_inference")
 
     # running in a loop
     for i in range(NUM_RUNS):
-        tt_bert_input = tt_bert_model.model_preprocessing(**bert_input)
-        _tt_out = tt_bert_model(*tt_bert_input)
+        tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
+        tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
+        tt_lib.device.Synchronize()
+        tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
+        _tt_out = tt_bert_model(tt_embedding, tt_attention_mask)
         tt_lib.device.Synchronize()
         _tt_out.deallocate()
         del _tt_out
@@ -206,7 +327,6 @@ def run_bert_question_and_answering_inference(
 @pytest.mark.parametrize(
     "input_path, NUM_RUNS",
     (("models/demos/metal_BERT_large_15/demo/input_data.json", 1),),
-    ids=["default_input"],
 )
 def test_demo(
     input_path,
@@ -234,4 +354,30 @@ def test_demo(
         input_path = input_path,
         model_location_generator = model_location_generator,
         device = device,
+    )
+
+@pytest.mark.parametrize(
+    "loop_count",
+    ((50),),
+)
+def test_demo_squadv2(
+    model_location_generator,
+    device,
+    use_program_cache,
+    loop_count
+):
+
+    disable_persistent_kernel_cache()
+    disable_compilation_reports()
+
+    return run_bert_question_and_answering_inference_squadv2(
+        model_version = "phiyodr/bert-large-finetuned-squad2",
+        batch = 8,
+        seq_len = 384,
+        return_attention_mask = True,
+        return_token_type_ids = True,
+        model_config = get_model_config("MIXED_PRECISION_BATCH8"),
+        model_location_generator = model_location_generator,
+        device = device,
+        loop_count=loop_count
     )
