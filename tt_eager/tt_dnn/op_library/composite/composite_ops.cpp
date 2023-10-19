@@ -695,8 +695,8 @@ Tensor _repeat_interleave(const Tensor& input_a, uint32_t repeat, int32_t dim, c
     auto shape_wh = input_a.shape();
     // normalizing the negative dim
     uint32_t normalized_dim = input_a.shape().get_normalized_index(dim);
-    // check if dim is 3
-    TT_ASSERT( normalized_dim != 3, "dim 3 is not supported ");
+    // check if dim is 1 or 3
+    TT_ASSERT( normalized_dim != 3 || normalized_dim != 1, "dim 1 & 3 is not supported ");
 
     if (normalized_dim <= 1){
         for (int i = 0; i < repeat; i++) {
