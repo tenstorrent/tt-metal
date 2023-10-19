@@ -65,6 +65,7 @@ static std::mutex watch_mutex;
 static std::unordered_map<void *, std::shared_ptr<WatcherDevice>> devices;
 static FILE *logfile = nullptr;
 static std::chrono::time_point start_time = std::chrono::system_clock::now();
+static std::vector<string> kernel_names;
 
 WatcherDevice::WatcherDevice(int device_id, std::function<CoreCoord ()>get_grid_size, std::function<CoreCoord (CoreCoord)>worker_from_logical, std::function<const std::set<CoreCoord> &()> storage_only_cores) : device_id_(device_id), get_grid_size_(get_grid_size), worker_from_logical_(worker_from_logical), storage_only_cores_(storage_only_cores) {
 }
@@ -102,27 +103,34 @@ static FILE * create_file(const string& log_path) {
     fprintf(f, "\tnoc<n>:<risc>{a, l}=an L1 address used by NOC<n> by <riscv> (eg, local src address)\n");
     fprintf(f, "\tnoc<n>:<riscv>{(x,y), a, l}=NOC<n> unicast address used by <riscv>\n");
     fprintf(f, "\tnoc<n>:<riscv>{(x1,y1)-(x2,y2), a, l}=NOC<n> multicast address used by <riscv>\n");
-    fprintf(f, "\trmsg:<c>=brisc host run message, D/H device/host dispatch; I/G/D init/go/done; brisc NOC ID; | separator; B/b enable/disable brisc; N/n enable/disable ncrisc; T/t enable/disable TRISC\n");
+    fprintf(f, "\trmsg:<c>=brisc host run message, D/H device/host dispatch; brisc NOC ID; I/G/D init/go/done; | separator; B/b enable/disable brisc; N/n enable/disable ncrisc; T/t enable/disable TRISC\n");
     fprintf(f, "\tsmsg:<c>=slave run message, I/G/D for NCRISC, TRISC0, TRISC1, TRISC2\n");
+    fprintf(f, "\tk_ids:<brisc id>|<ncrisc id>|<trisc id> (ID map to file at end of section)\n");
     fprintf(f, "\n");
 
     return f;
 }
 
-static void dump_l1_status(FILE *f, WatcherDevice *wdev, CoreCoord core) {
+static void log_running_kernels(const launch_msg_t *launch_msg) {
+    log_info(LogLLRuntime, "While running kernels:");
+    log_info(LogLLRuntime, " - {}", kernel_names[launch_msg->brisc_watcher_kernel_id]);
+    log_info(LogLLRuntime, " - {}", kernel_names[launch_msg->ncrisc_watcher_kernel_id]);
+    log_info(LogLLRuntime, " - {}", kernel_names[launch_msg->triscs_watcher_kernel_id]);
+}
+
+static void dump_l1_status(FILE *f, WatcherDevice *wdev, CoreCoord core, const launch_msg_t *launch_msg) {
 
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
     data = read_hex_vec_from_core(wdev->device_id_, core, MEM_L1_BASE, sizeof(uint32_t));
     // XXXX TODO(pgk): get this const from llrt (jump to fw insn)
     if (data[0] != 0x2010006f) {
-        fprintf(f, "L1[0]=bad value 0x%08x ", data[0]);
-        fflush(f);
-        log_fatal(LogLLRuntime, "Watcher found corruption at L1 location 0, see log");
+        log_running_kernels(launch_msg);
+        log_fatal(LogLLRuntime, "Watcher found corruption at L1[0] on core {}: read {}", core.str(), data[0]);
     }
 }
 
-static const char * get_sanity_riscv_name(CoreCoord core, uint32_t type)
+static const char * get_sanity_riscv_name(CoreCoord core, const launch_msg_t *launch_msg, uint32_t type)
 {
     switch (type) {
     case DebugSanitizeBrisc:
@@ -136,68 +144,75 @@ static const char * get_sanity_riscv_name(CoreCoord core, uint32_t type)
     case DebugSanitizeTrisc2:
         return "trisc2";
     default:
+        log_running_kernels(launch_msg);
         log_fatal(LogLLRuntime, "Watcher unexpected riscv type on core {}: {}", core.str(), type);
     }
     return nullptr;
 }
 
-static void dump_noc_sanity_status(FILE *f, CoreCoord core, int noc, const debug_sanitize_noc_addr_msg_t* san) {
+static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *launch_msg, int noc, const debug_sanitize_noc_addr_msg_t* san) {
 
     switch (san->invalid) {
     case DebugSanitizeNocInvalidOK:
         if (san->addr != DEBUG_SANITIZE_NOC_SENTINEL_OK_64 ||
             san->len != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 ||
             san->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_16) {
+            log_running_kernels(launch_msg);
             log_fatal(LogLLRuntime, "Watcher unexpected noc debug state on core {}, reported valid got (addr,len,which)=({},{},{})",
                       core.str(), san->addr, san->len, san->which);
         }
         break;
     case DebugSanitizeNocInvalidL1:
-        fprintf(f, "noc%d:%s{0x%08lx, %d}", noc, get_sanity_riscv_name(core, san->which), san->addr, san->len);
+        fprintf(f, "noc%d:%s{0x%08lx, %d}", noc, get_sanity_riscv_name(core, launch_msg, san->which), san->addr, san->len);
         fflush(f);
+        log_running_kernels(launch_msg);
         log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC L1/reg address, see log");
         break;
     case DebugSanitizeNocInvalidUnicast:
         fprintf(f, "noc%d:%s{(%02ld,%02ld) 0x%08lx, %d}",
                 noc,
-                get_sanity_riscv_name(core, san->which),
+                get_sanity_riscv_name(core, launch_msg, san->which),
                 NOC_UNICAST_ADDR_X(san->addr),
                 NOC_UNICAST_ADDR_Y(san->addr),
                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
         fflush(f);
+        log_running_kernels(launch_msg);
         log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC unicast transaction, see log");
         break;
     case DebugSanitizeNocInvalidMulticast:
         fprintf(f, "noc%d:%s{(%02ld,%02ld)-(%02ld,%02ld) 0x%08lx, %d}",
                 noc,
-                get_sanity_riscv_name(core, san->which),
+                get_sanity_riscv_name(core, launch_msg, san->which),
                 NOC_MCAST_ADDR_START_X(san->addr),
                 NOC_MCAST_ADDR_START_Y(san->addr),
                 NOC_MCAST_ADDR_END_X(san->addr),
                 NOC_MCAST_ADDR_END_Y(san->addr),
                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
         fflush(f);
+        log_running_kernels(launch_msg);
         log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC multicast transaction, see log");
         break;
     default:
+        log_running_kernels(launch_msg);
         log_fatal(LogLLRuntime, "Watcher unexpected noc debug state on core {}, unknown failure code: {}\n",
                   core.str(), san->invalid);
     }
 }
 
-static void dump_noc_sanity_status(FILE *f, CoreCoord core, const debug_sanitize_noc_addr_msg_t *san) {
+static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *launch_msg, const debug_sanitize_noc_addr_msg_t *san) {
 
     for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
-        dump_noc_sanity_status(f, core, noc, &san[noc]);
+        dump_noc_sanity_status(f, core, launch_msg, noc, &san[noc]);
     }
 }
 
-static void dump_run_state(FILE *f, CoreCoord core, uint32_t state) {
+static void dump_run_state(FILE *f, CoreCoord core, const launch_msg_t *launch_msg, uint32_t state) {
     char code = 'U';
     if (state == RUN_MSG_INIT) code = 'I';
     else if (state == RUN_MSG_GO) code = 'G';
     else if (state == RUN_MSG_DONE) code = 'D';
     if (code == 'U') {
+        log_running_kernels(launch_msg);
         log_fatal(LogLLRuntime, "Watcher unexpected run state on core{}: {} (expected {} or {} or {})",
                   core.str(), state, RUN_MSG_INIT, RUN_MSG_GO, RUN_MSG_DONE);
     } else {
@@ -207,73 +222,78 @@ static void dump_run_state(FILE *f, CoreCoord core, uint32_t state) {
 
 static void dump_run_mailboxes(FILE *f,
                                CoreCoord core,
-                               const launch_msg_t *launch,
+                               const launch_msg_t *launch_msg,
                                const slave_sync_msg_t *slave_sync) {
 
     fprintf(f, "rmsg:");
 
-    if (launch->mode == DISPATCH_MODE_DEV) {
+    if (launch_msg->mode == DISPATCH_MODE_DEV) {
         fprintf(f, "D");
-    } else if (launch->mode == DISPATCH_MODE_HOST) {
+    } else if (launch_msg->mode == DISPATCH_MODE_HOST) {
         fprintf(f, "H");
     } else {
+        log_running_kernels(launch_msg);
         log_fatal(LogLLRuntime, "Watcher unexpected launch mode on core {}: {} (expected {} or {})",
-                  core.str(), launch->mode, DISPATCH_MODE_DEV, DISPATCH_MODE_HOST);
+                  core.str(), launch_msg->mode, DISPATCH_MODE_DEV, DISPATCH_MODE_HOST);
     }
 
-    if (launch->brisc_noc_id == 0 || launch->brisc_noc_id == 1) {
-        fprintf(f, "%d", launch->brisc_noc_id);
+    if (launch_msg->brisc_noc_id == 0 || launch_msg->brisc_noc_id == 1) {
+        fprintf(f, "%d", launch_msg->brisc_noc_id);
     } else {
+        log_running_kernels(launch_msg);
         log_fatal(LogLLRuntime, "Watcher unexpected brisc noc_id on core {}: {} (expected 0 or 1)",
-                  core.str(), launch->brisc_noc_id);
+                  core.str(), launch_msg->brisc_noc_id);
     }
 
-    dump_run_state(f, core, launch->run);
+    dump_run_state(f, core, launch_msg, launch_msg->run);
 
     fprintf(f, "|");
 
-    if (launch->enable_brisc == 1) {
+    if (launch_msg->enable_brisc == 1) {
         fprintf(f, "B");
-    } else if (launch->enable_brisc == 0) {
+    } else if (launch_msg->enable_brisc == 0) {
         fprintf(f, "b");
     } else {
+        log_running_kernels(launch_msg);
         log_fatal(LogLLRuntime, "Watcher unexpected brisc enable on core {}: {} (expected 0 or 1)",
                   core.str(),
-                  launch->enable_brisc);
+                  launch_msg->enable_brisc);
     }
 
-    if (launch->enable_ncrisc == 1) {
+    if (launch_msg->enable_ncrisc == 1) {
         fprintf(f, "N");
-    } else if (launch->enable_ncrisc == 0) {
+    } else if (launch_msg->enable_ncrisc == 0) {
         fprintf(f, "n");
     } else {
+        log_running_kernels(launch_msg);
         log_fatal(LogLLRuntime, "Watcher unexpected ncrisc enable on core {}: {} (expected 0 or 1)",
                   core.str(),
-                  launch->enable_ncrisc);
+                  launch_msg->enable_ncrisc);
     }
 
-    if (launch->enable_triscs == 1) {
+    if (launch_msg->enable_triscs == 1) {
         fprintf(f, "T");
-    } else if (launch->enable_triscs == 0) {
+    } else if (launch_msg->enable_triscs == 0) {
         fprintf(f, "t");
     } else {
+        log_running_kernels(launch_msg);
         log_fatal(LogLLRuntime, "Watcher unexpected trisc enable on core {}: {} (expected 0 or 1)",
                   core.str(),
-                  launch->enable_triscs);
+                  launch_msg->enable_triscs);
     }
 
     fprintf(f, " ");
 
     fprintf(f, "smsg:");
-    dump_run_state(f, core, slave_sync->ncrisc);
-    dump_run_state(f, core, slave_sync->trisc0);
-    dump_run_state(f, core, slave_sync->trisc1);
-    dump_run_state(f, core, slave_sync->trisc2);
+    dump_run_state(f, core, launch_msg, slave_sync->ncrisc);
+    dump_run_state(f, core, launch_msg, slave_sync->trisc0);
+    dump_run_state(f, core, launch_msg, slave_sync->trisc1);
+    dump_run_state(f, core, launch_msg, slave_sync->trisc2);
 
     fprintf(f, " ");
 }
 
-static void dump_debug_status(FILE *f, CoreCoord core, const debug_status_msg_t *debug_status) {
+static void dump_debug_status(FILE *f, CoreCoord core, launch_msg_t *launch_msg, const debug_status_msg_t *debug_status) {
 
     for (int cpu = 0; cpu < num_riscv_per_core; cpu++) {
         for (int byte = 0; byte < num_status_bytes_per_riscv; byte++) {
@@ -282,6 +302,7 @@ static void dump_debug_status(FILE *f, CoreCoord core, const debug_status_msg_t 
             if (isprint(v)) {
                 fprintf(f, "%c", v);
             } else {
+                log_running_kernels(launch_msg);
                 log_fatal(LogLLRuntime, "Watcher unexpected debug status on core {}, unprintable character {}",
                           core.str(), (int)v);
             }
@@ -315,20 +336,47 @@ static void dump_sync_regs(FILE *f, WatcherDevice *wdev, CoreCoord core) {
     }
 }
 
-static void dump_core(FILE *f, WatcherDevice *wdev, CoreCoord core, bool dump_all) {
+static void validate_kernel_ids(FILE *f,
+                                std::map<int, bool>& used_kernel_names,
+                                CoreCoord core,
+                                const launch_msg_t *launch) {
 
-    // Core (x, y): L1[0]=ok  R:RRRR
-    fprintf(f, "Core %s: \t", core.str().c_str());
+    if (launch->brisc_watcher_kernel_id >= kernel_names.size()) {
+        log_fatal(LogLLRuntime, "Watcher unexpected brisc kernel id on core {}: {} (last valid {})",
+                  core.str(), launch->brisc_watcher_kernel_id, kernel_names.size());
+    }
+    used_kernel_names[launch->brisc_watcher_kernel_id] = true;
+
+    if (launch->ncrisc_watcher_kernel_id >= kernel_names.size()) {
+        log_fatal(LogLLRuntime, "Watcher unexpected ncrisc kernel id on core {}: {} (last valid {})",
+                  core.str(), launch->ncrisc_watcher_kernel_id, kernel_names.size());
+    }
+    used_kernel_names[launch->ncrisc_watcher_kernel_id] = true;
+
+    if (launch->triscs_watcher_kernel_id >= kernel_names.size()) {
+        log_fatal(LogLLRuntime, "Watcher unexpected trisc kernel id on core {}: {} (last valid {})",
+                  core.str(), launch->triscs_watcher_kernel_id, kernel_names.size());
+    }
+    used_kernel_names[launch->triscs_watcher_kernel_id] = true;
+}
+
+static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, WatcherDevice *wdev, CoreCoord core, bool dump_all) {
+
+    string pad(11 - core.str().length(), ' ');
+    fprintf(f, "Core %s:%s  ", core.str().c_str(), pad.c_str());
 
     std::vector<uint32_t> data;
     data = read_hex_vec_from_core(wdev->device_id_, core, MEM_MAILBOX_BASE, sizeof(mailboxes_t));
     mailboxes_t *mbox_data = (mailboxes_t *)(&data[0]);
 
+    // Validate these first since they are used in diagnostic messages below
+    validate_kernel_ids(f, used_kernel_names, core, &mbox_data->launch);
+
     if (watcher::enabled) {
         // Dump state only gathered if device is compiled w/ watcher
-        dump_debug_status(f, core, mbox_data->debug_status);
-        dump_l1_status(f, wdev, core);
-        dump_noc_sanity_status(f, core, mbox_data->sanitize_noc);
+        dump_debug_status(f, core, &mbox_data->launch, mbox_data->debug_status);
+        dump_l1_status(f, wdev, core,  &mbox_data->launch);
+        dump_noc_sanity_status(f, core, &mbox_data->launch, mbox_data->sanitize_noc);
     }
 
     // Dump state always available
@@ -338,6 +386,11 @@ static void dump_core(FILE *f, WatcherDevice *wdev, CoreCoord core, bool dump_al
         // requested explicitly
         dump_sync_regs(f, wdev, core);
     }
+
+    fprintf(f, "k_ids:%d|%d|%d",
+            mbox_data->launch.brisc_watcher_kernel_id,
+            mbox_data->launch.ncrisc_watcher_kernel_id,
+            mbox_data->launch.triscs_watcher_kernel_id);
 
     fprintf(f, "\n");
 
@@ -353,15 +406,20 @@ static void  __attribute__((noinline)) dump(FILE *f, bool dump_all) {
             log_info(LogLLRuntime, "Watcher checking device {}", wdev->device_id_);
         }
 
+        std::map<int, bool> used_kernel_names;
         CoreCoord grid_size = wdev->get_grid_size_();
         for (uint32_t y = 0; y < grid_size.y; y++) {
             for (uint32_t x = 0; x < grid_size.x; x++) {
                 CoreCoord logical_core(x, y);
                 CoreCoord worker_core = wdev->worker_from_logical_(logical_core);
                 if (wdev->storage_only_cores_().find(logical_core) == wdev->storage_only_cores_().end()) {
-                    dump_core(f, wdev.get(), worker_core, dump_all);
+                    dump_core(f, used_kernel_names, wdev.get(), worker_core, dump_all);
                 }
             }
+        }
+
+        for (auto k_id : used_kernel_names) {
+            fprintf(f, "k_id[%d]: %s\n", k_id.first, kernel_names[k_id.first].c_str());
         }
     }
 }
@@ -504,6 +562,8 @@ void watcher_attach(void *dev,
         std::thread watcher_thread = std::thread(&watcher::watcher_loop, sleep_usecs);
         watcher_thread.detach();
 
+        watcher::kernel_names.push_back("blank");
+
         watcher::enabled = true;
     }
 
@@ -541,6 +601,14 @@ void watcher_sanitize_host_noc_read(const metal_SocDescriptor& soc_d, CoreCoord 
 
 void watcher_sanitize_host_noc_write(const metal_SocDescriptor& soc_d, CoreCoord core, uint64_t addr, uint32_t lbytes) {
     watcher_sanitize_host_noc("write", soc_d, core, addr, lbytes);
+}
+
+int watcher_register_kernel(const string& name) {
+    const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
+
+    watcher::kernel_names.push_back(name);
+
+    return watcher::kernel_names.size() - 1;
 }
 
 } // namespace llrt

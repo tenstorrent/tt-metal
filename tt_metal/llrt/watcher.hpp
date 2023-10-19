@@ -17,5 +17,7 @@ void watcher_detach(void *dev);
 void watcher_sanitize_host_noc_read(const metal_SocDescriptor &soc_d, CoreCoord core, uint64_t addr, uint32_t len);
 void watcher_sanitize_host_noc_write(const metal_SocDescriptor &soc_d, CoreCoord core, uint64_t addr, uint32_t len);
 
+int watcher_register_kernel(const string& name);
+
 } // namespace llrt
 } // namespace tt
