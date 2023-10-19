@@ -248,6 +248,13 @@ git clone git@github.com:tenstorrent-metal/tt-metal.git --recurse-submodules --b
 cd tt-metal
 ```
 
+Note that we also recommend you periodically check LFS and pull its objects
+for submodules.
+
+```
+git submodule foreach 'git lfs fetch --all && git lfs pull'
+```
+
 2. Set up the environment. Note that this setup is required **every time you
    want to use this project**.
 
