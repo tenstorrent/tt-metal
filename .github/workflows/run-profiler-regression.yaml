@@ -13,13 +13,17 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        arch: [grayskull, wormhole_b0]
+        runner-info: [
+          {arch: grayskull, runs-on: ["grayskull", "fw-date-2023-06-28"]},
+          # N150
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "fw-date-2023-08-08", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"]},
+        ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.arch }}
+      ARCH_NAME: ${{ matrix.runner-info.arch }}
       TT_METAL_SLOW_DISPATCH_MODE: 1
     environment: dev
-    runs-on: ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
         with:
