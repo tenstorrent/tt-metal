@@ -45,12 +45,12 @@ def run_layernorm_tests(
     print(in_mem_config)
 
     x = torch.Tensor(size=input_shape[0]).uniform_(-10, 10)
-    y = torch.Tensor(size=input_shape[1]).uniform_(-10, 10)
-    z = torch.Tensor(size=input_shape[2]).uniform_(-10, 10)
+    # y = torch.Tensor(size=input_shape[1]).uniform_(-10, 10)
+    # z = torch.Tensor(size=input_shape[2]).uniform_(-10, 10)
 
     x_ref = x.detach().clone()
-    y_ref = y.detach().clone()
-    z_ref = z.detach().clone()
+    # y_ref = y.detach().clone()
+    # z_ref = z.detach().clone()
 
     # compute ref value --------------------------
     ref_value = pytorch_ops.layernorm_noweights(x_ref)
@@ -69,7 +69,7 @@ def run_layernorm_tests(
     # compare tt and golden outputs -------------
     success, pcc_value = comp_equal(ref_value, tt_result)
     logger.debug(pcc_value)
-
+    assert success
 
 test_sweep_args=[
     (
