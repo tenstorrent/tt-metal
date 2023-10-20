@@ -63,6 +63,7 @@ class Kernel {
     std::string compute_hash() const;
     virtual void set_build_options(build_kernel_for_riscv_options_t &build_options) const = 0;
     virtual void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const = 0;
+    inline uint16_t get_binary_size16() const { return binary_size16_; }
     void set_binary_path ( const std::string & binary_path) { binary_path_ = binary_path; }
     void set_binaries(std::vector<ll_api::memory> &&binaries);
     virtual void read_binaries(int device_id) = 0;
@@ -75,6 +76,7 @@ class Kernel {
     CoreRangeSet core_range_set_;
     std::string binary_path_;
     std::vector<ll_api::memory> binaries_;              // DataMovement kernels have one binary each and Compute kernels have three binaries
+    uint16_t binary_size16_;
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_to_runtime_args_;
     std::map<std::string, std::string> defines_;        // preprocessor defines. this is to be able to generate generic instances.

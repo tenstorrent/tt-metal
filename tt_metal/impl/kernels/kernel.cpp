@@ -19,7 +19,7 @@ namespace tt {
 namespace tt_metal {
 
 Kernel::Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compile_args, const std::map<std::string, std::string> &defines) :
-    id_(reinterpret_cast<uintptr_t>(this)), kernel_path_file_name_(kernel_path_file_name), core_range_set_(core_range_set), compile_time_args_(compile_args), defines_(defines) {
+    id_(reinterpret_cast<uintptr_t>(this)), kernel_path_file_name_(kernel_path_file_name), core_range_set_(core_range_set), binary_size16_(0), compile_time_args_(compile_args), defines_(defines) {
     for (auto core_range : this->core_range_set_.ranges()) {
         auto start = core_range.start;
         auto end = core_range.end;
@@ -208,7 +208,11 @@ void DataMovementKernel::read_binaries(int device_id) {
         default:
             TT_ASSERT(false, "Unsupported data movement processor!");
     }
+
     ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, device_id, false);
+    this->binary_size16_ = llrt::get_binary_code_size16(binary_mem, riscv_id);
+    log_debug("RISC {} kernel binary size: {} in bytes", riscv_id, this->binary_size16_ * 16);
+
     binaries.push_back(binary_mem);
     this->set_binaries(std::move(binaries));
 }
@@ -220,6 +224,8 @@ void ComputeKernel::read_binaries(int device_id) {
         std::string trisc_id_str = std::to_string(trisc_id);
         std::string hex_path = binary_path_ + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
         ll_api::memory binary_mem = llrt::get_risc_binary(hex_path, device_id, false);
+        this->binary_size16_ = llrt::get_binary_code_size16(binary_mem, trisc_id + 2);
+        log_debug("RISC {} kernel binary size: {} in bytes", trisc_id + 2, this->binary_size16_ * 16);
         binaries.push_back(binary_mem);
     }
     this->set_binaries(std::move(binaries));

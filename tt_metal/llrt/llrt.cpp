@@ -86,6 +86,55 @@ ll_api::memory get_risc_binary(string path, chip_id_t chip_id, bool fw_build) {
     return mem;
 }
 
+// Return the code size in 16 byte units
+// This matches what the fw needs for datamovement
+// and...squeezes more data into the launch message (2^20=1M)
+uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
+
+    uint64_t range_min, range_max;
+    switch (riscv_id) {
+        case 0:
+            range_min = MEM_BRISC_FIRMWARE_BASE;
+            range_max = MEM_BRISC_FIRMWARE_BASE + MEM_BRISC_FIRMWARE_SIZE;
+            break;
+        case 1:
+            range_min = MEM_NCRISC_FIRMWARE_BASE;
+            range_max = MEM_NCRISC_FIRMWARE_BASE + MEM_NCRISC_FIRMWARE_SIZE;
+            break;
+        case 2:
+            range_min = MEM_TRISC0_BASE;
+            range_max = MEM_TRISC0_BASE + MEM_TRISC0_SIZE;
+            break;
+        case 3:
+            range_min = MEM_TRISC1_BASE;
+            range_max = MEM_TRISC1_BASE + MEM_TRISC1_SIZE;
+            break;
+        case 4:
+            range_min = MEM_TRISC2_BASE;
+            range_max = MEM_TRISC2_BASE + MEM_TRISC2_SIZE;
+            break;
+        default: TT_ASSERT("Bad riscv_id: {}", riscv_id);
+    }
+
+    uint64_t min = std::numeric_limits<decltype(min)>::max();
+    uint64_t max = 0;
+    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
+
+        uint32_t len_bytes = len_words * sizeof(uint32_t);
+        // Only use the addresses within the firmware code range
+        if (addr >= range_min && addr + len_bytes <= range_max) {
+            if (addr < min) {
+                min = addr;
+            }
+            if (addr + len_bytes > max) {
+                max = addr + len_bytes;
+            }
+        }
+    });
+
+    return (uint16_t)((max - min + 15) >> 4);
+}
+
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
