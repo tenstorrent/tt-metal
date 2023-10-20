@@ -418,6 +418,7 @@ void TensorModule(py::module &m_tensor) {
     )doc");
     m_tensor.def("max_pool2d", &max_pool2d,
         py::arg("input").noconvert(),
+        py::arg("in_n").noconvert(),
         py::arg("in_h").noconvert(), py::arg("in_w").noconvert(),
         py::arg("kernel_h").noconvert(), py::arg("kernel_w").noconvert(),
         py::arg("stride_h") = 1, py::arg("stride_w") = 1,
@@ -431,6 +432,7 @@ void TensorModule(py::module &m_tensor) {
         | Argument          | Description                   | Data type     | Valid range | Required |
         +===================+===============================+===============+=============+==========+
         | input             | Input activations tensor      | Tensor        |             | Yes      |
+        | in_n              | Input nbatch                  | Tensor        |             | Yes      |
         | in_h              | Input height                  | Tensor        |             | Yes      |
         | in_w              | Input width                   | Tensor        |             | Yes      |
         | kernel_h          | kernel window height          | uint32_t      |             | Yes      |
