@@ -1045,6 +1045,10 @@ Tensor zeros(const Shape shape, Layout layout, Device * device, const MemoryConf
     return tt::numpy::zeros(shape, DataType::BFLOAT16, layout, device, output_mem_config);
 }
 
+Tensor empty(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
+  return create_device_tensor(shape,DataType::BFLOAT16,layout,device,output_mem_config);
+}
+
 //on-device tensor creation 1s with shape
 Tensor ones(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
     return tt::numpy::ones(shape, DataType::BFLOAT16, layout, device, output_mem_config);
