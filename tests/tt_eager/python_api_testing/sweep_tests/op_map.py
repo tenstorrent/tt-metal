@@ -76,6 +76,14 @@ op_map = {
         "tt_lib_op": tt_lib_ops.clip,
         "pytorch_op": pytorch_ops.clip,
     },
+    "eltwise-tril": {
+        "tt_lib_op": tt_lib_ops.tril,
+        "pytorch_op": pytorch_ops.tril,
+    },
+    "eltwise-triu": {
+        "tt_lib_op": tt_lib_ops.triu,
+        "pytorch_op": pytorch_ops.triu,
+    },
     "eltwise-zeros": {
         "tt_lib_op": tt_lib_ops.zeros,
         "pytorch_op": pytorch_ops.zeros,
