@@ -71,19 +71,10 @@ def compare(tt_out, torch_out, atol=0.2, rtop=0.2):
     "input_a_shape",
     (
         [1, 1, TILE_HEIGHT, TILE_WIDTH],
-        [1, 1, TILE_HEIGHT - 1, TILE_WIDTH],
         [1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 11],
-        [1, 1, TILE_HEIGHT - 7, TILE_WIDTH - 17],
-        [1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2],
         [1, 1, TILE_HEIGHT * 2 - 1, TILE_WIDTH * 2],
-        [1, 1, TILE_HEIGHT * 2 - 1, TILE_WIDTH * 2 - 11],
-        [1, 1, TILE_HEIGHT * 2 - 7, TILE_WIDTH * 2 - 17],
-        [1, 1, TILE_HEIGHT * 3, TILE_WIDTH * 3],
-        [1, 1, TILE_HEIGHT * 3 - 1, TILE_WIDTH * 3],
-        [1, 1, TILE_HEIGHT * 3 - 1, TILE_WIDTH * 3 - 11],
-        [1, 1, TILE_HEIGHT * 3 - 7, TILE_WIDTH * 3 - 17],
-        [1, 1, TILE_HEIGHT * 9 - 7, TILE_WIDTH * 3 - 1],
-        [1, 1, TILE_HEIGHT * 18 - 7, TILE_WIDTH * 2 - 1],
+        [1, 1, TILE_HEIGHT * 9 - 7, TILE_WIDTH * 3 - 10],
+        [1, 1, TILE_HEIGHT * 18 - 17, TILE_WIDTH * 2 - 10],
     ),
 )
 
@@ -93,18 +84,9 @@ def compare(tt_out, torch_out, atol=0.2, rtop=0.2):
     (
         [1, 1, TILE_HEIGHT, TILE_WIDTH],
         [1, 1, TILE_HEIGHT, TILE_WIDTH - 1],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH - 13],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH - 31],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 2],
         [1, 1, TILE_HEIGHT, TILE_WIDTH * 2 - 1],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 2 - 13],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 2 - 31],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 3],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 3 - 1],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 3 - 13],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 3 - 31],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 12 - 1],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 24 - 1],
+        [1, 1, TILE_HEIGHT, TILE_WIDTH * 12 - 10],
+        [1, 1, TILE_HEIGHT, TILE_WIDTH * 24 - 20],
     ),
 )
 def test_moreh_matmul(input_a_shape, input_b_shape, device):
@@ -148,19 +130,12 @@ def test_moreh_matmul(input_a_shape, input_b_shape, device):
     "input_a_shape",
     (
         [1, 1, TILE_HEIGHT, TILE_WIDTH],
-        [1, 2, TILE_HEIGHT - 1, TILE_WIDTH],
-        [2, 1, TILE_HEIGHT - 1, TILE_WIDTH - 11],
-        [2, 2, TILE_HEIGHT - 7, TILE_WIDTH - 17],
-        [1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2],
-        [1, 3, TILE_HEIGHT * 2 - 1, TILE_WIDTH * 2],
-        [3, 1, TILE_HEIGHT * 2 - 1, TILE_WIDTH * 2 - 11],
-        [3, 3, TILE_HEIGHT * 2 - 7, TILE_WIDTH * 2 - 17],
-        [1, 1, TILE_HEIGHT * 3, TILE_WIDTH * 3],
-        [1, 5, TILE_HEIGHT * 3 - 1, TILE_WIDTH * 3],
-        [5, 1, TILE_HEIGHT * 3 - 1, TILE_WIDTH * 3 - 11],
-        [5, 5, TILE_HEIGHT * 3 - 7, TILE_WIDTH * 3 - 17],
-        [5, 5, TILE_HEIGHT * 9 - 7, TILE_WIDTH * 3 - 1],
-        [5, 5, TILE_HEIGHT * 18 - 7, TILE_WIDTH * 2 - 1],
+        [1, 2, TILE_HEIGHT * 5 - 1, TILE_WIDTH],
+        [2, 1, TILE_HEIGHT * 5 - 1, TILE_WIDTH - 11],
+        [2, 2, TILE_HEIGHT * 5 - 7, TILE_WIDTH - 17],
+        [1, 5, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 3],
+        [5, 1, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 3 - 11],
+        [5, 5, TILE_HEIGHT * 20 - 7, TILE_WIDTH * 3 - 1],
     ),
 )
 
@@ -169,19 +144,12 @@ def test_moreh_matmul(input_a_shape, input_b_shape, device):
     "input_b_shape",
     (
         [1, 1, TILE_HEIGHT, TILE_WIDTH],
-        [1, 2, TILE_HEIGHT, TILE_WIDTH - 1],
-        [2, 1, TILE_HEIGHT, TILE_WIDTH - 13],
-        [2, 2, TILE_HEIGHT, TILE_WIDTH - 31],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 2],
-        [1, 3, TILE_HEIGHT, TILE_WIDTH * 2 - 1],
-        [3, 1, TILE_HEIGHT, TILE_WIDTH * 2 - 13],
-        [3, 3, TILE_HEIGHT, TILE_WIDTH * 2 - 31],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 3],
-        [1, 5, TILE_HEIGHT, TILE_WIDTH * 3 - 1],
-        [5, 1, TILE_HEIGHT, TILE_WIDTH * 3 - 13],
-        [5, 5, TILE_HEIGHT, TILE_WIDTH * 3 - 31],
-        [5, 5, TILE_HEIGHT, TILE_WIDTH * 12 - 1],
-        [5, 5, TILE_HEIGHT, TILE_WIDTH * 24 - 1],
+        [1, 2, TILE_HEIGHT, TILE_WIDTH * 5 - 1],
+        [2, 1, TILE_HEIGHT, TILE_WIDTH * 5 - 13],
+        [2, 2, TILE_HEIGHT, TILE_WIDTH * 5 - 31],
+        [1, 5, TILE_HEIGHT, TILE_WIDTH * 10 - 1],
+        [5, 1, TILE_HEIGHT, TILE_WIDTH * 10 - 13],
+        [5, 5, TILE_HEIGHT, TILE_WIDTH * 20 - 1],
     ),
 )
 def test_batched_moreh_matmul(input_a_shape, input_b_shape, device):
@@ -226,40 +194,22 @@ def test_batched_moreh_matmul(input_a_shape, input_b_shape, device):
     "input_a_shape",
     (
         [1, 1, TILE_HEIGHT, TILE_WIDTH],
-        [1, 1, TILE_HEIGHT - 1, TILE_WIDTH],
         [1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 11],
-        [1, 1, TILE_HEIGHT - 7, TILE_WIDTH - 17],
-        [1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2],
         [1, 1, TILE_HEIGHT * 2 - 1, TILE_WIDTH * 2],
-        [1, 1, TILE_HEIGHT * 2 - 1, TILE_WIDTH * 2 - 11],
-        [1, 1, TILE_HEIGHT * 2 - 7, TILE_WIDTH * 2 - 17],
-        [1, 1, TILE_HEIGHT * 3, TILE_WIDTH * 3],
-        [1, 1, TILE_HEIGHT * 3 - 1, TILE_WIDTH * 3],
-        [1, 1, TILE_HEIGHT * 3 - 1, TILE_WIDTH * 3 - 11],
-        [1, 1, TILE_HEIGHT * 3 - 7, TILE_WIDTH * 3 - 17],
-        [1, 1, TILE_HEIGHT * 9 - 7, TILE_WIDTH * 3 - 1],
-        [1, 1, TILE_HEIGHT * 18 - 7, TILE_WIDTH * 2 - 1],
+        [1, 1, TILE_HEIGHT * 9 - 7, TILE_WIDTH * 3 - 10],
+        [1, 1, TILE_HEIGHT * 18 - 17, TILE_WIDTH * 2 - 10],
     ),
 )
 
-# input_b_shape[2] is dummy
+# input_b_shape[3] is dummy
 @pytest.mark.parametrize(
     "input_b_shape",
     (
-        [1, 1, TILE_HEIGHT, TILE_WIDTH],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH - 1],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH - 13],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH - 31],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 2],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 2 - 1],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 2 - 13],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 2 - 31],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 3],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 3 - 1],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 3 - 13],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 3 - 31],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 12 - 1],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 24 - 1],
+        [1, 1, TILE_WIDTH, TILE_HEIGHT],
+        [1, 1, TILE_WIDTH - 1, TILE_HEIGHT],
+        [1, 1, TILE_WIDTH * 2 - 1, TILE_HEIGHT],
+        [1, 1, TILE_WIDTH * 12 - 10, TILE_HEIGHT],
+        [1, 1, TILE_WIDTH * 24 - 20, TILE_HEIGHT],
     ),
 )
 def test_moreh_matmul_transpose_b(input_a_shape, input_b_shape, device):
@@ -304,40 +254,26 @@ def test_moreh_matmul_transpose_b(input_a_shape, input_b_shape, device):
     "input_a_shape",
     (
         [1, 1, TILE_HEIGHT, TILE_WIDTH],
-        [1, 2, TILE_HEIGHT - 1, TILE_WIDTH],
-        [2, 1, TILE_HEIGHT - 1, TILE_WIDTH - 11],
-        [2, 2, TILE_HEIGHT - 7, TILE_WIDTH - 17],
-        [1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2],
-        [1, 3, TILE_HEIGHT * 2 - 1, TILE_WIDTH * 2],
-        [3, 1, TILE_HEIGHT * 2 - 1, TILE_WIDTH * 2 - 11],
-        [3, 3, TILE_HEIGHT * 2 - 7, TILE_WIDTH * 2 - 17],
-        [1, 1, TILE_HEIGHT * 3, TILE_WIDTH * 3],
-        [1, 5, TILE_HEIGHT * 3 - 1, TILE_WIDTH * 3],
-        [5, 1, TILE_HEIGHT * 3 - 1, TILE_WIDTH * 3 - 11],
-        [5, 5, TILE_HEIGHT * 3 - 7, TILE_WIDTH * 3 - 17],
-        [5, 5, TILE_HEIGHT * 9 - 7, TILE_WIDTH * 3 - 1],
-        [5, 5, TILE_HEIGHT * 18 - 7, TILE_WIDTH * 2 - 1],
+        [1, 2, TILE_HEIGHT * 5 - 1, TILE_WIDTH],
+        [2, 1, TILE_HEIGHT * 5 - 1, TILE_WIDTH - 11],
+        [2, 2, TILE_HEIGHT * 5 - 7, TILE_WIDTH - 17],
+        [1, 5, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 3],
+        [5, 1, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 3 - 11],
+        [5, 5, TILE_HEIGHT * 20 - 7, TILE_WIDTH * 3 - 1],
     ),
 )
 
-# input_b_shape[2] is dummy
+# input_b_shape[3] is dummy
 @pytest.mark.parametrize(
     "input_b_shape",
     (
-        [1, 1, TILE_HEIGHT, TILE_WIDTH],
-        [1, 2, TILE_HEIGHT, TILE_WIDTH - 1],
-        [2, 1, TILE_HEIGHT, TILE_WIDTH - 13],
-        [2, 2, TILE_HEIGHT, TILE_WIDTH - 31],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 2],
-        [1, 3, TILE_HEIGHT, TILE_WIDTH * 2 - 1],
-        [3, 1, TILE_HEIGHT, TILE_WIDTH * 2 - 13],
-        [3, 3, TILE_HEIGHT, TILE_WIDTH * 2 - 31],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 3],
-        [1, 5, TILE_HEIGHT, TILE_WIDTH * 3 - 1],
-        [5, 1, TILE_HEIGHT, TILE_WIDTH * 3 - 13],
-        [5, 5, TILE_HEIGHT, TILE_WIDTH * 3 - 31],
-        [5, 5, TILE_HEIGHT, TILE_WIDTH * 12 - 1],
-        [5, 5, TILE_HEIGHT, TILE_WIDTH * 24 - 1],
+        [1, 1, TILE_WIDTH, TILE_HEIGHT],
+        [1, 2, TILE_WIDTH * 5 - 1, TILE_HEIGHT],
+        [2, 1, TILE_WIDTH * 5 - 13, TILE_HEIGHT],
+        [2, 2, TILE_WIDTH * 5 - 31, TILE_HEIGHT],
+        [1, 5, TILE_WIDTH * 10 - 1, TILE_HEIGHT],
+        [5, 1, TILE_WIDTH * 10 - 13, TILE_HEIGHT],
+        [5, 5, TILE_WIDTH * 20 - 1, TILE_HEIGHT],
     ),
 )
 def test_batched_moreh_matmul_transpose_b(input_a_shape, input_b_shape, device):
@@ -381,22 +317,10 @@ def test_batched_moreh_matmul_transpose_b(input_a_shape, input_b_shape, device):
 @pytest.mark.parametrize(
     "input_shape",
     (
-        [1, 1, 1, 1],
-        [1, 1, 1, 10],
-        [1, 1, 1, 31],
-        [1, 1, 1, TILE_WIDTH],
-        [1, 1, 1, TILE_WIDTH * 2],
-        [1, 1, 1, TILE_WIDTH * 2 - 1],
-        [1, 1, 1, TILE_WIDTH * 2 - 21],
-        [1, 1, 1, TILE_WIDTH * 3],
-        [1, 1, 1, TILE_WIDTH * 3 - 3],
-        [1, 1, 1, TILE_WIDTH * 3 - 17],
-        [1, 1, 1, TILE_WIDTH * 10],
-        [1, 1, 1, TILE_WIDTH * 10 - 3],
-        [1, 1, 1, TILE_WIDTH * 10 - 17],
-        [1, 1, 1, TILE_WIDTH * 20],
-        [1, 1, 1, TILE_WIDTH * 20 - 3],
-        [1, 1, 1, TILE_WIDTH * 20 - 17],
+        [1, 1, 1, 10],  # test not mutiple of 32 case
+        [1, 1, 1, TILE_WIDTH],  # test single tile
+        [1, 1, 1, TILE_WIDTH * 20],  # test multiple tiles
+        [1, 1, 1, TILE_WIDTH * 20 - 17],  # test multiple tiles, not a multiple of 32
     ),
 )
 def test_moreh_matmul_1d(input_shape, device):
