@@ -29,6 +29,7 @@ def linear(x, weight, bias=None, *args, **kwargs):
 def copy(x, y, *args, **kwargs):
     return y.copy_(x)
 
+
 def clone(x, *args, **kwargs):
     return torch.clone(x)
 
@@ -381,9 +382,7 @@ def layernorm_noweights(x, *args, **kwargs):
 
 
 def groupnorm_noweights(x, *args, **kwargs):
-    return torch.nn.functional.group_norm(
-        input=x, num_groups=1, weight=None, bias=None, eps=1e-05
-    )
+    return torch.nn.functional.group_norm(input=x, num_groups=1, weight=None, bias=None, eps=1e-05)
 
 
 def add_layernorm(x, y, z, w, *args, **kwargs):
@@ -594,6 +593,11 @@ def full_like(x, *args, scalar, **kwargs):
 
 def zeros(x, *args, **kwargs):
     result = torch.zeros(x.shape)
+    return result
+
+
+def empty(x, *args, **kwargs):
+    result = torch.empty(x.shape)
     return result
 
 
@@ -967,9 +971,11 @@ def bert_large_pre_softmax_bmm(x, y, *args, **kwargs):
     ref_bmm = torch.matmul(x, y)
     return ref_bmm
 
+
 def bert_large_post_softmax_bmm(x, y, *args, **kwargs):
     ref_bmm = torch.matmul(x.reshape([9, 16, 384, 384]), y)
     return ref_bmm
+
 
 def bert_large_ff1_matmul(x, y, z, *args, **kwargs):
     ref_bmm = torch.matmul(x, y)
@@ -982,10 +988,12 @@ def bert_large_selfout_matmul(x, y, z, *args, **kwargs):
     ref_bmm = ref_bmm + z
     return ref_bmm
 
+
 def bert_large_ff2_matmul(x, y, z, *args, **kwargs):
     ref_bmm = torch.matmul(x, y)
     ref_bmm = ref_bmm + z
     return ref_bmm
+
 
 def eltwise_rpow(x, *args, **kwargs):
     dim = kwargs["factor"]

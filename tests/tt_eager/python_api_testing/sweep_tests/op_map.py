@@ -80,6 +80,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.zeros,
         "pytorch_op": pytorch_ops.zeros,
     },
+    "eltwise-empty": {
+        "tt_lib_op": tt_lib_ops.empty,
+        "pytorch_op": pytorch_ops.empty,
+    },
     "eltwise-ones": {
         "tt_lib_op": tt_lib_ops.ones,
         "pytorch_op": pytorch_ops.ones,
