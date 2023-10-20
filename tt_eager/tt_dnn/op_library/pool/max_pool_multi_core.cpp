@@ -999,7 +999,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
 
 // this version uses distribution along height = N * H * W
 operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const Tensor &input, Tensor& output,
-                                                                        uint32_t in_h, uint32_t in_w,
+                                                                        uint32_t in_n, uint32_t in_h, uint32_t in_w,
                                                                         uint32_t out_h, uint32_t out_w,
                                                                         uint32_t kernel_size_h, uint32_t kernel_size_w,
                                                                         uint32_t stride_h, uint32_t stride_w,
@@ -1029,7 +1029,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
     TT_ASSERT((in_nbytes_c & (in_nbytes_c - 1)) == 0, "in_nbytes_c should be power of 2");    // in_nbytes_c is power of 2
     TT_ASSERT((out_nbytes_c & (out_nbytes_c - 1)) == 0, "out_nbytes_c should be power of 2"); // out_nbytes_c is power of 2
 
-    uint32_t nbatch = input_shape[0];
+    uint32_t nbatch = in_n;
     TT_ASSERT(nbatch == output_shape[0], "Mismatch in N for input and output!!");
 
     uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;    // number of valid rows, to read

@@ -764,6 +764,7 @@ class Bottleneck(nn.Module):
                 self.conv1_output_shape[0],
                 self.conv1_output_shape[1],
                 self.conv1_output_shape[2],
+                1,  ## stride case
                 self.sharded_memory_config,
             )
         else:
@@ -912,6 +913,9 @@ class ResNet(nn.Module):
         # self.maxpool = TtMaxPool(self.device, kernel_size=3, stride=2, padding=1, output_mem_config=self.memory_config, nblocks=8, channels_last=True, reshape_2d=True)
         self.maxpool = TtMaxPool(
             self.device,
+            self.conv1_output_shape[0], ## in_n
+            self.conv1_output_shape[1], ## in_h
+            self.conv1_output_shape[2], ## in_w
             kernel_size=3,
             stride=2,
             padding=1,
@@ -1285,17 +1289,32 @@ class ResNet(nn.Module):
         # x = self.relu(x, self.memory_config)
         # tt_lib.device.DumpDeviceMemoryState(self.device)
         # x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM))
-        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
-        # time.sleep(2)
-        x = x.reshape(
-            self.conv1_output_shape[0],
-            self.conv1_output_shape[1],
-            self.conv1_output_shape[2],
-            self.conv1_output_shape[3],
-        )
+
+        # x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+        # x = x.reshape(
+        #     self.conv1_output_shape[0],
+        #     self.conv1_output_shape[1],
+        #     self.conv1_output_shape[2],
+        #     self.conv1_output_shape[3],
+        # )
+        x = tt_lib.tensor.untilize_with_halo(x,
+                                             0xf7ff,   ## pad_val
+                                             self.conv1_output_shape[0],   ## in_n
+                                             self.conv1_output_shape[1],   ## in_h
+                                             self.conv1_output_shape[2],   ## in_w
+                                             2,                            ## stride case
+                                             self.sharded_memory_config)
+        # x_shape = x.shape()
+        # x = x.reshape(
+        #     self.conv1_output_shape[0],
+        #     self.conv1_output_shape[1],
+        #     self.conv1_output_shape[2],
+        #     self.conv1_output_shape[3],
+        # )
         # print("Running maxpool")
         x = self.maxpool(x)
         # print("Done maxpool")
+
         x = x.reshape(
             1,
             1,

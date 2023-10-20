@@ -106,7 +106,7 @@ void init_neighbor_noc_xy_mapping(CoreCoord grid_size, uint32_t noc = 0) {
 } // namespace untilize_with_halo_helpers
 
 // The case of stride = 2
-operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& input, Tensor& output, uint32_t pad_val) {
+operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& input, Tensor& output, uint32_t pad_val, uint32_t in_b, uint32_t in_h, uint32_t in_w) {
     Program program = Program();
 
     Device *device = input.device();
@@ -132,10 +132,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
 
     // TODO: hard coded for testing only. need to pass these args in.
     // These are the input values before inserting and padding or halo
-    uint32_t nbatch = input_shape[0];
-    uint32_t in_h = std::sqrt(input_shape[2]);
-    uint32_t in_w = in_h;
-    TT_ASSERT(in_h * in_w == input_shape[2]);
+    uint32_t nbatch = in_b;
+    // uint32_t in_h = std::sqrt(input_shape[2]);
+    // uint32_t in_w = in_h;
+    TT_ASSERT(in_h * in_w == input_shape[2] || in_b * in_h * in_w == input_shape[2]);
     uint32_t in_c = input_shape[3];
     uint32_t pad_h = 1;
     uint32_t pad_w = 1;
@@ -851,7 +851,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, Tensor& output, uint32_t pad_val) {
+operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, Tensor& output, uint32_t pad_val, const uint32_t &in_b, const uint32_t &in_h, const uint32_t &in_w, const uint32_t &out_shard_size_max_per_core) {
     Program program = Program();
 
     Device *device = a.device();
@@ -1446,9 +1446,15 @@ std::vector<Shape> UntilizeWithHalo::compute_output_shapes(const std::vector<Ten
     // output_shape[0] remains same
     // output_shape[1] remains same
     // output_shape[2] changes
-    output_shape[2] = this->out_shard_size_max_per_core * ncores;
+    // output_shape[3] remains same
+    if (stride_ == 1) {
+        output_shape[2] = this->out_shard_size_max_per_core * ncores;
+    } else {
+        output_shape[2] = (uint32_t) ceil((float) total_nsticks / output_shape[0]);
+    }
 
     log_debug(LogOp, "output_shape: {} {} {} {}", output_shape[0], output_shape[1], output_shape[2], output_shape[3]);
+    log_debug(LogOp, "out_shard_size_max_per_core: {}", out_shard_size_max_per_core);
     log_debug(LogOp, "derived ncores: {}", ncores);
 
     return {output_shape};
@@ -1472,7 +1478,7 @@ operation::ProgramWithCallbacks UntilizeWithHalo::create_program(const std::vect
             return { untilize_with_halo_multi_core(input_tensor_a, output_tensor, pad_val_, this->in_b, this->in_h, this->in_w, this->out_shard_size_max_per_core) };
         case 2:
             log_debug(LogOp, "Using stride 2 kernel");
-            return { untilize_with_halo_multi_core_s2(input_tensor_a, output_tensor, pad_val_) };
+            return { untilize_with_halo_multi_core_s2(input_tensor_a, output_tensor, pad_val_, in_b, in_h, in_w) };
         default:
             TT_ASSERT(false, "Unsupported stride value");
     };
@@ -1487,7 +1493,7 @@ tt::stl::reflection::Attributes UntilizeWithHalo::attributes() const {
         {"in_w", this->in_w},
         {"out_shard_size_max_per_core", this->out_shard_size_max_per_core},
         {"stride", stride_},
-        {"output_mem_config", output_mem_config_},
+        {"output_mem_config", output_mem_config},
     };
 }
 
@@ -1531,7 +1537,7 @@ Tensor untilize_with_halo(const Tensor &input_tensor_a, const uint32_t pad_val, 
         uint32_t out_nsticks = local_nsticks + 2 * halo_nsticks;
         out_nsticks_max_per_core = std::max(out_nsticks_max_per_core, out_nsticks);
     }
-    return operation::run_without_autoformat(UntilizeWithHalo{pad_val, stride, in_b, in_h, in_w, out_nsticks_max_per_core, mem_config}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(UntilizeWithHalo{pad_val, in_b, in_h, in_w, out_nsticks_max_per_core, stride, mem_config}, {input_tensor_a}).at(0);
 }
 
 }  // namespace tt_metal

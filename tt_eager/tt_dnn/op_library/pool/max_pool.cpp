@@ -65,7 +65,7 @@ std::vector<Shape> MaxPool::compute_output_shapes(const std::vector<Tensor> &inp
     uint32_t out_hw_padded = (uint32_t) ceil_multiple_of(out_hw, constants::TILE_HEIGHT);
 
     // {N, 1, H * W, C}
-    const auto out_dims = std::vector<uint32_t>({ input_shape[0], 1, out_hw, out_c });
+    const auto out_dims = std::vector<uint32_t>({ in_n_, 1, out_hw, out_c });
     const auto padding = Padding({{0, 0},
                                   {0, 0},
                                   {0, out_hw_padded - out_hw},
@@ -81,7 +81,7 @@ std::vector<Tensor> MaxPool::create_output_tensors(const std::vector<Tensor> &in
     const auto& input = inputs.at(0);
     if (this->out_mem_config_.is_sharded()) {
         Shape output_shape = this->compute_output_shapes(inputs).at(0);
-        uint32_t nbatch = input.shape()[0];
+        uint32_t nbatch = in_n_;
         uint32_t out_hw = this->out_h_ * this->out_w_;
         uint32_t out_nhw = out_hw * nbatch;
         uint32_t ncores = max_pool_helpers::get_num_cores(input.device()->compute_with_storage_grid_size(), out_nhw);
@@ -110,8 +110,9 @@ operation::ProgramWithCallbacks MaxPool::create_program(const std::vector<Tensor
                                         nblocks_)};
     } else {
         if (input.memory_config().is_sharded()) {
-        return {max_pool_2d_multi_core_sharded_with_halo(input, output,
-                                        in_h_, in_w_,
+            log_debug(LogOp, "Using sharded with halo");
+            return {max_pool_2d_multi_core_sharded_with_halo(input, output,
+                                        in_n_, in_h_, in_w_,
                                         out_h_, out_w_,
                                         kernel_size_h_, kernel_size_w_,
                                         stride_h_, stride_w_,
@@ -120,6 +121,7 @@ operation::ProgramWithCallbacks MaxPool::create_program(const std::vector<Tensor
                                         out_mem_config_,
                                         nblocks_)};
         } else {
+            log_debug(LogOp, "Using generic");
             return {max_pool_2d_multi_core_generic(input, output,
                                         in_h_, in_w_,
                                         out_h_, out_w_,
@@ -135,6 +137,7 @@ operation::ProgramWithCallbacks MaxPool::create_program(const std::vector<Tensor
 
 tt::stl::reflection::Attributes MaxPool::attributes() const {
     return {
+        {"in_n", in_n_},    // input batch
         {"in_h", in_h_},    // input height
         {"in_w", in_w_},    // input width
         {"kernel_size_h", kernel_size_h_},
@@ -149,7 +152,7 @@ tt::stl::reflection::Attributes MaxPool::attributes() const {
 }
 
 Tensor max_pool2d(const Tensor &input,
-                  uint32_t in_h, uint32_t in_w,
+                  uint32_t in_n, uint32_t in_h, uint32_t in_w,
                   uint32_t kernel_size_h, uint32_t kernel_size_w,
                   uint32_t stride_h, uint32_t stride_w,
                   uint32_t pad_h, uint32_t pad_w,
@@ -163,7 +166,8 @@ Tensor max_pool2d(const Tensor &input,
     // calculate the H and W dims for output
     uint32_t out_h = ((in_h + 2 * pad_h - (dilation_h * kernel_size_h - 1) - 1) / stride_h) + 1;   // floor
     uint32_t out_w = ((in_w + 2 * pad_w - (dilation_w * kernel_size_w - 1) - 1) / stride_w) + 1;   // floor
-    return operation::run_without_autoformat(MaxPool{in_h, in_w, out_h, out_w,
+    return operation::run_without_autoformat(MaxPool{in_n, in_h, in_w,
+                                                     out_h, out_w,
                                                      kernel_size_h, kernel_size_w,
                                                      stride_h, stride_w,
                                                      pad_h, pad_w,
