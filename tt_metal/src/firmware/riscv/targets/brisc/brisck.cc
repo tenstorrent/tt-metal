@@ -30,16 +30,6 @@ CQReadInterface cq_read_interface;
 
 uint8_t noc_index = NOC_INDEX;
 
-// dram channel to x/y lookup tables
-// The number of banks is generated based off device we are running on --> controlled by allocator
-uint8_t dram_bank_to_noc_x[NUM_DRAM_BANKS];
-uint8_t dram_bank_to_noc_y[NUM_DRAM_BANKS];
-uint32_t dram_bank_to_noc_xy[NUM_DRAM_BANKS];
-
-uint8_t l1_bank_to_noc_x[NUM_L1_BANKS];
-uint8_t l1_bank_to_noc_y[NUM_L1_BANKS];
-uint32_t l1_bank_to_noc_xy[NUM_L1_BANKS];
-
 void kernel_launch() {
 
     firmware_kernel_common_init((void tt_l1_ptr *)MEM_BRISC_INIT_LOCAL_L1_BASE);
@@ -49,9 +39,6 @@ void kernel_launch() {
 #else
     setup_cb_read_write_interfaces();                // done by both BRISC / NCRISC
 #endif
-
-    init_dram_bank_to_noc_coord_lookup_tables();  // done by both BRISC / NCRISC
-    init_l1_bank_to_noc_coord_lookup_tables();  // done by both BRISC / NCRISC
 
     noc_local_state_init(noc_index);
 
