@@ -220,7 +220,7 @@ void kernel_main() {
 
     // // section 0: initial skip
     // uint32_t top_left_i = initial_skip;
-    // uint32_t reader_i = 0;
+    uint32_t reader_i = 0;
 
     // // section 1: partial first row
     // for (int32_t i = 0; i < partial_first_row_nsticks; ++ i) {
@@ -266,27 +266,19 @@ void kernel_main() {
     // }
 
     // DPRINT << "nsticks_per_core = " << nsticks_per_core << ENDL();
-    // DPRINT << "reader_i = " << reader_i << ENDL();
-    // for (uint32_t i = 0; i < reader_i; ++ i) {
-    //     DPRINT << i << ": " << reader_indices_ptr[i] << ENDL();
-    // }
 
     uint32_t batch_offset = 0;
     for (uint32_t out_stick_i = 0; out_stick_i < nsticks_per_core; ++ out_stick_i) {
-        cb_reserve_back(in_cb_id, 1);
-        uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
-        uint32_t out_l1_write_addr = out_l1_write_addr_base;
-
         uint32_t global_out_stick_i = local_out_stick_start + out_stick_i;
         uint32_t batch_i = global_out_stick_i / nsticks_per_batch;
         uint32_t batch_out_stick_i = global_out_stick_i % nsticks_per_batch;
         int32_t out_w_i = batch_out_stick_i % out_w;
         int32_t out_h_i = batch_out_stick_i / out_w;
-        DPRINT << "out_stick_i = " << out_stick_i << " :: " << (uint) out_w_i << "," << (uint) out_h_i << ENDL();
+        // DPRINT << "out_stick_i = " << out_stick_i << " :: " << (uint) out_w_i << "," << (uint) out_h_i << ENDL();
 
         int32_t in_center_w = ((int32_t) stride_w) * out_w_i - pad_w + window_w / 2;
         int32_t in_center_h = ((int32_t) stride_h) * out_h_i - pad_h + window_h / 2;
-        DPRINT << "center: = " << (uint) in_center_w << "," << (uint) in_center_h << ENDL();
+        // DPRINT << "center: = " << (uint) in_center_w << "," << (uint) in_center_h << ENDL();
 
         if (batch_out_stick_i == 0 && out_stick_i > 0 && local_out_stick_start > 0) {
             // this is start of a new batch, update offsets
@@ -294,25 +286,39 @@ void kernel_main() {
         }
 
         int32_t top_left_local_index = initial_skip + batch_offset + (in_center_w - window_w / 2) + (in_center_h - window_h / 2) * (in_w + 2 * pad_w) - start_stick;
-        DPRINT << "top_left_index: " << (uint) top_left_local_index << ENDL();
+        // DPRINT << "top_left_index: " << (uint) top_left_local_index << ENDL();
 
-        DPRINT << "sticks: ";
+        // DPRINT << "sticks: ";
         for (uint32_t h = 0; h < window_h; ++ h) {
             for (uint32_t w = 0; w < window_w; ++ w) {
                 uint32_t stick_offset = top_left_local_index + (w + h * (in_w + 2 * pad_w));
-                DPRINT << stick_offset << " ";
+                // DPRINT << stick_offset << " ";
                 uint32_t l1_offset = stick_offset * in_nbytes_c;
-                noc_async_read(get_noc_addr(in_l1_read_base_addr + l1_offset), out_l1_write_addr, in_nbytes_c);
+                reader_indices_ptr[reader_i ++] = l1_offset;
+            }
+        }
+        // DPRINT << TileSlice(in_cb_id, 0, srt, true, false) << ENDL();
+        // print_pages(out_l1_write_addr_base, 64, 10, 0);
+    }
+
+    // DPRINT << "reader_i = " << reader_i << ENDL();
+    // for (uint32_t i = 0; i < reader_i; ++ i) {
+    //     DPRINT << i << ": " << reader_indices_ptr[i] << ENDL();
+    // }
+
+    uint32_t counter = 0;
+    while (counter < reader_i) {
+        cb_reserve_back(in_cb_id, 1);
+        uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
+        uint32_t out_l1_write_addr = out_l1_write_addr_base;
+        for (uint32_t h = 0; h < window_h; ++ h) {
+            for (uint32_t w = 0; w < window_w; ++ w) {
+                uint32_t read_offset = in_l1_read_base_addr + reader_indices_ptr[counter ++];
+                noc_async_read(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c);
                 out_l1_write_addr += in_nbytes_c;
             }
         }
-        DPRINT << ENDL();
-
         noc_async_read_barrier();
-
-        // DPRINT << TileSlice(in_cb_id, 0, srt, true, false) << ENDL();
-        // print_pages(out_l1_write_addr_base, 64, 10, 0);
-
         cb_push_back(in_cb_id, 1);
     }
 } // kernel_main()
