@@ -19,7 +19,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 from tests.tt_eager.python_api_testing.sweep_tests.common import (
     is_wormhole_b0,
-    skip_for_wormhole_b0,
 )
 from functools import partial
 
@@ -27,10 +26,7 @@ from functools import partial
 class Complex:
     def __init__(self, input_shape: torch.Size):
         val = 1 + torch.arange(0, input_shape.numel()).reshape(input_shape).bfloat16()
-        self._cplx = (
-            val[:, :, :, input_shape[-1] // 2]
-            + val[:, :, :, input_shape[-1] // 2 :] * 1j
-        )
+        self._cplx = val[:, :, :, input_shape[-1] // 2] + val[:, :, :, input_shape[-1] // 2 :] * 1j
 
     def reset(self, val: torch.Tensor):
         self._cplx = val
@@ -103,12 +99,8 @@ def test_level1_is_real(memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([1, 1, 32, 64])
     # check real
     x = Complex(input_shape)
-    x = x.add( x.conj() )
-    xtt = (
-        ttl.tensor.Tensor(x.metal, dtype)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .to(device, memcfg)
-    )
+    x = x.add(x.conj())
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
     tt_dev = ttl.tensor.is_real(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_cpu = x.is_real()
@@ -130,12 +122,8 @@ def test_level1_is_imag(memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([1, 1, 32, 64])
     # check real
     x = Complex(input_shape)
-    x = x.sub( x.conj() )
-    xtt = (
-        ttl.tensor.Tensor(x.metal, dtype)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .to(device, memcfg)
-    )
+    x = x.sub(x.conj())
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
     tt_dev = ttl.tensor.is_imag(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_cpu = x.is_imag()
@@ -157,11 +145,7 @@ def test_level1_angle(memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([1, 1, 32, 64])
     # check real
     x = Complex(input_shape)
-    xtt = (
-        ttl.tensor.Tensor(x.metal, dtype)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .to(device, memcfg)
-    )
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
     tt_dev = ttl.tensor.angle(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_cpu = x.angle
@@ -183,11 +167,7 @@ def test_level1_real(memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([1, 1, 32, 64])
     # check real
     x = Complex(input_shape)
-    xtt = (
-        ttl.tensor.Tensor(x.metal, dtype)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .to(device, memcfg)
-    )
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
     tt_dev = ttl.tensor.real(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_cpu = x.real
@@ -255,18 +235,13 @@ def test_level1_conj(memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([1, 1, 32, 64])
     # check abs
     x = Complex(input_shape)
-    xtt = (
-        ttl.tensor.Tensor(x.metal, dtype)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .to(device, memcfg)
-    )
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
     tt_dev = ttl.tensor.conj(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_cpu = x.conj().metal
     if is_wormhole_b0():
-        passing, output = comp_pcc(tt_cpu, tt_dev, pcc=0.8)
-    else:
-        passing, output = comp_pcc(tt_cpu, tt_dev)
+        comp_pcc = partial(comp_pcc, pcc=0.8)
+    passing, output = comp_pcc(tt_cpu, tt_dev)
     logger.info(output)
     assert passing
 
@@ -286,16 +261,8 @@ def test_level1_add(memcfg, dtype, device, function_level_defaults):
     x = Complex(input_shape)
     y = Complex(input_shape) * -0.5
 
-    xtt = (
-        ttl.tensor.Tensor(x.metal, dtype)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .to(device, memcfg)
-    )
-    ytt = (
-        ttl.tensor.Tensor(y.metal, dtype)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .to(device, memcfg)
-    )
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
+    ytt = ttl.tensor.Tensor(y.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
 
     tt_dev = ttl.tensor.add(xtt, ytt)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -322,16 +289,8 @@ def test_level1_sub(memcfg, dtype, device, function_level_defaults):
     x = Complex(input_shape)
     y = Complex(input_shape) * 0.5
 
-    xtt = (
-        ttl.tensor.Tensor(x.metal, dtype)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .to(device, memcfg)
-    )
-    ytt = (
-        ttl.tensor.Tensor(y.metal, dtype)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .to(device, memcfg)
-    )
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
+    ytt = ttl.tensor.Tensor(y.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
 
     tt_dev = ttl.tensor.sub(xtt, ytt)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -358,16 +317,8 @@ def test_level1_mul(memcfg, dtype, device, function_level_defaults):
     x = Complex(input_shape)
     y = Complex(input_shape) * 0.75
 
-    xtt = (
-        ttl.tensor.Tensor(x.metal, dtype)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .to(device, memcfg)
-    )
-    ytt = (
-        ttl.tensor.Tensor(y.metal, dtype)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .to(device, memcfg)
-    )
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
+    ytt = ttl.tensor.Tensor(y.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
 
     tt_dev = ttl.tensor.complex_mul(xtt, ytt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -394,24 +345,13 @@ def test_level1_div(memcfg, dtype, device, function_level_defaults):
     x = Complex(input_shape)
     y = x.div(x)
 
-    xtt = (
-        ttl.tensor.Tensor(x.metal, dtype)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .to(device, memcfg)
-    )
-    ytt = (
-        ttl.tensor.Tensor(y.metal, dtype)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .to(device, memcfg)
-    )
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
+    ytt = ttl.tensor.Tensor(y.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
 
     tt_dev = ttl.tensor.complex_div(ytt, xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     tt_cpu = y.div(x).metal
-
-    if is_wormhole_b0():
-        pass  # pytest.skip("[DIV]: skip assertion for this test on WH B0")
 
     passing, output = comp_pcc(tt_cpu, tt_dev, pcc=0.96)
     logger.info(output)
@@ -432,19 +372,12 @@ def test_level1_recip(memcfg, dtype, device, function_level_defaults):
     # check abs
     x = Complex(input_shape)
     x = x.div(x * 0.5)
-    xtt = (
-        ttl.tensor.Tensor(x.metal, dtype)
-        .to(ttl.tensor.Layout.ROW_MAJOR)
-        .to(device, memcfg)
-    )
+    xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
 
     tt_dev = ttl.tensor.complex_recip(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     tt_cpu = x.recip().metal
-
-    if is_wormhole_b0():
-        pass  # pytest.skip("[RECIP]: skip assertion for this test on WH B0")
 
     passing, output = comp_pcc(tt_cpu, tt_dev, pcc=0.96)
     logger.info(output)

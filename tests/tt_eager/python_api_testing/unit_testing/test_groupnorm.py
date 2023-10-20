@@ -22,7 +22,7 @@ from tt_lib.utils import (
     tilize_to_list,
     untilize,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
+
 
 def ref_groupnorm(x, group_size, eps, **kwargs):
     n_channels = x.shape[1]
@@ -30,11 +30,8 @@ def ref_groupnorm(x, group_size, eps, **kwargs):
     return lnorm(x)
 
 
-def run_groupnorm_tests(
-    test_id, group_size, dtype, in0_mem_config, out_mem_config, device
-):
+def run_groupnorm_tests(test_id, group_size, dtype, in0_mem_config, out_mem_config, device):
     torch.manual_seed(1234)
-
 
     tensor = ttl.tensor
     dev = device
@@ -101,21 +98,15 @@ def run_groupnorm_tests(
 
             if test_id == 0:
                 logger.info("Running LN_NOGB")
-                ttz = tensor.groupnorm(
-                    ttx, group_size, epsf, output_mem_config=out_mem_config
-                )
+                ttz = tensor.groupnorm(ttx, group_size, epsf, output_mem_config=out_mem_config)
                 golden = ref_groupnorm(x, group_size, epsf)
             elif test_id == 1:
                 logger.info("Running LN_G")
-                ttz = tensor.groupnorm(
-                    ttx, group_size, epsf, ttgamma, output_mem_config=out_mem_config
-                )
+                ttz = tensor.groupnorm(ttx, group_size, epsf, ttgamma, output_mem_config=out_mem_config)
                 golden = ref_groupnorm(x, group_size, epsf, gamma=ttgamma)
             elif test_id == 2:
                 logger.info("Running LN_GB")
-                ttz = tensor.groupnorm(
-                    ttx, group_size, epsf, ttgamma, ttbeta, out_mem_config
-                )
+                ttz = tensor.groupnorm(ttx, group_size, epsf, ttgamma, ttbeta, out_mem_config)
                 golden = ref_groupnorm(x, group_size, epsf, gamma=ttgamma, beta=ttbeta)
             else:
                 assert False
@@ -131,7 +122,6 @@ def run_groupnorm_tests(
             tt_got_back = untilize(tt_got_back)
 
             torch.isclose(golden, tt_got_back)
-
 
 
 @pytest.mark.parametrize(

@@ -32,9 +32,7 @@ def getTensorFromBuff(buff):
     tensor_from_buff[
         torch.logical_or(
             torch.isnan(tensor_from_buff),
-            torch.logical_or(
-                torch.isinf(tensor_from_buff), torch.isneginf(tensor_from_buff)
-            ),
+            torch.logical_or(torch.isinf(tensor_from_buff), torch.isneginf(tensor_from_buff)),
         )
     ] = 0
     return tensor_from_buff
@@ -81,9 +79,7 @@ def getTensorFromBuff(buff):
         "1x2x16x10240",
     ],
 )
-def test_split_tiled_w(
-    shape, in_mem_config, out_mem_config, device, dtype=ttl.tensor.DataType.BFLOAT16
-):
+def test_split_tiled_w(shape, in_mem_config, out_mem_config, device, dtype=ttl.tensor.DataType.BFLOAT16):
     profile_location = "tt_metal/tools/profiler/logs/splitTwoChunks/"
     os.system(f"rm -rf {profile_location}")
 
