@@ -48,11 +48,9 @@ def test_run_tilize_test(nb, nc, nh, nw, multicore, device):
         ttl.tensor.Layout.ROW_MAJOR,
         device,
     )
-    b = ttl.tensor.tilize(a, use_multicore = multicore)
+    b = ttl.tensor.tilize(a, use_multicore=multicore)
     c = b.cpu().to_torch().to(torch.float32).reshape(shape).numpy()
 
     tilized_inp = tilize(inp.reshape(*shape))
 
-    assert (
-        abs(tilized_inp - c) < 0.02
-    ).all(), "Max abs difference for tilize can be 0.02 due to bfloat conversions"
+    assert (abs(tilized_inp - c) < 0.02).all(), "Max abs difference for tilize can be 0.02 due to bfloat conversions"

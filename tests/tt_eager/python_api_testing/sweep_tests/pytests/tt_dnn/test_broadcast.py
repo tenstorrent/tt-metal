@@ -17,7 +17,7 @@ sys.path.append(f"{f}/../../../..")
 import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
-from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0, is_wormhole_b0
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0
 
 shape1 = [
     [[1, 1, 32, 32], [1, 1, 1, 32]],  # Single core
@@ -25,8 +25,6 @@ shape1 = [
     [[1, 3, 3840, 32], [1, 1, 1, 32]],  # Multi core h
     [[1, 3, 3840, 32], [1, 3, 1, 32]],  # Multi core h
 ]
-if is_wormhole_b0():
-    del shape1[1:]
 
 @pytest.mark.parametrize(
     "input_shapes",

@@ -15,7 +15,7 @@ from tt_lib.utils import (
     untilize,
     is_close,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0
 
 
 def rmsnorm(x, gamma, beta, eps):
@@ -104,7 +104,6 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
         assert is_close(tt_got_back, ref_rmsnorm)
 
 
-@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "out_mem_config",
     (
@@ -132,4 +131,6 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
     ids=["RMSN", "RMSN_G", "RMSN_GB"],
 )
 def test_rmsnorm_test(test_id, dtype, in0_mem_config, out_mem_config, device):
+    if is_wormhole_b0() and test_id == 2:
+        pytest.skip("test skipped in WH B0 due to accuracy issue")
     run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device)
