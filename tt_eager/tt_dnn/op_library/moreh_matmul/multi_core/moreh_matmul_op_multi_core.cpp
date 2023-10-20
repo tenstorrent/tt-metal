@@ -17,9 +17,7 @@ namespace operations {
 namespace primary {
 
 std::tuple<bool, bool> get_bcast_batch(const Shape &input0_shape, const Shape &input1_shape) {
-    bool in0_bcast_batch = input0_shape[1] < input1_shape[1] ? true : false;
-    bool in1_bcast_batch = input0_shape[1] > input1_shape[1] ? true : false;
-    return {in0_bcast_batch, in1_bcast_batch};
+    return {(input0_shape[1] < input1_shape[1]), (input0_shape[1] > input1_shape[1])};
 }
 
 operation::ProgramWithCallbacks moreh_matmul_multi_core(
