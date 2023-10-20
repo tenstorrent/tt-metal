@@ -2,15 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import sys
 import pytest
 import math
 
-from pathlib import Path
 from loguru import logger
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
 
 import torch
 
@@ -136,12 +132,8 @@ def test_run_max_pool(
         logger.info("Invalid case")
         pytest.skip()
 
-    out_h = (
-        math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-    )
-    out_w = (
-        math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
-    )
+    out_h = math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
+    out_w = math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
     if out_w % nblocks != 0:
         logger.info(f"Unsupported case when out_w ({out_w}) % nblocks ({nblocks}) != 0")
         pytest.skip()
@@ -154,20 +146,18 @@ def test_run_max_pool(
     #     logger.info("Multi-block version has not been tested with multicore")
     #     pytest.skip()
 
-    if use_multicore and (
-        padding != (1, 1) or stride != (2, 2) or kernel_size != (3, 3)
-    ):
+    if use_multicore and (padding != (1, 1) or stride != (2, 2) or kernel_size != (3, 3)):
         logger.info("Multicore version only supports Resnet50 configs for now.")
         pytest.skip()
 
     if out_mem_config.is_sharded():
         if not use_multicore:
             pytest.skip("Unsupported sharding")
-        interleaved_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+        interleaved_mem_config = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+        )
 
-    torch.set_printoptions(
-        precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32
-    )
+    torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     torch.manual_seed(0)
 
@@ -238,7 +228,8 @@ def test_run_max_pool(
 
     ## test for equivalance
     out_pytorch = out_pytorch.reshape(golden_pytorch.shape)
-    assert torch.allclose(out_pytorch, golden_pytorch)  ##, rtol=1e-01, atol=1e-01)
+    passing_allclose = torch.allclose(out_pytorch, golden_pytorch)  ##, rtol=1e-01, atol=1e-01)
+    assert passing_allclose
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)
     logger.info(f"Passing PCC = {passing_pcc}")
     logger.info(f"Output PCC = {output_pcc}")

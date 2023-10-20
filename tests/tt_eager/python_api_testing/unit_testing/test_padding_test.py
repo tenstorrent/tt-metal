@@ -3,13 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from pathlib import Path
-import sys
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
 
-import numpy as np
 import torch
 
 import tt_lib as ttl
@@ -26,9 +21,7 @@ from models.utility_functions import nearest_32
         ((1, 3, 30, 30), (3, 3, 64, 64), (0, 0, 31, 31), -torch.inf),
     ),
 )
-def test_run_padding_test(
-    input_tensor_shape, output_tensor_shape, input_tensor_start, pad_value
-):
+def test_run_padding_test(input_tensor_shape, output_tensor_shape, input_tensor_start, pad_value):
     inp = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
     # Create tensor on host
@@ -39,10 +32,7 @@ def test_run_padding_test(
     a_pt = a_pad.to_torch()
 
     # Pytorch reference
-    input_tensor_end = tuple(
-        input_tensor_start[i] + input_tensor_shape[i]
-        for i in range(len(input_tensor_shape))
-    )
+    input_tensor_end = tuple(input_tensor_start[i] + input_tensor_shape[i] for i in range(len(input_tensor_shape)))
     a_ref = torch.ones(*output_tensor_shape, dtype=torch.bfloat16) * pad_value
     a_ref[
         input_tensor_start[0] : input_tensor_end[0],
@@ -56,7 +46,8 @@ def test_run_padding_test(
     # print("\n", a_ref)
 
     assert a_pt.shape == output_tensor_shape
-    assert torch.equal(a_pt, a_ref)
+    eq = torch.equal(a_pt, a_ref)
+    assert eq
 
 
 @pytest.mark.parametrize(
@@ -82,8 +73,7 @@ def test_run_unpadding_test(input_tensor_shape, output_tensor_start, output_tens
 
     # Unpad inputs on host
     output_tensor_shape = tuple(
-        output_tensor_end[i] - output_tensor_start[i] + 1
-        for i in range(len(input_tensor_shape))
+        output_tensor_end[i] - output_tensor_start[i] + 1 for i in range(len(input_tensor_shape))
     )
     a_unpad = a.unpad(output_tensor_start, output_tensor_end)
     a_pt = a_unpad.to_torch()
@@ -101,7 +91,8 @@ def test_run_unpadding_test(input_tensor_shape, output_tensor_start, output_tens
     # print("\n", a_ref)
 
     assert a_pt.shape == output_tensor_shape
-    assert torch.equal(a_pt, a_ref)
+    eq = torch.equal(a_pt, a_ref)
+    assert eq
 
 
 # Pad, run op, unpad
@@ -109,15 +100,10 @@ def test_run_unpadding_test(input_tensor_shape, output_tensor_start, output_tens
     "input_tensor_shape, output_tensor_shape, input_tensor_start, pad_value",
     (((1, 1, 3, 4), (1, 1, 32, 32), (0, 0, 1, 1), 0),),
 )
-def test_run_padding_and_add_test(
-    input_tensor_shape, output_tensor_shape, input_tensor_start, pad_value, device
-):
+def test_run_padding_and_add_test(input_tensor_shape, output_tensor_shape, input_tensor_start, pad_value, device):
     # Args for unpad
     output_tensor_start = input_tensor_start
-    output_tensor_end = tuple(
-        input_tensor_start[i] + input_tensor_shape[i] - 1
-        for i in range(len(input_tensor_shape))
-    )
+    output_tensor_end = tuple(input_tensor_start[i] + input_tensor_shape[i] - 1 for i in range(len(input_tensor_shape)))
 
     inp = torch.rand(*input_tensor_shape)
     ones = torch.ones(*input_tensor_shape)
@@ -156,7 +142,8 @@ def test_run_padding_and_add_test(
     # print("\n", out_pt)
     # print("\n", out_ref)
 
-    assert torch.allclose(out_pt, out_ref, rtol=1e-2)
+    passing = torch.allclose(out_pt, out_ref, rtol=1e-2)
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -190,9 +177,7 @@ def test_run_tile_padding_test(input_tensor_shape, pad_value):
     a_pt = a_pad.to_torch()
 
     # Pytorch reference
-    input_tensor_end = tuple(
-        input_tensor_shape[i] for i in range(len(input_tensor_shape))
-    )
+    input_tensor_end = tuple(input_tensor_shape[i] for i in range(len(input_tensor_shape)))
     a_ref = torch.ones(*output_tensor_shape, dtype=torch.bfloat16) * pad_value
     a_ref[
         0 : input_tensor_end[0],
@@ -206,7 +191,8 @@ def test_run_tile_padding_test(input_tensor_shape, pad_value):
     # print("\n", a_ref)
 
     assert a_pt.shape == output_tensor_shape
-    assert torch.equal(a_pt, a_ref)
+    eq = torch.equal(a_pt, a_ref)
+    assert eq
 
 
 @pytest.mark.parametrize(
@@ -247,7 +233,8 @@ def test_run_tile_unpadding_test(input_tensor_shape, output_tensor_shape):
     # print("\n", a_ref)
 
     assert a_pt.shape == output_tensor_shape
-    assert torch.equal(a_pt, a_ref)
+    eq = torch.equal(a_pt, a_ref)
+    assert eq
 
 
 # Pad, run op, unpad
@@ -291,4 +278,5 @@ def test_run_tile_padding_and_add_test(input_tensor_shape, pad_value, device):
     # print("\n", out_pt)
     # print("\n", out_ref)
 
-    assert torch.allclose(out_pt, out_ref, rtol=1e-2)
+    passing = torch.allclose(out_pt, out_ref, rtol=1e-2)
+    assert passing

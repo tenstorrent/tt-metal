@@ -2,13 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
-
 import torch
 
 import tt_lib as ttl
@@ -24,59 +17,62 @@ def test_tile_major_reshape(device):
     W = 96
     x = torch.randn((N, C, H, W), dtype=torch.float32).bfloat16().float()
 
-    xtt = (
-        ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16)
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    xtt = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
     xtt = ttl.tensor.reshape(xtt, 5, 3, 96, 64)
     assert xtt.shape() == [5, 3, 96, 64]
     xtt_host = xtt.cpu()
     tt_got_back = xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     x = x.reshape([5, 3, 96, 64])
-    assert torch.equal(x, tt_got_back)
+    eq = torch.equal(x, tt_got_back)
+    assert eq
 
     xtt = ttl.tensor.reshape(xtt, 3, 5, 64, 96)
     assert xtt.shape() == [3, 5, 64, 96]
     xtt_host = xtt.cpu()
     tt_got_back = xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     x = x.reshape([3, 5, 64, 96])
-    assert torch.equal(x, tt_got_back)
+    eq = torch.equal(x, tt_got_back)
+    assert eq
 
     xtt = ttl.tensor.reshape(xtt, -1, 5, 96, 64)
     assert xtt.shape() == [3, 5, 96, 64]
     xtt_host = xtt.cpu()
     tt_got_back = xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     x = x.reshape([3, 5, 96, 64])
-    assert torch.equal(x, tt_got_back)
+    eq = torch.equal(x, tt_got_back)
+    assert eq
 
     xtt = ttl.tensor.reshape(xtt, 3, -1, 64, 96)
     assert xtt.shape() == [3, 5, 64, 96]
     xtt_host = xtt.cpu()
     tt_got_back = xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     x = x.reshape([3, 5, 64, 96])
-    assert torch.equal(x, tt_got_back)
+    eq = torch.equal(x, tt_got_back)
+    assert eq
 
     xtt = ttl.tensor.reshape(xtt, 3, 5, -1, 64)
     assert xtt.shape() == [3, 5, 96, 64]
     xtt_host = xtt.cpu()
     tt_got_back = xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     x = x.reshape([3, 5, 96, 64])
-    assert torch.equal(x, tt_got_back)
+    eq = torch.equal(x, tt_got_back)
+    assert eq
 
     xtt = ttl.tensor.reshape(xtt, 3, 5, 64, -1)
     assert xtt.shape() == [3, 5, 64, 96]
     xtt_host = xtt.cpu()
     tt_got_back = xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     x = x.reshape([3, 5, 64, 96])
-    assert torch.equal(x, tt_got_back)
+    eq = torch.equal(x, tt_got_back)
+    assert eq
 
     xtt = ttl.tensor.reshape(xtt, 3, 5, 32, -1)
     assert xtt.shape() == [3, 5, 32, 96 * 2]
     xtt_host = xtt.cpu()
     tt_got_back = xtt_host.to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     x = x.reshape([3, 5, 32, 96 * 2])
-    assert torch.equal(x, tt_got_back)
+    eq = torch.equal(x, tt_got_back)
+    assert eq
 
     print("reshape() max absdiff=")
     print_diff_argmax(tt_got_back, x)
@@ -94,4 +90,5 @@ def test_row_major_reshape(device):
     reshaped = ttl.tensor.reshape(xtt, 1, 128, 2, 64)
     reshaped = reshaped.cpu().to_torch()
     torch_reshaped = torch.Tensor(x).reshape(1, 128, 2, 64)
-    assert torch.equal(torch_reshaped, reshaped)
+    eq = torch.equal(torch_reshaped, reshaped)
+    assert eq

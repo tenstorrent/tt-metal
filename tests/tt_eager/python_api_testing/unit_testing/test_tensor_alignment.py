@@ -29,8 +29,10 @@ def test_tensor_alignment(device):
 
     t0_h = t0_d.cpu()
 
-    assert torch.equal(a, t0_h.to_torch())
+    eq = torch.equal(a, t0_h.to_torch())
+    assert eq
 
     t1_h = t1_d.cpu()
 
-    assert torch.equal(b, t1_h.to_torch())
+    eq = torch.equal(b, t1_h.to_torch())
+    assert eq

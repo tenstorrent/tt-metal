@@ -20,15 +20,12 @@ def rotate_half(x):
 def test_rotate_half(shape, device):
     x = torch.randn(shape).bfloat16().float()
 
-    xt = (
-        ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16)
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    xt = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
     xtt = ttl.tensor.rotate_half(xt)
 
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     pt_out = rotate_half(x)
 
-    assert torch.equal(tt_got_back, pt_out)
+    eq = torch.equal(tt_got_back, pt_out)
+    assert eq

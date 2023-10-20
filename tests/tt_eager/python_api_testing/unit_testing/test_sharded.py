@@ -59,7 +59,8 @@ def test_sharded_tile(device):
 
     tt_got_back = zt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
-    assert torch.equal(tt_og, tt_got_back)
+    eq = torch.equal(tt_og, tt_got_back)
+    assert eq
 
 
 def test_sharded_rm(device):
@@ -422,5 +423,7 @@ def test_sharded_program_cache(device, use_program_cache):
     tt_got_back = zt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_got_back2 = zt2.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
-    assert torch.equal(tt_og, tt_got_back)
-    assert torch.equal(tt_og2, tt_got_back2)
+    eq = torch.equal(tt_og, tt_got_back)
+    assert eq
+    eq = torch.equal(tt_og2, tt_got_back2)
+    assert eq

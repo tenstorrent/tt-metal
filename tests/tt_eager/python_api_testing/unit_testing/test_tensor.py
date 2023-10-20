@@ -46,7 +46,8 @@ def test_tensor_conversion_between_torch_and_tt(shape, tt_dtype, device):
     assert torch_tensor.dtype == torch_tensor_after_round_trip.dtype
     assert torch_tensor.shape == torch_tensor_after_round_trip.shape
 
-    assert torch.allclose(torch_tensor, torch_tensor_after_round_trip)
+    passing = torch.allclose(torch_tensor, torch_tensor_after_round_trip)
+    assert passing
 
 
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
@@ -82,4 +83,5 @@ def test_serialization(tmp_path, shape, tt_dtype):
     if tt_dtype == ttl.tensor.DataType.BFLOAT8_B:
         allclose_kwargs = dict(atol=1e-2)
 
-    assert torch.allclose(torch_tensor, torch_tensor_from_file, **allclose_kwargs)
+    passing = torch.allclose(torch_tensor, torch_tensor_from_file, **allclose_kwargs)
+    assert passing

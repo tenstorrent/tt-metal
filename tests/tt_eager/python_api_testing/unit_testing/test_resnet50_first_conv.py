@@ -137,9 +137,7 @@ def test_resnet50_first_conv(
             extra_pad_w_right=1 + extra_padding_for_32B_alignment,
         )
         print("A_cl_host shape", A_cl_host.shape())
-        memory_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
-        )
+        memory_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
 
         # save original shape (N, H, W, C)
         original_A_cl_host_shape = A_cl_host.shape()
@@ -171,9 +169,7 @@ def test_resnet50_first_conv(
         B_tiled = B_tiled_host.to(device)
 
         # Bias
-        bias_cl_host = create_conv_bias_tensor(
-            bias_pyt, 1, K, _nearest_y(K, weight_block_w * 32), pad=0
-        )
+        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, _nearest_y(K, weight_block_w * 32), pad=0)
         bias_device = bias_cl_host.to(device)
 
         if has_bias:
@@ -192,9 +188,7 @@ def test_resnet50_first_conv(
             bias_device = None
         per_core_weight_matrix_w_ntiles = (int)(K / 32)
         output_mem_config = (
-            ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
-            )
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
             if sharded_out
             else None
         )
@@ -230,9 +224,7 @@ def test_resnet50_first_conv(
         if not untilize_out:
             out_unpadded_shape = [1, 1, N * OH * OW, K]
             assert out_unpadded_shape == out.shape_without_padding()
-            out = ttl.tensor.format_output_tensor(
-                out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR
-            )
+            out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
             out = out.reshape(
                 conv_output_shape[0],
                 conv_output_shape[1],
@@ -268,7 +260,8 @@ def test_resnet50_first_conv(
             indices = out_nonzero.nonzero()
             print("Printing non zero indices -")
             print(indices)
-            assert torch.all(out_bool)
+            all_non_neg = torch.all(out_bool)
+            assert all_non_neg
 
         # Compare against golden
         golden_pcc = 0.9999

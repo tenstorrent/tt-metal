@@ -2,12 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
-
 import torch
 
 import tt_lib
@@ -54,4 +48,5 @@ def test_fill_rm(device):
     # x[1,1,2,2] = 2.0
     print("reshape() max absdiff=")
     print_diff_argmax(tt_got_back, xp)
-    assert torch.equal(tt_got_back, xp)
+    eq = torch.equal(tt_got_back, xp)
+    assert eq
