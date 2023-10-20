@@ -12,6 +12,7 @@
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
 
 namespace tt {
 
@@ -123,8 +124,8 @@ class Device {
     void initialize_cluster();
     void initialize_allocator(const std::vector<uint32_t>& l1_bank_remap = {});
     void initialize_build();
-    void initialize_firmware(CoreCoord phys_core);
-    void initialize_hardware();
+    void initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg);
+    void initialize_and_launch_firmware();
     void clear_l1_state();
     // Puts device into reset
     bool close();
