@@ -26,4 +26,5 @@ def test_run_sfpu_tensor(device):
     shape = [1, 1, 32, 32]
     eps = ttl.tensor.sfpu_eps(shape, ttl.tensor.Layout.ROW_MAJOR, device)
     eps = eps.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    assert np.isclose( np.ones((1,1,32,32))*value, eps.float()).all()
+    passing = np.isclose(np.ones((1, 1, 32, 32)) * value, eps.float()).all()
+    assert passing

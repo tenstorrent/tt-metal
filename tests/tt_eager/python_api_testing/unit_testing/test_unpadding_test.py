@@ -9,11 +9,11 @@ import torch
 
 import tt_lib as ttl
 
-def unpadding_test(input_layout, input_tensor_shape, output_tensor_start,
-                   output_tensor_end, device, in_mem_config,
-                   out_mem_config):
-    inp = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
+def unpadding_test(
+    input_layout, input_tensor_shape, output_tensor_start, output_tensor_end, device, in_mem_config, out_mem_config
+):
+    inp = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
     a = (
         ttl.tensor.Tensor(
@@ -26,8 +26,12 @@ def unpadding_test(input_layout, input_tensor_shape, output_tensor_start,
         .to(device)
     )
 
-
-    a_pt = ttl.tensor.unpad(a, output_tensor_start, output_tensor_end, output_mem_config=out_mem_config).cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    a_pt = (
+        ttl.tensor.unpad(a, output_tensor_start, output_tensor_end, output_mem_config=out_mem_config)
+        .cpu()
+        .to(ttl.tensor.Layout.ROW_MAJOR)
+        .to_torch()
+    )
 
     # Pytorch reference
     a_ref = inp[
@@ -39,68 +43,92 @@ def unpadding_test(input_layout, input_tensor_shape, output_tensor_start,
 
     return a_pt, a_ref, ttl.program_cache.num_entries()
 
+
 @pytest.mark.parametrize(
     "out_mem_config",
-    (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-    ),
+    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
     ids=["out_DRAM"],
 )
 @pytest.mark.parametrize(
     "in_mem_config",
-    (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-    ),
+    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
     ids=["in0_DRAM"],
 )
-
 @pytest.mark.parametrize(
     "input_tensor_shape_0, output_tensor_start_0, output_tensor_end_0",
-    (
-        ((4, 3, 64, 64), (0, 0, 0, 0), (3, 2, 31, 31)),
-    ),
+    (((4, 3, 64, 64), (0, 0, 0, 0), (3, 2, 31, 31)),),
 )
-
 @pytest.mark.parametrize(
     "input_tensor_shape_1, output_tensor_start_1, output_tensor_end_1",
-    (
-        ((9, 8, 128, 128), (0, 0, 0, 0), (8, 7, 31, 31)),
-    ),
+    (((9, 8, 128, 128), (0, 0, 0, 0), (8, 7, 31, 31)),),
 )
-
-def test_run_unpadding_test(input_tensor_shape_0, output_tensor_start_0, output_tensor_end_0,
-                            input_tensor_shape_1, output_tensor_start_1, output_tensor_end_1,
-                            device, in_mem_config, out_mem_config, use_program_cache):
-
-    a_pt, a_ref, num_cache_entries = unpadding_test(ttl.tensor.Layout.ROW_MAJOR, input_tensor_shape_0, output_tensor_start_0,
-                                 output_tensor_end_0, device,
-                                 in_mem_config, out_mem_config)
+def test_run_unpadding_test(
+    input_tensor_shape_0,
+    output_tensor_start_0,
+    output_tensor_end_0,
+    input_tensor_shape_1,
+    output_tensor_start_1,
+    output_tensor_end_1,
+    device,
+    in_mem_config,
+    out_mem_config,
+    use_program_cache,
+):
+    a_pt, a_ref, num_cache_entries = unpadding_test(
+        ttl.tensor.Layout.ROW_MAJOR,
+        input_tensor_shape_0,
+        output_tensor_start_0,
+        output_tensor_end_0,
+        device,
+        in_mem_config,
+        out_mem_config,
+    )
     assert a_pt.shape == a_ref.shape
-    assert torch.equal(a_pt, a_ref)
-    assert (num_cache_entries == 1)
+    eq = torch.equal(a_pt, a_ref)
+    assert eq
+    assert num_cache_entries == 1
 
-    a_pt, a_ref, num_cache_entries = unpadding_test(ttl.tensor.Layout.ROW_MAJOR, input_tensor_shape_1, output_tensor_start_1,
-                                 output_tensor_end_1, device,
-                                 in_mem_config, out_mem_config)
+    a_pt, a_ref, num_cache_entries = unpadding_test(
+        ttl.tensor.Layout.ROW_MAJOR,
+        input_tensor_shape_1,
+        output_tensor_start_1,
+        output_tensor_end_1,
+        device,
+        in_mem_config,
+        out_mem_config,
+    )
     assert a_pt.shape == a_ref.shape
-    assert torch.equal(a_pt, a_ref)
-    #different width for row major
-    assert (num_cache_entries == 2)
+    eq = torch.equal(a_pt, a_ref)
+    assert eq
+    # different width for row major
+    assert num_cache_entries == 2
 
-
-    a_pt, a_ref, num_cache_entries = unpadding_test(ttl.tensor.Layout.TILE, input_tensor_shape_0, output_tensor_start_0,
-                                 output_tensor_end_0, device,
-                                 in_mem_config, out_mem_config)
-    #change from RM to TILE
-    assert (num_cache_entries == 3)
+    a_pt, a_ref, num_cache_entries = unpadding_test(
+        ttl.tensor.Layout.TILE,
+        input_tensor_shape_0,
+        output_tensor_start_0,
+        output_tensor_end_0,
+        device,
+        in_mem_config,
+        out_mem_config,
+    )
+    # change from RM to TILE
+    assert num_cache_entries == 3
     assert a_pt.shape == a_ref.shape
-    assert torch.equal(a_pt, a_ref)
+    eq = torch.equal(a_pt, a_ref)
+    assert eq
 
-
-    a_pt, a_ref, num_cache_entries = unpadding_test(ttl.tensor.Layout.TILE, input_tensor_shape_1, output_tensor_start_1,
-                                 output_tensor_end_1, device,
-                                 in_mem_config, out_mem_config)
-    #CACHE HIT
-    assert (num_cache_entries == 3)
+    a_pt, a_ref, num_cache_entries = unpadding_test(
+        ttl.tensor.Layout.TILE,
+        input_tensor_shape_1,
+        output_tensor_start_1,
+        output_tensor_end_1,
+        device,
+        in_mem_config,
+        out_mem_config,
+    )
+    # CACHE HIT
+    assert num_cache_entries == 3
     assert a_pt.shape == a_ref.shape
-    assert torch.equal(a_pt, a_ref)
+    eq = torch.equal(a_pt, a_ref)
+    assert eq
