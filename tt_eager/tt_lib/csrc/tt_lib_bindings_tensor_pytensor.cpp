@@ -548,9 +548,9 @@ namespace tt::tt_metal::detail
                     tt_tensor_padded = tt_tensor.pad(output_tensor_shape, input_tensor_start, pad_value)
 
                     print("Input tensor:")
-                    tt_tensor.pretty_print()
+                    print(tt_tensor)
                     print("\nPadded tensor:")
-                    tt_tensor_padded.pretty_print()
+                    print(tt_tensor_padded)
 
                 Example output:
 
@@ -617,9 +617,9 @@ namespace tt::tt_metal::detail
                     tt_tensor_unpadded = tt_tensor.unpad(output_tensor_start, output_tensor_end)
 
                     print("Input tensor:")
-                    tt_tensor.pretty_print()
+                    print(tt_tensor)
                     print("\nUnpadded tensor:")
-                    tt_tensor_unpadded.pretty_print()
+                    print(tt_tensor_unpadded)
 
                 Example output:
 
@@ -673,9 +673,9 @@ namespace tt::tt_metal::detail
                     tt_tensor_padded = tt_tensor.pad_to_tile(pad_value)
 
                     print("Input tensor:")
-                    tt_tensor.pretty_print()
+                    print(tt_tensor)
                     print("\nPadded tensor:")
-                    tt_tensor_padded.pretty_print()
+                    print(tt_tensor_padded)
 
                 Example output:
 
@@ -734,9 +734,9 @@ namespace tt::tt_metal::detail
                     tt_tensor_unpadded = tt_tensor.unpad_from_tile(output_tensor_shape)
 
                     print("Input tensor:")
-                    tt_tensor.pretty_print()
+                    print(tt_tensor)
                     print("\nUnpadded tensor:")
-                    tt_tensor_unpadded.pretty_print()
+                    print(tt_tensor_unpadded)
 
                 Example output:
 
@@ -756,7 +756,7 @@ namespace tt::tt_metal::detail
                         [7, 8, 9]]] dtype=bfloat16 ]
             )doc")
             .def("print", [](const Tensor &self, Layout print_layout) {
-                return self.print(print_layout);
+                std::cout << self.to_string(print_layout);
             }, py::arg("print_layout") = Layout::ROW_MAJOR, R"doc(
                 Prints the tensor as a flat list of numbers. By default, the tensor will be printed in row major order.
 
@@ -770,14 +770,14 @@ namespace tt::tt_metal::detail
 
                     [ 0.722656, 0.0332031, 0.109375, ..., 0.333984, 0.396484, 0.851562 dtype=bfloat16 ]
             )doc")
-            .def("pretty_print", [](const Tensor &self) {
-                return self.pretty_print();
+            .def("__str__", [](const Tensor &self) {
+                return self.to_string(Layout::ROW_MAJOR, true);
             }, R"doc(
                 Prints the tensor as list of nested lists. Number of levels of nesting is equal to tensor rank.
 
                 .. code-block:: python
 
-                    tt_tensor.pretty_print()
+                    print(tt_tensor)
 
                 Example output for a rank 4 TT Tensor with shape (1, 1, 32, 32):
 

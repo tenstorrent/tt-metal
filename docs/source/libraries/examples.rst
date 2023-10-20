@@ -42,7 +42,7 @@ These are the steps:
         tt_output = tt_relu_out.cpu()
 
         # Print TT Tensor
-        tt_output.pretty_print()
+        print(tt_output)
 
         # Close TT accelerator device
         tt_lib.device.CloseDevice(tt_device)
@@ -116,7 +116,7 @@ Lastly, we run ``exp`` on TT Accelerator device (suppling it with output from ``
         tt_output = tt_exp_out.cpu()
 
         # Print TT Tensor
-        tt_output.pretty_print()
+        print(tt_output)
 
         # Close TT accelerator device
         tt_lib.device.CloseDevice(tt_device)
@@ -171,7 +171,7 @@ can be modified as follow:
         tt_output = tt_relu_out.cpu()
 
         # Print TT Tensor
-        tt_output.pretty_print()
+        print(tt_output)
 
         # Close TT accelerator device
         tt_lib.device.CloseDevice(tt_device)

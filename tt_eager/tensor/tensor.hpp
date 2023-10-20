@@ -58,10 +58,8 @@ class Tensor {
 
         Tensor unpad_from_tile(const Shape &output_tensor_shape) const;
 
+        std::string to_string(Layout print_layout=Layout::ROW_MAJOR, bool pretty_print=false) const;
         void print(Layout print_layout=Layout::ROW_MAJOR, bool pretty_print=false) const;
-
-        // Prints like numpy print function to make it more readable. Only supports row major layout.
-        void pretty_print() const;
 
         // ======================================================================================
         //                                  Low Level APIs

@@ -81,14 +81,14 @@ Tensor unpad_wrapper(const Tensor &tensor, const Shape &output_tensor_start, con
     return unpad_map.at(tensor.dtype())(tensor, output_tensor_start, output_tensor_end);
 }
 
-void print_wrapper(const Tensor &tensor, Layout print_layout, bool pretty_print) {
-    const static std::map<DataType, std::function<void(const Tensor &, Layout, bool)>> print_map = {
-        {DataType::BFLOAT16, &print<bfloat16>},
-        {DataType::FLOAT32, &print<float>},
-        {DataType::UINT32, &print<uint32_t>},
-        {DataType::BFLOAT8_B, &print<uint32_t>}
+std::string to_string_wrapper(const Tensor &tensor, Layout print_layout, bool pretty_print) {
+    const static std::map<DataType, std::function<std::string(const Tensor &, Layout, bool)>> to_string_map = {
+        {DataType::BFLOAT16, &to_string<bfloat16>},
+        {DataType::FLOAT32, &to_string<float>},
+        {DataType::UINT32, &to_string<uint32_t>},
+        {DataType::BFLOAT8_B, &to_string<uint32_t>}
     };
-    print_map.at(tensor.dtype())(tensor, print_layout, pretty_print);
+    return to_string_map.at(tensor.dtype())(tensor, print_layout, pretty_print);
 }
 
 }  // namespace tensor_impl
