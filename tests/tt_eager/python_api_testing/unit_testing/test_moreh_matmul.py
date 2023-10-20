@@ -67,6 +67,7 @@ def compare(tt_out, torch_out, atol=0.2, rtop=0.2):
     return allclose_result, isclose_true_ratio
 
 
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_a_shape",
     (
@@ -126,6 +127,7 @@ def test_moreh_matmul(input_a_shape, input_b_shape, device):
     assert allclose_result or isclose_true_ratio > 0.95
 
 
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_a_shape",
     (
@@ -190,6 +192,7 @@ def test_batched_moreh_matmul(input_a_shape, input_b_shape, device):
     assert allclose_result or isclose_true_ratio > 0.95
 
 
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_a_shape",
     (
@@ -250,6 +253,7 @@ def test_moreh_matmul_transpose_b(input_a_shape, input_b_shape, device):
     assert allclose_result or isclose_true_ratio > 0.95
 
 
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_a_shape",
     (
@@ -314,6 +318,7 @@ def test_batched_moreh_matmul_transpose_b(input_a_shape, input_b_shape, device):
     assert allclose_result or isclose_true_ratio > 0.95
 
 
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shape",
     (
