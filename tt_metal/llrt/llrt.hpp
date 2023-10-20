@@ -136,7 +136,9 @@ namespace internal_ {
 
 void assert_enable_core_mailbox_is_valid_for_core(chip_id_t chip_id, const CoreCoord &core);
 
-bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core);
+void wait_until_cores_done(chip_id_t device_id,
+                           int run_state,
+                           std::unordered_set<CoreCoord>& not_done_phys_cores);
 
 void dispatch(
     chip_id_t chip_id,

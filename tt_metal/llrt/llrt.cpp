@@ -104,6 +104,7 @@ std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoor
 
 void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg) {
     msg->mode = DISPATCH_MODE_HOST;
+    TT_ASSERT(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
     tt::Cluster::instance().write_dram_vec((uint32_t *)msg, sizeof(launch_msg_t) / sizeof(uint32_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
 }
 
@@ -262,7 +263,7 @@ CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
 
 namespace internal_ {
 
-bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core) {
+static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
 
     std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
         constexpr int RUN_MAILBOX_BOGUS = 3;
@@ -270,16 +271,48 @@ bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &c
         // read a single uint32_t even though launch.run is smaller than that
         run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address & ~0x3, sizeof(uint32_t));
         uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, run) & 3));
-        if (run != RUN_MSG_GO && run != RUN_MSG_DONE) {
-            fprintf(stderr, "Read unexpected run_mailbox value: 0x%x (expected %x or %x)\n", run, RUN_MSG_GO, RUN_MSG_DONE);
+        if (run != run_state && run != RUN_MSG_DONE) {
+            fprintf(stderr, "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n", run, run_state, RUN_MSG_DONE);
             TT_ASSERT(
-                run_mailbox_read_val[0] == RUN_MSG_GO || run_mailbox_read_val[0] == RUN_MSG_DONE);
+                run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE);
         }
 
         return run == RUN_MSG_DONE;
     };
 
     return get_mailbox_is_done(GET_MAILBOX_ADDRESS_HOST(launch.run));
+}
+
+void wait_until_cores_done(chip_id_t device_id,
+                           int run_state,
+                           std::unordered_set<CoreCoord>& not_done_phys_cores) {
+
+    // poll the cores until the set of not done cores is empty
+    int loop_count = 0;
+    while (!not_done_phys_cores.empty()) {
+        // Print not-done cores
+        if (loop_count % 20 == 0) {
+            string not_done_cores_str = "Not done phys cores: ";
+            for (const auto &core : not_done_phys_cores) {
+                not_done_cores_str += (core.str() + " ");
+            }
+            log_debug(tt::LogMetal, not_done_cores_str.c_str());
+        }
+
+        for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {
+            const auto &phys_core = *it;
+
+            bool is_done = llrt::internal_::check_if_riscs_on_specified_core_done(device_id, phys_core, run_state);
+
+            if (is_done) {
+                log_debug(tt::LogMetal, "Phys cores just done: {}", phys_core.str());
+                it = not_done_phys_cores.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        loop_count++;
+    }
 }
 
 }  // namespace internal_
