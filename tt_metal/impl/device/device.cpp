@@ -135,7 +135,7 @@ void Device::initialize_build() {
                                 default_params);
 }
 
-void Device::initialize_firmware(CoreCoord phys_core) {
+void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) {
     ZoneScoped;
     for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
         string fname;
@@ -151,13 +151,28 @@ void Device::initialize_firmware(CoreCoord phys_core) {
         }
         llrt::test_load_write_read_risc_binary(fname, this->id(), phys_core, riscv_id, true);
     }
+
+    llrt::write_launch_msg_to_core(this->id(), phys_core, launch_msg);
 }
 
-void Device::initialize_hardware() {
+void Device::initialize_and_launch_firmware() {
     ZoneScoped;
 
+    launch_msg_t launch_msg = {
+        .brisc_kernel_id = 0,
+        .ncrisc_kernel_id = 0,
+        .trisc_kernel_id = 0,
+        .ncrisc_fw_size = 0,
+        .mode = DISPATCH_MODE_HOST,
+        .brisc_noc_id = 0,
+        .enable_brisc = 0,
+        .enable_ncrisc = 0,
+        .enable_triscs = 0,
+        .run = RUN_MSG_INIT,
+    };
+
     // Download to worker cores
-    std::vector<uint32_t> run_mailbox_init_val = {RUN_MSG_INIT};
+    log_debug("Initializing firmware");
     CoreCoord grid_size = this->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
@@ -165,8 +180,7 @@ void Device::initialize_hardware() {
             CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
 
             if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
-                this->initialize_firmware(worker_core);
-                llrt::write_hex_vec_to_core(this->id(), worker_core, run_mailbox_init_val, GET_MAILBOX_ADDRESS_HOST(launch.run));
+                this->initialize_firmware(worker_core, &launch_msg);
             }
         }
     }
@@ -209,7 +223,7 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     if (!already_initialized) {
         this->initialize_build();
     }
-    this->initialize_hardware();
+    this->initialize_and_launch_firmware();
     tt_start_debug_print_server();
     llrt::watcher_attach(this, this->id(),
                          [&, this]() { return this->logical_grid_size(); },
