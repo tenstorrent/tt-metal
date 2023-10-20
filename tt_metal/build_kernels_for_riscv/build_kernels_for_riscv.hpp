@@ -96,6 +96,7 @@ void generate_binaries_for_triscs(
 void generate_bank_to_noc_coord_descriptor(
     tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
     string out_dir_path,
+    tt_xy_pair grid_size,
     std::vector<CoreCoord>& dram_bank_map,
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
@@ -121,11 +122,4 @@ void generate_descriptors(
 
 std::string get_string_aliased_arch_lowercase(tt::ARCH arch);
 
-namespace __internal {
-void generate_default_bank_to_noc_coord_descriptor(
-    tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
-    string out_dir_path,
-    tt::ARCH arch
-);
-}
 }

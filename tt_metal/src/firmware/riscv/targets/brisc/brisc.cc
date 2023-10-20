@@ -22,6 +22,7 @@
 #include "dev_msgs.h"
 #include "risc_attribs.h"
 #include "noc_addr_ranges_gen.h"
+#include "generated_bank_to_noc_coord_mapping.h"
 
 #include "debug_status.h"
 #include "debug_print.h"
@@ -45,8 +46,6 @@ volatile uint32_t local_mem_barrier __attribute__((used));
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
-uint8_t noc_size_x __attribute__((used));
-uint8_t noc_size_y __attribute__((used));
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));

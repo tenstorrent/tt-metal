@@ -269,17 +269,19 @@ namespace tt::tt_metal{
                     l1_offset_per_bank[bank_id] = device->l1_bank_offset_from_bank_id(0);
                 }
             }
+
+            const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
+
             // Generate header file in proper location
             generate_bank_to_noc_coord_descriptor (
                 build_options,
                 op_path_suffix,
+                soc_d.grid_size,
                 dram_noc_coord_per_bank,
                 dram_offsets_per_bank,
                 l1_noc_coord_per_bank,
                 l1_offset_per_bank
             );
-
-            const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
 
             // Determine which noc-coords are harvested
             // TODO(PGK/Almeet): fix this w/ new UMD

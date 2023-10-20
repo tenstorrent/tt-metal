@@ -12,10 +12,6 @@ void risc_init() {
     uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(n, 0, NOC_NODE_ID);
     my_x[n] = noc_id_reg & NOC_NODE_ID_MASK;
     my_y[n] = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-    if (n == 0) {
-      noc_size_x = (noc_id_reg >> (NOC_ADDR_NODE_ID_BITS+NOC_ADDR_NODE_ID_BITS)) & ((((uint64_t)0x1) << (NOC_ADDR_NODE_ID_BITS+1)) - 1);
-      noc_size_y = (noc_id_reg >> (NOC_ADDR_NODE_ID_BITS+NOC_ADDR_NODE_ID_BITS+(NOC_ADDR_NODE_ID_BITS+1))) & ((((uint64_t)0x1) << (NOC_ADDR_NODE_ID_BITS+1)) - 1);
-    }
   }
 }
 

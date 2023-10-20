@@ -7,15 +7,12 @@
 #include "noc_nonblocking_api.h"
 #include "dev_msgs.h"
 #include "stream_io_map.h"
-#ifdef PERF_DUMP
-#include "risc_perf.h"
-#endif
 #include "ckernel_globals.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "tt_metal/src/firmware/riscv/common/risc_attribs.h"
+#include "generated_bank_to_noc_coord_mapping.h"
 
 #include "debug_status.h"
-
 #include "debug_print.h"
 
 volatile uint32_t local_mem_barrier __attribute__((used));
@@ -26,8 +23,10 @@ tt_l1_ptr mailboxes_t * const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
-uint8_t noc_size_x __attribute__((used));
-uint8_t noc_size_y __attribute__((used));
+
+uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));

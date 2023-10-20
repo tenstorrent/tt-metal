@@ -44,16 +44,6 @@ extern CQReadInterface cq_read_interface;
 #define NOC_UNICAST_WRITE_VC 1
 #define NOC_MULTICAST_WRITE_VC 4
 
-// dram channel to x/y lookup tables
-// The number of banks is generated based off device we are running on --> controlled by allocator
-extern uint8_t dram_bank_to_noc_x[NUM_DRAM_BANKS];
-extern uint8_t dram_bank_to_noc_y[NUM_DRAM_BANKS];
-extern uint32_t dram_bank_to_noc_xy[NUM_DRAM_BANKS];
-
-extern uint8_t l1_bank_to_noc_x[NUM_L1_BANKS];
-extern uint8_t l1_bank_to_noc_y[NUM_L1_BANKS];
-extern uint32_t l1_bank_to_noc_xy[NUM_L1_BANKS];
-
 inline uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
 // GS RISC-V RTL bug workaround (l1 reads followed by local mem reads causes a hang)
@@ -92,20 +82,6 @@ FORCE_INLINE T get_arg_val(int arg_idx) {
  * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
  */
 #define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_##arg_idx
-
-void init_dram_bank_to_noc_coord_lookup_tables() {
-    init_dram_bank_coords(dram_bank_to_noc_x, dram_bank_to_noc_y);
-    for (uint8_t i = 0; i < NUM_DRAM_BANKS; i++) {
-        dram_bank_to_noc_xy[i] = ((NOC_Y(dram_bank_to_noc_y[i]) << NOC_ADDR_NODE_ID_BITS) | NOC_X(dram_bank_to_noc_x[i])) << (NOC_ADDR_LOCAL_BITS - 32);
-    }
-}
-
-void init_l1_bank_to_noc_coord_lookup_tables() {
-    init_l1_bank_coords(l1_bank_to_noc_x, l1_bank_to_noc_y, bank_to_l1_offset);
-    for (uint16_t i = 0; i < NUM_L1_BANKS; i++) {
-        l1_bank_to_noc_xy[i] = ((NOC_Y(l1_bank_to_noc_y[i]) << NOC_ADDR_NODE_ID_BITS) | NOC_X(l1_bank_to_noc_x[i])) << (NOC_ADDR_LOCAL_BITS - 32);
-    }
-}
 
 // can be used on NCRICS and/or BRISC, as both can act as tile producers into Tensix
 void setup_cb_read_write_interfaces() {
@@ -607,20 +583,20 @@ struct InterleavedAddrGenFast {
             src_addr = MUL_WITH_TILE_SIZE((uint)this->data_format, udivsi3_const_divisor<NUM_DRAM_BANKS>(id)) +
                        this->bank_base_address + offset;
             src_addr += bank_to_dram_offset[bank_id];
-            src_noc_xy = dram_bank_to_noc_xy[bank_id];
+            src_noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 #else
             uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
             src_addr = MUL_WITH_TILE_SIZE((uint)this->data_format, id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) +
                        this->bank_base_address + offset;
             src_addr += bank_to_dram_offset[bank_id];
-            src_noc_xy = dram_bank_to_noc_xy[bank_id];
+            src_noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 #endif
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             src_addr = MUL_WITH_TILE_SIZE((uint)this->data_format, id >> LOG_BASE_2_OF_NUM_L1_BANKS) +
                        this->bank_base_address + offset;
             src_addr += bank_to_l1_offset[bank_id];
-            src_noc_xy = l1_bank_to_noc_xy[bank_id];
+            src_noc_xy = l1_bank_to_noc_xy[noc_index][bank_id];
         }
 
         DEBUG_STATUS('N', 'R', 'T', 'W');
@@ -655,13 +631,13 @@ struct InterleavedAddrGenFast {
                         this->bank_base_address;
             dest_addr += bank_to_dram_offset[bank_id];
 #endif
-            dest_noc_xy = dram_bank_to_noc_xy[bank_id];
+            dest_noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             dest_addr =
                 MUL_WITH_TILE_SIZE((uint)this->data_format, id >> LOG_BASE_2_OF_NUM_L1_BANKS) + this->bank_base_address;
             dest_addr += bank_to_l1_offset[bank_id];
-            dest_noc_xy = l1_bank_to_noc_xy[bank_id];
+            dest_noc_xy = l1_bank_to_noc_xy[noc_index][bank_id];
         }
 
         DEBUG_STATUS('N', 'W', 'T', 'W');
@@ -704,18 +680,18 @@ struct InterleavedPow2AddrGenFast {
             uint32_t bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
             src_addr = (udivsi3_const_divisor<NUM_DRAM_BANKS>(id) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
             src_addr += bank_to_dram_offset[bank_id];
-            src_noc_xy = dram_bank_to_noc_xy[bank_id];
+            src_noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 #else
             uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
             src_addr = ((id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
             src_addr += bank_to_dram_offset[bank_id];
-            src_noc_xy = dram_bank_to_noc_xy[bank_id];
+            src_noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 #endif
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             src_addr = ((id >> LOG_BASE_2_OF_NUM_L1_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
             src_addr += bank_to_l1_offset[bank_id];
-            src_noc_xy = l1_bank_to_noc_xy[bank_id];
+            src_noc_xy = l1_bank_to_noc_xy[noc_index][bank_id];
         }
 
         DEBUG_STATUS('N', 'R', 'P', 'W');
@@ -743,18 +719,18 @@ struct InterleavedPow2AddrGenFast {
             uint32_t bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
             src_addr = (udivsi3_const_divisor<NUM_DRAM_BANKS>(id) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
             src_addr += bank_to_dram_offset[bank_id];
-            src_noc_xy = dram_bank_to_noc_xy[bank_id];
+            src_noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 #else
             uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
             src_addr = ((id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
             src_addr += bank_to_dram_offset[bank_id];
-            src_noc_xy = dram_bank_to_noc_xy[bank_id];
+            src_noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 #endif
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             src_addr = ((id >> LOG_BASE_2_OF_NUM_L1_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
             src_addr += bank_to_l1_offset[bank_id];
-            src_noc_xy = l1_bank_to_noc_xy[bank_id];
+            src_noc_xy = l1_bank_to_noc_xy[noc_index][bank_id];
         }
 
         DEBUG_STATUS('R', 'P', 'W');
@@ -780,18 +756,18 @@ struct InterleavedPow2AddrGenFast {
             uint32_t bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
             dest_addr = (udivsi3_const_divisor<NUM_DRAM_BANKS>(id) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
             dest_addr += bank_to_dram_offset[bank_id];
-            dest_noc_xy = dram_bank_to_noc_xy[bank_id];
+            dest_noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 #else
             uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
             dest_addr = ((id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
             dest_addr += bank_to_dram_offset[bank_id];
-            dest_noc_xy = dram_bank_to_noc_xy[bank_id];
+            dest_noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 #endif
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             dest_addr = ((id >> LOG_BASE_2_OF_NUM_L1_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address + offset;
             dest_addr += bank_to_l1_offset[bank_id];
-            dest_noc_xy = l1_bank_to_noc_xy[bank_id];
+            dest_noc_xy = l1_bank_to_noc_xy[noc_index][bank_id];
         }
 
         DEBUG_STATUS('N', 'W', 'P', 'W');
