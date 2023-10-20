@@ -20,7 +20,7 @@ test-list:
       output-file: transpose_nw_sweep.csv
       env:
         TT_METAL_SLOW_DISPATCH_MODE: ""
-        TT_PCI_DMA_BUF_SIZE: "1048576"
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
@@ -46,7 +46,7 @@ test-list:
       output-file: transpose_nw_sweep.csv
       env:
         TT_METAL_SLOW_DISPATCH_MODE: ""
-        TT_PCI_DMA_BUF_SIZE: "1048576"
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
