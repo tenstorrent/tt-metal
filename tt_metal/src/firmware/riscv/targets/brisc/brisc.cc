@@ -35,6 +35,7 @@ constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x8;
 constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK;
 
 tt_l1_ptr mailboxes_t * const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
+uint32_t ncrisc_kernel_start_offset16;
 
 c_tensix_core core;
 
@@ -48,6 +49,8 @@ uint8_t my_y[NUM_NOCS] __attribute__((used));
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
+
+#define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
 
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
@@ -126,13 +129,13 @@ void set_deassert_addresses() {
     cfg_regs[NCRISC_RESET_PC_OVERRIDE_Reset_PC_Override_en_ADDR32] = 0x1;
 }
 
-void l1_to_ncrisc_iram_copy() {
+void l1_to_ncrisc_iram_copy(uint32_t src, uint32_t dst, uint16_t size) {
     // Copy NCRISC firmware from L1 to local IRAM using tensix DMA
     tdma_xmov(
         TDMA_MOVER0,
-        (MEM_NCRISC_INIT_IRAM_L1_BASE) >> 4,
-        (0x4 << 12),
-        (MEM_NCRISC_IRAM_SIZE) >> 4,
+        src,
+        dst,
+        size,
         XMOV_L1_TO_L0);
     // Wait for DMA to finish
     wait_tdma_movers_done(RISCV_TDMA_STATUS_FLAG_MOVER0_BUSY_MASK);
@@ -218,7 +221,10 @@ inline void deassert_ncrisc_trisc()
     // Below sets ncrisc to go so we can wait until it is cleared on first iteration
     mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
 
-    l1_to_ncrisc_iram_copy();
+    uint16_t fw_size16 = mailboxes->launch.ncrisc_kernel_size16;
+    ncrisc_kernel_start_offset16 = fw_size16;
+
+    l1_to_ncrisc_iram_copy(MEM_NCRISC_INIT_IRAM_L1_BASE >> 4, MEM_MOVER_VIEW_IRAM_BASE_ADDR, fw_size16);
 
     // Bring ncrisc/triscs out of reset
     deassert_all_reset();
@@ -242,8 +248,9 @@ inline void run_ncrisc_trisc()
     if (mailboxes->launch.enable_ncrisc) {
         mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
 
-        // TODO(pgk): don't copy all of iram! 1K cycles?
-        l1_to_ncrisc_iram_copy();
+        l1_to_ncrisc_iram_copy((MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + ncrisc_kernel_start_offset16,
+                               MEM_MOVER_VIEW_IRAM_BASE_ADDR + ncrisc_kernel_start_offset16,
+                               mailboxes->launch.ncrisc_kernel_size16);
 
         // Note: only ncrisc is in reset, so just deasserts ncrisc
         deassert_all_reset();
