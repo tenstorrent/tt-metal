@@ -149,7 +149,9 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
         case 3: fname = "tensix_thread1/tensix_thread1.hex"; break;
         case 4: fname = "tensix_thread2/tensix_thread2.hex"; break;
         }
-        llrt::test_load_write_read_risc_binary(fname, this->id(), phys_core, riscv_id, true);
+
+        ll_api::memory binary_mem = llrt::get_risc_binary(fname, this->id(), true);
+        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
     }
 
     llrt::write_launch_msg_to_core(this->id(), phys_core, launch_msg);
@@ -223,7 +225,6 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     if (!already_initialized) {
         this->initialize_build();
     }
-    this->initialize_and_launch_firmware();
     tt_start_debug_print_server();
     llrt::watcher_attach(this, this->id(),
                          [&, this]() { return this->logical_grid_size(); },
@@ -231,6 +232,7 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
                          [&, this]() -> const std::set<CoreCoord>& { return this->storage_only_cores(); },
                          get_compile_outpath()
                          );
+    this->initialize_and_launch_firmware();
 
     this->initialized_ = true;
     return true;

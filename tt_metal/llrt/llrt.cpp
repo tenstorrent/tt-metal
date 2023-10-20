@@ -197,7 +197,7 @@ void program_brisc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
     write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
 }
 
-static bool test_load_write_read_risc_binary_imp(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id) {
+bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id) {
 
     assert(is_worker_core(core, chip_id));
 
@@ -211,10 +211,10 @@ static bool test_load_write_read_risc_binary_imp(ll_api::memory &mem, chip_id_t 
     }
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
-    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len) {
+    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
         uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
 
-        tt::Cluster::instance().write_dram_vec(&*mem_ptr, len, tt_cxy_pair(chip_id, core), relo_addr);
+        tt::Cluster::instance().write_dram_vec(&*mem_ptr, len_words, tt_cxy_pair(chip_id, core), relo_addr);
     });
 
     log_debug(tt::LogLLRuntime, "wrote hex to core {}", core.str().c_str());
@@ -226,29 +226,6 @@ static bool test_load_write_read_risc_binary_imp(ll_api::memory &mem, chip_id_t 
     }
 
     return true;
-}
-
-bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id) {
-
-    test_load_write_read_risc_binary_imp(mem, chip_id, core, riscv_id);
-
-    return true;
-}
-
-bool test_load_write_read_risc_binary(std::string hex_file_name, chip_id_t chip_id, const CoreCoord &core, int riscv_id, bool fw_build) {
-
-    log_debug(tt::LogLLRuntime, "hex_file_path = {}", (fw_build ? get_firmware_compile_outpath(chip_id) : get_kernel_compile_outpath(chip_id)) + hex_file_name);
-    ll_api::memory mem = get_risc_binary(hex_file_name, chip_id, fw_build);
-    test_load_write_read_risc_binary_imp(mem, chip_id, core, riscv_id);
-
-    return true;
-}
-
-// for TRISCs
-bool test_load_write_read_trisc_binary(std::string hex_file_name, chip_id_t chip_id, const CoreCoord &core, int triscv_id) {
-
-    assert(triscv_id >= 0 and triscv_id <= 2);
-    return test_load_write_read_risc_binary(hex_file_name, chip_id, core, triscv_id + 2);
 }
 
 bool test_load_write_read_trisc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int triscv_id) {
