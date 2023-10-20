@@ -23,9 +23,8 @@ sfpi_inline vFloat calculate_sqrt_custom(vFloat in)
 {
     vFloat val = in;
     vFloat out;
-    vConstFloatPrgm0 = s2vFloat16b(0x5f37);
     v_if (val != 0.0f){
-        vUInt magic = vConstIntPrgm0;
+        vUInt magic = reinterpret<vUInt>(vFloat(s2vFloat16b(0x5f37)));
         vFloat approx = reinterpret<vFloat>(magic - (reinterpret<vUInt>(val) >> 1));
         for (int r = 0; r < 2; r++)
         {
@@ -69,7 +68,7 @@ inline void calculate_erfinv()
             dst_reg[0] = std::numeric_limits<float>::infinity();
         }v_elseif (v == -1.0f) {
             dst_reg[0] = -std::numeric_limits<float>::infinity();
-        }v_elseif ((v < -1.0f)||(v > 1.0f)) {
+        }v_elseif ((v < -1.0f)||(v > 1.0f)) { //Nan not supported
             dst_reg[0] = std::numeric_limits<float>::quiet_NaN();
         }v_elseif (v < 0.0f) {
             calculate_erfinv_body<true>(v);
@@ -84,7 +83,9 @@ inline void calculate_erfinv()
 
 template <bool APPROXIMATION_MODE>
 void erfinv_init() {
-    ;
+    vConstFloatPrgm0 = 0.692871f; // ln2
+    vConstFloatPrgm1 = 0.1058f;
+    vConstFloatPrgm2 = -0.7166f;
 }
 
 }  // namespace sfpu

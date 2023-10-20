@@ -17,8 +17,8 @@ namespace ckernel {
 // New LLK SFPU APIs
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_logical_not_unary_init() {
-    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::logical_erfinv_init<APPROXIMATE>);
+inline void llk_math_eltwise_unary_sfpu_erfinv_init() {
+    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::erfinv_init<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
