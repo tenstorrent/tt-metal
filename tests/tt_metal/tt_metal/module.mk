@@ -12,6 +12,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/perf_microbenchmark/matmul/matmul_local_l1 \
 		 tests/tt_metal/perf_microbenchmark/noc/test_noc_read_global_l1 \
 		 tests/tt_metal/perf_microbenchmark/noc/test_noc_read_local_l1 \
+		 tests/tt_metal/perf_microbenchmark/noc/test_noc_unicast_vs_multicast_to_single_core_latency \
 		 tests/tt_metal/perf_microbenchmark/pcie/test_enqueue_rw_buffer \
 		 tests/tt_metal/perf_microbenchmark/pcie/test_rw_buffer \
 		 tests/tt_metal/perf_microbenchmark/pcie/test_rw_device_dram \
