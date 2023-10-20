@@ -7,7 +7,7 @@
 #include "dataflow_api.h"
 #include "debug_print.h"
 
-void mask_tile(uint32_t l1_addr, uint32_t mask_w = 32, uint32_t mask_h = 32) {
+void mask_tile_in_reader(uint32_t l1_addr, uint32_t mask_w = 32, uint32_t mask_h = 32) {
     union {
         float f;
         uint32_t u;
@@ -105,8 +105,8 @@ void kernel_main() {
         noc_async_read_barrier();
 
         if (last_tile) {
-            mask_tile(l1_write_addr_in0, mask_w, mask_h);
-            mask_tile(l1_write_addr_in1, mask_w, mask_h);
+            mask_tile_in_reader(l1_write_addr_in0, mask_w, mask_h);
+            mask_tile_in_reader(l1_write_addr_in1, mask_w, mask_h);
         }
 
         cb_push_back(cb_id_in0, onetile);
