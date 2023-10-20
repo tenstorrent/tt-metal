@@ -143,71 +143,194 @@ inline std::vector<T> convert_layout_tile_to_row_major(const Shape& shape, const
 // ======================================================================================
 std::ostream& operator<<(std::ostream& os, const DataType& dtype);
 
+namespace detail {
+
 template <typename T>
-inline void print_datum(T datum) {
-    std::cout << datum;
+inline void print_datum(std::ostream& ss, T datum) {
+    ss << datum;
 }
 
 template <>
-inline void print_datum(bfloat16 datum) {
-    std::cout << datum.to_float();
+inline void print_datum(std::ostream& ss, bfloat16 datum) {
+    ss << datum.to_float();
 }
 
-template <typename T>
-void print_data(const std::vector<T> &data, DataType dtype) {
-    std::cout << "[ ";
-    for (int i = 0; i < data.size(); i++) {
-        print_datum(data[i]);
-        if (i < data.size() - 1) {
-            std::cout << ", ";
+template <typename BufferType>
+std::string to_string(const BufferType& buffer, DataType dtype) {
+    std::stringstream ss;
+    ss << "[ ";
+    for (int i = 0; i < buffer.size(); i++) {
+        print_datum(ss, buffer[i]);
+        if (i < buffer.size() - 1) {
+            ss << ", ";
         }
     }
-    std::cout << " dtype=" <<  dtype << " ]" << std::endl;
+    ss << " dtype=" <<  dtype << " ]" << std::endl;
+    return ss.str();
 }
 
-template <typename T>
-void print_row_major_data(const std::vector<T> &data, const Shape& shape, DataType dtype) {
-    std::cout << "[ ";
+template <typename BufferType>
+std::string to_string_row_major_0D(const BufferType& buffer, const Shape& shape, DataType dtype) {
+
+    std::stringstream ss;
+    ss << "Tensor( ";
+    print_datum(ss, buffer[0]);
+    ss << ", dtype=" <<  dtype << " )" << std::endl;
+    return ss.str();
+}
+
+template <typename BufferType>
+std::string to_string_row_major_1D(const BufferType& buffer, const Shape& shape, DataType dtype) {
+
+    std::stringstream ss;
+    ss << "Tensor([ ";
+    for(auto x = 0; x < shape[0]; x++) {
+        // data in row major order
+        auto index = x;
+        print_datum(ss, buffer[index]);
+        if (x < shape[0] - 1) {
+            ss << ", ";
+        }
+    }
+    ss << "], dtype=" <<  dtype << " )" << std::endl;
+    return ss.str();
+}
+
+template <typename BufferType>
+std::string to_string_row_major_2D(const BufferType& buffer, const Shape& shape, DataType dtype) {
+
+    std::stringstream ss;
+    ss << "Tensor([ ";
+    for(auto y = 0; y < shape[0]; y++) {
+        if (y == 0)
+            ss << "[";
+        else
+            ss << "    [";
+        for(auto x = 0; x < shape[1]; x++) {
+            // data in row major order
+            auto index = x + y*shape[1];
+            print_datum(ss, buffer[index]);
+            if (x < shape[1] - 1) {
+                ss << ", ";
+            }
+        }
+        if(y < shape[0] - 1)
+            ss << "]," << std::endl;
+        else
+            ss << "]";
+    }
+    ss << "], dtype=" <<  dtype << " )" << std::endl;
+    return ss.str();
+}
+
+template <typename BufferType>
+std::string to_string_row_major_3D(const BufferType& buffer, const Shape& shape, DataType dtype) {
+
+    std::stringstream ss;
+    ss << "Tensor([ ";
+    for(auto z = 0; z < shape[0]; z++) {
+        if (z == 0)
+            ss << "[";
+        else
+            ss << "   [";
+        for(auto y = 0; y < shape[1]; y++) {
+            if (y == 0)
+                ss << "[";
+            else
+                ss << "    [";
+            for(auto x = 0; x < shape[2]; x++) {
+                // data in row major order
+                auto index = x + y*shape[2] + z*shape[1]*shape[2];
+                print_datum(ss, buffer[index]);
+                if (x < shape[2] - 1) {
+                    ss << ", ";
+                }
+            }
+            if(y < shape[1] - 1)
+                ss << "]," << std::endl;
+            else
+                ss << "]";
+        }
+        if(z < shape[0] - 1)
+            ss << "]," << std::endl << std::endl;
+        else
+            ss << "]";
+    }
+    ss << "], dtype=" <<  dtype << " )" << std::endl;
+    return ss.str();
+}
+
+template <typename BufferType>
+std::string to_string_row_major_4D(const BufferType& buffer, const Shape& shape, DataType dtype) {
+
+    std::stringstream ss;
+    ss << "Tensor([ ";
     for(auto w = 0; w < shape[0]; w++) {
         if(w == 0)
-            std::cout << "[";
+            ss << "[";
         else
-            std::cout << "  [";
+            ss << "  [";
         for(auto z = 0; z < shape[1]; z++) {
             if (z == 0)
-                std::cout << "[";
+                ss << "[";
             else
-                std::cout << "   [";
+                ss << "   [";
             for(auto y = 0; y < shape[2]; y++) {
                 if (y == 0)
-                    std::cout << "[";
+                    ss << "[";
                 else
-                    std::cout << "    [";
+                    ss << "    [";
                 for(auto x = 0; x < shape[3]; x++) {
                     // data in row major order
                     auto index = x + y*shape[3] + z*shape[2]*shape[3] + w*shape[1]*shape[2]*shape[3];
-                    print_datum(data[index]);
+                    print_datum(ss, buffer[index]);
                     if (x < shape[3] - 1) {
-                        std::cout << ", ";
+                        ss << ", ";
                     }
                 }
                 if(y < shape[2] - 1)
-                    std::cout << "]," << std::endl;
+                    ss << "]," << std::endl;
                 else
-                    std::cout << "]";
+                    ss << "]";
             }
             if(z < shape[1] - 1)
-                std::cout << "]," << std::endl << std::endl;
+                ss << "]," << std::endl << std::endl;
             else
-                std::cout << "]";
+                ss << "]";
         }
         if(w < shape[0] - 1)
-            std::cout << "]," << std::endl << std::endl << std::endl;
+            ss << "]," << std::endl << std::endl << std::endl;
         else
-            std::cout << "]";
+            ss << "]";
     }
-    std::cout << " dtype=" <<  dtype << " ]" << std::endl;
+    ss << "], dtype=" <<  dtype << " )" << std::endl;
+    return ss.str();
 }
+
+
+template <typename BufferType>
+std::string to_string_row_major(const BufferType& buffer, const Shape& shape, DataType dtype) {
+    if (shape.rank() == 0) {
+        return to_string_row_major_0D(buffer, shape, dtype);
+    }
+    if (shape.rank() == 1) {
+        return to_string_row_major_1D(buffer, shape, dtype);
+    }
+    else if (shape.rank() == 2) {
+        return to_string_row_major_2D(buffer, shape, dtype);
+    }
+    else if (shape.rank() == 3) {
+        return to_string_row_major_3D(buffer, shape, dtype);
+    }
+    else if (shape.rank() == 4) {
+        return to_string_row_major_4D(buffer, shape, dtype);
+    }
+    else {
+        TT_THROW("Cannot print tensor of rank ", shape.rank());
+    }
+}
+
+} // namespace detail
 
 
 // ======================================================================================
@@ -577,41 +700,62 @@ Tensor unpad_bfloat8_b(const Tensor &tensor, const Shape& output_tensor_start, c
 //                                         Print
 // ======================================================================================
 template <typename T>
-inline void print(const Tensor &tensor, Layout print_layout, bool pretty_print) {
-    if (tensor.storage_type() == StorageType::DEVICE) {
-        print<T>(to_host<T>(tensor), print_layout, pretty_print);
-        return;
-    }
+inline std::string to_string(const Tensor &tensor, Layout print_layout, bool pretty_print = false) {
 
-    auto data_vec = owned_buffer::get_as<T>(tensor).get();
+    const auto shape = tensor.shape();
+    const auto dtype = tensor.dtype();
+    const auto layout = tensor.layout();
 
-    switch (tensor.layout()) {
-        case Layout::ROW_MAJOR:
-            if (print_layout == Layout::ROW_MAJOR) {
-                pretty_print ? print_row_major_data(data_vec, tensor.shape(), tensor.dtype()) : print_data(data_vec, tensor.dtype());
-            } else if (print_layout == Layout::TILE) {
-                TT_ASSERT(pretty_print == false && "Can only pretty print in Row Major layout!");
-                auto converted_data = convert_layout_row_major_to_tile(tensor.shape(), data_vec);
-                print_data(converted_data, tensor.dtype());
+    auto to_string_impl = [&print_layout, &pretty_print, &shape, &dtype, &layout](const auto& buffer) -> std::string {
+        switch (layout) {
+            case Layout::ROW_MAJOR:
+                if (print_layout == Layout::ROW_MAJOR) {
+                    return pretty_print ? detail::to_string_row_major(buffer, shape, dtype) : detail::to_string(buffer, dtype);
+                } else if (print_layout == Layout::TILE) {
+                    TT_ASSERT(pretty_print == false && "Can only pretty print in Row Major layout!");
+                    auto converted_data = convert_layout_row_major_to_tile(shape, buffer);
+                    return detail::to_string(converted_data, dtype);
+                }
+                else {
+                    TT_THROW("Unsupported print layout");
+                }
+                break;
+            case Layout::TILE:
+                if (print_layout == Layout::ROW_MAJOR) {
+                    auto converted_data = convert_layout_tile_to_row_major(shape, buffer);
+                    return pretty_print ? detail::to_string_row_major(converted_data, shape, dtype) : detail::to_string(converted_data, dtype);
+                } else if (print_layout == Layout::TILE) {
+                    TT_ASSERT(pretty_print == false && "Can only pretty print in Row Major layout!");
+                    return detail::to_string(buffer, dtype);
+                } else {
+                    TT_THROW("Unsupported print layout");
+                }
+                break;
+            default:
+                TT_THROW("Unsupported print layout");
+        }
+    };
+
+    return std::visit(
+        [&] (auto&& storage) -> std::string {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                const auto input_data = owned_buffer::get_as<T>(storage.buffer);
+                return to_string_impl(input_data);
+            }
+            else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                const auto input_data = borrowed_buffer::get_as<T>(storage.buffer);
+                return to_string_impl(input_data);
+            }
+            else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
+                return to_string<T>(to_host<T>(tensor), print_layout, pretty_print);
             }
             else {
-                TT_THROW("Unsupported print layout");
+                raise_unsupported_storage<StorageType>();
             }
-            break;
-        case Layout::TILE:
-            if (print_layout == Layout::ROW_MAJOR) {
-                auto converted_data = convert_layout_tile_to_row_major(tensor.shape(), data_vec);
-                pretty_print ? print_row_major_data(converted_data, tensor.shape(), tensor.dtype()) : print_data(converted_data, tensor.dtype());
-            } else if (print_layout == Layout::TILE) {
-                TT_ASSERT(pretty_print == false && "Can only pretty print in Row Major layout!");
-                print_data(data_vec, tensor.dtype());
-            } else {
-                TT_THROW("Unsupported print layout");
-            }
-            break;
-        default:
-            TT_THROW("Unsupported print layout");
-    }
+        },
+        tensor.storage()
+    );
 }
 
 }  // namespace tensor_impl

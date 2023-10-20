@@ -85,3 +85,33 @@ def test_serialization(tmp_path, shape, tt_dtype):
 
     passing = torch.allclose(torch_tensor, torch_tensor_from_file, **allclose_kwargs)
     assert passing
+
+
+@pytest.mark.parametrize("shape", [(1, 2, 3, 4)])
+@pytest.mark.parametrize(
+    "tt_dtype",
+    [
+        ttl.tensor.DataType.UINT32,
+        ttl.tensor.DataType.FLOAT32,
+        ttl.tensor.DataType.BFLOAT16,
+    ],
+)
+def test_print(shape, tt_dtype):
+    torch.manual_seed(0)
+
+    dtype = tt_dtype_to_torch_dtype[tt_dtype]
+
+    if dtype == torch.int32:
+        torch_tensor = torch.randint(0, 1024, shape, dtype=dtype)
+    else:
+        torch_tensor = torch.rand(shape, dtype=dtype)
+
+    tt_tensor = ttl.tensor.Tensor(torch_tensor, tt_dtype)
+    if tt_dtype == ttl.tensor.DataType.UINT32:
+        assert str(tt_tensor) == "[ [[[684, 559, 629, 192],\n    [835, 763, 707, 359],\n    [9, 723, 277, 754]],\n\n   [[804, 599, 70, 472],\n    [600, 396, 314, 705],\n    [486, 551, 87, 174]]] dtype=uint32 ]\n"
+    elif tt_dtype == ttl.tensor.DataType.FLOAT32:
+        assert str(tt_tensor) == "[ [[[0.496257, 0.768222, 0.0884774, 0.13203],\n    [0.307423, 0.634079, 0.490093, 0.896445],\n    [0.455628, 0.632306, 0.348893, 0.401717]],\n\n   [[0.0223258, 0.168859, 0.293888, 0.518522],\n    [0.697668, 0.800011, 0.161029, 0.282269],\n    [0.681609, 0.915194, 0.3971, 0.874156]]] dtype=float32 ]\n"
+    elif tt_dtype == ttl.tensor.DataType.BFLOAT16:
+        assert str(tt_tensor) == "[ [[[0.671875, 0.183594, 0.457031, 0.75],\n    [0.261719, 0.980469, 0.761719, 0.402344],\n    [0.0351562, 0.824219, 0.0820312, 0.945312]],\n\n   [[0.140625, 0.339844, 0.273438, 0.84375],\n    [0.34375, 0.546875, 0.226562, 0.753906],\n    [0.898438, 0.152344, 0.339844, 0.679688]]] dtype=bfloat16 ]\n"
+    else:
+        raise ValueError(f"Unsupported dtype: {tt_dtype}")

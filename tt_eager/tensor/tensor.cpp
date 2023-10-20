@@ -107,8 +107,12 @@ Tensor Tensor::to(Layout target_layout) const {
     return tensor_impl::to_layout_wrapper(*this, target_layout);
 }
 
+std::string Tensor::to_string(Layout print_layout, bool pretty_print) const {
+    return tensor_impl::to_string_wrapper(*this, print_layout, pretty_print);
+}
+
 void Tensor::print(Layout print_layout, bool pretty_print) const {
-    tensor_impl::print_wrapper(*this, print_layout, pretty_print);
+    std::cout << to_string(print_layout, pretty_print);
 }
 
 Tensor Tensor::pad(const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) const {
@@ -149,11 +153,6 @@ Tensor Tensor::unpad_from_tile(const Shape &output_tensor_shape) const {
     Shape output_tensor_start = {0, 0, 0, 0};
     Shape output_tensor_end = {output_tensor_shape[0] - 1, output_tensor_shape[1] - 1, output_tensor_shape[2] - 1, output_tensor_shape[3] - 1};
     return this->unpad(output_tensor_start, output_tensor_end);
-}
-
-// Prints like numpy print function to make it more readable. Only supports row major layout.
-void Tensor::pretty_print() const {
-    print(Layout::ROW_MAJOR, /*pretty_print=*/true);
 }
 
 uint32_t Tensor::element_size() const {
