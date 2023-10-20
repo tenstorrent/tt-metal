@@ -17,6 +17,7 @@ namespace tt {
 namespace tt_metal {
 
 struct MaxPool {
+    uint32_t in_n_; // nbatch
     uint32_t in_h_, in_w_;
     uint32_t out_h_, out_w_;
     uint32_t kernel_size_h_, kernel_size_w_;
@@ -62,7 +63,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                                                 const MemoryConfig& out_mem_config,
                                                                 uint32_t nblocks);
 operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const Tensor &input, Tensor& output,
-                                                                uint32_t in_h, uint32_t in_w,
+                                                                uint32_t in_n, uint32_t in_h, uint32_t in_w,
                                                                 uint32_t out_h, uint32_t out_w,
                                                                 uint32_t kernel_size_h, uint32_t kernel_size_w,
                                                                 uint32_t stride_h, uint32_t stride_w,
@@ -71,7 +72,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
                                                                 const MemoryConfig& out_mem_config,
                                                                 uint32_t nblocks);
 Tensor max_pool2d(const Tensor &input,
-                  uint32_t in_h, uint32_t in_w,
+                  uint32_t in_n, uint32_t in_h, uint32_t in_w,
                   uint32_t kernel_size_h, uint32_t kernel_size_w,
                   uint32_t stride_h = 1, uint32_t stride_w = 1,
                   uint32_t pad_h = 0, uint32_t pad_w = 0,               // default: no padding
