@@ -95,7 +95,7 @@ def run_geglu_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, 
             success, pcc_value = comp_pcc(output, ref_value)
             logger.debug(pcc_value)
             logger.debug(success)
-            #assert success
+            assert success
 
 
 test_sweep_args=[
