@@ -3,16 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import sys
 import torch
-from pathlib import Path
 from functools import partial
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
@@ -30,17 +22,17 @@ import tt_lib as ttl
         {
             "dtype": [ttl.tensor.DataType.BFLOAT16],
             "layout": [ttl.tensor.Layout.TILE],
-            "input_mem_config": [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
-            "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            "input_mem_config": [
+                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+            ],
+            "output_mem_config": ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            ),
         },
     ),
 )
 def test_untilize_test(input_shapes, untilize_args, device, function_level_defaults):
-    datagen_func = [
-        generation_funcs.gen_func_with_cast(
-            partial(generation_funcs.gen_arange), torch.bfloat16, True
-        )
-    ]
+    datagen_func = [generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_arange), torch.bfloat16, True)]
     comparison_func = comparison_funcs.comp_equal
     run_single_pytorch_test(
         "untilize",
