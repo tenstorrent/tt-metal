@@ -125,10 +125,12 @@ KernelGroup::KernelGroup(const Program& program,
     }
 
     if (ncrisc_id) {
+        const Kernel *kernel = program.get_kernel(ncrisc_id.value());
         // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
         // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
         this->launch_msg.enable_ncrisc = true;
-        this->launch_msg.brisc_noc_id = 1 - std::get<DataMovementConfig>(program.get_kernel(ncrisc_id.value())->config()).noc;
+        this->launch_msg.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
+        this->launch_msg.ncrisc_kernel_size16 = kernel->get_binary_size16();
     } else {
         this->launch_msg.enable_ncrisc = false;
     }
@@ -193,7 +195,6 @@ struct KernelGroupIntHasher {
 
 void Program::update_kernel_groups() {
     if (core_to_kernel_group_index_table_.size() == 0) {
-
         // Get the extent of the kernels in x, y
         CoreCoord base = {std::numeric_limits<decltype(base.x)>::max(),
                           std::numeric_limits<decltype(base.y)>::max()};
