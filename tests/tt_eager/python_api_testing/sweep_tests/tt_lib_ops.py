@@ -6,7 +6,7 @@ import torch
 import tt_lib as ttl
 from models.helper_funcs import Linear as tt_Linear
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
-
+import numpy as np
 
 def setup_tt_tensor(x, device, layout, input_mem_config, dtype):
     if input_mem_config is None:
@@ -789,6 +789,31 @@ def zeros(x, *args, device, dtype, layout, input_mem_config, output_mem_config, 
 
     return tt2torch_tensor(t1)
 
+@setup_host_and_device
+def triu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    tx = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    # create an upper triangular matrix
+    #Sa,Sb,Sy,Sz = x.shape[0],x.shape[1],x.shape[2],x.shape[3]
+    #y = np.triu(np.ones((Sa,Sb,Sy,Sz)))
+    #t0 = setup_tt_tensor(torch.Tensor(y), device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttl.tensor.triu(tx,output_mem_config)
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
+def tril(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    tx = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+
+    # create an lower triangular matrix
+    #Sa,Sb,Sy,Sz = x.shape[0],x.shape[1],x.shape[2],x.shape[3]
+    #y = np.tril(np.ones((Sa,Sb,Sy,Sz)))
+    #t0 = setup_tt_tensor(torch.Tensor(y), device, layout[0], input_mem_config[0], dtype[0])
+
+    t1 = ttl.tensor.tril(tx,output_mem_config)
+    t2 = tt2torch_tensor(t1)
+    return t2
 
 @setup_host_and_device
 def empty(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):

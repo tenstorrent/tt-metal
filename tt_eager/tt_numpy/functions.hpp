@@ -137,6 +137,47 @@ static Tensor arange(int64_t start, int64_t stop, int64_t step, const Layout lay
     return output;
 }
 
+template<typename T,bool IS_UPPER>
+static Tensor index_trilu(const Shape& shape, DataType data_type,
+			  const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr,
+			  const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    // Current implementation restrictions
+    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
+
+    auto index = 0;
+    for(uint32_t w = 0; w < shape[0]; w++) {
+      for(int32_t z = 0; z < shape[1]; z++) {
+	for(int32_t y = 0; y < shape[2]; y++) {
+	  for(int32_t x = 0; x < shape[3]; x++) {
+	    int32_t value = (IS_UPPER) ? (x >= y) : (y >= x);
+	    if constexpr (std::is_same_v<T, bfloat16>) {
+               owned_buffer[index++] = static_cast<T>(static_cast<float>(value));
+            } else {
+	      owned_buffer[index++] = static_cast<T>(value);
+            }
+	  }
+	}
+      }
+    }
+    auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
+    if (device != nullptr) {
+        output = output.to(device, output_mem_config);
+    }
+    return output;
+}
+
+template<typename T>
+static Tensor index_tril(const Shape& shape, DataType data_type, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr,
+		   const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+  return index_trilu<T,false>(shape,data_type,layout,device,output_mem_config);
+}
+
+template<typename T>
+static Tensor index_triu(const Shape& shape, DataType data_type, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr,
+		   const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+  return index_trilu<T,true>(shape,data_type,layout,device,output_mem_config);
+}
+
 namespace random {
 
 inline auto RANDOM_GENERATOR = std::mt19937(0);

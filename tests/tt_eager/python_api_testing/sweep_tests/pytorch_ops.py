@@ -580,6 +580,13 @@ def zeros_like(x, *args, **kwargs):
     result = torch.zeros_like(x)
     return result
 
+def triu(x, *args, **kwargs):
+    result = torch.triu(x)
+    return result
+
+def tril(x, *args, **kwargs):
+    result = torch.tril(x)
+    return result
 
 def ones_like(x, *args, **kwargs):
     result = torch.ones_like(x)
