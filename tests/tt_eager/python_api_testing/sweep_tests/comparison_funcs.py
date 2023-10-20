@@ -51,9 +51,7 @@ def get_atol_rtol_pcc(golden, calculated):
             calculated[
                 torch.logical_or(
                     torch.isnan(calculated),
-                    torch.logical_or(
-                        torch.isinf(calculated), torch.isneginf(calculated)
-                    ),
+                    torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
                 )
             ] = 0
 
@@ -69,16 +67,12 @@ def get_atol_rtol_pcc(golden, calculated):
                 return float(torch.equal(golden, calculated))
 
             # one tensor is constant
-            if torch.max(golden) == torch.min(golden) or torch.max(
-                calculated
-            ) == torch.min(calculated):
+            if torch.max(golden) == torch.min(golden) or torch.max(calculated) == torch.min(calculated):
                 return float(torch.equal(golden, calculated))
 
             cal_pcc = np.ma.corrcoef(
                 np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
-                np.ma.masked_invalid(
-                    torch.squeeze(calculated).detach().numpy()
-                ).flatten(),
+                np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
             )
             # Remove correlation coefficient with self (typically always 1.0)
             mask = np.ones(cal_pcc.shape, dtype=bool)
@@ -113,6 +107,14 @@ def comp_equal(golden, calculated):
     if not equal:
         output_str += ", Equal check failed"
 
+    return equal, output_str
+
+
+def comp_shape(golden, calculated):
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+    output_str = "compare shape"
+    equal = golden.shape == calculated.shape
     return equal, output_str
 
 

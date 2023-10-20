@@ -49,6 +49,8 @@ def custom_compare(*args, **kwargs):
         "is_close",
     ]:
         comparison_func = comparison_funcs.comp_equal
+    elif function in ["empty"]:
+        comparison_func = comparison_funcs.comp_shape
     else:
         comparison_func = partial(comparison_funcs.comp_pcc, pcc=reference_pcc[function])
     result = comparison_func(*args, **kwargs)
@@ -88,6 +90,7 @@ if is_wormhole_b0():
                 "zeros_like",
                 "full_like",
                 "ones",
+                "empty",
                 "zeros",
                 "full",
                 "arange",

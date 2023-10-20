@@ -89,6 +89,7 @@ def copy(
 
     return tt2torch_tensor(t1)
 
+
 @setup_host_and_device
 def clone(
     x,
@@ -122,6 +123,7 @@ def move(
 
     return tt2torch_tensor(t1)
 
+
 @setup_host_and_device
 def eltwise_exp(
     x,
@@ -138,6 +140,7 @@ def eltwise_exp(
     t1 = ttl.tensor.exp(t0, fast_and_approx, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
+
 
 @setup_host_and_device
 def eltwise_erf(
@@ -558,13 +561,9 @@ def layernorm_noweights(x, *args, device, dtype, layout, input_mem_config, outpu
 
 
 @setup_host_and_device
-def groupnorm_noweights(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
-):
+def groupnorm_noweights(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.groupnorm(
-        t0, 1, 1e-5, None, None, output_mem_config=output_mem_config
-    )
+    t1 = ttl.tensor.groupnorm(t0, 1, 1e-5, None, None, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -579,10 +578,7 @@ def add_layernorm_noweights(x, y, *args, device, dtype, layout, input_mem_config
 
 
 @setup_host_and_device
-def layernorm(
-    x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
-):
-
+def layernorm(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     if layout[1] == ttl.tensor.Layout.TILE:
         y = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
 
@@ -595,6 +591,7 @@ def layernorm(
     t3 = ttl.operations.primary.layernorm(t0, 1e-5, t1, t2, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t3)
+
 
 @setup_host_and_device
 def add_layernorm(
@@ -692,9 +689,7 @@ def eltwise_assign_binary(
     dtype,
     layout,
     input_mem_config,
-    output_mem_config=ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
-    ),
+    output_mem_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
@@ -797,6 +792,18 @@ def ones(x, *args, device, dtype, layout, input_mem_config, output_mem_config, *
 @setup_host_and_device
 def zeros(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t1 = ttl.tensor.zeros(
+        x.shape,
+        layout=layout[0],
+        device=device if input_mem_config[0] is not None else None,
+        output_mem_config=output_mem_config,
+    )
+
+    return tt2torch_tensor(t1)
+
+
+@setup_host_and_device
+def empty(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t1 = ttl.tensor.empty(
         x.shape,
         layout=layout[0],
         device=device if input_mem_config[0] is not None else None,
@@ -1999,9 +2006,7 @@ def unpad_from_tile(
 
 
 @setup_host_and_device
-def activation_glu(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
-):
+def activation_glu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     dim = kwargs.get("dim", -1)
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.glu(t0, dim, output_mem_config=output_mem_config)
@@ -2019,9 +2024,7 @@ def activation_geglu(x, *args, device, dtype, layout, input_mem_config, output_m
 
 
 @setup_host_and_device
-def activation_reglu(
-    x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs
-):
+def activation_reglu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     dim = kwargs.get("dim", -1)
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttl.tensor.reglu(t0, dim, output_mem_config=output_mem_config)
@@ -2064,6 +2067,7 @@ def bert_large_ff2_matmul(x, y, z, *args, device, dtype, layout, input_mem_confi
     t3 = ttl.tensor.bert_large_ff2_matmul(t0, t1, t2, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t3)
+
 
 @setup_host_and_device
 def bert_large_ff1_matmul(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
