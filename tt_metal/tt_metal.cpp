@@ -417,42 +417,16 @@ void LaunchProgram(Device *device, Program &program) {
     tt::Cluster::instance().l1_barrier(device->id());
 
     std::vector<CoreCoord> logical_cores_used_in_program = program.logical_cores();
+    std::unordered_set<CoreCoord> not_done_cores;
     for (const auto &logical_core : logical_cores_used_in_program) {
         launch_msg_t *msg = &program.kernels_on_core(logical_core)->launch_msg;
         auto worker_core = device->worker_core_from_logical_core(logical_core);
+        not_done_cores.insert(worker_core);
         tt::llrt::write_launch_msg_to_core(device->id(), worker_core, msg);
     }
 
     // Wait for all cores to be done
-
-    // get all the cores that need to be polled
-    std::unordered_set<CoreCoord> not_done_cores(logical_cores_used_in_program.begin(), logical_cores_used_in_program.end());
-
-    // poll the cores until the set of not done cores is empty
-    while (!not_done_cores.empty()) {
-        // Print not-done cores
-        string not_done_cores_str = "Not done logical cores: ";
-        for (const auto &core : not_done_cores) {
-            not_done_cores_str += (core.str() + " ");
-        }
-        not_done_cores_str += "\n";
-        log_debug(tt::LogMetal, not_done_cores_str.c_str());
-
-        for (auto it = not_done_cores.begin(); it != not_done_cores.end(); ) {
-            const auto &logical_core = *it;
-
-            auto worker_core = device->worker_core_from_logical_core(logical_core);
-
-            bool is_done = llrt::internal_::check_if_riscs_on_specified_core_done(device_id, worker_core);
-
-            if (is_done) {
-                log_debug(tt::LogMetal, "Logical core just done: {}", logical_core.str());
-                it = not_done_cores.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
+    llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
 
     }//Profiler scope end
     detail::DumpDeviceProfileResults(device,program);
