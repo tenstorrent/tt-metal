@@ -38,7 +38,7 @@ void kernel_main() {
     constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(3);   // pad value to fill pad buffer with
     constexpr uint32_t pad_stick_len  = get_compile_time_arg_val(4);   // stick size (size of the pad val buffer)
 
-    const uint16_t pad_val = pad_val_u32 >> 16;
+    const uint16_t pad_val = pad_val_u32;   // >> 16;
 
     cb_reserve_back(pad_cb_id, 1);
     fill_with_val(get_write_ptr(pad_cb_id), pad_stick_len, pad_val);
