@@ -33,6 +33,7 @@ if is_wormhole_b0():
         shapes[0],
     ]
 
+
 @pytest.mark.parametrize(
     "input_shapes",
     shapes,
@@ -165,8 +166,6 @@ class TestEltwiseUnary:
         input_mem_config,
         output_mem_config,
     ):
-        if is_wormhole_b0() and fast_and_approx:
-            pytest.skip("Gelu appx mode not working for WH b0")
         datagen_func = [
             generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
         ]
@@ -935,7 +934,6 @@ class TestEltwiseUnary:
             device,
             test_args,
         )
-
 
     @pytest.mark.parametrize("fn_kind", ["rsub", "rdiv"])
     def test_run_eltwise_reverse_neg_ops(

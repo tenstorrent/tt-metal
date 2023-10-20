@@ -3,21 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import sys
 import torch
-from pathlib import Path
 from functools import partial
 from itertools import product
 from collections import defaultdict
 from math import pi
 import random
 import numpy as np
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
@@ -160,7 +152,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     generator = generation_funcs.gen_rand
 
     if is_wormhole_b0():
-        if fn in ["logit", "bias_gelu_unary"]:
+        if fn in ["logit"]:
             pytest.skip("does not work for Wormhole -skipping")
     if fn in ["logical_xor", "logical_xori", "logical_ori", "logical_andi"]:
         datagen_func = [
