@@ -4,10 +4,3 @@
 
 from ._C import tensor, device, dtx, profiler, program_cache, operations
 from . import fallback_ops
-
-
-def empty(*args, **kwargs):
-    return tensor.zeros(*args, **kwargs)
-
-
-setattr(tensor, "empty", empty)

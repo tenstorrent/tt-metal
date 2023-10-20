@@ -406,6 +406,26 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
+        m_tensor.def("empty",
+            [] (const std::array<uint32_t, 4> shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
+                return empty(shape, layout, device, output_mem_config);
+            },
+            py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Returns a new empty tensor (on device it is filled with zeros in TT impelementation today but may change in future) in shape specified by input ``shape``.
+
+            Input shape is specified as a list of 4 integer elements
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "shape", "Shape vector", "Vector<int>", "[W, Z, Y, X]", "Yes"
+                "layout", "Tensor layout", "Layout", "default is ROW_MAJOR", "No"
+                "device", "Device tensor is placed on", "Device", "default is None (on host)", "No"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
         m_tensor.def("ones",
             [] (const std::array<uint32_t, 4> shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
                 return ones(shape, layout, device, output_mem_config);

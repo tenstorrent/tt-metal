@@ -194,6 +194,9 @@ Tensor ones_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_
 Tensor full_like(const Tensor& reference_tensor, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation 0s with shape
+Tensor empty(const Shape shape, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+//on-device tensor creation 0s with shape
 Tensor zeros(const Shape shape, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation 1s with shape
