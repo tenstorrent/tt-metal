@@ -3,12 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../../..")
 
 import numpy as np
 import tt_lib as ttl
@@ -63,9 +57,7 @@ def run_conv_as_large_matmul_dtx_cpu(conv_op_test_params, pytorch_inputs_and_gol
     # Prepare activations
     A_cl = create_conv_act_tensor(A_pyt, 1, C, H, W)
     # Prepare weights
-    B_tiled = create_conv_weight_tensor(
-        B_pyt, K, C, R, S, weight_block_h, weight_block_w
-    )
+    B_tiled = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
 
     if conv_op_test_params.test_level == TestLevel.INPUT_TENSOR_CREATE:
         return True
@@ -77,9 +69,7 @@ def run_conv_as_large_matmul_dtx_cpu(conv_op_test_params, pytorch_inputs_and_gol
     weight_block_width_datums = weight_block_w * 32
     matrix_activation_h_tiles = (int)(_nearest_y(OH * OW, act_block_height_datums) / 32)
     matrix_weight_w_tiles = (int)(_nearest_y(K, weight_block_width_datums) / 32)
-    matrix_activation_w_tiles = (int)(
-        _nearest_y(_nearest_y(C, 16) * R * S, act_block_width_datums) / 32
-    )
+    matrix_activation_w_tiles = (int)(_nearest_y(_nearest_y(C, 16) * R * S, act_block_width_datums) / 32)
 
     num_blocks_act_w = (int)(matrix_activation_w_tiles / act_block_w)
     num_blocks_act_h = (int)(matrix_activation_h_tiles / act_block_h)
@@ -139,9 +129,7 @@ def test_sweep_conv_with_dtx_cpu():
         conv_op_test_params,
         pytorch_inputs_and_golden,
     ) in pytorch_conv_golden_tb.items():
-        passing_ = run_conv_as_large_matmul_dtx_cpu(
-            conv_op_test_params, pytorch_inputs_and_golden
-        )
+        passing_ = run_conv_as_large_matmul_dtx_cpu(conv_op_test_params, pytorch_inputs_and_golden)
         if passing_:
             if conv_op_test_params.test_level == TestLevel.INPUT_TENSOR_CREATE:
                 input_tensor_only_passing_tests.append(conv_op_test_params)
@@ -167,10 +155,7 @@ def test_sweep_conv_with_dtx_cpu():
     print("Following tests failed - ")
     for conv_op_test_params in failing_tests:
         conv_op_test_params.print("   ")
-    print(
-        str(len(input_tensor_only_passing_tests))
-        + ' "INPUT TENSORS CREATION" tests PASSED.'
-    )
+    print(str(len(input_tensor_only_passing_tests)) + ' "INPUT TENSORS CREATION" tests PASSED.')
     print(str(len(full_op_compute_passing_tests)) + ' "FULL OP COMPUTE" tests PASSED.')
     print(str(len(failing_tests)) + ' "FULL OP COMPUTE" tests FAILED.')
     # assert passing

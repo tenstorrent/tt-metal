@@ -3,9 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import sys
 import torch
-from pathlib import Path
 from functools import partial
 from math import pi
 import copy

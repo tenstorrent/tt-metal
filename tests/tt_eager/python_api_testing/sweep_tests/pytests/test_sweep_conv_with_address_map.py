@@ -3,12 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from pathlib import Path
-import sys
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
 
 import numpy as np
 import tt_lib as ttl
@@ -58,8 +53,8 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
     out_subblock_h = 4
     out_subblock_w = 2
 
-    OH = ((int) ((H - R + 2 * pad_h) / stride_h)) + 1
-    OW = ((int) ((W - S + 2 * pad_w) / stride_w)) + 1
+    OH = ((int)((H - R + 2 * pad_h) / stride_h)) + 1
+    OW = ((int)((W - S + 2 * pad_w) / stride_w)) + 1
     conv_output_shape = [1, OH, OW, K]
 
     # Prepare activations
@@ -67,9 +62,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
     A = A_cl_host.to(device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.SINGLE_BANK))
 
     # Prepare weights
-    B_tiled_host = create_conv_weight_tensor(
-        B_pyt, K, C, R, S, weight_block_h, weight_block_w
-    )
+    B_tiled_host = create_conv_weight_tensor(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
     B_tiled = B_tiled_host.to(device, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.SINGLE_BANK))
 
     if conv_op_test_params.test_level == TestLevel.INPUT_TENSOR_CREATE:
@@ -88,11 +81,11 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
         weight_block_w,
         out_subblock_h,
         out_subblock_w,
-        K
+        K,
     )
     out = out.cpu()
-    assert(out.shape() == conv_output_shape)
-    assert(out.layout() == ttl.tensor.Layout.ROW_MAJOR)
+    assert out.shape() == conv_output_shape
+    assert out.layout() == ttl.tensor.Layout.ROW_MAJOR
 
     # Copy output to host and convert tt tensor to pytorch tensor
     out_result = torch.tensor(out.to_torch()).reshape(conv_output_shape)
@@ -136,9 +129,7 @@ def test_sweep_conv_tt():
             assert conv_op_test_params.test_level == TestLevel.OP_FULL_COMPUTE
             full_op_compute_tests += 1
         try:
-            passing_ = run_conv_as_large_matmul(
-                conv_op_test_params, pytorch_inputs_and_golden
-            )
+            passing_ = run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden)
             if passing_:
                 passing_tests.append(conv_op_test_params)
             else:
@@ -153,9 +144,7 @@ def test_sweep_conv_tt():
     print("Following tests that create only input tensors passed - ")
     for conv_op_test_params in input_tensor_only_passing_tests:
         conv_op_test_params.print("   ")
-    print(
-        "Following tests that create only input tensors failed with exception/error - "
-    )
+    print("Following tests that create only input tensors failed with exception/error - ")
     for conv_op_test_params in input_tensor_only_failing_tests_exception:
         conv_op_test_params.print("   ")
     print("Following tests that ran full op compute passed - ")

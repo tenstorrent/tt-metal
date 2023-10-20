@@ -3,30 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import sys
 import torch
-from pathlib import Path
 from functools import partial
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
 
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 
-if True:
-    params = [
-        pytest.param([[1, 1, 32, 32]], permute_args)
-        for permute_args in generation_funcs.gen_permute_args([[1, 1, 32, 32]])
-    ]
-    params += [
-        pytest.param([[32, 32, 32, 32]], permute_args)
-        for permute_args in generation_funcs.gen_permute_args([[32, 32, 32, 32]])
-    ]
+params = [
+    pytest.param([[1, 1, 32, 32]], permute_args) for permute_args in generation_funcs.gen_permute_args([[1, 1, 32, 32]])
+]
+params += [
+    pytest.param([[32, 32, 32, 32]], permute_args)
+    for permute_args in generation_funcs.gen_permute_args([[32, 32, 32, 32]])
+]
 
 
 @pytest.mark.parametrize("input_shapes, permute_args", params)
