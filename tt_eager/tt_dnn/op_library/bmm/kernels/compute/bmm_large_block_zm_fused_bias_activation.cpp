@@ -95,21 +95,16 @@ void MAIN {
                         tile_regs_acquire();
                     }
 
-                    // Compute output sub-block from in0_subblock x in1_subblock
-                    int dst_index = 0;
-                    int in0_index_h_offset = 0;
-                    for (uint32_t h = 0; h < out_subblock_h; h++) {
-                        for (uint32_t w = 0; w < out_subblock_w; w++) {
-                            int in1_index_inner_dim_offset = 0;
-                            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                                int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
-                                int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                matmul_tiles(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, false /* transpose */);
-                                in1_index_inner_dim_offset += in1_per_core_w;
-                            }
-                            dst_index++;
-                        }
-                        in0_index_h_offset += in0_block_w;
+                    // Compute output sub-block 
+                    int dst_index = 0; // start at 0, each call to matmul_block internally increments dst_index
+                    int in0_index = in0_index_subblock_offset; // offset into in0 block
+                    int in1_index = in1_index_subblock_offset; // offset into in1 block
+                    for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
+                        // matmul outer product of out_subblock_h x out_subblock_w tiles that fill dst
+                        // accumulation is done by iterating matmul_block across inner dim
+                        matmul_block(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, out_subblock_w, out_subblock_h, in0_block_w);
+                        in0_index++; // stride right by 1
+                        in1_index += in1_per_core_w; // to stride down by 1 need to stride by in_per_core_w (should be called in1_block_w)
                     }
 
                     if (last_out) {
