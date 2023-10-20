@@ -160,15 +160,19 @@ def test_run_max_pool(
     assert act_shape_padded == act_padded.shape
 
     ncores = 1
+    grid_size = (1, 1)
     in_height = in_n * in_h * in_w
     out_nhw = in_n * out_h * out_w
     ## NOTE: these should match the max_pool op code for now. Hardcoded Resnet shapes only.
     if out_nhw == 1024:
         ncores = 32
+        grid_size = (8, 4)
     elif out_nhw == 2048 or out_nhw == 4096 or out_nhw == 8192 or out_nhw == 16384 or out_nhw == 32768:
         ncores = 64
+        grid_size = (8, 8)
     elif out_nhw == 3136 or out_nhw == 6272 or out_nhw == 12544 or out_nhw == 25088:
         ncores = 98
+        grid_size = (12, 9)
     else:
         assert False
 
@@ -183,14 +187,14 @@ def test_run_max_pool(
 
     ttact_tilize = ttl.tensor.tilize(ttact, interleaved_mem_config)    ##, use_multicore=True)
     ttact.deallocate()
-    ttact_sharded = ttl.tensor.interleaved_to_sharded(ttact_tilize, ncores, [in_height // ncores, act_padded.shape[-1]], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,)
+    ttact_sharded = ttl.tensor.interleaved_to_sharded(ttact_tilize, grid_size, [in_height // ncores, act_padded.shape[-1]], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.ShardOrientation.ROW_MAJOR,)
     # ttact_tilize.deallocate()
     in_h = int(math.sqrt(act_shape_padded[-2]))
     in_w = in_h
     assert(in_h * in_w == act_shape_padded[-2])
     out_untilize = ttl.tensor.untilize_with_halo(ttact_sharded, 0xf7ff, in_n, in_h, in_w, 2, out_mem_config)
     # ttl.device.DumpDeviceMemoryState(device)
-    # ttact_sharded.deallocate()
+    ttact_sharded.deallocate()
 
     # ttact = ttl.tensor.tilize(ttact, interleaved_mem_config)    ##, use_multicore=True)
     # ttact = ttl.tensor.interleaved_to_sharded(ttact, ncores, [in_height // ncores, act_padded.shape[-1]], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,)
@@ -202,6 +206,7 @@ def test_run_max_pool(
     out_padded = ttl.tensor.max_pool2d(
         out_untilize,
         # ttact,
+        in_n,
         in_h,
         in_w,
         kernel_h,
