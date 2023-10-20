@@ -21,9 +21,28 @@ inline void print_sticks(uint32_t l1_addr, uint32_t stick_start, uint32_t nstick
     }
 }
 
+// Fill an L1 buffer with the given val
+inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
+    // simplest impl:
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(begin_addr);
+    for (uint32_t i = 0; i < n; ++ i) {
+        ptr[i] = val;
+    }
+    return true;
+}
+
 void kernel_main() {
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);  // has input shard
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(1); // has output shard with padding and halo
+    constexpr uint32_t pad_cb_id = get_compile_time_arg_val(2); // cb for const pad val buffer
+    constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(3);   // pad value to fill pad buffer with
+    constexpr uint32_t pad_stick_len  = get_compile_time_arg_val(4);   // stick size (size of the pad val buffer)
+
+    const uint16_t pad_val = pad_val_u32;   // >> 16;
+
+    cb_reserve_back(pad_cb_id, 1);
+    fill_with_val(get_write_ptr(pad_cb_id), pad_stick_len, pad_val);
+    cb_push_back(pad_cb_id, 1);
 
     // for this core's local shard
     uint32_t in_nsticks = get_arg_val<uint32_t>(0);
@@ -92,7 +111,7 @@ void kernel_main() {
 
     // uint32_t initial_pad_nsticks = get_arg_val<uint32_t>(45);
 
-    uint32_t pad_val_buffer_l1_addr = get_arg_val<uint32_t>(46);
+    // uint32_t pad_val_buffer_l1_addr = get_arg_val<uint32_t>(46);
 
     uint32_t initial_pad_nsticks = get_arg_val<uint32_t>(47);
     uint32_t local_offset_nsticks = get_arg_val<uint32_t>(48);
@@ -124,11 +143,12 @@ void kernel_main() {
 
     // DPRINT << "0" << ENDL();
 
-    const InterleavedAddrGen<false> s_pad_stick = {
-        .bank_base_address = pad_val_buffer_l1_addr,
-        .page_size = stick_nbytes
-    };
-    uint64_t padding_noc_addr = get_noc_addr(0, s_pad_stick);
+    // const InterleavedAddrGen<false> s_pad_stick = {
+    //     .bank_base_address = pad_val_buffer_l1_addr,
+    //     .page_size = stick_nbytes
+    // };
+    // uint64_t padding_noc_addr = get_noc_addr(0, s_pad_stick);
+    uint64_t padding_noc_addr = get_noc_addr(get_read_ptr(pad_cb_id));
 
     cb_wait_front(in_cb_id, in_nsticks);
 
@@ -345,10 +365,10 @@ void kernel_main() {
 
     noc_async_write_barrier();
 
-    // DPRINT << "==== PADDED OUTPUT:" << ENDL();
-    // for (uint32_t row = 0; row < 14; ++ row) {
-    //     DPRINT << "=== ROW " << row << ":" << ENDL();
-    //     print_sticks(out_base_l1_addr, 114 * row, 114, 64);
-    //     DPRINT << "=== ROW " << row << " END" << ENDL();
-    // }
+    DPRINT << "==== PADDED OUTPUT:" << ENDL();
+    for (uint32_t row = 0; row < 14; ++ row) {
+        DPRINT << "=== ROW " << row << ":" << ENDL();
+        print_sticks(out_base_l1_addr, 114 * row, 114, 64);
+        DPRINT << "=== ROW " << row << " END" << ENDL();
+    }
 }
