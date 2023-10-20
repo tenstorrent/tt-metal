@@ -270,6 +270,7 @@ int main() {
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
     mailboxes->ncrisc_halt.resume_addr = 0;
+    mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
     deassert_ncrisc_trisc();
     set_ncrisc_kernel_resume_deassert_address();
 
@@ -277,6 +278,8 @@ int main() {
     DEBUG_STATUS('I', 'N', 'W');
     while (mailboxes->slave_sync.ncrisc != RUN_SYNC_MSG_DONE);
     DEBUG_STATUS('I', 'N', 'D');
+
+    mailboxes->launch.run = RUN_MSG_DONE;
 
     // Cleanup profiler buffer incase we never get the go message
     kernel_profiler::init_profiler();

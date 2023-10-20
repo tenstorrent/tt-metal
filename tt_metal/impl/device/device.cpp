@@ -176,6 +176,7 @@ void Device::initialize_and_launch_firmware() {
     // Download to worker cores
     log_debug("Initializing firmware");
     CoreCoord grid_size = this->logical_grid_size();
+    std::unordered_set<CoreCoord> not_done_cores;
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
@@ -183,6 +184,7 @@ void Device::initialize_and_launch_firmware() {
 
             if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
                 this->initialize_firmware(worker_core, &launch_msg);
+                not_done_cores.insert(worker_core);
             }
         }
     }
@@ -201,6 +203,12 @@ void Device::initialize_and_launch_firmware() {
             }
         }
     }
+
+    // Wait until fw init is done, ensures the next launch msg doesn't get
+    // written while fw is still in init
+    log_debug("Waiting for firmware init complete");
+    llrt::internal_::wait_until_cores_done(this->id(), RUN_MSG_INIT, not_done_cores);
+    log_debug("Firmware init complete");
 }
 
 void Device::clear_l1_state() {
