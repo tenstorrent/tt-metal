@@ -92,18 +92,8 @@ void write_graph_interpreter_op_info_to_core(
 
 void program_brisc_startup_addr(chip_id_t chip_id, const CoreCoord &core);
 
-// for BRISC and NCRISC
-// hex_file_path is relative to the "kernels"/"firwmare" root
-bool test_load_write_read_risc_binary(
-    std::string hex_file_name, chip_id_t chip_id, const CoreCoord &core, int riscv_id, bool fw_build = false);
-
 bool test_load_write_read_risc_binary(
     ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id);
-
-// for TRISCs
-// hex_file_path is relative to the "kernels"/"firwmare" root
-bool test_load_write_read_trisc_binary(
-    std::string hex_file_name, chip_id_t chip_id, const CoreCoord &core, int triscv_id);
 
 bool test_load_write_read_trisc_binary(
     ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int triscv_id);
