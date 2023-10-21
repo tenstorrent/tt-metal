@@ -200,6 +200,9 @@ void kernel_main() {
     int32_t in_skip_after_partial_right_aligned_row = get_arg_val<int32_t>(83);
     int32_t in_skip_after_first_partial_image_row = get_arg_val<int32_t>(84);
     int32_t in_skip_after_full_image = get_arg_val<int32_t>(85);
+    int32_t in_skip_after_each_full_row = get_arg_val<int32_t>(86);
+    int32_t in_skip_after_each_stick = get_arg_val<int32_t>(87);
+    // int32_t in_skip_after_each_stick = stride_w;
 
     uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
     volatile tt_l1_ptr uint32_t* reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(reader_indices_cb_id));
@@ -242,25 +245,23 @@ void kernel_main() {
     // section 1: partial first row
     for (int32_t i = 0; i < partial_first_row_nsticks; ++ i) {
         reader_indices_ptr[reader_i ++] = top_left_i;
-        top_left_i += stride_w;
+        top_left_i += in_skip_after_each_stick;
     }
-    // top_left_i += partial_first_row_skip;
     if (partial_first_row_nsticks > 0) {
-        top_left_i += 2 * pad_w + (stride_h - 1) * in_w_padded;
+        top_left_i += in_skip_after_partial_right_aligned_row;  // 2 * pad_w + (stride_h - 1) * in_w_padded;
     }
 
     // section 2: partial first image
     for (int32_t i = 0; i < partial_top_image_nrows; ++ i) {
         for (int32_t j = 0; j < out_w; ++ j) {
             reader_indices_ptr[reader_i ++] = top_left_i;
-            top_left_i += stride_w;
+            top_left_i += in_skip_after_each_stick;
         }
         // skip pad per row
-        top_left_i += 2 * pad_w + (stride_h - 1) * in_w_padded;
+        top_left_i += in_skip_after_each_full_row; // 2 * pad_w + (stride_h - 1) * in_w_padded;
     }
-    // top_left_i += partial_top_image_skip;
     if (partial_top_image_nrows > 0) {
-        top_left_i += pad_h * in_w_padded;
+        top_left_i += in_skip_after_first_partial_image_row; // pad_h * in_w_padded;
     }
 
     // section 3: full images
@@ -268,30 +269,29 @@ void kernel_main() {
         for (int32_t i = 0; i < out_h; ++ i) {
             for (int32_t j = 0; j < out_w; ++ j) {
                 reader_indices_ptr[reader_i ++] = top_left_i;
-                top_left_i += stride_w;
+                top_left_i += in_skip_after_each_stick;
             }
             // skip pad per row
-            top_left_i += 2 * pad_w + (stride_h - 1) * in_w_padded;
+            top_left_i += in_skip_after_each_full_row; // 2 * pad_w + (stride_h - 1) * in_w_padded;
         }
         // skip pad rows per image
-        // top_left_i += full_images_skip;
-        top_left_i += pad_h * in_w_padded;
+        top_left_i += in_skip_after_full_image; // pad_h * in_w_padded;
     }
 
     // section 4: partial last image
     for (int32_t i = 0; i < partial_bottom_image_nrows; ++ i) {
         for (int32_t j = 0; j < out_w; ++ j) {
             reader_indices_ptr[reader_i ++] = top_left_i;
-            top_left_i += stride_w;
+            top_left_i += in_skip_after_each_stick;
         }
         // skip pad per row
-        top_left_i += 2 * pad_w + (stride_h - 1) * in_w_padded;
+        top_left_i += in_skip_after_each_full_row; // 2 * pad_w + (stride_h - 1) * in_w_padded;
     }
 
     // section 5: partial last row
     for (int32_t i = 0; i < partial_last_row_nsticks; ++ i) {
         reader_indices_ptr[reader_i ++] = top_left_i;
-        top_left_i += stride_w;
+        top_left_i += in_skip_after_each_stick;
     }
 
     // DPRINT << "reader_i = " << reader_i << ENDL();
