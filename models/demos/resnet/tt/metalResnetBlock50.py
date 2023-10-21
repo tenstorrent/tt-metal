@@ -1278,26 +1278,23 @@ class ResNet(nn.Module):
         x = self.conv1(x)
         # Relu is fused with conv1
 
-        # x = x.reshape(
-        #     self.conv1_output_shape[0],
-        #     self.conv1_output_shape[1],
-        #     self.conv1_output_shape[2],
-        #     self.conv1_output_shape[3],
-        # )
-        x = tt_lib.tensor.untilize_with_halo(x,
-                                             0xf7ff,   ## pad_val
-                                             self.conv1_output_shape[0],   ## in_n
-                                             self.conv1_output_shape[1],   ## in_h
-                                             self.conv1_output_shape[2],   ## in_w
-                                             2,                            ## stride case
-                                             self.sharded_memory_config)
-        # x_shape = x.shape()
-        # x = x.reshape(
-        #     self.conv1_output_shape[0],
-        #     self.conv1_output_shape[1],
-        #     self.conv1_output_shape[2],
-        #     self.conv1_output_shape[3],
-        # )
+        if self.sharded:
+            x = tt_lib.tensor.untilize_with_halo(x,
+                                                0xf7ff,   ## pad_val
+                                                self.conv1_output_shape[0],   ## in_n
+                                                self.conv1_output_shape[1],   ## in_h
+                                                self.conv1_output_shape[2],   ## in_w
+                                                2,                            ## stride case
+                                                self.sharded_memory_config)
+        else:
+            x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
+            x = x.reshape(
+                self.conv1_output_shape[0],
+                self.conv1_output_shape[1],
+                self.conv1_output_shape[2],
+                self.conv1_output_shape[3],
+            )
+
         x = self.maxpool(x)
 
         x = x.reshape(
