@@ -1316,6 +1316,8 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
                                             0,
                                             0,
                                             0,                  // 85
+                                            0,                  // in_skip_after_each_full_row
+                                            0,                  // skip_after_each_stick
                                             };
     auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_0,
                                             .noc = NOC::RISCV_0_default,
@@ -1504,6 +1506,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
             auto [in_sc, out_sc] = get_inout_shard_specs(start_out_stick_id, start_out_stick_id + out_nhw_per_core, pc);
 
             if (1) {
+                uint32_t in_w_padded = in_w + 2 * pad_w;
                 log_debug(LogOp, "++++ CORE: {}", i);
                 log_debug(LogOp, " + out_stick_id range: {} {}", start_out_stick_id, end_out_stick_id);
                 log_debug(LogOp, " + start_out: {} {}", start_out_w_i, start_out_h_i);
@@ -1524,9 +1527,11 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
                 log_debug(LogOp, " + full_nimages: {}", in_sc.num_full_images);
                 log_debug(LogOp, " + partial_bottom_image_nrows: {}", in_sc.last_partial_image_num_rows);
                 log_debug(LogOp, " + partial_last_row_nsticks: {}", in_sc.last_partial_left_aligned_row_width);
-                log_debug(LogOp, " + skip_after_partial_right_aligned_row: {}", in_sc.skip_after_partial_right_aligned_row);
-                log_debug(LogOp, " + skip_after_first_partial_image_row: {}", in_sc.skip_after_first_partial_image_row);
-                log_debug(LogOp, " + skip_after_full_image: {}", in_sc.skip_after_full_image);
+                log_debug(LogOp, " + skip_after_partial_right_aligned_row: {} ({})", in_sc.skip_after_partial_right_aligned_row, 2 * pad_w + (stride_h - 1) * in_w_padded);
+                log_debug(LogOp, " + skip_after_first_partial_image_row: {} ({})", in_sc.skip_after_first_partial_image_row, pad_h * in_w_padded);
+                log_debug(LogOp, " + skip_after_full_image: {} ({})", in_sc.skip_after_full_image, pad_h * in_w_padded);
+                log_debug(LogOp, " + skip_after_each_full_row: {} ({})", in_sc.skip_after_each_full_row, 2 * pad_w + (stride_h - 1) * in_w_padded);
+                log_debug(LogOp, " + skip_after_each_stick: {} ({})", in_sc.skip_after_each_stick, stride_w);
                 log_debug(LogOp, " + initial_skip: {}", in_sc.initial_skip);
                 log_debug(LogOp, " + start_stick: {}", in_sc.start_stick);
             }
@@ -1553,6 +1558,8 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
             reader_rt_args[83] = in_sc.skip_after_partial_right_aligned_row;
             reader_rt_args[84] = in_sc.skip_after_first_partial_image_row;
             reader_rt_args[85] = in_sc.skip_after_full_image;
+            reader_rt_args[86] = in_sc.skip_after_each_full_row;
+            reader_rt_args[87] = in_sc.skip_after_each_stick;
 
             SetRuntimeArgs(program, reader_kernel, core, reader_rt_args);
             std::vector<uint32_t> writer_rt_args = reader_rt_args;
