@@ -167,7 +167,7 @@ void kernel_main() {
     // section 0
     for (uint32_t i = 0; i < initial_pad_nsticks; ++ i) {
         // this is the beginning of a new image, insert padding sticks instead of halo
-        noc_async_read(padding_noc_addr, curr_out_l1_addr, stick_nbytes);
+        noc_async_read_one_packet(padding_noc_addr, curr_out_l1_addr, stick_nbytes);
         curr_out_l1_addr += stick_nbytes;
     }
     curr_out_l1_addr = out_base_l1_addr + local_offset_nsticks * stick_nbytes;
@@ -176,12 +176,15 @@ void kernel_main() {
     volatile uint32_t curr_in_l1_addr = in_l1_addr;
     for (uint32_t i = 0; i < partial_first_row_nsticks; ++ i) {
         uint64_t noc_addr = get_noc_addr(curr_in_l1_addr);
-        noc_async_read(noc_addr, curr_out_l1_addr, stick_nbytes);
+        noc_async_read_one_packet(noc_addr, curr_out_l1_addr, stick_nbytes);
         curr_in_l1_addr += stick_nbytes;
         curr_out_l1_addr += stick_nbytes;
     }
+
     // insert padding sticks
     for (uint32_t j = 0; j < partial_first_row_skip; ++ j) {
+        // TODO: converting this one to noc_async_read_one_packet() is slighly slower (too many trasnfers to the same padding_noc_addr?)
+        // to be investigated
         noc_async_read(padding_noc_addr, curr_out_l1_addr, stick_nbytes);
         curr_out_l1_addr += stick_nbytes;
     }
@@ -193,13 +196,14 @@ void kernel_main() {
         // data sticks for full row
         for (uint32_t j = 0; j < in_w; ++ j) {
             uint64_t noc_addr = get_noc_addr(curr_in_l1_addr);
-            noc_async_read(noc_addr, curr_out_l1_addr, stick_nbytes);
+            noc_async_read_one_packet(noc_addr, curr_out_l1_addr, stick_nbytes);
             curr_in_l1_addr += stick_nbytes;
             curr_out_l1_addr += stick_nbytes;
         }
         // if (i < partial_top_image_nrows - 1) {
             // padding sticks on the right, left edge
             for (uint32_t j = 0; j < partial_top_image_skip_per_row; ++ j) {
+                // TODO: see if switch to noc_async_read_one_packet() improves perf
                 noc_async_read(padding_noc_addr, curr_out_l1_addr, stick_nbytes);
                 curr_out_l1_addr += stick_nbytes;
             }
@@ -219,6 +223,7 @@ void kernel_main() {
             // data sticks for full row
             for (uint32_t j = 0; j < in_w; ++ j) {
                 uint64_t noc_addr = get_noc_addr(curr_in_l1_addr);
+                // TODO: converting this one to noc_async_read_one_packet() causes a *large* slowdown (to be investigated)
                 noc_async_read(noc_addr, curr_out_l1_addr, stick_nbytes);
                 curr_in_l1_addr += stick_nbytes;
                 curr_out_l1_addr += stick_nbytes;
@@ -226,6 +231,7 @@ void kernel_main() {
             // if (i < in_h - 1) {
                 // padding sticks after each row except last row
                 for (uint32_t j = 0; j < full_image_skip_per_row; ++ j) {
+                    // TODO: see if switch to noc_async_read_one_packet() improves perf
                     noc_async_read(padding_noc_addr, curr_out_l1_addr, stick_nbytes);
                     curr_out_l1_addr += stick_nbytes;
                 }
@@ -233,6 +239,7 @@ void kernel_main() {
         }
         // padding after full image
         for (uint32_t i = 0; i < full_image_skip; ++ i) {
+            // TODO: see if switch to noc_async_read_one_packet() improves perf
             noc_async_read(padding_noc_addr, curr_out_l1_addr, stick_nbytes);
             curr_out_l1_addr += stick_nbytes;
         }
@@ -248,7 +255,8 @@ void kernel_main() {
             // DPRINT << j << ": " << curr_in_l1_addr << ENDL();
             // for (volatile uint32_t x = 0; x < 10000; ++ x);
             uint64_t noc_addr = get_noc_addr(curr_in_l1_addr);
-            noc_async_read(noc_addr, curr_out_l1_addr, stick_nbytes);
+            // got big improvement from switching this one to noc_async_read_one_packet
+            noc_async_read_one_packet(noc_addr, curr_out_l1_addr, stick_nbytes);
             // noc_async_read_barrier();   // for debug: TODO remove
             curr_in_l1_addr += stick_nbytes;
             curr_out_l1_addr += stick_nbytes;
@@ -268,7 +276,7 @@ void kernel_main() {
     // partial row sticks
     for (uint32_t i = 0; i < partial_last_row_nsticks; ++ i) {
         uint64_t noc_addr = get_noc_addr(curr_in_l1_addr);
-        noc_async_read(noc_addr, curr_out_l1_addr, stick_nbytes);
+        noc_async_read_one_packet(noc_addr, curr_out_l1_addr, stick_nbytes);
         curr_in_l1_addr += stick_nbytes;
         curr_out_l1_addr += stick_nbytes;
     }
