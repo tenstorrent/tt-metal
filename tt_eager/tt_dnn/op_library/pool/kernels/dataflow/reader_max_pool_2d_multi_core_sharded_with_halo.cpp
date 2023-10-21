@@ -304,6 +304,7 @@ void kernel_main() {
     uint32_t counter = 0;
     while (counter < reader_i) {
         cb_reserve_back(in_cb_id, 1);
+
         uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
         uint32_t out_l1_write_addr = out_l1_write_addr_base;
         int32_t top_left_local_index = reader_indices_ptr[counter ++];
@@ -312,12 +313,13 @@ void kernel_main() {
             for (uint32_t w = 0; w < window_w; ++ w) {
                 uint32_t stick_offset = top_left_local_index + (w + h_multiples);
                 uint32_t read_offset = in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
-                noc_async_read(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c);
+                noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c);
                 out_l1_write_addr += in_nbytes_c;
             }
         }
         // print_pages(out_l1_write_addr_base, 64, 10, 0);
         noc_async_read_barrier();
+
         cb_push_back(in_cb_id, 1);
     }
 } // kernel_main()
