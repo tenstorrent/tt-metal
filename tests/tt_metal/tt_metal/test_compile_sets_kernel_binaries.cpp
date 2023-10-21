@@ -129,16 +129,16 @@ int main(int argc, char **argv) {
         for (int i = 0; i < num_compiles; i++) {
             tt_metal::detail::CompileProgram(device, program);
             if (i == 0) {
-                compute_binaries = compute_kernel->binaries();
+                compute_binaries = compute_kernel->binaries(device->id());
                 TT_ASSERT(compute_binaries.size() == 3, "Expected 3 Compute binaries!");
-                brisc_binaries = riscv0_kernel->binaries();
+                brisc_binaries = riscv0_kernel->binaries(device->id());
                 TT_ASSERT(brisc_binaries.size() == 1, "Expected 1 BRISC binary!");
-                ncrisc_binaries = riscv1_kernel->binaries();
+                ncrisc_binaries = riscv1_kernel->binaries(device->id());
                 TT_ASSERT(ncrisc_binaries.size() == 1, "Expected 1 NCRISC binary!");
             } else {
-                TT_ASSERT(compute_kernel->binaries() == compute_binaries);
-                TT_ASSERT(riscv0_kernel->binaries() == brisc_binaries);
-                TT_ASSERT(riscv1_kernel->binaries() == ncrisc_binaries);
+                TT_ASSERT(compute_kernel->binaries(device->id()) == compute_binaries);
+                TT_ASSERT(riscv0_kernel->binaries(device->id()) == brisc_binaries);
+                TT_ASSERT(riscv1_kernel->binaries(device->id()) == ncrisc_binaries);
             }
             std::string brisc_hex_path = get_latest_kernel_binary_path(device->id(), riscv0_kernel) + "/brisc/brisc.hex";
             ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path, device->id(), false);

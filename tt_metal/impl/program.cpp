@@ -42,9 +42,15 @@ namespace{
     #endif
 
     size_t KernelCompileHash(
-        Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const int &device_id) {
-        string compile_hash_str = std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc));
-        compile_hash_str += kernel->compute_hash();
+        Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const chip_id_t &device_id) {
+        // Account for device id in hash because generated headers are dependent on harvesting config, which can differ per device
+        // This can be removed with https://github.com/tenstorrent-metal/tt-metal/issues/3381
+        string compile_hash_str = fmt::format(
+            "{}_{}_{}",
+            device_id,
+            std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
+            kernel->compute_hash()
+        );
         size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 
     #ifdef GENERATE_HASH_LOG
@@ -53,6 +59,7 @@ namespace{
         {
             unique_lock<mutex> lock;
             f << kernel->name() << " :: "
+            << device_id << "::"
             << std::hash<tt_hlk_desc>{}(build_options.hlk_desc) << " :: "
             << kernel->compute_hash() << " :: "
             << compile_hash_str << " "
@@ -86,7 +93,7 @@ auto Program::semaphores_on_core(const CoreCoord &core) const {
 
 std::atomic<uint64_t> Program::program_counter = 0;
 
-Program::Program(): id(program_counter++),worker_crs_({}), compile_needed_(false), circular_buffer_allocation_needed_(false) {}
+Program::Program(): id(program_counter++),worker_crs_({}), circular_buffer_allocation_needed_(false) {}
 
 void Program::add_kernel(Kernel *kernel) {
     this->invalidate_compile();
@@ -546,9 +553,18 @@ void Program::set_cb_data_fmt(
     }
 }
 
+void Program::invalidate_compile() {
+    for (auto &[device_id, compile_needed] : compile_needed_) {
+        compile_needed = true;
+    }
+}
+
 void Program::compile( Device * device )
 {
-    if( !compile_needed_) return;
+    bool first_compile_on_device = compile_needed_.find(device->id()) == compile_needed_.end();
+    if (not first_compile_on_device and (not compile_needed_.at(device->id()))) {
+        return;
+    }
 
     TT_ASSERT(
         device->is_initialized(),
@@ -611,7 +627,7 @@ void Program::compile( Device * device )
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(*this, device);
     }
-    compile_needed_ = false;
+    compile_needed_[device->id()] = false;
 }
 
 Program::~Program() {

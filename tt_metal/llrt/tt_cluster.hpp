@@ -146,7 +146,7 @@ class Cluster {
         (uint32_t)MEM_TRISC2_SIZE,
         (uint32_t)MEM_TRISC0_BASE,
         (uint32_t)GET_MAILBOX_ADDRESS_HOST(l1_barrier),
-        (uint32_t)GET_MAILBOX_ADDRESS_HOST(l1_barrier)   // ethernet and tensix cores share same barrier address
+        (uint32_t)eth_l1_mem::address_map::ERISC_BARRIER_BASE
     };
 
     tt_driver_host_address_params host_address_params = {

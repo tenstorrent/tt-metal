@@ -87,7 +87,21 @@ bool dram_ping(
 bool load_all_blank_kernels(tt_metal::Device* device) {
     bool pass = true;
     tt_metal::Program program = tt_metal::Program();
+    CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
+    CoreRange all_cores = CoreRange(
+        CoreCoord{.x = 0, .y = 0},
+        CoreCoord{.x = 0, .y = 0}
+        // CoreCoord{.x = compute_grid_size.x - 1, .y = compute_grid_size.y -1}
+    );
+    CreateKernel(
+        program, "tt_metal/kernels/dataflow/blank.cpp", all_cores,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
+    CreateKernel(
+        program, "tt_metal/kernels/dataflow/blank.cpp", all_cores,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", all_cores, ComputeConfig{});
 
     tt_metal::LaunchProgram(device, program);
     return pass;

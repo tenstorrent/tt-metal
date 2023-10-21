@@ -64,13 +64,13 @@ uint8_t ComputeKernel::expected_num_binaries() const {
     return 3;
 }
 
-std::vector<ll_api::memory> const &Kernel::binaries() const {
+std::vector<ll_api::memory> const &Kernel::binaries(chip_id_t device_id) const {
     int expected_num_binaries = this->expected_num_binaries();
-    if (not this->binaries_.empty() and this->binaries_.size() != expected_num_binaries) {
+    if (this->binaries_.find(device_id) != this->binaries_.end() and this->binaries_.at(device_id).size() != expected_num_binaries) {
         TT_THROW("Expected " + std::to_string(expected_num_binaries) + " binaries but have "
-                    + std::to_string(this->binaries_.size()) + " for kernel " + this->name());
+                    + std::to_string(this->binaries_.at(device_id).size()) + " for kernel " + this->name());
     }
-    return this->binaries_;
+    return this->binaries_.at(device_id);
 }
 
 std::string DataMovementKernel::config_hash() const {
@@ -188,15 +188,15 @@ void ComputeKernel::generate_binaries(Device *device, build_kernel_for_riscv_opt
     generate_binaries_for_triscs(build_options, op_path_suffix, arch_name, this->compile_time_args_);
 }
 
-void Kernel::set_binaries(std::vector<ll_api::memory> &&binaries) {
-    if (not this->binaries_.empty()) {
-        TT_ASSERT(this->binaries_ == binaries);
+void Kernel::set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&binaries) {
+    if (this->binaries_.find(device_id) != this->binaries_.end()) {
+        TT_ASSERT(this->binaries_.at(device_id) == binaries);
     } else {
-        this->binaries_ = std::move(binaries);
+        this->binaries_[device_id] = std::move(binaries);
     }
 }
 
-void DataMovementKernel::read_binaries(int device_id) {
+void DataMovementKernel::read_binaries(chip_id_t device_id) {
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
     uint32_t riscv_id;
@@ -221,7 +221,7 @@ void DataMovementKernel::read_binaries(int device_id) {
     log_debug("RISC {} kernel binary size: {} in bytes", riscv_id, this->binary_size16_ * 16);
 
     binaries.push_back(binary_mem);
-    this->set_binaries(std::move(binaries));
+    this->set_binaries(device_id, std::move(binaries));
 }
 
 void ComputeKernel::read_binaries(int device_id) {
@@ -235,7 +235,7 @@ void ComputeKernel::read_binaries(int device_id) {
         log_debug("RISC {} kernel binary size: {} in bytes", trisc_id + 2, this->binary_size16_ * 16);
         binaries.push_back(binary_mem);
     }
-    this->set_binaries(std::move(binaries));
+    this->set_binaries(device_id, std::move(binaries));
 }
 
 RISCV DataMovementKernel::processor() const {
@@ -257,7 +257,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     }
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    ll_api::memory binary_mem = this->binaries().at(0);
+    ll_api::memory binary_mem = this->binaries(device_id).at(0);
 
     int riscv_id;
     switch (this->config_.processor) {
@@ -284,7 +284,7 @@ bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) con
     }
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    std::vector<ll_api::memory> binaries = this->binaries();
+    std::vector<ll_api::memory> binaries = this->binaries(device_id);
 
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         pass &= tt::llrt::test_load_write_read_trisc_binary(

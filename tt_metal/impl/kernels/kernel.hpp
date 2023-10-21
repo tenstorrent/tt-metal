@@ -45,7 +45,7 @@ class Kernel {
 
     bool is_on_logical_core(const CoreCoord &logical_core) const;
 
-    std::vector<ll_api::memory> const &binaries() const;
+    std::vector<ll_api::memory> const &binaries(chip_id_t device_id) const;
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
 
@@ -66,8 +66,8 @@ class Kernel {
     virtual void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const = 0;
     inline uint16_t get_binary_size16() const { return binary_size16_; }
     void set_binary_path ( const std::string & binary_path) { binary_path_ = binary_path; }
-    void set_binaries(std::vector<ll_api::memory> &&binaries);
-    virtual void read_binaries(int device_id) = 0;
+    void set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&binaries);
+    virtual void read_binaries(chip_id_t device_id) = 0;
 
     void set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
 
@@ -79,7 +79,10 @@ class Kernel {
     std::string kernel_path_file_name_;                 // Full kernel path and file name
     CoreRangeSet core_range_set_;
     std::string binary_path_;
-    std::vector<ll_api::memory> binaries_;              // DataMovement kernels have one binary each and Compute kernels have three binaries
+    // DataMovement kernels have one binary each and Compute kernels have three binaries
+    // Different set of binaries per device because kernel compilation is device dependent
+    // TODO: break this dependency by https://github.com/tenstorrent-metal/tt-metal/issues/3381
+    std::unordered_map<chip_id_t, std::vector<ll_api::memory>> binaries_;
     uint16_t binary_size16_;
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> core_to_runtime_args_;
@@ -103,7 +106,7 @@ class DataMovementKernel : public Kernel {
 
     void set_build_options(build_kernel_for_riscv_options_t &build_options) const;
     void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
-    void read_binaries(int device_id);
+    void read_binaries(chip_id_t device_id);
 
     bool configure(Device *device, const CoreCoord &logical_core) const;
 
@@ -129,7 +132,7 @@ class ComputeKernel : public Kernel {
 
     void set_build_options(build_kernel_for_riscv_options_t &build_options) const;
     void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
-    void read_binaries(int device_id);
+    void read_binaries(chip_id_t device_id);
 
     bool configure(Device *device, const CoreCoord &logical_core) const;
 

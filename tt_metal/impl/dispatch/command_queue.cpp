@@ -157,7 +157,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         }
 
         uint32_t sub_kernel_index = 0;
-        for (const ll_api::memory& kernel_bin : kernel->binaries()) {
+        for (const ll_api::memory& kernel_bin : kernel->binaries(device->id())) {
             kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
                 uint32_t num_bytes = len * sizeof(uint32_t);
                 if ((dst & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
@@ -213,7 +213,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     for (KernelID kernel_id : program.kernel_ids()) {
         const Kernel* kernel = detail::GetKernel(program, kernel_id);
 
-        for (const ll_api::memory& kernel_bin : kernel->binaries()) {
+        for (const ll_api::memory& kernel_bin : kernel->binaries(device->id())) {
             kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
                 std::copy(mem_ptr, mem_ptr + len, program_pages.begin() + program_page_idx);
                 program_page_idx = align(program_page_idx + len, noc_transfer_alignment_in_bytes / sizeof(uint32_t));
