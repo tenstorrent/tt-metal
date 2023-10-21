@@ -180,7 +180,7 @@ void kernel_main() {
             for (uint32_t inner = 0; inner < window_inner; inner++) {
                 // local read from reader_index + reader_offset;
                 act_l1_offset = (reader_indices_ptr[reader_idx] + reader_offsets_ptr[reader_offset_idx + inner]) << log_base_2_of_conv_act_size_c_bytes;
-                noc_async_read(get_noc_addr(act_l1_read_addr + act_l1_offset), l1_write_addr_act, conv_act_size_c_bytes);
+                noc_async_read_one_packet(get_noc_addr(act_l1_read_addr + act_l1_offset), l1_write_addr_act, conv_act_size_c_bytes);
                 l1_write_addr_act += conv_act_size_c_bytes;
 
             }
