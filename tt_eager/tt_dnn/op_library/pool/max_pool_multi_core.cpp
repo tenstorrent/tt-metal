@@ -1076,7 +1076,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
     uint32_t in_nhw_per_core_rem_mask = in_nhw_per_core - 1;    // NOTE: assuming in_nhw_per_core is power of 2
 
     // CBs
-    uint32_t multi_buffering_factor = 1;
+    uint32_t multi_buffering_factor = 2;
 
     // scalar CB as coefficient of reduce
     uint32_t in_scalar_cb_id = CB::c_in1;
