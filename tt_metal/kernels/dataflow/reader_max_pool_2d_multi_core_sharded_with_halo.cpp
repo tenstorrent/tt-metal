@@ -56,13 +56,13 @@ inline bool fill_with_val_async(const InterleavedPow2AddrGenFast<false>& s_const
  */
 void kernel_main() {
     // input tensor address
-    const uint32_t in_addr = get_arg_val<uint32_t>(0);
+    // const uint32_t in_addr = get_arg_val<uint32_t>(0);
 
     const uint32_t window_h = get_arg_val<uint32_t>(2);
     const uint32_t window_w = get_arg_val<uint32_t>(3);
-    const int32_t window_hw = get_arg_val<int32_t>(4);
+    // const int32_t window_hw = get_arg_val<int32_t>(4);
     // window_hw_padded = window_hw rounded up to the tile size (can be multiple tiles)
-    const uint32_t window_hw_padded = get_arg_val<uint32_t>(5);
+    // const uint32_t window_hw_padded = get_arg_val<uint32_t>(5);
 
     const int32_t pad_h = get_arg_val<int32_t>(8);
     const int32_t pad_w = get_arg_val<int32_t>(9);
@@ -76,40 +76,40 @@ void kernel_main() {
     // input tensor height / width / channels
     const int32_t in_h = get_arg_val<int32_t>(16);
     const int32_t in_w = get_arg_val<int32_t>(17);
-    const int32_t in_c = get_arg_val<int32_t>(19);
+    // const int32_t in_c = get_arg_val<int32_t>(19);
 
-    const int32_t in_cb_pagesize = get_arg_val<int32_t>(22);
+    // const int32_t in_cb_pagesize = get_arg_val<int32_t>(22);
     // product of window_hw_padded and in_c padded to the tile size (can be multiple tiles)
-    const int32_t in_cb_page_nelems_padded = get_arg_val<int32_t>(24);
+    // const int32_t in_cb_page_nelems_padded = get_arg_val<int32_t>(24);
 
     // out_w divided by number of out_nelems (== number of blocks per iteration)
-    const int32_t out_w_loop_count = get_arg_val<int32_t>(25);
+    // const int32_t out_w_loop_count = get_arg_val<int32_t>(25);
     const uint32_t in_log_base_2_of_page_size = get_arg_val<uint32_t>(26);
 
-    const uint32_t nbatch = get_arg_val<uint32_t>(27);
+    // const uint32_t nbatch = get_arg_val<uint32_t>(27);
 
-    const uint32_t in_hw = get_arg_val<uint32_t>(28);
+    // const uint32_t in_hw = get_arg_val<uint32_t>(28);
 
     const uint32_t minus_inf_buffer_addr = get_arg_val<uint32_t>(34);
-    const uint32_t minus_inf_buffer_nbytes = get_arg_val<uint32_t>(35);
+    // const uint32_t minus_inf_buffer_nbytes = get_arg_val<uint32_t>(35);
     const uint32_t in_cb_nsticks = get_arg_val<uint32_t>(36);
 
     // the starting offset for assigned batch input row id (batch_offset)
-    uint32_t core_offset_in_stick_id = get_arg_val<uint32_t>(37);
+    // uint32_t core_offset_in_stick_id = get_arg_val<uint32_t>(37);
 
     // compile time args
-    constexpr bool is_in_dram = get_compile_time_arg_val(0) == 1;
+    // constexpr bool is_in_dram = get_compile_time_arg_val(0) == 1;
     // value of 1 in bf16 in a uin32_t
     constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(2);
     // number of output elements per iteration == number of blocks per iteration
-    constexpr uint32_t out_nelems = get_compile_time_arg_val(3);
-    constexpr bool use_pow2 = get_compile_time_arg_val(4) == 1;
+    // constexpr uint32_t out_nelems = get_compile_time_arg_val(3);
+    // constexpr bool use_pow2 = get_compile_time_arg_val(4) == 1;
 
     constexpr uint32_t stride_h = get_compile_time_arg_val(5);
     constexpr uint32_t stride_w = get_compile_time_arg_val(6);
 
-    constexpr uint32_t reader_noc = get_compile_time_arg_val(7);
-    constexpr uint32_t writer_noc = get_compile_time_arg_val(8);
+    // constexpr uint32_t reader_noc = get_compile_time_arg_val(7);
+    // constexpr uint32_t writer_noc = get_compile_time_arg_val(8);
 
     constexpr uint32_t in_cb_id = tt::CB::c_in0;
     constexpr uint32_t in_scalar_cb_id = tt::CB::c_in1;
@@ -141,42 +141,42 @@ void kernel_main() {
 
     // DPRINT << "HAHA 1" << ENDL();
 
-    uint32_t core_out_w_i_start = get_arg_val<int32_t>(38);
-    uint32_t core_out_h_i_start = get_arg_val<int32_t>(39);
+    // uint32_t core_out_w_i_start = get_arg_val<int32_t>(38);
+    // uint32_t core_out_h_i_start = get_arg_val<int32_t>(39);
     uint32_t nsticks_per_core = get_arg_val<uint32_t>(40);
 
-    uint32_t nsticks_per_core_by_nblocks = get_arg_val<uint32_t>(42);
+    // uint32_t nsticks_per_core_by_nblocks = get_arg_val<uint32_t>(42);
 
     uint32_t local_out_stick_start = get_arg_val<uint32_t>(43);
     uint32_t nsticks_per_batch = get_arg_val<uint32_t>(44);
-    uint32_t local_in_stick_start = get_arg_val<uint32_t>(45);
-    uint32_t local_in_stick_end = get_arg_val<uint32_t>(46);
-    uint32_t in_nsticks_per_batch = get_arg_val<uint32_t>(47);
-    uint32_t in_nsticks_per_core = get_arg_val<uint32_t>(48);
+    // uint32_t local_in_stick_start = get_arg_val<uint32_t>(45);
+    // uint32_t local_in_stick_end = get_arg_val<uint32_t>(46);
+    // uint32_t in_nsticks_per_batch = get_arg_val<uint32_t>(47);
+    // uint32_t in_nsticks_per_core = get_arg_val<uint32_t>(48);
 
-    uint32_t has_left = get_arg_val<uint32_t>(49);
-    uint32_t left_noc_x = get_arg_val<uint32_t>(50);
-    uint32_t left_noc_y = get_arg_val<uint32_t>(51);
-    uint32_t has_right = get_arg_val<uint32_t>(52);
-    uint32_t right_noc_x = get_arg_val<uint32_t>(53);
-    uint32_t right_noc_y = get_arg_val<uint32_t>(54);
+    // uint32_t has_left = get_arg_val<uint32_t>(49);
+    // uint32_t left_noc_x = get_arg_val<uint32_t>(50);
+    // uint32_t left_noc_y = get_arg_val<uint32_t>(51);
+    // uint32_t has_right = get_arg_val<uint32_t>(52);
+    // uint32_t right_noc_x = get_arg_val<uint32_t>(53);
+    // uint32_t right_noc_y = get_arg_val<uint32_t>(54);
 
     // TODO: pass these as runtime args
     uint32_t in_nbytes_c_log2 = 7;  // for in_nbytes_c == 128
     // for in_nsticks_per_core == 1024, remainder mask = 0x3ff
     // uint32_t in_nsticks_per_core_rem_mask = 0x3ff;
-    uint32_t in_nsticks_per_core_rem_mask = get_arg_val<uint32_t>(55);
+    // uint32_t in_nsticks_per_core_rem_mask = get_arg_val<uint32_t>(55);
 
-    uint32_t has_left_left = get_arg_val<uint32_t>(56);
-    uint32_t left_left_noc_x = get_arg_val<uint32_t>(57);
-    uint32_t left_left_noc_y = get_arg_val<uint32_t>(58);
-    uint32_t has_right_right = get_arg_val<uint32_t>(59);
-    uint32_t right_right_noc_x = get_arg_val<uint32_t>(60);
-    uint32_t right_right_noc_y = get_arg_val<uint32_t>(61);
-    uint32_t left_in_stick_start = get_arg_val<uint32_t>(62);
-    uint32_t right_in_stick_end = get_arg_val<uint32_t>(63);
+    // uint32_t has_left_left = get_arg_val<uint32_t>(56);
+    // uint32_t left_left_noc_x = get_arg_val<uint32_t>(57);
+    // uint32_t left_left_noc_y = get_arg_val<uint32_t>(58);
+    // uint32_t has_right_right = get_arg_val<uint32_t>(59);
+    // uint32_t right_right_noc_x = get_arg_val<uint32_t>(60);
+    // uint32_t right_right_noc_y = get_arg_val<uint32_t>(61);
+    // uint32_t left_in_stick_start = get_arg_val<uint32_t>(62);
+    // uint32_t right_in_stick_end = get_arg_val<uint32_t>(63);
 
-    int32_t my_core = get_arg_val<int32_t>(64);
+    // int32_t my_core = get_arg_val<int32_t>(64);
 
     int32_t initial_skip = get_arg_val<int32_t>(65);
     int32_t partial_first_row_nsticks = get_arg_val<int32_t>(66);
@@ -189,135 +189,142 @@ void kernel_main() {
     int32_t partial_last_row_nsticks = get_arg_val<int32_t>(73);
     int32_t start_stick = get_arg_val<int32_t>(74);
 
-    volatile tt_l1_ptr uint32_t* reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(reader_indices_cb_id));
-
-    // DPRINT << TileSlice(in_shard_cb_id, 0, SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 }, true, false) << ENDL();
-    // DPRINT << TileSlice(in_shard_cb_id, 0, SliceRange{ .h0 = 1, .h1 = 2, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 }, true, false) << ENDL();
-    // DPRINT << TileSlice(in_shard_cb_id, 0, SliceRange{ .h0 = 2, .h1 = 3, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 }, true, false) << ENDL();
-    // DPRINT << TileSlice(in_shard_cb_id, 0, SliceRange{ .h0 = 3, .h1 = 4, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 }, true, false) << ENDL();
-    // DPRINT << TileSlice(in_shard_cb_id, 0, SliceRange{ .h0 = 4, .h1 = 5, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 }, true, false) << ENDL();
-    // DPRINT << TileSlice(in_shard_cb_id, 0, SliceRange{ .h0 = 5, .h1 = 6, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 }, true, false) << ENDL();
-    // DPRINT << TileSlice(in_shard_cb_id, 0, SliceRange{ .h0 = 6, .h1 = 7, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 }, true, false) << ENDL();
-    // DPRINT << TileSlice(in_shard_cb_id, 0, SliceRange{ .h0 = 7, .h1 = 8, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 }, true, false) << ENDL();
+    int32_t in_start_stick = get_arg_val<int32_t>(75);
+    int32_t in_first_partial_right_aligned_row_width = get_arg_val<int32_t>(76);
+    int32_t in_first_partial_image_num_rows = get_arg_val<int32_t>(77);
+    int32_t in_num_full_images = get_arg_val<int32_t>(78);
+    int32_t in_last_partial_image_num_rows = get_arg_val<int32_t>(79);
+    int32_t in_last_partial_left_aligned_row_width = get_arg_val<int32_t>(80);
+    int32_t in_initial_skip = get_arg_val<int32_t>(81);
+    int32_t in_skip_after_stick = get_arg_val<int32_t>(82);
+    int32_t in_skip_after_partial_right_aligned_row = get_arg_val<int32_t>(83);
+    int32_t in_skip_after_first_partial_image_row = get_arg_val<int32_t>(84);
+    int32_t in_skip_after_full_image = get_arg_val<int32_t>(85);
 
     uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
+    volatile tt_l1_ptr uint32_t* reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(reader_indices_cb_id));
 
     // print_pages(in_l1_read_base_addr, 64, 13 * 114, 0);
 
-    DPRINT << "local_in_stick_start: " << (uint) local_in_stick_start << ENDL();
-
-    DPRINT << "initial_skip: " << (uint) initial_skip << ENDL();
-    DPRINT << "start_stick: " << (uint) start_stick << ENDL();
-    DPRINT << "partial_first_row_nsticks: " << (uint) partial_first_row_nsticks << ENDL();
-    DPRINT << "partial_first_row_skip: " << (uint) partial_first_row_skip << ENDL();
-    DPRINT << "partial_top_image_nrows: " << (uint) partial_top_image_nrows << ENDL();
-    DPRINT << "partial_top_image_skip: " << (uint) partial_top_image_skip << ENDL();
-    DPRINT << "full_nimages: " << (uint) full_nimages << ENDL();
-    DPRINT << "full_nimages_skip: " << (uint) full_images_skip << ENDL();
-    DPRINT << "partial_bottom_image_nrows: " << (uint) partial_bottom_image_nrows << ENDL();
-    DPRINT << "partial_last_row_nsticks: " << (uint) partial_last_row_nsticks << ENDL();
-    DPRINT << "TOTAL nsticks = " << (uint) partial_first_row_nsticks + partial_top_image_nrows * in_w + full_nimages * in_w * in_h + partial_bottom_image_nrows * in_w + partial_last_row_nsticks << ENDL();
+    // DPRINT << "local_in_stick_start: " << (uint) local_in_stick_start << ENDL();
+    // DPRINT << "initial_skip: " << (uint) initial_skip << ENDL();
+    // DPRINT << "start_stick: " << (uint) start_stick << ENDL();
+    // DPRINT << "partial_first_row_nsticks: " << (uint) partial_first_row_nsticks << ENDL();
+    // DPRINT << "partial_first_row_skip: " << (uint) partial_first_row_skip << ENDL();
+    // DPRINT << "partial_top_image_nrows: " << (uint) partial_top_image_nrows << ENDL();
+    // DPRINT << "partial_top_image_skip: " << (uint) partial_top_image_skip << ENDL();
+    // DPRINT << "full_nimages: " << (uint) full_nimages << ENDL();
+    // DPRINT << "full_nimages_skip: " << (uint) full_images_skip << ENDL();
+    // DPRINT << "partial_bottom_image_nrows: " << (uint) partial_bottom_image_nrows << ENDL();
+    // DPRINT << "partial_last_row_nsticks: " << (uint) partial_last_row_nsticks << ENDL();
+    // DPRINT << "TOTAL nsticks = " << (uint) partial_first_row_nsticks + partial_top_image_nrows * in_w + full_nimages * in_w * in_h + partial_bottom_image_nrows * in_w + partial_last_row_nsticks << ENDL();
 
     // // section 0: initial skip
-    // uint32_t top_left_i = initial_skip;
+    uint32_t top_left_i = 0;
     uint32_t reader_i = 0;
 
-    // // section 1: partial first row
-    // for (int32_t i = 0; i < partial_first_row_nsticks; ++ i) {
-    //     reader_indices_ptr[reader_i ++] = top_left_i ++;
-    // }
+    uint32_t in_w_padded = in_w + 2 * pad_w;
+    // input index offsets:
+    //  between each stick = stride_w
+    //  between each row = + 2 * pad_w + (stride_h - 1) * row_size_padded
+    //  between each batch = + pad_h * row_size_padded
+
+    // section 1: partial first row
+    for (int32_t i = 0; i < partial_first_row_nsticks; ++ i) {
+        reader_indices_ptr[reader_i ++] = top_left_i;
+        top_left_i += stride_w;
+    }
     // top_left_i += partial_first_row_skip;
-
-    // // section 2: partial first image
-    // for (int32_t i = 0; i < partial_top_image_nrows; ++ i) {
-    //     for (int32_t j = 0; j < in_w; ++ j) {
-    //         reader_indices_ptr[reader_i ++] = top_left_i ++;
-    //     }
-    //     // skip pad per row
-    //     top_left_i += 2 * pad_w;
-    // }
-    // top_left_i += partial_top_image_skip;
-
-    // // section 3: full images
-    // for (int32_t n = 0; n < full_nimages; ++ n) {
-    //     for (int32_t i = 0; i < in_h; ++ i) {
-    //         for (int32_t j = 0; j < in_w; ++ j) {
-    //             reader_indices_ptr[reader_i ++] = top_left_i ++;
-    //         }
-    //         // skip pad per row
-    //         top_left_i += 2 * pad_w;
-    //     }
-    //     // skip pad rows per image
-    //     top_left_i += full_images_skip;
-    // }
-
-    // // section 4: partial last image
-    // for (int32_t i = 0; i < partial_bottom_image_nrows; ++ i) {
-    //     for (int32_t j = 0; j < in_w; ++ j) {
-    //         reader_indices_ptr[reader_i ++] = top_left_i ++;
-    //     }
-    //     // skip pad per row
-    //     top_left_i += 2 * pad_w;
-    // }
-
-    // // section 5: partial last row
-    // for (int32_t i = 0; i < partial_last_row_nsticks; ++ i) {
-    //     reader_indices_ptr[reader_i ++] = top_left_i ++;
-    // }
-
-    // DPRINT << "nsticks_per_core = " << nsticks_per_core << ENDL();
-
-    uint32_t batch_offset = 0;
-    for (uint32_t out_stick_i = 0; out_stick_i < nsticks_per_core; ++ out_stick_i) {
-        uint32_t global_out_stick_i = local_out_stick_start + out_stick_i;
-        uint32_t batch_i = global_out_stick_i / nsticks_per_batch;
-        uint32_t batch_out_stick_i = global_out_stick_i % nsticks_per_batch;
-        int32_t out_w_i = batch_out_stick_i % out_w;
-        int32_t out_h_i = batch_out_stick_i / out_w;
-        // DPRINT << "out_stick_i = " << out_stick_i << " :: " << (uint) out_w_i << "," << (uint) out_h_i << ENDL();
-
-        int32_t in_center_w = ((int32_t) stride_w) * out_w_i - pad_w + window_w / 2;
-        int32_t in_center_h = ((int32_t) stride_h) * out_h_i - pad_h + window_h / 2;
-        // DPRINT << "center: = " << (uint) in_center_w << "," << (uint) in_center_h << ENDL();
-
-        if (batch_out_stick_i == 0 && out_stick_i > 0 && local_out_stick_start > 0) {
-            // this is start of a new batch, update offsets
-            batch_offset += ((in_w + 2 * pad_w) * (in_h + pad_h));
-        }
-
-        int32_t top_left_local_index = initial_skip + batch_offset + (in_center_w - window_w / 2) + (in_center_h - window_h / 2) * (in_w + 2 * pad_w) - start_stick;
-        // DPRINT << "top_left_index: " << (uint) top_left_local_index << ENDL();
-
-        // DPRINT << "sticks: ";
-        for (uint32_t h = 0; h < window_h; ++ h) {
-            for (uint32_t w = 0; w < window_w; ++ w) {
-                uint32_t stick_offset = top_left_local_index + (w + h * (in_w + 2 * pad_w));
-                // DPRINT << stick_offset << " ";
-                uint32_t l1_offset = stick_offset * in_nbytes_c;
-                reader_indices_ptr[reader_i ++] = l1_offset;
-            }
-        }
-        // DPRINT << TileSlice(in_cb_id, 0, srt, true, false) << ENDL();
-        // print_pages(out_l1_write_addr_base, 64, 10, 0);
+    if (partial_first_row_nsticks > 0) {
+        top_left_i += 2 * pad_w + (stride_h - 1) * in_w_padded;
     }
 
-    // DPRINT << "reader_i = " << reader_i << ENDL();
-    // for (uint32_t i = 0; i < reader_i; ++ i) {
-    //     DPRINT << i << ": " << reader_indices_ptr[i] << ENDL();
+    // section 2: partial first image
+    for (int32_t i = 0; i < partial_top_image_nrows; ++ i) {
+        for (int32_t j = 0; j < out_w; ++ j) {
+            reader_indices_ptr[reader_i ++] = top_left_i;
+            top_left_i += stride_w;
+        }
+        // skip pad per row
+        top_left_i += 2 * pad_w + (stride_h - 1) * in_w_padded;
+    }
+    // top_left_i += partial_top_image_skip;
+    if (partial_top_image_nrows > 0) {
+        top_left_i += pad_h * in_w_padded;
+    }
+
+    // section 3: full images
+    for (int32_t n = 0; n < full_nimages; ++ n) {
+        for (int32_t i = 0; i < out_h; ++ i) {
+            for (int32_t j = 0; j < out_w; ++ j) {
+                reader_indices_ptr[reader_i ++] = top_left_i;
+                top_left_i += stride_w;
+            }
+            // skip pad per row
+            top_left_i += 2 * pad_w + (stride_h - 1) * in_w_padded;
+        }
+        // skip pad rows per image
+        // top_left_i += full_images_skip;
+        top_left_i += pad_h * in_w_padded;
+    }
+
+    // section 4: partial last image
+    for (int32_t i = 0; i < partial_bottom_image_nrows; ++ i) {
+        for (int32_t j = 0; j < out_w; ++ j) {
+            reader_indices_ptr[reader_i ++] = top_left_i;
+            top_left_i += stride_w;
+        }
+        // skip pad per row
+        top_left_i += 2 * pad_w + (stride_h - 1) * in_w_padded;
+    }
+
+    // section 5: partial last row
+    for (int32_t i = 0; i < partial_last_row_nsticks; ++ i) {
+        reader_indices_ptr[reader_i ++] = top_left_i;
+        top_left_i += stride_w;
+    }
+
+
+    // uint32_t batch_offset = 0;
+    // for (uint32_t out_stick_i = 0; out_stick_i < nsticks_per_core; ++ out_stick_i) {
+    //     uint32_t global_out_stick_i = local_out_stick_start + out_stick_i;
+    //     uint32_t batch_i = global_out_stick_i / nsticks_per_batch;
+    //     uint32_t batch_out_stick_i = global_out_stick_i % nsticks_per_batch;
+    //     int32_t out_w_i = batch_out_stick_i % out_w;
+    //     int32_t out_h_i = batch_out_stick_i / out_w;
+    //     // DPRINT << "out_stick_i = " << out_stick_i << " :: " << (uint) out_w_i << "," << (uint) out_h_i << ENDL();
+    //     int32_t in_center_w = ((int32_t) stride_w) * out_w_i - pad_w + (window_w >> 1);
+    //     int32_t in_center_h = ((int32_t) stride_h) * out_h_i - pad_h + (window_h >> 1);
+    //     // DPRINT << "center: = " << (uint) in_center_w << "," << (uint) in_center_h << ENDL();
+    //     if (batch_out_stick_i == 0 && out_stick_i > 0 && local_out_stick_start > 0) {
+    //         // this is start of a new batch, update offsets
+    //         batch_offset += in_w_padded * (in_h + pad_h);
+    //     }
+    //     int32_t top_left_local_index = initial_skip + batch_offset + (in_center_w - (window_w >> 1)) + (in_center_h - (window_h >> 1)) * (in_w_padded) - start_stick;
+    //     reader_indices_ptr[reader_i ++] = top_left_local_index;
     // }
+
+    DPRINT << "reader_i = " << reader_i << ENDL();
+    for (uint32_t i = 0; i < reader_i; ++ i) {
+        DPRINT << i << ": " << reader_indices_ptr[i] << ENDL();
+    }
 
     uint32_t counter = 0;
     while (counter < reader_i) {
         cb_reserve_back(in_cb_id, 1);
         uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
         uint32_t out_l1_write_addr = out_l1_write_addr_base;
-        for (uint32_t h = 0; h < window_h; ++ h) {
+        int32_t top_left_local_index = reader_indices_ptr[counter ++];
+        uint32_t h_multiples = 0;
+        for (uint32_t h = 0; h < window_h; ++ h, h_multiples += in_w_padded) {
             for (uint32_t w = 0; w < window_w; ++ w) {
-                uint32_t read_offset = in_l1_read_base_addr + reader_indices_ptr[counter ++];
+                uint32_t stick_offset = top_left_local_index + (w + h_multiples);
+                uint32_t read_offset = in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
                 noc_async_read(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c);
                 out_l1_write_addr += in_nbytes_c;
             }
         }
+        // print_pages(out_l1_write_addr_base, 64, 10, 0);
         noc_async_read_barrier();
         cb_push_back(in_cb_id, 1);
     }
