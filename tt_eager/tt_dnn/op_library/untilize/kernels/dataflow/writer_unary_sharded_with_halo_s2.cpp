@@ -365,10 +365,10 @@ void kernel_main() {
 
     noc_async_write_barrier();
 
-    DPRINT << "==== PADDED OUTPUT:" << ENDL();
-    for (uint32_t row = 0; row < 14; ++ row) {
-        DPRINT << "=== ROW " << row << ":" << ENDL();
-        print_sticks(out_base_l1_addr, 114 * row, 114, 64);
-        DPRINT << "=== ROW " << row << " END" << ENDL();
-    }
+    // DPRINT << "==== PADDED OUTPUT:" << ENDL();
+    // for (uint32_t row = 0; row < 14; ++ row) {
+    //     DPRINT << "=== ROW " << row << ":" << ENDL();
+    //     print_sticks(out_base_l1_addr, 114 * row, 114, 64);
+    //     DPRINT << "=== ROW " << row << " END" << ENDL();
+    // }
 }
