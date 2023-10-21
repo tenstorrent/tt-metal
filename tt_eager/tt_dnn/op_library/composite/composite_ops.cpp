@@ -1153,20 +1153,13 @@ Tensor sfpu_eps(const Shape shape, Layout layout, Device * device, const MemoryC
 
 //tril : select lower triangular region of input matrix
 Tensor tril(const Tensor& input_a, const MemoryConfig& output_mem_config) {
-  //  Tensor index_l = tt::numpy::index_tril<bfloat16>(input_a.shape(), DataType::BFLOAT16, input_a.layout(),
-  //							     input_a.device(), output_mem_config);
-  Tensor _index_l = tt::numpy::index_tril<bfloat16>(input_a.shape(), DataType::BFLOAT16);
-  Tensor index_l = AutoFormat::format_output_tensor(_index_l, input_a.shape(), input_a.device(), input_a.layout(),
-						    output_mem_config);
-
+  Tensor index_l = tt::numpy::index_tril<bfloat16>(input_a.shape(), DataType::BFLOAT16);
   return mul(input_a,index_l,std::nullopt,output_mem_config);
 }
 
 //triu : select upper triangular region of input matrix
 Tensor triu(const Tensor& input_a, const MemoryConfig& output_mem_config) {
-  Tensor _index_u = tt::numpy::index_triu<bfloat16>(input_a.shape(), DataType::BFLOAT16);
-  Tensor index_u = AutoFormat::format_output_tensor(_index_u, input_a.shape(), input_a.device(), input_a.layout(),
-						    output_mem_config);
+  Tensor index_u = tt::numpy::index_triu<bfloat16>(input_a.shape(), DataType::BFLOAT16);
   return mul(input_a,index_u,std::nullopt,output_mem_config);
 }
 

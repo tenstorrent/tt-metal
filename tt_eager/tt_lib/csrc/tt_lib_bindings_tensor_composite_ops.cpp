@@ -389,7 +389,7 @@ namespace tt::tt_metal::detail{
         m_tensor.def("triu",
 		     &triu, py::arg("input")
             , py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Returns a new tensor filled with zeros in shape specified by input ``shape``.
+            Returns a new tensor with upper triangular elements of input with rest being zero.
 
             Input tensor will have BFLOAT16 data type.
 
@@ -397,14 +397,15 @@ namespace tt::tt_metal::detail{
 
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
-                "input", "tensor input to be triu processed", "Tensor", "", "Yes"
+
+                "input", "tensor input to be upper triangular processed", "Tensor", "", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
         m_tensor.def("tril",
 	     &tril, py::arg("input")
             , py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Returns a new tensor filled with zeros in shape specified by input ``shape``.
+            Returns a new tensor with lower triangular elements of input with rest being zero.
 
             Input tensor will have BFLOAT16 data type.
 
@@ -412,7 +413,8 @@ namespace tt::tt_metal::detail{
 
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
-                "input", "tensor input to be triu processed", "Tensor", "", "Yes"
+
+                "input", "tensor input to be lower triangular processed", "Tensor", "", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
@@ -441,7 +443,7 @@ namespace tt::tt_metal::detail{
                 return empty(shape, layout, device, output_mem_config);
             },
             py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Returns a new empty tensor (on device it is filled with zeros in TT impelementation today but may change in future) in shape specified by input ``shape``.
+            Returns a new empty tensor (on device) in shape specified by input ``shape``.
 
             Input shape is specified as a list of 4 integer elements
 
