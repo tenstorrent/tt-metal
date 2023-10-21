@@ -1473,9 +1473,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
                 reader_rt_args[52] = 0;
             }
 
-            int32_t initial_offset = 0;
-
-            // first, given the start out stick id, figure out the start in stick id.
+            // given the start,end out stick id, calculate the start,end in stick id.
             int32_t start_out_stick_id = curr_out_stick_id;
             int32_t start_batch_i = start_out_stick_id / out_hw;
             int32_t start_out_w_i = start_out_stick_id % out_w;
@@ -1492,36 +1490,49 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
             int32_t end_in_h_i = end_out_h_i * stride_h;
             int32_t end_center_in_stick_id = end_in_h_i * in_w + end_in_w_i + (end_batch_i - start_batch_i) * in_hw;
 
-            NewShardingConfig sc = get_shard_specs_with_halo(start_center_in_stick_id, end_center_in_stick_id, pc);
+            auto [in_sc, out_sc] = get_inout_shard_specs(start_out_stick_id, start_out_stick_id + out_nhw_per_core, pc);
 
-            if (0) {
+            if (1) {
                 log_debug(LogOp, "++++ CORE: {}", i);
                 log_debug(LogOp, " + out_stick_id range: {} {}", start_out_stick_id, end_out_stick_id);
+                log_debug(LogOp, " + start_out: {} {}", start_out_w_i, start_out_h_i);
                 log_debug(LogOp, " + end_out: {} {}", end_out_w_i, end_out_h_i);
-                log_debug(LogOp, " + center_in_stick range: {} {}", start_center_in_stick_id, end_center_in_stick_id);
-                log_debug(LogOp, " + end_in: {} {}", end_in_w_i, end_in_h_i);
-                log_debug(LogOp, " + partial_first_row_nsticks: {}", sc.first_partial_right_aligned_row_width);
-                log_debug(LogOp, " + partial_top_image_nrows: {}", sc.first_partial_image_num_rows);
-                log_debug(LogOp, " + full_nimages: {}", sc.num_full_images);
-                log_debug(LogOp, " + partial_bottom_image_nrows: {}", sc.last_partial_image_num_rows);
-                log_debug(LogOp, " + partial_last_row_nsticks: {}", sc.last_partial_left_aligned_row_width);
-                log_debug(LogOp, " + skip_after_partial_right_aligned_row: {}", sc.skip_after_partial_right_aligned_row);
-                log_debug(LogOp, " + skip_after_first_partial_image_row: {}", sc.skip_after_first_partial_image_row);
-                log_debug(LogOp, " + skip_after_full_image: {}", sc.skip_after_full_image);
-                log_debug(LogOp, " + initial_skip: {}", sc.initial_skip);
-                log_debug(LogOp, " + start_stick: {}", sc.start_stick);
+                // log_debug(LogOp, " + center_in_stick range: {} {}", start_center_in_stick_id, end_center_in_stick_id);
+                // log_debug(LogOp, " + end_in: {} {}", end_in_w_i, end_in_h_i);
+                log_debug(LogOp, " + partial_first_row_nsticks: {}", out_sc.first_partial_right_aligned_row_width);
+                log_debug(LogOp, " + partial_top_image_nrows: {}", out_sc.first_partial_image_num_rows);
+                log_debug(LogOp, " + full_nimages: {}", out_sc.num_full_images);
+                log_debug(LogOp, " + partial_bottom_image_nrows: {}", out_sc.last_partial_image_num_rows);
+                log_debug(LogOp, " + partial_last_row_nsticks: {}", out_sc.last_partial_left_aligned_row_width);
+                log_debug(LogOp, " + skip_after_partial_right_aligned_row: {}", out_sc.skip_after_partial_right_aligned_row);
+                log_debug(LogOp, " + skip_after_first_partial_image_row: {}", out_sc.skip_after_first_partial_image_row);
+                log_debug(LogOp, " + skip_after_full_image: {}", out_sc.skip_after_full_image);
+                log_debug(LogOp, " + initial_skip: {}", out_sc.initial_skip);
+                log_debug(LogOp, " + start_stick: {}", out_sc.start_stick);
             }
 
-            reader_rt_args[65] = sc.initial_skip;
-            reader_rt_args[66] = sc.first_partial_right_aligned_row_width;
-            reader_rt_args[67] = sc.skip_after_partial_right_aligned_row;
-            reader_rt_args[68] = sc.first_partial_image_num_rows;
-            reader_rt_args[69] = sc.skip_after_first_partial_image_row;
-            reader_rt_args[70] = sc.num_full_images;
-            reader_rt_args[71] = sc.skip_after_full_image;
-            reader_rt_args[72] = sc.last_partial_image_num_rows;
-            reader_rt_args[73] = sc.last_partial_left_aligned_row_width;
-            reader_rt_args[74] = sc.start_stick;
+            reader_rt_args[65] = out_sc.initial_skip;
+            reader_rt_args[66] = out_sc.first_partial_right_aligned_row_width;
+            reader_rt_args[67] = out_sc.skip_after_partial_right_aligned_row;
+            reader_rt_args[68] = out_sc.first_partial_image_num_rows;
+            reader_rt_args[69] = out_sc.skip_after_first_partial_image_row;
+            reader_rt_args[70] = out_sc.num_full_images;
+            reader_rt_args[71] = out_sc.skip_after_full_image;
+            reader_rt_args[72] = out_sc.last_partial_image_num_rows;
+            reader_rt_args[73] = out_sc.last_partial_left_aligned_row_width;
+            reader_rt_args[74] = out_sc.start_stick;
+
+            reader_rt_args[75] = in_sc.start_stick;
+            reader_rt_args[76] = in_sc.first_partial_right_aligned_row_width;
+            reader_rt_args[77] = in_sc.first_partial_image_num_rows;
+            reader_rt_args[78] = in_sc.num_full_images;
+            reader_rt_args[79] = in_sc.last_partial_image_num_rows;
+            reader_rt_args[80] = in_sc.last_partial_left_aligned_row_width;
+            reader_rt_args[81] = in_sc.initial_skip;
+            reader_rt_args[82] = in_sc.skip_after_stick;
+            reader_rt_args[83] = in_sc.skip_after_partial_right_aligned_row;
+            reader_rt_args[84] = in_sc.skip_after_first_partial_image_row;
+            reader_rt_args[85] = in_sc.skip_after_full_image;
 
             SetRuntimeArgs(program, reader_kernel, core, reader_rt_args);
             std::vector<uint32_t> writer_rt_args = reader_rt_args;
