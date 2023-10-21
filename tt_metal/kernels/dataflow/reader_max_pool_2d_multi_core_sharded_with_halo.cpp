@@ -247,9 +247,9 @@ void kernel_main() {
         reader_indices_ptr[reader_i ++] = top_left_i;
         top_left_i += in_skip_after_each_stick;
     }
-    if (partial_first_row_nsticks > 0) {
+    // if (partial_first_row_nsticks > 0) {
         top_left_i += in_skip_after_partial_right_aligned_row;  // 2 * pad_w + (stride_h - 1) * in_w_padded;
-    }
+    // }
 
     // section 2: partial first image
     for (int32_t i = 0; i < partial_top_image_nrows; ++ i) {
@@ -260,9 +260,9 @@ void kernel_main() {
         // skip pad per row
         top_left_i += in_skip_after_each_full_row; // 2 * pad_w + (stride_h - 1) * in_w_padded;
     }
-    if (partial_top_image_nrows > 0) {
+    // if (partial_top_image_nrows > 0) {
         top_left_i += in_skip_after_first_partial_image_row; // pad_h * in_w_padded;
-    }
+    // }
 
     // section 3: full images
     for (int32_t n = 0; n < full_nimages; ++ n) {
