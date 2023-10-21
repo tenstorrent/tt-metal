@@ -239,9 +239,11 @@ def test_level1_conj(memcfg, dtype, device, function_level_defaults):
     tt_dev = ttl.tensor.conj(xtt, memcfg)
     tt_dev = tt_dev.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     tt_cpu = x.conj().metal
+    exp_pcc = 0.95
     if is_wormhole_b0():
-        comp_pcc = partial(comp_pcc, pcc=0.8)
-    passing, output = comp_pcc(tt_cpu, tt_dev)
+        exp_pcc = 0.80    
+    comp_pcc_new = partial(comp_pcc, pcc=exp_pcc)
+    passing, output = comp_pcc_new(tt_cpu, tt_dev)
     logger.info(output)
     assert passing
 

@@ -52,8 +52,6 @@ shapes = [
     [1, 1, 32, 32],
     [1, 3, 320, 384],
 ]
-if is_wormhole_b0():
-    del shapes[1:]
 
 
 @pytest.mark.parametrize(
