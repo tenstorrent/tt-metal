@@ -31,9 +31,11 @@ inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uin
     }
 }
 
+#define ALWI inline __attribute__((always_inline))
+
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
-inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
+ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     // simplest impl:
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(begin_addr);
     for (uint32_t i = 0; i < n; ++ i) {
@@ -42,10 +44,11 @@ inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     return true;
 }
 
-inline bool fill_with_val_async(const InterleavedPow2AddrGenFast<false>& s_const, uint32_t begin_addr, int32_t nrows, uint32_t row_nbytes) {
+ALWI bool fill_with_val_async(uint32_t local_src_addr, uint32_t begin_addr, int32_t nrows, uint32_t row_nbytes) {
     uint32_t curr_addr = begin_addr;
+    uint64_t local_noc_src_addr = get_noc_addr(local_src_addr);
     for (int32_t row_i = 0; row_i < nrows; ++ row_i) {
-        s_const.noc_async_read_page(0, curr_addr);
+        noc_async_read(local_noc_src_addr, curr_addr, row_nbytes);
         curr_addr += row_nbytes;
     }
     return true;
@@ -128,13 +131,12 @@ void kernel_main() {
     fill_with_val(get_write_ptr(in_scalar_cb_id), TILE_HW, bf16_one_u16);
     cb_push_back(in_scalar_cb_id, 1);
 
-    // fill in_cb_id rows with -inf
+    uint16_t minus_inf = 0xf7ff;
+    // fill one row of in_cb_id rows with -inf
     uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
-    const InterleavedPow2AddrGenFast<false> s_const = {     // NOTE: This is always in L1 (hardcoded in host)
-        .bank_base_address = minus_inf_buffer_addr,
-        .log_base_2_of_page_size = in_log_base_2_of_page_size        // TODO: generalize?, currently hardcorded for 1 row of 32 16b values
-    };
-    fill_with_val_async(s_const, in_l1_write_addr, in_cb_nsticks, in_nbytes_c);
+    fill_with_val(in_l1_write_addr, in_nbytes_c>>1, minus_inf);
+    // now replicate the row to fill the entire in_cb_id
+    fill_with_val_async(in_l1_write_addr, in_l1_write_addr+in_nbytes_c, in_cb_nsticks-1, in_nbytes_c);
     noc_async_read_barrier();
 
     // NOTE: batch is folded in
