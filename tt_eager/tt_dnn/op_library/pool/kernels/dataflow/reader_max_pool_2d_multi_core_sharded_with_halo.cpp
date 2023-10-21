@@ -206,7 +206,6 @@ void kernel_main() {
 
     // print_pages(in_l1_read_base_addr, 64, 13 * 114, 0);
 
-    // DPRINT << "local_in_stick_start: " << (uint) local_in_stick_start << ENDL();
     // DPRINT << "initial_skip: " << (uint) initial_skip << ENDL();
     // DPRINT << "start_stick: " << (uint) start_stick << ENDL();
     // DPRINT << "partial_first_row_nsticks: " << (uint) partial_first_row_nsticks << ENDL();
@@ -219,8 +218,19 @@ void kernel_main() {
     // DPRINT << "partial_last_row_nsticks: " << (uint) partial_last_row_nsticks << ENDL();
     // DPRINT << "TOTAL nsticks = " << (uint) partial_first_row_nsticks + partial_top_image_nrows * in_w + full_nimages * in_w * in_h + partial_bottom_image_nrows * in_w + partial_last_row_nsticks << ENDL();
 
+    // DPRINT << "initial_skip: " << (uint) in_initial_skip << ENDL();
+    // DPRINT << "start_stick: " << (uint) in_start_stick << ENDL();
+    // DPRINT << "partial_first_row_nsticks: " << (uint) in_first_partial_right_aligned_row_width << ENDL();
+    // DPRINT << "partial_first_row_skip: " << (uint) in_skip_after_partial_right_aligned_row << ENDL();
+    // DPRINT << "partial_top_image_nrows: " << (uint) in_first_partial_image_num_rows << ENDL();
+    // DPRINT << "partial_top_image_skip: " << (uint) in_skip_after_first_partial_image_row << ENDL();
+    // DPRINT << "full_nimages: " << (uint) in_num_full_images << ENDL();
+    // DPRINT << "full_nimages_skip: " << (uint) in_skip_after_full_image << ENDL();
+    // DPRINT << "partial_bottom_image_nrows: " << (uint) in_last_partial_image_num_rows << ENDL();
+    // DPRINT << "partial_last_row_nsticks: " << (uint) in_last_partial_left_aligned_row_width << ENDL();
+
     // // section 0: initial skip
-    uint32_t top_left_i = 0;
+    uint32_t top_left_i = in_initial_skip;
     uint32_t reader_i = 0;
 
     uint32_t in_w_padded = in_w + 2 * pad_w;
@@ -284,30 +294,10 @@ void kernel_main() {
         top_left_i += stride_w;
     }
 
-
-    // uint32_t batch_offset = 0;
-    // for (uint32_t out_stick_i = 0; out_stick_i < nsticks_per_core; ++ out_stick_i) {
-    //     uint32_t global_out_stick_i = local_out_stick_start + out_stick_i;
-    //     uint32_t batch_i = global_out_stick_i / nsticks_per_batch;
-    //     uint32_t batch_out_stick_i = global_out_stick_i % nsticks_per_batch;
-    //     int32_t out_w_i = batch_out_stick_i % out_w;
-    //     int32_t out_h_i = batch_out_stick_i / out_w;
-    //     // DPRINT << "out_stick_i = " << out_stick_i << " :: " << (uint) out_w_i << "," << (uint) out_h_i << ENDL();
-    //     int32_t in_center_w = ((int32_t) stride_w) * out_w_i - pad_w + (window_w >> 1);
-    //     int32_t in_center_h = ((int32_t) stride_h) * out_h_i - pad_h + (window_h >> 1);
-    //     // DPRINT << "center: = " << (uint) in_center_w << "," << (uint) in_center_h << ENDL();
-    //     if (batch_out_stick_i == 0 && out_stick_i > 0 && local_out_stick_start > 0) {
-    //         // this is start of a new batch, update offsets
-    //         batch_offset += in_w_padded * (in_h + pad_h);
-    //     }
-    //     int32_t top_left_local_index = initial_skip + batch_offset + (in_center_w - (window_w >> 1)) + (in_center_h - (window_h >> 1)) * (in_w_padded) - start_stick;
-    //     reader_indices_ptr[reader_i ++] = top_left_local_index;
+    // DPRINT << "reader_i = " << reader_i << ENDL();
+    // for (uint32_t i = 0; i < reader_i; ++ i) {
+    //     DPRINT << i << ": " << reader_indices_ptr[i] << ENDL();
     // }
-
-    DPRINT << "reader_i = " << reader_i << ENDL();
-    for (uint32_t i = 0; i < reader_i; ++ i) {
-        DPRINT << i << ": " << reader_indices_ptr[i] << ENDL();
-    }
 
     uint32_t counter = 0;
     while (counter < reader_i) {
