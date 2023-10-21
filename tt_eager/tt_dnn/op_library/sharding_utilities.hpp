@@ -542,6 +542,8 @@ struct InOutShardingConfig {
     int32_t skip_after_partial_right_aligned_row;
     int32_t skip_after_first_partial_image_row;
     int32_t skip_after_full_image;
+    int32_t skip_after_each_full_row;
+    int32_t skip_after_each_stick;
 };
 
 // For given pool config output, calculate the out sticks sharding config and the corresponding input shard config
@@ -559,6 +561,8 @@ get_inout_shard_specs(int32_t start_stick, int32_t end_stick, const PoolConfig& 
         .skip_after_partial_right_aligned_row = 0,
         .skip_after_first_partial_image_row = 0,
         .skip_after_full_image = 0,
+        .skip_after_each_full_row = 0,
+        .skip_after_each_stick = 0,
     };
     InOutShardingConfig in_sc = out_sc;
 
@@ -592,10 +596,19 @@ get_inout_shard_specs(int32_t start_stick, int32_t end_stick, const PoolConfig& 
     int32_t curr_out_stick = start_stick;
     int32_t curr_in_stick = start_in_stick;
 
+    // set the per row and per stick skips
+    out_sc.skip_after_each_stick = 0;
+    in_sc.skip_after_each_stick = pc.stride_w;
+    out_sc.skip_after_each_full_row = 0;
+    in_sc.skip_after_each_full_row = 2 * pc.pad_w + (pc.stride_h - 1) * (pc.in_w + 2 * pc.pad_w);
+
     // calculate the initial skip in input if starting stick is left-most and not the first in image
     if (start_out_w_i == 0 && start_out_h_i != 0) {
         in_sc.initial_skip = 2 * pc.pad_w;
     }
+
+    out_sc.skip_after_stick = 0;
+    in_sc.skip_after_stick = pc.stride_w;
 
     if (start_out_h_i == end_out_h_i && end_out_w_i != pc.out_w - 1) {
         // all out sticks belong to the same row
@@ -604,19 +617,15 @@ get_inout_shard_specs(int32_t start_stick, int32_t end_stick, const PoolConfig& 
         out_sc.last_partial_left_aligned_row_width = nsticks;
         in_sc.start_stick = curr_in_stick;
         in_sc.last_partial_left_aligned_row_width = end_in_stick + 1 - start_in_stick;
-        in_sc.skip_after_stick = (int32_t) pc.stride_w;
         return std::make_tuple(in_sc, out_sc);
     }
-
-    out_sc.skip_after_stick = 0;
-    in_sc.skip_after_stick = pc.stride_w;
 
     if (curr_out_stick % pc.out_w > 0) {
         // we have a partial row
         out_sc.first_partial_right_aligned_row_width = pc.out_w - (curr_out_stick % pc.out_w);
         out_sc.skip_after_partial_right_aligned_row = 0;
         in_sc.first_partial_right_aligned_row_width = pc.in_w - (curr_in_stick % pc.in_w);
-        in_sc.skip_after_partial_right_aligned_row = pc.stride_w + 2 * pc.pad_w + (pc.stride_h - 1) * (pc.in_w + 2 * pc.pad_w);
+        in_sc.skip_after_partial_right_aligned_row = 2 * pc.pad_w + (pc.stride_h - 1) * (pc.in_w + 2 * pc.pad_w);
     } else {
         // no partial row
         out_sc.first_partial_right_aligned_row_width = 0;
@@ -653,7 +662,7 @@ get_inout_shard_specs(int32_t start_stick, int32_t end_stick, const PoolConfig& 
             out_sc.first_partial_image_num_rows = (out_stick_counter - curr_out_stick) / pc.out_w;
             out_sc.skip_after_first_partial_image_row = 0;
             in_sc.first_partial_image_num_rows = (in_stick_counter - curr_in_stick) / pc.in_w;
-            in_sc.skip_after_first_partial_image_row = pc.stride_w + 2 * pc.pad_w + (pc.stride_h - 1 + pc.pad_h) * (pc.in_w + 2 * pc.pad_w);
+            in_sc.skip_after_first_partial_image_row = pc.pad_h * (pc.in_w + 2 * pc.pad_w);
             curr_out_stick += out_sc.first_partial_image_num_rows * pc.out_w + out_sc.skip_after_first_partial_image_row;
             curr_in_stick += in_sc.first_partial_image_num_rows * pc.in_w + in_sc.skip_after_first_partial_image_row;
         } else {
@@ -673,7 +682,7 @@ get_inout_shard_specs(int32_t start_stick, int32_t end_stick, const PoolConfig& 
     out_sc.num_full_images = rem_full_out_rows / pc.out_h;
     out_sc.skip_after_full_image = 0;
     in_sc.num_full_images = out_sc.num_full_images; // should be the same
-    in_sc.skip_after_full_image = pc.stride_w + 2 * pc.pad_w + (pc.stride_h - 1 + pc.pad_h) * (pc.in_w + 2 * pc.pad_w);
+    in_sc.skip_after_full_image = pc.pad_h * (pc.in_w + 2 * pc.pad_w);
     curr_out_stick += out_sc.num_full_images * (pc.out_h * pc.out_w) + out_sc.skip_after_full_image;
     curr_in_stick += in_sc.num_full_images * (pc.in_h * (pc.in_w + 2 * pc.pad_w)) + in_sc.skip_after_full_image;
 
