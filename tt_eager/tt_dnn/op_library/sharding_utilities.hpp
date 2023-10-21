@@ -592,6 +592,11 @@ get_inout_shard_specs(int32_t start_stick, int32_t end_stick, const PoolConfig& 
     int32_t curr_out_stick = start_stick;
     int32_t curr_in_stick = start_in_stick;
 
+    // calculate the initial skip in input if starting stick is left-most and not the first in image
+    if (start_out_w_i == 0 && start_out_h_i != 0) {
+        in_sc.initial_skip = 2 * pc.pad_w;
+    }
+
     if (start_out_h_i == end_out_h_i && end_out_w_i != pc.out_w - 1) {
         // all out sticks belong to the same row
         // treating them as last partial with no skip
