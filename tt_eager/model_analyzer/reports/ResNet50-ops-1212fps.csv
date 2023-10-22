@@ -20,7 +20,7 @@ OP_CODE,GL_CNT,GL,OP_NAME,PAD,STRIDE,FILT_H,FILT_W,INPUT_0_W,INPUT_0_Z,INPUT_0_Y
  tt::operations::primary::Matmul,19,,res2c_branch2c,0,1,1,1,1,56,56,64,1,1,64,256,29635
  EltwiseBinary,20,,,,,,,1,56,56,256,1,1,25088,256,8254
  tt::operations::primary::Matmul,21,,res3a_branch2a,0,1,1,1,1,56,56,256,1,1,256,128,45223
- Downsample,22,,,,,,,1,56,56,256,-,-,-,-,33696
+ Downsample,22,,,0,2,1,1,1,56,56,256,-,-,-,-,33696
  tt::operations::primary::Matmul,23,,res3a_branch1,0,1,1,1,1,28,28,256,1,1,256,512,63647
  Untilize,24,,,,,,,1,56,56,128,-,-,-,-,31470
  OptimizedConv,25,,res3a_branch2b,1,2,3,3,1,56,56,128,1,1,1152,128,90102
