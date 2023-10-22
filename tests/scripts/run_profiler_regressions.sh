@@ -30,6 +30,7 @@ run_post_proc_test(){
     export PYTHONPATH=$TT_METAL_HOME
 
     pytest $TT_METAL_HOME/tests/tt_metal/tools/profiler/test_device_logs.py -vvv
+    pytest $TT_METAL_HOME/tests/tt_metal/tools/profiler/test_unaryop_profiler.py -vvv
 }
 
 if [[ -z "$TT_METAL_HOME" ]]; then
