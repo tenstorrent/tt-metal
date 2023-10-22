@@ -162,7 +162,7 @@ void print_op_spec(const OperationSpec& op_spec) {
 }
 
 void analyze_op(OperationSpec& op_spec, OperationAnalysis& op_analysis, const ExecutionConfig& exec_config) {
-    // Calculate output dimensions
+    // Calculate output dimensions: relevant for window/stride based OPs (conv, maxpool, downsample)
     op_spec.output_height = std::floor((op_spec.in0_height - op_spec.filter_height + 2 * op_spec.pad) / op_spec.stride + 1);
     op_spec.output_width = std::floor((op_spec.in0_width - op_spec.filter_width + 2 * op_spec.pad) / op_spec.stride + 1);
 
@@ -170,17 +170,21 @@ void analyze_op(OperationSpec& op_spec, OperationAnalysis& op_analysis, const Ex
     op_analysis.measured_nano_sec -= exec_config.fw_launch_latency_nano_sec;
 
     // compute the amout of data that needs to be consumed on in0 (Bytes)
-    if (op_spec.op_code == "OptimizedConv" || op_spec.op_code == "MaxPool") {
+    if (op_spec.op_code == "OptimizedConv" || op_spec.op_code == "MaxPool" || op_spec.op_code == "Downsample") { 
         // filter window is only relevant for maxpool/convs, it's 1x1, s1 for all ohter OPs
         // for each output we gather a filter window of data from input0
+        // for strided OPs, the output is smaller than input, so we need to read less data (eg, downsample)
         op_analysis.in0_read_bytes = op_spec.output_height * op_spec.output_width * op_spec.in0_channels * op_spec.batch_size * exec_config.row_major_act_bytes_per_datum;
         op_analysis.in0_read_bytes *= op_spec.filter_height * op_spec.filter_width;
-    } else {
+    } else { 
+        // other OPs modeled as reading full input
+        // for eltwise binary OPs, we read both inputs but the each input and output is limited to 32 B/c because unpacker's 64 B/c is split across in0/in1, so each input and output get 32 B/c
         op_analysis.in0_read_bytes = op_spec.in0_height * op_spec.in0_width * op_spec.in0_channels * op_spec.batch_size * exec_config.tile_act_bytes_per_datum;
     }
 
     if (op_spec.op_code == "Matmul" || op_spec.op_code == "OptimizedConv") {
         // Calculate number of mul/add operations
+        // TODO: add bias modeling
         long long num_mul_adds_per_elem = op_spec.in0_channels * op_spec.filter_height * op_spec.filter_width * 2; // 1 multiply and 1 add per element
         op_analysis.num_mul_adds = num_mul_adds_per_elem * op_spec.output_height * op_spec.output_width * op_spec.output_channels * op_spec.batch_size;
 
@@ -211,6 +215,7 @@ OpList extract_op_list_from_table(const CSVTable& table, const ExecutionConfig& 
         "Pad",
         "Tilize",
         "UntilizeWithUnpadding",
+        "UntilizeWithHalo",
         "Downsample",
         
         "Reduce",
@@ -228,7 +233,8 @@ OpList extract_op_list_from_table(const CSVTable& table, const ExecutionConfig& 
 
             std::unordered_map<std::string, std::string> shorten_OP_CODE = {
                 {"tt::operations::primary::Matmul", "Matmul"},
-                {"UntilizeWithUnpadding",           "UntileAndUnpad"},
+                {"UntilizeWithUnpadding",           "UntileWithUnpad"},
+                {"UntilizeWithHalo",                "UntileWithHalo"},
                 {"InterleavedToSharded",            "IntrlevToShard"}
             };
             if (shorten_OP_CODE.find(op_code) != shorten_OP_CODE.end()) {
@@ -253,7 +259,8 @@ OpList extract_op_list_from_table(const CSVTable& table, const ExecutionConfig& 
                 op_spec.output_channels = op_spec.in0_channels;
             }
 
-            if (op_spec.op_code == "OptimizedConv" || op_spec.op_code == "MaxPool") {
+            // window/stride based OPs
+            if (op_spec.op_code == "OptimizedConv" || op_spec.op_code == "MaxPool" || op_spec.op_code == "Downsample") {
                 op_spec.filter_height = std::stoi(row[table.col_index.at("FILT_H")]);
                 op_spec.filter_width = std::stoi(row[table.col_index.at("FILT_W")]);
                 op_spec.stride = std::stoi(row[table.col_index.at("STRIDE")]);
@@ -289,7 +296,7 @@ void print_op_table(const OpList& op_list, std::unordered_set<std::string> filte
     std::cout << std::endl;
 
     std::vector<std::pair<std::string, int>> headers = {
-        {"GL_CNT", 6}, {"OP_CODE", 14}, {"OP_NAME", 15},
+        {"GL_CNT", 6}, {"OP_CODE", 15}, {"OP_NAME", 15},
         {"BS", 2}, {"IN_H", 4}, {"IN_W", 4}, {"IN_CH", 5},
         {"F_H", 4}, {"F_W", 4}, {"ST", 3}, {"PAD", 4},
         {"OUT_H", 5}, {"OUT_W", 5}, {"OUT_CH", 6},
@@ -522,7 +529,7 @@ int main(int argc, char* argv[]) {
 
     print_execution_breakdown(op_list, model_summary, {{"Matmul"}, {"OptimizedConv"},
                                        {"EltwiseBinary"}, {"MaxPool", "Reduce"},
-                                       {"Untilize", "Tilize","UntileAndUnpad", "Pad", "Unpad", "IntrlevToShard", "Downsample"}
+                                       {"Untilize", "Tilize", "UntileWithUnpad", "UntileWithHalo", "Pad", "Unpad", "IntrlevToShard", "Downsample"}
                                        });
 
     print_execution_breakdown(op_list, model_summary, {{"Matmul"}, {"OptimizedConv"},
