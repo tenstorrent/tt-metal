@@ -168,27 +168,64 @@ void kernel_main() {
         reader_offset += conv_act_size_w - 1; // Assuming (weight_size_w - 1) / 2 == pad_w
     }
 
-    reader_offset_idx = 0;
-    uint32_t act_l1_offset = 0;
-    uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
-    for (uint32_t outer = 0; outer < window_outer; outer++) {
-        // Reset reader_idx to finish act_block_h_datums
-        reader_idx = 0;
-        cb_reserve_back(cb_id_act, act_block_num_tiles);
-        uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
-        for (uint32_t bh = 0; bh < act_block_h_datums; bh++) {
-            for (uint32_t inner = 0; inner < window_inner; inner++) {
+
+    // TODO: need to make the read coalescing optimization cleaner
+    // pass coalesce_window_inner_reads as a compile time arg and num_coalesced_reads so we can constexpr the if
+    // currently works for the case of num_coalesced_reads == weight_size_w since these reads are contiguous on both src/dst side
+    // we check if window_inner == weight_size_w to make sure coalescing is legal along full window_inner so the loop can be removed
+    constexpr bool coalesce_window_inner_reads = true;
+    constexpr uint32_t num_coalesced_reads = 3;
+    const uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_size_c_bytes;
+    // we want to have the check hoisted out because in act_block_h_datums loop it would be to expensive (unless we make it ifdef)
+    if (coalesce_window_inner_reads and window_inner == num_coalesced_reads) {
+        // coalesce reads along weight_size_w
+        reader_offset_idx = 0;
+        uint32_t act_l1_offset = 0;
+        uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
+        for (uint32_t outer = 0; outer < window_outer; outer++) {
+            // Reset reader_idx to finish act_block_h_datums
+            reader_idx = 0;
+            cb_reserve_back(cb_id_act, act_block_num_tiles);
+            uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
+            uint32_t reader_offset = reader_offsets_ptr[reader_offset_idx];
+            for (uint32_t bh = 0; bh < act_block_h_datums; bh++) {
                 // local read from reader_index + reader_offset;
-                act_l1_offset = (reader_indices_ptr[reader_idx] + reader_offsets_ptr[reader_offset_idx + inner]) << log_base_2_of_conv_act_size_c_bytes;
-                noc_async_read_one_packet(get_noc_addr(act_l1_read_addr + act_l1_offset), l1_write_addr_act, conv_act_size_c_bytes);
-                l1_write_addr_act += conv_act_size_c_bytes;
-
+                act_l1_offset = (reader_indices_ptr[reader_idx] + reader_offset) << log_base_2_of_conv_act_size_c_bytes;
+                noc_async_read_one_packet(get_noc_addr(act_l1_read_addr + act_l1_offset), l1_write_addr_act, coalesced_read_bytes);
+                l1_write_addr_act += coalesced_read_bytes;
+                reader_idx++;
             }
-            reader_idx++;
-        }
-        noc_async_read_barrier();
-        cb_push_back(cb_id_act, act_block_num_tiles);
+            noc_async_read_barrier();
+            cb_push_back(cb_id_act, act_block_num_tiles);
 
-        reader_offset_idx += window_inner;
+            reader_offset_idx += window_inner;
+        }
+
+    } else {
+        // no coalescing of reads
+        reader_offset_idx = 0;
+        uint32_t act_l1_offset = 0;
+        uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
+        for (uint32_t outer = 0; outer < window_outer; outer++) {
+            // Reset reader_idx to finish act_block_h_datums
+            reader_idx = 0;
+            cb_reserve_back(cb_id_act, act_block_num_tiles);
+            uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
+            for (uint32_t bh = 0; bh < act_block_h_datums; bh++) {
+                for (uint32_t inner = 0; inner < window_inner; inner++) {
+                    // local read from reader_index + reader_offset;
+                    act_l1_offset = (reader_indices_ptr[reader_idx] + reader_offsets_ptr[reader_offset_idx + inner]) << log_base_2_of_conv_act_size_c_bytes;
+                    noc_async_read_one_packet(get_noc_addr(act_l1_read_addr + act_l1_offset), l1_write_addr_act, conv_act_size_c_bytes);
+                    l1_write_addr_act += conv_act_size_c_bytes;
+
+                }
+                reader_idx++;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_id_act, act_block_num_tiles);
+
+            reader_offset_idx += window_inner;
+        }
+
     }
 }
