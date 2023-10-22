@@ -47,10 +47,8 @@ void MAIN {
 
     constexpr bool spill = num_blocks > 1;
 
-    bool one_time_matmul_wait = true;
-
     mm_block_init(in0_cb_id, in1_cb_id, out_cb_id);
-    // mm_init(in0_cb_id, in1_cb_id, out_cb_id);
+
     for (uint32_t b = 0; b < batch; b++){
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
@@ -82,16 +80,15 @@ void MAIN {
 
                     if (enable_reload) {
                         // Reconfigure input
-                        copy_tile_matmul_partials_init_short_with_dt(mm_partials_cb_id);                                             // nothing to be done
+                        copy_tile_matmul_partials_init_short_with_dt(mm_partials_cb_id);
                         cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
                         tile_regs_acquire();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            copy_tile_matmul_partials(mm_partials_cb_id, i, i);                                                             // seems nothing to be done
+                            copy_tile_matmul_partials(mm_partials_cb_id, i, i);
                         }
                         cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
                         // // Reconfigure srcA back
-                        mm_block_init_short_with_dt(in0_cb_id, in1_cb_id, mm_partials_cb_id);                               // done
-                        // mm_init_short_with_dt(mm_partials_cb_id);
+                        mm_block_init_short_with_dt(in0_cb_id, in1_cb_id, mm_partials_cb_id);
                     } else {
                         // just acquire
                         tile_regs_acquire();
@@ -101,11 +98,13 @@ void MAIN {
                     int dst_index = 0; // start at 0, each call to matmul_block internally increments dst_index
                     int in0_index = in0_index_subblock_offset; // offset into in0 block
                     int in1_index = in1_index_subblock_offset; // offset into in1 block
+                    // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
                     for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
-                        // matmul outer product of out_subblock_h x out_subblock_w tiles that fill dst
+                        // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                         // accumulation is done by iterating matmul_block across inner dim
-                        matmul_block(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, out_subblock_w, out_subblock_h, in0_block_w);
-                        in0_index++; // stride right by 1
+                        // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
+                        matmul_block(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, false, out_subblock_w, out_subblock_h, in0_block_w);
+                        in0_index ++;  // stride right by 1
                         in1_index += in1_per_core_w; // to stride down by 1 need to stride by in_per_core_w (should be called in1_block_w)
                     }
 
@@ -121,7 +120,6 @@ void MAIN {
                         cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            // mm_pack_tile(i, mm_out_cb_id);                                                             // done
                             pack_tile(i, mm_out_cb_id);
                         }
                         tile_regs_release();
@@ -137,7 +135,6 @@ void MAIN {
                         cb_reserve_back(mm_partials_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            // mm_pack_tile(i, mm_partials_cb_id);                                                        // done
                             pack_tile(i, mm_partials_cb_id);
                         }
                         tile_regs_release();
