@@ -191,6 +191,6 @@ def test_bert_linear(device, fidelity, in0_sharded, out_sharded, in1_in_dram, ha
         pt_out = torch.nn.functional.gelu(pt_out)
     tt_out = tt2torch_tensor(output_t)
 
-    passing, output = comp_pcc(pt_out, tt_out)
+    passing, output = comp_pcc(pt_out, tt_out, 0.999)
     logger.info(output)
-    assert True
+    assert passing
