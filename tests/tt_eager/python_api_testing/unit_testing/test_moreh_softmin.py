@@ -13,14 +13,14 @@ import torch.nn.functional as F
 @pytest.mark.parametrize(
     "shape_dim",
     (
-        ((1, 1, 32, 32), 3), # single tile
-        ((1, 1, 32, 32 * 5), 3), # mutiple tile with dim W
-        ((5, 6, 32, 32), 3), # multiple cores
-        ((10, 20, 32 * 3, 32 * 5), 3), # multiple tiles per core
-        ((1, 1, 32, 32), 2), # single tile
-        ((1, 1, 32 * 5, 32), 2), # mutiple tile with dim H
-        ((5, 6, 32, 32), 2), # multiple cores
-        ((10, 20, 32 * 3, 32 * 5), 2), # multiple tiles per core
+        ((1, 1, 32, 32), 3),  # single tile
+        ((1, 1, 32, 32 * 5), 3),  # mutiple tile with dim W
+        ((5, 6, 32, 32), 3),  # multiple cores
+        ((10, 20, 32 * 3, 32 * 5), 3),  # multiple tiles per core
+        ((1, 1, 32, 32), 2),  # single tile
+        ((1, 1, 32 * 5, 32), 2),  # mutiple tile with dim H
+        ((5, 6, 32, 32), 2),  # multiple cores
+        ((10, 20, 32 * 3, 32 * 5), 2),  # multiple tiles per core
     ),
 )
 @skip_for_wormhole_b0
@@ -35,7 +35,8 @@ def test_softmin_for_dim_hw(shape_dim, device):
     H = shape[2]
     W = shape[3]
 
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=(N * C * H * W,)
+                      ).reshape((N, C, H, W)).to(torch.bfloat16)
 
     dev_x = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
@@ -50,7 +51,8 @@ def test_softmin_for_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(tt_cpu, tt_dev, rtol = 0.07, atol = 0.01)
+    assert torch.allclose(tt_cpu, tt_dev, rtol=0.07, atol=0.01)
+
 
 @pytest.mark.parametrize(
     "shape_dim",
@@ -71,7 +73,8 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, device):
     H = shape[2]
     W = shape[3]
 
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=(N * C * H * W,)
+                      ).reshape((N, C, H, W)).to(torch.bfloat16)
 
     dev_x = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
@@ -87,15 +90,16 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(tt_cpu, tt_dev, rtol = 0.07, atol = 0.01)
+    assert torch.allclose(tt_cpu, tt_dev, rtol=0.07, atol=0.01)
+
 
 @pytest.mark.parametrize(
     "shape_dim",
     (
-        ((1, 1, 10, 15), 3), # single tile
-        ((1, 1, 10, 32 * 2 + 10), 3), # mutiple tile with dim
-        ((1, 1, 15, 10), 2), # single tile
-        ((1, 1, 32 * 2 + 10, 32), 2), # mutiple tile with dim
+        ((1, 1, 10, 15), 3),  # single tile
+        ((1, 1, 10, 32 * 2 + 10), 3),  # mutiple tile with dim
+        ((1, 1, 15, 10), 2),  # single tile
+        ((1, 1, 32 * 2 + 10, 32), 2),  # mutiple tile with dim
     ),
 )
 @skip_for_wormhole_b0
@@ -109,7 +113,8 @@ def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, device):
     H = shape[2]
     W = shape[3]
 
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=(N * C * H * W,)
+                      ).reshape((N, C, H, W)).to(torch.bfloat16)
 
     dev_x = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
@@ -125,19 +130,19 @@ def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(tt_cpu, tt_dev, rtol = 0.07, atol = 0.01)
+    assert torch.allclose(tt_cpu, tt_dev, rtol=0.07, atol=0.01)
 
 
 @pytest.mark.parametrize(
     "shape_dim",
     (
-        ((1, 15, 32, 32), 1), # single tile c
-        ((1, 15, 32 * 7, 32 * 5), 1), # mutiple cores
-        ((109, 15, 32, 32), 1), # mutiple tiles per cores
+        ((1, 15, 32, 32), 1),  # single tile c
+        ((1, 15, 32 * 7, 32 * 5), 1),  # mutiple cores
+        ((109, 15, 32, 32), 1),  # mutiple tiles per cores
 
-        ((15, 1, 32, 32), 0), # single tile n
-        ((15, 1, 32 * 7, 32 * 5), 0), # mutiple cores
-        ((15, 109, 32 * 2, 32 * 2), 0), # mutiple tiles per cores
+        ((15, 1, 32, 32), 0),  # single tile n
+        ((15, 1, 32 * 7, 32 * 5), 0),  # mutiple cores
+        ((15, 109, 32 * 2, 32 * 2), 0),  # mutiple tiles per cores
     ),
 )
 @skip_for_wormhole_b0
@@ -151,7 +156,8 @@ def test_softmin_for_dim_nc(shape_dim, device):
     H = shape[2]
     W = shape[3]
 
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    x = torch.randint(low=0, high=4, size=(N * C * H * W,)
+                      ).reshape((N, C, H, W)).to(torch.bfloat16)
 
     dev_x = ttl.tensor.Tensor(
         x.reshape(-1).tolist(),
@@ -167,19 +173,20 @@ def test_softmin_for_dim_nc(shape_dim, device):
     assert tt_npu.shape() == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(tt_cpu, tt_dev, rtol = 0.07, atol = 0.01)
+    assert torch.allclose(tt_cpu, tt_dev, rtol=0.07, atol=0.01)
+
 
 @pytest.mark.parametrize(
     "shape_dim",
     (
-        ((1, 1, 32, 32), 3), # single tile
-        ((1, 1, 32, 32 * 5), 3), # mutiple tile with dim W
-        ((5, 6, 32, 32), 3), # multiple cores
-        ((10, 20, 32 * 3, 32 * 5), 3), # multiple tiles per core
-        ((1, 1, 32, 32), 2), # single tile
-        ((1, 1, 32 * 5, 32), 2), # mutiple tile with dim H
-        ((5, 6, 32, 32), 2), # multiple cores
-        ((10, 20, 32 * 3, 32 * 5), 2), # multiple tiles per core
+        ((1, 1, 32, 32), 3),  # single tile
+        ((1, 1, 32, 32 * 5), 3),  # mutiple tile with dim W
+        ((5, 6, 32, 32), 3),  # multiple cores
+        ((10, 20, 32 * 3, 32 * 5), 3),  # multiple tiles per core
+        ((1, 1, 32, 32), 2),  # single tile
+        ((1, 1, 32 * 5, 32), 2),  # mutiple tile with dim H
+        ((5, 6, 32, 32), 2),  # multiple cores
+        ((10, 20, 32 * 3, 32 * 5), 2),  # multiple tiles per core
     ),
 )
 @skip_for_wormhole_b0
@@ -193,7 +200,8 @@ def test_softmin_backward_for_dim_hw(shape_dim, device):
     H = shape[2]
     W = shape[3]
 
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16).requires_grad_(True)
+    x = torch.randint(low=0, high=4, size=(
+        N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16).requires_grad_(True)
 
     y = F.softmin(x, dim)
     dev_y = ttl.tensor.Tensor(
@@ -203,7 +211,8 @@ def test_softmin_backward_for_dim_hw(shape_dim, device):
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(ttl.tensor.Layout.TILE).to(device)
 
-    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)
+                       ).reshape((N, C, H, W)).to(torch.bfloat16)
     dev_dy = ttl.tensor.Tensor(
         dy.reshape(-1).tolist(),
         dy.shape,
@@ -217,7 +226,8 @@ def test_softmin_backward_for_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(x.grad, tt_dev, rtol = 0.07, atol = 0.01)
+    assert torch.allclose(x.grad, tt_dev, rtol=0.07, atol=0.01)
+
 
 @pytest.mark.parametrize(
     "shape_dim",
@@ -237,7 +247,8 @@ def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, device):
     H = shape[2]
     W = shape[3]
 
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16).requires_grad_(True)
+    x = torch.randint(low=0, high=4, size=(
+        N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16).requires_grad_(True)
 
     y = F.softmin(x, dim)
     dev_y = ttl.tensor.Tensor(
@@ -247,7 +258,8 @@ def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, device):
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(ttl.tensor.Layout.TILE).to(device)
 
-    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)
+                       ).reshape((N, C, H, W)).to(torch.bfloat16)
     dev_dy = ttl.tensor.Tensor(
         dy.reshape(-1).tolist(),
         dy.shape,
@@ -257,20 +269,22 @@ def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, device):
 
     y.backward(dy)
     strategy = ttl.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_W if dim == 3 else ttl.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_H
-    tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim, strategy)
+    tt_npu = ttl.operations.primary.moreh_softmin_backward(
+        dev_y, dev_dy, dim, strategy)
 
     assert tt_npu.shape() == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(x.grad, tt_dev, rtol = 0.07, atol = 0.01)
+    assert torch.allclose(x.grad, tt_dev, rtol=0.07, atol=0.01)
+
 
 @pytest.mark.parametrize(
     "shape_dim",
     (
-        ((1, 1, 10, 15), 3), # single tile
-        ((1, 1, 10, 32 * 2 + 10), 3), # mutiple tile with dim
-        ((1, 1, 15, 10), 2), # single tile
-        ((1, 1, 32 * 2 + 10, 32), 2), # mutiple tile with dim
+        ((1, 1, 10, 15), 3),  # single tile
+        ((1, 1, 10, 32 * 2 + 10), 3),  # mutiple tile with dim
+        ((1, 1, 15, 10), 2),  # single tile
+        ((1, 1, 32 * 2 + 10, 32), 2),  # mutiple tile with dim
     ),
 )
 @skip_for_wormhole_b0
@@ -284,7 +298,8 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
     H = shape[2]
     W = shape[3]
 
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16).requires_grad_(True)
+    x = torch.randint(low=0, high=4, size=(
+        N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16).requires_grad_(True)
 
     y = F.softmin(x, dim)
     dev_y = ttl.tensor.Tensor(
@@ -294,7 +309,8 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
         ttl.tensor.Layout.ROW_MAJOR,
     ).pad_to_tile(float('10')).to(ttl.tensor.Layout.TILE).to(device)
 
-    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)
+                       ).reshape((N, C, H, W)).to(torch.bfloat16)
     dev_dy = ttl.tensor.Tensor(
         dy.reshape(-1).tolist(),
         dy.shape,
@@ -309,18 +325,19 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(x.grad.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(x.grad, tt_dev, rtol = 0.07, atol = 0.01)
+    assert torch.allclose(x.grad, tt_dev, rtol=0.07, atol=0.01)
+
 
 @pytest.mark.parametrize(
     "shape_dim",
     (
-        ((1, 15, 32, 32), 1), # single tile c
-        ((1, 15, 32 * 7, 32 * 5), 1), # mutiple cores
-        ((109, 15, 32, 32), 1), # mutiple tiles per cores
+        ((1, 15, 32, 32), 1),  # single tile c
+        ((1, 15, 32 * 7, 32 * 5), 1),  # mutiple cores
+        ((109, 15, 32, 32), 1),  # mutiple tiles per cores
 
-        ((15, 1, 32, 32), 0), # single tile n
-        ((15, 1, 32 * 7, 32 * 5), 0), # mutiple cores
-        ((15, 109, 32 * 2, 32 * 2), 0), # mutiple tiles per cores
+        ((15, 1, 32, 32), 0),  # single tile n
+        ((15, 1, 32 * 7, 32 * 5), 0),  # mutiple cores
+        ((15, 109, 32 * 2, 32 * 2), 0),  # mutiple tiles per cores
     ),
 )
 @skip_for_wormhole_b0
@@ -334,7 +351,8 @@ def test_softmin_backward_for_dim_nc(shape_dim, device):
     H = shape[2]
     W = shape[3]
 
-    x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16).requires_grad_(True)
+    x = torch.randint(low=0, high=4, size=(
+        N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16).requires_grad_(True)
 
     y = F.softmin(x, dim)
     dev_y = ttl.tensor.Tensor(
@@ -344,7 +362,8 @@ def test_softmin_backward_for_dim_nc(shape_dim, device):
         ttl.tensor.Layout.ROW_MAJOR,
     ).pad_to_tile(float('10')).to(ttl.tensor.Layout.TILE).to(device)
 
-    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
+    dy = torch.randint(low=0, high=4, size=(N * C * H * W,)
+                       ).reshape((N, C, H, W)).to(torch.bfloat16)
     dev_dy = ttl.tensor.Tensor(
         dy.reshape(-1).tolist(),
         dy.shape,
@@ -360,4 +379,4 @@ def test_softmin_backward_for_dim_nc(shape_dim, device):
 
     atol = 0.02
     rtol = 0.07
-    assert torch.allclose(x.grad, tt_dev, rtol = rtol, atol = atol)
+    assert torch.allclose(x.grad, tt_dev, rtol=rtol, atol=atol)
