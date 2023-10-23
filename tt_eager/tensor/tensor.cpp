@@ -268,10 +268,7 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
     auto& shard_grid = shard_spec.shard_grid;
     auto& shard_shape = shard_spec.shard_shape;
 
-    uint32_t num_cores = 0;
-    for (const auto& core_range : shard_grid.ranges()) {
-        num_cores += core_range.size();
-    }
+    uint32_t num_cores = shard_grid.num_cores();
 
     uint32_t num_shards;
     uint32_t total_height = tt_metal::compute_volume(shape) / shape[-1];

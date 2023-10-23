@@ -310,6 +310,14 @@ class CoreRangeSet {
       }
     }
 
+    const uint32_t num_cores() const {
+      uint32_t num_cores = 0;
+      for (const auto& core_range : this->ranges()) {
+        num_cores += core_range.size();
+      }
+      return num_cores;
+    }
+
   private:
     std::set<CoreRange> ranges_;
 };

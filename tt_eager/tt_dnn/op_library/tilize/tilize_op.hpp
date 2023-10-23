@@ -13,7 +13,9 @@ namespace tt {
 
 namespace tt_metal {
 
-// TODO: Accept parallelization
+enum class TilizeOpParallelizationStrategy {
+    MULTI_CORE = 0, SINGLE_CORE = 1
+};
 
 struct Tilize {
     const MemoryConfig output_mem_config;
@@ -23,9 +25,14 @@ struct Tilize {
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    TilizeOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
+
+enum class TilizeWithValPaddingOpParallelizationStrategy {
+    MULTI_CORE = 0, SINGLE_CORE = 1
+};
 
 struct TilizeWithValPadding {
     const Shape output_tensor_shape;
@@ -37,11 +44,13 @@ struct TilizeWithValPadding {
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    TilizeWithValPaddingOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
 operation::ProgramWithCallbacks tilize_multi_core(const Tensor &a, Tensor& output);
 operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& output);
+operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value);
 operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value);
 
 Tensor tilize (const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, bool use_multicore = false);

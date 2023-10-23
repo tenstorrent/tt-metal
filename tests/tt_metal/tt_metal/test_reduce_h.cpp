@@ -106,7 +106,9 @@ int main(int argc, char **argv) {
         TT_ASSERT(num_tensor_tiles%Ht == 0);
 
         TT_ASSERT(multibank == true);
-        std::vector<uint32_t> reader_compile_args = {(std::uint32_t) true, *reinterpret_cast<uint32_t*>(&scaler)};
+        bfloat16 bfloat_scaler_value = bfloat16(scaler);
+        uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+        std::vector<uint32_t> reader_compile_args = {(std::uint32_t) true, packed_scaler_value};
         std::map<string, string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
         auto unary_reader_kernel = tt_metal::CreateKernel(

@@ -7,6 +7,7 @@
 #include "tt_dnn/op_library/tilize/tilize_op.hpp"
 #include "tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_dnn/op_library/math.hpp"
+#include "tensor/tensor_utils.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -66,10 +67,20 @@ std::vector<Tensor> Tilize::create_output_tensors(const std::vector<Tensor> &inp
 operation::ProgramWithCallbacks Tilize::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    if (use_multicore) {
-        return tilize_multi_core(input_tensor_a, output_tensor);
+    switch (this->get_parallelization_strategy(input_tensors)) {
+        case TilizeOpParallelizationStrategy::MULTI_CORE:
+            return tilize_multi_core(input_tensor_a, output_tensor);
+        case TilizeOpParallelizationStrategy::SINGLE_CORE:
+        default:
+            return tilize_single_core(input_tensor_a, output_tensor);
+    }
+}
+
+TilizeOpParallelizationStrategy Tilize::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+    if (this->use_multicore) {
+        return TilizeOpParallelizationStrategy::MULTI_CORE;
     } else {
-        return tilize_single_core(input_tensor_a, output_tensor);
+        return TilizeOpParallelizationStrategy::SINGLE_CORE;
     }
 }
 
@@ -109,6 +120,16 @@ void TilizeWithValPadding::validate(const std::vector<Tensor> &input_tensors) co
     uint32_t inner_dim = this->output_tensor_shape[3];
     TT_ASSERT(num_rows % TILE_HEIGHT == 0, "Output shape must be tilizable");
     TT_ASSERT(inner_dim % TILE_WIDTH == 0, "Output shape must be tilizable");
+
+    if (input_tensor_a.memory_config().is_sharded()) {
+        TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
+        TT_ASSERT(this->output_mem_config == input_tensor_a.memory_config());
+        for (uint32_t i = 0; i < input_tensor_a.shape().rank(); i++) {
+            if (i != input_tensor_a.shape().rank() - 2) {
+                TT_ASSERT(input_tensor_a.shape()[i] == this->output_tensor_shape[i]);
+            }
+        }
+    }
 }
 std::vector<Shape> TilizeWithValPadding::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     auto input_shape = input_tensors.at(0).shape();
@@ -123,7 +144,14 @@ std::vector<Shape> TilizeWithValPadding::compute_output_shapes(const std::vector
 }
 std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.dtype(), Layout::TILE, this->output_mem_config);
+    if (input_tensor_a.memory_config().is_sharded()) {
+        auto output_shape = this->compute_output_shapes(input_tensors).at(0);
+        auto shard_spec = input_tensor_a.shard_spec().value();
+        shard_spec.shard_shape[0] = tt_metal::compute_volume(output_shape) / output_shape[-1];
+        return {create_sharded_device_tensor(output_shape, input_tensor_a.dtype(), Layout::TILE, input_tensor_a.device(), input_tensor_a.memory_config(), shard_spec)};
+    } else {
+        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.dtype(), Layout::TILE, this->output_mem_config);
+    }
 }
 
 // TODO: If pad is called on a tile and output is not tile, we could untilize then pad, and output is RM
@@ -131,7 +159,21 @@ std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vecto
 operation::ProgramWithCallbacks TilizeWithValPadding::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    return tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+    switch (this->get_parallelization_strategy(input_tensors)) {
+        case TilizeWithValPaddingOpParallelizationStrategy::MULTI_CORE:
+            return tilize_with_val_padding_multi_core(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+        case TilizeWithValPaddingOpParallelizationStrategy::SINGLE_CORE:
+        default:
+            return tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->output_tensor_shape, this->input_tensor_start, this->pad_value);
+    }
+}
+
+TilizeWithValPaddingOpParallelizationStrategy TilizeWithValPadding::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
+    if (input_tensors.at(0).memory_config().is_sharded()) {
+        return TilizeWithValPaddingOpParallelizationStrategy::MULTI_CORE;
+    } else {
+        return TilizeWithValPaddingOpParallelizationStrategy::SINGLE_CORE;
+    }
 }
 
 tt::stl::reflection::Attributes TilizeWithValPadding::attributes() const {

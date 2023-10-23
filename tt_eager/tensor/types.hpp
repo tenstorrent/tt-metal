@@ -223,6 +223,7 @@ struct ShardSpec {
     CoreRangeSet shard_grid;
     std::array<uint32_t, 2> shard_shape;
     ShardOrientation shard_orientation;
+    const uint32_t numel() const { return this->shard_shape[0] * this->shard_shape[1]; }
     tt::stl::reflection::Attributes attributes() const;
 };
 

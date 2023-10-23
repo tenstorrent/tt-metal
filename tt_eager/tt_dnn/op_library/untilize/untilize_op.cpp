@@ -83,9 +83,9 @@ operation::ProgramWithCallbacks Untilize::create_program(const std::vector<Tenso
     switch (this->get_parallelization_strategy(input_tensors)) {
         case UntilizeOpParallelizationStrategy::MULTI_CORE:
             return untilize_multi_core(input_tensor_a, output_tensor);
-            break;
         case UntilizeOpParallelizationStrategy::SINGLE_CORE:
-        default: return untilize_single_core(input_tensor_a, output_tensor);
+        default:
+            return untilize_single_core(input_tensor_a, output_tensor);
     }
 }
 
