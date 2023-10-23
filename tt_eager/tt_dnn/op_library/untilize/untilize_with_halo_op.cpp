@@ -920,10 +920,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
     int32_t ncores_x = grid_size.x;
     int32_t ncores_y = grid_size.y;
     CoreRangeSet all_cores = a.shard_spec().value().shard_grid;
-    int32_t ncores = 0;
-    for (const auto& core_range : all_cores.ranges()) {
-        ncores += core_range.size();
-    }
+    int32_t ncores = all_cores.num_cores();
     CoreRangeSet core_range_cliff = CoreRangeSet({});
     uint32_t nblocks_per_core = a.shard_spec().value().shard_shape[0] / TILE_HEIGHT;
     uint32_t nblocks_per_core_cliff = 0;
@@ -1514,11 +1511,8 @@ Tensor untilize_with_halo(const Tensor &input_tensor_a, const uint32_t pad_val, 
     uint32_t pad_h = 1;
     uint32_t pad_w = 1;
     uint32_t window_w = 3;
-    uint32_t ncores = 0;
     CoreRangeSet all_cores = input_tensor_a.shard_spec().value().shard_grid;
-    for (const auto& core_range : all_cores.ranges()) {
-        ncores += core_range.size();
-    }
+    uint32_t ncores = all_cores.num_cores();
 
     // TODO: Uplift to support different num of sticks per core
     uint32_t in_nsticks_per_core = (in_b * in_h * in_w) / ncores;

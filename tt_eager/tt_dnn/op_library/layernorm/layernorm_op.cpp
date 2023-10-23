@@ -268,7 +268,9 @@ operation::ProgramWithCallbacks layernorm_(
     }
 
     uint32_t curr_row = 0;
-    union { float f; uint32_t u; } winv; winv.f = 1.0f / W; // bcast-w scaler
+    float winv = 1.0f / W; // bcast-w scaler
+    bfloat16 bfloat_winv_value = bfloat16(winv);
+    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     union { float f; uint32_t u; } e; e.f = eps; // epsilon
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
@@ -285,7 +287,7 @@ operation::ProgramWithCallbacks layernorm_(
         uint32_t tile_offset = curr_row * Wt;
 
         SetRuntimeArgs(program, reader_kernels_id, core,
-            { a_addr, num_tile_rows_per_core, Wt, tile_offset, winv.u, e.u, // 0-5
+            { a_addr, num_tile_rows_per_core, Wt, tile_offset, packed_winv_value, e.u, // 0-5
             gamma_dram_addr, beta_dram_addr, b_dram_addr } // 6-8
         );
         SetRuntimeArgs(program, compute_kernels_id, core, { num_tile_rows_per_core });

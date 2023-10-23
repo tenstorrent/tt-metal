@@ -7,16 +7,27 @@
 FORCE_INLINE void generate_bcast_scaler() {
     constexpr uint32_t cb_in_2 = 2;
     uint32_t scaler = get_arg_val<uint32_t>(10);
-    union { float f; uint32_t u; } u; u.u = scaler;
     //DPRINT << "basic Scaler = " << F32(u.f) << ENDL();
     cb_reserve_back(cb_in_2, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_in_2));
-    for (int j = 0; j < 1024; j++)
-        ptr[j] = uint16_t(0);
-
-    for (int k = 0; k < 4; k++)
-    for (int j = 0; j < 16; j++)
-        ptr[k*256 + j] = uint16_t(u.u>>16);
+    constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
+    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+    uint32_t write_addr = get_write_ptr(cb_in_2);
+    // Fill tile with zeros
+    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
+        noc_async_read(zeros_noc_addr, write_addr, MEM_ZEROS_SIZE);
+        write_addr += MEM_ZEROS_SIZE;
+    }
+    noc_async_read_barrier();
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_in_2));
+    uint32_t idx = 0;
+    for (uint32_t k = 0; k < 4; ++k) {
+        uint32_t curr_idx = idx;
+        for (uint32_t j = 0; j < 8; ++j) {
+            ptr[curr_idx] = scaler;
+            curr_idx++;
+        }
+        idx += 128;
+    }
     cb_push_back(cb_in_2, 1);
 }
 
