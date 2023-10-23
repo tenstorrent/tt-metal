@@ -22,6 +22,7 @@ namespace operations {
 namespace primary {
 
 operation::ProgramWithCallbacks moreh_softmax_backward_w_large(const Tensor &output, const Tensor &output_grad, Tensor &input_grad, const CoreRange core_range, const MorehSoftmaxBackwardOp op) {
+    log_info(LogTest, "Large tensor algorithm selected");
     // split work
     auto shape = input_grad.shape();
     auto N = shape[0];

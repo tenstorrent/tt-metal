@@ -55,8 +55,8 @@ def test_softmin_for_dim_hw(shape_dim, device):
 @pytest.mark.parametrize(
     "shape_dim",
     (
-        ((1, 1, 32, 32 * 500), 3), # single core
-        ((1, 1, 32 * 500, 32), 2), # single core
+        ((2, 3, 32 * 4, 32 * 5), 3),
+        ((2, 3, 32 * 4, 32 * 5), 2),
     ),
 )
 @skip_for_wormhole_b0
@@ -81,7 +81,8 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, device):
     ).to(ttl.tensor.Layout.TILE).to(device)
 
     tt_cpu = F.softmin(x, dim)
-    tt_npu = ttl.operations.primary.moreh_softmin(dev_x, dim)
+    strategy = ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_W if dim == 3 else ttl.operations.primary.MorehSoftmaxOpParallelizationStrategy.LARGE_H
+    tt_npu = ttl.operations.primary.moreh_softmin(dev_x, dim, strategy)
 
     assert tt_npu.shape() == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
@@ -221,8 +222,8 @@ def test_softmin_backward_for_dim_hw(shape_dim, device):
 @pytest.mark.parametrize(
     "shape_dim",
     (
-        ((1, 1, 32, 32 * 500), 3), # single core
-        ((1, 1, 32 * 500, 32), 2), # single core
+        ((2, 3, 32 * 4, 32 * 5), 3),
+        ((2, 3, 32 * 4, 32 * 5), 2),
     ),
 )
 @skip_for_wormhole_b0
@@ -255,7 +256,8 @@ def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, device):
     ).to(ttl.tensor.Layout.TILE).to(device)
 
     y.backward(dy)
-    tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim)
+    strategy = ttl.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_W if dim == 3 else ttl.operations.primary.MorehSoftmaxBackwardOpParallelizationStrategy.LARGE_H
+    tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim, strategy)
 
     assert tt_npu.shape() == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
