@@ -35,7 +35,11 @@ void MAIN {
         // step 1, compute exp(x)
         for (uint32_t i = 0; i < dim_size; ++i) {
             ACQ();
-            exp_tile_to_cb(cb_in0, cb_exps);
+            #ifdef SOFTMAX
+                exp_tile_to_cb(cb_in0, cb_exps);
+            #else
+                rexp_tile_to_cb(cb_in0, cb_exps);
+            #endif
             REL();
 
             if (i == 0) {
@@ -59,7 +63,11 @@ void MAIN {
         for (uint32_t i = 0; i < dim_size; ++i) {
             // compute exp(x)
             ACQ();
-            exp_tile_to_cb(cb_in0, cb_exps);
+            #ifdef SOFTMAX
+                exp_tile_to_cb(cb_in0, cb_exps);
+            #else
+                rexp_tile_to_cb(cb_in0, cb_exps);
+            #endif
             REL();
 
             // multiply recip
