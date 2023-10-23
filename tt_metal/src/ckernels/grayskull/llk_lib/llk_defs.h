@@ -147,6 +147,7 @@ enum SfpuType
   erfinv,
   i0,
   mask,
+  negative,
   unused
 };
 
