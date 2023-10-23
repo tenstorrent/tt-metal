@@ -24,19 +24,25 @@ enum class MorehSoftmaxBackwardOpParallelizationStrategy {
     LARGE_C = 4
 };
 
+enum class MorehSoftmaxBackwardOp {
+    SOFTMAX = 0,
+    SOFTMIN = 1
+};
+
 bool is_moreh_softmax_backward_w_small_available(const Tensor &tensor);
 bool is_moreh_softmax_backward_h_small_available(const Tensor &tensor);
 
-operation::ProgramWithCallbacks moreh_softmax_backward_w_small(const Tensor &output, const Tensor &output_grad, Tensor& input_grad, const CoreRange core_range);
-operation::ProgramWithCallbacks moreh_softmax_backward_w_large(const Tensor &output, const Tensor &output_grad, Tensor& input_grad, const CoreRange core_range);
-operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &output, const Tensor &output_grad, Tensor& input_grad, const CoreRange core_range);
-operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &output, const Tensor &output_grad, Tensor& input_grad, const CoreRange core_range);
-operation::ProgramWithCallbacks moreh_softmax_backward_c_large(const Tensor &output, const Tensor &output_grad, Tensor& input_grad, uint32_t dim, const CoreRange core_range);
+operation::ProgramWithCallbacks moreh_softmax_backward_w_small(const Tensor &output, const Tensor &output_grad, Tensor& input_grad, const CoreRange core_range, const MorehSoftmaxBackwardOp op);
+operation::ProgramWithCallbacks moreh_softmax_backward_w_large(const Tensor &output, const Tensor &output_grad, Tensor& input_grad, const CoreRange core_range, const MorehSoftmaxBackwardOp op);
+operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &output, const Tensor &output_grad, Tensor& input_grad, const CoreRange core_range, const MorehSoftmaxBackwardOp op);
+operation::ProgramWithCallbacks moreh_softmax_backward_h_large(const Tensor &output, const Tensor &output_grad, Tensor& input_grad, const CoreRange core_range, const MorehSoftmaxBackwardOp op);
+operation::ProgramWithCallbacks moreh_softmax_backward_c_large(const Tensor &output, const Tensor &output_grad, Tensor& input_grad, uint32_t dim, const CoreRange core_range, const MorehSoftmaxBackwardOp op);
 
 struct MorehSoftmaxBackward {
     const uint32_t dim;
     const MemoryConfig output_mem_config;
     const CoreRange core_range; // unused for now
+    const MorehSoftmaxBackwardOp op;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -51,6 +57,7 @@ struct MorehSoftmaxBackward {
 
 // const ref prevents
 Tensor moreh_softmax_backward(const Tensor& output_tensor, const Tensor& output_grad_tensor, uint32_t dim, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor moreh_softmin_backward(const Tensor& output_tensor, const Tensor& output_grad_tensor, uint32_t dim, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary
 }  // namespace operations

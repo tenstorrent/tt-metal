@@ -44,7 +44,7 @@ bool is_moreh_softmax_backward_h_small_available(const Tensor &tensor) {
     return (L1_UNRESERVED_BASE + cb_usage <= L1_512KB);
 }
 
-operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &output, const Tensor &output_grad, Tensor &input_grad, const CoreRange core_range) {
+operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &output, const Tensor &output_grad, Tensor &input_grad, const CoreRange core_range, const MorehSoftmaxBackwardOp op) {
     // split work
     auto shape = input_grad.shape();
     auto N = shape[0];
@@ -95,6 +95,10 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &out
     auto writer_kernel_id = CreateWriteKernel(
         program, "tt_eager/tt_dnn/op_library/moreh_softmax_backward/kernels/writer_moreh_softmax_h.cpp", all_cores, {dx_is_dram}, writer_defines);
 
+    std::map<string, string> compute_defines;
+    if (op == MorehSoftmaxBackwardOp::SOFTMAX) compute_defines["SOFTMAX"] = "1";
+    else compute_defines["SOFTMIN"] = "1";
+
     // create compute kernel
     CreateComputeKernel(
         program,
@@ -102,7 +106,8 @@ operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &out
         {
             {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, Ht}},
             {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, Ht}},
-        });
+        },
+        compute_defines);
 
     // Set Runtime Args
     auto core_x_offset = core_range.start.x;
