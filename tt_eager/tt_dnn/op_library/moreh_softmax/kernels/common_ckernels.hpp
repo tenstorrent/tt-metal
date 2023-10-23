@@ -4,6 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#pragma once
+
+#include "compute_kernel_api/eltwise_unary/negative.h"
+
 ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
 ALWI void REL() { release_dst(tt::DstMode::Half); }
 
@@ -152,20 +156,41 @@ ALWI void copy_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32
     cb_push_back(ocb, onetile);
 }
 
-ALWI void exp_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_t pop = 1) {
+ALWI void exp_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_t dst = 0, uint32_t pop = 1) {
     constexpr uint32_t onetile = 1;
-    constexpr int dst0 = 0;
 
     cb_reserve_back(ocb, onetile);
     cb_wait_front(icb, itile + 1);
 
     copy_tile_init();
-    copy_tile(icb, itile, dst0);
+    copy_tile(icb, itile, dst);
 
     exp_tile_init();
-    exp_tile(dst0);
+    exp_tile(dst);
 
-    pack_tile(dst0, ocb);
+    pack_tile(dst, ocb);
+
+    if (pop)
+        cb_pop_front(icb, pop);
+    cb_push_back(ocb, onetile);
+}
+
+ALWI void rexp_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_t dst = 0, uint32_t pop = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_reserve_back(ocb, onetile);
+    cb_wait_front(icb, itile + 1);
+
+    copy_tile_init();
+    copy_tile(icb, itile, dst);
+
+    negative_tile_init();
+    negative_tile(dst);
+
+    exp_tile_init();
+    exp_tile(dst);
+
+    pack_tile(dst, ocb);
 
     if (pop)
         cb_pop_front(icb, pop);
@@ -193,6 +218,48 @@ ALWI void exp_tile_and_mask_tile_to_cb(
 
     if (pop)
         cb_pop_front(icb, pop);
+
+    exp_tile_init();
+    exp_tile(dst);
+
+    copy_tile_init();
+    copy_tile(maskcb, mtile, dst_mask);
+
+    mask_tile_init();
+    mask_tile(dst, dst_mask);
+
+    if (popm)
+        cb_pop_front(maskcb, popm);
+
+    pack_tile(dst, ocb);
+
+    cb_push_back(ocb, onetile);
+}
+
+ALWI void rexp_tile_and_mask_tile_to_cb(
+    uint32_t icb,
+    uint32_t maskcb,
+    uint32_t ocb,
+    uint32_t itile = 0,
+    uint32_t mtile = 0,
+    uint32_t pop = 1,
+    uint32_t popm = 1,
+    uint32_t dst = 0,
+    uint32_t dst_mask = 1) {
+    constexpr uint32_t onetile = 1;
+
+    cb_reserve_back(ocb, onetile);
+    cb_wait_front(icb, itile + 1);
+    cb_wait_front(maskcb, mtile + 1);
+
+    copy_tile_init();
+    copy_tile(icb, itile, dst);
+
+    if (pop)
+        cb_pop_front(icb, pop);
+
+    negative_tile_init();
+    negative_tile(dst);
 
     exp_tile_init();
     exp_tile(dst);
