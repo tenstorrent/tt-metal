@@ -360,12 +360,23 @@ inline __attribute__((always_inline)) uint32_t fast_udiv_12(uint32_t n)
     return (((uint64_t) n * 0xAAAAAAAB) >> 32) >> 3;
 }
 
+inline __attribute__((always_inline)) uint32_t fast_udiv_94(uint32_t n)
+{
+    // Uses embedding style magic number
+    // * fixed point 1/12 then shifting.
+    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
+    return (((uint64_t) n * 0xAE4C415D) >> 32) >> 6;
+}
+
 template <uint32_t d>
 inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
 {
     if constexpr (d == 12) {
         // fast divide for 12 divisor
         return fast_udiv_12(n);
+    } else if constexpr (d == 94) {
+        // fast divide for 94 divisor. Handles Banked L1 address generation for E75
+        return fast_udiv_94(n);
     } else {
         // generic divide from llvm
         const unsigned n_uword_bits = sizeof(uint32_t) * CHAR_BIT;

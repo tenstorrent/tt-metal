@@ -95,8 +95,13 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
                     uint32_t remapped_bank_id = shuffled_bank_id[bank_id];
                     bank_ids.push_back(remapped_bank_id);
                     allocator.bank_id_to_logical_core.insert({remapped_bank_id, logical_core});
-                    uint64_t storage_core_offset = storage_bank_index * alloc_config.l1_bank_size;
-                    int64_t bank_offset_bytes = static_cast<int64_t>(storage_core_offset) - alloc_config.l1_bank_size; // Assuming top-down here --  Not sure if this is hacky... need to specialize based off top-down cofnig flag or not?
+                    int64_t bank_offset_bytes = 0;
+                    if (alloc_config.l1_bank_size != alloc_config.worker_l1_size) {
+                        uint64_t storage_core_offset = storage_bank_index * alloc_config.l1_bank_size;
+                        bank_offset_bytes = static_cast<int64_t>(storage_core_offset) - alloc_config.l1_bank_size; // Assuming top-down here --  Not sure if this is hacky... need to specialize based off top-down cofnig flag or not?
+                    } else if (num_banks.per_storage_core != 1) {
+                        tt::log_fatal(LogMetal, "Expected 1 bank per storage core if L1 bank size equals total worker L1 size but have {} banks", num_banks.per_storage_core);
+                    }
                     bank_id_to_bank_offset.insert({remapped_bank_id, bank_offset_bytes});
                     bank_id++;
                 }
@@ -112,10 +117,11 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
         num_banks.total
     );
 
+    uint32_t reserved_region = (alloc_config.l1_bank_size == alloc_config.worker_l1_size) ? L1_UNRESERVED_BASE : STORAGE_ONLY_UNRESERVED_BASE;
     // There is only alloc_config.l1_bank_size bytes available for L1 buffers to be allocated in
-    uint64_t allocatable_l1_size = static_cast<uint64_t>(alloc_config.l1_bank_size) - STORAGE_ONLY_UNRESERVED_BASE;
+    uint64_t allocatable_l1_size = static_cast<uint64_t>(alloc_config.l1_bank_size) - reserved_region;
     // Assuming top down allocation for L1 buffers so the allocatable memory space is the top alloc_config.l1_bank_size bytes of L1
-    uint64_t alloc_offset = static_cast<uint64_t>(alloc_config.worker_l1_size - alloc_config.l1_bank_size) + STORAGE_ONLY_UNRESERVED_BASE;
+    uint64_t alloc_offset = static_cast<uint64_t>(alloc_config.worker_l1_size - alloc_config.l1_bank_size) + reserved_region;
     allocator.l1_manager = BankManager(BufferType::L1, bank_id_to_bank_offset, allocatable_l1_size, alloc_offset);
 }
 

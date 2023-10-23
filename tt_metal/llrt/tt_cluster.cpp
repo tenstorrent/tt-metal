@@ -73,30 +73,8 @@ Cluster::Cluster() {
 
     if (cluster_desc_path == "") {
         // All Grayskull devices are MMIO mapped so physical_mmio_device_ids correspond to all available devices
-
-        std::set<chip_id_t> candidate_logical_mmio_device_ids;
         for (chip_id_t logical_mmio_device_id = 0; logical_mmio_device_id < physical_mmio_device_ids.size(); logical_mmio_device_id++) {
-            candidate_logical_mmio_device_ids.insert(logical_mmio_device_id);
-        }
-
-        // NOTE: Creating a dummy device driver to query harvesting info for Grayskull so that the UMD can be initialized with all non-harvested Grayskull devices
-        // At the moment there is no way to get harvesting masks for Grayskull without creating the device driver.
-        // This will be removed with https://github.com/tenstorrent-metal/tt-metal/issues/2860
-        std::unordered_map<std::string, std::int32_t> dynamic_tlb_config = {};
-        dynamic_tlb_config["REG_TLB"] = DEVICE_DATA.REG_TLB;
-        tt_SiliconDevice driver_to_query_gs_harvesting = tt_SiliconDevice(
-            sdesc_file,
-            cluster_desc_path,
-            candidate_logical_mmio_device_ids,
-            /*num_host_mem_ch_per_mmio_device*/1,
-            dynamic_tlb_config,
-            /*skip_driver_allocs*/false,
-            /*perform_harvesting*/true);
-
-        for (const auto &[gs_device_id, harvesting_mask] : driver_to_query_gs_harvesting.get_harvesting_masks_for_soc_descriptors()) {
-            if (harvesting_mask == 0) {
-                this->target_device_ids_.insert(gs_device_id);
-            }
+            this->target_device_ids_.insert(logical_mmio_device_id);
         }
         this->cluster_desc_ = tt_ClusterDescriptor::create_for_grayskull_cluster(this->target_device_ids_);
     } else {

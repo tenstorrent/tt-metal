@@ -26,16 +26,30 @@ void BankManager::init_allocator(uint64_t size_bytes, uint64_t offset) {
     );
 }
 
+void validate_num_banks(uint32_t num_banks, const BufferType &buffer_type) {
+    bool is_pow2_num_banks = num_banks && (!(num_banks & (num_banks - 1)));
+    // Dataflow API does not have a working implementation of generic modulo to determine bank_id for interleaved address gen
+    // For non pow2 num banks, special cases need to be added to avoid falling back to generic implementation.
+    // See https://github.com/tenstorrent-metal/tt-metal/issues/3321
+    bool custom_mod_bank_id_calculation_exists = (num_banks == 12 or num_banks == 94);
+    bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists);
+    if (not valid_num_banks) {
+        log_fatal(LogMetal, "Invalid number of memory banks for {}. Num banks must be power of 2 or have a dedicated modulo implementation", magic_enum::enum_name(buffer_type));
+    }
+}
+
 BankManager::BankManager(const BufferType &buffer_type, const std::vector<int64_t> &bank_offsets, uint64_t size_bytes, uint64_t alloc_offset) : buffer_type_(buffer_type) {
     unsigned int bank_id = 0;
     for (const auto bank_offset : bank_offsets) {
         this->bank_id_to_bank_offset_.insert({bank_id, bank_offset});
         bank_id++;
     }
+    validate_num_banks(this->bank_id_to_bank_offset_.size(), this->buffer_type_);
     this->init_allocator(size_bytes, alloc_offset);
 }
 
 BankManager::BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_bank_offset, uint64_t size_bytes, uint64_t alloc_offset) : buffer_type_(buffer_type), bank_id_to_bank_offset_(bank_id_to_bank_offset) {
+    validate_num_banks(this->bank_id_to_bank_offset_.size(), this->buffer_type_);
     this->init_allocator(size_bytes, alloc_offset);
 }
 

@@ -93,9 +93,9 @@ tt_cxy_pair metal_SocDescriptor::convert_to_umd_coordinates(const tt_cxy_pair &p
     return tt_cxy_pair(physical_cxy.chip, virtual_coord);
 }
 
-
 void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t harvesting_mask) {
-  if (harvesting_mask == 0) {
+  // No need to remap virtual descriptors to physical because Grayskull does not have translation tables enabled, meaning UMD removes the physical harvested rows rather than using virtual coordinates
+  if (harvesting_mask == 0 or (this->arch == tt::ARCH::GRAYSKULL)) {
     this->worker_log_to_physical_routing_x = this->worker_log_to_routing_x;
     this->worker_log_to_physical_routing_y = this->worker_log_to_routing_y;
     this->physical_cores = this->cores;
@@ -103,12 +103,16 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
     this->physical_harvested_workers = this->harvested_workers;
 
     for (const auto &[virtual_noc_core, core_desc] : this->cores) {
-      this->physical_routing_to_virtual_routing_x.insert({virtual_noc_core.x, virtual_noc_core.x});
-      this->physical_routing_to_virtual_routing_y.insert({virtual_noc_core.y, virtual_noc_core.y});
+      if (core_desc.type == CoreType::WORKER or core_desc.type == CoreType::HARVESTED) {
+        this->physical_routing_to_virtual_routing_x.insert({virtual_noc_core.x, virtual_noc_core.x});
+        this->physical_routing_to_virtual_routing_y.insert({virtual_noc_core.y, virtual_noc_core.y});
+      }
     }
 
     return;
   }
+
+  // TODO: CHECK THAT THE LOGIC WORKS FOR GS SINCE IT HAS NO TRANSLATION TABLES
 
   std::set<int> row_coordinates_to_remove;
   int row_coordinate = 0;
@@ -185,7 +189,7 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
 
 const std::string get_product_name(tt::ARCH arch, uint32_t num_harvested_noc_rows) {
   const static std::map<tt::ARCH, std::map<uint32_t, std::string> > product_name = {
-      {tt::ARCH::GRAYSKULL, { {0, "E150"} } },
+      {tt::ARCH::GRAYSKULL, { {0, "E150"}, {2, "E75"} } },
       {tt::ARCH::WORMHOLE_B0, { {0, "galaxy"}, {1, "nebula_x1"}, {2, "nebula_x2"} } }
   };
 
@@ -199,8 +203,8 @@ void metal_SocDescriptor::load_dispatch_and_banking_config(uint32_t harvesting_m
   if (num_harvested_noc_rows > 2) {
     tt::log_fatal(tt::LogDevice, "At most two rows can be harvested, but detected {} harvested rows", num_harvested_noc_rows);
   }
-  if (num_harvested_noc_rows > 0 and this->arch == tt::ARCH::GRAYSKULL) {
-    tt::log_fatal(tt::LogDevice, "Harvesting is not supported on Grayskull");
+  if (num_harvested_noc_rows == 1 and this->arch == tt::ARCH::GRAYSKULL) {
+    tt::log_fatal(tt::LogDevice, "One row harvested Grayskull is not supported");
   }
 
   YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
