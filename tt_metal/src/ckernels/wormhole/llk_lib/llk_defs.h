@@ -109,5 +109,6 @@ enum SfpuType
   dropout,
   abs,
   sign,
+  negative,
   unused
 };
