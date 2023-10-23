@@ -83,6 +83,7 @@ Tensor moreh_softmax_backward(
     const Tensor &output_tensor,
     const Tensor &output_grad_tensor,
     uint32_t dim,
+    const MorehSoftmaxBackwardOpParallelizationStrategy strategy = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 Tensor moreh_softmin_backward(
     const Tensor &output_tensor,
