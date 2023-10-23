@@ -52,20 +52,20 @@ operation::ProgramWithCallbacks MorehSoftmax::create_program(
 
     switch (parallelization_strategy){
         case MorehSoftmaxOpParallelizationStrategy::SMALL_W:
-            return {moreh_softmax_w_small(input, output, this->core_range)};
+            return {moreh_softmax_w_small(input, output, this->core_range, this->op)};
         case MorehSoftmaxOpParallelizationStrategy::SMALL_H:
-            return {moreh_softmax_h_small(input, output, this->core_range)};
+            return {moreh_softmax_h_small(input, output, this->core_range, this->op)};
         case MorehSoftmaxOpParallelizationStrategy::LARGE_W:
-            return {moreh_softmax_w_large(input, output, this->core_range)};
+            return {moreh_softmax_w_large(input, output, this->core_range, this->op)};
         case MorehSoftmaxOpParallelizationStrategy::LARGE_H:
-            return {moreh_softmax_h_large(input, output, this->core_range)};
+            return {moreh_softmax_h_large(input, output, this->core_range, this->op)};
         case MorehSoftmaxOpParallelizationStrategy::LARGE_C:
-            return {moreh_softmax_c_large(input, output, this->dim, this->core_range)};
+            return {moreh_softmax_c_large(input, output, this->dim, this->core_range, this->op)};
         // default:
         //     break;
     }
 
-    return {moreh_softmax_h_large(input, output, this->core_range)};
+    return {moreh_softmax_h_large(input, output, this->core_range, this->op)};
 }
 
 MorehSoftmaxOpParallelizationStrategy MorehSoftmax::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
@@ -103,7 +103,15 @@ Tensor moreh_softmax(const Tensor& input_tensor, uint32_t dim, const MemoryConfi
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y-1}};
 
-    return operation::run(MorehSoftmax{.dim=dim, .output_mem_config=output_mem_config, .core_range=all_cores}, {input_tensor}, {}).at(0);
+    return operation::run(MorehSoftmax{.dim=dim, .output_mem_config=output_mem_config, .core_range=all_cores, .op=MorehSoftmaxOp::SOFTMAX}, {input_tensor}, {}).at(0);
+}
+
+Tensor moreh_softmin(const Tensor& input_tensor, uint32_t dim, const MemoryConfig& output_mem_config) {
+    auto device = input_tensor.device();
+    auto grid_coord = device->compute_with_storage_grid_size();
+    const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y-1}};
+
+    return operation::run(MorehSoftmax{.dim=dim, .output_mem_config=output_mem_config, .core_range=all_cores, .op=MorehSoftmaxOp::SOFTMIN}, {input_tensor}, {}).at(0);
 }
 
 }  // namespace primary

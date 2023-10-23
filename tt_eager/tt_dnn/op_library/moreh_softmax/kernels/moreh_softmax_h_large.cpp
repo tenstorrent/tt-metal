@@ -38,16 +38,31 @@ void MAIN {
         for (uint32_t h = 0; h < Ht; ++h) {
             ACQ();
             if (h == Ht - 1) {
-                exp_tile_and_mask_tile_to_cb(
-                    cb_in0,
-                    cb_mask,
-                    cb_exps,
-                    /*itile=*/0,
-                    /*mtile=*/0,
-                    /*pop=*/1,
-                    /*popm=*/0);
+                #ifdef SOFTMAX
+                    exp_tile_and_mask_tile_to_cb(
+                        cb_in0,
+                        cb_mask,
+                        cb_exps,
+                        /*itile=*/0,
+                        /*mtile=*/0,
+                        /*pop=*/1,
+                        /*popm=*/0);
+                #else
+                    rexp_tile_and_mask_tile_to_cb(
+                        cb_in0,
+                        cb_mask,
+                        cb_exps,
+                        /*itile=*/0,
+                        /*mtile=*/0,
+                        /*pop=*/1,
+                        /*popm=*/0);
+                #endif
             } else {
-                exp_tile_to_cb(cb_in0, cb_exps);
+                #ifdef SOFTMAX
+                    exp_tile_to_cb(cb_in0, cb_exps);
+                #else
+                    rexp_tile_to_cb(cb_in0, cb_exps);
+                #endif
             }
             REL();
 
@@ -72,7 +87,11 @@ void MAIN {
         for (uint32_t h = 0; h < Ht; h += onetile) {
             // compute exp(x)
             ACQ();
-            exp_tile_to_cb(cb_in0, cb_exps);
+            #ifdef SOFTMAX
+                exp_tile_to_cb(cb_in0, cb_exps);
+            #else
+                rexp_tile_to_cb(cb_in0, cb_exps);
+            #endif
             REL();
 
             // compute exp(x)/sum(exp(x))

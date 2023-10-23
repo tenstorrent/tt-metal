@@ -24,19 +24,25 @@ enum class MorehSoftmaxOpParallelizationStrategy {
     LARGE_C = 4
 };
 
+enum class MorehSoftmaxOp {
+    SOFTMAX = 0,
+    SOFTMIN = 1
+};
+
 bool is_moreh_softmax_w_small_available(const Tensor &tensor);
 bool is_moreh_softmax_h_small_available(const Tensor &tensor);
 
-operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, Tensor &output, const CoreRange core_range);
-operation::ProgramWithCallbacks moreh_softmax_w_large(const Tensor &input, Tensor &output, const CoreRange core_range);
-operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, Tensor &output, const CoreRange core_range);
-operation::ProgramWithCallbacks moreh_softmax_h_large(const Tensor &input, Tensor &output, const CoreRange core_range);
-operation::ProgramWithCallbacks moreh_softmax_c_large(const Tensor &input, Tensor &output, uint32_t dim, const CoreRange core_range);
+operation::ProgramWithCallbacks moreh_softmax_w_small(const Tensor &input, Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op);
+operation::ProgramWithCallbacks moreh_softmax_w_large(const Tensor &input, Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op);
+operation::ProgramWithCallbacks moreh_softmax_h_small(const Tensor &input, Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op);
+operation::ProgramWithCallbacks moreh_softmax_h_large(const Tensor &input, Tensor &output, const CoreRange core_range, const MorehSoftmaxOp op);
+operation::ProgramWithCallbacks moreh_softmax_c_large(const Tensor &input, Tensor &output, uint32_t dim, const CoreRange core_range, const MorehSoftmaxOp op);
 
 struct MorehSoftmax {
     const uint32_t dim;
     const MemoryConfig output_mem_config;
     const CoreRange core_range; // unused for now
+    const MorehSoftmaxOp op;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -51,6 +57,7 @@ struct MorehSoftmax {
 
 // const ref prevents
 Tensor moreh_softmax(const Tensor& input_tensor, uint32_t dim, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor moreh_softmin(const Tensor& input_tensor, uint32_t dim, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary
 }  // namespace operations
