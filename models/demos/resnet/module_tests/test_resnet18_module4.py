@@ -2,28 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-sys.path.append(f"{f}/../../../../..")
-
-from typing import Type, Union, Optional, Callable
 from loguru import logger
 
 import torch
-from torchvision import models, transforms
+from torchvision import models
 import pytest
 
-import tt_lib as ttl
-from torch_resnet import _make_layer, BasicBlock
+from models.demos.resnet.module_tests.torch_resnet import _make_layer, BasicBlock
 
-from models.utility_functions import comp_allclose_and_pcc, comp_pcc
+from models.utility_functions import comp_pcc
 
 
 batch_size = 1

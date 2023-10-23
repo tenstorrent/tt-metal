@@ -2,22 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
-
 from loguru import logger
 import torch
 from torchvision import models
 import pytest
 import tt_lib
-from datetime import datetime
 
-from tests.models.resnet.metalResnetBlock50 import ResNet, Bottleneck
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose_and_pcc,
-    comp_pcc,
-)
 from models.utility_functions import is_e75
+
+from models.demos.resnet.metalResnetBlock50 import ResNet, Bottleneck
+from models.utility_functions import comp_pcc, comp_allclose_and_pcc
+
 
 @pytest.mark.parametrize("batch_size", [1, 2, 8])
 def test_run_resnet50_inference(device, batch_size, imagenet_sample_input):

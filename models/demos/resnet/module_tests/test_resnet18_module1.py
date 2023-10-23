@@ -2,29 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
 
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-sys.path.append(f"{f}/../../../../..")
-
-from typing import Type, Union, Optional, Callable
 from loguru import logger
 
 import torch
-from torchvision import models, transforms
+from torchvision import models
 import pytest
 
-from torch_resnet import _make_layer, BasicBlock
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose_and_pcc,
-    comp_pcc,
-)
+from models.demos.resnet.module_tests.torch_resnet import _make_layer, BasicBlock
+
+from models.utility_functions import comp_pcc
 
 
 @pytest.mark.parametrize("fuse_ops", [False, True], ids=["Not Fused", "Ops Fused"])

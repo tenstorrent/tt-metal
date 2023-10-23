@@ -2,28 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
 
 from loguru import logger
 import torch
 from torchvision import models
 import pytest
-from tests.models.resnet.genericResnetBlock import ResNet, BasicBlock
-import tt_lib
+from models.demos.resnet.genericResnetBlock import ResNet, BasicBlock
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose_and_pcc,
-    comp_pcc,
-)
-
+from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
 @pytest.mark.skip(
     reason="Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301"
