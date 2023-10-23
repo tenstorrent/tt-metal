@@ -84,6 +84,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_layernorm_backward/input_grad/moreh_layernorm_backward_input_grad.cpp \
 	tt_eager/tt_dnn/op_library/moreh_layernorm_backward/gamma_beta_grad/moreh_layernorm_backward_gamma_beta_grad.cpp \
+	tt_eager/tt_dnn/op_library/moreh_linear/moreh_linear_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/moreh_matmul_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_dot/single_core/moreh_dot_op_single_core.cpp \
