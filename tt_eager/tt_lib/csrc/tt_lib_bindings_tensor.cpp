@@ -26,6 +26,7 @@
 #include "tt_dnn/op_library/pool/max_pool.hpp"
 #include "tt_dnn/op_library/program_cache.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
+#include "tt_dnn/op_library/moreh_linear/moreh_linear_op.hpp"
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
 #include "tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
@@ -354,7 +355,7 @@ void TensorModule(py::module& m_tensor) {
         "Performs a moreh_layernorm operation.
     )doc");
 
-    // moreh_linear
+    // moreh_matmul
     m_tensor.def(
         "moreh_matmul",
         &moreh_matmul,
@@ -362,13 +363,20 @@ void TensorModule(py::module& m_tensor) {
         py::arg("other").noconvert(),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
+        "Performs a moreh_matmul operation.
+    )doc");
+
+    // moreh_linear
+    m_tensor.def("moreh_linear", &moreh_linear,
+        py::arg("input").noconvert(), py::arg("weight").noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a moreh_linear operation.
 
         .. csv-table::
             :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
             "input", "Input tensor", "Tensor", "", "Yes"
-            "other", "Other tensor", "Tensor", "", "Yes"
+            "weight", "Input weight tensor", "Tensor", "", "Yes"
+            "bias", "Input bias tensor", "Tensor", "", "No"
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
     )doc");
 
