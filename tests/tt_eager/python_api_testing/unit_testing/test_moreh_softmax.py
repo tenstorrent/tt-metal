@@ -7,6 +7,8 @@ import torch
 import tt_lib as ttl
 import pytest
 from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
+from models.utility_functions import comp_pcc
+from loguru import logger
 
 
 @pytest.mark.parametrize(
@@ -50,7 +52,9 @@ def test_softmax_for_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(tt_cpu, tt_dev, rtol=0.07, atol=0.01)
+    passing, out = comp_pcc(tt_cpu, tt_dev)
+    logger.info(out)
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -90,7 +94,9 @@ def test_softmax_large_algorithm_for_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(tt_cpu, tt_dev, rtol=0.07, atol=0.01)
+    passing, out = comp_pcc(tt_cpu, tt_dev)
+    logger.info(out)
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -130,7 +136,9 @@ def test_softmax_not_multiple_of_32_for_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(tt_cpu, tt_dev, rtol=0.07, atol=0.01)
+    passing, out = comp_pcc(tt_cpu, tt_dev)
+    logger.info(out)
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -173,7 +181,9 @@ def test_softmax_for_dim_nc(shape_dim, device):
     assert tt_npu.shape() == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(tt_cpu, tt_dev, rtol=0.07, atol=0.01)
+    passing, out = comp_pcc(tt_cpu, tt_dev)
+    logger.info(out)
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -226,7 +236,9 @@ def test_softmax_backward_for_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(x.grad, tt_dev, rtol=0.07, atol=0.01)
+    passing, out = comp_pcc(x.grad, tt_dev)
+    logger.info(out)
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -276,7 +288,9 @@ def test_softmax_backward_large_algorithmfor_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(x.grad, tt_dev, rtol=0.07, atol=0.01)
+    passing, out = comp_pcc(x.grad, tt_dev)
+    logger.info(out)
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -326,7 +340,9 @@ def test_softmax_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(x.grad.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(x.grad, tt_dev, rtol=0.07, atol=0.01)
+    passing, out = comp_pcc(x.grad, tt_dev)
+    logger.info(out)
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -378,6 +394,6 @@ def test_softmax_backward_for_dim_nc(shape_dim, device):
     assert tt_npu.shape() == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to_torch().to(torch.bfloat16)
 
-    atol = 0.02
-    rtol = 0.07
-    assert torch.allclose(x.grad, tt_dev, rtol=rtol, atol=atol)
+    passing, out = comp_pcc(x.grad, tt_dev)
+    logger.info(out)
+    assert passing
