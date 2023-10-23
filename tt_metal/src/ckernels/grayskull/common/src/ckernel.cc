@@ -56,6 +56,7 @@ int main(int argc, char *argv[])
     l1_to_local_mem_copy((uint*)__ldm_data_start, local_l1_start_addr, num_words);
 
     // Initialize GPRs to all 0s
+#pragma GCC unroll 0
     for (int i = 0; i < 64; i++)
         regfile[i] = 0;
 

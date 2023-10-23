@@ -58,6 +58,7 @@ int main(int argc, char *argv[])
 
 
     // Initialize GPRs to all 0s
+#pragma GCC unroll 0
     for (int i = 0; i < 64; i++)
         regfile[i] = 0;
 
