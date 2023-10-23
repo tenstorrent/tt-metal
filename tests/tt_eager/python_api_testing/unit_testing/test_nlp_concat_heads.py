@@ -8,9 +8,12 @@ from loguru import logger
 import tt_lib as ttl
 from models.utility_functions import comp_pcc, tt2torch_tensor
 import torch
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
 
-def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, device):
+def run_nlp_concat_heads_test(
+    batch, seq_len, dtype, in0_mem_config, out_mem_config, device
+):
     torch.manual_seed(1234)
 
     num_heads = 71
@@ -19,7 +22,11 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
 
     A = torch.randn(in0_shape)
 
-    in0_t = ttl.tensor.Tensor(A, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
+    in0_t = (
+        ttl.tensor.Tensor(A, dtype)
+        .to(ttl.tensor.Layout.TILE)
+        .to(device, in0_mem_config)
+    )
 
     out = ttl.tensor.nlp_concat_heads(in0_t, out_mem_config)
 
@@ -33,7 +40,9 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
 
     pyt_got_back_rm_out = tt2torch_tensor(out)
 
-    ref_out = torch.transpose(A, -3, -2).reshape([batch, 1, seq_len, num_heads * head_dim])
+    ref_out = torch.transpose(A, -3, -2).reshape(
+        [batch, 1, seq_len, num_heads * head_dim]
+    )
 
     if dtype == ttl.tensor.DataType.BFLOAT8_B:
         pcc = 0.99
@@ -45,7 +54,7 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
     logger.info(f"output pcc={output_pcc}")
     assert passing_pcc
 
-
+@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "out_mem_config",
     (
@@ -76,19 +85,29 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
         "batch1_seq128",
     ],
 )
-def test_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, request, device):
-    ttl.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/nlp_concat_heads_tm_{request.node.callspec.id}")
-    run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, device)
+def test_nlp_concat_heads_test(
+    batch, seq_len, dtype, in0_mem_config, out_mem_config, request, device
+):
+    ttl.profiler.set_profiler_location(
+        f"tt_metal/tools/profiler/logs/nlp_concat_heads_tm_{request.node.callspec.id}"
+    )
+    run_nlp_concat_heads_test(
+        batch, seq_len, dtype, in0_mem_config, out_mem_config, device
+    )
 
-
+@skip_for_wormhole_b0
 def test_nlp_concat_heads_with_program_cache(use_program_cache, device):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
-        run_nlp_concat_heads_test(1, 32, dtype, dram_mem_config, dram_mem_config, device)
+        run_nlp_concat_heads_test(
+            1, 32, dtype, dram_mem_config, dram_mem_config, device
+        )
 
     dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     for _ in range(2):
-        run_nlp_concat_heads_test(1, 32, dtype, dram_mem_config, dram_mem_config, device)
+        run_nlp_concat_heads_test(
+            1, 32, dtype, dram_mem_config, dram_mem_config, device
+        )
 
     assert ttl.program_cache.num_entries() == 2

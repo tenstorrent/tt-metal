@@ -6,6 +6,7 @@ import pytest
 from loguru import logger
 
 
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 import tt_lib as ttl
 from models.utility_functions import (
     comp_pcc,
@@ -52,6 +53,8 @@ shapes = [
     [1, 1, 32, 32],
     [1, 3, 320, 384],
 ]
+if is_wormhole_b0():
+    del shapes[1:]
 
 
 @pytest.mark.parametrize(

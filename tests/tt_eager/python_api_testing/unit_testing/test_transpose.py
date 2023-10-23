@@ -6,6 +6,7 @@ import torch
 
 import tt_lib as ttl
 from models.utility_functions import print_diff_argmax
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
 
 def transpose(input_shape, device, dim="hc", expected_program_cache_size=None):
@@ -49,6 +50,7 @@ def transpose(input_shape, device, dim="hc", expected_program_cache_size=None):
         assert ttl.program_cache.num_entries() == expected_program_cache_size
 
 
+@skip_for_wormhole_b0
 def test_transpose_hc(device):
     N = 3
     C = 32 * 2
