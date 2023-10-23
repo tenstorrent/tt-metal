@@ -1,6 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 #pragma once
 
@@ -8,16 +10,6 @@ enum ReduceDim {
   REDUCE_ROW,
   REDUCE_COL,
   REDUCE_SCALAR
-};
-
-enum Dim {
-  None      = 0,
-  R         = 1,
-  C         = 2,
-  Z         = 3,
-  RC        = 4,
-  ZR        = 5,
-  Invalid   = 0xFF,
 };
 
 enum PoolType {
@@ -98,13 +90,11 @@ enum SfpuType
   exponential,
   exp_with_base,
   sigmoid,
-  sigmoid_appx,
   reciprocal,
   sqrt,
-  rsqrt,
   lrelu,
   power,
-  square,
+  multiply,
   tanh_derivative,
   log,
   log_with_base,
@@ -119,55 +109,6 @@ enum SfpuType
   dropout,
   abs,
   sign,
-  max,
-  min,
-  sine,
-  cosine,
-  tan,
-  relu_min,
-  relu_max,
-  elu,
-  exp2,
-  heaviside,
-  expm1,
-  signbit,
-  asin,
-  acos,
-  atan,
-  erf,
-  erfc,
-  isfinite,
-  isinf,
-  isposinf,
-  isneginf,
-  isnan,
-  logical_not_unary,
-  erfinv,
-  i0,
-  silu,
-  mask,
   negative,
   unused
-};
-
-
-enum SfpiTestType
-{
-  logical_not,
-  bitwise_complement,
-  test1,
-  test2,
-  test3,
-  test4,
-  test5,
-  test6,
-  test7,
-  test8,
-  test9,
-  test10,
-  test11,
-  test12,
-  test13,
-  test14,
-  unused_test
 };

@@ -153,6 +153,7 @@ enum SfpuType {
     erfinv,
     i0,
     silu,
+    negative,
     unused,
 };
 }  // namespace ckernel
