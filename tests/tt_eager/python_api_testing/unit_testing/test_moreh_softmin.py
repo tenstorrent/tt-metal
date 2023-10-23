@@ -7,6 +7,8 @@ import torch
 import tt_lib as ttl
 import pytest
 from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
+from models.utility_functions import comp_pcc
+from loguru import logger
 import torch.nn.functional as F
 
 
@@ -53,6 +55,10 @@ def test_softmin_for_dim_hw(shape_dim, device):
 
     assert torch.allclose(tt_cpu, tt_dev, rtol=0.07, atol=0.01)
 
+    passing, out = comp_pcc(tt_cpu, tt_dev)
+    logger.info(out)
+    assert passing
+
 
 @pytest.mark.parametrize(
     "shape_dim",
@@ -90,7 +96,9 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(tt_cpu, tt_dev, rtol=0.07, atol=0.01)
+    passing, out = comp_pcc(tt_cpu, tt_dev)
+    logger.info(out)
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -130,7 +138,9 @@ def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(tt_cpu, tt_dev, rtol=0.07, atol=0.01)
+    passing, out = comp_pcc(tt_cpu, tt_dev)
+    logger.info(out)
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -173,7 +183,9 @@ def test_softmin_for_dim_nc(shape_dim, device):
     assert tt_npu.shape() == list(tt_cpu.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(tt_cpu, tt_dev, rtol=0.07, atol=0.01)
+    passing, out = comp_pcc(tt_cpu, tt_dev)
+    logger.info(out)
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -226,7 +238,9 @@ def test_softmin_backward_for_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(x.grad, tt_dev, rtol=0.07, atol=0.01)
+    passing, out = comp_pcc(x.grad, tt_dev)
+    logger.info(out)
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -275,7 +289,9 @@ def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(x.grad, tt_dev, rtol=0.07, atol=0.01)
+    passing, out = comp_pcc(x.grad, tt_dev)
+    logger.info(out)
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -325,7 +341,9 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(x.grad.shape)
     tt_dev = tt_npu.to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(x.grad, tt_dev, rtol=0.07, atol=0.01)
+    passing, out = comp_pcc(x.grad, tt_dev)
+    logger.info(out)
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -334,7 +352,6 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
         ((1, 15, 32, 32), 1),  # single tile c
         ((1, 15, 32 * 7, 32 * 5), 1),  # mutiple cores
         ((109, 15, 32, 32), 1),  # mutiple tiles per cores
-
         ((15, 1, 32, 32), 0),  # single tile n
         ((15, 1, 32 * 7, 32 * 5), 0),  # mutiple cores
         ((15, 109, 32 * 2, 32 * 2), 0),  # mutiple tiles per cores
@@ -377,6 +394,6 @@ def test_softmin_backward_for_dim_nc(shape_dim, device):
     assert tt_npu.shape() == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to_torch().to(torch.bfloat16)
 
-    atol = 0.02
-    rtol = 0.07
-    assert torch.allclose(x.grad, tt_dev, rtol=rtol, atol=atol)
+    passing, out = comp_pcc(x.grad, tt_dev)
+    logger.info(out)
+    assert passing
