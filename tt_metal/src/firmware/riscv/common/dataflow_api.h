@@ -404,12 +404,12 @@ std::uint64_t get_noc_addr(std::uint32_t noc_x, std::uint32_t noc_y, std::uint32
     the struct variant
 */
 FORCE_INLINE
-std::uint64_t get_noc_addr_helper(std::uint32_t noc_x, std::uint32_t noc_y, std::uint32_t addr) {
+std::uint64_t get_noc_addr_helper(std::uint32_t noc_xy, std::uint32_t addr) {
     /*
         Get an encoding which contains tensix core and address you want to
         write to via the noc multicast
     */
-    return NOC_XY_ADDR(NOC_X(noc_x), NOC_Y(noc_y), addr);
+    return ((uint64_t)(noc_xy) << 32) | addr;
 }
 
 
@@ -426,10 +426,9 @@ uint64_t get_dram_noc_addr(const uint32_t id, const uint32_t page_size, const ui
     #endif
 
     addr += bank_to_dram_offset[bank_id];
-    uint32_t noc_x = dram_bank_to_noc_x[bank_id];
-    uint32_t noc_y = dram_bank_to_noc_y[bank_id];
+    uint32_t noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
+    uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
 
-    uint64_t noc_addr = get_noc_addr_helper(noc_x, noc_y, addr);
     return noc_addr;
 }
 
@@ -437,9 +436,8 @@ uint64_t get_l1_noc_addr(const uint32_t id, const uint32_t page_size, const uint
     uint32_t bank_id = id & (NUM_L1_BANKS - 1);
     uint32_t addr = mulsi3(id >> LOG_BASE_2_OF_NUM_L1_BANKS, align(page_size, 32)) + bank_base_address + offset;
     addr += bank_to_l1_offset[bank_id];
-    uint32_t noc_x = l1_bank_to_noc_x[bank_id];
-    uint32_t noc_y = l1_bank_to_noc_y[bank_id];
-    uint64_t noc_addr = get_noc_addr_helper(noc_x, noc_y, addr);
+    uint32_t noc_xy = l1_bank_to_noc_xy[noc_index][bank_id];
+    uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
     return noc_addr;
 }
 
@@ -458,33 +456,30 @@ struct InterleavedAddrGen {
     FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0) const {
         uint32_t addr;
-        uint32_t noc_x;
-        uint32_t noc_y;
+        uint32_t noc_xy;
+
         if constexpr (DRAM) {
 #ifdef IS_NOT_POW2_NUM_DRAM_BANKS
             uint32_t bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
             addr =
                 mulsi3(udivsi3_const_divisor<NUM_DRAM_BANKS>(id), align(this->page_size, 32)) + this->bank_base_address + offset;
             addr += bank_to_dram_offset[bank_id];
-            noc_x = dram_bank_to_noc_x[bank_id];
-            noc_y = dram_bank_to_noc_y[bank_id];
+            noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 #else
             uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
             addr = mulsi3(id >> LOG_BASE_2_OF_NUM_DRAM_BANKS, align(this->page_size, 32)) + this->bank_base_address + offset;
 
             addr += bank_to_dram_offset[bank_id];
-            noc_x = dram_bank_to_noc_x[bank_id];
-            noc_y = dram_bank_to_noc_y[bank_id];
+            noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 #endif
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             addr = mulsi3(id >> LOG_BASE_2_OF_NUM_L1_BANKS, align(this->page_size, 32)) + this->bank_base_address + offset;
             addr += bank_to_l1_offset[bank_id];
-            noc_x = l1_bank_to_noc_x[bank_id];
-            noc_y = l1_bank_to_noc_y[bank_id];
+            noc_xy = l1_bank_to_noc_xy[noc_index][bank_id];
         }
 
-        uint64_t noc_addr = get_noc_addr_helper(noc_x, noc_y, addr);
+        uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
         return noc_addr;
     }
 };
@@ -499,8 +494,7 @@ struct InterleavedPow2AddrGen {
     std::uint64_t get_noc_addr(const uint32_t id) const {
         // So far, only using this for DRAM, but will eventually generalize to allow usage in L1 as well
         uint32_t addr;
-        uint32_t noc_x;
-        uint32_t noc_y;
+        uint32_t noc_xy;
 
 #ifdef TEMP_DEBUG2
 #endif
@@ -510,24 +504,21 @@ struct InterleavedPow2AddrGen {
             addr =
                 (udivsi3_const_divisor<NUM_DRAM_BANKS>(id) << this->log_base_2_of_page_size) + this->bank_base_address;
             addr += bank_to_dram_offset[bank_id];
-            noc_x = dram_bank_to_noc_x[bank_id];
-            noc_y = dram_bank_to_noc_y[bank_id];
+            noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 #else
             uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
             addr = ((id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address;
             addr += bank_to_dram_offset[bank_id];
-            noc_x = dram_bank_to_noc_x[bank_id];
-            noc_y = dram_bank_to_noc_y[bank_id];
+            noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 #endif
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             addr = ((id >> LOG_BASE_2_OF_NUM_L1_BANKS) << this->log_base_2_of_page_size) + this->bank_base_address;
             addr += bank_to_l1_offset[bank_id];
-            noc_x = l1_bank_to_noc_x[bank_id];
-            noc_y = l1_bank_to_noc_y[bank_id];
+            noc_xy = l1_bank_to_noc_xy[noc_index][bank_id];
         }
 
-        uint64_t noc_addr = get_noc_addr_helper(noc_x, noc_y, addr);
+        uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
         return noc_addr;
     }
 };
@@ -541,34 +532,31 @@ struct InterleavedAddrGenFast {
     FORCE_INLINE
     std::uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0) const {
         uint32_t addr;
-        uint32_t noc_x;
-        uint32_t noc_y;
+        uint32_t noc_xy;
+
         if constexpr (DRAM) {
 #ifdef IS_NOT_POW2_NUM_DRAM_BANKS
             uint32_t bank_id = umodsi3_const_divisor<NUM_DRAM_BANKS>(id);
             addr = MUL_WITH_TILE_SIZE((uint)this->data_format, udivsi3_const_divisor<NUM_DRAM_BANKS>(id)) +
                    this->bank_base_address + offset;
             addr += bank_to_dram_offset[bank_id];
-            noc_x = dram_bank_to_noc_x[bank_id];
-            noc_y = dram_bank_to_noc_y[bank_id];
+            noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 #else
             uint32_t bank_id = id & (NUM_DRAM_BANKS - 1);
             addr = MUL_WITH_TILE_SIZE((uint)this->data_format, id >> LOG_BASE_2_OF_NUM_DRAM_BANKS) +
                    this->bank_base_address + offset;
             addr += bank_to_dram_offset[bank_id];
-            noc_x = dram_bank_to_noc_x[bank_id];
-            noc_y = dram_bank_to_noc_y[bank_id];
+            noc_xy = dram_bank_to_noc_xy[noc_index][bank_id];
 #endif
         } else {
             uint32_t bank_id = id & (NUM_L1_BANKS - 1);
             addr = MUL_WITH_TILE_SIZE((uint)this->data_format, id >> LOG_BASE_2_OF_NUM_L1_BANKS) +
                    this->bank_base_address + offset;
             addr += bank_to_l1_offset[bank_id];
-            noc_x = l1_bank_to_noc_x[bank_id];
-            noc_y = l1_bank_to_noc_y[bank_id];
+            noc_xy = l1_bank_to_noc_xy[noc_index][bank_id];
         }
 
-        uint64_t noc_addr = get_noc_addr_helper(noc_x, noc_y, addr);
+        uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
         return noc_addr;
     }
 

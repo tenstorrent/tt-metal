@@ -1076,12 +1076,8 @@ std::string generate_bank_to_noc_coord_descriptor_string(
 
     ss << "#ifdef KERNEL_BUILD" << endl;
     ss << endl;
-    ss << "extern uint8_t dram_bank_to_noc_x[NUM_DRAM_BANKS];" << endl;
-    ss << "extern uint8_t dram_bank_to_noc_y[NUM_DRAM_BANKS];" << endl;
     ss << "extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];" << endl;
     ss << "extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];" << endl;
-    ss << "extern uint8_t l1_bank_to_noc_x[NUM_L1_BANKS];" << endl;
-    ss << "extern uint8_t l1_bank_to_noc_y[NUM_L1_BANKS];" << endl;
     ss << "extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];" << endl;
     ss << "extern int32_t bank_to_l1_offset[NUM_L1_BANKS];" << endl;
 
@@ -1089,18 +1085,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "#else // !KERNEL_BUILD (FW_BUILD)" << endl;
     ss << endl;
 
-    ss << "uint8_t dram_bank_to_noc_x[NUM_DRAM_BANKS] __attribute__((used)) = {" << endl;
-    for (unsigned int bank_id = 0; bank_id < dram_bank_map.size(); bank_id++) {
-        ss << "    " << dram_bank_map[bank_id].x << "," << endl;
-    }
-    ss << "};" << endl;
-    ss << endl;
-    ss << "uint8_t dram_bank_to_noc_y[NUM_DRAM_BANKS] __attribute__((used)) = {" << endl;
-    for (unsigned int bank_id = 0; bank_id < dram_bank_map.size(); bank_id++) {
-        ss << "    " << dram_bank_map[bank_id].y << "," << endl;
-    }
-    ss << "};" << endl;
-    ss << endl;
     ss << "uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used)) = {" << endl;
     for (unsigned int noc = 0; noc < 2; noc++) {
         ss << "    {" << endl;
@@ -1122,18 +1106,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "};" << endl;
     ss << endl;
 
-    ss << "uint8_t l1_bank_to_noc_x[NUM_L1_BANKS] __attribute__((used)) = {" << endl;
-    for (unsigned int bank_id = 0; bank_id < l1_bank_map.size(); bank_id++) {
-        ss << "    " << l1_bank_map[bank_id].x << "," << endl;
-    }
-    ss << "};" << endl;
-    ss << endl;
-    ss << "uint8_t l1_bank_to_noc_y[NUM_L1_BANKS] __attribute__((used)) = {" << endl;
-    for (unsigned int bank_id = 0; bank_id < l1_bank_map.size(); bank_id++) {
-        ss << "    " << l1_bank_map[bank_id].y << "," << endl;
-    }
-    ss << "};" << endl;
-    ss << endl;
     ss << "uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used)) = {" << endl;
     for (unsigned int noc = 0; noc < 2; noc++) {
         ss << "    {" << endl;
