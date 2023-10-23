@@ -58,20 +58,20 @@ operation::ProgramWithCallbacks MorehSoftmaxBackward::create_program(
 
     switch (parallelization_strategy){
         case MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W:
-            return {moreh_softmax_backward_w_small(output, output_grad, input_grad, this->core_range)};
+            return {moreh_softmax_backward_w_small(output, output_grad, input_grad, this->core_range, this->op)};
         case MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H:
-            return {moreh_softmax_backward_h_small(output, output_grad, input_grad, this->core_range)};
+            return {moreh_softmax_backward_h_small(output, output_grad, input_grad, this->core_range, this->op)};
         case MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_W:
-            return {moreh_softmax_backward_w_large(output, output_grad, input_grad, this->core_range)};
+            return {moreh_softmax_backward_w_large(output, output_grad, input_grad, this->core_range, this->op)};
         case MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_H:
-            return {moreh_softmax_backward_h_large(output, output_grad, input_grad, this->core_range)};
+            return {moreh_softmax_backward_h_large(output, output_grad, input_grad, this->core_range, this->op)};
         case MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_C:
-            return {moreh_softmax_backward_c_large(output, output_grad, input_grad, this->dim, this->core_range)};
+            return {moreh_softmax_backward_c_large(output, output_grad, input_grad, this->dim, this->core_range, this->op)};
         // default:
         //     break;
     }
 
-    return {moreh_softmax_backward_h_large(output, output_grad, input_grad, this->core_range)};
+    return {moreh_softmax_backward_h_large(output, output_grad, input_grad, this->core_range, this->op)};
 }
 
 MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackward::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
@@ -110,7 +110,15 @@ Tensor moreh_softmax_backward(const Tensor& output_tensor, const Tensor& output_
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y-1}};
 
-    return operation::run(MorehSoftmaxBackward{.dim=dim, .output_mem_config=output_mem_config, .core_range=all_cores}, {output_tensor, output_grad_tensor}, {}).at(0);
+    return operation::run(MorehSoftmaxBackward{.dim=dim, .output_mem_config=output_mem_config, .core_range=all_cores, .op=MorehSoftmaxBackwardOp::SOFTMAX}, {output_tensor, output_grad_tensor}, {}).at(0);
+}
+
+Tensor moreh_softmin_backward(const Tensor& output_tensor, const Tensor& output_grad_tensor, uint32_t dim, const MemoryConfig& output_mem_config) {
+    auto device = output_grad_tensor.device();
+    auto grid_coord = device->compute_with_storage_grid_size();
+    const CoreRange all_cores = {.start{0, 0}, .end = {grid_coord.x - 1, grid_coord.y-1}};
+
+    return operation::run(MorehSoftmaxBackward{.dim=dim, .output_mem_config=output_mem_config, .core_range=all_cores, .op=MorehSoftmaxBackwardOp::SOFTMIN}, {output_tensor, output_grad_tensor}, {}).at(0);
 }
 
 }  // namespace primary
