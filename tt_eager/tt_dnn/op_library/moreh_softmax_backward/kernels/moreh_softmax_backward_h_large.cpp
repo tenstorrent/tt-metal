@@ -76,10 +76,10 @@ void MAIN {
             ACQ();
             #ifdef SOFTMAX
                 // (dy - sum) * y
-                mul_tiles_and_negative_to_cb(cb_y, cb_inter2, cb_dx);
+                mul_tiles_to_cb(cb_y, cb_inter2, cb_dx);
             #else
                 // -(dy - sum) * y
-                mul_tiles_to_cb(cb_y, cb_inter2, cb_dx);
+                mul_tiles_and_negative_to_cb(cb_y, cb_inter2, cb_dx);
             #endif
             REL();
         }
