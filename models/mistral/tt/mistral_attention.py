@@ -61,17 +61,11 @@ class TtAttention(nn.Module):
             self.wo_weights,
         )
 
-        self.cache_k = torch.empty(
-            args.max_batch_size,
-            args.sliding_window,
-            self.n_kv_heads,
-            self.args.head_dim,
+        self.cache_k = tt_lib.tensor.empty(
+            (args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim)
         )
-        self.cache_v = torch.empty(
-            args.max_batch_size,
-            args.sliding_window,
-            self.n_kv_heads,
-            self.args.head_dim,
+        self.cache_v = tt_lib.tensor.empty(
+            (args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim)
         )
 
     def forward(
@@ -167,6 +161,7 @@ def apply_rotary_emb(
 
 
 def repeat_kv(keys: torch.Tensor, values: torch.Tensor, repeats: int) -> tt_lib.tensor.Tensor:
-    keys = tt_lib.fallback_ops.repeat_interleave(keys, repeats=repeats, dim=2)
-    values = tt_lib.fallback_ops.repeat_interleave(values, repeats=repeats, dim=2)
+    dim = 2
+    keys = tt_lib.tensor.repeat_interleave(keys, repeats, dim)
+    values = tt_lib.tensors.repeat_interleave(values, repeats, dim)
     return keys, values
