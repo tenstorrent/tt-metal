@@ -14,6 +14,7 @@ from pathlib import Path
 from loguru import logger
 from functools import partial
 import tt_lib
+from itertools import permutations, product
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/..")
@@ -45,6 +46,24 @@ MEM_CONFIGS_TT_DICT = {
     "L1": tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1),
     "SYSTEM_MEMORY": None,
 }
+
+
+def make_env_combinations(env_dict):
+    envs = []
+
+    for key in env_dict:
+        if isinstance(env_dict[key], list):
+            combinations = []
+
+            for value in env_dict[key]:
+                combinations.append((key, value))
+
+            envs.append(combinations)
+        else:
+            envs.append([(key, env_dict[key])])
+
+    return product(*envs)
+
 
 
 def run_pytorch_test(args):
@@ -120,158 +139,162 @@ def run_pytorch_test(args):
             else:
                 env_dict = default_env_dict
 
-            old_env_dict = {}
-            assert isinstance(env_dict, dict)
-            for key, value in env_dict.items():
-                old_env_dict[key] = os.environ.pop(key, None)
-                os.environ[key] = value
+            env_dict_combinations = make_env_combinations(env_dict)
 
-            shape_dict = test_config["shape"]
-            datagen_dict = test_config["datagen"]
-            results_csv_path = output_folder / test_config["output-file"]
+            for env_dict in env_dict_combinations:
+                old_env_dict = {}
+                # assert isinstance(env_dict, dict)
 
-            comparison_dict = test_config["comparison"]
-            comparison_args = comparison_dict.get("args", {})
-            comparison_func = partial(
-                getattr(comparison_funcs, comparison_dict["function"]), **comparison_args
-            )
-            test_args_gen = getattr(
-                generation_funcs,
-                test_config.get("args-gen", "gen_default_dtype_layout_device"),
-            )
-            # Optional test args for dtype, etc...
-            test_args = test_config.get("args", {})
+                for key, value in env_dict:
+                    old_env_dict[key] = os.environ.pop(key, None)
+                    os.environ[key] = value
 
-            # Set tests parameters --------------------------
-            test_tt_dtypes = []
-            test_tt_layouts = []
-            test_mem_configs = []
+                shape_dict = test_config["shape"]
+                datagen_dict = test_config["datagen"]
+                results_csv_path = output_folder / test_config["output-file"]
 
-            if "inputs" in test_args:
-                for input_spec in test_args["inputs"]:
-                    test_tt_dtypes.append([])
-                    test_tt_layouts.append([])
-                    test_mem_configs.append([])
+                comparison_dict = test_config["comparison"]
+                comparison_args = comparison_dict.get("args", {})
+                comparison_func = partial(
+                    getattr(comparison_funcs, comparison_dict["function"]), **comparison_args
+                )
+                test_args_gen = getattr(
+                    generation_funcs,
+                    test_config.get("args-gen", "gen_default_dtype_layout_device"),
+                )
+                # Optional test args for dtype, etc...
+                test_args = test_config.get("args", {})
 
-                    assert 'data-type' in input_spec, f"For each input you need to specify 'data-type'"
-                    assert 'data-layout' in input_spec, f"For each input you need to specify 'data-layout'"
-                    assert 'buffer-type' in input_spec, f"For each input you need to specify 'buffer-type'"
+                # Set tests parameters --------------------------
+                test_tt_dtypes = []
+                test_tt_layouts = []
+                test_mem_configs = []
 
-                    for dtype in input_spec['data-type']:
-                        test_tt_dtypes[-1].append(DTYPES_TT_DICT[dtype])
+                if "inputs" in test_args:
+                    for input_spec in test_args["inputs"]:
+                        test_tt_dtypes.append([])
+                        test_tt_layouts.append([])
+                        test_mem_configs.append([])
 
-                    for layout in input_spec['data-layout']:
-                        test_tt_layouts[-1].append(LAYOUTS_TT_DICT[layout])
+                        assert 'data-type' in input_spec, f"For each input you need to specify 'data-type'"
+                        assert 'data-layout' in input_spec, f"For each input you need to specify 'data-layout'"
+                        assert 'buffer-type' in input_spec, f"For each input you need to specify 'buffer-type'"
 
-                    for buffer_type in input_spec['buffer-type']:
-                        test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_type])
-            else:
-                for i in range(shape_dict["num-shapes"]):
-                    test_tt_dtypes.append([])
-                    test_tt_layouts.append([])
-                    test_mem_configs.append([])
-
-                    if 'data-layout' in test_args:
-                        for layout in test_args['data-layout']:
-                            test_tt_layouts[-1].append(LAYOUTS_TT_DICT[layout])
-                    else:
-                        test_tt_layouts[-1] = generation_funcs.supported_tt_layouts
-
-                    if 'data-type' in test_args:
-                        for dtype in test_args['data-type']:
+                        for dtype in input_spec['data-type']:
                             test_tt_dtypes[-1].append(DTYPES_TT_DICT[dtype])
-                    else:
-                        test_tt_dtypes[-1] = generation_funcs.supported_tt_dtypes
 
-                    if 'buffer-type' in test_args:
-                        for buffer_type in test_args['buffer-type']:
+                        for layout in input_spec['data-layout']:
+                            test_tt_layouts[-1].append(LAYOUTS_TT_DICT[layout])
+
+                        for buffer_type in input_spec['buffer-type']:
+                            test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_type])
+                else:
+                    for i in range(shape_dict["num-shapes"]):
+                        test_tt_dtypes.append([])
+                        test_tt_layouts.append([])
+                        test_mem_configs.append([])
+
+                        if 'data-layout' in test_args:
+                            for layout in test_args['data-layout']:
+                                test_tt_layouts[-1].append(LAYOUTS_TT_DICT[layout])
+                        else:
+                            test_tt_layouts[-1] = generation_funcs.supported_tt_layouts
+
+                        if 'data-type' in test_args:
+                            for dtype in test_args['data-type']:
+                                test_tt_dtypes[-1].append(DTYPES_TT_DICT[dtype])
+                        else:
+                            test_tt_dtypes[-1] = generation_funcs.supported_tt_dtypes
+
+                        if 'buffer-type' in test_args:
+                            for buffer_type in test_args['buffer-type']:
+                                test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_type])
+                        else:
+                            test_mem_configs[-1] = generation_funcs.supported_mem_configs
+
+                if "outputs" in test_args:
+                    for out_spec in test_args["outputs"]:
+                        test_mem_configs.append([])
+
+                        assert 'out-buffer-type' in out_spec, f"For output you need to specify 'out-buffer-type'"
+
+                        for buffer_type in out_spec['out-buffer-type']:
+                            test_mem_configs[-1].append(buffer_type)
+                else:
+                    test_mem_configs.append([])
+
+                    if 'out-buffer-type' in test_args:
+                        for buffer_type in test_args['out-buffer-type']:
                             test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_type])
                     else:
-                        test_mem_configs[-1] = generation_funcs.supported_mem_configs
+                        test_mem_configs[-1] = [MEM_CONFIGS_TT_DICT["DRAM"]]
+                # Set tests parameters --------------------------
 
-            if "outputs" in test_args:
-                for out_spec in test_args["outputs"]:
-                    test_mem_configs.append([])
+                ################# RUN TEST SWEEP #################
+                for input_shapes, datagen_funcs, generated_test_args in shapes_and_datagen(
+                    shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, test_tt_layouts, test_mem_configs
+                ):
+                    # Moved this here so that we don't need to maintain a hardcoded list of headers per op
+                    skip_header = results_csv_path.exists()
 
-                    assert 'out-buffer-type' in out_spec, f"For output you need to specify 'out-buffer-type'"
+                    with open(results_csv_path, "a", newline="") as results_csv:
+                        results_csv_writer = None
 
-                    for buffer_type in out_spec['out-buffer-type']:
-                        test_mem_configs[-1].append(buffer_type)
-            else:
-                test_mem_configs.append([])
+                        if write_to_csv:
+                            results_csv_writer = csv.DictWriter(
+                                results_csv,
+                                fieldnames=get_test_fieldnames(["args"])
+                            )
+                            if not skip_header:
+                                results_csv_writer.writeheader()
+                                results_csv.flush()
 
-                if 'out-buffer-type' in test_args:
-                    for buffer_type in test_args['out-buffer-type']:
-                        test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_type])
-                else:
-                    test_mem_configs[-1] = [MEM_CONFIGS_TT_DICT["DRAM"]]
-            # Set tests parameters --------------------------
+                        data_seed = random.randint(0, 20000000) # int(time.time())
+                        torch.manual_seed(data_seed)
 
-            ################# RUN TEST SWEEP #################
-            for input_shapes, datagen_funcs, generated_test_args in shapes_and_datagen(
-                shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, test_tt_layouts, test_mem_configs
-            ):
-                # Moved this here so that we don't need to maintain a hardcoded list of headers per op
-                skip_header = results_csv_path.exists()
-
-                with open(results_csv_path, "a", newline="") as results_csv:
-                    results_csv_writer = None
-
-                    if write_to_csv:
-                        results_csv_writer = csv.DictWriter(
-                            results_csv,
-                            fieldnames=get_test_fieldnames(["args"])
+                        logger.info(
+                            f"Running with shape: {input_shapes} and seed: {data_seed}"
                         )
-                        if not skip_header:
-                            results_csv_writer.writeheader()
-                            results_csv.flush()
 
-                    data_seed = random.randint(0, 20000000) # int(time.time())
-                    torch.manual_seed(data_seed)
+                        test_profiling_key = f"test_sweep_separator - {run_id}"
+                        logger.info(f"Starting profiling test {test_profiling_key}")
+                        tt_lib.profiler.start_profiling(test_profiling_key)
 
-                    logger.info(
-                        f"Running with shape: {input_shapes} and seed: {data_seed}"
-                    )
-
-                    test_profiling_key = f"test_sweep_separator - {run_id}"
-                    logger.info(f"Starting profiling test {test_profiling_key}")
-                    tt_lib.profiler.start_profiling(test_profiling_key)
-
-                    test_pass = run_test_and_save_results(
-                        results_csv_writer,
-                        test_name,
-                        input_shapes,
-                        data_seed,
-                        env_dict,
-                        generated_test_args,
-                        op_map[test_name]["tt_lib_op"],
-                        op_map[test_name]["pytorch_op"],
-                        input_shapes,
-                        datagen_funcs,
-                        comparison_func,
-                        generated_test_args,
-                        device,
-                    )
-
-                    tt_lib.device.Synchronize()
-                    tt_lib.profiler.stop_profiling(test_profiling_key)
-                    logger.info(f"Stopped profiling test {test_profiling_key}")
-                    run_id += 1
-
-                    results_csv.flush()
-
-                    # Check if test passed
-                    if args.run_tests_for_ci and not test_pass:
-                        logger.error(
-                            f"{test_name} test failed with input shape {input_shapes}."
+                        test_pass = run_test_and_save_results(
+                            results_csv_writer,
+                            test_name,
+                            input_shapes,
+                            data_seed,
+                            env_dict,
+                            generated_test_args,
+                            op_map[test_name]["tt_lib_op"],
+                            op_map[test_name]["pytorch_op"],
+                            input_shapes,
+                            datagen_funcs,
+                            comparison_func,
+                            generated_test_args,
+                            device,
                         )
-                        sys.exit(1)
 
-            # Unset env variables
-            for key, value in old_env_dict.items():
-                os.environ.pop(key)
-                if value is not None:
-                    os.environ[key] = value
+                        tt_lib.device.Synchronize()
+                        tt_lib.profiler.stop_profiling(test_profiling_key)
+                        logger.info(f"Stopped profiling test {test_profiling_key}")
+                        run_id += 1
+
+                        results_csv.flush()
+
+                        # Check if test passed
+                        if args.run_tests_for_ci and not test_pass:
+                            logger.error(
+                                f"{test_name} test failed with input shape {input_shapes}."
+                            )
+                            sys.exit(1)
+
+                # Unset env variables
+                for key, value in old_env_dict.items():
+                    os.environ.pop(key)
+                    if value is not None:
+                        os.environ[key] = value
 
     duration = time.time() - start_time
     logger.info(f"Tests run in {duration:.2f}s")
