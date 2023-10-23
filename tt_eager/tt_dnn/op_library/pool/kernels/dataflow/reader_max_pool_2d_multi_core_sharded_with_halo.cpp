@@ -48,7 +48,7 @@ ALWI bool fill_with_val_async(uint32_t local_src_addr, uint32_t begin_addr, int3
     uint32_t curr_addr = begin_addr;
     uint64_t local_noc_src_addr = get_noc_addr(local_src_addr);
     for (int32_t row_i = 0; row_i < nrows; ++ row_i) {
-        noc_async_read(local_noc_src_addr, curr_addr, row_nbytes);
+        noc_async_read_one_packet(local_noc_src_addr, curr_addr, row_nbytes);
         curr_addr += row_nbytes;
     }
     return true;
