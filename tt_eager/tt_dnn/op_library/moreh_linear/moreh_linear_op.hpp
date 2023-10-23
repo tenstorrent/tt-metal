@@ -1,0 +1,24 @@
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#pragma once
+
+#include <functional>
+
+#include "tensor/tensor.hpp"
+#include "tt_dnn/op_library/operation.hpp"
+
+namespace tt {
+namespace tt_metal {
+
+Tensor moreh_linear(
+    const Tensor& input,
+    const Tensor& weight,
+    std::optional<std::reference_wrapper<const Tensor>> bias = std::nullopt,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+}  // namespace tt_metal
+}  // namespace tt
