@@ -299,7 +299,7 @@ namespace ckernel::packer
       }
 
       // Save to GPR for quick data format reconfig 
-      regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+      regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = (1 + ((num_faces>2) ? 2 : 0) + 16) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = (1 + 1 + 32) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP8] = (1 + 0 + 48) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
