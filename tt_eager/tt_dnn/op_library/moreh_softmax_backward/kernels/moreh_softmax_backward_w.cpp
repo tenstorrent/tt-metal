@@ -9,10 +9,12 @@
 
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_unary/negative.h"
 #include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/softmax.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api.h"
 #include "debug_print.h"
 #include "tt_eager/tt_dnn/op_library/moreh_softmax_backward/kernels/common_ckernels.hpp"
 
@@ -60,9 +62,14 @@ void MAIN {
             sub_tiles_bcast_cols_to_cb(cb_dy, cb_sum, cb_inter2, w, 0, /*pop0=*/0, /*pop1=*/0);
             REL();
 
-            // (dy - sum) * y
             ACQ();
-            mul_tiles_to_cb(cb_y, cb_inter2, cb_dx, w, 0, /*pop0=*/0, /*pop1=*/1);
+            #ifdef SOFTMAX
+                // (dy - sum) * y
+                mul_tiles_to_cb(cb_y, cb_inter2, cb_dx, w, 0, /*pop0=*/0, /*pop1=*/1);
+            #else
+                // -(dy - sum) * y
+                mul_tiles_and_negative_to_cb(cb_y, cb_inter2, cb_dx, w, 0, /*pop0=*/0, /*pop1=*/1);
+            #endif
             REL();
         }
 

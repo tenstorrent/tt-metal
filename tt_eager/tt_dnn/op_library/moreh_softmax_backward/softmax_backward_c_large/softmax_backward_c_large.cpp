@@ -21,7 +21,7 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_softmax_backward_c_large(const Tensor &output, const Tensor &output_grad, Tensor &input_grad, uint32_t dim, const CoreRange core_range) {
+operation::ProgramWithCallbacks moreh_softmax_backward_c_large(const Tensor &output, const Tensor &output_grad, Tensor &input_grad, uint32_t dim, const CoreRange core_range, const MorehSoftmaxBackwardOp op) {
     // split work
     auto shape = input_grad.shape();
     auto N = shape[0];
@@ -85,6 +85,10 @@ operation::ProgramWithCallbacks moreh_softmax_backward_c_large(const Tensor &out
         dim_size = N;
     }
 
+    std::map<string, string> compute_defines;
+    if (op == MorehSoftmaxBackwardOp::SOFTMAX) compute_defines["SOFTMAX"] = "1";
+    else compute_defines["SOFTMIN"] = "1";
+
     // create compute kernel
     CreateComputeKernel(
         program,
@@ -92,7 +96,8 @@ operation::ProgramWithCallbacks moreh_softmax_backward_c_large(const Tensor &out
         {
             {core_group_1, num_tiles_per_core_group_1, {num_tiles_per_core_group_1, dim_size}},
             {core_group_2, num_tiles_per_core_group_2, {num_tiles_per_core_group_2, dim_size}},
-        });
+        },
+        compute_defines);
 
     // Set Runtime Args
     auto core_x_offset = core_range.start.x;
