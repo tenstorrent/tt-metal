@@ -61,11 +61,11 @@ void kernel_main() {
                         uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
                         noc_async_read_tile(itileA, s0, l1_write_addr_in0);
                         noc_async_read_barrier();
-                        //uint32_t debug_cb_id = 0;
-                        //for (int32_t r = 0; r < 32; ++ r) {
-                        //    SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-                        //    DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(debug_cb_id, 0, sr, true, false) << ENDL();
-                        //}
+                        uint32_t debug_cb_id = 0;
+                        for (int32_t r = 0; r < 32; ++ r) {
+                            SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+                            DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(debug_cb_id, itileA, sr, true, false) << ENDL();
+                        }
                         cb_push_back(cb_id_in0, onetile);
                     }
 
@@ -74,11 +74,11 @@ void kernel_main() {
                         uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
                         noc_async_read_tile(itileB, s1, l1_write_addr_in1);
                         noc_async_read_barrier();
-                        //uint32_t debug_cb_id = 1;
-                        //for (int32_t r = 0; r < 32; ++ r) {
-                        //    SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-                        //    DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(debug_cb_id, 0, sr, true, false) << ENDL();
-                        //}
+                        uint32_t debug_cb_id = 1;
+                        for (int32_t r = 0; r < 32; ++ r) {
+                            SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+                            DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(debug_cb_id, itileB, sr, true, false) << ENDL();
+                        }
                         cb_push_back(cb_id_in1, onetile);
                     }
                     DPRINT << "Pushed itileA=" << itileA << " itileB=" << itileB << ENDL();
