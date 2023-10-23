@@ -184,10 +184,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         ncores_x = device->compute_with_storage_grid_size().x;
         ncores_y = device->compute_with_storage_grid_size().y;
         all_cores = shard_spec.shard_grid;
-        uint32_t num_cores = 0;
-        for (const auto& core_range : all_cores.ranges()) {
-            num_cores += core_range.size();
-        }
+        uint32_t num_cores = all_cores.num_cores();
         ncores = num_cores;
         core_range = all_cores;
         core_range_cliff = CoreRangeSet({});
@@ -604,7 +601,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
-// This purely support input block shard -> output interleaved for now
+// This purely supports input block shard -> output interleaved for now
 operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end) {
 
     tt_metal::Program program = tt_metal::Program();
@@ -632,10 +629,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
     uint32_t ncores_x = grid.end.x + 1;
     uint32_t ncores_y = grid.end.y + 1;
     auto all_cores = shard_spec.shard_grid;
-    uint32_t num_cores = 0;
-    for (const auto& core_range : all_cores.ranges()) {
-        num_cores += core_range.size();
-    }
+    uint32_t num_cores = all_cores.num_cores();
     uint32_t ncores = num_cores;
     auto core_range = all_cores;
     ntiles_per_block = shard_spec.shard_shape[1] / TILE_WIDTH;

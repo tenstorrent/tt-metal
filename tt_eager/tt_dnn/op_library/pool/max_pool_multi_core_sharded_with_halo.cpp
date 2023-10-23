@@ -251,10 +251,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
     auto grid_size = device->compute_with_storage_grid_size();
     // auto [ncores, all_cores, core_range, core_range_cliff, in_nhw_per_core, in_nhw_per_core_cliff, out_nhw_per_core, out_nhw_per_core_cliff] = max_pool_helpers::get_decomposition_nhw(grid_size, in_nhw, out_nhw);
     auto all_cores = input.shard_spec().value().shard_grid;
-    uint32_t ncores = 0;
-    for (const auto & core_range : all_cores.ranges()) {
-        ncores += core_range.size();
-    }
+    uint32_t ncores = all_cores.num_cores();
     auto core_range = all_cores;
     auto core_range_cliff = CoreRangeSet({});
     uint32_t in_nhw_per_core = input.shard_spec().value().shard_shape[0];

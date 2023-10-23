@@ -192,7 +192,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
         uint32_t curr_ht = curr_row % Ht;
         uint32_t mask_id = curr_row / Ht * Wt;
 
-        SetRuntimeArgs(program, reader_kernels_id, core, { src_addr, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_addr, curr_ht, mask_id, 0x3f800000 }); // [10]=1.0f is scaler
+        SetRuntimeArgs(program, reader_kernels_id, core, { src_addr, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_addr, curr_ht, mask_id, 0x3f803f80 }); // [10]=1.0f is scaler
         SetRuntimeArgs(program, softmax_kernels_id, core, { num_tile_rows_per_core, Ht, Wt, block_size, curr_ht });
         SetRuntimeArgs(program, writer_kernels_id, core, { out_addr, num_tile_rows_per_core * Wt, tile_offset, block_size });
         curr_row += num_tile_rows_per_core;
@@ -305,7 +305,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
             uint32_t curr_ht = curr_row % Ht;
             uint32_t mask_id = curr_row / Ht * Wt;
 
-            SetRuntimeArgs(program, reader_kernels_id, core, { src_buffer_address, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_buffer_address, curr_ht, mask_id, 0x3f800000 }); // [10]=1.0f is scaler
+            SetRuntimeArgs(program, reader_kernels_id, core, { src_buffer_address, block_size, s.u, num_tile_rows_per_core, tile_offset, Wt, Ht, mask_buffer_address, curr_ht, mask_id, 0x3f803f80 }); // [10]=1.0f is scaler
             SetRuntimeArgs(program, softmax_kernels_id, core, { num_tile_rows_per_core, Ht, Wt, block_size, curr_ht });
             SetRuntimeArgs(program, writer_kernels_id, core, { dst_buffer_address, num_tile_rows_per_core * Wt, tile_offset, block_size });
             curr_row += num_tile_rows_per_core;

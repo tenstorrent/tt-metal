@@ -60,9 +60,11 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
 		.set_page_size(output_cb_index, single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
+    bfloat16 bfloat_scaler_value = bfloat16(scaler);
+    uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     tt_metal::Buffer *src_buffer = a.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, uint32_t(*reinterpret_cast<uint32_t*>(&scaler))};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, packed_scaler_value};
     tt_metal::Buffer *dst_buffer = output.buffer();
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
@@ -72,7 +74,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
 
     tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_reduce_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/op_library/reduce/kernels/dataflow/reader_unary_reduce_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 

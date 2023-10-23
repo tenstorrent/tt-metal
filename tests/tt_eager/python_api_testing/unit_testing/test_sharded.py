@@ -900,3 +900,140 @@ def test_sharded_untilize_with_unpadding(in_sharded, out_sharded, device, functi
     logger.info(output)
 
     assert passing
+
+@pytest.mark.parametrize("in_sharded", [True], ids=["in0_sharded"])
+@pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
+def test_sharded_tilize_with_val_padding(in_sharded, out_sharded, device, function_level_defaults):
+    grid_size = (8, 8)
+    N = 8
+    C = 1
+    H = 49
+    W = 2048
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
+
+    x = torch.arange(N * C * H * W).reshape((N, C, H, W)).bfloat16()
+
+    xt = (
+        ttl.tensor.Tensor(
+            x.reshape(-1).tolist(),
+            x.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(
+            device,
+            interleaved_mem_config,
+        )
+    )
+
+    if in_sharded:
+        xt = ttl.tensor.interleaved_to_sharded(
+            xt,
+            grid_size,
+            [N * C * H, W // (grid_size[0] * grid_size[1])],
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.ShardOrientation.COL_MAJOR,
+        )
+
+    yt = ttl.tensor.tilize_with_val_padding(
+        xt,
+        [8, 1, 64, 2048],
+        [0, 0, 0, 0],
+        1.0,
+        output_mem_config=out_mem_config,
+    )
+
+    if out_sharded:
+        yt = ttl.tensor.sharded_to_interleaved(
+            yt,
+            interleaved_mem_config,
+        )
+
+    tt_got_back = yt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
+    torch.set_printoptions(sci_mode=False)
+    print(tt_got_back)
+
+    y = torch.nn.functional.pad(x, [0, 0, 0, 15], "constant", 1.0)
+
+    passing, output = comp_equal(y, tt_got_back)
+    logger.info(output)
+
+    assert passing
+
+@pytest.mark.parametrize("in_sharded", [True], ids=["in0_sharded"])
+@pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
+def test_sharded_reduce_h(in_sharded, out_sharded, device, function_level_defaults):
+    grid_size = (8, 8)
+    N = 8
+    C = 1
+    H = 64
+    W = 2048
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
+
+    x = torch.randn((N, C, H, W)).bfloat16()
+
+    xt = (
+        ttl.tensor.Tensor(
+            x.reshape(-1).tolist(),
+            x.shape,
+            ttl.tensor.DataType.BFLOAT16,
+            ttl.tensor.Layout.ROW_MAJOR,
+        ).to(ttl.tensor.Layout.TILE)
+        .to(
+            device,
+            interleaved_mem_config,
+        )
+    )
+
+    if in_sharded:
+        xt = ttl.tensor.interleaved_to_sharded(
+            xt,
+            grid_size,
+            [N * C * H, W // (grid_size[0] * grid_size[1])],
+            ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+            ttl.tensor.ShardOrientation.COL_MAJOR,
+        )
+
+    yt = ttl.tensor.reduce(
+        xt,
+        ttl.tensor.ReduceOpMath.MAX,
+        ttl.tensor.ReduceOpDim.H,
+        1.0,
+        output_mem_config=out_mem_config,
+    )
+
+    if out_sharded:
+        yt = ttl.tensor.sharded_to_interleaved(
+            yt,
+            interleaved_mem_config,
+        )
+
+    tt_got_back = yt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()[:, :, :1, :]
+
+    y = torch.max(x, 2, True)[0]
+
+
+    passing, output = comp_equal(y, tt_got_back)
+    logger.info(output)
+
+    assert passing
