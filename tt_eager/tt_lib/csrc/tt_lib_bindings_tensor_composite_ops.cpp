@@ -387,7 +387,7 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("triu",
-		     &triu, py::arg("input")
+	     &triu, py::arg("input"), py::arg("diag") = 0
             , py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns a new tensor with upper triangular elements of input with rest being zero.
 
@@ -399,11 +399,12 @@ namespace tt::tt_metal::detail{
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "input", "tensor input to be upper triangular processed", "Tensor", "", "Yes"
+                "diag", "diagonal to be chosen (default to 0)", "int32_t", "-dim to +dim (default to 0)", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
         m_tensor.def("tril",
-	     &tril, py::arg("input")
+	    &tril, py::arg("input"), py::arg("diag") = 0
             , py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns a new tensor with lower triangular elements of input with rest being zero.
 
@@ -415,6 +416,7 @@ namespace tt::tt_metal::detail{
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "input", "tensor input to be lower triangular processed", "Tensor", "", "Yes"
+                "diag", "diagonal to be chosen", "int32_t", "-dim to +dim (default to 0)", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 

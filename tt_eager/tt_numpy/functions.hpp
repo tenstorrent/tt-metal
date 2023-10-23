@@ -138,7 +138,7 @@ static Tensor arange(int64_t start, int64_t stop, int64_t step, const Layout lay
 }
 
 template<typename T,bool IS_UPPER>
-static Tensor index_trilu(const Shape& shape, DataType data_type,
+static Tensor index_trilu(const Shape& shape, const int32_t diag, DataType data_type,
 			  const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr,
 			  const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     // Current implementation restrictions
@@ -149,7 +149,7 @@ static Tensor index_trilu(const Shape& shape, DataType data_type,
         for(int32_t z = 0; z < shape[1]; z++) {
             for(int32_t y = 0; y < shape[2]; y++) {
                 for(int32_t x = 0; x < shape[3]; x++) {
-                    int32_t value = (IS_UPPER) ? (x >= y) : (y >= x);
+		            int32_t value = (IS_UPPER) ? (x >= (y + diag)) : (y >= (x - diag));
                     if constexpr (std::is_same_v<T, bfloat16>) {
                         owned_buffer[index++] = static_cast<T>(static_cast<float>(value));
                     } else {
@@ -167,15 +167,15 @@ static Tensor index_trilu(const Shape& shape, DataType data_type,
 }
 
 template<typename T>
-static Tensor index_tril(const Shape& shape, DataType data_type, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr,
+static Tensor index_tril(const Shape& shape, const int32_t diag, DataType data_type, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr,
 		   const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    return index_trilu<T,false>(shape,data_type,layout,device,output_mem_config);
+    return index_trilu<T,false>(shape, diag, data_type, layout, device, output_mem_config);
 }
 
 template<typename T>
-static Tensor index_triu(const Shape& shape, DataType data_type, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr,
+static Tensor index_triu(const Shape& shape,const int32_t diag, DataType data_type, const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr,
 		   const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
-    return index_trilu<T,true>(shape,data_type,layout,device,output_mem_config);
+    return index_trilu<T,true>(shape, diag, data_type, layout, device, output_mem_config);
 }
 
 namespace random {

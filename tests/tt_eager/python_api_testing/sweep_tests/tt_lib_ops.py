@@ -7,6 +7,7 @@ import tt_lib as ttl
 from models.helper_funcs import Linear as tt_Linear
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
+
 def setup_tt_tensor(x, device, layout, input_mem_config, dtype):
     if input_mem_config is None:
         device = None
@@ -788,18 +789,22 @@ def zeros(x, *args, device, dtype, layout, input_mem_config, output_mem_config, 
 
     return tt2torch_tensor(t1)
 
+
 @setup_host_and_device
 def triu(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     tx = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.triu(tx,output_mem_config)
+    diag = kwargs.get("diag", 0)
+    t1 = ttl.tensor.triu(tx, diag, output_mem_config)
     return tt2torch_tensor(t1)
 
 
 @setup_host_and_device
 def tril(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     tx = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.tril(tx,output_mem_config)
+    diag = kwargs.get("diag", 0)
+    t1 = ttl.tensor.tril(tx, diag, output_mem_config)
     return tt2torch_tensor(t1)
+
 
 @setup_host_and_device
 def empty(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
@@ -2082,9 +2087,9 @@ def bert_large_ff1_matmul(x, y, z, *args, device, dtype, layout, input_mem_confi
 
     return tt2torch_tensor(t3)
 
+
 @setup_host_and_device
 def embeddings(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-
     x = x.int()
     x_shape = x.shape
     y_shape = y.shape
@@ -2093,9 +2098,7 @@ def embeddings(x, y, *args, device, dtype, layout, input_mem_config, output_mem_
     num_rows = x_shape[2]
     embedding_dim = y_shape[3]
 
-    t0 = ttl.tensor.Tensor(x, dtype[0]).to(
-        device, input_mem_config[0]
-    )
+    t0 = ttl.tensor.Tensor(x, dtype[0]).to(device, input_mem_config[0])
 
     t1 = ttl.tensor.Tensor(y, dtype[1]).to(device, input_mem_config[1])
 
@@ -2103,8 +2106,6 @@ def embeddings(x, y, *args, device, dtype, layout, input_mem_config, output_mem_
 
     tt_data = t2.cpu().to_torch()
 
-    tt_got_back = torch.Tensor(tt_data).reshape(
-        (batch_size, 1, num_rows, embedding_dim)
-    )
+    tt_got_back = torch.Tensor(tt_data).reshape((batch_size, 1, num_rows, embedding_dim))
 
     return tt_got_back

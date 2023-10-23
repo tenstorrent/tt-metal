@@ -119,7 +119,9 @@ class TestEltwiseUnary:
             ]
         else:
             datagen_func = [
-                generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
+                generation_funcs.gen_func_with_cast(
+                    partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16
+                )
             ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         comparison_func = comparison_funcs.comp_pcc
@@ -974,17 +976,19 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @pytest.mark.parametrize("fn_kind", ["tril","triu"])
+    @pytest.mark.parametrize("diag", [-2, -1, 0, 1, 2])
+    @pytest.mark.parametrize("fn_kind", ["tril", "triu"])
     def test_run_eltwise_tri_ops(
         self,
         input_shapes,
         fn_kind,
+        diag,
         device,
         function_level_defaults,
         input_mem_config,
         output_mem_config,
     ):
-        low_v, high_v = 0,10
+        low_v, high_v = 0, 10
         datagen_func = [
             generation_funcs.gen_func_with_cast(
                 partial(generation_funcs.gen_rand, low=low_v, high=high_v),
@@ -997,7 +1001,8 @@ class TestEltwiseUnary:
             {
                 "input_mem_config": [input_mem_config],
                 "output_mem_config": output_mem_config,
-             }
+                "diag": diag,
+            }
         )
         run_single_pytorch_test(
             f"eltwise-{fn_kind}",
