@@ -2,16 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../tt")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
 
 import torch
 from loguru import logger
@@ -19,19 +9,15 @@ from torchvision import models
 from transformers import AutoImageProcessor
 import pytest
 import tt_lib
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, profiler
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-)
-from models.utility_functions import prep_report, is_e75
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
-)
+from models.utility_functions import prep_report, is_e75
+from models.utility_functions import profiler
+from models.utility_functions import disable_persistent_kernel_cache
+from models.utility_functions import prep_report
+
+
 from loguru import logger
-from tests.models.resnet.metalResnetBlock50 import ResNet, Bottleneck
+from models.demos.resnet.metalResnetBlock50 import ResNet, Bottleneck
 
 
 def run_perf_resnet(

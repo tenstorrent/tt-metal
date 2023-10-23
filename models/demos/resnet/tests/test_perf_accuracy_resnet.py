@@ -18,8 +18,8 @@ from models.utility_functions import (
     prep_report,
     is_e75,
 )
-from tests.models.resnet.tests.demo_utils import get_data
-from tests.models.resnet.metalResnetBlock50 import ResNet, Bottleneck
+from models.demos.resnet.tests.demo_utils import get_data
+from models.demos.resnet.metalResnetBlock50 import ResNet, Bottleneck
 
 
 def run_perf_resnet(

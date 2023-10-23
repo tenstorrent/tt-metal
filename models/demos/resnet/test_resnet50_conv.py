@@ -9,7 +9,7 @@ import torch
 import pytest
 import tt_lib
 from models.utility_functions import comp_pcc
-from tests.models.resnet.metalResnetBlock50 import (
+from models.demos.resnet.metalResnetBlock50 import (
     compute_conv_output_shape,
     resnet50_1x1_conv_as_matmul,
     resnet50_optimized_conv,
