@@ -366,6 +366,17 @@ inline void llk_math_eltwise_unary_sfpu_mask_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::mask, APPROXIMATE>();
 }
 
+// Negative
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_negative(uint dst_index, int vector_mode = Dim::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::negative, APPROXIMATE, dst_sync>(dst_index,vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_negative_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::negative, APPROXIMATE>();
+}
+
 //silu
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_silu(uint dst_index, int vector_mode = Dim::RC) {
@@ -375,4 +386,6 @@ inline void llk_math_eltwise_unary_sfpu_silu(uint dst_index, int vector_mode = D
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_silu_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::silu, APPROXIMATE>();
+}
+
 }
