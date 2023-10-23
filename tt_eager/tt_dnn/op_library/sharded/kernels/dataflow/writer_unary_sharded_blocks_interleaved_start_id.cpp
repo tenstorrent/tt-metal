@@ -31,7 +31,6 @@ void kernel_main() {
 
     uint32_t row_start_tile_id = start_id;
     cb_wait_front(cb_id_out, block_num_tiles);
-    DPRINT<<'a'<<ENDL();
     uint32_t l1_read_addr = get_read_ptr(cb_id_out);
     for (uint32_t h = 0; h < unpadded_block_height_tiles; h++) {
         uint32_t tile_id = row_start_tile_id;
@@ -44,6 +43,5 @@ void kernel_main() {
         l1_read_addr += padded_width_diff;
         row_start_tile_id += output_width_tiles;
     }
-    DPRINT<<'b'<<ENDL();
     cb_pop_front(cb_id_out, block_num_tiles);
 }

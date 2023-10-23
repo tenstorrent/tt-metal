@@ -65,10 +65,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
     uint32_t block_height = 0, block_width = 0, block_size = 0, output_width = 0, last_unpadded_block_height = 0, last_unpadded_block_width = 0;
     if (shard_spec.has_value()) {
         all_cores = shard_spec.value().shard_grid;
-        num_cores = 0;
-        for (const auto& core_range : all_cores.ranges()) {
-            num_cores += core_range.size();
-        }
+        num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         core_group_2 = CoreRangeSet({});
         num_tiles_per_core_group_1 = shard_spec.value().shard_shape[0] * shard_spec.value().shard_shape[1] / TILE_HW;
@@ -336,10 +333,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
         CoreCoord end_core;
         if (shard_spec.has_value()) {
             all_cores = shard_spec.value().shard_grid;
-            num_cores = 0;
-            for (const auto& core_range : all_cores.ranges()) {
-                num_cores += core_range.size();
-            }
+            num_cores = all_cores.num_cores();
             core_group_1 = all_cores;
             core_group_2 = CoreRangeSet({});
             num_tiles_per_core_group_1 = shard_spec.value().shard_shape[0] * shard_spec.value().shard_shape[1] / TILE_HW;
