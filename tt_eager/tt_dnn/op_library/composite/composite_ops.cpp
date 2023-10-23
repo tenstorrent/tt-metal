@@ -1195,14 +1195,14 @@ Tensor sfpu_eps(const Shape shape, Layout layout, Device * device, const MemoryC
 }
 
 //tril : select lower triangular region of input matrix
-Tensor tril(const Tensor& input_a, const MemoryConfig& output_mem_config) {
-  Tensor index_l = tt::numpy::index_tril<bfloat16>(input_a.shape(), DataType::BFLOAT16);
+Tensor tril(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_config) {
+  Tensor index_l = tt::numpy::index_tril<bfloat16>(input_a.shape(), diag, DataType::BFLOAT16);
   return mul(input_a,index_l,std::nullopt,output_mem_config);
 }
 
 //triu : select upper triangular region of input matrix
-Tensor triu(const Tensor& input_a, const MemoryConfig& output_mem_config) {
-  Tensor index_u = tt::numpy::index_triu<bfloat16>(input_a.shape(), DataType::BFLOAT16);
+Tensor triu(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_config) {
+  Tensor index_u = tt::numpy::index_triu<bfloat16>(input_a.shape(), diag, DataType::BFLOAT16);
   return mul(input_a,index_u,std::nullopt,output_mem_config);
 }
 

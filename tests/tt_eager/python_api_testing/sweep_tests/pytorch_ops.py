@@ -580,13 +580,18 @@ def zeros_like(x, *args, **kwargs):
     result = torch.zeros_like(x)
     return result
 
+
 def triu(x, *args, **kwargs):
-    result = torch.triu(x)
+    diag = kwargs.get("diag", 0)
+    result = torch.triu(x, diag)
     return result
 
+
 def tril(x, *args, **kwargs):
-    result = torch.tril(x)
+    diag = kwargs.get("diag", 0)
+    result = torch.tril(x, diag)
     return result
+
 
 def ones_like(x, *args, **kwargs):
     result = torch.ones_like(x)
@@ -1019,6 +1024,7 @@ def eltwise_rsub(x, *args, **kwargs):
 def eltwise_rdiv(x, *args, **kwargs):
     dim = kwargs["factor"]
     return dim / x
+
 
 def embeddings(x, y, *args, **kwargs):
     x = x.int()
