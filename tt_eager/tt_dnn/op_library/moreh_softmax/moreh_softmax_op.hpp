@@ -60,6 +60,7 @@ struct MorehSoftmax {
 Tensor moreh_softmax(
     const Tensor &input_tensor,
     uint32_t dim,
+    const MorehSoftmaxOpParallelizationStrategy strategy = MorehSoftmaxOpParallelizationStrategy::NONE,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 Tensor moreh_softmin(
     const Tensor &input_tensor,
