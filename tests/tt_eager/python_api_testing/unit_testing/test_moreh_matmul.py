@@ -8,6 +8,7 @@ import torch.nn.functional as F
 
 import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
+from models.utility_functions import comp_pcc
 
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
@@ -34,8 +35,8 @@ def get_tensors(input_a_shape, input_b_shape, transpose_b, device):
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
 
     # create input tensors using torch
-    a = torch.randn(input_a_shape, dtype=torch.bfloat16).float()
-    b = torch.randn(input_b_shape, dtype=torch.bfloat16).float()
+    a = torch.randn(input_a_shape, dtype=torch.bfloat16)
+    b = torch.randn(input_b_shape, dtype=torch.bfloat16)
 
     # TT matmul
     # set different padded value for tt_a and tt_b.
@@ -57,14 +58,6 @@ def get_tensors(input_a_shape, input_b_shape, transpose_b, device):
     torch_b = torch.transpose(b.bfloat16(), 2, 3) if transpose_b else b.bfloat16()
 
     return tt_a, tt_b, torch_a, torch_b
-
-
-def compare(tt_out, torch_out, atol=0.2, rtop=0.2):
-    # TODO: better way to compare results
-    allclose_result = torch.allclose(tt_out, torch_out, atol=0.2, rtol=0.2)
-    isclose_sum = torch.isclose(tt_out, torch_out, atol=0.2, rtol=0.2).sum()
-    isclose_true_ratio = float(isclose_sum) / torch.numel(torch_out)
-    return allclose_result, isclose_true_ratio
 
 
 @skip_for_wormhole_b0
@@ -122,9 +115,12 @@ def test_moreh_matmul(input_a_shape, input_b_shape, device):
     # torch matmul
     torch_out = torch.matmul(torch_a, torch_b)
 
-    # compare results
-    allclose_result, isclose_true_ratio = compare(tt_out, torch_out)
-    assert allclose_result or isclose_true_ratio > 0.95
+    ## test for equivalance
+    passing_pcc, output_pcc = comp_pcc(torch_out, tt_out)
+    print(f"Passing PCC = {passing_pcc}")
+    print(f"Output PCC = {output_pcc}")
+
+    assert passing_pcc
 
 
 @skip_for_wormhole_b0
@@ -187,9 +183,12 @@ def test_batched_moreh_matmul(input_a_shape, input_b_shape, device):
     # torch matmul
     torch_out = torch.matmul(torch_a, torch_b)
 
-    # compare results
-    allclose_result, isclose_true_ratio = compare(tt_out, torch_out)
-    assert allclose_result or isclose_true_ratio > 0.95
+    ## test for equivalance
+    passing_pcc, output_pcc = comp_pcc(torch_out, tt_out)
+    print(f"Passing PCC = {passing_pcc}")
+    print(f"Output PCC = {output_pcc}")
+
+    assert passing_pcc
 
 
 @skip_for_wormhole_b0
@@ -248,9 +247,12 @@ def test_moreh_matmul_transpose_b(input_a_shape, input_b_shape, device):
     # torch matmul
     torch_out = torch.matmul(torch_a, torch_b)
 
-    # compare results
-    allclose_result, isclose_true_ratio = compare(tt_out, torch_out)
-    assert allclose_result or isclose_true_ratio > 0.95
+    ## test for equivalance
+    passing_pcc, output_pcc = comp_pcc(torch_out, tt_out)
+    print(f"Passing PCC = {passing_pcc}")
+    print(f"Output PCC = {output_pcc}")
+
+    assert passing_pcc
 
 
 @skip_for_wormhole_b0
@@ -313,9 +315,12 @@ def test_batched_moreh_matmul_transpose_b(input_a_shape, input_b_shape, device):
     # torch matmul
     torch_out = torch.matmul(torch_a, torch_b)
 
-    # compare results
-    allclose_result, isclose_true_ratio = compare(tt_out, torch_out)
-    assert allclose_result or isclose_true_ratio > 0.95
+    ## test for equivalance
+    passing_pcc, output_pcc = comp_pcc(torch_out, tt_out)
+    print(f"Passing PCC = {passing_pcc}")
+    print(f"Output PCC = {output_pcc}")
+
+    assert passing_pcc
 
 
 @skip_for_wormhole_b0
@@ -355,5 +360,10 @@ def test_moreh_matmul_1d(input_shape, device):
 
     # compare results
     tt_out = tt_out[0][0][0][0]
-    allclose_result, isclose_true_ratio = compare(tt_out, torch_out)
-    assert allclose_result or isclose_true_ratio > 0.95
+
+    ## test for equivalance
+    passing_pcc, output_pcc = comp_pcc(torch_out, tt_out)
+    print(f"Passing PCC = {passing_pcc}")
+    print(f"Output PCC = {output_pcc}")
+
+    assert passing_pcc
