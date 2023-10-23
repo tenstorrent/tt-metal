@@ -45,6 +45,7 @@ bool is_moreh_softmax_backward_h_small_available(const Tensor &tensor) {
 }
 
 operation::ProgramWithCallbacks moreh_softmax_backward_h_small(const Tensor &output, const Tensor &output_grad, Tensor &input_grad, const CoreRange core_range, const MorehSoftmaxBackwardOp op) {
+    log_info(LogTest, "Small tensor algorithm selected");
     // split work
     auto shape = input_grad.shape();
     auto N = shape[0];
