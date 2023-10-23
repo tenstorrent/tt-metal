@@ -1018,14 +1018,8 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     else if constexpr (operation == SfpuType::atan) {
         calculate_atan<APPROXIMATION_MODE, ITERATIONS>();
     }
-    else if constexpr (operation == SfpuType::signbit) {
-        calculate_signbit<APPROXIMATION_MODE, ITERATIONS>();
-    }
     else if constexpr (operation == SfpuType::negative) {
         calculate_negative<APPROXIMATION_MODE, ITERATIONS>();
-    }
-    else if constexpr (operation == SfpuType::silu) {
-        calculate_silu<APPROXIMATION_MODE, ITERATIONS>();
     }
 }
 
