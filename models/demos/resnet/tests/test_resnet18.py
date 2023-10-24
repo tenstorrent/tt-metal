@@ -7,7 +7,7 @@ from loguru import logger
 import torch
 from torchvision import models
 import pytest
-from models.demos.resnet.genericResnetBlock import ResNet, BasicBlock
+from models.demos.resnet.tt.genericResnetBlock import ResNet, BasicBlock
 
 from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
