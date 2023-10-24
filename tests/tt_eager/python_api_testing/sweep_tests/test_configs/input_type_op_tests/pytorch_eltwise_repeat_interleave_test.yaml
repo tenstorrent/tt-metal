@@ -1,6 +1,6 @@
 ---
 test-list:
-  eltwise-repeat_interleave:
+  repeat_interleave:
     shape:
       start-shape: [1, 1, 1, 2]
       end-shape: [2, 2, 2048, 2048]
