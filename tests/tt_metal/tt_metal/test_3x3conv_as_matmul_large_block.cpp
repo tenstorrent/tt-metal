@@ -198,7 +198,7 @@ int main(int argc, char **argv) {
             src0_num_tiles_per_block,
             src1_num_tiles_per_block};
 
-        auto generic_binary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto generic_binary_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/generic_binary_reader_blocked.cpp",
             core,
@@ -216,7 +216,7 @@ int main(int argc, char **argv) {
             (std::uint32_t)out_subblock_h * out_subblock_w * single_tile_size * (N/out_subblock_w), // bytes offset to next row of sub-blocks
             (std::uint32_t)out_subblock_w*single_tile_size}; // bytes offset to next sub-block
 
-        auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unswizzle.cpp",
             core,
@@ -249,7 +249,7 @@ int main(int argc, char **argv) {
             uint(out_subblock_num_tiles)
         };
 
-        auto mm_kernel = tt_metal::CreateComputeKernel(
+        auto mm_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp",
             core,

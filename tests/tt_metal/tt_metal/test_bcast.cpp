@@ -206,13 +206,13 @@ int main(int argc, char **argv) {
         std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
 
         const char* reader_name = get_reader_name(multibank, bcast_dim);
-        auto binary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto binary_reader_kernel = tt_metal::CreateKernel(
             program,
             reader_name,
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-        auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
                       : "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
@@ -247,7 +247,7 @@ int main(int argc, char **argv) {
             {"BCAST_OP", op_id_to_op_define[bcast_op]},
             {"BCAST_LLKOP", op_id_to_llkop_define[bcast_op]}
         };
-        auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
+        auto eltwise_binary_kernel = tt_metal::CreateKernel(
             program,
             get_compute_name(bcast_dim),
             core,

@@ -104,13 +104,13 @@ int main(int argc, char **argv) {
          * Specify data movement kernels for reading/writing data to/from
          * DRAM.
          */
-        KernelID binary_reader_kernel_id = CreateDataMovementKernel(
+        KernelID binary_reader_kernel_id = CreateKernel(
             program,
             "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-        KernelID unary_writer_kernel_id = CreateDataMovementKernel(
+        KernelID unary_writer_kernel_id = CreateKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
@@ -129,7 +129,7 @@ int main(int argc, char **argv) {
          * Use the add_tiles operation available in the eltwise_binary
          * compute kernel.
          */
-        KernelID eltwise_binary_kernel_id = CreateComputeKernel(
+        KernelID eltwise_binary_kernel_id = CreateKernel(
             program,
             "tt_metal/kernels/compute/eltwise_binary.cpp",
             core,
@@ -221,13 +221,13 @@ int main(int argc, char **argv) {
         cb_src1 = tt_metal::CreateCircularBuffer(program_mul, core, cb_src1_config);
         cb_output = tt_metal::CreateCircularBuffer(program_mul, core, cb_output_config);
 
-        binary_reader_kernel_id = CreateDataMovementKernel(
+        binary_reader_kernel_id = CreateKernel(
             program_mul,
             "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-        unary_writer_kernel_id = CreateDataMovementKernel(
+        unary_writer_kernel_id = CreateKernel(
             program_mul,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
@@ -236,7 +236,7 @@ int main(int argc, char **argv) {
         /*
          * But now let's do an eltwise mul!
          */
-        eltwise_binary_kernel_id = CreateComputeKernel(
+        eltwise_binary_kernel_id = CreateKernel(
             program_mul,
             "tt_metal/kernels/compute/eltwise_binary.cpp",
             core,

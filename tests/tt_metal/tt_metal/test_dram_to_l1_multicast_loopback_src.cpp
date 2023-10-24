@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
         };
         log_info(LogTest, "Start = {}, {}", core_start_physical.x, core_start_physical.y);
         log_info(LogTest, "End = {}, {}", core_end_physical.x, core_end_physical.y);
-        auto mcast_reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto mcast_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_include_src.cpp",
             core,

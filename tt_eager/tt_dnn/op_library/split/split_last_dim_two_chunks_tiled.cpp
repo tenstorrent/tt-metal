@@ -198,13 +198,13 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     };
 
-    auto reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
@@ -214,7 +214,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     std::vector<uint32_t> compute_args = {0};  // dummy
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
-    auto dummy_compute_kernel_id = tt_metal::CreateComputeKernel(
+    auto dummy_compute_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/blank.cpp",
         all_cores,

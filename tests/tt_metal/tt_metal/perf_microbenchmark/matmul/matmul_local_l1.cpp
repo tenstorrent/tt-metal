@@ -368,7 +368,7 @@ int main(int argc, char **argv) {
     vector<uint32_t> compute_kernel_args = {uint(per_core_Mt), uint(Kt),
                                             uint(per_core_Nt)};
 
-    auto mm_kernel = tt_metal::CreateComputeKernel(
+    auto mm_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/matmul/kernels/"
         "compute_local_l1.cpp",

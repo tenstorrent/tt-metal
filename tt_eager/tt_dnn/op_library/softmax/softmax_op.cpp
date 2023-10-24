@@ -108,7 +108,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     if (mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
     }
-    auto reader_kernels_id = CreateDataMovementKernel(
+    auto reader_kernels_id = CreateKernel(
         program, "tt_eager/tt_dnn/op_library/softmax/kernels/reader_unary_interleaved_sm.cpp", all_device_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -118,7 +118,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     });
     //DataMovementProcessor::RISCV_1, core.x < 6 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
 
-    auto writer_kernels_id = CreateDataMovementKernel(
+    auto writer_kernels_id = CreateKernel(
         program, "tt_eager/tt_dnn/op_library/softmax/kernels/writer_unary_interleaved_start_id_blocked_sm.cpp", all_device_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -133,7 +133,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     // if wtpc >= Ht then tpc should be a multiple of Ht
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = true;
-    auto softmax_kernels_id = CreateComputeKernel(
+    auto softmax_kernels_id = CreateKernel(
         program, "kernels/compute/softmax.cpp", all_device_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode,

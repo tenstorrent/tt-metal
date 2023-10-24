@@ -69,7 +69,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
             (std::uint32_t) src_is_dram
         };
 
-        unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+        unary_reader_kernel_id = tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/dataflow/reader_unary_blocks_interleaved_start_id.cpp",
             all_cores,
@@ -84,7 +84,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
             (std::uint32_t) src_log2_stick_size
         };
 
-        unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+        unary_reader_kernel_id = tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/dataflow/reader_unary_stick_layout_blocks_interleaved_start_id.cpp",
             all_cores,
@@ -92,7 +92,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
     }
 
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
-    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
@@ -234,7 +234,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
         (std::uint32_t) src0_cb_index
     };
 
-    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
@@ -250,7 +250,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
             (std::uint32_t) dst_is_dram
         };
 
-        unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+        unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary_blocks_interleaved_start_id.cpp",
             all_cores,
@@ -265,7 +265,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
             (std::uint32_t) dst_log2_stick_size
         };
 
-        unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+        unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary_stick_layout_blocks_interleaved_start_id.cpp",
             all_cores,

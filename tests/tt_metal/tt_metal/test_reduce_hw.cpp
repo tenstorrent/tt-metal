@@ -104,14 +104,14 @@ int main(int argc, char **argv) {
 
         TT_ASSERT(num_tensor_tiles%Ht == 0);
 
-        auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
             multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp"
                       : "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-        auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
                       : "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
@@ -129,7 +129,7 @@ int main(int argc, char **argv) {
             {"REDUCE_OP", do_max ? "PoolType::MAX" : "PoolType::SUM"},
             {"REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"}
         };
-        auto reduce_hw_compute_kernel = tt_metal::CreateComputeKernel(
+        auto reduce_hw_compute_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/reduce_hw.cpp",
             core,

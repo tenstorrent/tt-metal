@@ -164,7 +164,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
             .set_page_size(16, test_config.tile_byte_size);
         auto l1_output_cb = tt_metal::CreateCircularBuffer(program, core_range, l1_output_cb_config);
 
-        auto reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
             test_config.cores,
@@ -172,7 +172,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
                 .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         // Enqueue apis only supported on gs so far
-        auto writer_kernel = tt_metal::CreateDataMovementKernel(
+        auto writer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             test_config.cores,
@@ -190,7 +190,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 	sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
     sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"]="1";
 
-        auto sfpu_kernel = tt_metal::CreateComputeKernel(
+        auto sfpu_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
             test_config.cores,

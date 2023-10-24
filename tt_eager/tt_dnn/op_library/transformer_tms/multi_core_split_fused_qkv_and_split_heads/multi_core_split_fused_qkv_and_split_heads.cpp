@@ -115,12 +115,12 @@ operation::ProgramWithCallbacks multi_core_split_fused_qkv_and_split_heads(const
             (std::uint32_t) out_HtWt, // out_HtWt
     };
 
-    auto reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_tm_tile_layout_create_qkv_heads.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
-    auto writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_tm_tile_layout_create_qkv_heads.cpp",
         all_cores,
@@ -128,7 +128,7 @@ operation::ProgramWithCallbacks multi_core_split_fused_qkv_and_split_heads(const
 
     // Dummy compute kernel
     std::vector<uint32_t> compute_args = {num_tiles_per_tensor};
-    auto compute_kernel_id = tt_metal::CreateComputeKernel(
+    auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/transpose_wh.cpp",
         all_cores,

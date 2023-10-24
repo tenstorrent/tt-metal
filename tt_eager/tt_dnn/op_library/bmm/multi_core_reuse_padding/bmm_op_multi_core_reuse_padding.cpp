@@ -121,20 +121,20 @@ operation::ProgramWithCallbacks create_program(
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)out_is_dram};
 
     // Create reader and writer kernels per core
-    auto mm_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    auto mm_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_padding.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    auto unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_tile_layout_padding.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     // Create compute kernel
-    auto mm_kernel_id = tt_metal::CreateComputeKernel(
+    auto mm_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,

@@ -103,13 +103,13 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
         .set_page_size(ouput_cb_index, single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core_range_set, cb_output_config);
 
-    auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto unary_reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
         core_range_set,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-    auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto unary_writer_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core_range_set,
@@ -120,7 +120,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
         uint(num_tiles) // per_core_tile_cnt
     };
 
-    auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
+    auto eltwise_unary_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
         core_range_set,

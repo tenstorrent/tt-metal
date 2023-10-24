@@ -78,13 +78,13 @@ int main(int argc, char **argv) {
         std::vector<uint32_t> reader_cb_kernel_args = {8, 2};
         std::vector<uint32_t> writer_cb_kernel_args = {8, 4};
 
-        auto reader_cb_kernel = tt_metal::CreateDataMovementKernel(
+        auto reader_cb_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_cb_test.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_cb_kernel_args});
 
-        auto writer_cb_kernel = tt_metal::CreateDataMovementKernel(
+        auto writer_cb_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_cb_test.cpp",
             core,

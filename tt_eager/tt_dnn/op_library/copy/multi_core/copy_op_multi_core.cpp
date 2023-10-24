@@ -87,13 +87,13 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
     if (backwards) {
         kernel_defines["BACKWARDS"] = "1";
     }
-    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         tilized ? "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp" : "tt_metal/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = kernel_defines});
 
-    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         tilized ? "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp" : "tt_metal/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
         num_tiles_per_core_group_1
     };
 
-    auto eltwise_unary_kernel_group_1 = tt_metal::CreateComputeKernel(
+    auto eltwise_unary_kernel_group_1 = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/eltwise_copy.cpp",
         core_group_1,
@@ -122,7 +122,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
             num_tiles_per_core_group_2
         };
 
-        auto eltwise_unary_kernel_group_2 = tt_metal::CreateComputeKernel(
+        auto eltwise_unary_kernel_group_2 = tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/compute/eltwise_copy.cpp",
             core_group_2,

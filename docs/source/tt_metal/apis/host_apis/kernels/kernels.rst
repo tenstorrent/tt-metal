@@ -2,5 +2,4 @@ Kernels
 =======
 
 .. toctree::
-  CreateComputeKernel
-  CreateDataMovementKernel
+  CreateKernel

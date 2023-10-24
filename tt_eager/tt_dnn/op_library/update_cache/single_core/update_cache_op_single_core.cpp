@@ -100,13 +100,13 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
         (std::uint32_t) interm2_cb_index
     };
 
-    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_update_cache_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_update_cache_interleaved_start_id.cpp",
         core,
@@ -123,7 +123,7 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
         Wt
     };
 
-    auto eltwise_unary_kernel_id = tt_metal::CreateComputeKernel(
+    auto eltwise_unary_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/update_cache.cpp",
         core,
@@ -232,13 +232,13 @@ operation::ProgramWithCallbacks fill_cache_single_core(const Tensor& cache_tenso
         (std::uint32_t) dst_is_dram
     };
 
-    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,

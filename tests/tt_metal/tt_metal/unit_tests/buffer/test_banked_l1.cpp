@@ -80,12 +80,12 @@ bool l1_reader_cb_writer_l1(Device* device, const BankedL1Config& cfg, const boo
     bool input_is_dram = cfg.input_buffer_type == BufferType::DRAM;
     bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;
 
-    auto reader_kernel = CreateDataMovementKernel(
+    auto reader_kernel = CreateKernel(
         program,
         reader_kernel_name,
         cfg.logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0, .compile_args = {cb_id, uint32_t(input_buffer.page_size()), (uint32_t)input_is_dram}});
-    auto writer_kernel = CreateDataMovementKernel(
+    auto writer_kernel = CreateKernel(
         program,
         writer_kernel_name,
         cfg.logical_core,
@@ -166,7 +166,7 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
     bool input_is_dram = cfg.input_buffer_type == BufferType::DRAM;
     bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;
 
-    auto reader_kernel = CreateDataMovementKernel(
+    auto reader_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/banked_reader.cpp",
         cfg.logical_core,
@@ -175,7 +175,7 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
             .noc = NOC::RISCV_1_default,
             .compile_args = {input0_cb_index, uint32_t(input_buffer.page_size()), (uint32_t)input_is_dram}});
 
-    auto writer_kernel = CreateDataMovementKernel(
+    auto writer_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/banked_writer.cpp",
         cfg.logical_core,
@@ -187,7 +187,7 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
     vector<uint32_t> compute_kernel_args = {
         uint(cfg.num_tiles)  // per_core_tile_cnt
     };
-    auto datacopy_kernel = CreateComputeKernel(
+    auto datacopy_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         cfg.logical_core,

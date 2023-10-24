@@ -193,20 +193,24 @@ bool CloseDevice(Device *device) {
     return device->close();
 }
 
-KernelID CreateDataMovementKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::optional<DataMovementConfig> &config) {
-    CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-    auto dm_config = detail::GetDataMovementConfig(program, file_name, core_ranges, config);
-    auto kernel = new DataMovementKernel(file_name, core_ranges, dm_config);
-    detail::AddKernel(program, kernel);
-    return kernel->id();
-}
-
-KernelID CreateComputeKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::optional<ComputeConfig> &config) {
-    CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-    auto compute_config = config.has_value() ? config.value() : ComputeConfig{};
-    auto kernel = new ComputeKernel(file_name, core_ranges, compute_config);
-    detail::AddKernel(program, kernel);
-    return kernel->id();
+KernelID CreateKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig,ComputeConfig> &config) {
+    return std::visit( [&](auto&& cfg) -> KernelID
+                        {
+                            CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
+                            Kernel * kernel;
+                            using T = std::decay_t<decltype(cfg)>;
+                            if constexpr (std::is_same_v<T, DataMovementConfig>) {
+                                detail::CheckDataMovementConfig(program, file_name, core_ranges);
+                                kernel = new DataMovementKernel(file_name, core_ranges, cfg);
+                            }
+                            else if constexpr (std::is_same_v<T, ComputeConfig>) {
+                                kernel = new ComputeKernel(file_name, core_ranges, cfg);
+                            }
+                            detail::AddKernel(program, kernel);
+                            return kernel->id();
+                        },
+                        config
+                    );
 }
 
 CircularBufferID CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config) {

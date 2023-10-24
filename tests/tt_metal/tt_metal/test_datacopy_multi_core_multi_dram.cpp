@@ -139,13 +139,13 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> create_pro
         }
     }
 
-    auto reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_copy_tile_layout.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-    auto writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto writer_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_copy_tile_layout.cpp",
         all_cores,
@@ -156,7 +156,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> create_pro
         uint(num_blocks_per_core)
     };
 
-    auto compute_kernel = tt_metal::CreateComputeKernel(
+    auto compute_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block.cpp",
         all_cores,

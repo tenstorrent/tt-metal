@@ -83,37 +83,37 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)out_is_dram};
 
-    auto mm_reader_kernel_in0_sender_in1_sender_id = tt_metal::CreateDataMovementKernel(
+    auto mm_reader_kernel_in0_sender_in1_sender_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp",
         in0_sender_in1_sender,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
 
-    auto mm_reader_kernel_in0_sender_in1_receiver_id = tt_metal::CreateDataMovementKernel(
+    auto mm_reader_kernel_in0_sender_in1_receiver_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver_padding.cpp",
         in0_sender_in1_receiver,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
 
-    auto mm_reader_kernel_in0_receiver_in1_sender_id = tt_metal::CreateDataMovementKernel(
+    auto mm_reader_kernel_in0_receiver_in1_sender_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender_padding.cpp",
         in0_receiver_in1_sender,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto mm_reader_kernel_in0_receiver_in1_receiver_id = tt_metal::CreateDataMovementKernel(
+    auto mm_reader_kernel_in0_receiver_in1_receiver_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp",
         in0_receiver_in1_receiver,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto unary_writer_kernel_noc0_id = tt_metal::CreateDataMovementKernel(
+    auto unary_writer_kernel_noc0_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_tile_layout_padding.cpp",
         all_except_left_column,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
-    auto unary_writer_kernel_noc1_id = tt_metal::CreateDataMovementKernel(
+    auto unary_writer_kernel_noc1_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_tile_layout_padding.cpp",
         left_column,
@@ -151,7 +151,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     };
 
     // Create compute kernel
-    auto mm_kernel_id = tt_metal::CreateComputeKernel(
+    auto mm_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
@@ -484,19 +484,19 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)out_is_dram};
 
-    auto mm_reader_kernel_sender_id = tt_metal::CreateDataMovementKernel(
+    auto mm_reader_kernel_sender_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_mcast_sender_padding.cpp",
         mcast_senders,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto mm_reader_kernel_receiver_id = tt_metal::CreateDataMovementKernel(
+    auto mm_reader_kernel_receiver_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_mcast_receiver_padding.cpp",
         mcast_receivers,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    auto unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_tile_layout_padding.cpp",
         all_cores,
@@ -533,7 +533,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     };
 
     // Create compute kernel
-    auto mm_kernel = tt_metal::CreateComputeKernel(
+    auto mm_kernel = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
@@ -781,19 +781,19 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)out_is_dram};
 
-    auto mm_reader_kernel_sender_id = tt_metal::CreateDataMovementKernel(
+    auto mm_reader_kernel_sender_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_mcast_sender_padding.cpp",
         mcast_senders,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto mm_reader_kernel_receiver_id = tt_metal::CreateDataMovementKernel(
+    auto mm_reader_kernel_receiver_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_mcast_receiver_padding.cpp",
         mcast_receivers,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    auto unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_tile_layout_padding.cpp",
         all_cores,
@@ -831,7 +831,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     };
 
     // Create compute kernel
-    auto mm_kernel = tt_metal::CreateComputeKernel(
+    auto mm_kernel = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,

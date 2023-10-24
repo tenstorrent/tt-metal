@@ -46,7 +46,7 @@ bool reader_only(
     // auto l1_buffer =
     //     CreateBuffer(device, byte_size, l1_byte_address, byte_size, tt_metal::BufferType::L1);
 
-    auto reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_dram_to_l1.cpp",
         reader_core,
@@ -109,7 +109,7 @@ bool writer_only(
     // auto l1_buffer =
     //     CreateBuffer(device, byte_size, l1_byte_address, byte_size, tt_metal::BufferType::L1);
 
-    auto writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto writer_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_l1_to_dram.cpp",
         writer_core,
@@ -179,7 +179,7 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
         .set_page_size(cb_index, test_config.tile_byte_size);
     auto l1_cb = tt_metal::CreateCircularBuffer(program, test_config.core, l1_cb_config);
 
-    auto reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         test_config.core,
@@ -188,7 +188,7 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
             .noc = tt_metal::NOC::RISCV_1_default,
             .compile_args = {cb_index}});
 
-    auto writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto writer_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         test_config.core,
@@ -274,7 +274,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
         .set_page_size(output_cb_index, test_config.tile_byte_size);
     auto l1_output_cb = tt_metal::CreateCircularBuffer(program, test_config.core, l1_output_cb_config);
 
-    auto reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         test_config.core,
@@ -283,7 +283,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
             .noc = tt_metal::NOC::RISCV_1_default,
             .compile_args = {input0_cb_index}});
 
-    auto writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto writer_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         test_config.core,
@@ -295,7 +295,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
     vector<uint32_t> compute_kernel_args = {
         uint(test_config.num_tiles)  // per_core_tile_cnt
     };
-    auto datacopy_kernel = tt_metal::CreateComputeKernel(
+    auto datacopy_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         test_config.core,

@@ -154,7 +154,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                             .noc = NOC::RISCV_1_default,
                                             .compile_args = reader_ct_args};
     std::string reader_kernel_fname("tt_metal/kernels/dataflow/reader_max_pool_2d_single_core.cpp");
-    auto reader_kernel = CreateDataMovementKernel(program,
+    auto reader_kernel = CreateKernel(program,
                                                   reader_kernel_fname,
                                                   cores,
                                                   reader_config);
@@ -205,7 +205,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                             .noc = NOC::RISCV_0_default,
                                             .compile_args = writer_ct_args};
     std::string writer_kernel_fname("tt_metal/kernels/dataflow/writer_max_pool_2d_single_core.cpp");
-    auto writer_kernel = CreateDataMovementKernel(program,
+    auto writer_kernel = CreateKernel(program,
                                                   writer_kernel_fname,
                                                   cores,
                                                   writer_config);
@@ -233,7 +233,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                          out_h},    // out_h_per_core
                                         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
     std::string compute_kernel_fname("tt_metal/kernels/compute/max_pool.cpp");
-    auto compute_kernel = CreateComputeKernel(program,
+    auto compute_kernel = CreateKernel(program,
                                               compute_kernel_fname,
                                               cores,
                                               compute_config);

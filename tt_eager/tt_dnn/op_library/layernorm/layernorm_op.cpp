@@ -191,14 +191,14 @@ operation::ProgramWithCallbacks layernorm_(
     }
 
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
-    auto reader_kernels_id = CreateDataMovementKernel(
+    auto reader_kernels_id = CreateKernel(
         program,
         use_row_major_kernel ? "tt_eager/tt_dnn/op_library/layernorm/kernels/reader_unary_interleaved_ln_rm_gb.cpp" : "tt_eager/tt_dnn/op_library/layernorm/kernels/reader_unary_interleaved_ln.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = reader_defines}
     );
 
-    auto writer_kernels_id = CreateDataMovementKernel(
+    auto writer_kernels_id = CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp",
         all_cores,
@@ -209,7 +209,7 @@ operation::ProgramWithCallbacks layernorm_(
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = true;
-    auto compute_kernels_id = CreateComputeKernel(
+    auto compute_kernels_id = CreateKernel(
         program,
         rms_norm ? "tt_metal/kernels/compute/rmsnorm.cpp" : "tt_metal/kernels/compute/layernorm.cpp",
         all_cores,

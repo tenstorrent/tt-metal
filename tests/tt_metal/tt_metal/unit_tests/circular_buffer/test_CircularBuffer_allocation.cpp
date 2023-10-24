@@ -384,7 +384,7 @@ TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
     CircularBufferConfig cb_src0_config = CircularBufferConfig(buffer_size, {{cb_index, tt::DataFormat::Float16_b}}).set_page_size(cb_index, single_tile_size);
     auto cb_src0 = CreateCircularBuffer(program, core, cb_src0_config);
 
-    auto reader_kernel = CreateDataMovementKernel(
+    auto reader_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         core,
@@ -393,7 +393,7 @@ TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
             .noc = NOC::RISCV_1_default,
             .compile_args = {cb_index}});
 
-    auto writer_kernel = CreateDataMovementKernel(
+    auto writer_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         core,

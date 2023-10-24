@@ -133,8 +133,8 @@ void CompilationReporter::flush_program_entry(const Program &program, bool persi
 
     this->detailed_report_ << "Compiling Program: " << program.get_id() << "\n";
     this->detailed_report_ << "\n,Kernel Creation Report:\n";
-    this->detailed_report_ << ",,Number of CreateComputeKernel API calls: " << num_compute_kernels << "\n";
-    this->detailed_report_ << ",,Number of CreateDataMovementKernel API calls: " << num_data_movement_kernels << "\n";
+    this->detailed_report_ << ",,Number of Compute CreateKernel API calls: " << num_compute_kernels << "\n";
+    this->detailed_report_ << ",,Number of Datamovement CreateKernel API calls: " << num_data_movement_kernels << "\n";
 
     this->detailed_report_ << "\n,Kernel Compilation Report:\n";
     this->detailed_report_ << ",,Persistent kernel compile cache enabled: " << (persistent_compilation_cache_enabled ? "Y\n" : "N\n");
@@ -159,7 +159,7 @@ void CompilationReporter::init_reports() {
     fs::create_directories(metal_reports_dir());
     this->detailed_report_.open(compile_report_path);
     this->summary_report_.open(summary_report_path);
-    this->summary_report_ << "Program, Number of CreateComputeKernel API calls, Number of CreateDataMovementKernel API calls, Persistent Kernel Compile Cache Enabled, Total Number of Kernel Cache Misses, Total Number of Kernel Cache Hits\n";
+    this->summary_report_ << "Program, Number of CreateKernel API calls, Number of CreateKernel API calls, Persistent Kernel Compile Cache Enabled, Total Number of Kernel Cache Misses, Total Number of Kernel Cache Hits\n";
 }
 
 }   // namespace detail

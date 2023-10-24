@@ -108,7 +108,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
         }
 
         std::vector<uint32_t> receiver_kernel_compile_time_args = {cb_index, block_size_tiles};
-        receiver_kernels.push_back(tt_metal::CreateDataMovementKernel(
+        receiver_kernels.push_back(tt_metal::CreateKernel(
             program,
             receiver_kernel_name,
             cores[core_id],
@@ -124,7 +124,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
             sender_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/sender_intermediate_stage.cpp";
         }
         std::vector<uint32_t> sender_kernel_compile_time_args = {cb_index, block_size_tiles};
-        sender_kernels.push_back(tt_metal::CreateDataMovementKernel(
+        sender_kernels.push_back(tt_metal::CreateKernel(
             program,
             sender_kernel_name,
             cores[core_id],
@@ -134,7 +134,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
                 .compile_args = sender_kernel_compile_time_args}));
 
         // Add blank compute kernel
-        tt_metal::CreateComputeKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", cores[core_id]);
+        tt_metal::CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", cores[core_id], ComputeConfig{});
     }
 
     // TODO(agrebenisan): Once semaphores are properly allocated at 16B-aligned addresses, then

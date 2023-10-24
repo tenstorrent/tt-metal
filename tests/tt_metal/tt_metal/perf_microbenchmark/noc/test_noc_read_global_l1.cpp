@@ -238,7 +238,7 @@ int main(int argc, char **argv) {
     }
 
     // kernel setup
-    auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto mm_reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/noc/kernels/"
         "reader_global_l1.cpp",

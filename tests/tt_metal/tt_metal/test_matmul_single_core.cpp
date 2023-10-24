@@ -242,13 +242,13 @@ int main(int argc, char **argv) {
             (std::uint32_t)out_subblock_h * out_subblock_w * single_tile_size * (N/out_subblock_w), // bytes offset to next row of sub-blocks
             (std::uint32_t)out_subblock_w*single_tile_size}; // bytes offset to next sub-block
 
-        auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto mm_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_blocked.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-        auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unswizzle.cpp",
             core,
@@ -283,7 +283,7 @@ int main(int argc, char **argv) {
             uint(out_subblock_num_tiles)
         };
 
-        auto matmul_kernel = tt_metal::CreateComputeKernel(
+        auto matmul_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp",
             core,

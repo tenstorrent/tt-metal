@@ -29,7 +29,7 @@ enum class KernelType {
 Program initialize_program_data_movement(Device *device, const CoreRangeSet &core_range_set) {
     Program program = tt_metal::Program();
 
-    auto add_two_ints_kernel = tt_metal::CreateDataMovementKernel(
+    auto add_two_ints_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/riscv_draft/add_two_ints.cpp",
         core_range_set,
@@ -49,7 +49,7 @@ Program initialize_program_compute(Device *device, const CoreRangeSet &core_rang
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
 
-    auto compute_kernel_id = tt_metal::CreateComputeKernel(
+    auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp",
         core_range_set,

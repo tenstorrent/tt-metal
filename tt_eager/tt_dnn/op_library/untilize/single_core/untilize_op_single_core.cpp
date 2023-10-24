@@ -102,14 +102,14 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
     };
 
     // Tilized reader
-    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     // Untilized writer
-    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_stick_layout_split_rows_interleaved.cpp",
         core,
@@ -120,7 +120,7 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
         uint32_t(num_tiles_per_block) // per_core_block_tile_cnt
     };
 
-    auto untilize_kernel_id = tt_metal::CreateComputeKernel(
+    auto untilize_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/untilize.cpp",
         core,
@@ -281,14 +281,14 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
     };
 
     // Tilized reader
-    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     // Untilized writer
-    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_unpad_dims_split_rows.cpp",
         core,
@@ -299,7 +299,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
         uint32_t(num_tiles_per_block)
     };
 
-    auto untilize_kernel_id = tt_metal::CreateComputeKernel(
+    auto untilize_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/untilize.cpp",
         core,

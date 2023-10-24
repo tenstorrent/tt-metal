@@ -274,13 +274,13 @@ bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool
             }; // bytes offset to next sub-block
         }
 
-        auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto mm_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_blocked.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-        auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             writer_kernel,
             core,
@@ -328,7 +328,7 @@ bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool
 
         string compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block.cpp";
 
-        auto mm_kernel = tt_metal::CreateComputeKernel(
+        auto mm_kernel = tt_metal::CreateKernel(
             program,
             compute_kernel,
             core,

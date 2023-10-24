@@ -70,13 +70,13 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
         (std::uint32_t) dst_is_dram
     };
 
-    tt_metal::KernelID reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_reduce_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    tt_metal::KernelID writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
@@ -89,7 +89,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
         1, // NC
     };
 
-    auto reduce_compute_kernel_group_1_id = tt_metal::CreateComputeKernel(
+    auto reduce_compute_kernel_group_1_id = tt_metal::CreateKernel(
         program,
         compute_kernel_name,
         core_group_1,
@@ -103,7 +103,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
             1, // NC
         };
 
-        auto reduce_compute_kernel_group_2_id = tt_metal::CreateComputeKernel(
+        auto reduce_compute_kernel_group_2_id = tt_metal::CreateKernel(
             program,
             compute_kernel_name,
             core_group_2,

@@ -112,13 +112,13 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
         .set_page_size(program_attributes.output_cb_index, single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto unary_reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = program_attributes.reader_processor, .noc = program_attributes.reader_noc});
 
-    auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto unary_writer_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
@@ -128,7 +128,7 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
         uint(program_attributes.num_tiles) // per_core_tile_cnt
     };
 
-    auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
+    auto eltwise_unary_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
         core,
