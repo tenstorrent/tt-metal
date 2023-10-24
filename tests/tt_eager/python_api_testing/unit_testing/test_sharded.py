@@ -629,7 +629,6 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
     grid_size_binary = (12, 9)
     num_cores_binary = 98
     grid_size_matmul = (10, 8)
-    num_cores_matmul = 80
     in0_shape = [1, 1, 6272, 512]
     in1_shape = in0_shape
     weight_shape = [1, 1, 512, 256]

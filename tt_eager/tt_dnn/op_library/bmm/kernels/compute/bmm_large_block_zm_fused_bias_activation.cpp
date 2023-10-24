@@ -33,10 +33,9 @@ void MAIN {
     constexpr uint32_t in1_cb_id = tt::CB::c_in1;
     constexpr uint32_t out_cb_id = tt::CB::c_out0;
     constexpr uint32_t mm_partials_cb_id = tt::CB::c_intermed0;
-    constexpr uint32_t bias_cb_id = tt::CB::c_in3;
 
     #ifdef FUSE_BIAS
-    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(mm_partials_cb_id, bias_cb_id, out_cb_id);
+    constexpr uint32_t bias_cb_id = tt::CB::c_in3;
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
     #else
     constexpr uint32_t mm_out_cb_id = out_cb_id;
@@ -55,7 +54,7 @@ void MAIN {
 
         #ifdef PACK_RELU
         // for each batch we start we relu disabled so that intermediate results are not relu'd
-        if constexpr(spill and batch > 1) {
+        if constexpr(batch > 1) {
             PACK(( llk_pack_relu_config(ReluType::NO_RELU) ));
         }
         #endif
@@ -163,14 +162,12 @@ void MAIN {
         add_bcast_rows_init_short();
         // reconfigure unpacker df for src B
         unpack_reconfig_data_format(mm_partials_cb_id, bias_cb_id);
-        // reconfigure packer df for out
-        pack_reconfig_data_format(out_cb_id);
+        cb_wait_front(bias_cb_id, in1_per_core_w);
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
             int in1_index_subblock_offset = 0;
             for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                 // Redundant wait since we know data was just pushed
                 cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
-                cb_wait_front(bias_cb_id, in1_per_core_w);
                 tile_regs_acquire();
                 for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
                     uint32_t bcast_tile_idx = in1_index_subblock_offset;
@@ -207,7 +204,7 @@ void MAIN {
                 in1_index_subblock_offset += out_subblock_w;
             }
         }
-        if constexpr(spill and batch > 1) {
+        if constexpr(batch > 1) {
             // reconfigure init for matmul
             mm_init_short();
             // reconfigure unpacker df for src B

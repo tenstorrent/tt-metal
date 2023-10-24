@@ -124,12 +124,15 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         // std::swap(in0_noc, in1_noc);
         // std::swap(in0_split_noc, in1_split_noc);
     }
+    if (in0_address.has_value()) {
+        in0_sender = all_cores;
+    }
 
     // Not exactly half-half; this seems to get slightly better perf for fused qkv and selfout
     // TODO: Experiment with different splits?
 
-    uint32_t half_core = (num_cores_c) / 2;
-    bool split_half = num_cores_c > 2;
+    bool split_half = num_cores_c > 2 && !in0_address.has_value();
+    uint32_t half_core = split_half ? (num_cores_c) / 2 : num_cores_c - 1;
 
     CoreRange in0_receiver_in1_receiver_left_half{
         .start={(std::size_t) start_core_x + 1, (std::size_t) start_core_y + 1},
@@ -158,7 +161,39 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         in3_is_dram = bias_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     }
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> in0_sender_compile_time_args = {
+
+    uint32_t in0_num_subblocks = (per_core_M/out_subblock_h);
+    uint32_t in0_block_num_tiles = out_subblock_h*in0_block_w*in0_num_subblocks;
+
+    std::vector<uint32_t> in0_sender_compile_time_args;
+
+    if (in0_address.has_value()) {
+        uint32_t num_x, num_y;
+        if (transpose_mcast) {
+            num_x = 1;
+            num_y = num_cores_r;
+        } else {
+            num_x = num_cores_c;
+            num_y = 1;
+        }
+        in0_sender_compile_time_args = {
+            (std::uint32_t)  in0_block_num_tiles, // in0_block_num_tiles
+            (std::uint32_t)  in0_block_num_tiles * in0_single_tile_size, // in0_block_size_bytes
+            // in0/in1 common args
+            (std::uint32_t)  num_blocks, // num_blocks
+            // in0 mcast args
+            (std::uint32_t)  in0_mcast_sender_semaphore,
+            (std::uint32_t)  in0_mcast_receiver_semaphore,
+            (std::uint32_t)  (in1_end), // in0_mcast_num_dests
+            (std::uint32_t)  (in1_end), // in0_mcast_num_cores includes self
+            (std::uint32_t)  (num_x),
+            (std::uint32_t)  (num_y),
+            (std::uint32_t)  (transpose_mcast),
+            // batch args
+            (std::uint32_t)  B // batch
+        };
+    } else {
+        in0_sender_compile_time_args = {
             // interleaved accessor args
             (std::uint32_t) in0_is_dram,
 
@@ -169,7 +204,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             // in0 block args
             (std::uint32_t)  in0_block_w, // in0_block_w
             (std::uint32_t)  per_core_M, // in0_block_h
-            (std::uint32_t)  in0_block_w * per_core_M, // in0_block_num_tiles
+            (std::uint32_t)  in0_block_num_tiles, // in0_block_num_tiles
             // in0/in1 common args
             (std::uint32_t)  num_blocks, // num_blocks
             // in0 mcast args
@@ -180,7 +215,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             // batch args
             (std::uint32_t)  M * K, // MtKt
             (std::uint32_t)  B // batch
-    };
+        };
+    }
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
             // interleaved accessor args
             (std::uint32_t) in1_is_dram,
@@ -295,7 +331,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
-        in0_address.has_value() ? "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding_block_sharded.cpp" : "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        in0_address.has_value() ? "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp" : "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         in0_sender,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc, .compile_args = in0_sender_compile_time_args});
 
@@ -312,15 +348,18 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (CoreRangeSet) (std::set<CoreRange>) {in0_sender_in1_receiver, in0_receiver_in1_receiver_left_half},
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc, .compile_args = in1_receiver_writer_compile_time_args, .defines = mm_kernel_in1_receiver_writer_defines});
 
-    auto mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
-        program,
-        "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
-        /* in0_receiver_in1_sender, // If not using half-half noc setup */
-        (CoreRangeSet) (std::set<CoreRange>) {in0_receiver_in1_sender, in0_receiver_in1_receiver_left_half},
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc, .compile_args = in0_receiver_compile_time_args});
+    KernelID mm_kernel_in0_receiver_id = 0;
+    if (!in0_address.has_value()) {
+        mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
+            program,
+            "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+            /* in0_receiver_in1_sender, // If not using half-half noc setup */
+            (CoreRangeSet) (std::set<CoreRange>) {in0_receiver_in1_sender, in0_receiver_in1_receiver_left_half},
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc, .compile_args = in0_receiver_compile_time_args});
+    }
 
-    KernelID mm_kernel_in1_receiver_writer_other_noc_setup_id = 0;
-    KernelID mm_kernel_in0_receiver_other_noc_setup_id = 0;
+    KernelID mm_kernel_in1_receiver_writer_other_noc_setup_id = mm_kernel_in1_receiver_writer_id;
+    KernelID mm_kernel_in0_receiver_other_noc_setup_id = mm_kernel_in0_receiver_id;
 
     if (split_half) {
         mm_kernel_in1_receiver_writer_other_noc_setup_id = tt_metal::CreateKernel(
@@ -338,8 +377,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     // Compute kernel compile time args
 
-    uint32_t in0_num_subblocks = (per_core_M/out_subblock_h);
-    uint32_t in0_block_num_tiles = out_subblock_h*in0_block_w*in0_num_subblocks;
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
 
     uint32_t in1_num_subblocks = (per_core_N/out_subblock_w);
@@ -432,19 +469,30 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     std::vector<KernelID> reader_kernel_ids;
     std::vector<KernelID> writer_kernel_ids;
 
-    std::vector<uint32_t> in0_shard_diff_coords;
+    uint32_t diff_start_coord;
+    uint32_t diff_end_coord;
+    std::vector<uint32_t> in0_mcast_noc_x;
+    std::vector<uint32_t> in0_mcast_noc_y;
     if (in0_address.has_value()) {
-        for (uint32_t i = 0; i < num_blocks; i++) {
-            if (transpose_mcast) {
-                in0_shard_diff_coords.push_back(device->worker_core_from_logical_core({0, i}).y);
-            } else {
-                in0_shard_diff_coords.push_back(device->worker_core_from_logical_core({i, 0}).x);
+        if (transpose_mcast) {
+            diff_start_coord = device->worker_core_from_logical_core({0, start_core_y}).y;
+            diff_end_coord = device->worker_core_from_logical_core({0, start_core_y + num_cores_r - 1}).y;
+            in0_mcast_noc_y.reserve(num_cores_r);
+            for(uint32_t core_idx_y = 0; core_idx_y < num_cores_r; ++core_idx_y) {
+                in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+            }
+        } else {
+            diff_start_coord = device->worker_core_from_logical_core({start_core_x, 0}).x;
+            diff_end_coord = device->worker_core_from_logical_core({start_core_x + num_cores_c - 1, 0}).x;
+            in0_mcast_noc_x.reserve(num_cores_c);
+            for(uint32_t core_idx_x = 0; core_idx_x < num_cores_c; ++core_idx_x) {
+                in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({0, core_idx_x}).x);
             }
         }
     }
 
-    for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-        for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
+    for(uint32_t core_idx_y = 0; core_idx_y < num_cores_r; ++core_idx_y) {
+        for(uint32_t core_idx_x = 0; core_idx_x < num_cores_c; ++core_idx_x) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
             CoreCoord left_core    = {(std::size_t) start_core_x, (std::size_t) core.y};
             CoreCoord left_core_plus_one    = {(std::size_t) start_core_x + 1, (std::size_t) core.y};
@@ -478,7 +526,32 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             }
 
             // in0 sender
-            if (in1_idx == 0) {
+            if (in0_address.has_value()) {
+                uint32_t worker_shard_same_coord;
+                uint32_t idx;
+                std::vector<uint32_t> mm_in0_sender_args;
+                if (transpose_mcast) {
+                    worker_shard_same_coord = device->worker_core_from_logical_core(core).x;
+                    mm_in0_sender_args.push_back(core_idx_y);
+                    mm_in0_sender_args.push_back(worker_shard_same_coord);
+                    mm_in0_sender_args.push_back(diff_start_coord);
+                    mm_in0_sender_args.push_back(worker_shard_same_coord);
+                    mm_in0_sender_args.push_back(diff_end_coord);
+                    mm_in0_sender_args.push_back(worker_shard_same_coord);
+                    mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
+                } else {
+                    worker_shard_same_coord = device->worker_core_from_logical_core(core).y;
+                    mm_in0_sender_args.push_back(core_idx_x);
+                    mm_in0_sender_args.push_back(diff_start_coord);
+                    mm_in0_sender_args.push_back(worker_shard_same_coord);
+                    mm_in0_sender_args.push_back(diff_end_coord);
+                    mm_in0_sender_args.push_back(worker_shard_same_coord);
+                    mm_in0_sender_args.push_back(worker_shard_same_coord);
+                    mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
+                }
+                tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
+                reader_kernel_ids.push_back(mm_kernel_in0_sender_id);
+            } else if (in1_idx == 0) {
                 std::vector<uint32_t> mm_in0_sender_args =  {
                     // in0 tensor args
                     (std::uint32_t)  in0_buffer->address(),
@@ -494,18 +567,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in0_sender_args.push_back(last_block_h); // last_block_h
                 } else {
                     mm_in0_sender_args.push_back(per_core_M);
-                }
-
-                if (in0_address.has_value()) {
-                    uint32_t worker_shard_same_coord;
-                    if (transpose_mcast) {
-                        worker_shard_same_coord = device->worker_core_from_logical_core(core).x;
-                    } else {
-                        worker_shard_same_coord = device->worker_core_from_logical_core(core).y;
-                    }
-                    mm_in0_sender_args.push_back(!transpose_mcast);
-                    mm_in0_sender_args.push_back(worker_shard_same_coord);
-                    mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_shard_diff_coords.begin(), in0_shard_diff_coords.end());
                 }
 
                 tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
@@ -697,7 +758,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 }
 
                 // in0 sender
-                if (in1_idx == 0) {
+                if (!src0_sharded && in1_idx == 0) {
                     reader_runtime_args[0] = src_buffer_a->address();
                     SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
                 // in0 receiver
