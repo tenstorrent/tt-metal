@@ -79,8 +79,8 @@ class TtTransformer(nn.Module):
             mask = tt_lib.tensor.triu(tensor,diagonal)
             mask = tt_lib.tensor.relu( tt_lib.tensor.log(mask) )
             #mask = relu(log(mask))
-            mask = ttl.tensor.unary_chain(mask,[ttl.tensor.FusibleActivation.LOG,
-                                                ttl.tensor.FusibleActivation.RELU])
+            mask = tt_lib.tensor.unary_chain(mask,[tt_lib.tensor.FusibleActivation.LOG,
+                                                tt_lib.tensor.FusibleActivation.RELU])
             mask = tt_to_torch_tensor( mask )
 
         freqs_cis = torch_to_tt_tensor_rm(freqs_cis, self.device)
