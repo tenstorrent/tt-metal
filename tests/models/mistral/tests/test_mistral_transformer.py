@@ -65,8 +65,8 @@ def test_mistral_attention_inference(pcc, model_location_generator, device):
     logger.info(pcc_message)
 
     if passing:
-        logger.info("Mistral_Transformer_Block Passed!")
+        logger.info("Mistral_Transformer Passed!")
     else:
-        logger.warning("Mistral_Transformer_Block Failed!")
+        logger.warning("Mistral_Transformer Failed!")
 
-    assert passing, f"Mistral_Transformer_Block output does not meet PCC requirement {pcc}."
+    assert passing, f"Mistral_Transformer output does not meet PCC requirement {pcc}."
