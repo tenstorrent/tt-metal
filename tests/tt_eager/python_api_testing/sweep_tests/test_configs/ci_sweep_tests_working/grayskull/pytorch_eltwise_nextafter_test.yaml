@@ -22,6 +22,9 @@ test-list:
         buffer-type: ["DRAM"]
         out-buffer-type: ["DRAM"]
       output-file: eltwise_nextafter_sweep.csv
+      env:
+        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
   - eltwise-nextafter:
       shape:
         start-shape: [1, 1, 2, 2]
@@ -44,3 +47,6 @@ test-list:
         buffer-type: ["DRAM"]
         out-buffer-type: ["DRAM"]
       output-file: eltwise_nextafter_sweep.csv
+      env:
+        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
