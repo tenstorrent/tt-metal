@@ -242,28 +242,8 @@ inline void llk_math_matmul_init(std::uint32_t transpose=0) {
 }
 
 
-
-
-// #include "llk_param_structs.h"
-
-// #include "ckernel_include.h"
-// #include "ckernel_template.h"
-
-// #include "cmath_common.h"
-// #include "llk_math_common.h"
-
-// #ifndef HF
-// #define HF 0
-// #endif
-
-// using namespace ckernel;
-
-// // local function declarations
-// inline void matmul_configure_addrmod();
-// inline void matmul_configure_mop();
-
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul_cm(uint dst_index, bool transpose = false, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+ALWI void llk_math_matmul_cm(uint dst_index, bool transpose = false, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
     // TT_LLK_DUMP("llk_math_matmul<{}, {}>({}, {}, {}, {}, {})", NUM_FIDELITY_PHASES, FaceLayout, dst_index, transpose, ct_dim, rt_dim, kt_dim);
     for (std::uint32_t rt=0; rt<rt_dim; rt++) {
         for (std::uint32_t ct=0; ct<ct_dim; ct++) {
@@ -313,7 +293,7 @@ inline void llk_math_matmul_cm(uint dst_index, bool transpose = false, const std
 }
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void matmul_configure_addrmod_cm() {
+ALWI void matmul_configure_addrmod_cm() {
     // MVMUL does D = B*A
 
     // Inner Loop --> 8 times for the full 16x32 face
@@ -424,8 +404,8 @@ inline void matmul_configure_addrmod_cm() {
     }
 }
 
-template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void matmul_configure_mop_cm(bool transpose) {
+template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor, bool transpose=false>
+ALWI void matmul_configure_mop_cm() {
     if constexpr (FaceLayout == DstTileFaceLayout::ColMajor) {
         if constexpr (NUM_FIDELITY_PHASES > 0) {
             ckernel_template tmp(NUM_FIDELITY_PHASES, 8, TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0));
@@ -439,7 +419,7 @@ inline void matmul_configure_mop_cm(bool transpose) {
             // 4x16x16 * 2x32x16
 
             ckernel_template tmp(2, 8, TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0));
-            if (transpose) {
+            if constexpr (transpose) {
                 tmp.set_start_op(TT_OP_TRNSPSRCA);
             }
             tmp.set_last_inner_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0));
@@ -461,12 +441,12 @@ inline void matmul_configure_mop_cm(bool transpose) {
     }
 }
 
-template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul_init_cm(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t transpose=0, const std::uint32_t ct_dim=0, const std::uint32_t rt_dim=0, const std::uint32_t kt_dim=0) {
+template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor, bool transpose=false>
+ALWI void llk_math_matmul_init_cm(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim=0, const std::uint32_t rt_dim=0, const std::uint32_t kt_dim=0) {
     // TT_LLK_DUMP("llk_math_matmul_init<{}, {}>({}, {}, {}, {}, {}, {})", NUM_FIDELITY_PHASES, FaceLayout, operandA, operandB, transpose, ct_dim, rt_dim, kt_dim);
     // Todo: figure out tile dims based on operandA and operandB
 
     matmul_configure_addrmod_cm<NUM_FIDELITY_PHASES, FaceLayout>();
-    matmul_configure_mop_cm<NUM_FIDELITY_PHASES, FaceLayout>(transpose>0);
+    matmul_configure_mop_cm<NUM_FIDELITY_PHASES, FaceLayout, transpose>();
     math::reset_counters(p_setrwc::SET_ABD_F);
 }

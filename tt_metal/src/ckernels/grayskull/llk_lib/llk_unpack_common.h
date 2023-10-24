@@ -112,7 +112,7 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
     llk_unpack_reconfig_data_format_srcb_impl(get_operand_id(srcb_new_operand));
 }
 
-inline void llk_unpack_reconfig_data_format_impl(std::uint32_t srca_operand_id, std::uint32_t srcb_operand_id) {
+ALWI void llk_unpack_reconfig_data_format_impl(std::uint32_t srca_operand_id, std::uint32_t srcb_operand_id) {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
 
     uint alu_src_format = (unpack_dst_format[srcb_operand_id] << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |
@@ -155,7 +155,7 @@ inline void llk_unpack_reconfig_data_format(
     }
 }
 
-inline void llk_unpack_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
+ALWI void llk_unpack_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
     llk_unpack_reconfig_data_format_impl(get_operand_id(srca_new_operand), get_operand_id(srcb_new_operand));
 }
 
