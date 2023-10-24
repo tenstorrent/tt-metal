@@ -56,7 +56,7 @@ bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & prog
     uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
-        CoresInCoreRangeGenerator core_range_generator(core_range, device->logical_grid_size());
+        CoresInCoreRangeGenerator core_range_generator(core_range, device->compute_with_storage_grid_size());
 
         bool terminate;
         do {
@@ -168,7 +168,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
     uint32_t sem_buffer_size = program_config.num_sems * SEMAPHORE_ALIGNMENT;
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
-        CoresInCoreRangeGenerator core_range_generator(core_range, device->logical_grid_size());
+        CoresInCoreRangeGenerator core_range_generator(core_range, device->compute_with_storage_grid_size());
 
         bool terminate;
         do {
@@ -209,7 +209,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
     vector<uint32_t> dummy_kernel1_args = {9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20};
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
-        CoresInCoreRangeGenerator core_range_generator(core_range, tt::Cluster::instance().get_soc_desc(0).worker_grid_size);
+        CoresInCoreRangeGenerator core_range_generator(core_range, device->compute_with_storage_grid_size());
 
         bool terminate;
         do {
@@ -227,7 +227,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
     Finish(cq);
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
-        CoresInCoreRangeGenerator core_range_generator(core_range, tt::Cluster::instance().get_soc_desc(0).worker_grid_size);
+        CoresInCoreRangeGenerator core_range_generator(core_range, device->compute_with_storage_grid_size());
 
         bool terminate;
         do {
@@ -476,9 +476,9 @@ TEST_F(CommandQueueFixture, TestRuntimeArgsCorrectlySentSingleCore) {
 
 namespace multicore_tests {
 TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentMultiCore) {
-    CoreCoord worker_grid_size = this->device_->logical_grid_size();
+    CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
 
-    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 2}};
+    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 1}};
     CoreRangeSet cr_set({cr});
 
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -494,9 +494,9 @@ TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentMultiCore) {
 }
 
 TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
-    CoreCoord worker_grid_size = this->device_->logical_grid_size();
+    CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
 
-    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 2}};
+    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 1}};
     CoreRangeSet cr_set({cr});
 
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -512,9 +512,9 @@ TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
 
 
 TEST_F(CommandQueueFixture, TestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
-    CoreCoord worker_grid_size = this->device_->logical_grid_size();
+    CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
 
-    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 2}};
+    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 1}};
     CoreRangeSet cr_set({cr});
 
     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -530,9 +530,9 @@ TEST_F(CommandQueueFixture, TestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) 
 }
 
 TEST_F(CommandQueueFixture, TestAllSemConfigsCorrectlySentMultiCore) {
-    CoreCoord worker_grid_size = this->device_->logical_grid_size();
+    CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
 
-    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 2}};
+    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 1}};
     CoreRangeSet cr_set({cr});
 
     DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
@@ -543,7 +543,7 @@ TEST_F(CommandQueueFixture, TestAllSemConfigsCorrectlySentMultiCore) {
 TEST_F(CommandQueueFixture, TestAllRuntimeArgsCorrectlySentMultiCore) {
     CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
 
-    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 2}};
+    CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 1}};
     CoreRangeSet cr_set({cr});
 
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};

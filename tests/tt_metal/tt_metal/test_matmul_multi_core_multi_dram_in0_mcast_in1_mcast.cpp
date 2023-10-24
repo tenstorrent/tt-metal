@@ -431,8 +431,8 @@ int main(int argc, char **argv) {
             tt_metal::CreateDevice(device_id);
         int start_core_x = 0;
         int start_core_y = 0;
-        int num_cores_r = device->logical_grid_size().y - 1;
-        int num_cores_c = device->logical_grid_size().x;
+        int num_cores_r = device->compute_with_storage_grid_size().y;
+        int num_cores_c = device->compute_with_storage_grid_size().x;
 
         uint32_t M = 16 * num_cores_r;
         uint32_t K = 16 * 12;

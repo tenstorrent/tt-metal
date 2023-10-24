@@ -278,8 +278,17 @@ int main(int argc, char **argv) {
     tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {
-        int num_cores_r = 9;
-        int num_cores_c = 12;
+        ////////////////////////////////////////////////////////////////////////////
+        //                      Device Setup
+        ////////////////////////////////////////////////////////////////////////////
+        int device_id = 0;
+        tt_metal::Device *device =
+            tt_metal::CreateDevice(device_id);
+
+        CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        int num_cores_r = compute_with_storage_grid_size.y;
+        int num_cores_c = compute_with_storage_grid_size.x;
+        log_info(LogTest, "Num cores r = {}, Num cores c = {}", num_cores_r, num_cores_c);
         uint32_t M = 16 * num_cores_r;
         uint32_t K = 16 * 12;
         uint32_t N = 16 * num_cores_c;
@@ -298,14 +307,6 @@ int main(int argc, char **argv) {
         tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bflaot16 identity
         auto golden = select_columns(tensor.get_values(), M, K, N);
-
-        ////////////////////////////////////////////////////////////////////////////
-        //                      Device Setup
-        ////////////////////////////////////////////////////////////////////////////
-        int device_id = 0;
-        tt_metal::Device *device =
-            tt_metal::CreateDevice(device_id);
-
 
 
         ////////////////////////////////////////////////////////////////////////////
@@ -391,7 +392,7 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Copying inputs to dram and runtime args to cores complete");
 
-        log_info(LogTest, "Running Matmul 108 core test");
+        log_info(LogTest, "Running Matmul {} core test", num_cores_c * num_cores_r);
 
         tt_metal::LaunchProgram(device, program);
         log_info(LogTest, "Matmul test done");

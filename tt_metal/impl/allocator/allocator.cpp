@@ -196,12 +196,16 @@ int32_t dram_bank_offset_from_bank_id(const Allocator &allocator, uint32_t bank_
 }
 
 std::vector<uint32_t> bank_ids_from_dram_channel(const Allocator &allocator, uint32_t dram_channel) {
-    TT_ASSERT(allocator.dram_channel_to_bank_ids.find(dram_channel) != allocator.dram_channel_to_bank_ids.end());
+    if (allocator.dram_channel_to_bank_ids.find(dram_channel) == allocator.dram_channel_to_bank_ids.end()) {
+        log_fatal(LogMetal, "No DRAM bank exists for DRAM channel {}", dram_channel);
+    }
     return allocator.dram_channel_to_bank_ids.at(dram_channel);
 }
 
 std::vector<uint32_t> bank_ids_from_logical_core(const Allocator &allocator, const CoreCoord &logical_core) {
-    TT_ASSERT(allocator.logical_core_to_bank_ids.find(logical_core) != allocator.logical_core_to_bank_ids.end());
+    if (allocator.logical_core_to_bank_ids.find(logical_core) == allocator.logical_core_to_bank_ids.end()) {
+        log_fatal(LogMetal, "No L1 bank exists for core {}", logical_core.str());
+    }
     return allocator.logical_core_to_bank_ids.at(logical_core);
 }
 
