@@ -397,7 +397,6 @@ def test_sharded_binary(device, in0_sharded, in1_sharded, out_sharded, H, num_co
     assert passing
 
 
-@pytest.mark.skip("Sharded tensors do not work with program cache")
 def test_sharded_program_cache(device, use_program_cache, function_level_defaults):
     grid_size = (12, 9)
     N = 1
@@ -459,7 +458,7 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
     )
 
     yt2 = ttl.tensor.interleaved_to_sharded(
-        xt2, [H // num_cores, W], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.ShardOrientation.ROW_MAJOR
+        xt2, grid_size, [H // num_cores, W], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.ShardOrientation.ROW_MAJOR
     )
 
     zt2 = ttl.tensor.sharded_to_interleaved(
@@ -629,7 +628,6 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
     grid_size_binary = (12, 9)
     num_cores_binary = 98
     grid_size_matmul = (10, 8)
-    num_cores_matmul = 80
     in0_shape = [1, 1, 6272, 512]
     in1_shape = in0_shape
     weight_shape = [1, 1, 512, 256]
