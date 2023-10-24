@@ -268,6 +268,9 @@ inline void calculate_rsqrt()
 
         vFloat in = dst_reg[0];
         vFloat result = sfpu_reciprocal<false>(in);
+        v_if(dst_reg[0] < 1.0f){
+            result = 1.0f;
+        }v_endif;
 
         for (int r = 0; r < RECIPROCAL_ITERATIONS; r++)
         {
@@ -275,7 +278,11 @@ inline void calculate_rsqrt()
             result = result * (1.5F - 0.5F  * dst_reg[0] * result * result);
         }
 
-        dst_reg[0] = result;
+        v_if(dst_reg[0] == 0.0f){
+            dst_reg[0] = std::numeric_limits<float>::infinity();
+        }v_else{
+            dst_reg[0] = result;
+        }v_endif;
 
         dst_reg++;
 

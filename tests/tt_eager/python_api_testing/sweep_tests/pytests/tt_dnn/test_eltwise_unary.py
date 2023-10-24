@@ -197,7 +197,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=1, high=1e8), torch.bfloat16)
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=0, high=1e8), torch.bfloat16)
         ]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
         test_args["fast_and_approx"] = fast_and_approx
