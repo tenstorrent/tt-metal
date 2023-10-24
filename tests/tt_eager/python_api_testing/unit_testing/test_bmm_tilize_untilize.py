@@ -30,12 +30,12 @@ a_height_nblocks = [1, 7]
 a_width_nblocks = [1, 7]
 b_width_nblocks = [1, 7]
 # block sizes as number of tiles along h and w:
-a_block_height_ntiles = [1]
-a_block_width_ntiles = [1]
-b_block_width_ntiles = [1]
+a_block_height_ntiles = [4]
+a_block_width_ntiles = [4]
+b_block_width_ntiles = [16]
 # output sublobcking per block:
-out_subblock_height_ntiles = [1]  ## == a_block_height_ntiles, <= 8
-out_subblock_width_ntiles = [1]  ## == b_block_width_ntiles, <= 8
+out_subblock_height_ntiles = [4]  ## == a_block_height_ntiles, <= 8
+out_subblock_width_ntiles = [2]  ## == b_block_width_ntiles, <= 8
 tilize_a = [True, False]
 untilize_out = [True, False]
 
@@ -93,12 +93,6 @@ def test_run_bmm_single_core_tilize_untilize(
     out_dtype,
     device,
 ):
-    pytest.skip() # disabled for resnet development branch. Bad rebase with main.
-    print(f"a_dtype: {a_dtype}")
-    print(f"b_dtype: {b_dtype}")
-    print(f"out_dtype: {out_dtype}")
-
-
     if is_wormhole_b0():
         if ( ttl.tensor.DataType.BFLOAT16 in [a_dtype,b_dtype,out_dtype] ):
             pytest.skip('Not working for BFLOAT8 combination')
@@ -106,10 +100,8 @@ def test_run_bmm_single_core_tilize_untilize(
         if a_width_nblocks == 7:
             pytest.skip('Skip this dimension for WH B0')
 
-
-    if (tilize_a and a_dtype != ttl.tensor.DataType.BFLOAT16) or (
-        untilize_out and out_dtype != ttl.tensor.DataType.BFLOAT16
-    ):
+    if (tilize_a and a_dtype != ttl.tensor.DataType.BFLOAT16) or    \
+        (untilize_out and out_dtype != ttl.tensor.DataType.BFLOAT16):
         print(f"invalid case, skipping.")
         pytest.skip()
 
@@ -121,15 +113,19 @@ def test_run_bmm_single_core_tilize_untilize(
         print("Bias with untilize out is not supported.")
         pytest.skip()
 
-    ## TODO (AS): Certain mixed-prec cases do not yet work. Skip them here (these are currently asserted out in the op.)
-    if (
-        not (
-            a_dtype == out_dtype
-            and a_dtype == b_dtype
-            and a_dtype == ttl.tensor.DataType.BFLOAT16
-        )
-    ) and (tilize_a or untilize_out):
-        print(f"TODO: Mixed-prec case to be debugged. Skipping for now.")
+    if a_dtype == ttl.tensor.DataType.BFLOAT8_B             \
+            and out_dtype == ttl.tensor.DataType.BFLOAT16   \
+            and tilize_a == False and untilize_out == True  \
+            and (a_height_nblocks > 1 or a_width_nblocks > 1 or b_width_nblocks > 1):
+        print(f'TODO: This case does not yet work. Skipping for now.')
+        pytest.skip()
+
+    if a_dtype == ttl.tensor.DataType.BFLOAT16              \
+            and b_dtype == ttl.tensor.DataType.BFLOAT8_B    \
+            and out_dtype == ttl.tensor.DataType.BFLOAT16   \
+            and tilize_a == True                            \
+            and (a_height_nblocks > 1 or a_width_nblocks > 1 or b_width_nblocks > 1):
+        print(f'TODO: This case potentially has a race in tilize_in data reconfig before tilizing. Needs debugging. Skipping for now')
         pytest.skip()
 
     ## TODO (AS): Support multi-precision with as well. Currently bias only works for BFLOAT16
@@ -144,16 +140,13 @@ def test_run_bmm_single_core_tilize_untilize(
     b_height = a_width
     b_width = b_width_nblocks * b_block_width_ntiles * TILE_WIDTH
 
-    a_height = 25
-    # a_width = 32
-    b_width = 64
-
     a_shape = [a_batch, a_channel, a_height, a_width]
     b_shape = [b_batch, b_channel, b_height, b_width]
     out_shape = [a_batch, a_channel, a_height, b_width]
 
     torch.manual_seed(0)
     a = torch.randn(a_shape, dtype=torch.bfloat16).float()
+    # a = torch.ones(a_shape, dtype=torch.bfloat16).float()
     b = torch.randn(b_shape, dtype=torch.bfloat16).float()
     # b = torch.zeros(b_shape, dtype=torch.bfloat16).float()
 
@@ -169,9 +162,8 @@ def test_run_bmm_single_core_tilize_untilize(
         ## a in tile
         a_layout = ttl.tensor.Layout.TILE
         a_list = tilize_to_list(a)
-    # tta = ttl.tensor.Tensor(a_list, a_shape, a_dtype, a_layout, device)
-    tta = ttl.tensor.Tensor(a_list, a_shape, a_dtype, ttl.tensor.Layout.ROW_MAJOR)
-    tta = tta.pad_to_tile(0).to(device)
+    tta = ttl.tensor.Tensor(a_list, a_shape, a_dtype, a_layout) #, device)
+    tta = tta.to(device)
 
     ## tensor b, in tile format
     ttb = ttl.tensor.Tensor(
@@ -179,13 +171,15 @@ def test_run_bmm_single_core_tilize_untilize(
     )
 
     bias, ttbias = None, None
-    # if has_bias:
-    bias_shape = [a_batch, 1, 1, b_width]
-    bias = torch.randn(bias_shape, dtype=torch.bfloat16).float()
-    # bias = torch.zeros(bias_shape, dtype=torch.bfloat16).float()
-    # bias = torch.ones(bias_shape, dtype=torch.bfloat16).float()
-    ttbias = ttl.tensor.Tensor(torch.flatten(bias).tolist(), bias_shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR)
-    ttbias = ttbias.pad_to_tile(0).to(ttl.tensor.Layout.TILE).to(device)
+    if has_bias:
+        bias_shape = [a_batch, 1, 1, b_width]
+        bias = torch.randn(bias_shape, dtype=torch.bfloat16).float()
+        # bias = torch.zeros(bias_shape, dtype=torch.bfloat16).float()
+        # bias = torch.ones(bias_shape, dtype=torch.bfloat16).float()
+        ttbias = ttl.tensor.Tensor(torch.flatten(bias).tolist(), bias_shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR)
+        ttbias = ttbias.pad_to_tile(0).to(ttl.tensor.Layout.TILE).to(device)
+    else:
+        ttbias = ttl.tensor.Tensor(torch.zeros(0))
 
     ## tensor out format checks
     if untilize_out:
@@ -219,7 +213,7 @@ def test_run_bmm_single_core_tilize_untilize(
         b_width_nblocks,
         a_block_height_ntiles,
         a_block_width_ntiles,
-        int(b_width / TILE_WIDTH),
+        b_block_width_ntiles,
         out_subblock_height_ntiles,
         out_subblock_width_ntiles,
         tilize_a,
@@ -229,19 +223,17 @@ def test_run_bmm_single_core_tilize_untilize(
     out = out.cpu()
     out = out.to(ttl.tensor.Layout.ROW_MAJOR).unpad_from_tile(out_shape).to_torch().float()
 
-    print(f'returned output: {out}')
-
     ## reference
     golden_pytorch = torch.matmul(a, b)
     if has_bias:
         golden_pytorch += bias
 
-    print("golden out:\n", golden_pytorch)
-
-    print(f'{torch.isclose(out, golden_pytorch, atol=0.1, rtol=0.1)}')
+    # print(f'returned output: {out}')
+    # print("golden out:\n", golden_pytorch)
+    # print(f'{torch.isclose(out, golden_pytorch, atol=0.1, rtol=0.1)}')
+    # print (f'{out.shape} <-> {golden_pytorch.shape}')
 
     ## test for equivalance
-    print (f'{out.shape} <-> {golden_pytorch.shape}')
     # assert out.shape == golden_pytorch.shape
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out)
     print(f"Passing PCC = {passing_pcc}")
