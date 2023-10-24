@@ -38,7 +38,7 @@ def run_eltwise_rsqrt_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_
 
     tt_result = tt_eltwise_rsqrt(
         x=x,
-        fast_and_appx=fast_and_appx,
+        fast_and_approx=fast_and_appx,
         device=device,
         device_id=0,
         dtype=[dtype],
