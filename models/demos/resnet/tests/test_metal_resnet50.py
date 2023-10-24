@@ -57,9 +57,9 @@ def test_run_resnet50_inference(device, batch_size, imagenet_sample_input):
         # tt_output = tt_resnet50(image)
         # end_time = datetime.now()
         # diff = end_time - start_time
-        # print("End to end time (microseconds))", diff.microseconds)
+        # logger.info("End to end time (microseconds))", diff.microseconds)
         # throughput_fps = (float) (1000000 / diff.microseconds)
-        # print("Throughput (fps)", throughput_fps)
+        # logger.info("Throughput (fps)", throughput_fps)
 
         passing, info = comp_allclose_and_pcc(torch_output, tt_output, pcc=0.985)
         logger.info(info)
