@@ -359,16 +359,25 @@ void ConfigureKernelGroup(const Program &program, const KernelGroup &kernel_grou
     }
 }
 
-void SetRuntimeArgs(const Program &program, KernelID kernel_id, const std::variant<CoreCoord,CoreRange,CoreRangeSet> &core_spec, const std::vector<uint32_t> &runtime_args) {
+void SetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
     ZoneScoped;
-    CoreRangeSet crs = detail::GetCoreRangeSet(core_spec);
-    for (auto core_range : crs.ranges()) {
-        for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-            for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
-                CoreCoord logical_core(x, y);
-                detail::GetKernel(program, kernel_id)->set_runtime_args(logical_core, runtime_args);
-            }
+    detail::GetKernel(program, kernel_id)->set_runtime_args(logical_core, runtime_args);
+}
+
+void SetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args) {
+    ZoneScoped;
+    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+            CoreCoord logical_core(x, y);
+            SetRuntimeArgs(program, kernel_id, logical_core, runtime_args);
         }
+    }
+}
+
+void SetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &runtime_args) {
+    ZoneScoped;
+    for (auto core_range : core_range_set.ranges()) {
+        SetRuntimeArgs(program, kernel_id, core_range, runtime_args);
     }
 }
 

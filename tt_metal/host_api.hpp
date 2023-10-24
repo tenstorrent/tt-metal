@@ -211,14 +211,42 @@ void DeallocateBuffer(Buffer &buffer);
  *
  * Return value: void
  *
- * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
- * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
- * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
- * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelID (uint64_t)                                    |                                                                     | Yes      |
- * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
- * | runtime_args | The runtime args to be written                                         | const std::vector<uint32_t> &                          |                                                                     | Yes      |
+ * | Argument     | Description                                                            | Type                          | Valid Range                                                      | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                                                  | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelID (uint64_t)                |                                                                  | Yes      |
+ * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate on which the kernel is placed | Yes      |
+ * | runtime_args | The runtime args to be written                                         | const std::vector<uint32_t> & |                                                                  | Yes      |
  */
-void SetRuntimeArgs(const Program &program, KernelID kernel, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::vector<uint32_t> &runtime_args);
+void SetRuntimeArgs(const Program &program, KernelID kernel, const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
+
+/**
+ * Set runtime args for a kernel that are shared amongst a range of cores. Runtime args are sent to cores during runtime. This API needs to be called to update the runtime args for the kernel.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                                                            | Type                          | Valid Range                                                             | Required |
+ * |--------------|--------------------------------------------------------------------------------------------------------|-------------------------------|-------------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores                                           | const Program &               |                                    | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                                                    | KernelID (uint64_t)                |                                    | Yes      |
+ * | core_range   | The range of the Tensix co-ordinates which receive the runtime args (Logical co-ordinates)             | const CoreRange &             | A range of any logical Tensix core coordinate on which the kernel is placed | Yes      |
+ * | runtime_args | The runtime args to be written to the core range                                                       | const std::vector<uint32_t> & |                                                                         | Yes      |
+ */
+void SetRuntimeArgs(const Program &program, KernelID kernel, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args);
+
+/**
+ * Set runtime args for a kernel that are shared amongst a CoreRangeSet. Runtime args are sent to cores during runtime. This API needs to be called to update the runtime args for the kernel.
+ *
+ * Return value: void
+ *
+ * | Argument       | Description                                                                                            | Type                          | Valid Range                        | Required |
+ * |----------------|--------------------------------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores                                             | const Program &               |                                    | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                                                      | KernelID (uint64_t)                |                                    | Yes      |
+ * | core_range_set | Set of ranges of Tensix co-ordinates which receive the runtime args (Logical co-ordinates)             | const CoreRangeSet &          | Ranges of any logical Tensix core coordinate on which the kernel is placed | Yes      |
+ * | runtime_args   | The runtime args to be written to the core ranges                                                      | const std::vector<uint32_t> & |                                    | Yes      |
+ */
+void SetRuntimeArgs(const Program &program, KernelID kernel, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &runtime_args);
 
 /**
  * Get the runtime args for a kernel.
