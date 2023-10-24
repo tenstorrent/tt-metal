@@ -58,7 +58,7 @@ void multicore_cb_push_back(uint64_t consumer_noc_encoding, uint32_t consumer_fi
     *CQ_CONSUMER_CB_RECV_PTR += num_to_write;
     *CQ_CONSUMER_CB_WRITE_PTR += (page_size * num_to_write) >> 4;
 
-    if ((*CQ_CONSUMER_CB_WRITE_PTR << 4) > consumer_fifo_limit) {
+    if ((*CQ_CONSUMER_CB_WRITE_PTR << 4) >= consumer_fifo_limit) {
         *CQ_CONSUMER_CB_WRITE_PTR -= consumer_fifo_size >> 4;
     }
 
@@ -88,7 +88,7 @@ void produce(
         writing to the consumer.
     */
     command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
-    uint32_t l1_consumer_fifo_limit = get_db_buf_addr(db_buf_switch) + consumer_cb_size - 1;
+    uint32_t l1_consumer_fifo_limit = get_db_buf_addr(db_buf_switch) + consumer_cb_size;
 
     for (uint32_t i = 0; i < num_srcs; i++) {
         const uint32_t bank_base_address = command_ptr[0];
