@@ -80,13 +80,33 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_(
     const auto origin_H = output_grad_shape_without_padding[2];
     const auto origin_W = output_grad_shape_without_padding[3];
 
-    const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0;
+    const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && is_lastdim_layernorm;
     const uint32_t mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
 
-    const auto origin_Ht = tt::div_up(origin_H, TILE_HEIGHT);
-    const auto origin_Wt = tt::div_up(origin_W, TILE_WIDTH);
-
     auto adjusted_output_grad_shape = output_grad_shape;
+    if (normalized_dims.size() == 2) {
+        // HW
+        // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (N, C, TILE_HEIGHT, Ht * Wt * TILE_WIDTH)
+        adjusted_output_grad_shape[2] = TILE_HEIGHT;
+        adjusted_output_grad_shape[3] = (output_grad_shape[2] / TILE_HEIGHT) * output_grad_shape[3];
+    } else if (normalized_dims.size() == 3) {
+        // CHW
+        // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (N, 1, TILE_HEIGHT, C * Ht * Wt * TILE_WIDTH)
+        adjusted_output_grad_shape[1] = 1;
+        adjusted_output_grad_shape[2] = TILE_HEIGHT;
+        adjusted_output_grad_shape[3] =
+            output_grad_shape[1] * (output_grad_shape[2] / TILE_HEIGHT) * output_grad_shape[3];
+    } else if (normalized_dims.size() == 4) {
+        // NCHW
+        // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (1, 1, TILE_HEIGHT, N * C * Ht * Wt * TILE_WIDTH)
+        adjusted_output_grad_shape[0] = 1;
+        adjusted_output_grad_shape[1] = 1;
+        adjusted_output_grad_shape[2] = TILE_HEIGHT;
+        adjusted_output_grad_shape[3] =
+            output_grad_shape[0] * output_grad_shape[1] * (output_grad_shape[2] / TILE_HEIGHT) * output_grad_shape[3];
+    } else {
+        TT_ASSERT(is_lastdim_layernorm);
+    }
 
     const auto N = adjusted_output_grad_shape[0];
     const auto C = adjusted_output_grad_shape[1];
@@ -94,16 +114,14 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_(
     const auto W = adjusted_output_grad_shape[3];
 
     const auto Ht = H / TILE_HEIGHT;
-    const auto Wt = W / TILE_WIDTH;
+    const auto Wt = W / TILE_WIDTH;  // inner_size
 
     const auto NC = N * C;
-    const auto NCHt = NC * Ht;
-
-    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
-    const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    const auto NCHt = NC * Ht;  // outer_size
 
     const bool gamma_grad_has_value = gamma_grad.has_value();
     const bool beta_grad_has_value = beta_grad.has_value();
+    TT_ASSERT(gamma_grad_has_value || beta_grad_has_value);
 
     const uint32_t in0_t = 1;                  // output_grad(==dy)
     const uint32_t in1_t = 1;                  // input(==x)
@@ -141,6 +159,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_(
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
+    const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     tt::operations::primary::CreateCircularBuffer(
         program,
         all_cores,
@@ -200,7 +219,13 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_(
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";
 
     const std::vector<uint32_t> compute_args_group_1{
-        num_cols_per_core_group_1, origin_H, NCHt, Wt, gamma_grad_has_value, beta_grad_has_value, is_lastdim_layernorm};
+        num_cols_per_core_group_1,
+        origin_H,
+        NCHt,
+        Wt,
+        static_cast<uint32_t>(gamma_grad_has_value),
+        static_cast<uint32_t>(beta_grad_has_value),
+        static_cast<uint32_t>(is_lastdim_layernorm)};
 
     const auto compute_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
@@ -215,9 +240,9 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_(
             origin_H,
             NCHt,
             Wt,
-            gamma_grad_has_value,
-            beta_grad_has_value,
-            is_lastdim_layernorm};
+            static_cast<uint32_t>(gamma_grad_has_value),
+            static_cast<uint32_t>(beta_grad_has_value),
+            static_cast<uint32_t>(is_lastdim_layernorm)};
 
         tt::operations::primary::CreateComputeKernel(
             program,
@@ -277,6 +302,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_(
 
         auto gamma_grad_buffer = input_buffers.at(4);
         auto beta_grad_buffer = input_buffers.at(5);
+        TT_ASSERT(gamma_grad_buffer != nullptr || beta_grad_buffer != nullptr);
 
         for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};

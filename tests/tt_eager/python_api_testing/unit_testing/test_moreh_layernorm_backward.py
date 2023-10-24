@@ -8,10 +8,13 @@ import torch.nn.functional as F
 
 import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
+from models.utility_functions import comp_pcc
+from loguru import logger
 
 
 def torch_layernorm_backward(input,
                              output_grad,
+                             *,
                              normalized_dims=(3, ),
                              gamma=None,
                              beta=None,
@@ -46,16 +49,18 @@ def torch_layernorm_backward(input,
 def make_tensors(input_shape, normalized_dims, elementwise_affine, eps, device,
                  cpu_layout, npu_layout):
     # rank
-    rank = len(normalized_dims)
+    input_rank = len(input_shape)
+    normalized_rank = len(normalized_dims)
 
     # output_grad_shape
     output_grad_shape = input_shape
 
     # mean_rstd_shape
-    mean_rstd_shape = input_shape[:-rank] + [1] * rank
+    mean_rstd_shape = input_shape[:-normalized_rank] + [1] * normalized_rank
 
     # gamma_beta_shape
-    gamma_beta_shape = [1] * (4 - rank) + input_shape[-rank:]
+    gamma_beta_shape = [1] * (input_rank -
+                              normalized_rank) + input_shape[-normalized_rank:]
 
     # dtype
     npu_dtype = ttl.tensor.DataType.BFLOAT16
@@ -72,15 +77,15 @@ def make_tensors(input_shape, normalized_dims, elementwise_affine, eps, device,
 
     # input
     cpu_input = torch.randint(-2, 3, input_shape, dtype=cpu_dtype)
-    npu_input = (ttl.tensor.Tensor(
+    npu_input = ttl.tensor.Tensor(
         cpu_input.flatten().tolist(),
         input_shape,
         npu_dtype,
         cpu_layout,
-    ).pad_to_tile(float('nan')).to(npu_layout).to(device))
+    ).pad_to_tile(float('nan')).to(npu_layout).to(device)
 
     # mean
-    cpu_mean = cpu_input.mean(dim=-1, keepdim=True)
+    cpu_mean = cpu_input.mean(dim=normalized_dims, keepdim=True)
     npu_mean = ttl.tensor.Tensor(
         cpu_mean.flatten().tolist(),
         mean_rstd_shape,
@@ -89,7 +94,8 @@ def make_tensors(input_shape, normalized_dims, elementwise_affine, eps, device,
     ).pad_to_tile(float('nan')).to(npu_layout).to(device)
 
     # rstd
-    cpu_var = ((cpu_input - cpu_mean)**2).mean(dim=-1, keepdim=True)
+    cpu_var = ((cpu_input - cpu_mean)**2).mean(dim=normalized_dims,
+                                               keepdim=True)
     cpu_rstd = (cpu_var + eps).sqrt()
     npu_rstd = ttl.tensor.Tensor(
         cpu_rstd.flatten().tolist(),
@@ -156,12 +162,14 @@ TILE_HEIGHT = 32
 TILE_WIDTH = 32
 
 
-@pytest.mark.parametrize('eps', (1e-5, 1e-6, 1e-4),
+@pytest.mark.parametrize('eps', [1e-5, 1e-6, 1e-4],
                          ids=['1e-5', '1e-6', '1e-4'])
-@pytest.mark.parametrize('normalized_dims', ([3], ), ids=['W'])
+@pytest.mark.parametrize('normalized_dims',
+                         [[3], [2, 3], [1, 2, 3], [0, 1, 2, 3]],
+                         ids=['W', 'HW', 'CHW', 'NCHW'])
 @pytest.mark.parametrize(
     'elementwise_affine',
-    (False, True),
+    [False, True],
     ids=['elementwise_affine=False', 'elementwise_affine=True'],
 )
 @pytest.mark.parametrize(
@@ -195,7 +203,11 @@ def test_moreh_layernorm_backward(input_shape, normalized_dims,
 
     # expected
     expected_input_grad, expected_gamma_grad, expected_beta_grad = torch_layernorm_backward(
-        cpu_input, cpu_output_grad, gamma=cpu_gamma, beta=cpu_beta)
+        cpu_input,
+        cpu_output_grad,
+        normalized_dims=normalized_dims,
+        gamma=cpu_gamma,
+        beta=cpu_beta)
 
     # actual
     _, npu_gamma_grad, _ = ttl.operations.primary.moreh_layernorm_backward(
@@ -213,35 +225,32 @@ def test_moreh_layernorm_backward(input_shape, normalized_dims,
         input_shape).to_torch()
 
     # Check input_grad
-    rtol = atol = 0.1
-    assert torch.allclose(actual_input_grad,
-                          expected_input_grad,
-                          rtol=rtol,
-                          atol=atol)
-
-    # I divide gamma_grad and beta_grad by (N * C * Ht), because the error increases.
-    N, C, H, _ = input_shape
-    Ht = (H + TILE_HEIGHT - 1) // TILE_HEIGHT
-    numerator = N * C * Ht
+    pig, oig = comp_pcc(expected_input_grad, actual_input_grad)
+    logger.info(f'input_grad\'s {oig}')
+    assert pig
 
     # gamma_beta_shape
-    rank = len(normalized_dims)
-    gamma_beta_shape = [1] * (4 - rank) + input_shape[-rank:]
+    input_rank = len(input_shape)
+    normalized_rank = len(normalized_dims)
+    gamma_beta_shape = [1] * (input_rank -
+                              normalized_rank) + input_shape[-normalized_rank:]
 
     # Check gamma_grad
     if npu_gamma_grad is not None:
         actual_gamma_grad = npu_gamma_grad.cpu().to(
             cpu_layout).unpad_from_tile(gamma_beta_shape).to_torch()
-        assert torch.allclose(actual_gamma_grad / numerator,
-                              expected_gamma_grad / numerator,
-                              rtol=rtol,
-                              atol=atol)
+        pgg, ogg = comp_pcc(expected_gamma_grad, actual_gamma_grad)
+        logger.info(f'gamma_grad\'s {ogg}')
+        assert pgg
+    else:
+        assert expected_gamma_grad is None
 
     # Check beta_grad
     if npu_beta_grad is not None:
         actual_beta_grad = npu_beta_grad.cpu().to(cpu_layout).unpad_from_tile(
             gamma_beta_shape).to_torch()
-        assert torch.allclose(actual_beta_grad / numerator,
-                              expected_beta_grad / numerator,
-                              rtol=rtol,
-                              atol=atol)
+        pbg, obg = comp_pcc(expected_beta_grad, actual_beta_grad)
+        logger.info(f'beta_grad\'s {obg}')
+        assert pbg
+    else:
+        assert expected_beta_grad is None
