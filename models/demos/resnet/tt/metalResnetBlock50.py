@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Type, Union, Optional, List, Callable
+from typing import Optional, List, Callable
 import time
 import tt_lib
 import torch
 import torch.nn as nn
 import math
+from loguru import logger
 from models.demos.resnet.utils import fold_bn_to_conv_weights_bias
 from models.utility_functions import tt2torch_tensor
 from tt_lib.utils import pad_weight
@@ -644,7 +645,7 @@ class Bottleneck(nn.Module):
         assert (conv3_as_mm_padded_act_height, width, planes * self.expansion) in hardcoded_matmul_config_conv[
             batch_size
         ]
-        # print("Setting matmul config for 1x1 conv (third conv in module)")
+        # logger.info("Setting matmul config for 1x1 conv (third conv in module)")
         matmul_config = hardcoded_matmul_config_conv[batch_size][
             (conv3_as_mm_padded_act_height, width, planes * self.expansion)
         ]
@@ -681,16 +682,16 @@ class Bottleneck(nn.Module):
                 self.downsample_or_noop = downsample_conv_op_wrapper(self.downsample_conv_on_tt)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # print("This module input shape - ", self.module_input_shape)
+        # logger.info("This module input shape - ", self.module_input_shape)
         # conv1 is 1x1 conv
-        # print("Running conv1")
+        # logger.info("Running conv1")
         out = self.conv1(x)
-        # print("conv1 output shape - ", self.conv1_output_shape)
-        # print("Running ds or nop")
+        # logger.info("conv1 output shape - ", self.conv1_output_shape)
+        # logger.info("Running ds or nop")
         ds_out = self.downsample_or_noop(x)
         # Relu after conv1 is fused with the 1x1 conv (matmul)
         # out = self.relu(out, self.memory_config)
-        # print("Running untilize op")
+        # logger.info("Running untilize op")
         out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         out = out.reshape(
             self.conv1_output_shape[0],
@@ -699,15 +700,15 @@ class Bottleneck(nn.Module):
             self.conv1_output_shape[3],
         )
 
-        # print("Running conv2")
+        # logger.info("Running conv2")
         out = self.conv2(out)
         # out = self.relu(out, self.memory_config)  ## fused with conv2
         # conv3 is 1x1 conv
-        # print("Running conv3")
+        # logger.info("Running conv3")
         out = self.conv3(out)
 
         fused_activations = [tt_lib.tensor.FusibleActivation.RELU]
-        # print("Running eltwise add")
+        # logger.info("Running eltwise add")
         out = tt_lib.tensor.add_without_autoformat(
             out, ds_out, fused_activations, output_mem_config=self.out_memory_config
         )
@@ -1032,7 +1033,7 @@ class ResNet(nn.Module):
                     self.inplanes,
                     downsample_output_channels,
                 ) in hardcoded_matmul_config_conv[batch_size]
-                # print("Setting matmul config for 1x1 conv (downsample stride 1 conv in module)")
+                # logger.info("Setting matmul config for 1x1 conv (downsample stride 1 conv in module)")
                 matmul_config = hardcoded_matmul_config_conv[batch_size][
                     (downsample_output_padded_face_size, self.inplanes, downsample_output_channels)
                 ]
@@ -1143,7 +1144,7 @@ class ResNet(nn.Module):
         # assert x.shape[3] == 224 and x.shape[2] == 224
         # profiler.start(permute_key)
 
-        # print("padding x shape - ", x.shape)
+        # logger.info("padding x shape - ", x.shape)
         x = torch.permute(x, (0, 2, 3, 1))
         # profiler.end(permute_key)
         # profiler.start(input_tensor_construct_key)
@@ -1152,7 +1153,7 @@ class ResNet(nn.Module):
 
         original_A_cl_host_shape = x.shape()
         x = x.reshape(x.shape()[0], x.shape()[1], 1, x.shape()[2] * x.shape()[3])
-        # print("A_cl_host shape after re-shape (only for transfer)", x.shape())
+        # logger.info("A_cl_host shape after re-shape (only for transfer)", x.shape())
 
         x = x.to(self.device, self.memory_config)  # to l1
         # re-shape back to original shape (N, H, W, C)
@@ -1162,13 +1163,13 @@ class ResNet(nn.Module):
             original_A_cl_host_shape[2],
             original_A_cl_host_shape[3],
         )
-        # print("A_cl_device shape into OP", x.shape())
-        # print("Running conv1")
+        # logger.info("A_cl_device shape into OP", x.shape())
+        # logger.info("Running conv1")
         # time.sleep(5)
         x = self.conv1(x)
         # time.sleep(5)
         # x = x.reshape(1, 1, x.shape()[0]*x.shape()[1]*x.shape()[2], x.shape()[3]);
-        # print("Printing relu after conv1")
+        # logger.info("Printing relu after conv1")
         # Relu is fused with conv1
         # x = self.relu(x, self.memory_config)
         # tt_lib.device.DumpDeviceMemoryState(self.device)
@@ -1181,9 +1182,9 @@ class ResNet(nn.Module):
             self.conv1_output_shape[2],
             self.conv1_output_shape[3],
         )
-        # print("Running maxpool")
+        # logger.info("Running maxpool")
         x = self.maxpool(x)
-        # print("Done maxpool")
+        # logger.info("Done maxpool")
         x = x.reshape(
             1,
             1,
@@ -1269,9 +1270,9 @@ class ResNet(nn.Module):
         # profiler.start(tt_to_torch_key)
         x = x.to_torch().to(torch.float)
         # profiler.end(tt_to_torch_key)
-        # print("Printing profiler")
+        # logger.info("Printing profiler")
         # profiler.print()
-        # print("Done printing profiler")
+        # logger.info("Done printing profiler")
         return x
 
     def run_first_part(self, x):
@@ -1283,7 +1284,7 @@ class ResNet(nn.Module):
         # assert x.shape[3] == 224 and x.shape[2] == 224
         # profiler.start(permute_key)
 
-        # print("padding x shape - ", x.shape)
+        # logger.info("padding x shape - ", x.shape)
         x = torch.permute(x, (0, 2, 3, 1))
         # profiler.end(permute_key)
         # profiler.start(input_tensor_construct_key)
@@ -1292,7 +1293,7 @@ class ResNet(nn.Module):
 
         original_A_cl_host_shape = x.shape()
         x = x.reshape(x.shape()[0], x.shape()[1], 1, x.shape()[2] * x.shape()[3])
-        # print("A_cl_host shape after re-shape (only for transfer)", x.shape())
+        # logger.info("A_cl_host shape after re-shape (only for transfer)", x.shape())
 
         x = x.to(self.device, self.memory_config)  # to l1
         # re-shape back to original shape (N, H, W, C)
@@ -1302,13 +1303,13 @@ class ResNet(nn.Module):
             original_A_cl_host_shape[2],
             original_A_cl_host_shape[3],
         )
-        # print("A_cl_device shape into OP", x.shape())
-        # print("Running conv1")
+        # logger.info("A_cl_device shape into OP", x.shape())
+        # logger.info("Running conv1")
         # time.sleep(5)
         x = self.conv1(x)
         # time.sleep(5)
         # x = x.reshape(1, 1, x.shape()[0]*x.shape()[1]*x.shape()[2], x.shape()[3]);
-        # print("Printing relu after conv1")
+        # logger.info("Printing relu after conv1")
         # Relu is fused with conv1
         # x = self.relu(x, self.memory_config)
         # tt_lib.device.DumpDeviceMemoryState(self.device)
@@ -1328,7 +1329,7 @@ class ResNet(nn.Module):
         # Permute from nhwc to nchw
         conv1_output_on_host = torch.transpose(conv1_output_on_host, 2, 3)
         conv1_output_on_host = torch.transpose(conv1_output_on_host, 1, 2)
-        # print("Running maxpool")
+        # logger.info("Running maxpool")
         # time.sleep(2)
         x = self.maxpool(x)
         max_pool_output_on_host = x.cpu().to_torch().to(torch.float)
@@ -1338,7 +1339,7 @@ class ResNet(nn.Module):
         max_pool_output_on_host = torch.transpose(max_pool_output_on_host, 1, 2)
         return conv1_output_on_host, max_pool_output_on_host
 
-        # print("Done maxpool")
+        # logger.info("Done maxpool")
         x = x.reshape(
             1,
             1,
@@ -1415,7 +1416,7 @@ class ResNet(nn.Module):
         # profiler.start(tt_to_torch_key)
         x = x.to_torch().to(torch.float)
         # profiler.end(tt_to_torch_key)
-        # print("Printing profiler")
+        # logger.info("Printing profiler")
         # profiler.print()
-        # print("Done printing profiler")
+        # logger.info("Done printing profiler")
         return x, conv1_output_on_host, max_pool_output_on_host

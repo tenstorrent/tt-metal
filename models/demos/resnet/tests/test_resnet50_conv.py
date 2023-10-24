@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
-
+from loguru import logger
 import torch
 import pytest
 import tt_lib
@@ -487,13 +485,13 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
 
         conv_params = [K, C, R, S, stride_h, stride_w, pad_h, pad_w, 1, 1]
         conv_output_shape = compute_conv_output_shape(conv_params, conv_input_shape_nhwc)
-        print("Conv output shape - ", conv_output_shape)
+        logger.info("Conv output shape - ", conv_output_shape)
         conv_as_mm_padded_act_height = _nearest_32(conv_output_shape[0] * conv_output_shape[1] * conv_output_shape[2])
 
         if is_1x1_conv:
             matmul_config = None
             assert (conv_as_mm_padded_act_height, C, K) in hardcoded_matmul_config_conv[N]
-            print("Setting matmul config for 1x1 conv")
+            logger.info("Setting matmul config for 1x1 conv")
             matmul_config = hardcoded_matmul_config_conv[N][(conv_as_mm_padded_act_height, C, K)]
             # 1x1 conv with stride 1 padding 0 is run using regular matmul
             conv = resnet50_1x1_conv_as_matmul(
@@ -582,6 +580,6 @@ def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h,
         # Compare against golden
         assert out_result.shape == out_golden.shape
         passing_pcc, output_pcc = comp_pcc(out_golden, out_result, 0.99)
-        print("Passing=", passing_pcc)
-        print("Output pcc=", output_pcc)
+        logger.info("Passing=", passing_pcc)
+        logger.info("Output pcc=", output_pcc)
         assert passing_pcc
