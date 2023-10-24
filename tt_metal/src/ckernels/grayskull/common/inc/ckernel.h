@@ -236,7 +236,7 @@ inline void zerosrc() {
 
 inline void sync_regfile_write(const uint index)
 {
-    volatile uint foo = 0xdeadbeef;
+    volatile uint foo = 0;
     volatile uint *fooptr = &foo;
     *fooptr = regfile[index];
 }
