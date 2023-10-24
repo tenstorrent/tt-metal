@@ -73,7 +73,7 @@ def test_roberta_for_multiple_choice(device):
         tt_predicted_class = tt_output_to_torch.argmax().item()
 
         print(torch_outputs.logits)
-        tt_output.logits.pretty_print()
+        print(tt_output.logits)
         # Compare outputs
 
         # Torch output
