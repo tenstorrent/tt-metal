@@ -219,29 +219,37 @@ CircularBufferConfig &GetCircularBufferConfig(Program &program, CircularBufferID
     return detail::GetCircularBuffer(program, circular_buffer_id)->config();
 }
 
-uint32_t CreateSemaphore(Program &program, const CoreRange &core_range, uint32_t initial_value) {
-    return CreateSemaphore(program, CoreRangeSet({core_range}), initial_value);
-}
+uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value) {
+    return std::visit(
+        [&](auto&& c) -> uint32_t
+        {
+            using T = std::decay_t<decltype(c)>;
+            CoreRangeSet crs({});
+            if constexpr (std::is_same_v<T, CoreRange>) {
+                crs = CoreRangeSet({c});
+            } else{
+                crs = c;
+            }
+            std::optional<uint32_t> address;
+            TT_ASSERT(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
+            for (const auto& core_range : crs.ranges()) {
+                CoreCoord start_core = core_range.start;
+                CoreCoord end_core = core_range.end;
+                TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
+                auto addr = get_semaphore_address(program, core_range);
+                if (!address.has_value()) {
+                    address = addr;
+                } else {
+                    TT_ASSERT(addr == address);
+                }
+            }
+            TT_ASSERT(address.has_value(), "Expecting a valid Semaphore address!");
 
-uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, uint32_t initial_value) {
-    std::optional<uint32_t> address;
-    TT_ASSERT(core_range_set.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
-    for (auto core_range : core_range_set.ranges()) {
-        auto start_core = core_range.start;
-        auto end_core = core_range.end;
-        TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
-        auto addr = get_semaphore_address(program, core_range);
-        if (!address.has_value()) {
-            address = addr;
-        } else {
-            TT_ASSERT(addr == address);
-        }
-    }
-    TT_ASSERT(address.has_value(), "Expecting a valid Semaphore address!");
+            program.add_semaphore(crs, address.value(), initial_value);
 
-    program.add_semaphore(core_range_set, address.value(), initial_value);
-
-    return address.value();
+            return address.value();
+        },
+        core_spec);
 }
 
 void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {

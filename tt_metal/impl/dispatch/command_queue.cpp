@@ -606,8 +606,8 @@ void send_dispatch_kernel_to_device(Device* device) {
             .compile_args = dispatch_compile_args,
             .defines = consumer_defines});
 
-    tt::tt_metal::CreateSemaphore(dispatch_program, {producer_logical_core, producer_logical_core}, 2);
-    tt::tt_metal::CreateSemaphore(dispatch_program, {consumer_logical_core, consumer_logical_core}, 0);
+    tt::tt_metal::CreateSemaphore(dispatch_program, producer_logical_core, 2);
+    tt::tt_metal::CreateSemaphore(dispatch_program, consumer_logical_core, 0);
 
     detail::CompileProgram(device, dispatch_program);
     tt::tt_metal::detail::ConfigureDeviceWithProgram(device, dispatch_program);

@@ -151,8 +151,7 @@ class Program {
     friend void detail::AddKernel(Program &program, Kernel *kernel);
     friend Kernel *detail::GetKernel(const Program &program, KernelID kernel_id);
 
-    friend uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, uint32_t initial_value);
-
+    friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value);
     void add_kernel(Kernel *kernel);
     Kernel *get_kernel(KernelID kernel_id) const;
 
