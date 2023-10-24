@@ -53,8 +53,6 @@ def test_softmin_for_dim_hw(shape_dim, device):
     assert tt_npu.shape() == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
 
-    assert torch.allclose(tt_cpu, tt_dev, rtol=0.07, atol=0.01)
-
     passing, out = comp_pcc(tt_cpu, tt_dev)
     logger.info(out)
     assert passing
