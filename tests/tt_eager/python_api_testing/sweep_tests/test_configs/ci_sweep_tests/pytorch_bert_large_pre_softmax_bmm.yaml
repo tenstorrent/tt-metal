@@ -21,7 +21,7 @@ test-list:
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
-      output-file: bert_large_pre_softmax_bmm.csv
+      output-file: bert_large_pre_softmax_bmm_sweep.csv
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16", "BFLOAT8_B"]
