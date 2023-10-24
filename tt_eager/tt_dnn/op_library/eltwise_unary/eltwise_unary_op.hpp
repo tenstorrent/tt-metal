@@ -19,7 +19,7 @@ enum class UnaryOpType {
     EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
     ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26, HEAVISIDE = 27,
     EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31, RSQRT = 32, RELU6 = 33, ATAN = 34, ERF = 35, ERFC = 36, ISINF = 37, ISPOSINF = 38, ISNEGINF = 39, ISNAN = 40, LOGICAL_NOT_UNARY = 41, ISFINITE = 42,
-    ERFINV = 43, I0 = 44, TAN = 45, RSUB = 46, RDIV = 47, SILU = 48
+    ERFINV = 43, I0 = 44, TAN = 45, RSUB = 46, RDIV = 47, SILU = 48, NEG = 49
 };
 
 template <typename T>
@@ -140,6 +140,7 @@ constexpr auto logical_not_unary = make_eltwise_unary<UnaryOpType::LOGICAL_NOT_U
 constexpr auto i0 = make_eltwise_unary<UnaryOpType::I0>{};
 constexpr auto erfinv = make_eltwise_unary<UnaryOpType::ERFINV>{};
 constexpr auto tan = make_eltwise_unary<UnaryOpType::TAN>{};
+constexpr auto neg = make_eltwise_unary<UnaryOpType::NEG>{};
 constexpr auto relu_max = make_eltwise_unary_with_param<UnaryOpType::RELU_MAX>{};
 constexpr auto relu_min = make_eltwise_unary_with_param<UnaryOpType::RELU_MIN>{};
 constexpr auto power = make_eltwise_unary_with_param<UnaryOpType::POWER, uint32_t>{};
@@ -198,10 +199,6 @@ inline Tensor deg2rad(const Tensor &input_tensor, const MemoryConfig& output_mem
 
 //rad2deg(a) using scale 180/pi.
 inline Tensor rad2deg(const Tensor &input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) { return mul_unary(input_tensor, (float)(180.0/M_PI), output_mem_config); }
-
-// Function neg
-//use transformation y = -1 * x by broadcast
-inline Tensor neg(const Tensor &input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) { return mul_unary(input_tensor, -1.0f, output_mem_config); }
 
 //add 1
 //use transformation y = 1.0 + x by broadcast

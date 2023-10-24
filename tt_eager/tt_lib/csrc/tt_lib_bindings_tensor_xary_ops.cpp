@@ -81,6 +81,7 @@ namespace tt::tt_metal::detail {
         detail::bind_unary_op(m_tensor, "erfinv", erfinv, R"doc(Computes inverse error function for all elements of the input tensor ``{0}`` in the range (-1,1) .)doc");
         detail::bind_unary_op(m_tensor, "i0", i0, R"doc(Computes the zeroth order modified Bessel function of the first kind applied on the elements of the input tensor ``{0}``, for the input range -10 to 10.)doc");
         detail::bind_unary_op(m_tensor, "silu", silu, R"doc(Returns tensor with the silu all of elements of the input tensor ``{0}``.)doc");
+        detail::bind_unary_op(m_tensor, "neg", neg, R"doc(Returns tensor with the negate all of elements of the input tensor ``{0}``.)doc");
 
         detail::bind_unary_op_with_param(
             m_tensor, "exp", py::overload_cast<const Tensor&, bool, const MemoryConfig&>(&exp),
@@ -192,7 +193,6 @@ namespace tt::tt_metal::detail {
 
         // *** bcast binary tied to unary ***
         detail::bind_unary_op(m_tensor, "add1", &add1, R"doc(Returns tensor with the addition of one with input tensor ``{0}``.)doc");
-        detail::bind_unary_op(m_tensor, "neg", &neg, R"doc(Returns tensor with the negate all of elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "deg2rad", &deg2rad, R"doc(Returns tensor with the deg2rad conversion of elements of the input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "rad2deg", &rad2deg, R"doc(Returns tensor with the rad2deg conversion of elements of the input tensor ``{0}``.)doc");
 
