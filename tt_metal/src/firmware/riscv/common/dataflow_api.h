@@ -94,8 +94,7 @@ void setup_cb_read_write_interfaces() {
         cb_interface[cb_id].fifo_wr_ptr = fifo_addr;
         cb_interface[cb_id].fifo_rd_ptr = fifo_addr;
         cb_interface[cb_id].fifo_size = fifo_size;
-        cb_interface[cb_id].tiles_acked = 0;
-        cb_interface[cb_id].tiles_received = 0;
+        cb_interface[cb_id].tiles_acked_received_init = 0;
         cb_interface[cb_id].fifo_num_pages = fifo_num_pages;
         cb_interface[cb_id].fifo_page_size = fifo_page_size;
 
