@@ -13,17 +13,24 @@
 namespace tt {
 namespace tt_metal {
 
+inline bool is_shape_out_features(const Shape& bias, const Shape& weight) {
+    return (bias[0] == 1 && bias[1] == 1 && bias[2] == 1 && bias[3] == weight[2]);
+}
+
+inline bool is_shape_scalar(const Shape& bias) {
+    return (bias[0] == 1 && bias[1] == 1 && bias[2] == 1 && bias[3] == 1);
+}
+
 inline void moreh_linear_validate(
     const Tensor& input, const Tensor& weight, std::optional<std::reference_wrapper<const Tensor>> bias) {
-    const auto& weight_wo_shape = weight.shape().without_padding();
-    TT_ASSERT(weight_wo_shape[0] == 1 && weight_wo_shape[1] == 1, "weight should be a 2D tensor");
+    const auto& weight_shape = weight.shape().without_padding();
+    TT_ASSERT(weight_shape[0] == 1 && weight_shape[1] == 1, "weight should be a 2D tensor");
     if (bias) {
         const auto& bias_tensor = bias->get();
-        const auto& bias_wo_shape = bias_tensor.shape().without_padding();
+        const auto& bias_shape = bias_tensor.shape().without_padding();
         TT_ASSERT(
-            bias_wo_shape[0] == 1 && bias_wo_shape[1] == 1 && bias_wo_shape[2] == 1 &&
-                bias_wo_shape[3] == weight_wo_shape[2],
-            "shape of bias should be [1, 1, 1, wieght_wo_shape[2]]");
+            is_shape_out_features(bias_shape, weight_shape) || is_shape_scalar(bias_shape),
+            "shape of bias should be [1, 1, 1, wieght_shape[2]] or [1, 1, 1, 1]");
     }
 }
 
@@ -35,7 +42,10 @@ Tensor moreh_linear_(
     moreh_linear_validate(input, weight, bias);
     Tensor mm_output = tt::operations::primary::moreh_matmul(input, weight, false, true, output_mem_config);
     if (bias) {
-        return bcast(mm_output, bias->get(), BcastOpMath::ADD, BcastOpDim::H, output_mem_config);
+        const auto& bias_tensor = bias->get();
+        const auto& bias_shape = bias_tensor.shape().without_padding();
+        BcastOpDim bcast_dim = is_shape_scalar(bias_shape) ? BcastOpDim::HW : BcastOpDim::H;
+        return bcast(mm_output, bias_tensor, BcastOpMath::ADD, bcast_dim, output_mem_config);
     }
     return mm_output;
 }
