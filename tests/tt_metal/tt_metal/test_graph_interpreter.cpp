@@ -187,13 +187,13 @@ bool run_chained_sfpu_test(int chain_length) {
             num_tiles
         };
 
-        auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-        auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             core,
@@ -204,7 +204,7 @@ bool run_chained_sfpu_test(int chain_length) {
             uint(chain_length)
         };
 
-        auto graph_interpreter_kernel = tt_metal::CreateComputeKernel(
+        auto graph_interpreter_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/graph_interpreter.cpp",
             core,
@@ -401,13 +401,13 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
             num_tiles
         };
 
-        auto binary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto binary_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-        auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             core,
@@ -418,7 +418,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
             uint(chain_length)
         };
 
-        auto graph_interpreter_kernel = tt_metal::CreateComputeKernel(
+        auto graph_interpreter_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/graph_interpreter.cpp",
             core,
@@ -640,13 +640,13 @@ bool run_forked_binary_test() {
         };
 
 
-        auto nary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto nary_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_nary.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-        auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             core,
@@ -657,7 +657,7 @@ bool run_forked_binary_test() {
             uint(chain_length)
         };
 
-        auto graph_interpreter_kernel = tt_metal::CreateComputeKernel(
+        auto graph_interpreter_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/graph_interpreter.cpp",
             core,

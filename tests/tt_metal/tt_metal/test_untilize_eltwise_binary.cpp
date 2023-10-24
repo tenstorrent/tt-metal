@@ -146,14 +146,14 @@ int main(int argc, char **argv) {
             .set_page_size(ouput_cb_index, single_tile_size);
         auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-        auto binary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto binary_reader_kernel = tt_metal::CreateKernel(
             program,
             multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_8bank.cpp"
                       : "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_diff_lengths.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-        auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
                       : "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
@@ -166,7 +166,7 @@ int main(int argc, char **argv) {
             num_tiles_c
         };
 
-        auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
+        auto eltwise_binary_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/untilA_elwbin_3m.cpp",
             core,

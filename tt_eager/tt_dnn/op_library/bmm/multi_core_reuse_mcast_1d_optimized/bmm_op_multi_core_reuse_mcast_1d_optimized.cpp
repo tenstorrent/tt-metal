@@ -212,20 +212,20 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     }
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
-    auto mm_kernel_in0_sender_id = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         mcast_sender,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = in0_sender_compile_time_args});
 
-    auto mm_kernel_in1_sender_writer_id = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = in1_sender_writer_compile_time_args, .defines = mm_kernel_in1_sender_writer_defines});
 
 
-    auto mm_kernel_in0_receiver_id = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
         /* in0_receiver_in1_sender, // If not using half-half noc setup */
@@ -267,7 +267,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
     bool math_approx_mode = false;
-    auto mm_kernel = tt_metal::CreateComputeKernel(
+    auto mm_kernel = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores,
@@ -747,20 +747,20 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     }
 
     mm_kernel_in0_sender_defines["SKIP_MCAST"] = "1";
-    auto mm_kernel_in0_sender_id = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = in0_sender_compile_time_args, .defines = mm_kernel_in0_sender_defines});
 
-    auto mm_kernel_in1_sender_writer_id = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
         mcast_sender,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = in1_sender_writer_compile_time_args, .defines = mm_kernel_in1_sender_writer_defines});
 
 
-    auto mm_kernel_in1_receiver_writer_id = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in1_receiver_writer_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
         mcast_receivers,
@@ -801,7 +801,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
     bool math_approx_mode = false;
-    auto mm_kernel = tt_metal::CreateComputeKernel(
+    auto mm_kernel = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         all_cores,

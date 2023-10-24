@@ -90,12 +90,12 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads(const Tensor &a,
             (std::uint32_t) q_out_HtWt,
     };
 
-    auto reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
-    auto writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_tm_tile_layout_nlp_create_qkv_heads.cpp",
         all_cores,

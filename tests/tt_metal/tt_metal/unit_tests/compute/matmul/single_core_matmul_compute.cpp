@@ -234,14 +234,14 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
                 (cfg.N / cfg.out_subblock_w)),                        // bytes offset to next row of sub-blocks
             (std::uint32_t)(cfg.out_subblock_w * single_tile_size)};  // bytes offset to next sub-block
     }
-    auto writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto writer_kernel = tt_metal::CreateKernel(
         program,
         writer_kernel_name,
         cfg.core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    auto reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_blocked.cpp",
         cfg.core,
@@ -294,7 +294,7 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
         uint(cfg.activations_rm),
         uint(cfg.outputs_rm)};
 
-    auto matmul_kernel = tt_metal::CreateComputeKernel(
+    auto matmul_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block.cpp",
         cfg.core,
@@ -410,7 +410,7 @@ bool single_tile_matmul(tt_metal::Device* device) {
         .set_page_size(out_cb_index, byte_size);
     auto l1_output_cb = tt_metal::CreateCircularBuffer(program, core, l1_output_cb_config);
 
-    auto reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/reader_binary.cpp",
         core,
@@ -419,7 +419,7 @@ bool single_tile_matmul(tt_metal::Device* device) {
             .noc = tt_metal::NOC::RISCV_1_default,
             .compile_args = {in0_cb_index, in1_cb_index}});
 
-    auto writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto writer_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/writer_unary.cpp",
         core,
@@ -428,7 +428,7 @@ bool single_tile_matmul(tt_metal::Device* device) {
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = {out_cb_index}});
 
-    auto simple_matmul_kernel = tt_metal::CreateComputeKernel(
+    auto simple_matmul_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/single_tile_compute.cpp",
         core,
@@ -535,7 +535,7 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
         .set_page_size(out_cb_index, cb_page_size);
     auto l1_output_cb = tt_metal::CreateCircularBuffer(program, core, l1_output_cb_config);
 
-    auto reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/reader_binary_blocked.cpp",
         core,
@@ -544,7 +544,7 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
             .noc = tt_metal::NOC::RISCV_1_default,
             .compile_args = {in0_cb_index, in1_cb_index}});
 
-    auto writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto writer_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/writer_unary.cpp",
         core,
@@ -553,7 +553,7 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = {out_cb_index}});
 
-    auto simple_matmul_kernel = tt_metal::CreateComputeKernel(
+    auto simple_matmul_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/multi_tile_compute.cpp",
         core,
@@ -680,7 +680,7 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
         .set_page_size(partials_cb_index, cb_page_size);
     auto l1_partials_cb = tt_metal::CreateCircularBuffer(program, core, l1_partials_cb_config);
 
-    auto reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/reader_binary_blocked.cpp",
         core,
@@ -689,7 +689,7 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
             .noc = tt_metal::NOC::RISCV_1_default,
             .compile_args = {in0_cb_index, in1_cb_index}});
 
-    auto writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto writer_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/writer_unary.cpp",
         core,
@@ -698,7 +698,7 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = {out_cb_index}});
 
-    auto simple_matmul_kernel = tt_metal::CreateComputeKernel(
+    auto simple_matmul_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/multi_block_compute.cpp",
         core,

@@ -199,7 +199,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
         (std::uint32_t) stick_size_is_power_of_two,
         (std::uint32_t) log2_stick_size,
     };
-    KernelID unary_reader_kernel_id = CreateDataMovementKernel(
+    KernelID unary_reader_kernel_id = CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
         all_cores,
@@ -215,7 +215,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
         (std::uint32_t) output_cb_index,
         (std::uint32_t) out_is_dram
     };
-    KernelID unary_writer_kernel_id = CreateDataMovementKernel(
+    KernelID unary_writer_kernel_id = CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
@@ -236,7 +236,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
     };
 
     if (core_range.ranges().size() > 0) {
-        auto tilize_kernel_id = CreateComputeKernel(
+        auto tilize_kernel_id = CreateKernel(
             program,
             "tt_metal/kernels/compute/tilize.cpp",
             core_range,
@@ -244,7 +244,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
                 .compile_args = compute_args});
     }
     if (core_range_cliff.ranges().size() > 0) {
-        auto tilize_cliff_kernel_id = CreateComputeKernel(
+        auto tilize_cliff_kernel_id = CreateKernel(
             program,
             "tt_metal/kernels/compute/tilize.cpp",
             core_range_cliff,
@@ -420,13 +420,13 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor &input, T
         (std::uint32_t) output_cb_index
     };
 
-    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
@@ -437,7 +437,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor &input, T
         uint32_t(num_tiles_per_row)
     };
 
-    auto untilize_kernel_id = tt_metal::CreateComputeKernel(
+    auto untilize_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/tilize.cpp",
         all_cores,

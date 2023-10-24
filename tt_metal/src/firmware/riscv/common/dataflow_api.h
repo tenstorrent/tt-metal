@@ -57,7 +57,7 @@ constexpr static uint32_t get_arg_addr(int arg_idx) {
 
 /**
  * Returns the value of an argument from kernel_args array provided during
- * kernel creation using CreateDataMovementKernel, CreateComputeKernel calls.
+ * kernel creation using CreateKernel calls.
  *
  * | Argument              | Description                        | Type                  | Valid Range | Required |
  * |-----------------------|------------------------------------|-----------------------|-------------|----------|
@@ -73,7 +73,7 @@ FORCE_INLINE T get_arg_val(int arg_idx) {
 
 /**
  * Returns the value of a constexpr argument from kernel_compile_time_args array provided during kernel creation using
- * CreateDataMovementKernel, CreateComputeKernel calls.
+ * CreateKernel calls.
  *
  * Return value: constexpr uint32_t
  *

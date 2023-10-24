@@ -586,7 +586,7 @@ void send_dispatch_kernel_to_device(Device* device) {
         {"PRODUCER_NOC_Y", std::to_string(producer_physical_core.y)},
     };
     std::vector<uint32_t> dispatch_compile_args = {DEVICE_DATA.TENSIX_SOFT_RESET_ADDR};
-    tt::tt_metal::CreateDataMovementKernel(
+    tt::tt_metal::CreateKernel(
         dispatch_program,
         "tt_metal/impl/dispatch/kernels/command_queue_producer.cpp",
         producer_logical_core,
@@ -596,7 +596,7 @@ void send_dispatch_kernel_to_device(Device* device) {
             .compile_args = dispatch_compile_args,
             .defines = producer_defines});
 
-    tt::tt_metal::CreateDataMovementKernel(
+    tt::tt_metal::CreateKernel(
         dispatch_program,
         "tt_metal/impl/dispatch/kernels/command_queue_consumer.cpp",
         consumer_logical_core,

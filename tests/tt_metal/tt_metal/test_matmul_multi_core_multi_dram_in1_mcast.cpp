@@ -152,19 +152,19 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID, tt_metal::
         }
     }
 
-    auto mm_reader_kernel_sender = tt_metal::CreateDataMovementKernel(
+    auto mm_reader_kernel_sender = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in1_mcast_sender.cpp",
         mcast_senders,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-    auto mm_reader_kernel_receiver = tt_metal::CreateDataMovementKernel(
+    auto mm_reader_kernel_receiver = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in1_mcast_receiver.cpp",
         mcast_receivers,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-    auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto unary_writer_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_matmul_tile_layout.cpp",
         all_cores,
@@ -199,7 +199,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID, tt_metal::
         uint(out_subblock_num_tiles)
     };
 
-    auto mm_kernel = tt_metal::CreateComputeKernel(
+    auto mm_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp",
         all_cores,

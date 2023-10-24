@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
                 auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
                 tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
 
-                auto l1_to_l1_kernel = tt_metal::CreateDataMovementKernel(
+                auto l1_to_l1_kernel = tt_metal::CreateKernel(
                         program,
                         "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_l1.cpp",
                         core,

@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
         auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
         auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
-        auto dram_copy_kernel = tt_metal::CreateDataMovementKernel(
+        auto dram_copy_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
             core,

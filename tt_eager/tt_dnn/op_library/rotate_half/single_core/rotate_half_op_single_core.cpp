@@ -78,13 +78,13 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
         (std::uint32_t) dst_is_dram
     };
 
-    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_rotate_half_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_rotate_half_interleaved_start_id.cpp",
         core,
@@ -97,7 +97,7 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
 		{"BCAST_SCALAR", "1"}
 	};
 
-	auto bcast_kernel_group_1_id = tt_metal::CreateComputeKernel(
+	auto bcast_kernel_group_1_id = tt_metal::CreateKernel(
 		program,
 		"tt_metal/kernels/compute/bcast_hw.cpp",
 		core,

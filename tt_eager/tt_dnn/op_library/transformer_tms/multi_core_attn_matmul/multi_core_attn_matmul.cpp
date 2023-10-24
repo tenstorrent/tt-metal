@@ -121,13 +121,13 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         (std::uint32_t) dst_is_dram
     };
 
-    auto reader_id = tt_metal::CreateDataMovementKernel(
+    auto reader_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_transformer_attn_matmul.cpp",
         all_device_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto writer_id = tt_metal::CreateDataMovementKernel(
+    auto writer_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,
@@ -137,7 +137,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         (uint32_t) transpose_hw_bool, // transpose_hw for matmul_init
     }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
 
-    auto eltwise_binary_kernel_id = tt_metal::CreateComputeKernel(
+    auto eltwise_binary_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/transformer_attn_matmul.cpp",
         all_device_cores,

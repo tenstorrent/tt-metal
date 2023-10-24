@@ -72,7 +72,7 @@ int main(int argc, char **argv) {
                 core_to_l1_addr[core] = l1_b0.address();
             }
         }
-        auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_sticks.cpp",
             all_cores,

@@ -135,7 +135,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
         (std::uint32_t) weight_log2_stick_size
         };
 
-    auto reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel_id = tt_metal::CreateKernel(
                                         program,
                                         "tt_metal/kernels/dataflow/embeddings_tilize.cpp",
                                         all_cores,
@@ -148,7 +148,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
             uint32_t(num_blocks_per_core_group_1), // per_core_block_cnt
             uint32_t(num_tiles_per_block) // per_core_block_tile_cnt
         };
-        auto tilize_kernel_id_1 = tt_metal::CreateComputeKernel(
+        auto tilize_kernel_id_1 = tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/compute/tilize.cpp",
             core_group_1,
@@ -161,7 +161,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
             uint32_t(num_blocks_per_core_group_2), // per_core_block_cnt
             uint32_t(num_tiles_per_block) // per_core_block_tile_cnt
         };
-        auto tilize_kernel_id_2 = tt_metal::CreateComputeKernel(
+        auto tilize_kernel_id_2 = tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/compute/tilize.cpp",
             core_group_2,
@@ -175,7 +175,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
     };
 
     // Tilized writer
-    auto writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
@@ -405,7 +405,7 @@ operation::ProgramWithCallbacks embeddings_rm(
 
                                                      };
 
-        kernIds[risc_id] = tt_metal::CreateDataMovementKernel(
+        kernIds[risc_id] = tt_metal::CreateKernel(
                                     program,
                                     "tt_metal/kernels/dataflow/embeddings.cpp",
                                     all_cores,

@@ -79,13 +79,13 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
         (std::uint32_t) dst_is_dram
     };
 
-    KernelID binary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    KernelID binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
@@ -94,7 +94,7 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
     vector<uint32_t> compute_kernel_args = {
     };
 
-    auto eltwise_binary_kernel_id = tt_metal::CreateComputeKernel(
+    auto eltwise_binary_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/eltwise_binary.cpp",
         core,

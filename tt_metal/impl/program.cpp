@@ -148,8 +148,8 @@ std::vector<KernelGroup>& Program::get_kernel_groups() {
 KernelGroup * Program::kernels_on_core(const CoreCoord &core) {
     update_kernel_groups();
     if (core.x >= grid_extent_.x || core.y >= grid_extent_.y) return nullptr;
-    uint8_t index = core_to_kernel_group_index_table_[core.y * grid_extent_.x + core.x];
-    return (index == core_to_kernel_group_invalid_index) ? nullptr : &kernel_groups_[index];
+    uint8_t index = core_to_kernel_group_index_table_.at(core.y * grid_extent_.x + core.x);
+    return (index == core_to_kernel_group_invalid_index) ? nullptr : &kernel_groups_.at(index);
 }
 
 struct KernelGroupInt {

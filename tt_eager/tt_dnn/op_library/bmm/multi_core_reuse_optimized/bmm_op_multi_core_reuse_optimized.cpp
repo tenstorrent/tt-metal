@@ -104,14 +104,14 @@ operation::ProgramWithCallbacks create_program(
     };
 
     // left half
-    auto mm_kernel_in0_reader_id = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in0_reader_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
         left_half,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args}
     );
 
-    auto mm_kernel_in1_reader_writer_id = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in1_reader_writer_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
         left_half,
@@ -119,14 +119,14 @@ operation::ProgramWithCallbacks create_program(
     );
 
     // right half
-    auto mm_kernel_in0_reader_other_noc_setup_id = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in0_reader_other_noc_setup_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
         right_half,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args}
     );
 
-    auto mm_kernel_in1_reader_writer_other_noc_setup_id = tt_metal::CreateDataMovementKernel(
+    auto mm_kernel_in1_reader_writer_other_noc_setup_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
         right_half,
@@ -170,13 +170,13 @@ operation::ProgramWithCallbacks create_program(
     };
 
     // Create compute kernel
-    auto mm_kernel_group_1_id = tt_metal::CreateComputeKernel(
+    auto mm_kernel_group_1_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm_mixed_precision.cpp",
         core_group_1,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args_group_1}
     );
-    auto mm_kernel_group_2_id = tt_metal::CreateComputeKernel(
+    auto mm_kernel_group_2_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/bmm_large_block_zm_mixed_precision.cpp",
         core_group_2,
@@ -281,7 +281,7 @@ operation::ProgramWithCallbacks create_program(
         /* Checkerboard logic
         // white
         if ((core_idx_x + core_idx_y) % 2 == 0) {
-            auto mm_kernel_in0_reader = tt_metal::CreateDataMovementKernel(
+            auto mm_kernel_in0_reader = tt_metal::CreateKernel(
                 program,
                 "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
                 core,
@@ -290,7 +290,7 @@ operation::ProgramWithCallbacks create_program(
                 tt_metal::NOC::RISCV_1_default
             );
 
-            auto mm_kernel_in1_reader_writer = tt_metal::CreateDataMovementKernel(
+            auto mm_kernel_in1_reader_writer = tt_metal::CreateKernel(
                 program,
                 "tt_metal/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
                 core,
@@ -305,7 +305,7 @@ operation::ProgramWithCallbacks create_program(
         }
         // black
         else {
-            auto mm_kernel_in0_reader = tt_metal::CreateDataMovementKernel(
+            auto mm_kernel_in0_reader = tt_metal::CreateKernel(
                 program,
                 "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
                 core,
@@ -314,7 +314,7 @@ operation::ProgramWithCallbacks create_program(
                 tt_metal::NOC::RISCV_0_default
             );
 
-            auto mm_kernel_in1_reader_writer = tt_metal::CreateDataMovementKernel(
+            auto mm_kernel_in1_reader_writer = tt_metal::CreateKernel(
                 program,
                 "tt_metal/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
                 core,
@@ -330,7 +330,7 @@ operation::ProgramWithCallbacks create_program(
         */
 
         /* Uncomment if we don't checkerboard
-        auto mm_kernel_in0_reader = tt_metal::CreateDataMovementKernel(
+        auto mm_kernel_in0_reader = tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
             core,
@@ -338,7 +338,7 @@ operation::ProgramWithCallbacks create_program(
             tt_metal::DataMovementProcessor::RISCV_1,
             num_output_blocks_per_core[i] > num_evenly_divided_output_blocks ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default);
 
-        auto mm_kernel_in1_reader_writer = tt_metal::CreateDataMovementKernel(
+        auto mm_kernel_in1_reader_writer = tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
             core,

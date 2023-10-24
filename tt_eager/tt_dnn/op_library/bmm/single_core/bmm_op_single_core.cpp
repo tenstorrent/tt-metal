@@ -68,13 +68,13 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
 
-    auto reader_id = tt_metal::CreateDataMovementKernel(
+    auto reader_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto writer_id = tt_metal::CreateDataMovementKernel(
+    auto writer_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_bmm_8bank.cpp",
         core,
@@ -86,7 +86,7 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
         Kt, // Kt
         Nt // Nt
     };
-    auto eltwise_binary_kernel_id = tt_metal::CreateComputeKernel(
+    auto eltwise_binary_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/bmm.cpp",
         core,

@@ -103,7 +103,7 @@ bool run_sfpu_test(string sfpu_name) {
             .set_page_size(ouput_cb_index, single_tile_size);
         auto cb_output = tt_metal::CreateCircularBuffer(program, core, output_cb_config);
 
-        auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
             multibank ?
                 "tt_metal/kernels/dataflow/reader_unary_8bank.cpp" :
@@ -111,7 +111,7 @@ bool run_sfpu_test(string sfpu_name) {
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-        auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             multibank ?
                 "tt_metal/kernels/dataflow/writer_unary_8bank.cpp" :
@@ -126,7 +126,7 @@ bool run_sfpu_test(string sfpu_name) {
         string hlk_kernel_name = "tt_metal/kernels/compute/eltwise_sfpu.cpp";
         // defines macro expands per SFPU ops
         std::map<string, string> hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
-        auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
+        auto eltwise_unary_kernel = tt_metal::CreateKernel(
             program,
             hlk_kernel_name,
             core,

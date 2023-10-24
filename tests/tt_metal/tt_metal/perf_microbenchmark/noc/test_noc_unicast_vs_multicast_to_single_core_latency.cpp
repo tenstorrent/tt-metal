@@ -28,7 +28,7 @@ void measure_latency(string kernel_name) {
     };
 
     tt_metal::Program program = tt_metal::Program();
-    tt_metal::CreateDataMovementKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/noc/kernels/" + kernel_name + ".cpp",
         consumer_logical_core,

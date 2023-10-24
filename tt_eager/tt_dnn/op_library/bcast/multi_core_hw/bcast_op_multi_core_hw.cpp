@@ -95,19 +95,19 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 		reader_defines["BCAST_SCALAR"] = "1";
 		bcast_compute_defines["BCAST_SCALAR"] = "1";
 	}
-	KernelID binary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+	KernelID binary_reader_kernel_id = tt_metal::CreateKernel(
 		program,
 		reader_name,
 		all_device_cores,
 		tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = reader_defines});
 
-	KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+	KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
 		program,
 		"tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
 		all_device_cores,
 		tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
-	auto bcast_kernel_id = tt_metal::CreateComputeKernel(
+	auto bcast_kernel_id = tt_metal::CreateKernel(
 		program,
 		compute_name,
 		all_device_cores,

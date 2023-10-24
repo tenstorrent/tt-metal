@@ -550,7 +550,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         };
     }
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    auto reader_id = CreateDataMovementKernel(
+    auto reader_id = CreateKernel(
         program,
         reader_kernel,
         core,
@@ -560,7 +560,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
-    auto writer_id = CreateDataMovementKernel(
+    auto writer_id = CreateKernel(
         program,
         writer_kernel,
         core,
@@ -595,7 +595,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         bias_ntiles
     };
 
-    auto compute = CreateComputeKernel(
+    auto compute = CreateKernel(
         program,
         compute_kernel,
         core,
@@ -1247,13 +1247,13 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
             Hat / out_subblock_h_ntiles
         };
     }
-    auto reader_id = tt_metal::CreateDataMovementKernel(
+    auto reader_id = tt_metal::CreateKernel(
         program,
         reader_kernel,
         core,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
-    auto writer_id = tt_metal::CreateDataMovementKernel(
+    auto writer_id = tt_metal::CreateKernel(
         program,
         writer_kernel,
         core,
@@ -1282,7 +1282,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         untilize_out
     };
 
-    auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
+    auto eltwise_binary_kernel = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/bmm_tilize_untilize.cpp",
         core,

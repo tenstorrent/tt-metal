@@ -87,7 +87,7 @@ int main(int argc, char **argv) {
         uint32_t HW = H*W;
         uint32_t CHW = C*H*W;
 
-        auto reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto reader_kernel = tt_metal::CreateKernel(
             program,
             multibank ?
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/transpose_hc_8bank.cpp" :
@@ -95,7 +95,7 @@ int main(int argc, char **argv) {
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-        auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             multibank ?
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp" :
@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
             uint(num_tensor_tiles)
         };
 
-        auto blank_binary_kernel = tt_metal::CreateComputeKernel(
+        auto blank_binary_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
             core,

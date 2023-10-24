@@ -48,13 +48,13 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
         .set_page_size(ouput_cb_index, single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto unary_writer_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto unary_reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank.cpp",
         core,
@@ -65,7 +65,7 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
         1,          // per_core_block_size
     };
 
-    auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
+    auto eltwise_binary_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         core,

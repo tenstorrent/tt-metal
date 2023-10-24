@@ -416,7 +416,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
             bias_tile_nbytes
         };
     }
-    auto reader_id = CreateDataMovementKernel(
+    auto reader_id = CreateKernel(
         program,                            // program
         reader_kernel,                      // file name
         core_range,                         // core
@@ -466,7 +466,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
 
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
 
-    auto writer_id = CreateDataMovementKernel(
+    auto writer_id = CreateKernel(
         program,                        // program
         writer_kernel,                  // file name
         core_range,                     // core
@@ -498,7 +498,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         untilize_out,
         bias_ntiles_w
     };
-    auto bmm_compute_id = CreateComputeKernel(
+    auto bmm_compute_id = CreateKernel(
         program,
         compute_kernel,
         core_range,

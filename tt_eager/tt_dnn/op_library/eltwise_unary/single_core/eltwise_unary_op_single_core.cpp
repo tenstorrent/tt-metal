@@ -50,13 +50,13 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
         (std::uint32_t) dst_is_dram
     };
 
-    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
@@ -70,7 +70,7 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = std::all_of(op_chain.begin(), op_chain.end(), [](const auto& u) {return eltwise_unary_op_utils::get_op_approx_mode(u.op_type);});
     std::map<string, string> unary_defines = eltwise_unary_op_utils::get_block_defines(op_chain);
-    auto eltwise_unary_kernel_id = tt_metal::CreateComputeKernel(
+    auto eltwise_unary_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
         core,

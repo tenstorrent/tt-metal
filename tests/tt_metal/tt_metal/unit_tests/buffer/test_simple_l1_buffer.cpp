@@ -62,12 +62,12 @@ namespace tt::test::buffer::detail {
             .set_page_size(cb_index, page_size);
         auto l1_cb = tt_metal::CreateCircularBuffer(program, core, l1_cb_config);
 
-        auto reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::NOC_0, .compile_args = {cb_index}});
-        auto writer_kernel = tt_metal::CreateDataMovementKernel(
+        auto writer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
             core,

@@ -77,14 +77,14 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         .set_page_size(16, test_config.tile_byte_size);
     auto l1_output_cb = tt_metal::CreateCircularBuffer(program, test_config.core, l1_output_cb_config);
 
-    auto reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
         test_config.core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-    auto writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto writer_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         test_config.core,
@@ -96,7 +96,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
     std::map<string, string> defines = {
         {"ELTWISE_OP_CODE", binary_op_name_to_op_code.at(test_config.binary_op)},
         {"ELTWISE_OP", binary_op_name_to_op_kernel.at(test_config.binary_op)}};
-    auto binary_kernel = tt_metal::CreateComputeKernel(
+    auto binary_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp",
         test_config.core,

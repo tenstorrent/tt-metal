@@ -663,7 +663,7 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
 
     auto writer_mcast_noc = NOC::NOC_0;
     auto reader_noc = writer_mcast_noc == NOC::NOC_0 ? NOC::NOC_1 : NOC::NOC_0;
-    auto writer_mcast_sender_id = CreateDataMovementKernel(
+    auto writer_mcast_sender_id = CreateKernel(
     program,
     writer_mcast_sender_kernel,
     mcast_sender_cores,
@@ -675,7 +675,7 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
 
     KernelID writer_mcast_receiver_id;
     if (total_num_cores > 1) {
-        writer_mcast_receiver_id = CreateDataMovementKernel(
+        writer_mcast_receiver_id = CreateKernel(
         program,
         writer_mcast_receiver_kernel,
         mcast_receiver_cores,
@@ -687,7 +687,7 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     }
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    auto reader_id = CreateDataMovementKernel(
+    auto reader_id = CreateKernel(
         program,
         reader_kernel,
         all_cores,
@@ -699,7 +699,7 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
 
     // Compile compute kernel for active cores only
     // Compile blank kernel for noop cores
-    auto compute_id = CreateComputeKernel(
+    auto compute_id = CreateKernel(
         program,
         compute_kernel,
         all_active_cores,
@@ -709,10 +709,10 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
             .defines = compute_defines});
 
     if (total_noop_cores > 0) {
-        auto compute_id = CreateComputeKernel(
+        auto compute_id = CreateKernel(
         program,
         "tt_metal/kernels/compute/blank.cpp",
-        noop_cores);
+        noop_cores, ComputeConfig{});
     }
 
     vector<KernelID> reader_ids;

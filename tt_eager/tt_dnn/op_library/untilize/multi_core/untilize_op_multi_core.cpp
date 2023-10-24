@@ -226,7 +226,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             (std::uint32_t) src0_cb_index
         };
 
-        unary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+        unary_reader_kernel_id = tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/dataflow/reader_unary_sharded.cpp",
             all_cores,
@@ -237,7 +237,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             (uint32_t) src0_is_dram
         };
 
-        unary_reader_kernel_id = CreateDataMovementKernel(
+        unary_reader_kernel_id = CreateKernel(
             program,
             "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
             all_cores,
@@ -254,7 +254,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         std::vector<uint32_t> writer_ct_args = {
             (std::uint32_t) output_cb_index
         };
-        unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+        unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary_sharded.cpp",
             all_cores,
@@ -269,7 +269,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             (uint32_t) log2_stick_size,
         };
 
-        unary_writer_kernel_id = CreateDataMovementKernel(
+        unary_writer_kernel_id = CreateKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary_stick_layout_split_rows_interleaved.cpp",
             all_cores,
@@ -291,7 +291,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     };
 
     if (core_range.ranges().size() > 0) {
-        auto untilize_kernel_id = CreateComputeKernel(
+        auto untilize_kernel_id = CreateKernel(
             program,
             "tt_metal/kernels/compute/untilize.cpp",
             core_range,
@@ -299,7 +299,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
                 .compile_args = compute_args});
     }
     if (core_range_cliff.ranges().size() > 0) {
-        auto untilize_cliff_kernel_id = CreateComputeKernel(
+        auto untilize_cliff_kernel_id = CreateKernel(
             program,
             "tt_metal/kernels/compute/untilize.cpp",
             core_range_cliff,

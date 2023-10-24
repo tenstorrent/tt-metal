@@ -21,15 +21,15 @@ struct CBConfig {
 };
 
 inline void initialize_program(Program& program, const CoreRangeSet& cr_set) {
-    auto dummy_reader_kernel = CreateDataMovementKernel(
+    auto dummy_reader_kernel = CreateKernel(
         program, "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp", cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-    auto dummy_writer_kernel = CreateDataMovementKernel(
+    auto dummy_writer_kernel = CreateKernel(
         program, "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp", cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto dummy_compute_kernel = CreateComputeKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", cr_set);
+    auto dummy_compute_kernel = CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 }
 
 }   // end namespace basic_tests::circular_buffer

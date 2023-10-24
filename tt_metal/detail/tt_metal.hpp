@@ -311,7 +311,7 @@ namespace tt::tt_metal{
                 {device->worker_core_from_logical_core(consumer_logical_core)});
         }
 
-        inline DataMovementConfig GetDataMovementConfig(Program &program, const std::string &file_name, const CoreRangeSet &core_ranges, const std::optional<DataMovementConfig> &dm_config) {
+        inline void CheckDataMovementConfig(Program &program, const std::string &file_name, const CoreRangeSet &core_ranges) {
             bool riscv0_in_use = false; bool riscv1_in_use = false;
             bool noc0_in_use = false; bool noc1_in_use = false;
 
@@ -347,14 +347,6 @@ namespace tt::tt_metal{
 
             TT_ASSERT(not (riscv0_in_use and riscv1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because both data movement processors are in use!", file_name);
             TT_ASSERT(not (noc0_in_use and noc1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernels for {} across specified cores because both NOCs are in use!", file_name);
-
-            if (dm_config.has_value()) {
-                return dm_config.value();
-            }
-
-            DataMovementProcessor processor = riscv0_in_use ? DataMovementProcessor::RISCV_1 : DataMovementProcessor::RISCV_0;
-            NOC noc = noc0_in_use ? NOC::NOC_1 : NOC::NOC_0;
-            return DataMovementConfig{.processor = processor, .noc = noc};
         }
 
         inline CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet> &specified_core_spec) {

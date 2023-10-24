@@ -86,13 +86,13 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
         (std::uint32_t) dst_is_dram
     };
 
-    auto reader_id = tt_metal::CreateDataMovementKernel(
+    auto reader_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto writer_id = tt_metal::CreateDataMovementKernel(
+    auto writer_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
@@ -105,7 +105,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
         num_output_tiles_per_core_group_1 // Nt
     }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
 
-    auto eltwise_binary_kernel_group_1_id = tt_metal::CreateComputeKernel(
+    auto eltwise_binary_kernel_group_1_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/bmm.cpp",
         core_group_1,
@@ -120,7 +120,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
             num_output_tiles_per_core_group_2 // Nt
         }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
 
-        auto eltwise_binary_kernel_group_2_id = tt_metal::CreateComputeKernel(
+        auto eltwise_binary_kernel_group_2_id = tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/compute/bmm.cpp",
             core_group_2,

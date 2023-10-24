@@ -123,13 +123,13 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             .set_page_size(ouput_cb_index, single_tile_size);
         auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-        auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = {1}});
 
-        auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             core,
@@ -139,7 +139,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             uint(num_output_tiles)
         };
 
-        auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
+        auto eltwise_unary_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
             core,
@@ -289,13 +289,13 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
             .set_page_size(ouput_cb_index, single_tile_size);
         auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-        auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = {1}});
 
-        auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+        auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
             core,
@@ -305,7 +305,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
             uint(num_output_tiles)
         };
 
-        auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
+        auto eltwise_unary_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
             core,
@@ -408,13 +408,13 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
         .set_page_size(16, num_bytes_per_page);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
+    auto unary_reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = {not src_is_in_l1}});
 
-    auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
+    auto unary_writer_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
         core,
@@ -422,7 +422,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
 
     vector<uint32_t> compute_kernel_args = { num_pages };
-    auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
+    auto eltwise_unary_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         core,

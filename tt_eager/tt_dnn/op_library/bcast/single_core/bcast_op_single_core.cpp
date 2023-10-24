@@ -77,13 +77,13 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
     };
 
     const char* reader_name = bcast_op_utils::get_reader_name(bcast_dim, BcastOpParallelizationStrategy::SINGLE_CORE);
-    KernelID binary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    KernelID binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         reader_name,
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
@@ -91,7 +91,7 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
 
     const char* compute_name = bcast_op_utils::get_compute_name(bcast_dim);
     std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(bcast_dim, bcast_math);
-    auto bcast_kernel_id = tt_metal::CreateComputeKernel(
+    auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
         compute_name,
         core,

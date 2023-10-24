@@ -22,7 +22,7 @@ namespace detail {
 /**
  * Enable generation of reports for compilation statistics.
  * Two reports are generated in .reports/tt_metal:
- *  - `compile_program_summary.csv` has a table with an entry for each program that indicates number of CreateComputeKernel and CreateDataMovement API calls,
+ *  - `compile_program_summary.csv` has a table with an entry for each program that indicates number of Compute and Data movement CreateKernel API calls,
  *  and number of kernel compilation cache hits and misses
  *  - `compile_program.csv` expands on the summary report by including a per program table with an entry for each kernel, indicating the cores the kernel
  * is placed on, kernel attributes and whether there was a cache hit or miss when compiling the kernel.
