@@ -32,4 +32,4 @@ test-list:
             data-type: ["BFLOAT16", "BFLOAT8_B"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
-      output-file: bert_large_fused_qkv_matmul.csv
+      output-file: bert_large_fused_qkv_matmul_sweep.csv
