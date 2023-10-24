@@ -5,7 +5,7 @@ import torch.nn as nn
 import tt_lib
 from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
 
-
+#TODO: use on-device RMSNorm
 class TtRMSNorm(nn.Module):
     def __init__(
         self,
