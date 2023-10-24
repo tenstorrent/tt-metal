@@ -10,6 +10,10 @@
 namespace tt::tt_metal::detail{
     void TensorModuleCompositeOPs( py::module & m_tensor){
 
+        py::class_<ComplexTensor> pycplx_cls(m_tensor, "ComplexTensor");
+        pycplx_cls.def("real",&ComplexTensor::get_real);
+        pycplx_cls.def("imag",&ComplexTensor::get_imag);
+
         m_tensor.def("sfpu_eps",
                     [] (const std::array<uint32_t, 4> shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
                         return tt::tt_metal::sfpu_eps(shape, layout, device, output_mem_config);
@@ -737,7 +741,6 @@ namespace tt::tt_metal::detail{
         detail::bind_unary_op(m_tensor, "complex_abs", &tt::tt_metal::complex_abs, R"doc(Returns elementwise abs value of complex tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "conj", &tt::tt_metal::conj, R"doc(Returns elementwise complex conjugate of tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "complex_recip", &tt::tt_metal::complex_recip, R"doc(Returns elementwise reciprocal of complex tensor ``{0}``.)doc");
-
         m_tensor.def("complex_mul", &tt::tt_metal::complex_mul,
             py::arg("input_a"), py::arg("input_b"),
             py::arg("output_mem_config").noconvert() = std::nullopt,R"doc(Perform an eltwise-binary multiplication ``input_a * input_b`` on two complex tensors.)doc");
@@ -745,6 +748,7 @@ namespace tt::tt_metal::detail{
         m_tensor.def("complex_div", &tt::tt_metal::complex_div,
             py::arg("input_a"), py::arg("input_b"),
             py::arg("output_mem_config").noconvert() = std::nullopt,R"doc(Perform an eltwise-binary divide ``input_a / input_b`` on two complex tensors.)doc");
+
 
         detail::bind_binary_op<false, true, false>(m_tensor, "logical_xor", &logical_xor, R"doc(Performs eltwise-binary logical_xor (``{0} ^ {1}``) on two tensors.)doc");
         detail::bind_binary_op<false, true, false>(m_tensor, "max", &tt::tt_metal::max, R"doc(Perform an eltwise-binary max on two tensors.)doc");
@@ -755,10 +759,163 @@ namespace tt::tt_metal::detail{
         detail::bind_binary_op<false, true, false>(m_tensor, "nextafter", &nextafter, R"doc(Returns the next floating-point value after input towards other of the input tensors ``{0}`` and ``{1}``.)doc");
 
 
+/**
+
+Tensor type2_complex_abs(const ComplexTensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+(SKIP) Tensor type2_is_real(const ComplexTensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+(SKIP) Tensor type2_is_imag(const ComplexTensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor type2_real(const ComplexTensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor type2_imag(const ComplexTensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor type2_angle(const ComplexTensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+ComplexTensor type2_conj(const ComplexTensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+inline
+std::array<Tensor,2> type2_complex_add(std::array<Tensor,2>& input_a,  std::array<Tensor,2>& input_b,  const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    return { add(input_a[0],input_b[0],{},output_mem_config),
+             add(input_a[1],input_b[1],{},output_mem_config) };
+}
+
+inline
+std::array<Tensor,2> type2_complex_sub(std::array<Tensor,2>& input_a,  std::array<Tensor,2>& input_b,  const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    return { sub(input_a[0],input_b[0],{},output_mem_config),
+             sub(input_a[1],input_b[1],{},output_mem_config) };
+}
+
+ComplexTensor type2_complex_mul(const ComplexTensor& input_a, const ComplexTensor& input_b,  const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+ComplexTensor type2_complex_div(const ComplexTensor& input_a, const ComplexTensor& input_b,  const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+ComplexTensor type2_complex_recip(const ComplexTensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+*/
+	    // *** type-2 complex operations ***
+        m_tensor.def("type2_complex_tensor",
+		     [](Tensor& r, Tensor& i) -> ComplexTensor {
+		       return ComplexTensor({r,i});
+		     },
+            py::arg("real"),
+            py::arg("imag"),
+	    R"doc(Create a complex tensor object from real and imag parts ``{0}`` and ``{1}``.)doc"
+        );
+
+        m_tensor.def("type2_is_real",
+		     [](ComplexTensor& t, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) -> Tensor {
+		       return tt::tt_metal::type2_is_real(t,output_mem_config);
+		     },
+            py::arg("input_a"),
+	    py::arg("output_mem_config").noconvert() = std::nullopt,
+	    R"doc(Returns boolean tensor if value of complex tensor ``{0}`` is real.)doc"
+        );
+
+        m_tensor.def("type2_is_imag",
+		     [](ComplexTensor& t, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) -> Tensor {
+		       return tt::tt_metal::type2_is_imag(t,output_mem_config);
+		     },
+            py::arg("input_a"),
+	    py::arg("output_mem_config").noconvert() = std::nullopt,
+	    R"doc(Returns boolean tensor if value of complex tensor ``{0}`` is imaginary.)doc"
+        );
+
+        m_tensor.def("type2_complex_abs",
+		     [](ComplexTensor& t, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) -> Tensor {
+		       return tt::tt_metal::type2_complex_abs(t,output_mem_config);
+		     },
+            py::arg("input_a"),
+	    py::arg("output_mem_config").noconvert() = std::nullopt,
+	    R"doc(Returns absolute value of complex tensor ``{0}``.)doc"
+        );
+
+        m_tensor.def("type2_real",
+		     [](ComplexTensor& t, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) -> Tensor {
+		       return tt::tt_metal::type2_real(t,output_mem_config);
+		     },
+            py::arg("input_a"),
+	    py::arg("output_mem_config").noconvert() = std::nullopt,
+	    R"doc(Returns real value of complex tensor ``{0}``.)doc"
+        );
+
+        m_tensor.def("type2_imag",
+		     [](ComplexTensor& t, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) -> Tensor {
+		       return tt::tt_metal::type2_imag(t,output_mem_config);
+		     },
+            py::arg("input_a"),
+	    py::arg("output_mem_config").noconvert() = std::nullopt,
+	    R"doc(Returns imaginary value of complex tensor ``{0}``.)doc"
+        );
+
+        m_tensor.def("type2_angle",
+		     [](ComplexTensor& t, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) -> Tensor {
+		       return tt::tt_metal::type2_angle(t,output_mem_config);
+		     },
+            py::arg("input_a"),
+	    py::arg("output_mem_config").noconvert() = std::nullopt,
+	    R"doc(Returns angle of a complex tensor ``{0}``.)doc"
+        );
+
+        m_tensor.def("type2_conj",
+		     [](ComplexTensor& t, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) -> ComplexTensor {
+		       return tt::tt_metal::type2_conj(t,output_mem_config);
+		     },
+            py::arg("input_a"),
+	    py::arg("output_mem_config").noconvert() = std::nullopt,
+	    R"doc(Returns complex conjugate value of complex tensor ``{0}``.)doc"
+        );
+
+        m_tensor.def("type2_complex_recip",
+		     [](ComplexTensor& t, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) -> ComplexTensor {
+		       return (tt::tt_metal::type2_complex_recip(t,output_mem_config));
+		     },
+            py::arg("input_a"),
+	    py::arg("output_mem_config").noconvert() = std::nullopt,
+	    R"doc(Returns complex reciprocal value of complex tensor ``{0}``.)doc"
+        );
+
+        m_tensor.def("type2_complex_add",
+		     [](ComplexTensor& t,ComplexTensor& u, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) -> ComplexTensor {
+		       auto tt = t;
+               auto uu = u;
+               return (tt::tt_metal::type2_complex_add(tt,uu,output_mem_config));
+		     },
+            py::arg("input_a"),
+            py::arg("input_b"),
+	    py::arg("output_mem_config").noconvert() = std::nullopt,
+	    R"doc(Returns addition of a complex tensor ``{0}`` with ``{1}``.)doc"
+        );
+
+        m_tensor.def("type2_complex_sub",
+		     [](ComplexTensor& t,ComplexTensor& u, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) -> ComplexTensor {
+               auto tt = t;
+               auto uu = u;
+               return (tt::tt_metal::type2_complex_sub(tt,uu,output_mem_config));
+		     },
+            py::arg("t"),
+            py::arg("u"),
+	    py::arg("output_mem_config").noconvert() = std::nullopt,
+	    R"doc(Returns subtraction of a complex tensor ``{1}`` from ``{0}``.)doc"
+        );
+
+        m_tensor.def("type2_complex_mul",
+		     [](ComplexTensor& t,ComplexTensor& u, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) -> ComplexTensor {
+               auto tt = t;
+               auto uu = u;
+		       return (tt::tt_metal::type2_complex_mul(tt,uu,output_mem_config));
+		     },
+            py::arg("t"),
+            py::arg("u"),
+	    py::arg("output_mem_config").noconvert() = std::nullopt,
+	    R"doc(Returns addition of a complex multiplication of ``{0}`` and ``{1}``.)doc"
+        );
+
+        m_tensor.def("type2_complex_div",
+		     [](ComplexTensor& t,ComplexTensor& u, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) -> ComplexTensor {
+               auto tt = t;
+               auto uu = u;
+		       return (tt::tt_metal::type2_complex_div(tt,uu,output_mem_config));
+		     },
+            py::arg("t"),
+            py::arg("u"),
+	    py::arg("output_mem_config").noconvert() = std::nullopt,
+	    R"doc(Returns addition of a complex division of ``{0}`` by ``{1}``.)doc"
+        );
     }
-
-
-
-
 
 }
