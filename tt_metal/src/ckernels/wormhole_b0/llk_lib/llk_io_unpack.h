@@ -29,7 +29,7 @@ inline void llk_setup_cb_interface() {
 
         cb_interface[cb_id].fifo_rd_ptr = fifo_addr;
         cb_interface[cb_id].fifo_size = fifo_size;
-        cb_interface[cb_id].fifo_limit = fifo_addr + fifo_size - 1;  // Check if there is overflow
+        cb_interface[cb_id].fifo_limit = fifo_addr + fifo_size;  // Check if there is overflow
         cb_interface[cb_id].tiles_acked = 0;
         cb_interface[cb_id].fifo_page_size = fifo_page_size;
 
@@ -74,7 +74,7 @@ inline void llk_pop_tiles(
     TT_STOREREG(4, (std::uint32_t)&tiles_acked_ptr[0]);
     cb_interface[input].fifo_rd_ptr += num_words;
 
-    if (cb_interface[input].fifo_rd_ptr > cb_interface[input].fifo_limit) {
+    if (cb_interface[input].fifo_rd_ptr >= cb_interface[input].fifo_limit) {
         cb_interface[input].fifo_rd_ptr -= cb_interface[input].fifo_size;
     }
 }
@@ -91,7 +91,7 @@ inline void llk_clear_tiles(std::uint32_t operand, std::uint32_t num_tiles) {
 
     //     cb_interface[input].fifo_rd_ptr += num_words;
 
-    //     if (cb_interface[input].f.fifo_rd_ptr > operands[input].fifo_limit) {
+    //     if (cb_interface[input].f.fifo_rd_ptr >= operands[input].fifo_limit) {
     //         cb_interface[input].f.fifo_rd_ptr -= operands[input].fifo_size;
     //     }
 
