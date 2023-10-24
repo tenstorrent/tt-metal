@@ -80,13 +80,13 @@ int main(int argc, char **argv) {
 
         auto reader_cb_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/reader_cb_test.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_cb_test.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_cb_kernel_args});
 
         auto writer_cb_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_cb_test.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_cb_test.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_cb_kernel_args});
 

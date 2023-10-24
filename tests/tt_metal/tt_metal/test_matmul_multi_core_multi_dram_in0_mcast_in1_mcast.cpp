@@ -170,37 +170,37 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID, tt_metal::
 
     auto mm_reader_kernel_in0_sender_in1_sender = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_matmul_tile_layout_in0_sender_in1_sender.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in0_sender_in1_sender.cpp",
         in0_sender_in1_sender,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default});
 
     auto mm_reader_kernel_in0_sender_in1_receiver = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_matmul_tile_layout_in0_sender_in1_receiver.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in0_sender_in1_receiver.cpp",
         in0_sender_in1_receiver,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default});
 
     auto mm_reader_kernel_in0_receiver_in1_sender = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_matmul_tile_layout_in0_receiver_in1_sender.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in0_receiver_in1_sender.cpp",
         in0_receiver_in1_sender,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto mm_reader_kernel_in0_receiver_in1_receiver = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_matmul_tile_layout_in0_receiver_in1_receiver.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in0_receiver_in1_receiver.cpp",
         in0_receiver_in1_receiver,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel_noc0 = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_matmul_tile_layout.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_matmul_tile_layout.cpp",
         all_except_left_column,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     auto unary_writer_kernel_noc1 = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_matmul_tile_layout.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_matmul_tile_layout.cpp",
         left_column,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default});
 
@@ -235,7 +235,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID, tt_metal::
 
     auto mm_kernel = tt_metal::CreateComputeKernel(
         program,
-        "tt_metal/kernels/compute/matmul_large_block_zm.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );

@@ -125,13 +125,13 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
 
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = {1}});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
@@ -141,7 +141,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
 
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "tt_metal/kernels/compute/eltwise_copy.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
             core,
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
         );
@@ -291,13 +291,13 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
 
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = {1}});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
@@ -307,7 +307,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
 
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "tt_metal/kernels/compute/eltwise_copy.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
             core,
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
         );
@@ -410,13 +410,13 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
     auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_8bank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = {not src_is_in_l1}});
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = {not dst_is_in_l1}});
 
@@ -424,7 +424,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     vector<uint32_t> compute_kernel_args = { num_pages };
     auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_copy.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );

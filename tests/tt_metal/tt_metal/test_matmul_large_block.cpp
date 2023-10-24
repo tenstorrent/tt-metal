@@ -251,7 +251,7 @@ bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool
         std::vector<uint32_t> writer_rt_args;
         string writer_kernel;
         if (output_rm) {
-            writer_kernel = "tt_metal/kernels/dataflow/writer_unary.cpp";
+            writer_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp";
             writer_rt_args = {
                 dst_dram_buffer.address(),
                 (std::uint32_t)dram_dst_noc_xy.x,
@@ -259,7 +259,7 @@ bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool
                 uint(M * N)
             };
         } else {
-            writer_kernel = "tt_metal/kernels/dataflow/writer_unswizzle.cpp";
+            writer_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unswizzle.cpp";
             writer_rt_args = {
                 dst_dram_buffer.address(),
                 (std::uint32_t)dram_dst_noc_xy.x,
@@ -276,7 +276,7 @@ bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool
 
         auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/reader_matmul_blocked.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_blocked.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
@@ -326,7 +326,7 @@ bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool
             uint(output_rm)
         };
 
-        string compute_kernel = "tt_metal/kernels/compute/matmul_large_block.cpp";
+        string compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block.cpp";
 
         auto mm_kernel = tt_metal::CreateComputeKernel(
             program,

@@ -104,15 +104,15 @@ int main(int argc, char **argv) {
 
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            multibank ? "tt_metal/kernels/dataflow/reader_unary_8bank_reduce.cpp"
-                      : "tt_metal/kernels/dataflow/reader_unary.cpp",
+            multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp"
+                      : "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            multibank ? "tt_metal/kernels/dataflow/writer_unary_8bank.cpp"
-                      : "tt_metal/kernels/dataflow/writer_unary.cpp",
+            multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
+                      : "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
         };
         auto reduce_w_compute_kernel = tt_metal::CreateComputeKernel(
             program,
-            "tt_metal/kernels/compute/reduce_w.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/compute/reduce_w.cpp",
             core,
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = reduce_defines}
         );

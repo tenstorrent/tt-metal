@@ -50,13 +50,13 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_8bank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_8bank.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
@@ -67,7 +67,7 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
 
     auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_copy.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
 

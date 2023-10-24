@@ -111,15 +111,15 @@ int main(int argc, char **argv) {
         reader_defines["REDUCE_SCALER"] = "1";
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            multibank ? "tt_metal/kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp"
-                      : "tt_metal/kernels/dataflow/reader_unary_transpose_wh.cpp", // TODO(AP): not ported for reduce with scaler
+            multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp"
+                      : "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh.cpp", // TODO(AP): not ported for reduce with scaler
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_args, .defines = reader_defines});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            multibank ? "tt_metal/kernels/dataflow/writer_unary_8bank.cpp" // no need to transpose the output since output Ht=1
-                      : "tt_metal/kernels/dataflow/writer_unary.cpp",
+            multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp" // no need to transpose the output since output Ht=1
+                      : "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
@@ -135,7 +135,7 @@ int main(int argc, char **argv) {
         };
         auto reduce_h_compute_kernel = tt_metal::CreateComputeKernel(
             program,
-            "tt_metal/kernels/compute/reduce_h.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/compute/reduce_h.cpp",
             core,
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = reduce_defines}
         );

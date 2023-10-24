@@ -102,9 +102,9 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
     for (int core_id = 0; core_id < num_cores; core_id++) {
         string receiver_kernel_name;
         if (core_id == 0) {
-            receiver_kernel_name = "tt_metal/kernels/dataflow/reader_first_stage.cpp";
+            receiver_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_first_stage.cpp";
         } else {
-            receiver_kernel_name = "tt_metal/kernels/dataflow/receiver_intermediate_stage.cpp";
+            receiver_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/receiver_intermediate_stage.cpp";
         }
 
         std::vector<uint32_t> receiver_kernel_compile_time_args = {cb_index, block_size_tiles};
@@ -119,9 +119,9 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
 
         string sender_kernel_name;
         if (core_id == num_cores - 1) {
-            sender_kernel_name = "tt_metal/kernels/dataflow/writer_last_stage.cpp";
+            sender_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_last_stage.cpp";
         } else {
-            sender_kernel_name = "tt_metal/kernels/dataflow/sender_intermediate_stage.cpp";
+            sender_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/sender_intermediate_stage.cpp";
         }
         std::vector<uint32_t> sender_kernel_compile_time_args = {cb_index, block_size_tiles};
         sender_kernels.push_back(tt_metal::CreateDataMovementKernel(
@@ -134,7 +134,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
                 .compile_args = sender_kernel_compile_time_args}));
 
         // Add blank compute kernel
-        tt_metal::CreateComputeKernel(program, "tt_metal/kernels/compute/blank.cpp", cores[core_id]);
+        tt_metal::CreateComputeKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", cores[core_id]);
     }
 
     // TODO(agrebenisan): Once semaphores are properly allocated at 16B-aligned addresses, then

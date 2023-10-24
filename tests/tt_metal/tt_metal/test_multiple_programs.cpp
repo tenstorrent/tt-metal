@@ -56,13 +56,13 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> setup_prog
 
     auto binary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_binary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
@@ -72,7 +72,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> setup_prog
     binary_defines["ELTWISE_OP"] = "add_tiles";
     auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_binary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines}
     );
@@ -109,13 +109,13 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> setup_prog
 
     auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_matmul_small_block.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_small_block.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
@@ -131,7 +131,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> setup_prog
 
     auto mm_kernel = tt_metal::CreateComputeKernel(
         program,
-        "tt_metal/kernels/compute/matmul.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/matmul.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
