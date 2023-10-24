@@ -293,8 +293,8 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
                 == num_dims
             )
 
-            shape1_start.append(shape2_start[-1])
-            shape1_end.append(shape2_end[-1])
+            shape1_start = shape1_start + [shape2_start[-1]]
+            shape1_end = shape1_end + [shape2_end[-1]]
 
             def _gen_matmul_shapes(shape):
                 shape1 = [shape[0], shape[1], shape[2], shape[3]]
@@ -434,8 +434,8 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
 
             shape1_start, shape2_start = start_shape
             shape1_end, shape2_end = end_shape
-
             num_dims = 4
+
             assert (
                 len(shape1_start)
                 == len(shape1_end)
@@ -449,8 +449,8 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
 
             assert len(interval) == (num_dims + 1)
 
-            shape1_start.append(shape2_start[-1])
-            shape1_end.append(shape2_end[-1])
+            shape1_start = shape1_start + [shape2_start[-1]]
+            shape1_end = shape1_end + [shape2_end[-1]]
 
             def _gen_linear_shapes(shape):
                 b, c, h, w, outer_dim = shape
