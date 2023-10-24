@@ -8,17 +8,15 @@ import tt_lib
 import torch
 import torch.nn as nn
 import math
-from models.demos.resnet.utils import conv3x3, conv1x1, fold_bn_to_conv, fold_bn_to_conv_weights_bias
-from models.utility_functions import pad_by_zero, tt2torch_tensor
+from models.demos.resnet.utils import fold_bn_to_conv_weights_bias
+from models.utility_functions import tt2torch_tensor
 from tt_lib.utils import pad_weight
 
 from tt_lib.fused_ops.average_pool import run_avg_pool_on_device_wrapper as TtAvgPool
 from tt_lib.fused_ops.max_pool import run_max_pool_on_device_wrapper as TtMaxPool
 from tt_lib.fused_ops.max_pool import compute_max_pool_shape
-from tt_lib.fused_ops.softmax import softmax as TtSoftmax
 from tt_lib.fused_ops.conv import resnet50_first_conv, resnet50_1x1_conv_as_matmul, resnet50_optimized_conv
-from models.utility_functions import _nearest_32, profiler
-from tt_lib.fallback_ops import fallback_ops
+from models.utility_functions import _nearest_32
 
 
 def ResnetLinear(
@@ -68,24 +66,16 @@ def _nearest_y(x, y):
 def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
     if x.layout() == target_layout:
         return x
-    if (
-        x.layout() == tt_lib.tensor.Layout.ROW_MAJOR
-        and target_layout == tt_lib.tensor.Layout.TILE
-    ):
-        x_padded_shape = tt_lib.tensor.pad_to_tile_shape(
-            x.shape(), False, False, True, True
-        )
-        if (x.shape() != x_padded_shape):
+    if x.layout() == tt_lib.tensor.Layout.ROW_MAJOR and target_layout == tt_lib.tensor.Layout.TILE:
+        x_padded_shape = tt_lib.tensor.pad_to_tile_shape(x.shape(), False, False, True, True)
+        if x.shape() != x_padded_shape:
             return tt_lib.tensor.format_input_tensor(
                 x, device, x_padded_shape, pad_value, target_layout, output_mem_config
             )
         else:
             return tt_lib.tensor.tilize(x, output_mem_config, use_multicore=True)
-    elif (
-        x.layout() == tt_lib.tensor.Layout.TILE
-        and target_layout == tt_lib.tensor.Layout.ROW_MAJOR
-    ):
-        if (x.shape() != x.shape_without_padding()):
+    elif x.layout() == tt_lib.tensor.Layout.TILE and target_layout == tt_lib.tensor.Layout.ROW_MAJOR:
+        if x.shape() != x.shape_without_padding():
             return tt_lib.tensor.format_output_tensor(
                 x, x.shape_without_padding(), device, target_layout, output_mem_config
             )
