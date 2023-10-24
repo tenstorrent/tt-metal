@@ -20,10 +20,14 @@
 // #include "debug_macros.h"
 
 // SliceRange srt = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
-// SliceRange srr = SliceRange{.h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
+// SliceRange srr = SliceRange{.h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 4};
 // SliceRange srr1 = SliceRange{.h0 = 1, .h1 = 2, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
 // SliceRange src = SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
 
+
+inline void kernel_sleep(uint32_t loop_count = 1000) {
+    for (volatile uint32_t i = 0; i < loop_count; ++ i);
+}
 
 inline void tilize_in(
     uint32_t in_cb_id,
@@ -32,7 +36,8 @@ inline void tilize_in(
     uint32_t in_num_subblocks,
     uint32_t out_cb_id) {
 
-    tilize_init_short(in_cb_id, in_block_w);
+    // kernel_sleep(100);
+    tilize_init_short_with_dt(in_cb_id, in_block_w);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
             cb_wait_front(in_cb_id, in_block_w);
@@ -42,7 +47,7 @@ inline void tilize_in(
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
-    tilize_uninit();
+    tilize_uninit_with_dt();
 } // tilize_in()
 
 // NOTE: Bias is not supported with the untilize option
@@ -175,7 +180,9 @@ void MAIN {
                             }
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
                             // Reconfigure srcA back
-                            mm_init_short_with_dt(matmul_partials_cb);
+                            // mm_init_short_with_dt(matmul_partials_cb);
+                            mm_init_short();
+                            unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
                         } // enable_reload
                         // Compute output sub-block from in0_subblock x in1_subblock
                         int dst_index = 0;
@@ -250,6 +257,7 @@ void MAIN {
                     #ifndef FUSE_BIAS
                         // untilizing is only supported if there is no bias
                         if (last_out && untilize_out) {
+                            unpack_reconfig_data_format(untilize_mode_final_matmul_partials_cb, untilize_mode_final_matmul_partials_cb);
                             reblock_and_untilize(
                                 in1_num_subblocks,
                                 out_subblock_num_tiles,
@@ -260,6 +268,7 @@ void MAIN {
                                 untilize_mode_reblock_cb,
                                 out_cb_id);
                             mm_init_short();
+                            unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
                         } // last_out
                     #endif
                     in0_index_subblock_offset += in0_subblock_num_tiles;

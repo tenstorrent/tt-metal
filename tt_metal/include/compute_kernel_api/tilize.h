@@ -54,15 +54,17 @@ ALWI void tilize_init_short(uint32_t icb, uint32_t block)
     UNPACK(( llk_unpack_tilize_init(icb, block) ));
 }
 
+ALWI void tilize_init_short_with_dt(uint32_t icb, uint32_t block) {
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
+    UNPACK(( llk_unpack_reconfig_data_format(1, 0, 0, 0) ));
+    UNPACK(( llk_unpack_tilize_init(icb, block) ));
+}
+
 ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
 {
-
     UNPACK(( llk_unpack_tilize_block(icb, block) ));
 
-    // UNPACK(( DPRINT << "WLKRHFJOLWSNDJN W" << ENDL() ));
-
     for (uint32_t t = 0; t < block; t++) {
-
         // Acquire dst
         MATH(( llk_math_wait_for_dest_available<SYNC>() ));
         PACK(( llk_packer_wait_for_math_done() ));
@@ -75,13 +77,16 @@ ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
         MATH(( llk_math_dest_section_done<SYNC>() ));
         PACK(( llk_pack_dest_section_done<SYNC>() ));
     }
-    // PACK(( DPRINT << 'p' << ENDL() ));
-
 }
 
 ALWI void tilize_uninit()
 {
     UNPACK(( llk_unpack_tilize_uninit() ));
+}
+
+ALWI void tilize_uninit_with_dt() {
+    UNPACK(( llk_unpack_tilize_uninit() ));
+    UNPACK(( llk_unpack_reconfig_data_format(0, 1, 0, 0) ));
 }
 
 
