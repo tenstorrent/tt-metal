@@ -25,26 +25,26 @@ pytestmark = pytest.mark.skipif(is_wormhole_b0(), reason="Unsupported paralleliz
 @pytest.mark.parametrize(
     "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation",
     [
-        (False, True, True, 12*128, 1024, 1024, None),
+        # (False, True, True, 12*128, 1024, 1024, None),
         # one core
-        # (False, False, False, 256, 1024, 256, None),
+        # (False, False, False, 128, 256, 128, None),
         # in1-L1-fusedQKV
-        # (False, True, True, 4608, 1024, 3072, None), # both sharded
+        (False, True, True, 4608, 1024, 3072, None), # both sharded
         # (False, True, False, 4608, 1024, 3072, None), # out sharded, in0 interleaved
         # (False, False, True, 4608, 1024, 3072, None), # out interleaved, in0 sharded
         # (False, False, False, 4608, 1024, 3072, None), # out interleaved, in0 interleaved
         # # in1-dram-fusedQKV
-        # (True, True, True, 4608, 1024, 3072, None),
+        (True, True, True, 4608, 1024, 3072, None),
         # (True, True, False, 4608, 1024, 3072, None),
         # (True, False, True, 4608, 1024, 3072, None),
         # (True, False, False, 4608, 1024, 3072, None),
         # # in1-L1-selfout
-        # (False, True, True, 4608, 1024, 1024, None),
+        (False, True, True, 4608, 1024, 1024, None),
         # (False, True, False, 4608, 1024, 1024, None),
         # (False, False, True, 4608, 1024, 1024, None),
         # (False, False, False, 4608, 1024, 1024, None),
         # # in1-dram-selfout
-        # (True, True, True, 4608, 1024, 1024, None),
+        (True, True, True, 4608, 1024, 1024, None),
         # (True, True, False, 4608, 1024, 1024, None),
         # (True, False, True, 4608, 1024, 1024, None),
         # (True, False, False, 4608, 1024, 1024, None),
@@ -59,22 +59,22 @@ pytestmark = pytest.mark.skipif(is_wormhole_b0(), reason="Unsupported paralleliz
         # (True, False, True, 4608, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
         # (True, False, False, 4608, 1024, 4096, (ttl.tensor.FusibleActivation.GELU, True)),
         # # in1-L1-ff1 - no Gelu
-        # (False, True, True, 4608, 1024, 4096, None),
+        (False, True, True, 4608, 1024, 4096, None),
         # (False, True, False, 4608, 1024, 4096, None),
         # (False, False, True, 4608, 1024, 4096, None),
         # (False, False, False, 4608, 1024, 4096, None),
         # # in1-dram-ff1 - no Gelu
-        # (True, True, True, 4608, 1024, 4096, None),
+        (True, True, True, 4608, 1024, 4096, None),
         # (True, True, False, 4608, 1024, 4096, None),
         # (True, False, True, 4608, 1024, 4096, None),
         # (True, False, False, 4608, 1024, 4096, None),
         # # in1-L1-ff2
-        # (False, True, True, 4608, 4096, 1024, None),
+        (False, True, True, 4608, 4096, 1024, None),
         # (False, True, False, 4608, 4096, 1024, None),
         # (False, False, True, 4608, 4096, 1024, None),
         # (False, False, False, 4608, 4096, 1024, None),
         # # in1-dram-ff2
-        # (True, True, True, 4608, 4096, 1024, None),
+        (True, True, True, 4608, 4096, 1024, None),
         # (True, True, False, 4608, 4096, 1024, None),
         # (True, False, True, 4608, 4096, 1024, None),
         # (True, False, False, 4608, 4096, 1024, None),
@@ -85,7 +85,7 @@ def test_bert_linear(device, fidelity, in0_sharded, out_sharded, in1_in_dram, ha
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, N]
     grid_size = (12, 8)
-    # grid_size = (8, 8)
+    # grid_size = (2, 2)
     shard_shape = [M // grid_size[0], K // grid_size[1]] # shard height, width
 
     in0_block_w = K // grid_size[1] // 32 # 16
@@ -103,7 +103,7 @@ def test_bert_linear(device, fidelity, in0_sharded, out_sharded, in1_in_dram, ha
             out_subblock_w = out_block_w // 2
 
 
-    # in0_block_w = 4
+    # in0_block_w = 1
     # out_subblock_w = 1
     # out_subblock_h = 1
 

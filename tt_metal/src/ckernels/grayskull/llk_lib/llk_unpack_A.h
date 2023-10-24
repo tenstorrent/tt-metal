@@ -352,17 +352,16 @@ ALWI void llk_unpack_A_cm(const std::uint32_t operand, const std::uint32_t start
     std::uint32_t input = get_operand_id(operand);
     std::uint32_t base_address = cb_interface[input].fifo_rd_ptr - 1;
 
-    // Program srcA and srcB base addresses
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
-
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
 
         std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[input], tile_index);
-        // std::uint32_t offset_address = (tile_index << 6) + (tile_index << 2);
         std::uint32_t address = base_address + offset_address;
 
         // Clear z/w start counters
         TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+
+        // Program srcA and srcB base addresses
+        volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
         // Wait for free context
         wait_for_next_context(2);

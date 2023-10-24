@@ -89,17 +89,17 @@ ALWI void mm_init_short(const std::uint32_t transpose=0) {
 }
 
 
-ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16, const uint32_t transpose=0) {
+ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id = 16) {
     UNPACK(( llk_setup_operands() ));
     #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_AB_matmul_init_cm(in0_cb_id, in1_cb_id, transpose) ));
+    UNPACK(( llk_unpack_AB_matmul_init_cm<false>(in0_cb_id, in1_cb_id) ));
     #else
     UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id) ));
     #endif
     UNPACK(( llk_unpack_AB_matmul_hw_configure_disaggregated(in0_cb_id, in1_cb_id) ));
 
     #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_matmul_init_cm<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose) ));
+    MATH(( llk_math_matmul_init_cm<MATH_FIDELITY, DstTileFaceLayout::ColMajor, false>(in0_cb_id, in1_cb_id) ));
     #else
     MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id) ));
     #endif
