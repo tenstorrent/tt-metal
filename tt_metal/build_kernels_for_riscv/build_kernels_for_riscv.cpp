@@ -234,6 +234,7 @@ struct CompileState {
         switch (hwthread) {
             case RISCID::NC:
                 result += " -DCOMPILE_FOR_NCRISC ";
+                result += arch_define;
             break;
             case RISCID::TR0:
                 result += " -DUCK_CHLKC_UNPACK ";
@@ -255,6 +256,7 @@ struct CompileState {
             break;
             case RISCID::BR:
                 result += " -DCOMPILE_FOR_BRISC ";
+                result += arch_define;
             break;
             default: break;
         }
