@@ -200,10 +200,10 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         TT_ASSERT(!untilize_out, "Untilize is not supported with bias");
     }
 
-    // TODO (AS): Certain mixed-prec cases do not currently work. Assert them out.
-    if (!(in0_dt == out_dt && in0_dt == in1_dt && in0_dt == DataType::BFLOAT16) && (tilize_in0 || untilize_out)) {
-        TT_ASSERT(false, "TODO: Cases to be debugged");
-    }
+    // // TODO (AS): Certain mixed-prec cases do not currently work. Assert them out.
+    // if (!(in0_dt == out_dt && in0_dt == in1_dt && in0_dt == DataType::BFLOAT16) && (tilize_in0 || untilize_out)) {
+    //     TT_ASSERT(false, "TODO: Cases to be debugged");
+    // }
 
     const auto in0_tile_nbytes = tile_size(in0_df);
     const auto in1_tile_nbytes = tile_size(in1_df);
@@ -233,7 +233,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     // Ensure the size arguments match the input tensors
     TT_ASSERT(in0_height_ntiles == in0_height_nblocks * in0_block_height_ntiles, "Mismatch in tensor in0 height!");
     TT_ASSERT(in0_width_ntiles == in0_width_nblocks * in0_block_width_ntiles, "Mismatch tensor in0 width!");
-    TT_ASSERT(in1_width_ntiles == in1_width_nblocks * in1_block_width_ntiles, "Mismatch tensor in1 width!");
+    TT_ASSERT(in1_width_ntiles == in1_width_nblocks * in1_block_width_ntiles, "Mismatch in tensor in1 width! in1_width_ntiles = {}, in1_width_nblocks = {}, in1_block_width_ntiles = {}", in1_width_ntiles, in1_width_nblocks, in1_block_width_ntiles);
 
     // in0
     uint32_t in0_dram_addr = src0_dram_buffer->address();
