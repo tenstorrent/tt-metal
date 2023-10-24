@@ -486,7 +486,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             diff_end_coord = device->worker_core_from_logical_core({start_core_x + num_cores_c - 1, 0}).x;
             in0_mcast_noc_x.reserve(num_cores_c);
             for(uint32_t core_idx_x = 0; core_idx_x < num_cores_c; ++core_idx_x) {
-                in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({0, core_idx_x}).x);
+                in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
             }
         }
     }
@@ -546,8 +546,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in0_sender_args.push_back(worker_shard_same_coord);
                     mm_in0_sender_args.push_back(diff_end_coord);
                     mm_in0_sender_args.push_back(worker_shard_same_coord);
-                    mm_in0_sender_args.push_back(worker_shard_same_coord);
                     mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
+                    mm_in0_sender_args.push_back(worker_shard_same_coord);
                 }
                 tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
                 reader_kernel_ids.push_back(mm_kernel_in0_sender_id);
