@@ -11,8 +11,6 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 
-#include <optional>
-
 using namespace tt::constants;
 using namespace std;
 using namespace tt::tt_metal;
