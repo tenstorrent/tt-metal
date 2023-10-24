@@ -11,9 +11,8 @@ from models.demos.resnet.tt.genericResnetBlock import ResNet, BasicBlock
 
 from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
-@pytest.mark.skip(
-    reason="Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301"
-)
+
+@pytest.mark.skip(reason="Hanging post commit 8/24/23 debug war room session, see PR#2297, PR#2301")
 @pytest.mark.parametrize("fold_batchnorm", [True], ids=["Batchnorm folded"])
 def test_run_resnet18_inference(device, fold_batchnorm, imagenet_sample_input):
     image = imagenet_sample_input

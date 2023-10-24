@@ -38,9 +38,7 @@ def run_perf_resnet(
     inputs = image_processor(image, return_tensors="pt")
 
     inputs = inputs["pixel_values"]
-    comments = (
-        f"{list(inputs.shape)[-2]}x{list(inputs.shape)[-1]}_batchsize{batch_size}"
-    )
+    comments = f"{list(inputs.shape)[-2]}x{list(inputs.shape)[-1]}_batchsize{batch_size}"
 
     inputs1 = inputs
     for i in range(batch_size - 1):
