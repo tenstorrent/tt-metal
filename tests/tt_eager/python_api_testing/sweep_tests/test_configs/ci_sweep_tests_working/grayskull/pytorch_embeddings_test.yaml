@@ -18,7 +18,6 @@ test-list:
       args-gen: gen_embeddings_args
       output-file: embeddings_sweep.csv
       args:
-      args:
         inputs:
           - input-1:
             data-layout: ["TILE"]
@@ -29,3 +28,6 @@ test-list:
             data-type: ["BFLOAT16"]
             buffer-type: ["DRAM"]
         out-buffer-type: ["DRAM"]
+      env:
+        TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
+        # TT_PCI_DMA_BUF_SIZE: "1048576"
