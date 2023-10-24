@@ -40,7 +40,7 @@ int main(int argc, char **argv) {
         std::vector<uint32_t> second_runtime_args = {303, 606};
 
         tt_metal::KernelID add_two_ints_kernel = tt_metal::CreateDataMovementKernel(
-            program, "tt_metal/kernels/riscv_draft/add_two_ints.cpp", core,
+            program, "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp", core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         ////////////////////////////////////////////////////////////////////////////

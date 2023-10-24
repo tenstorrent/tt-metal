@@ -114,13 +114,13 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
 
     auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_push_4.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = program_attributes.reader_processor, .noc = program_attributes.reader_noc});
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = program_attributes.writer_processor, .noc = program_attributes.writer_noc});
 
@@ -130,7 +130,7 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
 
     auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_copy_3m.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
         core,
         tt_metal::ComputeConfig{
             .math_fidelity = program_attributes.math_fidelity,

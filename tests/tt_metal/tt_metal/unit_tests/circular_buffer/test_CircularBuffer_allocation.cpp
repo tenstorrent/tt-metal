@@ -386,7 +386,7 @@ TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
 
     auto reader_kernel = CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -395,7 +395,7 @@ TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
 
     auto writer_kernel = CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,

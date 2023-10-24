@@ -31,7 +31,7 @@ Program initialize_program_data_movement(Device *device, const CoreRangeSet &cor
 
     auto add_two_ints_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/riscv_draft/add_two_ints.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/riscv_draft/add_two_ints.cpp",
         core_range_set,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
@@ -51,7 +51,7 @@ Program initialize_program_compute(Device *device, const CoreRangeSet &core_rang
 
     auto compute_kernel_id = tt_metal::CreateComputeKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/increment_runtime_arg.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp",
         core_range_set,
         tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_args});
 

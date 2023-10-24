@@ -28,16 +28,16 @@ const char* get_reader_name(bool multibank, BcastDim::Enum bcast_dim) {
     TT_ASSERT(multibank && "Only multibank is supported correctly.");
     if (bcast_dim == BcastDim::H) {
         return multibank ?
-            "tt_metal/kernels/dataflow/reader_bcast_h_8bank.cpp" :
-            "tt_metal/kernels/dataflow/reader_bcast_h.cpp";
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_h_8bank.cpp" :
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_h.cpp";
     } else if (bcast_dim == BcastDim::W) {
         return multibank ?
-            "tt_metal/kernels/dataflow/reader_bcast_w_8bank.cpp" :
-            "tt_metal/kernels/dataflow/reader_bcast_w.cpp";
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_w_8bank.cpp" :
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_w.cpp";
     } if (bcast_dim == BcastDim::HW) {
         return multibank ?
-            "tt_metal/kernels/dataflow/reader_bcast_hw_8bank.cpp" :
-            "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp";
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_hw_8bank.cpp" :
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_diff_lengths.cpp";
     }
     TT_ASSERT(false && "Unexpected bcast_dim!");
     return "";
@@ -45,9 +45,9 @@ const char* get_reader_name(bool multibank, BcastDim::Enum bcast_dim) {
 
 const char* get_compute_name(BcastDim::Enum bcast_dim) {
     switch (bcast_dim) {
-        case BcastDim::H:  return "tt_metal/kernels/compute/bcast_h.cpp";
-        case BcastDim::W:  return "tt_metal/kernels/compute/bcast_w.cpp";
-        case BcastDim::HW: return "tt_metal/kernels/compute/bcast_hw.cpp";
+        case BcastDim::H:  return "tests/tt_metal/tt_metal/test_kernels/compute/bcast_h.cpp";
+        case BcastDim::W:  return "tests/tt_metal/tt_metal/test_kernels/compute/bcast_w.cpp";
+        case BcastDim::HW: return "tests/tt_metal/tt_metal/test_kernels/compute/bcast_hw.cpp";
         default:           TT_ASSERT(false && "Unexpected bcast_dim!");
     }
     return "";
@@ -214,8 +214,8 @@ int main(int argc, char **argv) {
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            multibank ? "tt_metal/kernels/dataflow/writer_unary_8bank.cpp"
-                      : "tt_metal/kernels/dataflow/writer_unary.cpp",
+            multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
+                      : "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 

@@ -77,13 +77,13 @@ int main(int argc, char **argv) {
         std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
         auto reader = tt_metal::CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/reader_bmm_8bank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
         auto writer = tt_metal::CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_bmm_8bank.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
 
         auto eltwise_binary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "tt_metal/kernels/compute/bmm.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
             core,
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
         );

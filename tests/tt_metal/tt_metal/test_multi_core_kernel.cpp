@@ -47,19 +47,19 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> create_pro
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_push_4.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_copy.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = eltwise_unary_args}
     );

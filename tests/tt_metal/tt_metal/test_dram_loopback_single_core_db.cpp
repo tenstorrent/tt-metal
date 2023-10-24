@@ -59,7 +59,7 @@ int main(int argc, char **argv) {
 
         auto dram_copy_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/dram_copy_db.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_db.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 

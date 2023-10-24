@@ -105,13 +105,13 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
 
     auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_push_4.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
         core_range_set,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core_range_set,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
@@ -122,7 +122,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
 
     auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_copy_3m.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
         core_range_set,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );

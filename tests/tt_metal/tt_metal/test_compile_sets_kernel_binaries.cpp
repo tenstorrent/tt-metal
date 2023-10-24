@@ -86,13 +86,13 @@ int main(int argc, char **argv) {
 
         auto unary_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/reader_unary_push_4.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
@@ -102,7 +102,7 @@ int main(int argc, char **argv) {
 
         auto eltwise_unary_kernel = tt_metal::CreateComputeKernel(
             program,
-            "tt_metal/kernels/compute/eltwise_copy_3m.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
             core,
             tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
         );

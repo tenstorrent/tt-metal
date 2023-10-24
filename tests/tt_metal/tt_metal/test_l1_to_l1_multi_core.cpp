@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
 
                 auto l1_to_l1_kernel = tt_metal::CreateDataMovementKernel(
                         program,
-                        "tt_metal/kernels/dataflow/l1_to_l1.cpp",
+                        "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_l1.cpp",
                         core,
                         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 

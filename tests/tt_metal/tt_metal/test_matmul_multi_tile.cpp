@@ -165,7 +165,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
             .set_page_size(intermediate_cb_index, single_tile_size);
         auto cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_output_config);
 
-        string reader_kernel = "tt_metal/kernels/dataflow/reader_matmul_with_bias_blocked.cpp";
+        string reader_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_with_bias_blocked.cpp";
 
         auto mm_reader_kernel = tt_metal::CreateDataMovementKernel(
             program,
@@ -175,7 +175,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
 
         auto unary_writer_kernel = tt_metal::CreateDataMovementKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
@@ -191,7 +191,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         };
 
         string compute_kernel_name;
-        compute_kernel_name = "tt_metal/kernels/compute/matmul_with_bias.cpp";
+        compute_kernel_name = "tests/tt_metal/tt_metal/test_kernels/compute/matmul_with_bias.cpp";
 
         auto mm_kernel = tt_metal::CreateComputeKernel(
             program,

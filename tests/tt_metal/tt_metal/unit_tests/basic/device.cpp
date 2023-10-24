@@ -298,7 +298,7 @@ TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
         }
 
         tt_metal::Program program = tt_metal::Program();
-        string kernel_name = "tests/tt_metal/tt_metal/test_kernels/ping_legal_l1s.cpp";
+        string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
         CoreCoord logical_target_core = CoreCoord({.x = 0, .y = 0});
         uint32_t intermediate_l1_addr = L1_UNRESERVED_BASE;
         uint32_t size_bytes = host_input.size() * sizeof(uint32_t);

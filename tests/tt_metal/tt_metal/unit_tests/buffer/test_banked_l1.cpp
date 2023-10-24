@@ -49,18 +49,18 @@ bool l1_reader_cb_writer_l1(Device* device, const BankedL1Config& cfg, const boo
     std::vector<uint32_t> reader_runtime_args = {};
     std::vector<uint32_t> writer_runtime_args = {};
     if (banked_reader) {
-        reader_kernel_name = "tests/tt_metal/tt_metal/test_kernels/banked_reader.cpp";
+        reader_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/banked_reader.cpp";
         input_page_size_bytes = cfg.page_size_bytes;
     } else {
-        reader_kernel_name = "tests/tt_metal/tt_metal/test_kernels/direct_reader_unary.cpp";
+        reader_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/direct_reader_unary.cpp";
         input_page_size_bytes = cfg.size_bytes;
     }
 
     if (banked_writer) {
-        writer_kernel_name = "tests/tt_metal/tt_metal/test_kernels/banked_writer.cpp";
+        writer_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/banked_writer.cpp";
         output_page_size_bytes = cfg.page_size_bytes;
     } else {
-        writer_kernel_name = "tests/tt_metal/tt_metal/test_kernels/direct_writer_unary.cpp";
+        writer_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/direct_writer_unary.cpp";
         output_page_size_bytes = cfg.size_bytes;
     }
 
@@ -168,7 +168,7 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
 
     auto reader_kernel = CreateDataMovementKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/banked_reader.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/banked_reader.cpp",
         cfg.logical_core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -177,7 +177,7 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
 
     auto writer_kernel = CreateDataMovementKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/banked_writer.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/banked_writer.cpp",
         cfg.logical_core,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -189,7 +189,7 @@ bool l1_reader_datacopy_l1_writer(Device* device, const BankedL1Config& cfg) {
     };
     auto datacopy_kernel = CreateComputeKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_copy.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         cfg.logical_core,
         ComputeConfig{.compile_args = compute_kernel_args});
 
