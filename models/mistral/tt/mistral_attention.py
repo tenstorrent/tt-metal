@@ -61,18 +61,36 @@ class TtAttention(nn.Module):
             self.wo_weights,
         )
 
-        self.cache_k = torch.empty(
-            args.max_batch_size,
-            args.sliding_window,
-            self.n_kv_heads,
-            self.args.head_dim,
+        if self.args.FALLBACK_EMPTY:
+            self.cache_k = torch.empty(
+                args.max_batch_size,
+                args.sliding_window,
+                self.n_kv_heads,
+                self.args.head_dim,
+            )
+            self.cache_v = torch.empty(
+                args.max_batch_size,
+                args.sliding_window,
+                self.n_kv_heads,
+                self.args.head_dim,
+        else:
+                cache_k = tt_lib.tensor.empty(
+                    [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,tt_lib.tensor.BufferType.DRAM)
         )
-        self.cache_v = torch.empty(
-            args.max_batch_size,
-            args.sliding_window,
-            self.n_kv_heads,
-            self.args.head_dim,
-        )
+                self.cache_k = tt_to_torch_tensor(cache_k).to(torch.float32)
+                cache_v = tt_lib.tensor.empty(
+                    [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,tt_lib.tensor.BufferType.DRAM)
+                )
+                self.cache_v = tt_to_torch_tensor(cache_v).to(torch.float32)
+        
+    def repeat_kv(self, keys: torch.Tensor, values: torch.Tensor, repeats: int) -> tt_lib.tensor.Tensor:
+        dim = 2
+        keys = torch_to_tt_tensor_rm(keys, self.device)
+        values = torch_to_tt_tensor_rm(values, self.device)
+        keys = tt_lib.tensor.repeat_interleave(keys, repeats, dim)
+        values = tt_lib.tensor.repeat_interleave(values, repeats, dim)
+        return keys, values
+
 
     def forward(
         self,
@@ -107,10 +125,10 @@ class TtAttention(nn.Module):
 
         if positions.shape[0] > 1:
             # prefill
-            key, value = repeat_kv(xk, xv, self.repeats)
+            key, value = self.repeat_kv(xk, xv, self.repeats)
         else:
             cur_pos = positions[-1].item() + 1
-            key, value = repeat_kv(self.cache_k[:bsz, :cur_pos, ...], self.cache_v[:bsz, :cur_pos, ...], self.repeats)
+            key, value = self.repeat_kv(self.cache_k[:bsz, :cur_pos, ...], self.cache_v[:bsz, :cur_pos, ...], self.repeats)
 
         xq = torch_to_tt_tensor_rm(xq, self.device)
         query = tt_lib.tensor.transpose_hc(xq)
@@ -122,14 +140,17 @@ class TtAttention(nn.Module):
         scores = tt_lib.tensor.mul_unary(scores, self.scale)
 
         scores = tt_to_torch_tensor(scores)
-        # mask = tt_to_torch_tensor(mask).squeeze(0).squeeze(0).squeeze(0)
         if mask is not None:
+            if mask.dim() == 4:
+                mask = mask.squeeze()
             scores += mask[None, None, ...]
 
         query = tt_to_torch_tensor(query)
-        scores = torch_to_tt_tensor_rm(scores, self.device, put_on_device=False)
+        # scores = torch_to_tt_tensor_rm(scores, self.device, put_on_device=False)
 
-        scores = tt_lib.operations.primary.softmax_in_place(scores) #last-dim
+        # scores = tt_lib.operations.primary.softmax_in_place(scores) #last-dim
+        scores = nn.functional.softmax(scores, dim=-1).type_as(query)
+        scores = torch_to_tt_tensor_rm(scores, self.device, put_on_device=False)
         output = tt_lib.tensor.bmm(scores, value)  # (bs, n_local_heads, slen, head_dim)
 
         output = tt_lib.tensor.transpose_hc(output)
