@@ -129,7 +129,7 @@ class TtAttention(nn.Module):
         query = tt_to_torch_tensor(query)
         scores = torch_to_tt_tensor_rm(scores, self.device, put_on_device=False)
 
-        scores = fallback_ops.softmax(scores, dim=-1)
+        scores = tt_lib.operations.primary.softmax_in_place(scores) #last-dim
         output = tt_lib.tensor.bmm(scores, value)  # (bs, n_local_heads, slen, head_dim)
 
         output = tt_lib.tensor.transpose_hc(output)
