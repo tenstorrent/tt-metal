@@ -16,25 +16,17 @@
 
 using namespace ckernel;
 
-// GS RISC-V RTL bug workaround (l1 reads followed by local mem reads causes a hang)
-// in ncrisc.cc/brisc.cc: volatile uint32_t local_mem_barrier;
-void write_to_local_mem_barrier(uint32_t data) {
-    local_mem_barrier = data;
-}
-
 inline void llk_setup_cb_interface() {
 
     volatile tt_l1_ptr std::uint32_t* buffer_config_addr = (volatile tt_l1_ptr uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
 
     for (uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
 
-        // write_to_local_mem_barrier are needed on GS because of the RTL bug
         // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
         uint32_t fifo_addr = buffer_config_addr[0];
         uint32_t fifo_size = buffer_config_addr[1];
         uint32_t fifo_num_pages = buffer_config_addr[2]; // not used atm
         uint32_t fifo_page_size = buffer_config_addr[3]; // not used atm
-        write_to_local_mem_barrier(fifo_num_pages);
 
         cb_interface[cb_id].fifo_rd_ptr = fifo_addr;
         cb_interface[cb_id].fifo_size = fifo_size;
