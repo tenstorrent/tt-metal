@@ -115,7 +115,7 @@ inline std::set<CoreRange> num_cores_to_corerange_set(uint32_t target_num_cores,
 	uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
 
-	TT_ASSERT(target_num_cores <= num_cores_x * num_cores_y, "Target number of cores is greater than total number of cores");
+	TT_ASSERT(target_num_cores <= num_cores_x * num_cores_y, "Target number of cores is greater than total number of cores of specified core grid");
 	std::set<CoreRange> all_cores_set;
     if (row_wise) {
         if (target_num_cores > num_cores_x) {
