@@ -10,7 +10,6 @@
 #include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "debug_print.h"
 
 ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
 ALWI void REL() { release_dst(tt::DstMode::Half); }
@@ -21,10 +20,9 @@ void MAIN {
     constexpr uint32_t origin_H = get_compile_time_arg_val(1);
     constexpr uint32_t NCHt = get_compile_time_arg_val(2);
     constexpr uint32_t Wt = get_compile_time_arg_val(3);
-
-    constexpr uint32_t gamma_grad_has_value = get_compile_time_arg_val(4);
-    constexpr uint32_t beta_grad_has_value = get_compile_time_arg_val(5);
-    constexpr uint32_t is_lastdim_layernorm = get_compile_time_arg_val(6);
+    constexpr bool gamma_grad_has_value = get_compile_time_arg_val(4) == 1;
+    constexpr bool beta_grad_has_value = get_compile_time_arg_val(5) == 1;
+    constexpr bool is_lastdim_layernorm = get_compile_time_arg_val(6) == 1;
 
     binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0);
 
@@ -55,7 +53,7 @@ void MAIN {
 
     constexpr uint32_t TILE_H = 32;
 
-    constexpr bool do_mask_h = (origin_H % TILE_H) != 0;
+    constexpr bool do_mask_h = (origin_H % TILE_H) != 0 && is_lastdim_layernorm;
     constexpr uint32_t origin_Ht = (origin_H + TILE_H - 1) / TILE_H;
 
     if (do_mask_h) {
@@ -129,8 +127,13 @@ void MAIN {
                 cb_wait_front(cb_mean, onetile);  // comes from the reader
                 cb_reserve_back(cb_xmm, onetile);
 
-                sub_bcast_cols_init_short();
-                sub_tiles_bcast_cols(cb_x, cb_mean, 0, 0, dst0);
+                if (is_lastdim_layernorm) {
+                    sub_bcast_cols_init_short();
+                    sub_tiles_bcast_cols(cb_x, cb_mean, 0, 0, dst0);
+                } else {
+                    sub_tiles_bcast_scalar_init_short();
+                    sub_tiles_bcast_scalar(cb_x, cb_mean, 0, 0, dst0);
+                }
 
                 if (do_mask_h && ((h_idx + 1) % origin_Ht == 0)) {
                     copy_tile_init();
@@ -172,8 +175,13 @@ void MAIN {
                 cb_wait_front(cb_recip_rstd, onetile);
                 cb_reserve_back(cb_y, onetile);
 
-                mul_bcast_cols_init_short();
-                mul_tiles_bcast_cols(cb_xmm, cb_recip_rstd, 0, 0, dst0);
+                if (is_lastdim_layernorm) {
+                    mul_bcast_cols_init_short();
+                    mul_tiles_bcast_cols(cb_xmm, cb_recip_rstd, 0, 0, dst0);
+                } else {
+                    mul_tiles_bcast_scalar_init_short();
+                    mul_tiles_bcast_scalar(cb_xmm, cb_recip_rstd, 0, 0, dst0);
+                }
 
                 pack_tile(dst0, cb_y);
 
@@ -233,17 +241,23 @@ void MAIN {
 
         if (gamma_grad_has_value) {
             // Compute cb_dgamma
-            // Sum[y * dy]
             ACQ();
             cb_wait_front(cb_ydyadd, onetile);
             cb_reserve_back(cb_dgamma, onetile);
 
-            reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
-            reduce_tile(REDUCE_OP, REDUCE_DIM, cb_ydyadd, cb_scaler, 0, 0, dst0);
+            if (is_lastdim_layernorm) {
+                // Sum[y * dy]
+                reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+                reduce_tile(REDUCE_OP, REDUCE_DIM, cb_ydyadd, cb_scaler, 0, 0, dst0);
+                reduce_revert_delta();
+            } else {
+                // Just copy
+                copy_tile_init();
+                copy_tile(cb_ydyadd, 0, dst0);
+            }
 
             pack_tile(dst0, cb_dgamma);
 
-            reduce_revert_delta();
             cb_pop_front(cb_ydyadd, onetile);
             cb_push_back(cb_dgamma, onetile);
             REL();
@@ -251,17 +265,23 @@ void MAIN {
 
         if (beta_grad_has_value) {
             // Compute cb_dbeta
-            // Sum[dy]
             ACQ();
             cb_wait_front(cb_dyadd, onetile);
             cb_reserve_back(cb_dbeta, onetile);
 
-            reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
-            reduce_tile(REDUCE_OP, REDUCE_DIM, cb_dyadd, cb_scaler, 0, 0, dst0);
+            if (is_lastdim_layernorm) {
+                // Sum[dy]
+                reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
+                reduce_tile(REDUCE_OP, REDUCE_DIM, cb_dyadd, cb_scaler, 0, 0, dst0);
+                reduce_revert_delta();
+            } else {
+                // Just copy
+                copy_tile_init();
+                copy_tile(cb_dyadd, 0, dst0);
+            }
 
             pack_tile(dst0, cb_dbeta);
 
-            reduce_revert_delta();
             cb_pop_front(cb_dyadd, onetile);
             cb_push_back(cb_dbeta, onetile);
             REL();
