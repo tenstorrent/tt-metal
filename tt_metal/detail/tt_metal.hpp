@@ -358,6 +358,7 @@ namespace tt::tt_metal{
         }
 
         inline CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet> &specified_core_spec) {
+            ZoneScoped;
             return std::visit(
                 [](auto&& core_spec) -> CoreRangeSet
                 {
