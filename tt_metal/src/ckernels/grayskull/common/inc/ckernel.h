@@ -160,13 +160,11 @@ inline void cfg_write(uint cfg_addr32, uint data)
 //    return cfg_regs[cfg_addr(cfg_addr32)];
 //}
 
-inline uint cfg_read_barrier(uint cfg_addr32)
+inline uint cfg_read(uint cfg_addr32)
 {
     // Declared here instead of globally to prevent direct access, which might ignore current state ID
-    volatile uint *cfg_regs = reinterpret_cast<volatile uint *>(TENSIX_CFG_BASE);
-    uint data = cfg_regs[cfg_addr(cfg_addr32)];
-    local_mem_barrier = data;
-    return data;
+    volatile uint32_t tt_reg_ptr *cfg_regs = reinterpret_cast<volatile uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE);
+    return cfg_regs[cfg_addr(cfg_addr32)];
 }
 
 // Return pointer to CFG with the right base address for the current state
@@ -197,50 +195,12 @@ inline void mop_run(const uint8_t type, const uint8_t count)
     TTI_MOP(type, count - 1, 0); // Run the MOP
 }
 
-inline void mem_barrier(uint32_t data)
-{
-    local_mem_barrier = data;
-}
-
-// Register read with local barrier (workaround for bug
-// https://yyz-gitlab.local.tenstorrent.com/tenstorrent/tensix/issues/976)
-// Read from register followed by dummy write of readback data to local memory
-// Will flush all prev reads
-inline __attribute__((always_inline)) uint32_t reg_read_barrier(uint32_t addr)
-{
-    volatile uint *p_reg = reinterpret_cast<volatile uint *> (addr);
-    uint data = p_reg[0];
-    local_mem_barrier = data;
-    return data;
-}
-
 inline __attribute__((always_inline)) uint32_t reg_read(uint32_t addr)
 {
-    return reg_read_barrier(addr);
+    volatile uint32_t tt_reg_ptr *p_reg = reinterpret_cast<volatile uint32_t tt_reg_ptr *> (addr);
+    return p_reg[0];
 }
 
-
-// Same as above. Input address targets l1
-inline uint l1_read_barrier(volatile uint *addr)
-{
-    uint data = addr[0];
-    local_mem_barrier = data;
-    return data;
-}
-
-inline uint16_t l1_read_barrier(volatile uint16_t *addr)
-{
-    uint16_t data = addr[0];
-    local_mem_barrier = (uint32_t) data;
-    return data;
-}
-
-inline uint8_t l1_read_barrier(volatile uint8_t *addr)
-{
-    uint8_t data = addr[0];
-    local_mem_barrier = (uint32_t) data;
-    return data;
-}
 
 inline void reg_write(uint32_t addr, uint32_t data)
 {
@@ -290,7 +250,7 @@ inline void cfg_rmw(uint32_t cfg_addr32, uint32_t cfg_shamt, uint32_t cfg_mask, 
     const uint32_t addr = (cfg_state_id == 0) ? cfg_addr32 : (CFG_STATE_SIZE * 4) + cfg_addr32;
 
     // Declared here instead of globally to prevent direct access, which might ignore current state ID
-    volatile uint *cfg_regs = reinterpret_cast<volatile uint *>(TENSIX_CFG_BASE);
+    volatile uint32_t tt_reg_ptr *cfg_regs = reinterpret_cast<volatile uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE);
     uint32_t cfg_data = cfg_regs[addr];
 
     // Shift and mask wrdata to properly align withn 32-bit DWORD
