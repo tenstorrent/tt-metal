@@ -5,17 +5,8 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "debug_print.h"
+#include "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/kernels/utils.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/common.hpp"
-
-inline void fill_cb_with_value(uint32_t cb_id, uint32_t value) {
-    cb_reserve_back(cb_id, 1);
-    auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_id));
-    for (int j = 0; j < 1024; j++) {
-        ptr[j] = uint16_t(value >> 16);
-    }
-    cb_push_back(cb_id, 1);
-}
 
 void kernel_main() {
     const auto output_grad_addr = get_arg_val<uint32_t>(0);
