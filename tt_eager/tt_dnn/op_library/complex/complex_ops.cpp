@@ -71,11 +71,20 @@ Tensor complex_recip(const Tensor& input, const MemoryConfig& output_mem_config)
 
     Tensor a_plus_b = add(ab[0],ab[1],{},output_mem_config);
     Tensor a_minus_b = sub(ab[0],ab[1],{},output_mem_config);
-    Tensor asqr_plus_bsqr = mul(a_minus_b,a_minus_b,{},output_mem_config);
+    Tensor asqr_plus_bsqr = add(square(ab[0],output_mem_config),square(ab[1],output_mem_config),
+                                {},output_mem_config);
     Tensor inv_dr = recip( asqr_plus_bsqr, output_mem_config );
     Tensor conj_im = mul( neg(ab[1],output_mem_config), inv_dr, {}, output_mem_config);
     Tensor conj_re = mul( ab[0], inv_dr, {}, output_mem_config);
     return mk_complex( conj_re, conj_im, output_mem_config );
+}
+
+Tensor complex_add(const Tensor& input_a, const Tensor& input_b,  const MemoryConfig& output_mem_config) {
+    return add(input_a,input_b,{},output_mem_config);
+}
+
+Tensor complex_sub(const Tensor& input_a, const Tensor& input_b,  const MemoryConfig& output_mem_config) {
+    return sub(input_a,input_b,{},output_mem_config);
 }
 
 Tensor complex_mul(const Tensor& input_a, const Tensor& input_b,  const MemoryConfig& output_mem_config) {
@@ -89,7 +98,7 @@ Tensor complex_mul(const Tensor& input_a, const Tensor& input_b,  const MemoryCo
 }
 
 
-// z_a/z_b = z_a*recip(z_b) = z_a*conj(z_b)/
+// z_a/z_b = z_a*recip(z_b) = z_a*conj(z_b)/(z_b*conj(z_b))
 Tensor complex_div(const Tensor& input_a, const Tensor& input_b,  const MemoryConfig& output_mem_config) {
     CHECK_FOR_COMPLEX(input_a);
     CHECK_FOR_COMPLEX(input_b);
@@ -104,6 +113,67 @@ Tensor angle(const Tensor& input, const MemoryConfig& output_mem_config) {
 }
 
 #undef CHECK_FOR_COMPLEX
+
+///// type-2 implementation ////
+Tensor is_real(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    return eqz( input[1], output_mem_config);
+}
+
+Tensor is_imag(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    return eqz( input[0], output_mem_config);
+}
+
+Tensor real(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    return input[0];
+}
+
+Tensor imag(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    return input[1];
+}
+
+ComplexTensor conj(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    return ComplexTensor({input[0], neg(input[1],output_mem_config)});
+}
+
+Tensor angle(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    return neg( atan2(input[1],input[0],output_mem_config), output_mem_config );
+}
+
+Tensor complex_abs(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
+    return hypot(input[0],input[1],output_mem_config);
+}
+
+ComplexTensor complex_mul(const ComplexTensor& ab, const ComplexTensor& cd,  const MemoryConfig& output_mem_config) {
+    // (a + ib)*(c + id) = (ac - bd) + i(bc + ad)
+    Tensor re_part = sub( mul(ab[0],cd[0],{},output_mem_config), mul(ab[1],cd[1],{},output_mem_config), {}, output_mem_config );
+    Tensor im_part = add( mul(ab[0],cd[1],{},output_mem_config), mul(ab[1],cd[0],{},output_mem_config), {}, output_mem_config );
+    return ComplexTensor({ re_part, im_part });
+}
+
+ComplexTensor complex_div(const ComplexTensor& input_a, const ComplexTensor& input_b,  const MemoryConfig& output_mem_config) {
+    return complex_mul( input_a, complex_recip( input_b , output_mem_config ), output_mem_config  );
+}
+
+ComplexTensor complex_recip(const ComplexTensor& ab, const MemoryConfig& output_mem_config) {
+    Tensor a_plus_b = add(ab[0],ab[1],{},output_mem_config);
+    Tensor a_minus_b = sub(ab[0],ab[1],{},output_mem_config);
+    Tensor asqr_plus_bsqr = add(square(ab[0],output_mem_config),square(ab[1],output_mem_config),
+                                {},output_mem_config);
+    Tensor inv_dr = recip( asqr_plus_bsqr, output_mem_config );
+    Tensor conj_im = mul( neg(ab[1],output_mem_config), inv_dr, {}, output_mem_config);
+    Tensor conj_re = mul( ab[0], inv_dr, {}, output_mem_config);
+    return ComplexTensor({ conj_re, conj_im});
+}
+
+ComplexTensor complex_add(const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config) {
+    return ComplexTensor({ add(input_a[0],input_b[0],{},output_mem_config),
+             add(input_a[1],input_b[1],{},output_mem_config) });
+}
+
+ComplexTensor complex_sub(const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config) {
+    return ComplexTensor({ sub(input_a[0],input_b[0],{},output_mem_config),
+             sub(input_a[1],input_b[1],{},output_mem_config) });
+}
 
 }//namespace tt_metal
 

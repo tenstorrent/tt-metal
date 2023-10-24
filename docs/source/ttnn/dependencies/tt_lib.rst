@@ -593,6 +593,10 @@ The following functions are available,
 
 Complex arithmetic can be carried out for multiply, divide, add and subtract as follows:
 
+.. autofunction:: tt_lib.tensor.complex_add
+
+.. autofunction:: tt_lib.tensor.complex_sub
+
 .. autofunction:: tt_lib.tensor.complex_mul
 
 .. autofunction:: tt_lib.tensor.complex_div
@@ -608,6 +612,12 @@ and then unary operations for,
 .. autofunction:: tt_lib.tensor.conj
 
 .. autofunction:: tt_lib.tensor.complex_recip
+
+Complex Operations (Type 2)
+---------------------------
+Type 2 Complex representation allows for more flexible storage than earlier one while providing same set of
+operations; specifically this storage allows for compute without the cost of split-concat implict in
+the Type 1 contiguous representations.
 
 Other Operations
 ----------------
