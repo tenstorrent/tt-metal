@@ -42,8 +42,6 @@ volatile tt_l1_ptr uint32_t* instrn_buf[MAX_THREADS];
 volatile tt_l1_ptr uint32_t* pc_buf[MAX_THREADS];
 volatile tt_l1_ptr uint32_t* mailbox[MAX_THREADS];
 
-volatile uint32_t local_mem_barrier __attribute__((used));
-
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
 
