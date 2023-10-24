@@ -80,40 +80,67 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
     const auto origin_H = output_grad_shape_without_padding[2];
     const auto origin_W = output_grad_shape_without_padding[3];
 
+    const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && !is_lastdim_layernorm;
+    const uint32_t mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
+
     const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
     const uint32_t mask_w = do_mask_w ? origin_W % TILE_WIDTH : TILE_WIDTH;
-
-    const auto origin_Ht = tt::div_up(origin_H, TILE_HEIGHT);
-    const auto origin_Wt = tt::div_up(origin_W, TILE_WIDTH);
 
     auto normalized_numel = origin_W;
 
     auto adjusted_output_grad_shape = output_grad_shape;
+    if (normalized_dims.size() == 2) {
+        // HW
+        // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (N, C, TILE_HEIGHT, Ht * Wt * TILE_WIDTH)
+        adjusted_output_grad_shape[2] = TILE_HEIGHT;
+        adjusted_output_grad_shape[3] = (output_grad_shape[2] / TILE_HEIGHT) * output_grad_shape[3];
+        normalized_numel *= origin_H;
+    } else if (normalized_dims.size() == 3) {
+        // CHW
+        // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (N, 1, TILE_HEIGHT, C * Ht * Wt * TILE_WIDTH)
+        adjusted_output_grad_shape[1] = 1;
+        adjusted_output_grad_shape[2] = TILE_HEIGHT;
+        adjusted_output_grad_shape[3] =
+            output_grad_shape[1] * (output_grad_shape[2] / TILE_HEIGHT) * output_grad_shape[3];
+        normalized_numel *= origin_C * origin_H;
+    } else if (normalized_dims.size() == 4) {
+        // NCHW
+        // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (1, 1, TILE_HEIGHT, N * C * Ht * Wt * TILE_WIDTH)
+        adjusted_output_grad_shape[0] = 1;
+        adjusted_output_grad_shape[1] = 1;
+        adjusted_output_grad_shape[2] = TILE_HEIGHT;
+        adjusted_output_grad_shape[3] =
+            output_grad_shape[0] * output_grad_shape[1] * (output_grad_shape[2] / TILE_HEIGHT) * output_grad_shape[3];
+        normalized_numel *= origin_N * origin_C * origin_H;
+    } else {
+        TT_ASSERT(is_lastdim_layernorm);
+    }
 
     const auto N = adjusted_output_grad_shape[0];
     const auto C = adjusted_output_grad_shape[1];
     const auto H = adjusted_output_grad_shape[2];
     const auto W = adjusted_output_grad_shape[3];
 
-    const auto NC = N * C;
-
     const auto Ht = H / TILE_HEIGHT;
-    const auto Wt = W / TILE_WIDTH;
+    const auto Wt = W / TILE_WIDTH;  // inner_size
+
+    const auto NC = N * C;
+    const auto NCHt = NC * Ht;  // outer_size
 
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     const bool gamma_has_value = gamma.has_value();
-    const bool input_grad_has_value = input_grad.has_value();
+    TT_ASSERT(input_grad.has_value());
 
-    const uint32_t in0_t = 1;                        // output_grad(==dy)
-    const uint32_t in1_t = 1;                        // input(==x)
-    const uint32_t in2_t = 1;                        // mean
-    const uint32_t in3_t = 1;                        // rstd
-    const uint32_t in4_t = 1;                        // scaler
-    const uint32_t in5_t = 1;                        // normalized_numel(==n)
-    const uint32_t in6_t = gamma_has_value ? 1 : 0;  // gamma
-    const uint32_t in7_t = do_mask_w ? 1 : 0;        // mask
+    const uint32_t in0_t = 1;                                 // output_grad(==dy)
+    const uint32_t in1_t = 1;                                 // input(==x)
+    const uint32_t in2_t = 1;                                 // mean
+    const uint32_t in3_t = 1;                                 // rstd
+    const uint32_t in4_t = 1;                                 // scaler
+    const uint32_t in5_t = 1;                                 // normalized_numel(==n)
+    const uint32_t in6_t = gamma_has_value ? 1 : 0;           // gamma
+    const uint32_t in7_t = (do_mask_h || do_mask_w) ? 2 : 0;  // mask_h_w
 
     // dx = ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (1.0 / (n * rstd))
     const uint32_t out0_t = 1;  // input_grad(==dx)
@@ -145,7 +172,6 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto NCHt = NC * Ht;
     tt_metal::CoreGridDesc core_grid(device);
     const auto num_cores_y = core_grid.y_;
     CoreCoord core_grid_coord = {.x = core_grid.x_, .y = num_cores_y};
@@ -173,7 +199,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
             {CB::c_in4, in4_t},        // scaler
             {CB::c_in5, in5_t},        // normalized_numel(==n)
             {CB::c_in6, in6_t},        // gamma
-            {CB::c_in7, in7_t},        // mask
+            {CB::c_in7, in7_t},        // mask_h_w
             {CB::c_out0, out0_t},      // input_grad(==dx)
             {CB::c_intermed0, im0_t},  // copy output_grad(==dy or dy * gamma)
             {CB::c_intermed1, im1_t},  // output(==y)
@@ -195,6 +221,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
         static_cast<uint32_t>(is_dram(rstd)),
         static_cast<uint32_t>(is_dram(gamma)),
         static_cast<uint32_t>(gamma_has_value),
+        static_cast<uint32_t>(do_mask_h),
         static_cast<uint32_t>(do_mask_w)};
 
     const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
@@ -224,7 +251,12 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
     }
 
     const std::vector<uint32_t> compute_args_group_1{
-        num_rows_per_core_group_1, origin_H, origin_W, Wt, gamma_has_value, is_lastdim_layernorm};
+        num_rows_per_core_group_1,
+        origin_H,
+        origin_W,
+        Wt,
+        static_cast<uint32_t>(gamma_has_value),
+        static_cast<uint32_t>(is_lastdim_layernorm)};
 
     const auto compute_kernel_file = use_large_algorithm
                                          ? "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
@@ -237,7 +269,12 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
 
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{
-            num_rows_per_core_group_2, origin_H, origin_W, Wt, gamma_has_value, is_lastdim_layernorm};
+            num_rows_per_core_group_2,
+            origin_H,
+            origin_W,
+            Wt,
+            static_cast<uint32_t>(gamma_has_value),
+            static_cast<uint32_t>(is_lastdim_layernorm)};
 
         tt::operations::primary::CreateComputeKernel(
             program,
@@ -262,7 +299,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
 
     const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0;
 
-    const auto input_grad_addr = input_grad_has_value ? input_grad.value().buffer()->address() : 0;
+    const auto input_grad_addr = input_grad.value().buffer()->address();
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -286,6 +323,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
             Wt,
             tile_offset,
             n.u,
+            mask_h,
             mask_w};
         SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
 
@@ -330,9 +368,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
 
             {
                 auto runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
-                if (input_grad_buffer != nullptr) {
-                    runtime_args[0] = input_grad_buffer->address();
-                }
+                TT_ASSERT(input_grad_buffer != nullptr);
+                runtime_args[0] = input_grad_buffer->address();
                 SetRuntimeArgs(program, writer_kernels_id, core, runtime_args);
             }
         }

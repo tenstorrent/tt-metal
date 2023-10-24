@@ -5,17 +5,7 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "debug_print.h"
-#include "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/common.hpp"
-
-inline void fill_cb_with_value(uint32_t cb_id, uint32_t value) {
-    cb_reserve_back(cb_id, 1);
-    auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_id));
-    for (int j = 0; j < 1024; j++) {
-        ptr[j] = uint16_t(value >> 16);
-    }
-    cb_push_back(cb_id, 1);
-}
+#include "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/kernels/utils.hpp"
 
 void kernel_main() {
     const auto output_grad_addr = get_arg_val<uint32_t>(0);
@@ -28,7 +18,8 @@ void kernel_main() {
     const auto Wt = get_arg_val<uint32_t>(6);
     const auto tile_offset = get_arg_val<uint32_t>(7);
     const auto normalized_numel = get_arg_val<uint32_t>(8);
-    const auto mask_w = get_arg_val<uint32_t>(9);
+    const auto mask_h = get_arg_val<uint32_t>(9);
+    const auto mask_w = get_arg_val<uint32_t>(10);
 
     constexpr uint32_t cb_id_output_grad = 0;
     constexpr uint32_t cb_id_input = 1;
@@ -37,7 +28,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_scaler = 4;
     constexpr uint32_t cb_id_numel = 5;
     constexpr uint32_t cb_id_gamma = 6;
-    constexpr uint32_t cb_id_mask_w = 7;
+    constexpr uint32_t cb_id_mask_h_w = 7;
 
     const uint32_t output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
     const auto output_grad_data_format = get_dataformat(cb_id_output_grad);
@@ -57,7 +48,8 @@ void kernel_main() {
     constexpr bool rstd_is_dram = get_compile_time_arg_val(3) == 1;
     constexpr bool gamma_is_dram = get_compile_time_arg_val(4) == 1;
     constexpr bool gamma_has_value = get_compile_time_arg_val(5) == 1;
-    constexpr bool do_mask_w = get_compile_time_arg_val(6) == 1;
+    constexpr bool do_mask_h = get_compile_time_arg_val(6) == 1;
+    constexpr bool do_mask_w = get_compile_time_arg_val(7) == 1;
 
     const InterleavedAddrGenFast<output_grad_is_dram> output_grad_addrg = {
         .bank_base_address = output_grad_addr,
@@ -86,8 +78,8 @@ void kernel_main() {
     fill_cb_with_value(cb_id_scaler, scaler.u);
     fill_cb_with_value(cb_id_numel, normalized_numel);
 
-    if (do_mask_w) {
-        generate_mask_w(cb_id_mask_w, mask_w);
+    if (do_mask_h || do_mask_w) {
+        generate_mask_h_w(cb_id_mask_h_w, mask_h, mask_w);
     }
 
     uint32_t offs = 0;
