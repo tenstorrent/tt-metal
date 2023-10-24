@@ -88,7 +88,7 @@ void setup_cb_read_write_interfaces() {
         uint32_t fifo_size = circular_buffer_config_addr[1];
         uint32_t fifo_num_pages = circular_buffer_config_addr[2];
         uint32_t fifo_page_size = circular_buffer_config_addr[3];
-        uint32_t fifo_limit = fifo_addr + fifo_size - 1;
+        uint32_t fifo_limit = fifo_addr + fifo_size;
 
         cb_interface[cb_id].fifo_limit = fifo_limit;  // to check if we need to wrap
         cb_interface[cb_id].fifo_wr_ptr = fifo_addr;
@@ -108,7 +108,7 @@ void setup_cq_read_write_interface() {
     uint fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;  // The fifo starts after the pointer addresses
     uint fifo_size = ((1024 * 1024 * 1024) >> 4) - fifo_addr;
 
-    cq_read_interface.fifo_limit = fifo_addr + fifo_size - 1;
+    cq_read_interface.fifo_limit = fifo_addr + fifo_size;
     cq_read_interface.fifo_rd_ptr = fifo_addr;
     cq_read_interface.fifo_size = fifo_size;
 }
@@ -178,7 +178,7 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
 
     // this will basically reset fifo_wr_ptr to fifo_addr -- no other wrap is legal
     // producer always writes into contiguous memory, it cannot wrap
-    if (cb_interface[operand].fifo_wr_ptr > cb_interface[operand].fifo_limit) {
+    if (cb_interface[operand].fifo_wr_ptr >= cb_interface[operand].fifo_limit) {
         // TODO: change this to fifo_wr_ptr
         cb_interface[operand].fifo_wr_ptr -= cb_interface[operand].fifo_size;
     }
@@ -217,7 +217,7 @@ void cb_pop_front(int32_t operand, int32_t num_pages) {
 
     // this will basically reset fifo_rd_ptr to fifo_addr -- no other wrap is legal
     // consumer always reads from contiguous memory, it cannot wrap
-    if (cb_interface[operand].fifo_rd_ptr > cb_interface[operand].fifo_limit) {
+    if (cb_interface[operand].fifo_rd_ptr >= cb_interface[operand].fifo_limit) {
         // TODO: change this to fifo_wr_ptr
         cb_interface[operand].fifo_rd_ptr -= cb_interface[operand].fifo_size;
     }
