@@ -19,7 +19,7 @@ from models.utility_functions import (
     is_e75,
 )
 from models.demos.resnet.tests.demo_utils import get_data
-from models.demos.resnet.metalResnetBlock50 import ResNet, Bottleneck
+from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 
 
 def run_perf_resnet(

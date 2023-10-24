@@ -17,7 +17,7 @@ from models.utility_functions import prep_report
 
 
 from loguru import logger
-from models.demos.resnet.metalResnetBlock50 import ResNet, Bottleneck
+from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 
 
 def run_perf_resnet(

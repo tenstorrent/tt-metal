@@ -8,7 +8,7 @@ import torch
 from torchvision import models
 import pytest
 
-from models.demos.resnet.genericResnetBlock import ResNet, Bottleneck
+from models.demos.resnet.tt.genericResnetBlock import ResNet, Bottleneck
 from models.utility_functions import comp_pcc
 
 

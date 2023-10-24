@@ -10,7 +10,7 @@ import tt_lib
 
 from models.utility_functions import is_e75
 
-from models.demos.resnet.metalResnetBlock50 import ResNet, Bottleneck
+from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 
 
