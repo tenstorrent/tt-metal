@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 import tt_lib
 from tt_lib import fallback_ops
 from models.mistral.tt.mistral_configuration import TtModelArgs
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, torch_to_tt_tensor
 from models.helper_funcs import Linear as TtLinear
 
 
@@ -101,7 +101,7 @@ class TtAttention(nn.Module):
         xv = tt_to_torch_tensor(xv).to(torch.float32)
 
         freqs_cis = tt_to_torch_tensor(freqs_cis).squeeze(0).squeeze(0)
-        xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
+        xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis, device=self.device)
 
         # The cache is a rotating buffer
         positions = tt_to_torch_tensor(positions).squeeze(0).squeeze(0).squeeze(0)
@@ -178,22 +178,22 @@ def apply_rotary_emb(
     t_xq: torch.Tensor,
     t_xk: torch.Tensor,
     freqs_cis: torch.Tensor,
+    device
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    #xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    #xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    xq_shape = copy.deepcopy(t_xq.shape)
+    xq_shape = list(copy.deepcopy(t_xq.shape))
     xq_shape[-1] = xq_shape[-1]//2
     freqs_cis = _reshape_for_broadcast(freqs_cis, xq_shape,4)
-    freqs_cis = tt_to_torch_tensor(freqs_cis)
+    freqs_cis = torch_to_tt_tensor_rm(freqs_cis,device)
 
-    freqs_cis = tt_lib.torch.concat(freqs_cis,freqs_cis)
-    xq = tt_to_torch_tensor(t_xq)
-    xk = tt_to_torch_tensor(t_xk)
+    freqs_cis = tt_lib.tensor.concat([freqs_cis,freqs_cis],-1)
+    xq = torch_to_tt_tensor_rm(t_xq,device)
+    xk = torch_to_tt_tensor_rm(t_xk,device)
 
-    xq = tt_lib.tensor.transpose(xq)
-    xk = tt_lib.tensor.transpose(xk)
+    BCH = tt_lib.tensor.BcastOpDim.H
+    BCMUL = tt_lib.tensor.BcastOpMath.MUL
+    xq_out = tt_lib.tensor.bcast(xq,freqs_cis,BCMUL,BCH)
+    xk_out = tt_lib.tensor.bcast(xk,freqs_cis,BCMUL,BCH)
 
-    xq_out = tt_lib.torch.mul( xq, freqs_cis )
-    xk_out = tt_lib.torch.mul( kq, freqs_cis )
+    xq, xk = tt_to_torch_tensor(xq_out), tt_to_torch_tensor(xk_out)
 
-    return xq_out, xk_out
+    return xq.type_as(xq), xk.type_as(xk)
