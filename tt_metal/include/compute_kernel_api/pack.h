@@ -47,9 +47,9 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb)
     PACK((  llk_pack<false, SYNC, false >(ifrom_dst, icb)  ));
 }
 
-ALWI void mm_pack_tile(uint32_t ifrom_dst, uint32_t icb)
+ALWI void matmul_pack_tile(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles)
 {
-    PACK((  llk_mm_pack<false, SYNC, false >(ifrom_dst, icb)  ));
+    PACK((  llk_matmul_pack<false, SYNC, false >(ifrom_dst, icb, ntiles)  ));
 }
 
 /**

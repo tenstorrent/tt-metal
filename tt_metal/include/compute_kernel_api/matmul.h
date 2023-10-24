@@ -93,7 +93,6 @@ ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t
     UNPACK(( llk_setup_operands() ));
     #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_AB_matmul_init_cm(in0_cb_id, in1_cb_id, transpose) ));
-    // UNPACK(( llk_unpack_AB_matmul_init(transpose) ));
     #else
     UNPACK(( llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id) ));
     #endif
@@ -101,7 +100,6 @@ ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t
 
     #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_matmul_init_cm<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose) ));
-    // MATH(( llk_math_matmul_init<MATH_FIDELITY>(transpose) ));
     #else
     MATH(( llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id) ));
     #endif
@@ -122,11 +120,11 @@ ALWI void matmul_block(uint32_t c_in0, uint32_t c_in1, uint32_t itile0, uint32_t
 }
 
 
-ALWI void mm_block_init_short_with_dt(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t out_cb_id=2, const uint32_t transpose=0) {
+ALWI void mm_block_init_short_with_dt(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t cbid=2) {
     #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_AB_matmul_init_cm(in0_cb_id, in1_cb_id, transpose) ));
-    UNPACK(( llk_unpack_reconfig_data_format(out_cb_id, 1, 0, 0) ));
-    MATH(( llk_math_matmul_init_cm<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose) ));
+    UNPACK(( llk_unpack_AB_matmul_init_cm<false>(in0_cb_id, in1_cb_id) ));
+    UNPACK(( llk_unpack_reconfig_data_format(cbid, 1, 0, 0) ));
+    MATH(( llk_math_matmul_init_cm<MATH_FIDELITY, DstTileFaceLayout::ColMajor, false>(in0_cb_id, in1_cb_id) ));
     #else
     UNPACK(( llk_unpack_AB_matmul_init(cbid, 1) ));
     UNPACK(( llk_unpack_reconfig_data_format(cbid, 1, 0, 0) ));

@@ -18,7 +18,7 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-inline void llk_unpack_AB_matmul_mop_config(bool transpose) {
+ALWI void llk_unpack_AB_matmul_mop_config(bool transpose) {
     /*
     static constexpr uint unpack_srcb_top  = TT_OP_UNPACR(SrcB, 0b01000001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0,
     0, 0, 0, 1); static constexpr uint unpack_srcb_bot =  TT_OP_UNPACR(SrcB, 0b01000001, 0, 0, 0, 1, 1,
@@ -141,8 +141,8 @@ inline void llk_unpack_AB_matmul(
 }
 
 
-
-inline void llk_unpack_AB_matmul_mop_config_cm(const bool transpose) {
+template<bool transpose=false>
+inline void llk_unpack_AB_matmul_mop_config_cm() {
     /*
     static constexpr uint unpack_srcb_top  = TT_OP_UNPACR(SrcB, 0b01000001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0,
     0, 0, 0, 1); static constexpr uint unpack_srcb_bot =  TT_OP_UNPACR(SrcB, 0b01000001, 0, 0, 0, 1, 1,
@@ -178,18 +178,32 @@ inline void llk_unpack_AB_matmul_mop_config_cm(const bool transpose) {
     static constexpr uint unpack_srcb_bot =
         TT_OP_UNPACR(SrcB, 0b010010, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 #endif
-    ckernel_unpack_template tmp = ckernel_unpack_template(
+
+    if constexpr (transpose) {
+        ckernel_unpack_template tmp = ckernel_unpack_template(
         true,  // src B
         true,  // halo - just used for 4 unpacks
         unpack_srcb_top,
         unpack_srcb_bot,
-        transpose ? unpack_srca0_transpose : unpack_srca0,
-        transpose ? unpack_srca1_transpose : unpack_srca1,
+        unpack_srca0_transpose,
+        unpack_srca1_transpose,
         0,
-        transpose ? unpack_src_set_z_transpose : unpack_src_set_z,
+        unpack_src_set_z_transpose,
         0);
-
-    tmp.program(instrn_buffer);
+        tmp.program(instrn_buffer);
+    } else {
+        ckernel_unpack_template tmp = ckernel_unpack_template(
+        true,  // src B
+        true,  // halo - just used for 4 unpacks
+        unpack_srcb_top,
+        unpack_srcb_bot,
+        unpack_srca0,
+        unpack_srca1,
+        0,
+        unpack_src_set_z,
+        0);
+        tmp.program(instrn_buffer);
+    }
 }
 
 inline void llk_unpack_AB_matmul_hw_configure_cm(const llk_unpack_AB_matmul_params_t *unpack_AB_params) {
@@ -208,14 +222,14 @@ inline void llk_unpack_AB_matmul_hw_configure_disaggregated_cm(
     llk_unpack_AB_matmul_hw_configure_cm(&unpack_AB_matmul_params);
 }
 
-inline void llk_unpack_AB_matmul_init_cm(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose=0, const std::uint32_t ct_dim=0, const std::uint32_t rt_dim=0, const std::uint32_t kt_dim=0) {
+template<bool transpose=false>
+ALWI void llk_unpack_AB_matmul_init_cm(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t ct_dim=0, const std::uint32_t rt_dim=0, const std::uint32_t kt_dim=0) {
     // TT_LLK_DUMP("llk_unpack_AB_matmul_init({}, {}, {}, {}, {}, {})", unpA_operand, unpB_operand, transpose, ct_dim, rt_dim, kt_dim);
     // TODO: figure out tile dims based on unpA and unpB operands
-    llk_unpack_AB_matmul_mop_config(transpose>0);
-    // llk_unpack_AB_matmul_mop_config_cm(transpose>0);
+    llk_unpack_AB_matmul_mop_config_cm<transpose>();
 }
 
-inline void llk_unpack_AB_matmul_cm(
+ALWI void llk_unpack_AB_matmul_cm(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t tile_index_a,
     const std::uint32_t tile_index_b, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
     // TT_LLK_DUMP("llk_unpack_AB_matmul({}, {}, {}, {}, {}, {}, {})", operandA, operandB, tile_index_a, tile_index_b, ct_dim, rt_dim, kt_dim);
