@@ -29,7 +29,6 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     uint32_t a_start_tile_id,
     uint32_t b_start_tile_id,
     uint32_t output_start_tile_id) {
-    TT_ASSERT(!(transpose_a == true && transpose_b == true));
 
     tt_metal::Program program{};
     const auto &ashape = a.shape(), bshape = b.shape();
