@@ -56,6 +56,7 @@ void kernel_main() {
     uint32_t act_block_h_ntiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_block_w_ntiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t act_w_num_outer = get_arg_val<uint32_t>(i); i+=1;
     uint32_t src_dram_act_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
     uint32_t dst_l1_act_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
     uint32_t n_start = get_arg_val<uint32_t>(i); i+=1;
@@ -73,7 +74,7 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(2);
     constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(3);
     constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
-    constexpr uint32_t conv_act_size_c_bytes = get_compile_time_arg_val(5);
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t log_base_2_of_conv_act_size_c_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t num_channel_slices = get_compile_time_arg_val(8); // arg index=7 unused
     constexpr uint32_t channel_slice_size_bytes = get_compile_time_arg_val(9);

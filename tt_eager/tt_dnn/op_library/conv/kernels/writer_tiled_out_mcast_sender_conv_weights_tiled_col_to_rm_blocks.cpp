@@ -37,6 +37,7 @@ void kernel_main() {
 
     uint32_t num_blocks_weight_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t weight_block_height_num_outer = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_block_height_ntiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_block_width_ntiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_stride_h = get_arg_val<uint32_t>(i); i+=1;
@@ -145,12 +146,14 @@ void kernel_main() {
     //     .data_format = out_df
     // };
 
+
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
     uint32_t out_block_w_start_tile_id = out_start_tile_id;
     //DPRINT << "out_start_tile_id=" << out_start_tile_id << ENDL();
     uint32_t out_block_w_start_tile_id_w = out_start_tile_id_w;
     uint32_t weight_start_tile_id = out_start_tile_id_w;
+    uint32_t weight_inner_block_stride_h = weight_next_block_stride_h / weight_block_height_num_outer; // TODO: Pass as args
     //DPRINT << "weight_start_tile_id=" << weight_start_tile_id << ENDL();
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         uint32_t out_block_h_start_tile_id = out_block_w_start_tile_id;
@@ -160,58 +163,63 @@ void kernel_main() {
             // read weight blocks inner dim
             // read weight slice - 1 block of weights in width dim and full weight matrix height
             // read slice only once for all activation blocks
-            uint32_t weight_current_block_start_tile_id = weight_start_tile_id;
-            for(uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h; block_weight_h++) {
-                cb_reserve_back(cb_id_weight, weight_block_num_tiles);
-                uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
-                uint32_t weight_row_start_tile_id = weight_current_block_start_tile_id;
+            uint32_t weight_h_offset = 0;
+            for(uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer; weight_tile_h_outer_i++) {
+                uint32_t weight_current_block_start_tile_id = weight_start_tile_id;
+                for(uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h; block_weight_h++) {
+                    cb_reserve_back(cb_id_weight, weight_block_num_tiles);
+                    uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
+                    uint32_t weight_row_start_tile_id = weight_current_block_start_tile_id + weight_h_offset;
 
-                // mcast args
-                uint32_t weights_start_address = weight_write_l1_addr;
-                uint32_t weights_block_size_bytes = 0;
+                    // mcast args
+                    uint32_t weights_start_address = weight_write_l1_addr;
+                    uint32_t weights_block_size_bytes = 0;
 
-                // loop over weight block tiles along h
-                for(uint32_t weight_tile_h_i = 0; weight_tile_h_i < weight_block_height_ntiles; ++weight_tile_h_i) {
-                    uint32_t weight_tile_id = weight_row_start_tile_id;
-                    // loop over weight block tiles along w
-                    for(uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
-                        //DPRINT << "weight_tile_id=" << weight_tile_id << ENDL();
-                        s_weight.noc_async_read_tile(weight_tile_id, weight_write_l1_addr);
-                        weight_write_l1_addr += weight_tile_nbytes;
-                        weights_block_size_bytes += weight_tile_nbytes;
-                        weight_tile_id += 1;
-                    } // for weight_block_w
-                    weight_row_start_tile_id += weight_stride_h;
-                } // for weight_block_h
-                noc_async_read_barrier();
+                    // loop over weight block tiles along h
+                    for(uint32_t weight_tile_h_i = 0; weight_tile_h_i < weight_block_height_ntiles; ++weight_tile_h_i) {
+                        uint32_t weight_tile_id = weight_row_start_tile_id;
+                        // loop over weight block tiles along w
+                        for(uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
+                            //DPRINT << "weight_tile_id=" << weight_tile_id << ENDL();
+                            s_weight.noc_async_read_tile(weight_tile_id, weight_write_l1_addr);
+                            weight_write_l1_addr += weight_tile_nbytes;
+                            weights_block_size_bytes += weight_tile_nbytes;
+                            weight_tile_id += 1;
+                        } // for weight_block_w
+                        weight_row_start_tile_id += weight_stride_h;
+                    } // for weight_block_h
+                    noc_async_read_barrier();
 
-                #ifndef SKIP_MCAST
-                // wait until all weights mcast destinations have atomically incremented the weights semaphore_addr (i.e. its value should be weights_mcast_num_dests), then reset
-                // the semaphore_addr value back to zero for the next block
-                noc_semaphore_wait(weights_mcast_sender_semaphore_addr_ptr, weights_mcast_num_dests);
-                noc_semaphore_set(weights_mcast_sender_semaphore_addr_ptr, 0);
+                    #ifndef SKIP_MCAST
+                    // wait until all weights mcast destinations have atomically incremented the weights semaphore_addr (i.e. its value should be weights_mcast_num_dests), then reset
+                    // the semaphore_addr value back to zero for the next block
+                    noc_semaphore_wait(weights_mcast_sender_semaphore_addr_ptr, weights_mcast_num_dests);
+                    noc_semaphore_set(weights_mcast_sender_semaphore_addr_ptr, 0);
 
-                // Now we have the block in the CB address, we can mcast to dests!
-                uint64_t weights_multicast_data_addr = get_noc_multicast_addr(
-                weights_mcast_dest_noc_start_x,
-                weights_mcast_dest_noc_start_y,
-                weights_mcast_dest_noc_end_x,
-                weights_mcast_dest_noc_end_y,
-                weights_start_address);
-                // num_dests must not include source, since we are NOT really doing a local copy!
-                noc_async_write_multicast(weights_start_address, weights_multicast_data_addr, weights_block_size_bytes, weights_mcast_num_cores);
+                    // Now we have the block in the CB address, we can mcast to dests!
+                    uint64_t weights_multicast_data_addr = get_noc_multicast_addr(
+                    weights_mcast_dest_noc_start_x,
+                    weights_mcast_dest_noc_start_y,
+                    weights_mcast_dest_noc_end_x,
+                    weights_mcast_dest_noc_end_y,
+                    weights_start_address);
+                    // num_dests must not include source, since we are NOT really doing a local copy!
+                    noc_async_write_multicast(weights_start_address, weights_multicast_data_addr, weights_block_size_bytes, weights_mcast_num_cores);
 
-                // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
-                // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+                    // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
+                    // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
 
-                // We should also multicast the flag to destinations
-                // num_dests must not include source, since we are NOT really doing a local copy!
-                noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores);
-                #endif
+                    // We should also multicast the flag to destinations
+                    // num_dests must not include source, since we are NOT really doing a local copy!
+                    noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores);
+                    #endif
 
-                weight_current_block_start_tile_id += weight_next_block_stride_h;
-                cb_push_back(cb_id_weight, weight_block_num_tiles);
-            } // for num_blocks_weight_h
+                    weight_current_block_start_tile_id += weight_next_block_stride_h;
+
+                    cb_push_back(cb_id_weight, weight_block_num_tiles);
+                } // for num_blocks_weight_h
+                weight_h_offset += weight_inner_block_stride_h;
+            } // for weight_block_height_num_outer
 
 
             #ifdef FUSE_BIAS
