@@ -59,6 +59,7 @@ extern volatile uint tt_reg_ptr * const regfile;
 extern uint tt_reg_ptr * regmem;
 extern volatile uint tt_reg_ptr * const instrn_buffer;
 extern volatile uint tt_reg_ptr *dbg_event_scratch;
+extern volatile uint local_mem_barrier;
 
 extern uint32_t cfg_state_id;
 extern uint32_t dest_offset_id;
@@ -156,7 +157,7 @@ inline void cfg_write(uint cfg_addr32, uint data)
 inline uint cfg_read(uint cfg_addr32)
 {
     // Declared here instead of globally to prevent direct access, which might ignore current state ID
-    volatile uint32_t tt_reg_ptr *cfg_regs = reinterpret_cast<volatile uint32_t tt_reg_ptr *>(TENSIX_CFG_BASE);
+    volatile uint *cfg_regs = reinterpret_cast<volatile uint *>(TENSIX_CFG_BASE);
     return cfg_regs[cfg_addr(cfg_addr32)];
 }
 
@@ -201,6 +202,10 @@ inline void mop_run(const uint8_t type, const uint8_t count)
     TTI_MOP(type, count - 1, 0); // Run the MOP
 }
 
+// Register read (workaround for bug
+// https://yyz-gitlab.local.tenstorrent.com/tenstorrent/tensix/issues/976
+// now handled by the compiler)
+// workaround is needed only for GS
 inline __attribute__((always_inline)) uint32_t reg_read(uint32_t addr)
 {
     volatile uint tt_reg_ptr *p_reg = reinterpret_cast<volatile uint tt_reg_ptr *> (addr);
@@ -441,6 +446,11 @@ inline void llk_get_next_op_info(tt::op_info_t& op_info_struct) {
     if (op_info_offset == OP_INFO_SIZE) {
         op_info_offset = 0; // In case we go out of bounds
     }
+}
+
+inline void mem_barrier(uint32_t data)
+{
+    local_mem_barrier = data;
 }
 
 }

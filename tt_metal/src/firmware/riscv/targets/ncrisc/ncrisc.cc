@@ -15,6 +15,8 @@
 #include "debug_status.h"
 #include "debug_print.h"
 
+volatile uint32_t local_mem_barrier __attribute__((used));
+
 uint32_t halt_stack_ptr_save;
 
 tt_l1_ptr mailboxes_t * const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);

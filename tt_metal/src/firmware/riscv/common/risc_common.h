@@ -44,6 +44,7 @@ const uint32_t MAX_TILES_PER_PHASE = 2048;
 
 extern uint8_t my_x[NUM_NOCS];
 extern uint8_t my_y[NUM_NOCS];
+extern volatile uint32_t local_mem_barrier;
 
 inline void WRITE_REG(uint32_t addr, uint32_t val) {
   volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)addr;
@@ -103,10 +104,25 @@ inline __attribute__((always_inline)) uint32_t buf_ptr_dec_wrap(uint32_t buf_ptr
   return result;
 }
 
-inline __attribute__((always_inline)) uint32_t reg_read(uint32_t addr)
+inline __attribute__((always_inline)) uint32_t reg_read_barrier(uint32_t addr)
 {
     volatile tt_reg_ptr uint32_t *p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t *> (addr);
-    return p_reg[0];
+    uint32_t data = p_reg[0];
+    local_mem_barrier = data;
+    return data;
+}
+
+inline __attribute__((always_inline)) uint32_t reg_read(uint32_t addr)
+{
+    return reg_read_barrier(addr);
+}
+
+inline uint32_t reg_read_barrier_l1(uint32_t addr)
+{
+    volatile tt_reg_ptr uint32_t *p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t *> (addr);
+    uint32_t data = p_reg[0];
+    local_mem_barrier = data;
+    return data;
 }
 
 inline void assert_trisc_reset() {

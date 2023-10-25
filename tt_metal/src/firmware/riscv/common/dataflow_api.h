@@ -319,7 +319,7 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
     do {
         // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
         // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
-        uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
+        uint16_t pages_acked = (uint16_t)reg_read_barrier(pages_acked_ptr);
         uint16_t free_space_pages_wrap =
             cb_interface[operand].fifo_num_pages - (pages_received - pages_acked);
         free_space_pages = (int32_t)free_space_pages_wrap;
@@ -358,7 +358,7 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
 
     DEBUG_STATUS('C', 'W', 'F', 'W');
     do {
-        pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
+        pages_received = ((uint16_t)reg_read_barrier(pages_received_ptr)) - pages_acked;
     } while (pages_received < num_pages);
     DEBUG_STATUS('C', 'W', 'F', 'D');
 }
