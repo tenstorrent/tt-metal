@@ -1183,18 +1183,28 @@ def gen_elu_args(
 
 
 def gen_fast_and_approx_args(input_shapes, dtypes, layouts, mem_configs):
-    for input_info in gen_dtype_layout_device(
+
+    input_info = gen_dtype_layout_device(
         input_shapes,
         dtypes,
         layouts,
         mem_configs,
-    ):
-        if input_info is not None:
-            input_info.update({"fast_and_approx": True})
-            yield input_info
+    )
 
-            input_info.update({"fast_and_approx": False})
-            yield input_info
+    test_args_combinations = []
+
+    for input_args in input_info:
+        if input_args is not None:
+            input_args_1 = input_args.copy()
+            input_args_2 = input_args.copy()
+
+            input_args_1.update({"fast_and_approx": True})
+            test_args_combinations.append(input_args_1)
+
+            input_args_2.update({"fast_and_approx": False})
+            test_args_combinations.append(input_args_2)
+
+    return test_args_combinations
 
 
 def gen_two_scalar_args(
