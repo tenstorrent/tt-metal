@@ -13,7 +13,7 @@ FORCE_INLINE
 void program_local_cb(uint32_t num_pages, uint32_t page_size, uint32_t cb_size) {
     uint32_t cb_id = 0;
     uint32_t fifo_addr = DeviceCommand::DATA_SECTION_ADDRESS >> 4;
-    uint32_t fifo_limit = fifo_addr + (cb_size >> 4);
+    uint32_t fifo_limit = fifo_addr + (cb_size >> 4) - 1;
     cb_interface[cb_id].fifo_limit = fifo_limit;  // to check if we need to wrap
     cb_interface[cb_id].fifo_wr_ptr = fifo_addr;
     cb_interface[cb_id].fifo_rd_ptr = fifo_addr;

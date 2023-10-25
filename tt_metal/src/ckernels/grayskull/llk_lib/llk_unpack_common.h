@@ -29,7 +29,7 @@ inline void llk_zero_operand(std::uint32_t operand) {
     TT_SETDMAREG(0, 0, 0, LO_16(p_gpr_unpack::OPERAND_OFFSET_ADDR));
     TT_SETDMAREG(0, 0, 0, HI_16(p_gpr_unpack::OPERAND_OFFSET_ADDR));
 
-    std::uint32_t fifo_base_addr = cb_interface[input].fifo_limit - cb_interface[input].fifo_size;
+    std::uint32_t fifo_base_addr = (cb_interface[input].fifo_limit + 1) - cb_interface[input].fifo_size;
     TT_SETDMAREG(0, fifo_base_addr, 0, LO_16(p_gpr_unpack::p_gpr_unpack::OPERAND_BASE_ADDR));
 
     for (std::uint32_t i = 0; i < cb_interface[input].fifo_size; i++) {
