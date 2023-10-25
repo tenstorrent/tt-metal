@@ -13,6 +13,7 @@
 #include "tt_dnn/op_library/pool/max_pool.hpp"
 #include "tt_dnn/op_library/fully_connected/fully_connected_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
@@ -319,6 +320,19 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
 
+
+    // moreh_linear
+    m_tensor.def("moreh_matmul", &moreh_matmul,
+        py::arg("input").noconvert(), py::arg("other").noconvert(),  py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        "Performs a moreh_linear operation.
+
+        .. csv-table::
+            :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+            "input", "Input tensor", "Tensor", "", "Yes"
+            "other", "Other tensor", "Tensor", "", "Yes"
+            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+    )doc");
 
     // groupnorm
     m_tensor.def("groupnorm", &groupnorm,
