@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
-from models.utility_functions import comp_pcc
+from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
 
 
@@ -224,8 +224,16 @@ def test_moreh_layernorm_backward(input_shape, normalized_dims,
     actual_input_grad = npu_input_grad.cpu().to(cpu_layout).unpad_from_tile(
         input_shape).to_torch()
 
+    # Set rtol and atol and pcc
+    rtol = atol = 0.1
+    pcc = 0.999
+
     # Check input_grad
-    pig, oig = comp_pcc(expected_input_grad, actual_input_grad)
+    pig, oig = comp_allclose_and_pcc(expected_input_grad,
+                                     actual_input_grad,
+                                     rtol=rtol,
+                                     atol=atol,
+                                     pcc=pcc)
     logger.info(f'input_grad\'s {oig}')
     assert pig
 
@@ -235,11 +243,23 @@ def test_moreh_layernorm_backward(input_shape, normalized_dims,
     gamma_beta_shape = [1] * (input_rank -
                               normalized_rank) + input_shape[-normalized_rank:]
 
+    # I divide gamma_grad and beta_grad by (N * C * Ht), because the error increases.
+    N, C, H, _ = input_shape
+    Ht = (H + TILE_HEIGHT - 1) // TILE_HEIGHT
+    numerator = N * C * Ht
+
     # Check gamma_grad
     if npu_gamma_grad is not None:
         actual_gamma_grad = npu_gamma_grad.cpu().to(
             cpu_layout).unpad_from_tile(gamma_beta_shape).to_torch()
-        pgg, ogg = comp_pcc(expected_gamma_grad, actual_gamma_grad)
+        broadcasted_expected_gamma_grad, broadcasted_actual_gamma_grad = torch.broadcast_tensors(
+            expected_gamma_grad, actual_gamma_grad)
+        pgg, ogg = comp_allclose_and_pcc(
+            broadcasted_expected_gamma_grad / numerator,
+            broadcasted_actual_gamma_grad / numerator,
+            rtol=rtol,
+            atol=atol,
+            pcc=pcc)
         logger.info(f'gamma_grad\'s {ogg}')
         assert pgg
     else:
@@ -249,7 +269,14 @@ def test_moreh_layernorm_backward(input_shape, normalized_dims,
     if npu_beta_grad is not None:
         actual_beta_grad = npu_beta_grad.cpu().to(cpu_layout).unpad_from_tile(
             gamma_beta_shape).to_torch()
-        pbg, obg = comp_pcc(expected_beta_grad, actual_beta_grad)
+        broadcasted_expected_beta_grad, broadcasted_actual_beta_grad = torch.broadcast_tensors(
+            expected_beta_grad, actual_beta_grad)
+        pbg, obg = comp_allclose_and_pcc(
+            broadcasted_expected_beta_grad / numerator,
+            broadcasted_actual_beta_grad / numerator,
+            rtol=rtol,
+            atol=atol,
+            pcc=pcc)
         logger.info(f'beta_grad\'s {obg}')
         assert pbg
     else:
