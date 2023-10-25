@@ -68,7 +68,10 @@ def run_perf_resnet(
         profiler.end(cpu_key)
 
         profiler.start(first_key)
-        tt_output = tt_resnet50(inputs)
+        tt_inputs = tt_resnet50.preprocessing(inputs)
+        tt_output = tt_resnet50(tt_inputs)
+        tt_output = tt_output.to_torch().to(torch.float)
+
         tt_lib.device.Synchronize()
         profiler.end(first_key)
         del tt_output
@@ -76,7 +79,10 @@ def run_perf_resnet(
         enable_persistent_kernel_cache()
 
         profiler.start(second_key)
-        tt_output = tt_resnet50(inputs)
+        tt_inputs = tt_resnet50.preprocessing(inputs)
+        tt_output = tt_resnet50(tt_inputs)
+        tt_output = tt_output.to_torch().to(torch.float)
+
         tt_lib.device.Synchronize()
         profiler.end(second_key)
         del tt_output
@@ -96,7 +102,9 @@ def run_perf_resnet(
                 input_image = input_image.convert(mode="RGB")
             input = image_processor(input_image, return_tensors="pt")
             input = input["pixel_values"]
-            tt_output = tt_resnet50(input)
+            tt_inputs = tt_resnet50.preprocessing(input)
+            tt_output = tt_resnet50(tt_inputs)
+            tt_output = tt_output.to_torch().to(torch.float)
             prediction = tt_output[0][0][0].argmax()
             prediction = prediction.item()
             predicted_labels.append(prediction)

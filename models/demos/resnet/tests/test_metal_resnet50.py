@@ -50,7 +50,10 @@ def test_run_resnet50_inference(device, batch_size, imagenet_sample_input):
         )
 
         torch_output = torch_resnet50(image).unsqueeze(1).unsqueeze(1)
-        tt_output = tt_resnet50(image)
+        tt_image = tt_resnet50.preprocessing(image)
+        tt_output = tt_resnet50(tt_image)
+        tt_output = tt_output.to_torch().to(torch.float)
+
 
         # # run again to measure end to end perf
         # start_time = datetime.now()
