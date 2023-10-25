@@ -81,11 +81,13 @@ def run_falcon_attn_matmul_test(
         .to(device, in0_mem_config)
     )
 
+    compute_grid_size = device.compute_with_storage_grid_size()
+
     if falcon_op == ttl.operations.primary.transformers.attn_matmul:
         out = falcon_op(
             a_t,
             b_t,
-            compute_with_storage_grid_size=ttl.tensor.CoreCoord(12, 9),
+            compute_with_storage_grid_size=ttl.tensor.CoreCoord(compute_grid_size.x, compute_grid_size.y),
             output_mem_config=out_mem_config,
             output_dtype=out_dtype,
         )
@@ -96,7 +98,7 @@ def run_falcon_attn_matmul_test(
             b_t,
             seq_len,
             transpose_hw,
-            compute_with_storage_grid_size=ttl.tensor.CoreCoord(12, 9),
+            compute_with_storage_grid_size=ttl.tensor.CoreCoord(compute_grid_size.x, compute_grid_size.y),
             output_mem_config=out_mem_config,
             output_dtype=out_dtype,
         )

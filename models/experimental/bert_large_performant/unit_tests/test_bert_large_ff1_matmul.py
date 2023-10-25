@@ -25,6 +25,10 @@ def run_bert_large_ff1_matmul_test(
     out_mem_config,
     fused_activation,
 ):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if (compute_grid_size.x < 12):
+        pytest.skip(f"Grid size {compute_grid_size} is not supported")
+
     if (
         dtype == ttl.tensor.DataType.BFLOAT16
         and out_mem_config.buffer_type == ttl.tensor.BufferType.L1

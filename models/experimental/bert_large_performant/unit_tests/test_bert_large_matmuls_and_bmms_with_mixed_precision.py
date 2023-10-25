@@ -327,6 +327,10 @@ def test_bert_large_matmul(
     request,
     device,
 ):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if (compute_grid_size.x < 12):
+        pytest.skip(f"Grid size {compute_grid_size} is not supported")
+
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_{request.node.callspec.id}"
     )
@@ -403,6 +407,10 @@ def test_bert_large_bmm(
     request,
     device,
 ):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if (compute_grid_size.x < 12):
+        pytest.skip(f"Grid size {compute_grid_size} is not supported")
+
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/BERT_large_{request.node.callspec.id}"
     )

@@ -40,7 +40,8 @@ void DeviceModule(py::module &m_device) {
             ), "Create device."
         )
         .def("id", &Device::id, "Device's ID")
-        .def("arch", &Device::arch, "Device's arch");
+        .def("arch", &Device::arch, "Device's arch")
+        .def("compute_with_storage_grid_size", &Device::compute_with_storage_grid_size, "Grid size (x, y) denoting region that can be targeted by ops");
 
     // *** eps constant ***
     m_device.attr("EPS_GS") = EPS_GS;

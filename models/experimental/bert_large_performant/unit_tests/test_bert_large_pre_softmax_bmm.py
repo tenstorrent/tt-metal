@@ -18,6 +18,10 @@ import torch
 def run_bert_large_pre_softmax_bmm_test(
     device, dtype, in0_mem_config, in1_mem_config, out_mem_config
 ):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if (compute_grid_size.x < 12):
+        pytest.skip(f"Grid size {compute_grid_size} is not supported")
+
     torch.manual_seed(1234)
 
     a_shape = [9, 16, 384, 64]

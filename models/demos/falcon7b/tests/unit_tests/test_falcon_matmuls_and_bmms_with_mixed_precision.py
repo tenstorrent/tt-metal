@@ -196,6 +196,11 @@ def test_falcon_matmul(
     request,
     device,
 ):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    is_e75_grid_size = (compute_grid_size.x * compute_grid_size.y) == 88
+    if (is_e75_grid_size and (seq_len == 512) and (falcon_op == ttl.tensor.falcon_lm_head_matmul)):
+        pytest.skip(f"LM Head does not work on E75 grid size {compute_grid_size}")
+
     ttl.profiler.set_profiler_location(
         f"tt_metal/tools/profiler/logs/falcon_{request.node.callspec.id}"
     )

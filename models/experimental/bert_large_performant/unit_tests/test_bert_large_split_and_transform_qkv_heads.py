@@ -19,6 +19,10 @@ import torch
 def run_split_fused_qkv_and_split_heads_test(
     device, batch, dtype, in0_mem_config, out_mem_config
 ):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if (compute_grid_size.x < 12):
+        pytest.skip(f"Grid size {compute_grid_size} is not supported")
+
     torch.manual_seed(1234)
 
     a_shape = [batch, 1, 384, 3072]

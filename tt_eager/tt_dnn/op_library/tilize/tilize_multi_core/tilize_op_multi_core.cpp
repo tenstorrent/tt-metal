@@ -101,7 +101,6 @@ inline std::tuple<int32_t, int32_t, int32_t, int32_t, CoreRangeSet, CoreRangeSet
             // last core has unequal blocks
             if (ncores_x_cliff == ncores_x) {
                 // ncores x is same throughout
-                ncores_x_cliff = 0;
                 if (ncores_y > 1) {
                     core_range.insert(CoreRange{.start = CoreCoord(0, 0), .end = CoreCoord(ncores_x - 1, ncores_y - 2)});
                 }

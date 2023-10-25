@@ -125,8 +125,9 @@ void TensorModule(py::module &m_tensor) {
         .def(py::init<std::size_t, std::size_t>())
         .def("__repr__", [](const CoreCoord& self) -> std::string {
             return self.str();
-        }
-        );
+        })
+        .def_readonly("x", &CoreCoord::x)
+        .def_readonly("y", &CoreCoord::y);
 
     auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
         Class defining memory configuration for storing tensor data on TT Accelerator device.

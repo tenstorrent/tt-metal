@@ -24,6 +24,10 @@ def test_sharded_tile(device):
     H = 100352
     W = 64
     num_cores = 98
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if (num_cores > (compute_grid_size.x * compute_grid_size.y)):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+
     x = torch.arange(N * C * H * W).reshape((N, C, H, W)).bfloat16().float()
 
     xt = (
@@ -69,6 +73,9 @@ def test_sharded_rm(device):
     H = 100352
     W = 64
     num_cores = 98
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if (num_cores > (compute_grid_size.x * compute_grid_size.y)):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
     x = torch.arange(N * C * H * W).reshape((N, C, H, W)).bfloat16().float()
 
     xt = ttl.tensor.Tensor(
@@ -115,6 +122,10 @@ def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, device):
     W = 64
     if out_sharded and not in_sharded and H == 100352:
         pytest.skip("Unsupported config for sharding")
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if (num_cores > (compute_grid_size.x * compute_grid_size.y)):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
@@ -176,6 +187,11 @@ def test_sharded_tilize(H, num_cores, device):
     N = 1
     C = 1
     W = 64
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if (num_cores > (compute_grid_size.x * compute_grid_size.y)):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+
     x = torch.arange(N * C * H * W).reshape((N, C, H, W)).bfloat16()
 
     xt = ttl.tensor.Tensor(
@@ -232,6 +248,10 @@ def test_sharded_matmul(device, in0_sharded, out_sharded, M, N, num_cores):
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, 1, N]
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if (num_cores > (compute_grid_size.x * compute_grid_size.y)):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
@@ -301,6 +321,10 @@ def test_sharded_binary(device, in0_sharded, in1_sharded, out_sharded, H, num_co
 
     if out_sharded and not in0_sharded and not in1_sharded and H == 25088:
         pytest.skip("Unsupported sharding config")
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if (num_cores > (compute_grid_size.x * compute_grid_size.y)):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
