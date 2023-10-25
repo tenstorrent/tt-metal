@@ -324,11 +324,11 @@ void py_module(py::module& m_primary) {
     m_primary.def(
         "moreh_matmul",
         &moreh_matmul,
-        py::arg("input_tensor_a").noconvert(),
-        py::arg("input_tensor_b").noconvert(),
+        py::arg("input_tensor").noconvert(),
+        py::arg("other_tensor").noconvert(),
         py::kw_only(),
-        py::arg("transpose_a").noconvert() = false,
-        py::arg("transpose_b").noconvert() = false,
+        py::arg("transpose_input").noconvert() = false,
+        py::arg("transpose_other").noconvert() = false,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a moreh_matmul operation.");
 
