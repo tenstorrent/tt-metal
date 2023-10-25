@@ -114,7 +114,9 @@ class TtAttention(nn.Module):
         xv = tt_to_torch_tensor(xv).to(torch.float32)
 
         freqs_cis = tt_to_torch_tensor(freqs_cis).squeeze(0).squeeze(0)
+        freqs_cis = freqs_cis.to(torch.float32)
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis, device=self.device)
+        #xq, xk = old_apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
 
         # The cache is a rotating buffer
         positions = tt_to_torch_tensor(positions).squeeze(0).squeeze(0).squeeze(0)
@@ -147,11 +149,8 @@ class TtAttention(nn.Module):
             scores += mask[None, None, ...]
 
         query = tt_to_torch_tensor(query)
-        # scores = torch_to_tt_tensor_rm(scores, self.device, put_on_device=False)
-
-        # scores = tt_lib.operations.primary.softmax_in_place(scores) #last-dim
-        scores = nn.functional.softmax(scores, dim=-1).type_as(query)
         scores = torch_to_tt_tensor_rm(scores, self.device, put_on_device=False)
+        scores = fallback_ops.softmax(scores, dim=-1)
         output = tt_lib.tensor.bmm(scores, value)  # (bs, n_local_heads, slen, head_dim)
 
         output = tt_lib.tensor.transpose_hc(output)
@@ -182,7 +181,7 @@ def old_apply_rotary_emb(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
     xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    freqs_cis = _reshape_for_broadcast(freqs_cis, xq_.shape,xq_.ndim)
+    freqs_cis = _reshape_for_broadcast(freqs_cis, xq_)
     xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
     xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
     return xq_out.type_as(xq), xk_out.type_as(xk)
@@ -214,7 +213,6 @@ def apply_rotary_emb(
     xq_out = tt_lib.tensor.bcast(xq,freqs_cis,BCMUL,BCH)
     xk_out = tt_lib.tensor.bcast(xk,freqs_cis,BCMUL,BCH)
 
-    xq, xk = tt_to_torch_tensor(xq_out), tt_to_torch_tensor(xk_out)
-
-    return xq.type_as(xq), xk.type_as(xk)
+    xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
+    return xq, xk
 
