@@ -20,6 +20,7 @@
 #include "tt_dnn/op_library/groupnorm/groupnorm_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
 #include "tt_dnn/op_library/moreh_bmm/moreh_bmm_op.hpp"
+#include "tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_dnn/op_library/pool/average_pool.hpp"
@@ -339,6 +340,18 @@ void TensorModule(py::module& m_tensor) {
     m_tensor.def("moreh_bmm", &moreh_bmm,
         py::arg("input").noconvert(), py::arg("mat2").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a moreh_bmm operation.
+    )doc");
+
+    // moreh_bmm_backward
+    m_tensor.def(
+        "moreh_bmm_backward",
+        &moreh_bmm_backward,
+        py::arg("output_grad").noconvert(),
+        py::arg("input").noconvert(),
+        py::arg("mat2").noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+        "Performs a moreh_bmm_backward operation.
     )doc");
 
     // moreh_layernorm
