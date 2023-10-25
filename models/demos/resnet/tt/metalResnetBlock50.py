@@ -1135,25 +1135,23 @@ class ResNet(nn.Module):
         last_layer_shape = layers[-1].conv3_output_shape
         return layers, last_layer_shape
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def preprocessing(self, x: torch.Tensor) -> tt_lib.tensor:
         extra_padding_for_32B_alignment = 25
         x = torch.nn.functional.pad(x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1))
-        # permute_key="permute_key"
-        # input_tensor_construct_key="input_tensor_construct_key"
-        # misc_key = "misc_key"
-        # assert x.shape[3] == 224 and x.shape[2] == 224
-        # profiler.start(permute_key)
-
-        # logger.info("padding x shape - ", x.shape)
         x = torch.permute(x, (0, 2, 3, 1))
-        # profiler.end(permute_key)
-        # profiler.start(input_tensor_construct_key)
         x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
-        # profiler.end(input_tensor_construct_key)
+        return x
+
+    def forward(self, x: tt_lib.tensor) -> tt_lib.tensor:
+        # extra_padding_for_32B_alignment = 25
+        # x = torch.nn.functional.pad(x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1))
+        # x = torch.permute(x, (0, 2, 3, 1))
+
+
+        # x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
 
         original_A_cl_host_shape = x.shape()
         x = x.reshape(x.shape()[0], x.shape()[1], 1, x.shape()[2] * x.shape()[3])
-        # logger.info("A_cl_host shape after re-shape (only for transfer)", x.shape())
 
         x = x.to(self.device, self.memory_config)  # to l1
         # re-shape back to original shape (N, H, W, C)
@@ -1163,28 +1161,16 @@ class ResNet(nn.Module):
             original_A_cl_host_shape[2],
             original_A_cl_host_shape[3],
         )
-        # logger.info("A_cl_device shape into OP", x.shape())
-        # logger.info("Running conv1")
-        # time.sleep(5)
         x = self.conv1(x)
-        # time.sleep(5)
-        # x = x.reshape(1, 1, x.shape()[0]*x.shape()[1]*x.shape()[2], x.shape()[3]);
-        # logger.info("Printing relu after conv1")
         # Relu is fused with conv1
-        # x = self.relu(x, self.memory_config)
-        # tt_lib.device.DumpDeviceMemoryState(self.device)
-        # x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM))
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
-        # time.sleep(2)
         x = x.reshape(
             self.conv1_output_shape[0],
             self.conv1_output_shape[1],
             self.conv1_output_shape[2],
             self.conv1_output_shape[3],
         )
-        # logger.info("Running maxpool")
         x = self.maxpool(x)
-        # logger.info("Done maxpool")
         x = x.reshape(
             1,
             1,
@@ -1260,17 +1246,10 @@ class ResNet(nn.Module):
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         x = x.reshape(self.batch_size, x.shape()[1], (int)(x.shape()[2] / self.batch_size), x.shape()[3])
         x = x.cpu()
-        # assert x.layout() != tt_lib.tensor.Layout.ROW_MAJOR
-        # x = x.to(tt_lib.tensor.Layout.ROW_MAJOR)
         desired_shape = [x.shape()[0], x.shape()[1], 1, 1000]
         x = x.unpad(
             (0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1)
         )
-        # tt_to_torch_key = "tt_to_torch_key"
-        # profiler.start(tt_to_torch_key)
-        x = x.to_torch().to(torch.float)
-        # profiler.end(tt_to_torch_key)
-        # logger.info("Printing profiler")
-        # profiler.print()
-        # logger.info("Done printing profiler")
+
+        # x = x.to_torch().to(torch.float)
         return x
