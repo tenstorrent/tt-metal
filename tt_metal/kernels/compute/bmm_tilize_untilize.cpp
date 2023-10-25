@@ -76,10 +76,12 @@ inline void tilize_in(
             for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
                 for (uint32_t w = 0; w < out_subblock_w; w++) {
                     uint32_t tile_index = block_offset + within_block_index + w;
-                    acquire_dst(tt::DstMode::Half);
+                    tile_regs_acquire();
                     copy_tile(interm_cb_id, tile_index, 0);
+                    tile_regs_commit();
+                    tile_regs_wait();
                     pack_tile(0, reblock_cb_id);
-                    release_dst(tt::DstMode::Half);
+                    tile_regs_release();
                 }
                 block_offset += out_subblock_num_tiles;
             }
@@ -103,9 +105,11 @@ inline void tilize_in(
 
 inline void pack_matmul_subblock(uint32_t cb_id, uint32_t out_subblock_num_tiles) {
     cb_reserve_back(cb_id, out_subblock_num_tiles);
+    tile_regs_wait();
     for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
         pack_tile(i, cb_id);
     }
+    tile_regs_release();
     cb_push_back(cb_id, out_subblock_num_tiles);
 }
 
@@ -170,7 +174,7 @@ void MAIN {
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     int in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
-                        acquire_dst(tt::DstMode::Half);
+                        tile_regs_acquire();
                         if (enable_reload) {
                             // Reconfigure input
                             copy_tile_to_dst_init_short_with_dt(matmul_partials_cb);
@@ -206,9 +210,9 @@ void MAIN {
                         #ifdef FUSE_BIAS
                             // if bias is to be added, add it to the data in dst before packing into the out cb
                             if (last_out) {
+                                tile_regs_commit();
                                 // first move the current result from dst to interim CB
                                 pack_matmul_subblock(out_for_bias_cb_id, out_subblock_num_tiles);
-                                release_dst(tt::DstMode::Half);
                                 // reconfig unpacker df for src B
                                 // unpack_reconfig_data_format(out_for_bias_cb_id, bias_cb_id);
                                 // bcast add data from bias_cb_id
@@ -217,7 +221,7 @@ void MAIN {
                                 add_bcast_rows_init_short();
                                 // reconfig packer df for out
                                 // pack_reconfig_data_format(out_cb_id);
-                                acquire_dst(tt::DstMode::Half);
+                                tile_regs_acquire();
                                 uint32_t i = 0;
                                 for (uint32_t h = 0; h < out_subblock_h; ++ h) {
                                     uint32_t bcast_tile_i = bias_block_offset + in1_index_subblock_offset;
@@ -245,13 +249,14 @@ void MAIN {
                             }
                         #endif
 
+                        tile_regs_commit();
+
                         auto curr_matmul_out_cb = last_out
                                                     ? (untilize_out
                                                         ? untilize_mode_final_matmul_partials_cb
                                                         : out_cb_id)
                                                     : matmul_partials_cb;
                         pack_matmul_subblock(curr_matmul_out_cb, out_subblock_num_tiles);
-                        release_dst(tt::DstMode::Half);
                         in1_index_subblock_offset += out_subblock_w;
                     } // for in1_num_subblocks
                     #ifndef FUSE_BIAS
