@@ -25,20 +25,20 @@ using namespace tt_metal;
  * GENERAL MATMUL
  */
 operation::ProgramWithCallbacks moreh_matmul_multi_core(
-    const Tensor &input_tensor_a,
-    const Tensor &input_tensor_b,
+    const Tensor &input_tensor,
+    const Tensor &other_tensor,
     const Tensor &output_tensor,
-    bool transpose_a,
-    bool transpose_b,
-    uint32_t a_start_tile_id,
-    uint32_t b_start_tile_id,
+    bool transpose_input,
+    bool transpose_other,
+    uint32_t input_start_tile_id,
+    uint32_t other_start_tile_id,
     uint32_t output_start_tile_id);
 
 struct MorehMatmul {
-    bool transpose_a;
-    bool transpose_b;
-    uint32_t a_start_tile_id = 0;
-    uint32_t b_start_tile_id = 0;
+    bool transpose_input;
+    bool transpose_other;
+    uint32_t input_start_tile_id = 0;
+    uint32_t other_start_tile_id = 0;
     uint32_t output_start_tile_id = 0;
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -49,10 +49,10 @@ struct MorehMatmul {
 };
 
 Tensor moreh_matmul(
-    const Tensor &input_tensor_a,
-    const Tensor &input_tensor_b,
-    bool transpose_a = false,
-    bool transpose_b = false,
+    const Tensor &input_tensor,
+    const Tensor &other_tensor,
+    bool transpose_input = false,
+    bool transpose_other = false,
     const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary
