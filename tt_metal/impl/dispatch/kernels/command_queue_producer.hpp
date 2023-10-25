@@ -23,7 +23,7 @@ bool cb_producer_space_available(int32_t num_pages) {
 
     // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
     // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
-    uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
+    uint16_t pages_acked = (uint16_t)reg_read_barrier(pages_acked_ptr);
     uint16_t free_space_pages_wrap =
         cb_interface[operand].fifo_num_pages - (pages_received - pages_acked);
     free_space_pages = (int32_t)free_space_pages_wrap;
