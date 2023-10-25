@@ -68,10 +68,10 @@ void kernel_main() {
     const uint32_t tile_nbytes = get_tile_size(cb_id_out0);
     const DataFormat out_df = get_dataformat(cb_id_out0);
 
-    const InterleavedAddrGenFast<out_in_dram> s = {
+    constexpr uint32_t tile_size_pow2_exponent = 11;    // == 2^11 = 2048 = 2 * 32 * 32 (assuming dtype = 2 bytes)
+    const InterleavedPow2AddrGen<out_in_dram> s = {
         .bank_base_address = out_addr,
-        .page_size = tile_nbytes,
-        .data_format = out_df
+        .log_base_2_of_page_size = tile_size_pow2_exponent
     };
 
     // read in bias if enabled (done only once for all batches)
@@ -102,17 +102,18 @@ void kernel_main() {
     // DPRINT << "out_height_num_tiles - " << out_height_num_tiles << ENDL();
     // DPRINT << "out_width_num_tiles - " << out_width_num_tiles << ENDL();
 
-    // const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
-    // const InterleavedPow2AddrGen<true> s_weight = {
-    //     .bank_base_address = weight_addr_dram_base,
-    //     .log_base_2_of_page_size = tile_size_pow2_exponent
-    // };
+    const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
+    const InterleavedPow2AddrGen<true> s_weight = {
+        .bank_base_address = weight_addr_dram_base,
+        .log_base_2_of_page_size = tile_size_pow2_exponent
+    };
 
     // const InterleavedAddrGenFast<true> s = {
     //     .bank_base_address = out_addr,
     //     .page_size = tile_nbytes,
     //     .data_format = out_df
     // };
+
 
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
@@ -130,20 +131,18 @@ void kernel_main() {
             // read weight slice - 1 block of weights in width dim and full weight matrix height
             // read slice only once for all activation blocks
             for(uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer; weight_tile_h_outer_i++) {
-                for(uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h; block_weight_h++) {
-                    cb_reserve_back(cb_id_weight, weight_block_num_tiles);
-                    // Set weights semaphore value to INVALID
-                    noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
+                cb_reserve_back(cb_id_weight, weight_block_num_tiles);
+                // Set weights semaphore value to INVALID
+                noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                    // Atomic increment source core counter
-                    uint64_t weights_mcast_sender_semaphore_noc_addr = get_noc_addr(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
-                    noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
+                // Atomic increment source core counter
+                uint64_t weights_mcast_sender_semaphore_noc_addr = get_noc_addr(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
+                noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
 
-                    // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
+                // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
+                noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
 
-                    cb_push_back(cb_id_weight, weight_block_num_tiles);
-                } // for num_blocks_weight_h
+                cb_push_back(cb_id_weight, weight_block_num_tiles);
             } // for weight_block_height_num_outer
 
             #ifdef FUSE_BIAS

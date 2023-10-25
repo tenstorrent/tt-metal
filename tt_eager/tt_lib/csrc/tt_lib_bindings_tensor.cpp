@@ -244,10 +244,11 @@ void TensorModule(py::module &m_tensor) {
 
     py::class_<OptimizedConvBlockConfig>(m_tensor, "OptimizedConvBlockConfig")
         .def(
-            py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(),
+            py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(),
             py::kw_only(),
             py::arg("act_block_h_ntiles").noconvert(),
             py::arg("act_block_w_ntiles").noconvert(),
+            py::arg("act_c_num_blocks").noconvert() = 1,
             py::arg("weight_block_w_ntiles").noconvert(),
             py::arg("out_block_h_ntiles").noconvert(),
             py::arg("out_subblock_h_ntiles").noconvert(),

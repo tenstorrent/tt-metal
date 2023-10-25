@@ -162,6 +162,7 @@ def resnet50_optimized_conv(
     weights_dtype=None,
     output_dtype=None,
     math_fidelity=None,
+    act_c_num_blocks=1,
 ):
     """
     Returns a function that performs a Convolution. Bias is fused with conv.
@@ -247,6 +248,7 @@ def resnet50_optimized_conv(
             tensor.OptimizedConvBlockConfig(
                 act_block_h_ntiles=act_block_h,
                 act_block_w_ntiles=act_block_w,
+                act_c_num_blocks=act_c_num_blocks,
                 weight_block_w_ntiles=weight_block_w,
                 out_block_h_ntiles=out_block_h,
                 out_subblock_h_ntiles=out_subblock_h,

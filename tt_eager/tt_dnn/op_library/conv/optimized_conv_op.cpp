@@ -29,6 +29,7 @@ const uint32_t bias_cb                                = CB::c_in2;
 const uint32_t sharded_act_cb                         = CB::c_in3;
 const uint32_t cb_for_reader_indices                  = CB::c_in4;
 const uint32_t cb_for_reader_offsets                  = CB::c_in5;
+const uint32_t sharded_act_mcast_receiver_cb          = CB::c_in6;
 const uint32_t matmul_partials_cb                     = CB::c_intermed0;
 const uint32_t tilize_mode_tilized_act_cb             = CB::c_intermed1;
 const uint32_t untilize_mode_reblock_cb               = CB::c_intermed2;
@@ -73,6 +74,7 @@ tuple<CircularBufferID, CircularBufferID> create_CBs(tt_metal::Program &program,
                                 DataFormat tilized_act_df,
                                 DataFormat out_df,
                                 DataFormat bias_df,
+                                bool weight_width_sliced,
                                 uint32_t bias_ntiles = 0,
                                 bool with_bias = false,
                                 std::optional<uint32_t> output_cb_address = std::nullopt
@@ -89,6 +91,7 @@ tuple<CircularBufferID, CircularBufferID> create_CBs(tt_metal::Program &program,
     auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
 
     auto cb_sharded_act = 0;
+    auto cb_sharded_act_mcast_receiver = 0;
     if (input.memory_config().is_sharded()) {
         uint32_t num_bytes_for_df = datum_size(act_df);
         auto shard_shape = input.shard_spec().value().shard_shape;
@@ -97,6 +100,13 @@ tuple<CircularBufferID, CircularBufferID> create_CBs(tt_metal::Program &program,
         // incoming data is the input cb instead of raw l1/dram addr
         cb_sharded_act_config.set_globally_allocated_address(input.buffer()->address());
         cb_sharded_act = tt_metal::CreateCircularBuffer(program, core, cb_sharded_act_config);
+
+        // For 2D convs, we need a separate cb to receive mcasted input shards
+        if (weight_width_sliced) {
+          CircularBufferConfig cb_sharded_act_mcast_receiver_config = CircularBufferConfig(shard_shape[0] * shard_shape[1] * num_bytes_for_df, {{sharded_act_mcast_receiver_cb, tt::DataFormat::Float16_b}})
+		      .set_page_size(sharded_act_mcast_receiver_cb, shard_shape[1] * num_bytes_for_df);
+          cb_sharded_act_mcast_receiver = tt_metal::CreateCircularBuffer(program, core, cb_sharded_act_mcast_receiver_config);
+        }
     }
 
     CircularBufferConfig cb_weight_config = CircularBufferConfig(num_cb1_tiles * weight_tile_size, {{weight_cb, weight_df}})
@@ -171,6 +181,13 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
     //assert(out_block_h_ntiles == act_block_h_ntiles); // TODO: fix output block sizing
     TT_ASSERT(out_block_h_ntiles >= act_block_h_ntiles, "Output block height (in # of tiles) should be greater than or equal to activation block height (in # of tiles)");
+
+    // Partitions conv inner dim into blocks to support sharding along this dim
+    // TODO: Only 2D convs with sharded input use this, but we can uplift to support generically
+    // TODO: Only updated variables which is affected, but there may be more that needs to account for this
+    // TODO: Loop naming in reader, writer, and compute kernels could also be cleaned up
+    // TODO: Can conv_act_c_blocks be same as num_blocks_act_w?
+    uint32_t conv_act_c_blocks = block_config.act_c_num_blocks;
 
     uint32_t conv_act_size_h = ashape[1];
     uint32_t conv_act_size_w = ashape[2];
@@ -336,6 +353,10 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
 
     if (act_matrix_height_unpadded < act_block_h_datums * num_blocks_act_h) {
         reader_defines["ACT_BLOCK_HEIGHT_PADDING"] = "1";
+    }
+
+    if (conv_act_c_blocks > 1) {
+        reader_defines["ACT_W_OUTER_BLOCKS"] = "1";
     }
 
     uint32_t output_height_padded_to_tile_height = round_up(act_matrix_height_unpadded, TILE_HEIGHT);
@@ -504,6 +525,9 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     CoreRangeSet mcast_receiver_cores{{}};
     uint32_t weights_mcast_sender_semaphore;
     uint32_t weights_mcast_receiver_semaphore;
+    uint32_t act_mcast_sender_semaphore = 0;
+    uint32_t act_mcast_receiver_semaphore = 0;
+    std::vector<uint32_t> act_mcast_noc_y;
     // 2D mcast
     if (weight_width_sliced) {
         mcast_sender_cores = {.start=top_left_core, .end=CoreCoord(0, num_cores_y - 1)};
@@ -525,15 +549,26 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
         }
     }
 
-    uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles;
+    bool read_3x3_window_in_inner_loop = false;
+    uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles / conv_act_c_blocks;
+    uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles / conv_act_c_blocks;
+    // TODO: This flag should be set in kernel logic but need this for create_CB
+    if (a.memory_config().is_sharded() && weight_size_h == 3 && weight_size_w == 3 && stride_h == 1 && weight_width_sliced) {
+        // If conv_act_c_blocks > 1 and we have 2D conv with sharded input, we always read entire 3x3 window before pushing in reader/writer
+        // TODO: Generalize this to not make this assumption
+        read_3x3_window_in_inner_loop = true;
+        num_weight_cb_tiles *= weight_size_h * weight_size_w;
+        num_act_cb_tiles *= weight_size_h * weight_size_w;
+    }
+    uint32_t num_cb0_tilized_tiles = num_act_cb_tiles;
+
     if (per_core_weight_matrix_width_ntiles < 8) {
         num_weight_cb_tiles = num_weight_cb_tiles * 2;
     }
     if (rn50_first_conv) {
         num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles * num_blocks_weight_w * num_blocks_act_w;
     }
-    uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles;
-    if (conv_act_size_c < 256) {
+    if (conv_act_size_c / conv_act_c_blocks < 256) {
         num_act_cb_tiles = num_act_cb_tiles * 2; // double buffered
     }
     uint32_t writer_output_block_num_tiles = out_block_h_ntiles * weight_block_w_ntiles;
@@ -546,13 +581,16 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     if (output.memory_config().is_sharded()) {
         output_cb_address = output.buffer()->address();
     }
+    // TODO: Moving this function call to after kernel logic causes pcc fails
+    // There are additional CBs and semaphores created in 2D conv in kernel logic,
+    // so does order of create_cb calls matter?
     auto [cb_sharded_act, cb_output] = create_CBs(
             program,
             a,
             all_cores,
             num_act_cb_tiles, // row major act cb
             num_weight_cb_tiles, // tiled weight cb
-            act_block_h_ntiles * act_block_w_ntiles, // tiled act cb
+            num_cb0_tilized_tiles, // tiled act cb
             writer_output_block_num_tiles, // math output cb
             weight_block_w_ntiles, // reblock cb
             writer_output_block_num_tiles, // writer output cb, double bufferred
@@ -562,6 +600,7 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
             tilized_act_df,
             out_df,
             bias_df,
+            weight_width_sliced,
             bias_ntiles_per_core,
             has_bias,
             output_cb_address);
@@ -577,6 +616,9 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
         writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_and_mcast_sender_weights_resnet50_first_conv_tiled_out.cpp";
         writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_and_mcast_receiver_weights_resnet50_first_conv_tiled_out.cpp";
     } else {
+        compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
+        writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
+        writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
         if (weight_size_h == 1 && weight_size_w == 1) {
             // use custom 1x1 conv kernels
             reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv1x1_activations_fast_for_col_major_conv_out_blocks.cpp";
@@ -585,9 +627,24 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
         }
         else {
             // If sharded input, always use reader kernel for input shard with halo and padding
-            if (a.memory_config().is_sharded() && weight_size_h == 3 && weight_size_w == 3 && stride_h == 1 && not weight_width_sliced) {
+            if (a.memory_config().is_sharded() && weight_size_h == 3 && weight_size_w == 3 && stride_h == 1) {
                 reader_with_indices = true;
-                reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_padded_with_halo_3x3_weights.cpp";
+                if (weight_width_sliced) {
+                    assert(read_3x3_window_in_inner_loop == true);
+                    reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights.cpp";
+                    writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
+                    writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
+
+                    act_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+                    act_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+
+                    act_mcast_noc_y.reserve(num_cores_y);
+                    for(uint32_t core_idx_y = 0; core_idx_y < num_cores_y; ++core_idx_y) {
+                        act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+                    }
+                } else {
+                    reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_padded_with_halo_3x3_weights.cpp";
+                }
 
                 // Local L1 to store array for reader indices
                 CircularBufferConfig cb_for_reader_indices_config = CircularBufferConfig(act_block_h_datums * 4, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
@@ -609,9 +666,6 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
                 }
             }
         }
-        compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
-        writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
-        writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
     }
     TT_ASSERT(!(conv_act_size_c & (conv_act_size_c - 1))); // channel depth power of 2 is supported only
 
@@ -620,10 +674,19 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     std::vector<uint32_t> writer_rt_args;
     std::vector<uint32_t> writer_compile_time_args;
 
-    reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
-            (uint32_t) stride_h, (uint32_t) stride_w, (uint32_t) conv_act_size_w, (uint32_t) conv_output_size_w,
-            (uint32_t) conv_act_size_c * a.element_size(), (uint32_t) std::log2(conv_act_size_c * a.element_size()), extra_padding_for_32B_alignment,
-            (uint32_t) (conv_act_size_c/act_block_w_datums), act_block_w_datums * a.element_size()};
+    uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
+    // For new reader_with_indices, this is used to calculate offset so use actual read_bytes along c
+    // For old readers, this is used for bank page size for interleaved; offset is from conv_act_c_read_bytes
+    uint32_t log_base_2_of_conv_act_size_c_bytes = reader_with_indices ? std::log2(conv_act_c_read_bytes) : std::log2(conv_act_size_c * a.element_size());
+    reader_compile_time_args = {(uint32_t)
+        (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
+        (uint32_t) stride_h,
+        (uint32_t) stride_w,
+        (uint32_t) conv_act_size_w,
+        (uint32_t) conv_output_size_w,
+        (uint32_t) conv_act_c_read_bytes,
+        (uint32_t) log_base_2_of_conv_act_size_c_bytes, extra_padding_for_32B_alignment,
+        (uint32_t) (conv_act_size_c/act_block_w_datums), act_block_w_datums * a.element_size()};
 
     // define for bias
     std::map<string, string> writer_defines;
@@ -653,19 +716,33 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
         bias_cb,
         (uint32_t) (bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0))};
 
+    uint32_t in0_block_w = act_block_w_ntiles / conv_act_c_blocks;
+    uint32_t in0_block_num_tiles = act_block_num_tiles / conv_act_c_blocks;
+    uint32_t in0_subblock_num_tiles = act_subblock_num_tiles / conv_act_c_blocks;
+    uint32_t in1_block_num_tiles = weight_block_num_tiles / conv_act_c_blocks;
+    uint32_t in0_num_blocks_w = num_blocks_act_w * conv_act_c_blocks; // Fold outer c_block loop together with weight_block_num_tiles = 9
+    if (read_3x3_window_in_inner_loop) {
+        const uint32_t window_size = weight_size_h * weight_size_w;
+        in0_block_w *= window_size;
+        in0_block_num_tiles *= window_size;
+        in0_subblock_num_tiles *= window_size;
+        in1_block_num_tiles *= window_size;
+        in0_num_blocks_w /= window_size;
+    }
+
     vector<uint32_t> compute_kernel_args = {
-        act_block_w_ntiles,
+        in0_block_w,
         act_num_subblocks,
-        act_block_num_tiles,
-        act_subblock_num_tiles,
+        in0_block_num_tiles,
+        in0_subblock_num_tiles,
         act_subblock_h_ntiles,
 
         weight_num_subblocks,
-        weight_block_num_tiles,
+        in1_block_num_tiles,
         weight_block_w_ntiles,
 
         num_blocks_act_h_per_core,
-        num_blocks_act_w,
+        in0_num_blocks_w,
         num_blocks_weight_w_per_core,
 
         out_subblock_h_ntiles,
@@ -812,7 +889,9 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
              * last_partial_image_num_rows
              * last_partial_left_aligned_row_width
              */
-            uint32_t start_stick = core_i * act_block_h_datums;
+
+            // If 2D, same image specs across a row
+            uint32_t start_stick = weight_width_sliced ? core_x_i * act_block_h_datums : core_i * act_block_h_datums;
             uint32_t end_stick = start_stick + act_block_h_datums;
 
             ShardingConfig sharding_config = get_specs_for_sharding_partition(start_stick, end_stick, conv_act_size_h, conv_act_size_w, weight_size_w, pad_h, pad_w);
@@ -825,64 +904,146 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
             uint32_t last_partial_image_num_rows = sharding_config.last_partial_image_num_rows;
             uint32_t last_partial_left_aligned_row_width = sharding_config.last_partial_left_aligned_row_width;
 
-            reader_rt_args = {
-                // arguments for act
-                act_dram_addr,
-                act_noc_x,
-                act_noc_y,
+            if (weight_width_sliced) {
+                TT_ASSERT(reader_noc == NOC::NOC_1);
+                auto shard_shape = a.shard_spec().value().shard_shape;
+                uint32_t shard_size_bytes = shard_shape[0] * shard_shape[1] * a.element_size();
+                CoreCoord bottom_core = {(std::size_t) core_x_i, (std::size_t) num_cores_y - 1};
+                auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+                reader_rt_args = {
+                    // arguments for act
+                    act_dram_addr,
+                    act_noc_x,
+                    act_noc_y,
 
-                conv_act_size_w,
-                conv_act_size_h,
-                conv_act_size_c,
-                weight_size_h,
-                weight_size_w,
-                stride_h,
-                stride_w,
-                pad_h,
-                pad_w,
-                conv_output_size_h,
-                conv_output_size_w,
-                num_blocks_act_h_per_core, // per core
-                num_blocks_act_w,
-                num_blocks_weight_w_per_core,
-                num_groups,
+                    conv_act_size_w,
+                    conv_act_size_h,
+                    conv_act_size_c,
+                    weight_size_h,
+                    weight_size_w,
+                    stride_h,
+                    stride_w,
+                    pad_h,
+                    pad_w,
+                    conv_output_size_h,
+                    conv_output_size_w,
+                    num_blocks_act_h_per_core, // per core
+                    num_blocks_act_w,
+                    num_blocks_weight_w_per_core,
+                    num_groups,
 
-                act_matrix_height_unpadded,
-                act_matrix_width_unpadded,
-                act_matrix_height,
-                act_matrix_width,
-                act_matrix_height_ntiles,
-                act_matrix_width_ntiles,
-                act_block_h_datums,
-                act_block_w_datums,
-                act_block_h_ntiles,
-                act_block_w_ntiles,
-                act_block_num_tiles,
+                    act_matrix_height_unpadded,
+                    act_matrix_width_unpadded,
+                    act_matrix_height,
+                    act_matrix_width,
+                    act_matrix_height_ntiles,
+                    act_matrix_width_ntiles,
+                    act_block_h_datums,
+                    act_block_w_datums,
+                    act_block_h_ntiles,
+                    act_block_w_ntiles,
+                    in0_block_num_tiles,
+                    conv_act_c_blocks,
 
-                src_dram_act_buffer_size_bytes,
-                dst_l1_act_buffer_size_bytes,
+                    src_dram_act_buffer_size_bytes,
+                    dst_l1_act_buffer_size_bytes,
 
-                n_start,
-                out_h_start,
-                out_w_start,
-                total_h_start,
+                    n_start,
+                    out_h_start,
+                    out_w_start,
+                    total_h_start,
 
-                // Specs for reader indices
-                first_partial_right_aligned_row_width,
-                skip_after_partial_right_aligned_row,
-                first_partial_image_num_rows,
-                skip_after_first_partial_image_row,
-                num_full_images,
-                skip_after_full_image,
-                last_partial_image_num_rows,
-                last_partial_left_aligned_row_width,
+                    // Specs for reader indices
+                    first_partial_right_aligned_row_width,
+                    skip_after_partial_right_aligned_row,
+                    first_partial_image_num_rows,
+                    skip_after_first_partial_image_row,
+                    num_full_images,
+                    skip_after_full_image,
+                    last_partial_image_num_rows,
+                    last_partial_left_aligned_row_width,
 
-                // Specs for reader offsets
-                num_blocks_act_w, // window_outer
-                weight_size_h * weight_size_w / num_blocks_act_w, // window_inner
+                    // Specs for reader offsets
+                    1, // window_outer
+                    3, // window_inner = 9 / 3, ie. read 3 width coalesced
 
-                (uint32_t) noop_core
-            };
+                    (uint32_t) noop_core,
+
+                    // mcast args
+                    (uint32_t) bottom_core_physical.x,
+                    (uint32_t) bottom_core_physical.y,
+                    (uint32_t) bottom_core_physical.x,
+                    (uint32_t) top_left_core_physical.y,
+                    num_cores_y - 1,
+                    num_cores_y - 1,
+                    act_mcast_sender_semaphore,
+                    act_mcast_receiver_semaphore,
+                    shard_size_bytes,
+                    core_y_i, // act_mcast_sender_id (goes down the column)
+                    (uint32_t) bottom_core_physical.x, // act_mcast_sender_noc_x
+                };
+                reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end()); // act_mcast_sender_noc_y
+            } else {
+                reader_rt_args = {
+                    // arguments for act
+                    act_dram_addr,
+                    act_noc_x,
+                    act_noc_y,
+
+                    conv_act_size_w,
+                    conv_act_size_h,
+                    conv_act_size_c,
+                    weight_size_h,
+                    weight_size_w,
+                    stride_h,
+                    stride_w,
+                    pad_h,
+                    pad_w,
+                    conv_output_size_h,
+                    conv_output_size_w,
+                    num_blocks_act_h_per_core, // per core
+                    num_blocks_act_w,
+                    num_blocks_weight_w_per_core,
+                    num_groups,
+
+                    act_matrix_height_unpadded,
+                    act_matrix_width_unpadded,
+                    act_matrix_height,
+                    act_matrix_width,
+                    act_matrix_height_ntiles,
+                    act_matrix_width_ntiles,
+                    act_block_h_datums,
+                    act_block_w_datums,
+                    act_block_h_ntiles,
+                    act_block_w_ntiles,
+                    act_block_num_tiles / conv_act_c_blocks,
+                    conv_act_c_blocks,
+
+                    src_dram_act_buffer_size_bytes,
+                    dst_l1_act_buffer_size_bytes,
+
+                    n_start,
+                    out_h_start,
+                    out_w_start,
+                    total_h_start,
+
+                    // Specs for reader indices
+                    first_partial_right_aligned_row_width,
+                    skip_after_partial_right_aligned_row,
+                    first_partial_image_num_rows,
+                    skip_after_first_partial_image_row,
+                    num_full_images,
+                    skip_after_full_image,
+                    last_partial_image_num_rows,
+                    last_partial_left_aligned_row_width,
+
+                    // Specs for reader offsets
+                    num_blocks_act_w, // window_outer
+                    weight_size_h * weight_size_w / num_blocks_act_w, // window_inner
+
+                    (uint32_t) noop_core
+                };
+            }
         } else {
             reader_rt_args = {
                 // arguments for act
@@ -916,7 +1077,8 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
                 act_block_w_datums,
                 act_block_h_ntiles,
                 act_block_w_ntiles,
-                act_block_num_tiles,
+                act_block_num_tiles / conv_act_c_blocks,
+                conv_act_c_blocks,
 
                 src_dram_act_buffer_size_bytes,
                 dst_l1_act_buffer_size_bytes,
@@ -925,9 +1087,16 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
                 out_h_start,
                 out_w_start,
                 total_h_start,
+
                 (uint32_t) noop_core
             };
         }
+
+        SetRuntimeArgs(
+            program, reader_id, core,
+            reader_rt_args
+        );
+        reader_ids.push_back(reader_id);
 
         writer_rt_args = {
             out_dram_addr,
@@ -955,8 +1124,9 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
             out_start_tile_id_w,
 
             num_blocks_act_w, // = number of blocks of weight in height dim
-            weight_block_num_tiles,
-            weight_block_h_ntiles,
+            in1_block_num_tiles,
+            conv_act_c_blocks,
+            weight_block_h_ntiles / conv_act_c_blocks,
             weight_block_w_ntiles,
             weight_matrix_width_ntiles, // weight_stride_h
             weight_matrix_width_ntiles * weight_block_h_ntiles, // weight_next_block_stride_h,
@@ -968,12 +1138,6 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
 
             (uint32_t) noop_core
         };
-
-        SetRuntimeArgs(
-            program, reader_id, core,
-            reader_rt_args
-        );
-        reader_ids.push_back(reader_id);
 
         // Mcast sender
         // 2D mcast
@@ -1178,6 +1342,9 @@ void OptimizedConv::validate(const std::vector<Tensor>& input_tensors, const std
             TT_ASSERT(this->parallelization_config.per_core_weight_matrix_width_ntiles == out_width_ntiles);
             TT_ASSERT(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
         } else if (this->output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            // For block sharded, out_width per core is shard width, and this is split along row
+            // TODO: We should clean this up and relax constraints on out_subblock h and w
+            out_width_ntiles /= this->parallelization_config.grid_size.y;
             TT_ASSERT(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
         }
     }
@@ -1232,7 +1399,7 @@ std::vector<Tensor> OptimizedConv::create_output_tensors(const std::vector<Tenso
             auto shard_spec = ShardSpec{.shard_grid=shard_grid, .shard_shape=shard_shape, .shard_orientation=ShardOrientation::ROW_MAJOR};
             return {create_sharded_device_tensor(output_shape, this->output_dtype, output_layout, input_tensor.device(), this->output_mem_config, shard_spec)};
         } else {
-            auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_opt_conv_activation_as_mm_shape(input_tensor.shape(), conv_params, this->block_config.out_block_h_ntiles, extra_padding_for_32B_alignment);
+            auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_opt_conv_activation_as_mm_shape(this->input_tensor_shape, conv_params, this->block_config.out_block_h_ntiles, extra_padding_for_32B_alignment);
             uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
             uint32_t act_matrix_height_ntiles = act_matrix_height / TILE_HEIGHT;
             uint32_t total_active_num_cores_per_weight_slice = act_matrix_height_ntiles / this->parallelization_config.per_core_out_matrix_height_ntiles;
@@ -1289,6 +1456,7 @@ tt::stl::reflection::Attributes OptimizedConvBlockConfig::attributes() const {
     return {
         {"act_block_h_ntiles",  this->act_block_h_ntiles},
         {"act_block_w_ntiles",  this->act_block_w_ntiles},
+        {"act_c_num_blocks",  this->act_c_num_blocks},
         {"weight_block_w_ntiles",  this->weight_block_w_ntiles},
         {"out_block_h_ntiles",  this->out_block_h_ntiles},
         {"out_subblock_h_ntiles",  this->out_subblock_h_ntiles},
