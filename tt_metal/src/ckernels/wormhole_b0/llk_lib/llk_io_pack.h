@@ -28,7 +28,7 @@ inline void llk_setup_cb_interface() {
         uint32_t fifo_page_size = circular_buffer_config_addr[3];
 
         cb_interface[cb_id].fifo_wr_ptr = fifo_addr;
-        cb_interface[cb_id].fifo_limit = fifo_addr + fifo_size;  // Check if there is overflow
+        cb_interface[cb_id].fifo_limit = fifo_addr + fifo_size - 1;  // Check if there is overflow
         cb_interface[cb_id].fifo_size = fifo_size;
         cb_interface[cb_id].fifo_num_pages = fifo_num_pages;
         cb_interface[cb_id].fifo_page_size = fifo_page_size;
@@ -108,7 +108,7 @@ inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_ti
     cb_interface[output].fifo_wr_ptr += num_words;
     cb_interface[output].fifo_wr_tile_ptr = 0;
 
-    if (cb_interface[output].fifo_wr_ptr >= cb_interface[output].fifo_limit) {
+    if (cb_interface[output].fifo_wr_ptr > cb_interface[output].fifo_limit) {
         cb_interface[output].fifo_wr_ptr -= cb_interface[output].fifo_size;
     }
 
