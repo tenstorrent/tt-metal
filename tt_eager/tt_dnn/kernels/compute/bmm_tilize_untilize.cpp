@@ -36,7 +36,7 @@ inline void tilize_in(
     uint32_t in_num_subblocks,
     uint32_t out_cb_id) {
 
-    // kernel_sleep(100);
+    // UNPACK(( kernel_sleep(100) ));
     tilize_init_short_with_dt(in_cb_id, in_block_w);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
