@@ -35,6 +35,7 @@ void kernel_main() {
 
     uint32_t num_blocks_weight_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t weight_block_height_num_outer = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_block_height_ntiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_block_width_ntiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_stride_h = get_arg_val<uint32_t>(i); i+=1;
@@ -96,6 +97,7 @@ void kernel_main() {
         .log_base_2_of_page_size = tile_size_pow2_exponent
     };
 
+    // TODO: Review to support weight_block_height_num_outer
     // READ WEIGHTS + MCAST SEND WEIGHTS
     // read weight blocks inner dim
     // weight DRAM -> L1 (weights in tiled form)

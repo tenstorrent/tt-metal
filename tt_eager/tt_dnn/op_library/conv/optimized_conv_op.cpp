@@ -574,6 +574,12 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     string writer_mcast_sender_kernel;
     string writer_mcast_receiver_kernel;
     bool reader_with_indices = false;
+    // Partitions conv inner dim into blocks to support sharding along this dim
+    // TODO: Only 2D convs with sharded input use this, but we can uplift to support generically
+    // TODO: Only updated variables which is affected, but there may be more that needs to account for this
+    // TODO: Loop naming in reader, writer, and compute kernels could also be cleaned up
+    // TODO: Can conv_act_c_blocks be same as num_blocks_act_w?
+    uint32_t conv_act_c_blocks = 1;
     if (rn50_first_conv) {
         reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_resnet50_first_conv.cpp";
         compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/bmm_tilize_untilize_all_weights_in_l1_single_output_block_width_dim.cpp";
@@ -624,10 +630,15 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     std::vector<uint32_t> writer_rt_args;
     std::vector<uint32_t> writer_compile_time_args;
 
-    reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
-            (uint32_t) stride_h, (uint32_t) stride_w, (uint32_t) conv_act_size_w, (uint32_t) conv_output_size_w,
-            (uint32_t) conv_act_size_c * num_bytes_of_df, (uint32_t) std::log2(conv_act_size_c * num_bytes_of_df), extra_padding_for_32B_alignment,
-            (uint32_t) (conv_act_size_c/act_block_w_datums), act_block_w_datums * num_bytes_of_df};
+    reader_compile_time_args = {(uint32_t)
+        (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
+        (uint32_t) stride_h,
+        (uint32_t) stride_w,
+        (uint32_t) conv_act_size_w,
+        (uint32_t) conv_output_size_w,
+        (uint32_t) conv_act_size_c * num_bytes_of_df / conv_act_c_blocks,
+        (uint32_t) std::log2(conv_act_size_c * num_bytes_of_df), extra_padding_for_32B_alignment,
+        (uint32_t) (conv_act_size_c/act_block_w_datums), act_block_w_datums * num_bytes_of_df};
 
     // define for bias
     std::map<string, string> writer_defines;
@@ -660,14 +671,15 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
         (uint32_t) (bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0))};
 
     vector<uint32_t> compute_kernel_args = {
-        act_block_w_ntiles,
+        act_block_w_ntiles / conv_act_c_blocks,
+        conv_act_c_blocks,
         act_num_subblocks,
-        act_block_num_tiles,
-        act_subblock_num_tiles,
+        act_block_num_tiles / conv_act_c_blocks,
+        act_subblock_num_tiles / conv_act_c_blocks,
         act_subblock_h_ntiles,
 
         weight_num_subblocks,
-        weight_block_num_tiles,
+        weight_block_num_tiles / conv_act_c_blocks,
         weight_block_w_ntiles,
 
         num_blocks_act_h_per_core,
@@ -864,7 +876,8 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
                 act_block_w_datums,
                 act_block_h_ntiles,
                 act_block_w_ntiles,
-                act_block_num_tiles,
+                act_block_num_tiles / conv_act_c_blocks,
+                conv_act_c_blocks,
 
                 src_dram_act_buffer_size_bytes,
                 dst_l1_act_buffer_size_bytes,
@@ -923,7 +936,8 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
                 act_block_w_datums,
                 act_block_h_ntiles,
                 act_block_w_ntiles,
-                act_block_num_tiles,
+                act_block_num_tiles / conv_act_c_blocks,
+                conv_act_c_blocks,
 
                 src_dram_act_buffer_size_bytes,
                 dst_l1_act_buffer_size_bytes,
@@ -932,9 +946,16 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
                 out_h_start,
                 out_w_start,
                 total_h_start,
+
                 (uint32_t) noop_core
             };
         }
+
+        SetRuntimeArgs(
+            program, reader_id, core,
+            reader_rt_args
+        );
+        reader_ids.push_back(reader_id);
 
         writer_rt_args = {
             out_dram_addr,
@@ -962,8 +983,9 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
             out_start_tile_id_w,
 
             num_blocks_act_w, // = number of blocks of weight in height dim
-            weight_block_num_tiles,
-            weight_block_h_ntiles,
+            weight_block_num_tiles / conv_act_c_blocks,
+            conv_act_c_blocks,
+            weight_block_h_ntiles / conv_act_c_blocks,
             weight_block_w_ntiles,
             weight_matrix_width_ntiles, // weight_stride_h
             weight_matrix_width_ntiles * weight_block_h_ntiles, // weight_next_block_stride_h,
@@ -975,12 +997,6 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
 
             (uint32_t) noop_core
         };
-
-        SetRuntimeArgs(
-            program, reader_id, core,
-            reader_rt_args
-        );
-        reader_ids.push_back(reader_id);
 
         // Mcast sender
         // 2D mcast

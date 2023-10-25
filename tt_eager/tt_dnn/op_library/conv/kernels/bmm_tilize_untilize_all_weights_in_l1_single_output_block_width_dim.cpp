@@ -98,25 +98,27 @@ inline void pack_matmul_subblock(uint32_t cb_id, uint32_t out_subblock_num_tiles
 namespace NAMESPACE {
 void MAIN {
 
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(0); // inner block size in tiles
-    constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1); // outer row block size (in inner row blocks)
-    constexpr uint32_t in0_block_num_tiles =  get_compile_time_arg_val(2); // out_subblock_h*in0_block_w*in0_num_subblocks;
-    constexpr uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);  // out_subblock_h*in0_block_w
-    constexpr uint32_t in0_subblock_h = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_num_subblocks = get_compile_time_arg_val(5); // outer column block size (in inner column blocks)
-    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(6); //out_subblock_w*in0_block_w* in1_num_subblocks;
-    constexpr uint32_t in1_per_core_w = get_compile_time_arg_val(7); // out_subblock_w*in1_num_subblocks
+    constexpr uint32_t in0_block_w            = get_compile_time_arg_val(0); // inner block size in tiles
+    // TODO: Review to support in0_w_num_outer
+    constexpr uint32_t in0_w_num_outer        = get_compile_time_arg_val(1); // number of blocks of inner dim
+    constexpr uint32_t in0_num_subblocks      = get_compile_time_arg_val(2); // outer row block size (in inner row blocks)
+    constexpr uint32_t in0_block_num_tiles    = get_compile_time_arg_val(3); // out_subblock_h*in0_block_w*in0_num_subblocks;
+    constexpr uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(4);  // out_subblock_h*in0_block_w
+    constexpr uint32_t in0_subblock_h         = get_compile_time_arg_val(5);
+    constexpr uint32_t in1_num_subblocks      = get_compile_time_arg_val(6); // outer column block size (in inner column blocks)
+    constexpr uint32_t in1_block_num_tiles    = get_compile_time_arg_val(7); //out_subblock_w*in0_block_w* in1_num_subblocks;
+    constexpr uint32_t in1_block_w            = get_compile_time_arg_val(8); // out_subblock_w*in1_num_subblocks
     // if these are not defined as volatile, it causes code size for TRISC2 to be too large if num_blocks > 1
-    constexpr uint32_t in0_num_blocks_h = get_compile_time_arg_val(8);
-    constexpr uint32_t in0_num_blocks_w = get_compile_time_arg_val(9);
-    constexpr uint32_t in1_num_blocks_w = get_compile_time_arg_val(10);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(11); // inner row block size in tiles
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(12); // inner column block size in tiles
-    constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(13); // out_subblock_h * out_subblock_w;
-    constexpr bool tilize_in0 = get_compile_time_arg_val(14);
-    constexpr bool untilize_out = get_compile_time_arg_val(15);
+    constexpr uint32_t in0_num_blocks_h       = get_compile_time_arg_val(9);
+    constexpr uint32_t in0_num_blocks_w       = get_compile_time_arg_val(10);
+    constexpr uint32_t in1_num_blocks_w       = get_compile_time_arg_val(11);
+    constexpr uint32_t out_subblock_h         = get_compile_time_arg_val(12); // inner row block size in tiles
+    constexpr uint32_t out_subblock_w         = get_compile_time_arg_val(13); // inner column block size in tiles
+    constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(14); // out_subblock_h * out_subblock_w;
+    constexpr bool tilize_in0                 = get_compile_time_arg_val(15);
+    constexpr bool untilize_out               = get_compile_time_arg_val(16);
 
-    uint32_t out_block_w = in1_per_core_w;
+    uint32_t out_block_w = in1_block_w;
     constexpr bool spill = in0_num_blocks_w > 1;
 
     // CB indices
@@ -128,7 +130,7 @@ void MAIN {
     constexpr uint32_t untilize_mode_reblock_cb                 = tt::CB::c_intermed3;
     constexpr uint32_t out_cb_id                                = tt::CB::c_out0;
     #ifdef FUSE_BIAS
-    uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
+    uint32_t bias_ntiles_w = get_compile_time_arg_val(17);
     constexpr uint32_t bias_cb_id                           = tt::CB::c_in2;
     init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(matmul_partials_cb, bias_cb_id, out_cb_id);
     constexpr uint32_t mm_out_cb_id = matmul_partials_cb;
@@ -204,7 +206,7 @@ void MAIN {
                                                 in1_index_inner_dim_h_offset + in1_index_subblock_offset + in1_index_inner_dim_subblock_offset + w,    // in1 tile
                                                 dst_index,                                                     // dst
                                                 false);
-                                in1_index_inner_dim_subblock_offset += in1_per_core_w;
+                                in1_index_inner_dim_subblock_offset += in1_block_w;
                             } // for in0_block_w
                             ++dst_index;
                         } // for out_subblock_w

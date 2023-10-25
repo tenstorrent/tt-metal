@@ -40,6 +40,7 @@ void kernel_main() {
     uint32_t act_block_h_ntiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_block_w_ntiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t act_w_num_outer = get_arg_val<uint32_t>(i); i+=1;
     uint32_t src_dram_act_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
     uint32_t dst_l1_act_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
     uint32_t n_start = get_arg_val<uint32_t>(i); i+=1;
@@ -69,7 +70,7 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(2);
     constexpr uint32_t conv_act_size_w_ = get_compile_time_arg_val(3);
     constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
-    constexpr uint32_t conv_act_size_c_bytes = get_compile_time_arg_val(5);
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t log_base_2_of_conv_act_size_c_bytes = get_compile_time_arg_val(6);
 
     constexpr uint32_t cb_id_act = 0;
@@ -153,8 +154,8 @@ void kernel_main() {
     /* We can add another loop to read chunks of a stick as well.
      * - Duplicate reader_offset for same stick X times (window_inner must be 1)
      * - New loop between outer and inner that loops X times reading from same stick
-     * - Read conv_act_size_c_bytes / X each time
-     * - Update l1_write_addr_act by conv_act_size_c_bytes
+     * - Read conv_act_c_read_bytes / X each time
+     * - Update l1_write_addr_act by conv_act_c_read_bytes
      */
     constexpr uint32_t cb_reader_offsets = tt::CB::c_intermed5;
     volatile tt_l1_ptr uint32_t* reader_offsets_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_offsets));
@@ -175,7 +176,7 @@ void kernel_main() {
     // we check if window_inner == weight_size_w to make sure coalescing is legal along full window_inner so the loop can be removed
     constexpr bool coalesce_window_inner_reads = true;
     constexpr uint32_t num_coalesced_reads = 3;
-    const uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_size_c_bytes;
+    const uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
     // we want to have the check hoisted out because in act_block_h_datums loop it would be to expensive (unless we make it ifdef)
     if (coalesce_window_inner_reads and window_inner == num_coalesced_reads) {
         // coalesce reads along weight_size_w
@@ -215,8 +216,8 @@ void kernel_main() {
                 for (uint32_t inner = 0; inner < window_inner; inner++) {
                     // local read from reader_index + reader_offset;
                     act_l1_offset = (reader_indices_ptr[reader_idx] + reader_offsets_ptr[reader_offset_idx + inner]) << log_base_2_of_conv_act_size_c_bytes;
-                    noc_async_read_one_packet(get_noc_addr(act_l1_read_addr + act_l1_offset), l1_write_addr_act, conv_act_size_c_bytes);
-                    l1_write_addr_act += conv_act_size_c_bytes;
+                    noc_async_read_one_packet(get_noc_addr(act_l1_read_addr + act_l1_offset), l1_write_addr_act, conv_act_c_read_bytes);
+                    l1_write_addr_act += conv_act_c_read_bytes;
 
                 }
                 reader_idx++;
