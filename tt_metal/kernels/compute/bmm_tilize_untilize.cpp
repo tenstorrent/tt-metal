@@ -40,8 +40,9 @@ inline void tilize_in(
     // ie, ensure previously unpacked srca/srcb have been used up
     cb_wait_front(in_cb_id, in_block_w);
     cb_reserve_back(out_cb_id, in_block_w);;
-    UNPACK(( llk_unpack_reconfig_data_format_srca(in_cb_id) ));
-    tilize_init_short(in_cb_id, in_block_w);
+    // UNPACK(( llk_unpack_reconfig_data_format_srca(in_cb_id) ));
+    // tilize_init_short(in_cb_id, in_block_w);
+    tilize_init_short_with_dt(in_cb_id, in_block_w);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
             cb_wait_front(in_cb_id, in_block_w);
