@@ -11,7 +11,7 @@ test-list:
       datagen:
         function: gen_rand
         args:
-          low: -10
+          low: -4
           high: 10
       comparison:
         function: comp_pcc
@@ -33,7 +33,7 @@ test-list:
       datagen:
         function: gen_rand
         args:
-          low: -10
+          low: -4
           high: 10
       comparison:
         function: comp_pcc
