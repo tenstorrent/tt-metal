@@ -4,323 +4,38 @@
 
 import pytest
 import torch
-import torch.nn.functional as F
+from loguru import logger
 
 import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
 from models.utility_functions import comp_pcc
 
-TILE_HEIGHT = 32
-TILE_WIDTH = 32
 
-
-def get_tensor_shape(input_a_shape, input_b_shape, transpose_b):
-    a_b1 = input_a_shape[0]
-    a_b2 = input_a_shape[1]
-    a_m = input_a_shape[2]
-    a_k = input_a_shape[3]
-
-    b_b1 = input_b_shape[0]
-    b_b2 = input_b_shape[1]
-
-    b_k = input_b_shape[3] if transpose_b else input_b_shape[2]
-    b_n = input_b_shape[2] if transpose_b else input_b_shape[3]
-    return a_b1, a_b2, a_m, a_k, b_b1, b_b2, b_k, b_n
-
-
-def get_tensors(input_a_shape, input_b_shape, transpose_b, device):
+def get_tensors(input_shape, other_shape, transpose_input, transpose_other,
+                device):
     torch.manual_seed(2023)
     dtype = ttl.tensor.DataType.BFLOAT16
     npu_layout = ttl.tensor.Layout.TILE
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
 
     # create input tensors using torch
-    a = torch.randn(input_a_shape, dtype=torch.bfloat16)
-    b = torch.randn(input_b_shape, dtype=torch.bfloat16)
+    input = torch.randn(input_shape, dtype=torch.bfloat16)
+    other = torch.randn(other_shape, dtype=torch.bfloat16)
 
     # TT matmul
-    # set different padded value for tt_a and tt_b.
-    tt_a = (
-        ttl.tensor.Tensor(a.reshape(-1).tolist(), input_a_shape, dtype, cpu_layout)
-        .pad_to_tile(1)
-        .to(npu_layout)
-        .to(device)
-    )
+    # set different padded value for tt_input and tt_other.
+    tt_input = (ttl.tensor.Tensor(
+        input.reshape(-1).tolist(), input_shape, dtype,
+        cpu_layout).pad_to_tile(1).to(npu_layout).to(device))
 
-    tt_b = (
-        ttl.tensor.Tensor(b.reshape(-1).tolist(), input_b_shape, dtype, cpu_layout)
-        .pad_to_tile(float("nan"))
-        .to(npu_layout)
-        .to(device)
-    )
+    tt_other = (ttl.tensor.Tensor(
+        other.reshape(-1).tolist(), other_shape, dtype,
+        cpu_layout).pad_to_tile(float("nan")).to(npu_layout).to(device))
 
-    torch_a = a.bfloat16()
-    torch_b = torch.transpose(b.bfloat16(), 2, 3) if transpose_b else b.bfloat16()
+    torch_input = torch.transpose(input, 2, 3) if transpose_input else input
+    torch_other = torch.transpose(other, 2, 3) if transpose_other else other
 
-    return tt_a, tt_b, torch_a, torch_b
-
-
-@skip_for_wormhole_b0
-@pytest.mark.parametrize(
-    "input_a_shape",
-    (
-        [1, 1, TILE_HEIGHT, TILE_WIDTH],
-        [1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 11],
-        [1, 1, TILE_HEIGHT * 2 - 1, TILE_WIDTH * 2],
-        [1, 1, TILE_HEIGHT * 9 - 7, TILE_WIDTH * 3 - 10],
-        [1, 1, TILE_HEIGHT * 18 - 17, TILE_WIDTH * 2 - 10],
-    ),
-)
-
-# input_b_shape[2] is dummy
-@pytest.mark.parametrize(
-    "input_b_shape",
-    (
-        [1, 1, TILE_HEIGHT, TILE_WIDTH],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH - 1],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 2 - 1],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 12 - 10],
-        [1, 1, TILE_HEIGHT, TILE_WIDTH * 24 - 20],
-    ),
-)
-def test_moreh_matmul(input_a_shape, input_b_shape, device):
-    # check matmul shape
-    transpose_b = False
-    input_b_shape[2] = input_a_shape[3]
-    a_b1, a_b2, a_m, a_k, b_b1, b_b2, b_k, b_n = get_tensor_shape(input_a_shape, input_b_shape, transpose_b)
-    output_shape = [a_b1 if a_b1 >= b_b1 else b_b1, a_b2 if a_b2 >= b_b2 else b_b2, a_m, b_n]
-
-    if a_k != b_k:
-        pytest.skip(f"k dim {a_k} and {b_k} is not the same")
-
-    if not ((a_b2 == b_b2) or (a_b2 == 1) or (b_b2 == 1)):
-        pytest.skip(f"The size of tensor a {a_b2} must match the size of tensor b {b_b2} at non-singleton dimension 1")
-
-    if not ((a_b1 == b_b1) or (a_b1 == 1) or (b_b1 == 1)):
-        pytest.skip(f"The size of tensor a {a_b1} must match the size of tensor b {b_b1} at non-singleton dimension 0")
-
-    # get tensors
-    tt_a, tt_b, torch_a, torch_b = get_tensors(input_a_shape, input_b_shape, transpose_b, device)
-
-    # tt matmul
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_out = (
-        ttl.operations.primary.moreh_matmul(tt_a, tt_b, transpose_b=transpose_b)
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(output_shape)
-        .to_torch()
-    )
-
-    # torch matmul
-    torch_out = torch.matmul(torch_a, torch_b)
-
-    ## test for equivalance
-    passing_pcc, output_pcc = comp_pcc(torch_out, tt_out)
-    print(f"Passing PCC = {passing_pcc}")
-    print(f"Output PCC = {output_pcc}")
-
-    assert passing_pcc
-
-
-@skip_for_wormhole_b0
-@pytest.mark.parametrize(
-    "input_a_shape",
-    (
-        [1, 1, TILE_HEIGHT, TILE_WIDTH],
-        [1, 2, TILE_HEIGHT * 5 - 1, TILE_WIDTH],
-        [2, 1, TILE_HEIGHT * 5 - 1, TILE_WIDTH - 11],
-        [2, 2, TILE_HEIGHT * 5 - 7, TILE_WIDTH - 17],
-        [1, 5, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 3],
-        [5, 1, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 3 - 11],
-        [5, 5, TILE_HEIGHT * 20 - 7, TILE_WIDTH * 3 - 1],
-    ),
-)
-
-# input_b_shape[2] is dummy
-@pytest.mark.parametrize(
-    "input_b_shape",
-    (
-        [1, 1, TILE_HEIGHT, TILE_WIDTH],
-        [1, 2, TILE_HEIGHT, TILE_WIDTH * 5 - 1],
-        [2, 1, TILE_HEIGHT, TILE_WIDTH * 5 - 13],
-        [2, 2, TILE_HEIGHT, TILE_WIDTH * 5 - 31],
-        [1, 5, TILE_HEIGHT, TILE_WIDTH * 10 - 1],
-        [5, 1, TILE_HEIGHT, TILE_WIDTH * 10 - 13],
-        [5, 5, TILE_HEIGHT, TILE_WIDTH * 20 - 1],
-    ),
-)
-def test_batched_moreh_matmul(input_a_shape, input_b_shape, device):
-    transpose_b = False
-    input_b_shape[2] = input_a_shape[3]
-
-    # check matmul shape
-    a_b1, a_b2, a_m, a_k, b_b1, b_b2, b_k, b_n = get_tensor_shape(input_a_shape, input_b_shape, transpose_b)
-    output_shape = [a_b1 if a_b1 >= b_b1 else b_b1, a_b2 if a_b2 >= b_b2 else b_b2, a_m, b_n]
-
-    if a_k != b_k:
-        pytest.skip(f"k dim {a_k} and {b_k} is not the same")
-
-    if not ((a_b2 == b_b2) or (a_b2 == 1) or (b_b2 == 1)):
-        pytest.skip(f"The size of tensor a {a_b2} must match the size of tensor b {b_b2} at non-singleton dimension 1")
-
-    if not ((a_b1 == b_b1) or (a_b1 == 1) or (b_b1 == 1)):
-        pytest.skip(f"The size of tensor a {a_b1} must match the size of tensor b {b_b1} at non-singleton dimension 0")
-
-    # get tensors
-    tt_a, tt_b, torch_a, torch_b = get_tensors(input_a_shape, input_b_shape, transpose_b, device)
-
-    # tt matmul
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_out = (
-        ttl.operations.primary.moreh_matmul(tt_a, tt_b, transpose_b=transpose_b)
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(output_shape)
-        .to_torch()
-    )
-
-    # torch matmul
-    torch_out = torch.matmul(torch_a, torch_b)
-
-    ## test for equivalance
-    passing_pcc, output_pcc = comp_pcc(torch_out, tt_out)
-    print(f"Passing PCC = {passing_pcc}")
-    print(f"Output PCC = {output_pcc}")
-
-    assert passing_pcc
-
-
-@skip_for_wormhole_b0
-@pytest.mark.parametrize(
-    "input_a_shape",
-    (
-        [1, 1, TILE_HEIGHT, TILE_WIDTH],
-        [1, 1, TILE_HEIGHT - 1, TILE_WIDTH - 11],
-        [1, 1, TILE_HEIGHT * 2 - 1, TILE_WIDTH * 2],
-        [1, 1, TILE_HEIGHT * 9 - 7, TILE_WIDTH * 3 - 10],
-        [1, 1, TILE_HEIGHT * 18 - 17, TILE_WIDTH * 2 - 10],
-    ),
-)
-
-# input_b_shape[3] is dummy
-@pytest.mark.parametrize(
-    "input_b_shape",
-    (
-        [1, 1, TILE_WIDTH, TILE_HEIGHT],
-        [1, 1, TILE_WIDTH - 1, TILE_HEIGHT],
-        [1, 1, TILE_WIDTH * 2 - 1, TILE_HEIGHT],
-        [1, 1, TILE_WIDTH * 12 - 10, TILE_HEIGHT],
-        [1, 1, TILE_WIDTH * 24 - 20, TILE_HEIGHT],
-    ),
-)
-def test_moreh_matmul_transpose_b(input_a_shape, input_b_shape, device):
-    transpose_b = True
-    input_b_shape[3] = input_a_shape[3]
-
-    # check matmul shape
-    a_b1, a_b2, a_m, a_k, b_b1, b_b2, b_k, b_n = get_tensor_shape(input_a_shape, input_b_shape, transpose_b)
-    output_shape = [a_b1 if a_b1 >= b_b1 else b_b1, a_b2 if a_b2 >= b_b2 else b_b2, a_m, b_n]
-
-    if a_k != b_k:
-        pytest.skip(f"k dim {a_k} and {b_k} is not the same")
-
-    if not ((a_b2 == b_b2) or (a_b2 == 1) or (b_b2 == 1)):
-        pytest.skip(f"The size of tensor a {a_b2} must match the size of tensor b {b_b2} at non-singleton dimension 1")
-
-    if not ((a_b1 == b_b1) or (a_b1 == 1) or (b_b1 == 1)):
-        pytest.skip(f"The size of tensor a {a_b1} must match the size of tensor b {b_b1} at non-singleton dimension 0")
-
-    # get tensors
-    tt_a, tt_b, torch_a, torch_b = get_tensors(input_a_shape, input_b_shape, transpose_b, device)
-
-    # tt matmul
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_out = (
-        ttl.operations.primary.moreh_matmul(tt_a, tt_b, transpose_b=transpose_b)
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(output_shape)
-        .to_torch()
-    )
-
-    # torch matmul
-    torch_out = torch.matmul(torch_a, torch_b)
-
-    ## test for equivalance
-    passing_pcc, output_pcc = comp_pcc(torch_out, tt_out)
-    print(f"Passing PCC = {passing_pcc}")
-    print(f"Output PCC = {output_pcc}")
-
-    assert passing_pcc
-
-
-@skip_for_wormhole_b0
-@pytest.mark.parametrize(
-    "input_a_shape",
-    (
-        [1, 1, TILE_HEIGHT, TILE_WIDTH],
-        [1, 2, TILE_HEIGHT * 5 - 1, TILE_WIDTH],
-        [2, 1, TILE_HEIGHT * 5 - 1, TILE_WIDTH - 11],
-        [2, 2, TILE_HEIGHT * 5 - 7, TILE_WIDTH - 17],
-        [1, 5, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 3],
-        [5, 1, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 3 - 11],
-        [5, 5, TILE_HEIGHT * 20 - 7, TILE_WIDTH * 3 - 1],
-    ),
-)
-
-# input_b_shape[3] is dummy
-@pytest.mark.parametrize(
-    "input_b_shape",
-    (
-        [1, 1, TILE_WIDTH, TILE_HEIGHT],
-        [1, 2, TILE_WIDTH * 5 - 1, TILE_HEIGHT],
-        [2, 1, TILE_WIDTH * 5 - 13, TILE_HEIGHT],
-        [2, 2, TILE_WIDTH * 5 - 31, TILE_HEIGHT],
-        [1, 5, TILE_WIDTH * 10 - 1, TILE_HEIGHT],
-        [5, 1, TILE_WIDTH * 10 - 13, TILE_HEIGHT],
-        [5, 5, TILE_WIDTH * 20 - 1, TILE_HEIGHT],
-    ),
-)
-def test_batched_moreh_matmul_transpose_b(input_a_shape, input_b_shape, device):
-    transpose_b = True
-    input_b_shape[3] = input_a_shape[3]
-
-    # check matmul shape
-    a_b1, a_b2, a_m, a_k, b_b1, b_b2, b_k, b_n = get_tensor_shape(input_a_shape, input_b_shape, transpose_b)
-    output_shape = [a_b1 if a_b1 >= b_b1 else b_b1, a_b2 if a_b2 >= b_b2 else b_b2, a_m, b_n]
-
-    if a_k != b_k:
-        pytest.skip(f"k dim {a_k} and {b_k} is not the same")
-
-    if not ((a_b2 == b_b2) or (a_b2 == 1) or (b_b2 == 1)):
-        pytest.skip(f"The size of tensor a {a_b2} must match the size of tensor b {b_b2} at non-singleton dimension 1")
-
-    if not ((a_b1 == b_b1) or (a_b1 == 1) or (b_b1 == 1)):
-        pytest.skip(f"The size of tensor a {a_b1} must match the size of tensor b {b_b1} at non-singleton dimension 0")
-
-    # get tensors
-    tt_a, tt_b, torch_a, torch_b = get_tensors(input_a_shape, input_b_shape, transpose_b, device)
-
-    # tt matmul
-    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_out = (
-        ttl.operations.primary.moreh_matmul(tt_a, tt_b, transpose_b=transpose_b)
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(output_shape)
-        .to_torch()
-    )
-
-    # torch matmul
-    torch_out = torch.matmul(torch_a, torch_b)
-
-    ## test for equivalance
-    passing_pcc, output_pcc = comp_pcc(torch_out, tt_out)
-    print(f"Passing PCC = {passing_pcc}")
-    print(f"Output PCC = {output_pcc}")
-
-    assert passing_pcc
+    return tt_input, tt_other, torch_input, torch_other
 
 
 @skip_for_wormhole_b0
@@ -328,42 +43,120 @@ def test_batched_moreh_matmul_transpose_b(input_a_shape, input_b_shape, device):
     "input_shape",
     (
         [1, 1, 1, 10],  # test not mutiple of 32 case
-        [1, 1, 1, TILE_WIDTH],  # test single tile
-        [1, 1, 1, TILE_WIDTH * 20],  # test multiple tiles
-        [1, 1, 1, TILE_WIDTH * 20 - 17],  # test multiple tiles, not a multiple of 32
+        [1, 1, 1, 32],  # test single tile
+        [1, 1, 1, 640],  # test multiple tiles
+        [1, 1, 1, 623],  # test multiple tiles, not a multiple of 32
     ),
 )
 def test_moreh_matmul_1d(input_shape, device):
-    transpose_b = False
-
     if input_shape[0] != 1 or input_shape[1] != 1 or input_shape[2] != 1:
         pytest.skip(f"dim 0, 1, 2 should be 1")
 
-    output_shape = [1, 1, 1, TILE_WIDTH]
     # get tensors
-    tt_a, tt_b, torch_a, torch_b = get_tensors(input_shape, input_shape, transpose_b, device)
+    tt_input, tt_other, torch_input, torch_other = get_tensors(
+        input_shape, input_shape, False, False, device)
 
     # tt matmul
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
-    tt_out = (
-        ttl.operations.primary.moreh_matmul(tt_a, tt_b, transpose_b=transpose_b)
-        .cpu()
-        .to(cpu_layout)
-        .unpad_from_tile(output_shape)
-        .to_torch()
-    )
+    output_shape = [1, 1, 1, 1]
+    tt_out = (ttl.tensor.moreh_matmul(tt_input, tt_other).cpu().to(
+        cpu_layout).unpad_from_tile(output_shape).to_torch())
 
     # torch matmul
-    torch_a = torch.reshape(torch_a, (torch_a.shape[-1],))
-    torch_b = torch.reshape(torch_b, (torch_b.shape[-1],))
-    torch_out = torch.matmul(torch_a, torch_b)
+    torch_input = torch.reshape(torch_input, (torch_input.shape[-1], ))
+    torch_other = torch.reshape(torch_other, (torch_other.shape[-1], ))
+    torch_out = torch.matmul(torch_input, torch_other)
 
-    # compare results
-    tt_out = tt_out[0][0][0][0]
+    # test for equivalance
+    passing_pcc, output_pcc = comp_pcc(torch_out, tt_out, pcc=0.999)
+    logger.info(f"Out passing={passing_pcc}")
+    logger.info(f"Output pcc={output_pcc}")
 
-    ## test for equivalance
-    passing_pcc, output_pcc = comp_pcc(torch_out, tt_out)
-    print(f"Passing PCC = {passing_pcc}")
-    print(f"Output PCC = {output_pcc}")
+    assert passing_pcc
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        # input, other, output shape
+        ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32]),
+        ([1, 1, 29, 31], [1, 1, 31, 30], [1, 1, 29, 30]),
+        ([3, 3, 511, 313], [1, 1, 313, 765], [3, 3, 511, 765]),
+        ([1, 1, 511, 313], [3, 3, 313, 765], [3, 3, 511, 765]),
+        ([1, 3, 511, 313], [1, 1, 313, 765], [1, 3, 511, 765]),
+        ([3, 1, 511, 313], [1, 1, 313, 765], [3, 1, 511, 765]),
+        ([1, 1, 511, 313], [1, 3, 313, 765], [1, 3, 511, 765]),
+        ([1, 1, 511, 313], [3, 1, 313, 765], [3, 1, 511, 765]),
+        ([1, 3, 511, 313], [3, 1, 313, 765], [3, 3, 511, 765]),
+        ([3, 1, 511, 313], [1, 3, 313, 765], [3, 3, 511, 765]),
+        ([1, 3, 511, 313], [1, 3, 313, 765], [1, 3, 511, 765]),
+        ([3, 1, 511, 313], [3, 1, 313, 765], [3, 1, 511, 765]),
+        ([3, 3, 511, 313], [3, 3, 313, 765], [3, 3, 511, 765]),
+    ))
+def test_moreh_matmul(params, device):
+    input_shape, other_shape, output_shape = params
+    tt_input, tt_other, torch_input, torch_other = get_tensors(
+        input_shape, other_shape, False, False, device)
+
+    # tt matmul
+    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    tt_output = (ttl.tensor.moreh_matmul(tt_input, tt_other).cpu().to(
+        cpu_layout).unpad_from_tile(output_shape).to_torch())
+
+    # torch matmul
+    torch_out = torch.matmul(torch_input, torch_other)
+
+    # test for equivalance
+    passing_pcc, output_pcc = comp_pcc(torch_out, tt_output, pcc=0.999)
+    logger.info(f"Out passing={passing_pcc}")
+    logger.info(f"Output pcc={output_pcc}")
+
+    assert passing_pcc
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        # input, other, output shape, transpose input, other
+        ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], False, False),
+        ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], False, True),
+        ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], True, False),
+        ([1, 1, 32, 32], [1, 1, 32, 32], [1, 1, 32, 32], True, True),
+        ([1, 1, 29, 31], [1, 1, 31, 30], [1, 1, 29, 30], False, False),
+        ([1, 1, 29, 31], [1, 1, 30, 31], [1, 1, 29, 30], False, True),
+        ([1, 1, 29, 31], [1, 1, 29, 30], [1, 1, 31, 30], True, False),
+        ([1, 1, 29, 31], [1, 1, 30, 29], [1, 1, 31, 30], True, True),
+        ([1, 3, 511, 313], [1, 1, 765, 313], [1, 3, 511, 765], False, True),
+        ([1, 1, 511, 313], [1, 3, 765, 313], [1, 3, 511, 765], False, True),
+        ([1, 3, 511, 313], [3, 1, 765, 313], [3, 3, 511, 765], False, True),
+        ([3, 3, 511, 313], [3, 3, 765, 313], [3, 3, 511, 765], False, True),
+        ([1, 1, 319, 309], [1, 1, 319, 748], [1, 1, 309, 748], True, False),
+        ([1, 3, 313, 511], [1, 1, 313, 765], [1, 3, 511, 765], True, False),
+        ([1, 1, 313, 511], [1, 3, 313, 765], [1, 3, 511, 765], True, False),
+        ([1, 3, 313, 511], [3, 1, 313, 765], [3, 3, 511, 765], True, False),
+        ([3, 3, 313, 511], [3, 3, 313, 765], [3, 3, 511, 765], True, False),
+        ([3, 3, 313, 511], [3, 3, 765, 313], [3, 3, 511, 765], True, True),
+    ))
+def test_primary_moreh_matmul(params, device):
+    input_shape, other_shape, output_shape, transpose_input, transpose_other = params
+    tt_input, tt_other, torch_input, torch_other = get_tensors(
+        input_shape, other_shape, transpose_input, transpose_other, device)
+
+    # tt matmul
+    cpu_layout = ttl.tensor.Layout.ROW_MAJOR
+    tt_output = (ttl.operations.primary.moreh_matmul(
+        tt_input,
+        tt_other,
+        transpose_input=transpose_input,
+        transpose_other=transpose_other).cpu().to(cpu_layout).unpad_from_tile(
+            output_shape).to_torch())
+
+    # torch matmul
+    torch_out = torch.matmul(torch_input, torch_other)
+
+    # test for equivalance
+    passing_pcc, output_pcc = comp_pcc(torch_out, tt_output, pcc=0.999)
+    logger.info(f"Out passing={passing_pcc}")
+    logger.info(f"Output pcc={output_pcc}")
 
     assert passing_pcc
