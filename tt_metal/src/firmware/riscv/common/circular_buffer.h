@@ -23,14 +23,8 @@ struct CBInterface {
     uint32_t fifo_rd_ptr;
     uint32_t fifo_wr_ptr;
 
-    // Save a cycle during init by writing 0 to the uint32 below
-    union {
-        uint32_t tiles_acked_received_init;
-        struct {
-            uint16_t tiles_acked;
-            uint16_t tiles_received;
-        };
-    };
+    uint16_t tiles_acked;
+    uint16_t tiles_received;
 
     // used by packer for in-order packing
     uint32_t fifo_wr_tile_ptr;
