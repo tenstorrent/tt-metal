@@ -37,7 +37,8 @@ inline void tilize_in(
     uint32_t out_cb_id) {
 
     // UNPACK(( kernel_sleep(100) ));
-    tilize_init_short_with_dt(in_cb_id, in_block_w);
+    UNPACK(( llk_unpack_reconfig_data_format(1, 0, 0, 0) ));
+    tilize_init_short(in_cb_id, in_block_w);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
             cb_wait_front(in_cb_id, in_block_w);
@@ -47,7 +48,8 @@ inline void tilize_in(
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
-    tilize_uninit_with_dt();
+    tilize_uninit();
+    UNPACK(( llk_unpack_reconfig_data_format(0, 1, 0, 0) ));
 } // tilize_in()
 
 // NOTE: Bias is not supported with the untilize option
@@ -177,14 +179,14 @@ void MAIN {
                         tile_regs_acquire();
                         if (enable_reload) {
                             // Reconfigure input
-                            copy_tile_to_dst_init_short_with_dt(matmul_partials_cb);
+                            copy_tile_to_dst_init_short();
+                            UNPACK(( llk_unpack_reconfig_data_format(1, matmul_partials_cb, 0, 0) ));
                             cb_wait_front(matmul_partials_cb, out_subblock_num_tiles);
                             for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
                                 copy_tile(matmul_partials_cb, i, i);
                             }
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
                             // Reconfigure srcA back
-                            // mm_init_short_with_dt(matmul_partials_cb);
                             mm_init_short();
                             unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
                         } // enable_reload
