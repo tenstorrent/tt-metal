@@ -120,13 +120,13 @@ def test_run_bmm_single_core_tilize_untilize(
         print(f'TODO: This case does not yet work. Skipping for now.')
         pytest.skip()
 
-    if a_dtype == ttl.tensor.DataType.BFLOAT16              \
-            and b_dtype == ttl.tensor.DataType.BFLOAT8_B    \
-            and out_dtype == ttl.tensor.DataType.BFLOAT16   \
-            and tilize_a == True                            \
-            and (a_height_nblocks > 1 or a_width_nblocks > 1 or b_width_nblocks > 1):
-        print(f'TODO: This case potentially has a race in tilize_in data reconfig before tilizing. Needs debugging. Skipping for now')
-        pytest.skip()
+    # if a_dtype == ttl.tensor.DataType.BFLOAT16              \
+    #         and b_dtype == ttl.tensor.DataType.BFLOAT8_B    \
+    #         and out_dtype == ttl.tensor.DataType.BFLOAT16   \
+    #         and tilize_a == True                            \
+    #         and (a_height_nblocks > 1 or a_width_nblocks > 1 or b_width_nblocks > 1):
+    #     print(f'TODO: This case potentially has a race in tilize_in data reconfig before tilizing. Needs debugging. Skipping for now')
+    #     pytest.skip()
 
     ## TODO (AS): Support multi-precision with as well. Currently bias only works for BFLOAT16
     if has_bias and (a_dtype != ttl.tensor.DataType.BFLOAT16 or b_dtype != ttl.tensor.DataType.BFLOAT16 or out_dtype != ttl.tensor.DataType.BFLOAT16):
