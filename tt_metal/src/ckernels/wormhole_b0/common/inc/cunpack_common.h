@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "ckernel_globals.h"
 #include "fw_debug.h"
+#include "debug_status.h"
 
 #ifdef PERF_DUMP
 #include "perf_res_decouple.h"
@@ -157,7 +158,9 @@ namespace ckernel::unpacker
    // Wait for threshold of busy contexts to fall below total available contexts
    inline void wait_for_next_context(const uint num_contexts)
    {
+       DEBUG_STATUS('W', 'N', 'C', 'W');
        while (semaphore_read(semaphore::UNPACK_SYNC) >= num_contexts) {}
+       DEBUG_STATUS('W', 'N', 'C', 'D');
    }
 
    inline void switch_config_context(uint &unp_cfg_context)
@@ -191,7 +194,9 @@ namespace ckernel::unpacker
    // Sync on unpacker idle via waiting busy contexts counter 0
    inline void wait_for_idle()
    {
+       DEBUG_STATUS('W', 'I', 'W');
        while (semaphore_read(semaphore::UNPACK_SYNC) > 0) {}
+       DEBUG_STATUS('W', 'I', 'D');
    }
 
    inline constexpr uint32_t get_num_faces(const std::uint32_t operand_id)

@@ -12,6 +12,7 @@
 #include "ckernel_globals.h"
 
 #include "fw_debug.h"
+#include "debug_status.h"
 
 #ifndef SFPU_OP_PARAM
 #define SFPU_OP_PARAM 0
@@ -139,7 +140,9 @@ inline uint32_t get_dest_buffer_base()
 inline void wait_math_semaphores()
 {
     // wait while math semaphore is on max, no room to write math results
+    DEBUG_STATUS('W', 'M', 'S', 'W');
     TTI_SEMWAIT(p_stall::STALL_MATH, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_MAX);
+    DEBUG_STATUS('W', 'M', 'S', 'D');
 }
 
 inline void set_math_semaphores()
@@ -170,7 +173,9 @@ inline void clear_dst_reg_addr()
 
 inline void math_dest_wait()
 {
+    DEBUG_STATUS('W', 'D', 'S', 'W');
     TTI_SEMWAIT(p_stall::STALL_MATH, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_MAX);
+    DEBUG_STATUS('W', 'D', 'S', 'D');
 }
 
 inline void dest_section_flip()

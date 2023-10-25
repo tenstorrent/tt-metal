@@ -10,6 +10,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
 #include "fw_debug.h"
+#include "debug_status.h"
 
 #define TT_OP_SETDMAREG_SHFT(Payload_SigSelSize, Payload_SigSelShft, SetSignalsMode, RegIndex16b) \
   TT_OP(0x45, (((Payload_SigSelSize) << 22) + ((Payload_SigSelShft)) + ((SetSignalsMode) << 7) + ((RegIndex16b) << 0)))
@@ -165,7 +166,9 @@ namespace ckernel::packer
 
    inline void wait_for_unpack_config_done()
    {
+      DEBUG_STATUS('W', 'U', 'C', 'W');
       while (semaphore_read(semaphore::UNPACK_PACK_CONFIG_SYNC) == 0) {}
+      DEBUG_STATUS('W', 'U', 'C', 'D');
    }
 
    inline void configure_pack(uint pack_output, uint relu_config = 0, bool skip_alu_format_set=false)
