@@ -46,6 +46,10 @@ extern CQReadInterface cq_read_interface;
 
 inline uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
+// GS RISC-V RTL bug workaround (l1 reads followed by local mem reads causes a hang)
+// in ncrisc.cc/brisc.cc: volatile uint32_t local_mem_barrier;
+void write_to_local_mem_barrier(uint32_t data) { local_mem_barrier = data; }
+
 constexpr static uint32_t get_arg_addr(int arg_idx) {
     // args are 4B in size
     return L1_ARG_BASE + (arg_idx << 2);
@@ -84,11 +88,14 @@ void setup_cb_read_write_interfaces() {
     volatile tt_l1_ptr uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
 
     for (uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
+        // write_to_local_mem_barrier are needed on GS because of the RTL bug
+        // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
         uint32_t fifo_addr = circular_buffer_config_addr[0];
         uint32_t fifo_size = circular_buffer_config_addr[1];
         uint32_t fifo_num_pages = circular_buffer_config_addr[2];
         uint32_t fifo_page_size = circular_buffer_config_addr[3];
         uint32_t fifo_limit = fifo_addr + fifo_size - 1;
+        write_to_local_mem_barrier(fifo_limit);
 
         cb_interface[cb_id].fifo_limit = fifo_limit;  // to check if we need to wrap
         cb_interface[cb_id].fifo_wr_ptr = fifo_addr;
