@@ -545,6 +545,18 @@ void Cluster::l1_barrier(chip_id_t chip_id) const {
     this->device_->l1_membar(chip_id, "LARGE_WRITE_TLB");
 }
 
+uint32_t Cluster::get_num_host_channels(chip_id_t device_id) const {
+    return this->device_->get_num_host_channels(device_id);
+}
+
+uint32_t Cluster::get_host_channel_size(chip_id_t device_id, uint32_t channel) const {
+    return this->device_->get_host_channel_size(device_id, channel);
+}
+
+void *Cluster::host_dma_address(uint64_t offset, chip_id_t src_device_id, uint16_t channel) const {
+    return this->device_->host_dma_address(offset, src_device_id, channel);
+}
+
 }  // namespace tt
 
 std::ostream &operator<<(std::ostream &os, tt_target_dram const &dram) {

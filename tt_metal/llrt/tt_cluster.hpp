@@ -92,6 +92,11 @@ class Cluster {
     void dram_barrier(chip_id_t chip_id) const;
     void l1_barrier(chip_id_t chip_id) const;
 
+    uint32_t get_num_host_channels(chip_id_t device_id) const;
+    uint32_t get_host_channel_size(chip_id_t device_id, uint32_t channel) const;
+    // Returns address in host space
+    void *host_dma_address(uint64_t offset, chip_id_t src_device_id, uint16_t channel) const;
+
    private:
     Cluster();
     ~Cluster();
