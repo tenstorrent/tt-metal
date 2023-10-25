@@ -56,6 +56,7 @@ void kernel_main() {
     uint32_t act_block_h_ntiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_block_w_ntiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t act_w_num_outer = get_arg_val<uint32_t>(i); i+=1;
     uint32_t src_dram_act_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
     uint32_t dst_l1_act_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
     uint32_t n_start = get_arg_val<uint32_t>(i); i+=1;
@@ -73,7 +74,7 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(2);
     constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(3);
     constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
-    constexpr uint32_t conv_act_size_c_bytes = get_compile_time_arg_val(5);
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t log_base_2_of_conv_act_size_c_bytes = get_compile_time_arg_val(6);
 
     constexpr uint32_t cb_id_act = 0;
@@ -83,6 +84,8 @@ void kernel_main() {
         .bank_base_address = act_addr_dram_base,
         .log_base_2_of_page_size = log_base_2_of_conv_act_size_c_bytes
     };
+
+
 
     // Assumptions. Must be true. Validate on host.
     // assert(act_block_w_datums == C * weight_size_w)
@@ -126,7 +129,7 @@ void kernel_main() {
                     uint32_t in_w_offset = out_w * stride_w; // expect stride 1 or 2.. make this compile time args - also conv input width
                     uint32_t in_w_offset_within_kernel_window = 0;
                     for(uint32_t bw = 0; bw < weight_size_w; bw++) {
-                        uint32_t read_size_bytes = conv_act_size_c_bytes;
+                        uint32_t read_size_bytes = conv_act_c_read_bytes;
 
                         if (total_h < act_matrix_height_unpadded) {
                             uint32_t in_h = in_h_offset + in_h_offset_within_kernel_window;

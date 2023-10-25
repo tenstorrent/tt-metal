@@ -98,23 +98,23 @@ inline void pack_matmul_subblock(uint32_t cb_id, uint32_t out_subblock_num_tiles
 namespace NAMESPACE {
 void MAIN {
 
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(0); // inner block size in tiles
-    constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1); // outer row block size (in inner row blocks)
-    constexpr uint32_t in0_block_num_tiles =  get_compile_time_arg_val(2); // out_subblock_h*in0_block_w*in0_num_subblocks;
+    constexpr uint32_t in0_block_w            = get_compile_time_arg_val(0); // inner block size in tiles
+    constexpr uint32_t in0_num_subblocks      = get_compile_time_arg_val(1); // outer row block size (in inner row blocks)
+    constexpr uint32_t in0_block_num_tiles    = get_compile_time_arg_val(2); // out_subblock_h*in0_block_w*in0_num_subblocks;
     constexpr uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);  // out_subblock_h*in0_block_w
-    constexpr uint32_t in0_subblock_h = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_num_subblocks = get_compile_time_arg_val(5); // outer column block size (in inner column blocks)
-    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(6); //out_subblock_w*in0_block_w* in1_num_subblocks;
-    constexpr uint32_t in1_per_core_w = get_compile_time_arg_val(7); // out_subblock_w*in1_num_subblocks
+    constexpr uint32_t in0_subblock_h         = get_compile_time_arg_val(4);
+    constexpr uint32_t in1_num_subblocks      = get_compile_time_arg_val(5); // outer column block size (in inner column blocks)
+    constexpr uint32_t in1_block_num_tiles    = get_compile_time_arg_val(6); //out_subblock_w*in0_block_w* in1_num_subblocks;
+    constexpr uint32_t in1_per_core_w         = get_compile_time_arg_val(7); // out_subblock_w*in1_num_subblocks
     // if these are not defined as volatile, it causes code size for TRISC2 to be too large if num_blocks > 1
-    constexpr uint32_t in0_num_blocks_h = get_compile_time_arg_val(8);
-    constexpr uint32_t in0_num_blocks_w = get_compile_time_arg_val(9);
-    constexpr uint32_t in1_num_blocks_w = get_compile_time_arg_val(10);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(11); // inner row block size in tiles
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(12); // inner column block size in tiles
+    constexpr uint32_t in0_num_blocks_h       = get_compile_time_arg_val(8);
+    constexpr uint32_t in0_num_blocks_w       = get_compile_time_arg_val(9);
+    constexpr uint32_t in1_num_blocks_w       = get_compile_time_arg_val(10);
+    constexpr uint32_t out_subblock_h         = get_compile_time_arg_val(11); // inner row block size in tiles
+    constexpr uint32_t out_subblock_w         = get_compile_time_arg_val(12); // inner column block size in tiles
     constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(13); // out_subblock_h * out_subblock_w;
-    constexpr bool tilize_in0 = get_compile_time_arg_val(14);
-    constexpr bool untilize_out = get_compile_time_arg_val(15);
+    constexpr bool tilize_in0                 = get_compile_time_arg_val(14);
+    constexpr bool untilize_out               = get_compile_time_arg_val(15);
 
     constexpr uint32_t out_block_w = in1_per_core_w;
     constexpr bool spill = in0_num_blocks_w > 1;

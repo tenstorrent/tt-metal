@@ -34,6 +34,7 @@ struct OptimizedConvParallelizationConfig {
 struct OptimizedConvBlockConfig {
     uint32_t act_block_h_ntiles;
     uint32_t act_block_w_ntiles;
+    uint32_t act_c_num_blocks;
     uint32_t weight_block_w_ntiles;
     uint32_t out_block_h_ntiles;
     uint32_t out_subblock_h_ntiles;
