@@ -11,6 +11,14 @@
 using namespace tt::constants;
 
 namespace tt {
+namespace tt_metal {
+
+Tensor moreh_matmul(const Tensor& input_tensor, const Tensor& other_tensor, const MemoryConfig& mem_config) {
+    return tt::operations::primary::moreh_matmul(input_tensor, other_tensor, false, false, mem_config);
+}
+
+}  // namespace tt_metal
+
 namespace operations {
 namespace primary {
 

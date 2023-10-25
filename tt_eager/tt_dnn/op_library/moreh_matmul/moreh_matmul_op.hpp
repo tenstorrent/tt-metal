@@ -9,6 +9,11 @@
 #include "tt_dnn/op_library/run_operation.hpp"
 
 namespace tt {
+namespace tt_metal {
+
+Tensor moreh_matmul(const Tensor &input_tensor, const Tensor &other_tensor, const MemoryConfig &mem_config);
+
+}  // namespace tt_metal
 
 namespace operations {
 
