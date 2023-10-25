@@ -201,7 +201,7 @@ ALWI void add_bcast_rows_init_short_post_matmul()
 {
     // unpacker
     #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_A_init_cm<BroadcastType::NONE, false>(0, 0, 255) ));
+    UNPACK(( llk_unpack_A_init_cm<BroadcastType::NONE, false, 0>(0, 255) ));
     UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>() ));
     #else
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
