@@ -36,8 +36,12 @@ inline void tilize_in(
     uint32_t in_num_subblocks,
     uint32_t out_cb_id) {
 
-    // kernel_sleep(100);
-    tilize_init_short_with_dt(in_cb_id, in_block_w);
+    // wait until completely ready for next iteration before reconfiguring data type
+    // ie, ensure previously unpacked srca/srcb have been used up
+    cb_wait_front(in_cb_id, in_block_w);
+    cb_reserve_back(out_cb_id, in_block_w);;
+    UNPACK(( llk_unpack_reconfig_data_format_srca(in_cb_id) ));
+    tilize_init_short(in_cb_id, in_block_w);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
             cb_wait_front(in_cb_id, in_block_w);
@@ -47,7 +51,7 @@ inline void tilize_in(
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
-    tilize_uninit_with_dt();
+    tilize_uninit();
 } // tilize_in()
 
 // NOTE: Bias is not supported with the untilize option
@@ -103,9 +107,11 @@ inline void tilize_in(
 
 inline void pack_matmul_subblock(uint32_t cb_id, uint32_t out_subblock_num_tiles) {
     cb_reserve_back(cb_id, out_subblock_num_tiles);
+    tile_regs_wait();
     for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
         pack_tile(i, cb_id);
     }
+    tile_regs_release();
     cb_push_back(cb_id, out_subblock_num_tiles);
 }
 
@@ -147,9 +153,11 @@ void MAIN {
         constexpr uint32_t bias_cb_id                           = tt::CB::c_in2;
         constexpr uint32_t out_for_bias_cb_id                   = tt::CB::c_intermed4;
         init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(out_for_bias_cb_id, bias_cb_id, out_cb_id);
+        mm_init_short();
+    #else
+        mm_init(in0_cb_id, in1_cb_id, out_cb_id);
     #endif
 
-    mm_init(in0_cb_id, in1_cb_id, out_cb_id);
     for(uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
         #ifdef FUSE_BIAS
             uint32_t bias_block_offset = 0;
@@ -160,8 +168,9 @@ void MAIN {
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
                 if (tilize_in0) {
                     tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
-                    mm_init_short();
                     cb_wait_front(tilized_in0_cb_id, in0_block_num_tiles);
+                    UNPACK(( llk_unpack_reconfig_data_format(0, in1_cb_id, 0, in0_cb_id) ));
+                    mm_init_short();
                 } else {
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
                 }
@@ -170,8 +179,10 @@ void MAIN {
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     int in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
-                        acquire_dst(tt::DstMode::Half);
+                        // UNPACK(( kernel_sleep(10) ));
+                        tile_regs_acquire();
                         if (enable_reload) {
+                            // UNPACK(( DPRINT << "HA!" << ENDL() ));
                             // Reconfigure input
                             copy_tile_to_dst_init_short_with_dt(matmul_partials_cb);
                             cb_wait_front(matmul_partials_cb, out_subblock_num_tiles);
@@ -180,7 +191,6 @@ void MAIN {
                             }
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
                             // Reconfigure srcA back
-                            // mm_init_short_with_dt(matmul_partials_cb);
                             mm_init_short();
                             unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
                         } // enable_reload
@@ -206,18 +216,18 @@ void MAIN {
                         #ifdef FUSE_BIAS
                             // if bias is to be added, add it to the data in dst before packing into the out cb
                             if (last_out) {
+                                tile_regs_commit();
                                 // first move the current result from dst to interim CB
                                 pack_matmul_subblock(out_for_bias_cb_id, out_subblock_num_tiles);
-                                release_dst(tt::DstMode::Half);
-                                // reconfig unpacker df for src B
+                                // TODO: reconfig unpacker df for src B
                                 // unpack_reconfig_data_format(out_for_bias_cb_id, bias_cb_id);
                                 // bcast add data from bias_cb_id
                                 cb_wait_front(bias_cb_id, bias_ntiles_w);
                                 cb_wait_front(out_for_bias_cb_id, out_subblock_num_tiles);
                                 add_bcast_rows_init_short();
-                                // reconfig packer df for out
+                                // TODO: reconfig packer df for out
                                 // pack_reconfig_data_format(out_cb_id);
-                                acquire_dst(tt::DstMode::Half);
+                                tile_regs_acquire();
                                 uint32_t i = 0;
                                 for (uint32_t h = 0; h < out_subblock_h; ++ h) {
                                     uint32_t bcast_tile_i = bias_block_offset + in1_index_subblock_offset;
@@ -231,7 +241,7 @@ void MAIN {
                                 cb_pop_front(out_for_bias_cb_id, out_subblock_num_tiles);
                                 // reconfig for matmul
                                 mm_init_short();
-                                // reconfig unpacker df for srcB
+                                // TODO: reconfig unpacker df for srcB
                                 // unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
                             }
                         #endif
@@ -245,13 +255,14 @@ void MAIN {
                             }
                         #endif
 
+                        tile_regs_commit();
+
                         auto curr_matmul_out_cb = last_out
                                                     ? (untilize_out
                                                         ? untilize_mode_final_matmul_partials_cb
                                                         : out_cb_id)
                                                     : matmul_partials_cb;
                         pack_matmul_subblock(curr_matmul_out_cb, out_subblock_num_tiles);
-                        release_dst(tt::DstMode::Half);
                         in1_index_subblock_offset += out_subblock_w;
                     } // for in1_num_subblocks
                     #ifndef FUSE_BIAS
@@ -273,7 +284,6 @@ void MAIN {
                     #endif
                     in0_index_subblock_offset += in0_subblock_num_tiles;
                 }
-
                 if (spill) enable_reload = true;
 
                 cb_pop_front(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in0_block_num_tiles);
