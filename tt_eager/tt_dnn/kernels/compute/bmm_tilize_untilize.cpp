@@ -188,7 +188,7 @@ void MAIN {
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
                             // Reconfigure srcA back
                             mm_init_short();
-                            unpack_reconfig_data_format(in1_cb_id, in0_cb_id);
+                            UNPACK(( llk_unpack_reconfig_data_format(matmul_partials_cb, 1, 0, 0) ));
                         } // enable_reload
                         // Compute output sub-block from in0_subblock x in1_subblock
                         int dst_index = 0;
