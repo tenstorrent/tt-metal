@@ -55,10 +55,16 @@ void mask_tile(uint32_t l1_addr, uint32_t mask_w = 32, uint32_t mask_h = 32) {
     }
 }
 
-inline bool is_in0_last_row(uint32_t itileA, uint32_t Mt, uint32_t Kt, uint32_t MtKt) {
+inline bool is_in0_last_row(uint32_t itileA, uint32_t Mt, uint32_t Kt, uint32_t MtKt, uint32_t a_transpose) {
     bool in0_last_row = false;
-    if ((itileA % MtKt) / Kt == (Mt - 1)) {
-        in0_last_row = true;
+    if (a_transpose) {
+        if ((itileA % MtKt) == (Mt - 1)) {
+            in0_last_row = true;
+        }
+    } else {
+        if ((itileA % MtKt) / Kt == (Mt - 1)) {
+            in0_last_row = true;
+        }
     }
     return in0_last_row;
 }
@@ -83,18 +89,29 @@ inline void mask_in0_tile(
     uint32_t kt,
     uint32_t Kt,
     uint32_t in0_mask_h,
-    uint32_t in0_mask_w) {
+    uint32_t in0_mask_w,
+    uint32_t a_transpose) {
     if (in0_last_row) {
         if (kt != Kt - 1) {
-            if (in0_mask_h != 32)
-                mask_tile(l1_write_addr_in0, 32, in0_mask_h);
+            if (a_transpose) {
+                if (in0_mask_w != 32)
+                    mask_tile(l1_write_addr_in0, in0_mask_w, 32);
+            } else {
+                if (in0_mask_h != 32)
+                    mask_tile(l1_write_addr_in0, 32, in0_mask_h);
+            }
         } else {
             if (in0_mask_h != 32 || in0_mask_w != 32)
                 mask_tile(l1_write_addr_in0, in0_mask_w, in0_mask_h);
         }
     } else if (kt == Kt - 1) {
-        if (in0_mask_w != 32)
-            mask_tile(l1_write_addr_in0, in0_mask_w);
+        if (a_transpose) {
+            if (in0_mask_h != 32)
+                mask_tile(l1_write_addr_in0, 32, in0_mask_h);
+        } else {
+            if (in0_mask_w != 32)
+                mask_tile(l1_write_addr_in0, in0_mask_w);
+        }
     }
 }
 
@@ -134,6 +151,62 @@ inline void mask_in1_tile(
     }
 }
 
+inline uint32_t get_tile_a(
+    uint32_t output_tile_id,
+    uint32_t Mt,
+    uint32_t Nt,
+    uint32_t Kt,
+    uint32_t MtKt,
+    uint32_t MtNt,
+    uint32_t a_transpose,
+    uint32_t a_bcast_B,
+    uint32_t a_start_tile_id) {
+    uint32_t itileA = output_tile_id / MtNt * MtKt;
+    if (a_transpose) {
+        itileA += (output_tile_id % MtNt) / Nt;
+    } else {
+        itileA += (output_tile_id % MtNt) / Nt * Kt;
+    }
+
+    if (a_bcast_B) {
+        if (a_transpose) {
+            itileA %= Mt;
+        } else {
+            itileA %= MtKt;
+        }
+    }
+    itileA += a_start_tile_id;
+    return itileA;
+}
+
+inline uint32_t get_tile_b(
+    uint32_t output_tile_id,
+    uint32_t Mt,
+    uint32_t Nt,
+    uint32_t Kt,
+    uint32_t KtNt,
+    uint32_t MtNt,
+    uint32_t b_transpose,
+    uint32_t b_bcast_B,
+    uint32_t b_start_tile_id) {
+    uint32_t itileB = output_tile_id / MtNt * KtNt;
+    if (b_transpose) {
+        itileB += (output_tile_id % Nt) * Kt;
+    } else {
+        itileB += (output_tile_id % Nt);
+    }
+
+    if (b_bcast_B) {
+        if (b_transpose) {
+            itileB %= KtNt;
+        } else {
+            itileB %= Nt;
+        }
+    }
+    itileB += b_start_tile_id;
+    return itileB;
+}
+
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lenghts for compat
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -159,12 +232,6 @@ void kernel_main() {
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
-
-    // DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
-    // DPRINT << "src0=" << src0_addr << " src1=" << src1_addr << ENDL();
-    // DPRINT << "bcast " << a_bcast_B << " " << b_bcast_B << ENDL();
-    // DPRINT << "transpose " << a_transpose << " " << b_transpose << ENDL();
-
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
 
@@ -183,30 +250,11 @@ void kernel_main() {
     uint32_t output_tile_id = output_tile_start_id;
     for (uint32_t n = 0; n < num_output_tiles; n++) {
         // get tile index of a an b
-        uint32_t itileA = output_tile_id / Nt * Kt;
-        if (a_bcast_B) {
-            itileA %= MtKt;
-        }
-        itileA += a_start_tile_id;
-
-        uint32_t itileB = output_tile_id / MtNt * KtNt;
-        if (b_transpose) {
-            itileB += (output_tile_id % Nt) * Kt;
-        } else {
-            itileB += (output_tile_id % Nt);
-        }
-
-        if (b_bcast_B) {
-            if (b_transpose) {
-                itileB %= KtNt;
-            } else {
-                itileB %= Nt;
-            }
-        }
-        itileB += b_start_tile_id;
+        uint32_t itileA = get_tile_a(output_tile_id, Mt, Nt, Kt, MtKt, MtNt, a_transpose, a_bcast_B, a_start_tile_id);
+        uint32_t itileB = get_tile_b(output_tile_id, Mt, Nt, Kt, KtNt, MtNt, b_transpose, b_bcast_B, b_start_tile_id);
 
         // get last row or last col for mask
-        bool in0_last_row = is_in0_last_row(itileA, Mt, Kt, MtKt);
+        bool in0_last_row = is_in0_last_row(itileA, Mt, Kt, MtKt, a_transpose);
         bool in1_last_col = is_in1_last_col(itileB, Nt, Kt, KtNt, b_transpose);
 
         for (uint32_t kt = 0; kt < Kt; kt++) {
@@ -217,7 +265,7 @@ void kernel_main() {
                 noc_async_read_barrier();
 
                 // mask in in0 tile
-                mask_in0_tile(l1_write_addr_in0, in0_last_row, kt, Kt, in0_mask_h, in0_mask_w);
+                mask_in0_tile(l1_write_addr_in0, in0_last_row, kt, Kt, in0_mask_h, in0_mask_w, a_transpose);
                 cb_push_back(cb_id_in0, onetile);
             }
 
@@ -232,8 +280,13 @@ void kernel_main() {
                 cb_push_back(cb_id_in1, onetile);
             }
 
-            itileA += 1;  // A is MK
-            if (b_transpose == 1) {
+            if (a_transpose) {
+                itileA += Mt;
+            } else {
+                itileA += 1;
+            }
+
+            if (b_transpose) {
                 itileB += 1;
             } else {
                 itileB += Nt;  // B is KN, so to get k++ we stride by Nt
