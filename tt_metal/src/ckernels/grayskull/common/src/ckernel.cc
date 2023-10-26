@@ -43,6 +43,21 @@ volatile tt_l1_ptr uint8_t * const trisc_run = &GET_TRISC_RUN(((tt_l1_ptr mailbo
 
 volatile tt_l1_ptr uint32_t l1_buffer[16] __attribute__ ((section ("l1_data"))) __attribute__ ((aligned (16))) __attribute__((used));
 
+#if !defined(UCK_CHLKC_MATH)
+CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+#endif
+
+#if defined(UCK_CHLKC_UNPACK)
+constexpr bool cb_init_read = true;
+#else
+constexpr bool cb_init_read = false;
+#endif
+#if defined(UCK_CHLKC_PACK)
+constexpr bool cb_init_write = true;
+#else
+constexpr bool cb_init_write = false;
+#endif
+
 using namespace ckernel;
 
 int main(int argc, char *argv[])
@@ -78,6 +93,10 @@ int main(int argc, char *argv[])
 
         kernel_profiler::init_profiler();
         kernel_profiler::mark_time(CC_MAIN_START);
+
+#if !defined(UCK_CHLKC_MATH)
+        setup_cb_read_write_interfaces(cb_init_read, cb_init_write);
+#endif
 
         DEBUG_STATUS('R');
         kernel_init();

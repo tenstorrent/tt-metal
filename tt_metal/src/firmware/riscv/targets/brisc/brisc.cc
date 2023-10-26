@@ -23,7 +23,7 @@
 #include "risc_attribs.h"
 #include "noc_addr_ranges_gen.h"
 #include "generated_bank_to_noc_coord_mapping.h"
-#include "dataflow_api.h"
+#include "circular_buffer.h"
 
 #include "debug_status.h"
 #include "debug_print.h"
@@ -50,6 +50,8 @@ uint8_t my_y[NUM_NOCS] __attribute__((used));
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
+
+CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 #define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
 
@@ -315,6 +317,7 @@ int main() {
         // Run the BRISC kernel
         DEBUG_STATUS('R');
         if (mailboxes->launch.enable_brisc) {
+            setup_cb_read_write_interfaces(true, true);
             kernel_init();
         } else {
             noc_local_state_init(noc_index);
