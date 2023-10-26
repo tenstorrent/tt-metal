@@ -54,8 +54,12 @@ const std::vector<CoreCoord> metal_SocDescriptor::get_dram_cores() const {
     return cores;
 }
 
-const std::vector<CoreCoord>& metal_SocDescriptor::get_ethernet_cores() const {
-    return this->ethernet_cores;
+const std::vector<CoreCoord>& metal_SocDescriptor::get_physical_ethernet_cores() const {
+    return this->physical_ethernet_cores;
+}
+
+const std::vector<CoreCoord>& metal_SocDescriptor::get_logical_ethernet_cores() const {
+    return this->logical_ethernet_cores;
 }
 
 void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
@@ -262,6 +266,17 @@ void metal_SocDescriptor::load_dispatch_and_banking_config(uint32_t harvesting_m
   }
 }
 
+void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
+    this->physical_ethernet_cores = this->ethernet_cores;
+    constexpr int x_size = 4;
+    for (int i = 0; i < this->physical_ethernet_cores.size(); i++) {
+        CoreCoord core = {.x = static_cast<size_t>(i / x_size), .y = static_cast<size_t>(i % x_size)};
+        this->logical_eth_core_to_chan_map.insert({core, i});
+        this->chan_to_logical_eth_core_map.insert({i, core});
+        this->logical_ethernet_cores.emplace_back(core);
+    }
+}
+
 // UMD initializes and owns tt_SocDescriptor
 // For architectures with translation tables enabled, UMD will remove the last x rows from the descriptors in tt_SocDescriptor (workers list and worker_log_to_routing_x/y maps)
 // This creates a virtual coordinate system, where translation tables are used to convert virtual core coordinates to the true harvesting state.
@@ -273,4 +288,5 @@ metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t
   this->generate_physical_descriptors_from_virtual(harvesting_mask);
   this->load_dram_metadata_from_device_descriptor();
   this->load_dispatch_and_banking_config(harvesting_mask);
+  this->generate_logical_eth_coords_mapping();
 }

@@ -24,6 +24,7 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
   std::vector<RelativeCoreCoord> compute_with_storage_cores;  // saved as CoreType::WORKER
   std::vector<RelativeCoreCoord> storage_cores;  // saved as CoreType::WORKER
   std::vector<RelativeCoreCoord> dispatch_cores; // saved as CoreType::WORKER
+  std::vector<CoreCoord> logical_ethernet_cores;
   int l1_bank_size;
 
   // in tt_SocDescriptor worker_log_to_routing_x and worker_log_to_routing_y map logical coordinates to NOC virtual coordinates
@@ -31,12 +32,16 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
   std::unordered_map<tt_xy_pair, CoreDescriptor> physical_cores;
   std::vector<tt_xy_pair> physical_workers;
   std::vector<tt_xy_pair> physical_harvested_workers;
+  std::vector<tt_xy_pair> physical_ethernet_cores;
 
   std::unordered_map<int, int> worker_log_to_physical_routing_x;
   std::unordered_map<int, int> worker_log_to_physical_routing_y;
   // Physical to virtual maps are only applicable for x and y of tensix workers
   std::unordered_map<int, int> physical_routing_to_virtual_routing_x;
   std::unordered_map<int, int> physical_routing_to_virtual_routing_y;
+
+  std::map<CoreCoord, int> logical_eth_core_to_chan_map;
+  std::map<int, CoreCoord> chan_to_logical_eth_core_map;
 
   metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t harvesting_mask);
   metal_SocDescriptor() = default;
@@ -48,7 +53,8 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
   bool is_harvested_core(const CoreCoord &core) const;
   const std::vector<CoreCoord>& get_pcie_cores() const;
   const std::vector<CoreCoord> get_dram_cores() const;
-  const std::vector<CoreCoord>& get_ethernet_cores() const;
+  const std::vector<CoreCoord>& get_logical_ethernet_cores() const;
+  const std::vector<CoreCoord>& get_physical_ethernet_cores() const;
 
   tt_cxy_pair convert_to_umd_coordinates(const tt_cxy_pair &physical_cxy) const;
 
@@ -56,4 +62,5 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
   void generate_physical_descriptors_from_virtual(uint32_t harvesting_mask);
   void load_dram_metadata_from_device_descriptor();
   void load_dispatch_and_banking_config(uint32_t harvesting_mask);
+  void generate_logical_eth_coords_mapping();
 };

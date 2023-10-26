@@ -293,14 +293,16 @@ namespace tt::tt_metal{
             CoreCoord producer_logical_core = *dispatch_cores++;
             CoreCoord consumer_logical_core = *dispatch_cores;
 
-            generate_noc_addr_ranges_header (
+            generate_noc_addr_ranges_header(
                 build_options,
                 op_path_suffix,
-                0, (uint64_t)4 * 1024 * 1024 * 1024,
-                0, device->dram_size_per_channel(),
+                0,
+                (uint64_t)4 * 1024 * 1024 * 1024,
+                0,
+                device->dram_size_per_channel(),
                 soc_d.get_pcie_cores(),
                 soc_d.get_dram_cores(),
-                soc_d.get_ethernet_cores(),
+                soc_d.get_physical_ethernet_cores(),
                 soc_d.grid_size,
                 harvested_rows,
                 {device->worker_core_from_logical_core(consumer_logical_core)});

@@ -51,7 +51,7 @@ class Device {
    public:
     // TODO: move these to host_api
     static size_t detect_num_available_devices();
-    static size_t detect_num_available_pci_devices();
+    static size_t detect_num_pci_devices();
     // friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
     Device(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap = {});
@@ -82,7 +82,28 @@ class Device {
 
     CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const;
 
-    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores);
+    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
+
+    // Ethernet API
+    CoreCoord ethernet_core_from_logical_core(const CoreCoord &logical_core) const;
+
+    std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
+
+    std::unordered_set<chip_id_t> get_ethernet_connected_chip_ids() const {
+        return tt::Cluster::instance().get_ethernet_connected_chip_ids(this->id_);
+    }
+
+    std::unordered_set<CoreCoord> get_active_ethernet_cores() const {
+        return tt::Cluster::instance().get_active_ethernet_cores(this->id_);
+    }
+
+    std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const {
+        return tt::Cluster::instance().get_inactive_ethernet_cores(this->id_);
+    }
+
+    std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const {
+        return tt::Cluster::instance().get_connected_ethernet_core(std::make_tuple(this->id_, eth_core));
+    }
 
     uint32_t num_banks(const BufferType &buffer_type) const;
     uint32_t bank_size(const BufferType &buffer_type) const;
@@ -110,6 +131,12 @@ class Device {
 
     // Set of logical dispatch core coordinates
     const std::set<CoreCoord> &dispatch_cores() const { return this->dispatch_cores_; }
+
+    // Set of logical ethernet core coordinates
+    // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
+    // core.y represents different channels along one <x>
+    const std::set<CoreCoord> &ethernet_cores() const { return this->ethernet_cores_; }
+
     void deallocate_buffers();
 
     // machine epsilon
@@ -143,6 +170,7 @@ class Device {
 
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> dispatch_cores_;
+    std::set<CoreCoord> ethernet_cores_;
 };
 
 }  // namespace tt_metal
