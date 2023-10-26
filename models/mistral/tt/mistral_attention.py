@@ -11,6 +11,8 @@ from models.mistral.tt.mistral_configuration import TtModelArgs
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, torch_to_tt_tensor
 from models.helper_funcs import Linear as TtLinear
 
+FALLBACK_SOFTMAX = False
+
 
 class TtAttention(nn.Module):
     def __init__(
@@ -63,11 +65,17 @@ class TtAttention(nn.Module):
         )
 
         cache_k = tt_lib.tensor.empty(
-            [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,tt_lib.tensor.BufferType.DRAM)
+            [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],
+            tt_lib.tensor.Layout.ROW_MAJOR,
+            self.device,
+            tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
         )
         self.cache_k = tt_to_torch_tensor(cache_k).to(torch.float32)
         cache_v = tt_lib.tensor.empty(
-            [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,tt_lib.tensor.BufferType.DRAM)
+            [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],
+            tt_lib.tensor.Layout.ROW_MAJOR,
+            self.device,
+            tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
         )
         self.cache_v = tt_to_torch_tensor(cache_v).to(torch.float32)
 
@@ -78,7 +86,6 @@ class TtAttention(nn.Module):
         keys = tt_lib.tensor.repeat_interleave(keys, repeats, dim)
         values = tt_lib.tensor.repeat_interleave(values, repeats, dim)
         return keys, values
-
 
     def forward(
         self,
@@ -103,7 +110,7 @@ class TtAttention(nn.Module):
         freqs_cis = tt_to_torch_tensor(freqs_cis).squeeze(0).squeeze(0)
         freqs_cis = freqs_cis.to(torch.float32)
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis, device=self.device)
-        #xq, xk = old_apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
+        # xq, xk = old_apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
 
         # The cache is a rotating buffer
         positions = tt_to_torch_tensor(positions).squeeze(0).squeeze(0).squeeze(0)
@@ -118,7 +125,9 @@ class TtAttention(nn.Module):
             key, value = self.repeat_kv(xk, xv, self.repeats)
         else:
             cur_pos = positions[-1].item() + 1
-            key, value = self.repeat_kv(self.cache_k[:bsz, :cur_pos, ...], self.cache_v[:bsz, :cur_pos, ...], self.repeats)
+            key, value = self.repeat_kv(
+                self.cache_k[:bsz, :cur_pos, ...], self.cache_v[:bsz, :cur_pos, ...], self.repeats
+            )
 
         xq = torch_to_tt_tensor_rm(xq, self.device)
         query = tt_lib.tensor.transpose_hc(xq)
@@ -137,16 +146,17 @@ class TtAttention(nn.Module):
 
         query = tt_to_torch_tensor(query)
         scores = torch_to_tt_tensor_rm(scores, self.device, put_on_device=False)
-        scores = fallback_ops.softmax(scores, dim=-1)
+        if FALLBACK_SOFTMAX:
+            scores = fallback_ops.softmax(scores, dim=-1)
+        else:
+            scores = tt_lib.tensor.softmax(scores)
         output = tt_lib.tensor.bmm(scores, value)  # (bs, n_local_heads, slen, head_dim)
-
         output = tt_lib.tensor.transpose_hc(output)
-
         output = fallback_ops.reshape(output, 1, bsz, seqlen, -1)
         return self.wo(output)
 
 
-def _reshape_for_broadcast(freqs_cis: torch.Tensor,x_shape,x_ndim) -> torch.Tensor:
+def _reshape_for_broadcast(freqs_cis: torch.Tensor, x_shape, x_ndim) -> torch.Tensor:
     """
     freqs_cis: complex - (seq_len, head_dim / 2)
     x: complex - (bsz, seq_len, head_dim / 2)
@@ -173,25 +183,23 @@ def old_apply_rotary_emb(
     xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
     return xq_out.type_as(xq), xk_out.type_as(xk)
 
+
 def apply_rotary_emb(
-    t_xq: torch.Tensor,
-    t_xk: torch.Tensor,
-    freqs_cis: torch.Tensor,
-    device
+    t_xq: torch.Tensor, t_xk: torch.Tensor, freqs_cis: torch.Tensor, device
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     xq_shape = list(copy.deepcopy(t_xq.shape))
-    xq_shape[-1] = xq_shape[-1]//2
-    freqs_cis = _reshape_for_broadcast(freqs_cis, xq_shape,4)
-    freqs_cis = torch_to_tt_tensor_rm(freqs_cis,device)
+    xq_shape[-1] = xq_shape[-1] // 2
+    freqs_cis = _reshape_for_broadcast(freqs_cis, xq_shape, 4)
+    freqs_cis = torch_to_tt_tensor_rm(freqs_cis, device)
 
-    freqs_cis = tt_lib.tensor.concat([freqs_cis,freqs_cis],-1)
-    xq = torch_to_tt_tensor_rm(t_xq,device)
-    xk = torch_to_tt_tensor_rm(t_xk,device)
+    freqs_cis = tt_lib.tensor.concat([freqs_cis, freqs_cis], -1)
+    xq = torch_to_tt_tensor_rm(t_xq, device)
+    xk = torch_to_tt_tensor_rm(t_xk, device)
 
     BCH = tt_lib.tensor.BcastOpDim.H
     BCMUL = tt_lib.tensor.BcastOpMath.MUL
-    xq_out = tt_lib.tensor.bcast(xq,freqs_cis,BCMUL,BCH)
-    xk_out = tt_lib.tensor.bcast(xk,freqs_cis,BCMUL,BCH)
+    xq_out = tt_lib.tensor.bcast(xq, freqs_cis, BCMUL, BCH)
+    xk_out = tt_lib.tensor.bcast(xk, freqs_cis, BCMUL, BCH)
 
     xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
     return xq, xk
