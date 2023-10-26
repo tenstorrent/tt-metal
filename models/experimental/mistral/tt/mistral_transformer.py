@@ -5,9 +5,9 @@
 import tt_lib
 import torch
 import torch.nn as nn
-from models.mistral.tt.mistral_configuration import TtModelArgs
-from models.mistral.tt.mistral_transformer_block import TtTransformerBlock
-from models.mistral.tt.mistral_rms_norm import TtRMSNorm
+from models.experimental.mistral.tt.mistral_configuration import TtModelArgs
+from models.experimental.mistral.tt.mistral_transformer_block import TtTransformerBlock
+from models.experimental.mistral.tt.mistral_rms_norm import TtRMSNorm
 from models.helper_funcs import Linear as TtLinear
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from typing import Optional
@@ -15,8 +15,8 @@ from typing import Optional
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> torch.Tensor:
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-    t = torch.arange(end, device=freqs.device)  # type: ignore
-    freqs = torch.outer(t, freqs).float()  # type: ignore
+    t = torch.arange(end, device=freqs.device)
+    freqs = torch.outer(t, freqs).float()
     return torch.polar(torch.ones_like(freqs), freqs)  # complex64
 
 
@@ -61,30 +61,25 @@ class TtTransformer(nn.Module):
         self,
         input_ids: torch.Tensor,
         positions: torch.Tensor,
-    ):
+    ) -> tt_lib.tensor.Tensor:
         h = self.tok_embeddings(input_ids)
-        input_ids = torch_to_tt_tensor_rm(input_ids, self.device, put_on_device=False)
+
         freqs_cis = self.freqs_cis[positions]
         mask: Optional[torch.Tensor] = None
+        input_ids = torch_to_tt_tensor_rm(input_ids, self.device, put_on_device=False)
         if input_ids.shape()[-1] > 1:
             seqlen = input_ids.shape()[-1]
             tensor = tt_lib.tensor.full(
                 (1, 1, seqlen, seqlen),
                 fill_value=1.0,
             )
-            diagonal = 0
-
-            mask = tt_lib.tensor.tril(tensor, diagonal)
+            tensor = tt_to_torch_tensor(tensor)
+            mask = torch.tril(tensor, diagonal=0).to(h.dtype)
             # make the mask banded to account for sliding window
-            diagonal = -self.args.sliding_window
-            mask = tt_lib.tensor.triu(mask, diagonal)
-            #mask = relu(log(mask))            
-            mask =  tt_lib.tensor.log(mask)
-            # mask = tt_lib.tensor.unary_chain(mask,[tt_lib.tensor.FusibleActivation.LOG,
-            #                                     tt_lib.tensor.FusibleActivation.RELU])
-            mask = tt_to_torch_tensor( mask )
-
-        freqs_cis = torch_to_tt_tensor_rm(freqs_cis, self.device)
+            mask = torch.triu(mask, diagonal=-self.args.sliding_window)
+            mask = torch_to_tt_tensor_rm(mask, self.device, put_on_device=False)
+            mask = tt_lib.tensor.log(mask)
+            mask = tt_to_torch_tensor(mask).squeeze(0).squeeze(0)
         positions = torch_to_tt_tensor_rm(positions, self.device, put_on_device=False)
         h = torch_to_tt_tensor_rm(h, self.device, put_on_device=False)
         for layer in self.layers:
