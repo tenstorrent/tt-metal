@@ -49,57 +49,35 @@ range_t calculate_in_range(const range_t& out_range, const PoolConfig& pc) {
     return in_range;
 }
 
-// reader noc coords for left and right neighbors
-std::map<CoreCoord, CoreCoord> left_neighbor_noc_xy, right_neighbor_noc_xy;
-void init_neighbor_noc_xy_mapping(CoreCoord grid_size, uint32_t noc = 0) {
-    TT_ASSERT(grid_size.x == 12 && grid_size.y == 9);
-    if (noc == 0) {
-        for (uint32_t y = 1; y <= grid_size.y; ++ y) {
-            for (uint32_t x = 1; x <= grid_size.x; ++ x) {
-                CoreCoord local_noc = {x, y > 5 ? y + 1 : y};
-                CoreCoord left_noc, right_noc;
-                // calculate left neighbor
-                left_noc.x = local_noc.x;
-                left_noc.y = local_noc.y;
-                if (left_noc.x > 1) {
-                    left_noc.x -= 1;
-                } else {
-                    left_noc.x = grid_size.x;
-                    left_noc.y -= 1;
-                }
-                if (left_noc.y < 1) {
-                    // there is no left neighbor
-                } else {
-                    if (left_noc.y == 6) {
-                        // y = 6 is to be skipped
-                        left_noc.y -= 1;
-                    }
-                    left_neighbor_noc_xy[local_noc] = {left_noc.x, left_noc.y};
-                }
-                // calculate right neighbor
-                right_noc.x = local_noc.x;
-                right_noc.y = local_noc.y;
-                if (right_noc.x < grid_size.x) {
-                    right_noc.x += 1;
-                } else {
-                    right_noc.y += 1;
-                    right_noc.x = 1;
-                }
-                // NOTE: y = 6 is to be skipped. Hence go till y + 1
-                if (right_noc.y > grid_size.y + 1) {
-                    // there is no right neighbor
-                } else {
-                    if (right_noc.y == 6) {
-                        // y = 6 is to be skipped
-                        right_noc.y += 1;
-                    }
-                    right_neighbor_noc_xy[local_noc] = {right_noc.x, right_noc.y};
-                }
+std::map<CoreCoord, CoreCoord> left_neighbor_core, right_neighbor_core;
+void init_neighbor_core_xy_mapping(CoreCoord grid_size, bool is_twod = false) {
+    TT_ASSERT(grid_size.x == 12 && grid_size.y == 9);   // grayskull
+    for (int32_t y = 0; y < grid_size.y; ++ y) {
+        for (int32_t x = 0; x < grid_size.x; ++ x) {
+            CoreCoord core = {(uint32_t) x, (uint32_t) y};
+            // calculate left neighbor
+            int32_t left_x = x - 1, left_y = y;
+            if (left_x < 0) {
+                left_x = grid_size.x - 1;
+                left_y -= 1;
+            }
+            if (left_y < 0) {
+                // there is no left neighbor
+            } else {
+                left_neighbor_core[core] = {(uint32_t) left_x, (uint32_t) left_y};
+            }
+            // calculate right neighbor
+            int32_t right_x = x + 1, right_y = y;
+            if (right_x == grid_size.x) {
+                right_x = 0;
+                right_y += 1;
+            }
+            if (right_y == grid_size.y) {
+                // there is no right neighbor
+            } else {
+                right_neighbor_core[core] = {(uint32_t) right_x, (uint32_t) right_y};
             }
         }
-    } else {
-        // noc == 1
-        TT_ASSERT(noc == 0, "noc = 1 for reader is not yet handled in sharded input case.");
     }
 }
 
@@ -185,7 +163,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
 
     auto grid_size = device->compute_with_storage_grid_size();
 
-    untilize_with_halo_helpers::init_neighbor_noc_xy_mapping(grid_size);
+    untilize_with_halo_helpers::init_neighbor_core_xy_mapping(grid_size);
 
     int32_t ncores_x = grid_size.x;     // distributing data to cores row-wise
     CoreRangeSet all_cores = input.shard_spec().value().shard_grid;
@@ -681,48 +659,47 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         // that is, compute the sharding config
         uint32_t in_stick_end = in_stick_start + in_nsticks_per_core;
 
-        CoreCoord noc_core = core_coord;  // calculate physical
-        if (writer_noc == 0) {
-            noc_core.x += 1;
-            noc_core.y += 1;
-            if (noc_core.y > 5) {
-                noc_core.y += 1;
-            }
-        } else {
-            TT_ASSERT(false);
-        }
-
-        if (untilize_with_halo_helpers::left_neighbor_noc_xy.count(noc_core) > 0) {
-            CoreCoord left_noc = untilize_with_halo_helpers::left_neighbor_noc_xy.at(noc_core);
+        // left neighbor args
+        if (untilize_with_halo_helpers::left_neighbor_core.count(core_coord) > 0) {
+            CoreCoord left_core = untilize_with_halo_helpers::left_neighbor_core.at(core_coord);
+            CoreCoord left_noc = device->worker_core_from_logical_core(left_core);
             writer_rt_args[19] = 1;
             writer_rt_args[20] = left_noc.x;
             writer_rt_args[21] = left_noc.y;
-            if (untilize_with_halo_helpers::left_neighbor_noc_xy.count(left_noc) > 0) {
-                CoreCoord left_left_noc = untilize_with_halo_helpers::left_neighbor_noc_xy.at(left_noc);
+            if (untilize_with_halo_helpers::left_neighbor_core.count(left_core) > 0) {
+                CoreCoord left_left_core = untilize_with_halo_helpers::left_neighbor_core.at(left_core);
+                CoreCoord left_left_noc = device->worker_core_from_logical_core(left_left_core);
                 writer_rt_args[25] = 1;
                 writer_rt_args[26] = left_left_noc.x;
                 writer_rt_args[27] = left_left_noc.y;
             } else {
+                // no left-left neighbor
                 writer_rt_args[25] = 0;
             }
         } else {
+            // no left neighbors
             writer_rt_args[19] = 0;
             writer_rt_args[25] = 0;
         }
-        if (untilize_with_halo_helpers::right_neighbor_noc_xy.count(noc_core) > 0 && (core < ncores - 1)) {
-            CoreCoord right_noc = untilize_with_halo_helpers::right_neighbor_noc_xy.at(noc_core);
+        // right neighbor args
+        if (untilize_with_halo_helpers::right_neighbor_core.count(core_coord) > 0) {
+            CoreCoord right_core = untilize_with_halo_helpers::right_neighbor_core.at(core_coord);
+            CoreCoord right_noc = device->worker_core_from_logical_core(right_core);
             writer_rt_args[22] = 1;
             writer_rt_args[23] = right_noc.x;
             writer_rt_args[24] = right_noc.y;
-            if (untilize_with_halo_helpers::right_neighbor_noc_xy.count(noc_core) > 0 && (core < ncores - 2)) {
-                CoreCoord right_right_noc = untilize_with_halo_helpers::right_neighbor_noc_xy.at(right_noc);
+            if (untilize_with_halo_helpers::right_neighbor_core.count(right_core) > 0) {
+                CoreCoord right_right_core = untilize_with_halo_helpers::right_neighbor_core.at(right_core);
+                CoreCoord right_right_noc = device->worker_core_from_logical_core(right_right_core);
                 writer_rt_args[28] = 1;
                 writer_rt_args[29] = right_right_noc.x;
                 writer_rt_args[30] = right_right_noc.y;
             } else {
+                // no right-right neighbor
                 writer_rt_args[28] = 0;
             }
         } else {
+            // no right neighbors
             writer_rt_args[22] = 0;
             writer_rt_args[28] = 0;
         }
@@ -747,12 +724,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         int32_t partial_last_image_nrows = sc.last_partial_image_num_rows;
         int32_t partial_last_row_nsticks = sc.last_partial_left_aligned_row_width;
         int32_t initial_skip = sc.initial_skip;
-
-        // uint32_t initial_pad_nsticks = 0;
-        // if (in_stick_start % (in_h * in_w) == 0) {
-        //     // This is start of image. Insert initial padding worth halo size
-        //     initial_pad_nsticks = halo_out_nsticks;
-        // }
 
         // args for handling local data movement:
         //     intial_pad_nsticks
@@ -816,24 +787,26 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     }
 
     // print stuff for debug
-    in_stick_start = 0;
-    for (uint32_t core = 0; core < ncores; ++ core) {
-        uint32_t in_stick_end = in_stick_start + in_nsticks_per_core;
-        log_debug("==== Core {}:", core);
-        log_debug(" in shard = [{},{})", in_stick_start, in_stick_end);
-        log_debug(" re shard = [{},{}) [{},{}) [{},{})", my_shard[core][0][0], my_shard[core][0][1],
-                                                         my_shard[core][1][0], my_shard[core][1][1],
-                                                         my_shard[core][2][0], my_shard[core][2][1]);
-        for (uint32_t neighbor = 0; neighbor < 2 * NEIGHBORHOOD_DIST + 1; ++ neighbor) {
-            log_debug(" + N {} :: recv: (count = {}, offset = {})\t send: (count = {}, from = {}, to = {}) : [{},{})", neighbor,
-                                                                  updated_count_to_receive[core][neighbor],
-                                                                  receive_at_offset_nsticks[core][neighbor],
-                                                                  updated_count_to_send[core][neighbor],
-                                                                  send_from_offset_nsticks[core][neighbor],
-                                                                  send_to_offset_nsticks[core][neighbor],
-                                                                  range_to_send[core][neighbor][0], range_to_send[core][neighbor][1]);
+    if (0) {
+        in_stick_start = 0;
+        for (uint32_t core = 0; core < ncores; ++ core) {
+            uint32_t in_stick_end = in_stick_start + in_nsticks_per_core;
+            log_debug("==== Core {}:", core);
+            log_debug(" in shard = [{},{})", in_stick_start, in_stick_end);
+            log_debug(" re shard = [{},{}) [{},{}) [{},{})", my_shard[core][0][0], my_shard[core][0][1],
+                                                            my_shard[core][1][0], my_shard[core][1][1],
+                                                            my_shard[core][2][0], my_shard[core][2][1]);
+            for (uint32_t neighbor = 0; neighbor < 2 * NEIGHBORHOOD_DIST + 1; ++ neighbor) {
+                log_debug(" + N {} :: recv: (count = {}, offset = {})\t send: (count = {}, from = {}, to = {}) : [{},{})", neighbor,
+                                                                    updated_count_to_receive[core][neighbor],
+                                                                    receive_at_offset_nsticks[core][neighbor],
+                                                                    updated_count_to_send[core][neighbor],
+                                                                    send_from_offset_nsticks[core][neighbor],
+                                                                    send_to_offset_nsticks[core][neighbor],
+                                                                    range_to_send[core][neighbor][0], range_to_send[core][neighbor][1]);
+            }
+            in_stick_start += in_nsticks_per_core;
         }
-        in_stick_start += in_nsticks_per_core;
     }
 
 
@@ -915,7 +888,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
 
     auto grid_size = device->compute_with_storage_grid_size();
 
-    untilize_with_halo_helpers::init_neighbor_noc_xy_mapping(grid_size);
+    untilize_with_halo_helpers::init_neighbor_core_xy_mapping(grid_size);
 
     int32_t ncores_x = grid_size.x;
     int32_t ncores_y = grid_size.y;
@@ -1235,16 +1208,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
     uint32_t out_stick_start = 0;
     for (uint32_t i = 0; i < ncores_full; ++ i) {
         CoreCoord core = {i % ncores_x, i / ncores_x};  // logical
-        CoreCoord noc_core = core;  // calculate physical
-        if (writer_noc == 0) {
-            noc_core.x += 1;
-            noc_core.y += 1;
-            if (noc_core.y > 5) {
-                noc_core.y += 1;
-            }
-        } else {
-            TT_ASSERT(false);
-        }
 
         // reader rt args
         SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
@@ -1289,15 +1252,17 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
         writer_rt_args[43] = partial_top_image_skip;
         writer_rt_args[44] = full_image_skip;
 
-        if (untilize_with_halo_helpers::left_neighbor_noc_xy.count(noc_core) > 0) {
-            CoreCoord left_noc = untilize_with_halo_helpers::left_neighbor_noc_xy.at(noc_core);
+        if (untilize_with_halo_helpers::left_neighbor_core.count(core) > 0) {
+            CoreCoord left_core = untilize_with_halo_helpers::left_neighbor_core.at(core);
+            CoreCoord left_noc = device->worker_core_from_logical_core(left_core);
             writer_rt_args[19] = 1;
             writer_rt_args[20] = left_noc.x;
             writer_rt_args[21] = left_noc.y;
             writer_rt_args[33] = my_right_halo[i - 1];      // sticks to left neighbor core's right halo
             writer_rt_args[37] = my_right_halo_offset[i - 1];
-            if (untilize_with_halo_helpers::left_neighbor_noc_xy.count(left_noc) > 0) {
-                CoreCoord left_left_noc = untilize_with_halo_helpers::left_neighbor_noc_xy.at(left_noc);
+            if (untilize_with_halo_helpers::left_neighbor_core.count(left_core) > 0) {
+                CoreCoord left_left_core = untilize_with_halo_helpers::left_neighbor_core.at(left_core);
+                CoreCoord left_left_noc = device->worker_core_from_logical_core(left_left_core);
                 writer_rt_args[25] = 1;
                 writer_rt_args[26] = left_left_noc.x;
                 writer_rt_args[27] = left_left_noc.y;
@@ -1311,15 +1276,17 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
             writer_rt_args[19] = 0;
             writer_rt_args[25] = 0;
         }
-        if (untilize_with_halo_helpers::right_neighbor_noc_xy.count(noc_core) > 0 && (i < ncores_full - 1)) {
-            CoreCoord right_noc = untilize_with_halo_helpers::right_neighbor_noc_xy.at(noc_core);
+        if (untilize_with_halo_helpers::right_neighbor_core.count(core) > 0) {
+            CoreCoord right_core = untilize_with_halo_helpers::right_neighbor_core.at(core);
+            CoreCoord right_noc = device->worker_core_from_logical_core(right_core);
             writer_rt_args[22] = 1;
             writer_rt_args[23] = right_noc.x;
             writer_rt_args[24] = right_noc.y;
             writer_rt_args[34] = my_left_halo[i + 1];       // sticks to right neighbor core's left halo
             writer_rt_args[38] = my_left_halo_offset[i + 1];
-            if (untilize_with_halo_helpers::right_neighbor_noc_xy.count(noc_core) > 0 && (i < ncores_full - 2)) {
-                CoreCoord right_right_noc = untilize_with_halo_helpers::right_neighbor_noc_xy.at(right_noc);
+            if (untilize_with_halo_helpers::right_neighbor_core.count(right_core) > 0) {
+                CoreCoord right_right_core = untilize_with_halo_helpers::right_neighbor_core.at(right_core);
+                CoreCoord right_right_noc = device->worker_core_from_logical_core(right_right_core);
                 writer_rt_args[28] = 1;
                 writer_rt_args[29] = right_right_noc.x;
                 writer_rt_args[30] = right_right_noc.y;
