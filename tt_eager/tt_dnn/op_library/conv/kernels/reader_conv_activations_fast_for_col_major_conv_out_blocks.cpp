@@ -103,6 +103,7 @@ void kernel_main() {
     // DPRINT << "num_blocks_act_w " << num_blocks_act_w << ENDL();
     // Outer loop is number of blocks in weight width dim
     // Conv output blocks are computed in col major order
+
     for(uint32_t nbr = 0; nbr < num_blocks_weight_w; nbr++) {
         uint32_t out_h = out_h_start;
         uint32_t out_w = out_w_start;

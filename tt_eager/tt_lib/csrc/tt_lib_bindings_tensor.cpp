@@ -253,6 +253,7 @@ void TensorModule(py::module &m_tensor) {
                 [] (
                     uint32_t act_block_h_ntiles,
                     uint32_t act_block_w_ntiles,
+                    uint32_t act_c_num_blocks,
                     uint32_t weight_block_w_ntiles,
                     uint32_t out_block_h_ntiles,
                     uint32_t out_subblock_h_ntiles,
@@ -261,6 +262,7 @@ void TensorModule(py::module &m_tensor) {
                     return OptimizedConvBlockConfig{
                         .act_block_h_ntiles=act_block_h_ntiles,
                         .act_block_w_ntiles=act_block_w_ntiles,
+                        .act_c_num_blocks=act_c_num_blocks,
                         .weight_block_w_ntiles=weight_block_w_ntiles,
                         .out_block_h_ntiles=out_block_h_ntiles,
                         .out_subblock_h_ntiles=out_subblock_h_ntiles,
@@ -271,6 +273,7 @@ void TensorModule(py::module &m_tensor) {
             py::kw_only(),
             py::arg("act_block_h_ntiles").noconvert(),
             py::arg("act_block_w_ntiles").noconvert(),
+            py::arg("act_c_num_blocks").noconvert() = 1,
             py::arg("weight_block_w_ntiles").noconvert(),
             py::arg("out_block_h_ntiles").noconvert(),
             py::arg("out_subblock_h_ntiles").noconvert(),

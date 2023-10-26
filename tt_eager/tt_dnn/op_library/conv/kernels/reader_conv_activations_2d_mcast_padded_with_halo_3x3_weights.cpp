@@ -6,6 +6,8 @@
 #include "dataflow_api.h"
 #include "debug_print.h"
 
+auto s1 = SliceRange{ .h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1 };
+
 
 void kernel_main() {
     uint32_t i = 0;
@@ -13,7 +15,7 @@ void kernel_main() {
     uint32_t act_dram_noc_x = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_dram_noc_y = get_arg_val<uint32_t>(i); i+=1;
 
-    uint32_t conv_act_size_w = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t conv_act_size_w_ = get_arg_val<uint32_t>(i); i+=1;
     uint32_t conv_act_size_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t conv_act_size_c_ = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_size_h = get_arg_val<uint32_t>(i); i+=1;
@@ -65,16 +67,31 @@ void kernel_main() {
         return;
     }
 
+    uint32_t act_mcast_dest_noc_start_x                  = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t act_mcast_dest_noc_start_y                  = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t act_mcast_dest_noc_end_x                    = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t act_mcast_dest_noc_end_y                    = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t act_mcast_num_dests                         = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t act_mcast_num_cores                         = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t act_mcast_sender_semaphore_addr             = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t act_mcast_receiver_semaphore_addr           = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t act_mcast_sender_id                         = get_arg_val<uint32_t>(i); i+=1;
+
+    uint32_t act_mcast_sender_noc_x                      = get_arg_val<uint32_t>(i); i+=1;
+    volatile tt_l1_ptr uint32_t *act_mcast_sender_noc_y  = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(i));
+
+
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t stride_h = get_compile_time_arg_val(1);
     constexpr uint32_t stride_w = get_compile_time_arg_val(2);
-    constexpr uint32_t conv_act_size_w_ = get_compile_time_arg_val(3);
+    constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(3);
     constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t log_base_2_of_conv_act_size_c_bytes = get_compile_time_arg_val(6);
 
     constexpr uint32_t cb_id_act = 0;
     constexpr uint32_t cb_id_sharded_act = 3;
+
 
     // Assumptions. Must be true. Validate on host.
     // assert(act_block_w_datums == C * weight_size_w)
@@ -103,6 +120,7 @@ void kernel_main() {
 
     uint32_t weights_top_left_corner_idx = 0;
     uint32_t reader_idx = 0;
+
 
     // First partial right-aligned row
     for (uint32_t k = 0; k < first_partial_right_aligned_row_width; k++) {
@@ -164,6 +182,23 @@ void kernel_main() {
     }
 
 
+    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
+    volatile tt_l1_ptr uint32_t* act_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_receiver_semaphore_addr);
+    // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
+    // to receive the mcast
+    volatile tt_l1_ptr uint32_t* act_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_sender_semaphore_addr);
+
+    uint64_t act_multicast_noc_addr = get_noc_multicast_addr(
+        act_mcast_dest_noc_start_x,
+        act_mcast_dest_noc_start_y,
+        act_mcast_dest_noc_end_x,
+        act_mcast_dest_noc_end_y,
+        0
+    );
+
+    uint64_t act_mcast_receiver_semaphore_noc_addr = act_multicast_noc_addr | act_mcast_receiver_semaphore_addr;
+
+
     // TODO: need to make the read coalescing optimization cleaner
     // pass coalesce_window_inner_reads as a compile time arg and num_coalesced_reads so we can constexpr the if
     // currently works for the case of num_coalesced_reads == weight_size_w since these reads are contiguous on both src/dst side
@@ -173,10 +208,13 @@ void kernel_main() {
     const uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
     // we want to have the check hoisted out because in act_block_h_datums loop it would be to expensive (unless we make it ifdef)
     if (coalesce_window_inner_reads and window_inner == num_coalesced_reads) {
+        // TODO: Add mcast support for coalescing case if needed; otherwise, this block isn't used for 2D convs
         // coalesce reads along weight_size_w
         reader_offset_idx = 0;
         uint32_t act_l1_offset = 0;
         uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
+
+        for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
         for (uint32_t outer = 0; outer < window_outer; outer++) {
             // Reset reader_idx to finish act_block_h_datums
             reader_idx = 0;
@@ -195,31 +233,83 @@ void kernel_main() {
 
             reader_offset_idx += window_inner;
         }
+        }
 
     } else {
         // no coalescing of reads
         reader_offset_idx = 0;
         uint32_t act_l1_offset = 0;
         uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
-        for (uint32_t outer = 0; outer < window_outer; outer++) {
-            // Reset reader_idx to finish act_block_h_datums
-            reader_idx = 0;
-            cb_reserve_back(cb_id_act, act_block_num_tiles);
-            uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
-            for (uint32_t bh = 0; bh < act_block_h_datums; bh++) {
-                for (uint32_t inner = 0; inner < window_inner; inner++) {
-                    // local read from reader_index + reader_offset;
-                    act_l1_offset = (reader_indices_ptr[reader_idx] + reader_offsets_ptr[reader_offset_idx + inner]) << log_base_2_of_conv_act_size_c_bytes;
-                    noc_async_read_one_packet(get_noc_addr(act_l1_read_addr + act_l1_offset), l1_write_addr_act, conv_act_c_read_bytes);
-                    l1_write_addr_act += conv_act_c_read_bytes;
 
+        for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
+            if (act_w_outer_i == act_mcast_sender_id) {
+                // MCAST SENDER
+                *(act_mcast_receiver_semaphore_addr_ptr) = VALID;
+                for (uint32_t outer = 0; outer < window_outer; outer++) {
+                    // Reset reader_idx to finish act_block_h_datums
+                    reader_idx = 0;
+                    cb_reserve_back(cb_id_act, act_block_num_tiles);
+                    uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
+
+                    // mcast args
+                    uint32_t act_start_address = l1_write_addr_act;
+                    uint32_t act_block_size_bytes = 0;
+
+                    for (uint32_t bh = 0; bh < act_block_h_datums; bh++) {
+                        for (uint32_t inner = 0; inner < window_inner; inner++) {
+                            // local read from reader_index + reader_offset;
+                            act_l1_offset = (reader_indices_ptr[reader_idx] + reader_offsets_ptr[reader_offset_idx + inner]) << log_base_2_of_conv_act_size_c_bytes;
+                            noc_async_read_one_packet(get_noc_addr(act_l1_read_addr + act_l1_offset), l1_write_addr_act, conv_act_c_read_bytes);
+                            l1_write_addr_act += conv_act_c_read_bytes;
+                            act_block_size_bytes += conv_act_c_read_bytes;
+
+                        }
+                        reader_idx++;
+                    }
+                    noc_async_read_barrier();
+
+                    // MCAST SENDER
+                    // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e. its value should be act_mcast_num_dests), then reset
+                    // the semaphore_addr value back to zero for the next block
+                    noc_semaphore_wait(act_mcast_sender_semaphore_addr_ptr, act_mcast_num_dests);
+                    noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
+
+                    // Now we have the block in the CB address, we can mcast to dests!
+                    uint64_t act_multicast_data_addr = act_multicast_noc_addr | act_start_address;
+                    // num_dests will not include source, but we are going through source along mcast path to avoid dispatch cores
+                    noc_async_write_multicast(act_start_address, act_multicast_data_addr, act_block_size_bytes, act_mcast_num_cores);
+
+                    // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
+                    // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+
+                    // We should also multicast VALID flag to destinations for receiver semaphore
+                    noc_semaphore_set_multicast(act_mcast_receiver_semaphore_addr, act_mcast_receiver_semaphore_noc_addr, act_mcast_num_cores);
+
+                    cb_push_back(cb_id_act, act_block_num_tiles);
+                    reader_offset_idx += window_inner;
                 }
-                reader_idx++;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_id_act, act_block_num_tiles);
+                // Need write barrier because we are modifying act_mcast_receiver_semaphore_addr value
+                noc_async_write_barrier();
+            } else {
+                // MCAST RECEIVER
+                for (uint32_t outer = 0; outer < window_outer; outer++) {
+                    cb_reserve_back(cb_id_act, act_block_num_tiles);
 
-            reader_offset_idx += window_inner;
+                    // Set act semaphore value to INVALID
+                    noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
+
+                    // Atomic increment source core counter
+                    uint64_t act_mcast_sender_semaphore_noc_addr = get_noc_addr(act_mcast_sender_noc_x, act_mcast_sender_noc_y[act_w_outer_i], act_mcast_sender_semaphore_addr);
+                    noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
+
+                    // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
+                    noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+
+                    cb_push_back(cb_id_act, act_block_num_tiles);
+                }
+
+            }
+
         }
 
     }
