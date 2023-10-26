@@ -24,6 +24,20 @@ from tt_lib.fused_ops.conv import (
 )
 from models.utility_functions import _nearest_32
 
+hardcoded_matmul_config_linear = {
+    8: tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 4),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    ),
+}
+
 
 def ResnetLinear(
     in_features: int,
@@ -35,6 +49,7 @@ def ResnetLinear(
         tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
     ),
     device=None,
+    batch_size=None,
 ):
     """
     Returns a function for linear operation in resnet with bias.
@@ -53,9 +68,24 @@ def ResnetLinear(
     if device is not None:
         weight_T = weight_T.to(device)
 
+    matmul_config = None
+    if batch_size in hardcoded_matmul_config_linear and output_mem_config.is_sharded():
+        matmul_config = hardcoded_matmul_config_linear[batch_size]
+
     def linear_(act):
         ## this uses the systolic 1d matmul with bias fused
-        output = tt_lib.tensor.resnet_matmul(act, weight_T, bias, output_mem_config)
+        if matmul_config is None:
+            output = tt_lib.tensor.resnet_matmul(act, weight_T, bias, output_mem_config)
+        else:
+            output = tt_lib.operations.primary.matmul_1d(
+                act,
+                weight_T,
+                bias=bias,
+                program_config=matmul_config,
+                output_mem_config=output_mem_config,
+                output_dtype=None,
+                math_fidelity=tt_lib.tensor.MathFidelity.LoFi,
+            )
         return output
 
     return linear_
@@ -829,11 +859,15 @@ class ResNet(nn.Module):
                 tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
             )
         if sharded:
-            self.sharded_memory_config = tt_lib.tensor.MemoryConfig(
+            self.height_sharded_memory_config = tt_lib.tensor.MemoryConfig(
                 tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
             )
+            self.width_sharded_memory_config = tt_lib.tensor.MemoryConfig(
+                tt_lib.tensor.TensorMemoryLayout.WIDTH_SHARDED, tt_lib.tensor.BufferType.L1
+            )
         else:
-            self.sharded_memory_config = self.memory_config
+            self.height_sharded_memory_config = self.memory_config
+            self.width_sharded_memory_config = self.memory_config
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         self._norm_layer = norm_layer
@@ -901,7 +935,7 @@ class ResNet(nn.Module):
             conv1_bias.tolist(),
             8,
             fuse_relu=True,
-            out_mem_config=self.sharded_memory_config if sharded else None,
+            out_mem_config=self.height_sharded_memory_config if sharded else None,
         )
         self.conv1_output_shape = compute_conv_output_shape(
             self.conv1_params,
@@ -912,13 +946,13 @@ class ResNet(nn.Module):
         # self.maxpool = TtMaxPool(self.device, kernel_size=3, stride=2, padding=1, output_mem_config=self.memory_config, nblocks=8, channels_last=True, reshape_2d=True)
         self.maxpool = TtMaxPool(
             self.device,
-            self.conv1_output_shape[0], ## in_n
-            self.conv1_output_shape[1], ## in_h
-            self.conv1_output_shape[2], ## in_w
+            self.conv1_output_shape[0],  ## in_n
+            self.conv1_output_shape[1],  ## in_h
+            self.conv1_output_shape[2],  ## in_w
             kernel_size=3,
             stride=2,
             padding=1,
-            output_mem_config=self.sharded_memory_config,
+            output_mem_config=self.height_sharded_memory_config,
             nblocks=1,
             channels_last=True,
             reshape_2d=True,
@@ -1023,8 +1057,9 @@ class ResNet(nn.Module):
             fc_weight,
             fc_bias,
             transpose=False,
-            output_mem_config=self.memory_config,
+            output_mem_config=self.width_sharded_memory_config,
             device=self.device,
+            batch_size=batch_size,
         )  # num_classes = 1000
         # self.fc = nn.Linear(512 * block.expansion, num_classes)
 
@@ -1279,13 +1314,15 @@ class ResNet(nn.Module):
         # Relu is fused with conv1
 
         if self.sharded:
-            x = tt_lib.tensor.untilize_with_halo(x,
-                                                0xf7ff,   ## pad_val
-                                                self.conv1_output_shape[0],   ## in_n
-                                                self.conv1_output_shape[1],   ## in_h
-                                                self.conv1_output_shape[2],   ## in_w
-                                                2,                            ## stride case
-                                                self.sharded_memory_config)
+            x = tt_lib.tensor.untilize_with_halo(
+                x,
+                0xF7FF,  ## pad_val
+                self.conv1_output_shape[0],  ## in_n
+                self.conv1_output_shape[1],  ## in_h
+                self.conv1_output_shape[2],  ## in_w
+                2,  ## stride case
+                self.height_sharded_memory_config,
+            )
         else:
             x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
             x = x.reshape(
@@ -1303,7 +1340,7 @@ class ResNet(nn.Module):
             self.maxpool_output_shape[0] * self.maxpool_output_shape[1] * self.maxpool_output_shape[2],
             self.maxpool_output_shape[3],
         )
-        x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.sharded_memory_config)
+        x = format_tensor(x, tt_lib.tensor.Layout.TILE, self.device, self.height_sharded_memory_config)
 
         x = self.layer1_module1(x)
         x = self.layer1_module2(x)
@@ -1351,6 +1388,15 @@ class ResNet(nn.Module):
         )
 
         x = x.reshape(self.batch_size, x.shape()[1], (int)(x.shape()[2] / self.batch_size), x.shape()[3])
+        if self.sharded:
+            grid_size = (8, 4)
+            x = tt_lib.tensor.interleaved_to_sharded(
+                x,
+                grid_size,
+                [x.volume() // x.shape()[-1], x.shape()[-1] // (grid_size[0] * grid_size[1])],
+                tt_lib.tensor.TensorMemoryLayout.WIDTH_SHARDED,
+                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+            )
 
         unpadded_shape = x.shape()
         padded_shape = [
@@ -1359,16 +1405,26 @@ class ResNet(nn.Module):
             _nearest_32(unpadded_shape[2]),
             _nearest_32(unpadded_shape[3]),
         ]
-        x = tt_lib.tensor.pad(
-            x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config, use_multicore=True
-        )
-        x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config, use_multicore=True)
+        if self.sharded:
+            x = tt_lib.tensor.tilize_with_val_padding(
+                x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.width_sharded_memory_config
+            )
+        else:
+            x = tt_lib.tensor.pad(
+                x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config, use_multicore=True
+            )
+            x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config, use_multicore=True)
 
-        x = self.avgpool(x, self.memory_config)
+        x = self.avgpool(x, self.width_sharded_memory_config)
 
         unpadded_shape_end = [x.shape()[0] - 1, x.shape()[1] - 1, 1 - 1, x.shape()[3] - 1]
-        x = tt_lib.tensor.untilize(x, self.memory_config, use_multicore=True)
-        x = tt_lib.tensor.unpad(x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=self.memory_config)
+        if self.sharded:
+            x = tt_lib.tensor.untilize_with_unpadding(
+                x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=self.width_sharded_memory_config
+            )
+        else:
+            x = tt_lib.tensor.untilize(x, self.memory_config, use_multicore=True)
+            x = tt_lib.tensor.unpad(x, (0, 0, 0, 0), unpadded_shape_end, output_mem_config=self.memory_config)
 
         x = x.reshape(1, x.shape()[1], self.batch_size * x.shape()[2], x.shape()[3])
 
@@ -1379,10 +1435,15 @@ class ResNet(nn.Module):
             _nearest_32(unpadded_shape[2]),
             _nearest_32(unpadded_shape[3]),
         ]
-        x = tt_lib.tensor.pad(
-            x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config, use_multicore=True
-        )
-        x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config, use_multicore=True)
+        if self.sharded:
+            x = tt_lib.tensor.tilize_with_val_padding(
+                x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.width_sharded_memory_config
+            )
+        else:
+            x = tt_lib.tensor.pad(
+                x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config, use_multicore=True
+            )
+            x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config, use_multicore=True)
 
         x = self.fc(x)
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
