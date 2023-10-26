@@ -73,16 +73,14 @@ class TtTransformer(nn.Module):
                 fill_value=1.0,
             )
             diagonal = 0
-            mask = tt_lib.tensor.tril(tensor,diagonal)
+            mask = tt_lib.tensor.tril(tensor, diagonal)
             # make the mask banded to account for sliding window
             diagonal = -self.args.sliding_window
-            mask = tt_lib.tensor.triu(tensor,diagonal)
-            mask = tt_lib.tensor.relu( tt_lib.tensor.log(mask) )
-            #mask = relu(log(mask))
-            mask = tt_lib.tensor.unary_chain(mask,[tt_lib.tensor.FusibleActivation.LOG,
-                                                tt_lib.tensor.FusibleActivation.RELU])
+            mask = tt_lib.tensor.triu(mask, diagonal)
+            mask =  tt_lib.tensor.log(mask)
+            # mask = tt_lib.tensor.unary_chain(mask,[tt_lib.tensor.FusibleActivation.LOG,
+            #                                     tt_lib.tensor.FusibleActivation.RELU])
             mask = tt_to_torch_tensor( mask )
-
         freqs_cis = torch_to_tt_tensor_rm(freqs_cis, self.device)
         positions = torch_to_tt_tensor_rm(positions, self.device, put_on_device=False)
         h = torch_to_tt_tensor_rm(h, self.device, put_on_device=False)
