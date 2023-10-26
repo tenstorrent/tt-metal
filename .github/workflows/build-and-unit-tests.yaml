@@ -66,3 +66,11 @@ jobs:
         run: python -m pip install -r infra/requirements-infra.txt
       - name: Check SPDX licenses
         run: python -m check_copyright --verbose --dry-run --config ./check_copyright_config.yaml .
+  check-metal-kernel-count:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.CHECKOUT_TOKEN }}
+      - name: Check kernel count in base metal is less than maximum
+        run: if (( $(find tt_metal/kernels/ -type f | wc -l) > 7 )); then exit 1; fi
