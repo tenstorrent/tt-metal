@@ -5,17 +5,20 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-// TODO: Support width > 1 tile
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    uint32_t Wt = get_arg_val<uint32_t>(1);
+    uint32_t Ht = get_arg_val<uint32_t>(2);
+    uint32_t batch = get_arg_val<uint32_t>(3);
+    uint32_t row_size_bytes = get_arg_val<uint32_t>(4);
+    uint32_t batch_size_bytes = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    cb_reserve_back(cb_id_in0, num_tiles);
-    cb_push_back(cb_id_in0, num_tiles);
+    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
 
     #ifdef REDUCE_SCALER
-    constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(1);
-    constexpr uint32_t scaler = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
+    uint32_t scaler = get_arg_val<uint32_t>(6);
     cb_reserve_back(cb_id_in2, 1);
     constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
@@ -26,16 +29,42 @@ void kernel_main() {
         write_addr += MEM_ZEROS_SIZE;
     }
     noc_async_read_barrier();
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_in2));
-    uint32_t idx = 0;
-    for (uint32_t k = 0; k < 4; ++k) {
-        uint32_t curr_idx = idx;
-        for (uint32_t j = 0; j < 8; ++j) {
-            ptr[curr_idx] = scaler;
-            curr_idx++;
+    if (scaler != 0) {
+        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_in2));
+        uint32_t idx = 0;
+        for (uint32_t k = 0; k < 4; ++k) {
+            uint32_t curr_idx = idx;
+            for (uint32_t j = 0; j < 8; ++j) {
+                ptr[curr_idx] = scaler;
+                curr_idx++;
+            }
+            idx += 128;
         }
-        idx += 128;
     }
     cb_push_back(cb_id_in2, 1);
     #endif
+
+    constexpr uint32_t onetile = 1;
+    uint32_t tile_bytes = get_tile_size(cb_id_in0);
+
+    cb_reserve_back(cb_id_in1, num_tiles);
+    uint64_t base_noc_addr = get_noc_addr(get_write_ptr(cb_id_in1));
+
+    for (uint32_t b = 0; b < batch; ++b)  {
+        uint64_t col_noc_addr = base_noc_addr;
+        for (uint32_t i = 0; i < Wt; ++i) {
+            uint64_t curr_noc_addr = col_noc_addr;
+            for (uint32_t j = 0; j < Ht; ++j) {
+                cb_reserve_back(cb_id_in0, onetile);
+                uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+                noc_async_read(curr_noc_addr, l1_write_addr, tile_bytes);
+                curr_noc_addr += row_size_bytes;
+                noc_async_read_barrier();
+                cb_push_back(cb_id_in0, onetile);
+            }
+            col_noc_addr += tile_bytes;
+        }
+        base_noc_addr += batch_size_bytes;
+    }
+
 }

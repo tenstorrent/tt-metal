@@ -800,6 +800,16 @@ namespace tt::tt_metal::detail
                     shape = tt_tensor.shape()
 
             )doc")
+            .def("volume", [](const Tensor &self) {
+                return self.volume();
+            }, R"doc(
+                Get the volume of the tensor.
+
+                .. code-block:: python
+
+                    volume = tt_tensor.volume()
+
+            )doc")
             .def("storage_type", [](const Tensor &self) {
                 return self.storage_type();
             }, R"doc(

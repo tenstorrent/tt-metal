@@ -62,11 +62,10 @@ void Reduce::validate(const std::vector<Tensor> &input_tensors) const {
     if (this->dim == ReduceOpDim::H) {
         if (input_tensor.memory_config().is_sharded()) {
             TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
-            // Did not add handling for generic case yet
-            TT_ASSERT(input_tensor.shard_spec().value().shard_shape[1] == TILE_WIDTH);
         } else {
             TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
         }
+        TT_ASSERT(input_tensor.memory_config().memory_layout == this->output_mem_config.memory_layout);
     } else {
         TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
     }
@@ -99,11 +98,11 @@ std::vector<Shape> Reduce::compute_output_shapes(const std::vector<Tensor> &inpu
 
 std::vector<Tensor> Reduce::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    if (input_tensor.memory_config().is_sharded()) {
+    if(this->output_mem_config.is_sharded()){
         auto output_shape = this->compute_output_shapes(input_tensors).at(0);
         auto shard_spec = input_tensor.shard_spec().value();
         shard_spec.shard_shape[0] = tt_metal::compute_volume(output_shape) / output_shape[-1];
-        return {create_sharded_device_tensor(output_shape, input_tensor.dtype(), Layout::TILE, input_tensor.device(), input_tensor.memory_config(), shard_spec)};
+        return {create_sharded_device_tensor(output_shape, input_tensor.dtype(), Layout::TILE, input_tensor.device(), this->output_mem_config, shard_spec)};
     } else {
         return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
     }

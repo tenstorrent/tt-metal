@@ -38,7 +38,7 @@ void kernel_main() {
         noc_async_read(src_noc_addr, l1_write_addr, block_width_bytes);
         stick_id++;
         l1_write_addr += block_width_bytes;
-        noc_async_read_barrier();
     }
+    noc_async_read_barrier();
     cb_push_back(cb_id_in0, block_height);
 }

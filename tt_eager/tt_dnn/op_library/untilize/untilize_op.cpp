@@ -9,6 +9,7 @@
 #include "tt_dnn/op_library/copy/copy_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/math.hpp"
+#include "tensor/tensor_utils.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -148,13 +149,30 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor> &input_tensors) c
     TT_ASSERT(((this->output_tensor_end[3] - this->output_tensor_start[3] + 1) % 2 == 0), "Can only unpad to row major tensor of even width");
 
     if (input_tensor_a.memory_config().is_sharded()) {
-        TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
-        TT_ASSERT(input_tensor_a.shard_spec().value().shard_grid.ranges().size() == 1);
+        if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            TT_ASSERT(input_tensor_a.shard_spec().value().shard_grid.ranges().size() == 1);
+            TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+            TT_ASSERT(input_tensor_a.volume() / (input_tensor_a.shape()[-2] * input_tensor_a.shape()[-1]) == 1, "Can only write unbatched output interleaved");
+        } else if(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+            auto output_shape = this->compute_output_shapes(input_tensors).at(0);
+            for (uint32_t i = 0; i < output_shape.rank(); i++) {
+                if (i != output_shape.rank() - 2) {
+                    TT_ASSERT(input_tensor_a.shape()[i] == output_shape[i]);
+                }
+                if (output_mem_config.is_sharded()) {
+                    TT_ASSERT(this->output_mem_config == input_tensor_a.memory_config());
+                } else {
+                    TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+                    TT_ASSERT(input_tensor_a.volume() / (input_tensor_a.shape()[-2] * input_tensor_a.shape()[-1]) == 1, "Can only write unbatched output interleaved");
+                }
+            }
+        } else {
+            TT_ASSERT(false, "Unsupported sharding scheme");
+        }
     } else {
         TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
     }
-    TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
-
 }
 std::vector<Shape> UntilizeWithUnpadding::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     Shape output_tensor_shape = {
@@ -167,7 +185,17 @@ std::vector<Shape> UntilizeWithUnpadding::compute_output_shapes(const std::vecto
 }
 std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.dtype(), Layout::ROW_MAJOR, this->output_mem_config);
+     if (input_tensor_a.memory_config().is_sharded() && this->output_mem_config.is_sharded()) {
+        auto output_shape = this->compute_output_shapes(input_tensors).at(0);
+        uint32_t fused_height = tt_metal::compute_volume(output_shape) / output_shape[-1];
+        uint32_t num_cores = input_tensor_a.shard_spec().value().shard_grid.num_cores();
+        std::array<uint32_t, 2> shard_shape = {fused_height, output_shape[-1] / num_cores};
+        ShardSpec shard_spec = input_tensor_a.shard_spec().value();
+        shard_spec.shard_shape = shard_shape;
+        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor_a.dtype(), Layout::ROW_MAJOR, input_tensor_a.device(), this->output_mem_config, shard_spec)};
+    } else {
+        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.dtype(), Layout::ROW_MAJOR, this->output_mem_config);
+    }
 }
 
 operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
