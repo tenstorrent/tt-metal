@@ -234,7 +234,6 @@ inline void llk_unpack_AB_matmul_cm(
     for (std::uint32_t rt=0; rt<rt_dim; rt++) {
         std::uint32_t offset_address_a = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputA], (tile_index_a + rt*kt_dim));
         std::uint32_t address_a = base_address_a + offset_address_a;
-
         for (std::uint32_t ct=0; ct<ct_dim; ct++) {
 
             std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputB], (tile_index_b+ct));
