@@ -11,7 +11,10 @@
 #include "tt_metal/host_api.hpp"
 
 namespace tt {
-namespace tt_metal {
+namespace operations {
+namespace primary {
+
+using namespace tt_metal;
 
 inline bool is_shape_out_features(const Shape& bias, const Shape& weight) {
     return (bias[0] == 1 && bias[1] == 1 && bias[2] == 1 && bias[3] == weight[2]);
@@ -40,7 +43,8 @@ Tensor moreh_linear_(
     std::optional<std::reference_wrapper<const Tensor>> bias,
     const MemoryConfig& output_mem_config) {
     moreh_linear_validate(input, weight, bias);
-    Tensor mm_output = tt::operations::primary::moreh_matmul(input, weight, false, true, output_mem_config);
+    Tensor mm_output =
+        tt::operations::primary::moreh_matmul(input, weight, std::nullopt, false, true, output_mem_config);
     if (bias) {
         const auto& bias_tensor = bias->get();
         const auto& bias_shape = bias_tensor.shape().without_padding();
@@ -61,5 +65,8 @@ Tensor moreh_linear(
     return moreh_linear_(input, weight, bias, output_mem_config);
 }
 
-}  // namespace tt_metal
+}  // namespace primary
+
+}  // namespace operations
+
 }  // namespace tt
