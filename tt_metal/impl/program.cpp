@@ -144,6 +144,7 @@ KernelGroup::KernelGroup(const Program& program,
     } else {
         this->launch_msg.ncrisc_watcher_kernel_id = 0;
         this->launch_msg.enable_ncrisc = false;
+        this->launch_msg.ncrisc_kernel_size16 = 0;
     }
 
     if (trisc_id) {
