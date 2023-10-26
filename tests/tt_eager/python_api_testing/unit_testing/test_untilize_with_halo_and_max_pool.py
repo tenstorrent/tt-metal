@@ -36,14 +36,14 @@ def volume(shape):
 ## dilation_h, dilation_w
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
-    (
+    (   ## only resnet50 shapes supported
         (   ## [1, 32, 32, 32],
-            [1, 64, 64, 64],
+            # [1, 64, 64, 64],
             [1, 64, 112, 112],
 
-            [2, 64, 64, 64],
-            [8, 64, 64, 64],
-            [8, 64, 128, 128],
+            # [2, 64, 64, 64],
+            # [8, 64, 64, 64],
+            # [8, 64, 128, 128],
 
             [4, 64, 112, 112],
             [8, 64, 112, 112],
@@ -62,21 +62,18 @@ def volume(shape):
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        # (1, 1),
         (3, 3),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
-        # (0, 0),  ## default
         (1, 1),
     ),
 )
 @pytest.mark.parametrize(
     "stride",
     (
-        # (1, 1),  ## default
         (2, 2),
     ),
 )
@@ -84,9 +81,7 @@ def volume(shape):
 @pytest.mark.parametrize(
     "nblocks",
     (
-        1,  ## default
-        # 4,
-        # 8,
+        1,
     ),
 )
 def test_run_max_pool(
