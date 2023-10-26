@@ -44,7 +44,7 @@ def test_run_repeat_interleave_test(input_shapes, dim, repeat, device):
     test_args.update({"dim": dim, "repeat": repeat})
     comparison_func = comparison_funcs.comp_equal
     run_single_pytorch_test(
-        f"eltwise-repeat_interleave",
+        f"repeat_interleave",
         input_shapes,
         datagen_func,
         comparison_func,
