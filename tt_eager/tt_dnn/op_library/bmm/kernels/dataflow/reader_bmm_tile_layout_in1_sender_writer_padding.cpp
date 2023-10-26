@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-
+#include "debug_print.h"
 void kernel_main() {
     // READER
     // in1 tensor args
@@ -295,6 +295,7 @@ void kernel_main() {
         cb_wait_front(cb_id_out0, padded_block_tiles_h_skip);
         cb_pop_front(cb_id_out0, padded_block_tiles_h_skip);
         out_tensor_start_tile_id += MtNt;
+        DPRINT<<'a'<<ENDL();
         #endif
     }
 

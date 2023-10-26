@@ -61,11 +61,18 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
 
     uint32_t src0_cb_index = CB::c_in0;
     CircularBufferID cb_src0;
+    uint32_t src1_cb_index = CB::c_in1;
+    CircularBufferID cb_src1 = 0;
     if (in_sharded) {
-        uint32_t num_input_tiles = a.shard_spec().value().numel() / TILE_HW;
+        uint32_t num_shard_tiles = a.shard_spec().value().numel() / TILE_HW;
+        uint32_t num_input_tiles = 2;
         tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
-            .set_page_size(src0_cb_index, src0_single_tile_size).set_globally_allocated_address(a.buffer()->address());
+            .set_page_size(src0_cb_index, src0_single_tile_size);
         cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+        tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(num_shard_tiles * src0_single_tile_size, {{src1_cb_index, src0_cb_data_format}})
+            .set_page_size(src1_cb_index, src0_single_tile_size).set_globally_allocated_address(a.buffer()->address());
+        cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
     } else {
         uint32_t num_input_tiles = 2;
         tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
@@ -98,8 +105,8 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     if (in_sharded) {
         std::vector<uint32_t> reader_compile_time_args = {
             src0_cb_index,
-            scaler_cb_index,
-            packed_scaler_value
+            src1_cb_index,
+            scaler_cb_index
         };
         std::map<string, string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
@@ -185,8 +192,17 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     }
 
     if (in_sharded && out_sharded) {
+        uint32_t shard_Wt = num_cols_per_core_group_1 / NC;
+        uint32_t shard_row_size = shard_Wt * src0_single_tile_size;
+        uint32_t shard_batch_size = shard_row_size * Ht;
         vector<uint32_t> reader_rt_args = {
             num_cols_per_core_group_1 * Ht,
+            shard_Wt,
+            Ht,
+            NC,
+            shard_row_size,
+            shard_batch_size,
+            packed_scaler_value
         };
         tt_metal::SetRuntimeArgs(
             program,
@@ -240,7 +256,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     auto override_runtime_arguments_callback = [
             reader_kernel_id=reader_kernel_id,
             writer_kernel_id=writer_kernel_id,
-            cb_src0=cb_src0,
+            cb_src1=cb_src1,
             cb_output=cb_output,
             num_cores=num_cores,
             num_cores_y=num_cores_y
@@ -260,8 +276,8 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
         if (src_sharded && out_sharded) {
-            auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
-            src0_cb_config.set_globally_allocated_address(src_buffer->address());
+            auto& src1_cb_config = GetCircularBufferConfig(program, cb_src1);
+            src1_cb_config.set_globally_allocated_address(src_buffer->address());
             auto& out_cb_config = GetCircularBufferConfig(program, cb_output);
             out_cb_config.set_globally_allocated_address(dst_buffer->address());
         } else {
