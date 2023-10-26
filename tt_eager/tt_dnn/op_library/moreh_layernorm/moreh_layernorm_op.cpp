@@ -60,12 +60,23 @@ inline uint32_t find_divisor_with_max_block_size(uint32_t val, uint32_t max_bloc
     }
     return divisor;
 }
+
+inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
+    TT_ASSERT(tensor.layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
+    TT_ASSERT(tensor.dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
+    TT_ASSERT(
+        tensor.storage_type() == StorageType::DEVICE, fmt::format("Operands to {} need to be on device!", op_name));
+    TT_ASSERT(
+        tensor.buffer() != nullptr, fmt::format("Operands to {} need to be allocated in buffers on device!", op_name));
+}
 }  // namespace
 
 operation::ProgramWithCallbacks moreh_layernorm_(
     const Tensor& input,
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> beta,
+    const std::optional<const Tensor> mean,
+    const std::optional<const Tensor> rstd,
     Tensor& output,
     float eps,
     const std::vector<uint32_t>& normalized_dims) {
@@ -90,9 +101,6 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const auto origin_C = input_shape_without_padding[1];
     const auto origin_H = input_shape_without_padding[2];
     const auto origin_W = input_shape_without_padding[3];
-
-    const auto origin_Ht = tt::div_up(origin_H, TILE_HEIGHT);
-    const auto origin_Wt = tt::div_up(origin_W, TILE_WIDTH);
 
     auto adjusted_input_shape = input_shape;
     if (normalized_dims.size() == 2) {
@@ -123,7 +131,6 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const auto W = adjusted_input_shape[3];
 
     const auto NC = N * C;
-    const auto HW = H * W;
 
     const auto Ht = H / TILE_HEIGHT;
     const auto Wt = W / TILE_WIDTH;
@@ -139,31 +146,35 @@ operation::ProgramWithCallbacks moreh_layernorm_(
 
     const auto gamma_has_value = gamma.has_value();
     const auto beta_has_value = beta.has_value();
+    const auto mean_has_value = mean.has_value();
+    const auto rstd_has_value = rstd.has_value();
 
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && !is_lastdim_layernorm;
     const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
 
     uint32_t in0_t = 2 * Wt;                                      // input
-    const uint32_t in1_t = 2;                                     // scaler
-    const uint32_t in2_t = 2;                                     // epsilon
+    const uint32_t in1_t = 1;                                     // scaler
+    const uint32_t in2_t = 1;                                     // epsilon
     const uint32_t in3_t = gamma_has_value ? 2 * block_size : 0;  // gamma
     const uint32_t in4_t = beta_has_value ? 2 * block_size : 0;   // beta
-    const uint32_t in5_t = do_mask_h ? 2 : 0;                     // mask_h
-    const uint32_t in6_t = do_mask_w ? 2 : 0;                     // mask_w
+    const uint32_t in5_t = do_mask_h ? 1 : 0;                     // mask_h
+    const uint32_t in6_t = do_mask_w ? 1 : 0;                     // mask_w
 
-    const uint32_t out0_t = 2 * block_size;  // output
+    const uint32_t out0_t = 2 * block_size;          // output
+    const uint32_t out1_t = mean_has_value ? 1 : 0;  // mean
+    const uint32_t out2_t = rstd_has_value ? 1 : 0;  // rstd
 
-    const uint32_t im0_t = 2;                                                         // E[x]
+    const uint32_t im0_t = 1;                                                         // E[x]
     uint32_t im1_t = Wt;                                                              // x - E[x]
-    uint32_t im2_t = 2;                                                               // (x - E[x])^2
-    const uint32_t im3_t = 2;                                                         // Sum[(x - E[x])^2]
-    const uint32_t im4_t = 2;                                                         // E[(x - E[x])^2] = Var[x]
+    uint32_t im2_t = 1;                                                               // (x - E[x])^2
+    const uint32_t im3_t = 1;                                                         // Sum[(x - E[x])^2]
+    const uint32_t im4_t = 1;                                                         // E[(x - E[x])^2] = Var[x]
     const uint32_t im5_t = 1;                                                         // 1.0/(sqrt(Var[x] + eps))
     const uint32_t im6_t = (gamma_has_value || beta_has_value) ? 2 * block_size : 0;  // x * gamm + beta
     const uint32_t im7_t = 2;                                                         // Sum[x]
 
-    const uint32_t cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + im0_t + im1_t + im2_t +
-                               im3_t + im4_t + im5_t + im6_t + im7_t) *
+    const uint32_t cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t +
+                               im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) *
                               single_tile_size;
     const uint32_t available_L1 = device->l1_size_per_core() - L1_UNRESERVED_BASE;
     const bool use_large_algorithm = cb_usage >= available_L1;
@@ -212,6 +223,8 @@ operation::ProgramWithCallbacks moreh_layernorm_(
             {CB::c_in5, in5_t},        // mask_h
             {CB::c_in6, in6_t},        // mask_w
             {CB::c_out0, out0_t},      // output
+            {CB::c_out1, out1_t},      // mean
+            {CB::c_out2, out2_t},      // rstd
             {CB::c_intermed0, im0_t},  // E[x]
             {CB::c_intermed1, im1_t},  // x - E[x]
             {CB::c_intermed2, im2_t},  // (x - E[x])^2
@@ -226,9 +239,18 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> reader_compile_time_args{
-        (uint32_t)(is_dram(input)), (uint32_t)(is_dram(gamma)), (uint32_t)(is_dram(beta)), block_size};
+        static_cast<uint32_t>(is_dram(input)),
+        static_cast<uint32_t>(is_dram(gamma)),
+        static_cast<uint32_t>(is_dram(beta)),
+        block_size};
 
-    const std::vector<uint32_t> writer_compile_time_args{(uint32_t)(is_dram(output)), block_size};
+    const std::vector<uint32_t> writer_compile_time_args{
+        static_cast<uint32_t>(is_dram(output)),
+        static_cast<uint32_t>(is_dram(mean)),
+        static_cast<uint32_t>(is_dram(rstd)),
+        static_cast<uint32_t>(mean_has_value),
+        static_cast<uint32_t>(rstd_has_value),
+        block_size};
 
     std::map<string, string> reader_defines{};
     if (gamma_has_value) {
@@ -271,13 +293,15 @@ operation::ProgramWithCallbacks moreh_layernorm_(
         origin_W,
         Wt,
         block_size,
-        gamma_has_value,
-        beta_has_value,
-        is_lastdim_layernorm};
+        static_cast<uint32_t>(gamma_has_value),
+        static_cast<uint32_t>(beta_has_value),
+        static_cast<uint32_t>(mean_has_value),
+        static_cast<uint32_t>(rstd_has_value),
+        static_cast<uint32_t>(is_lastdim_layernorm)};
 
     const auto compute_kernel_file =
-        use_large_algorithm ? "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_large.cpp"
-                            : "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_small.cpp";
+        use_large_algorithm ? "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_large_kernel.cpp"
+                            : "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_small_kernel.cpp";
 
     tt::operations::primary::CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_rows_per_core_group_1, compute_args_group_1}, compute_defines);
@@ -289,9 +313,11 @@ operation::ProgramWithCallbacks moreh_layernorm_(
             origin_W,
             Wt,
             block_size,
-            gamma_has_value,
-            beta_has_value,
-            is_lastdim_layernorm};
+            static_cast<uint32_t>(gamma_has_value),
+            static_cast<uint32_t>(beta_has_value),
+            static_cast<uint32_t>(mean_has_value),
+            static_cast<uint32_t>(rstd_has_value),
+            static_cast<uint32_t>(is_lastdim_layernorm)};
 
         tt::operations::primary::CreateComputeKernel(
             program,
@@ -336,6 +362,8 @@ operation::ProgramWithCallbacks moreh_layernorm_(
 
     const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0;
     const auto beta_addr = beta_has_value ? beta.value().buffer()->address() : 0;
+    const auto mean_addr = mean_has_value ? mean.value().buffer()->address() : 0;
+    const auto rstd_addr = rstd_has_value ? rstd.value().buffer()->address() : 0;
 
     const auto mask_h = origin_H % TILE_HEIGHT;
     const auto mask_w = origin_W % TILE_WIDTH;
@@ -356,7 +384,8 @@ operation::ProgramWithCallbacks moreh_layernorm_(
             input_addr, num_rows_per_core, Wt, tile_offset, scaler.u, e.u, gamma_addr, beta_addr, mask_h, mask_w};
         SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
 
-        const std::vector<uint32_t> writer_runtime_args{output_addr, num_rows_per_core, Wt, tile_offset};
+        const std::vector<uint32_t> writer_runtime_args{
+            output_addr, mean_addr, rstd_addr, num_rows_per_core, Wt, tile_offset};
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
 
         tile_offset += num_rows_per_core * Wt;
@@ -375,6 +404,8 @@ operation::ProgramWithCallbacks moreh_layernorm_(
         auto input_buffer = input_buffers.at(0);
         auto gamma_buffer = input_buffers.at(1);
         auto beta_buffer = input_buffers.at(2);
+        auto mean_buffer = input_buffers.at(3);
+        auto rstd_buffer = input_buffers.at(4);
 
         auto ouput_buffer = output_buffers.at(0);
 
@@ -396,6 +427,12 @@ operation::ProgramWithCallbacks moreh_layernorm_(
             {
                 auto runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
                 runtime_args[0] = ouput_buffer->address();
+                if (mean_buffer != nullptr) {
+                    runtime_args[1] = mean_buffer->address();
+                }
+                if (rstd_buffer != nullptr) {
+                    runtime_args[2] = rstd_buffer->address();
+                }
                 SetRuntimeArgs(program, writer_kernels_id, core, runtime_args);
             }
         }
@@ -408,20 +445,19 @@ void MorehLayerNorm::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_ASSERT(
-        input_tensors.size() == 1 and optional_input_tensors.size() <= 2, "Must have between 1 to 3 input tensors");
+        input_tensors.size() == 1 and optional_input_tensors.size() <= 4, "Must have between 1 to 5 input tensors");
 
     const auto& input = input_tensors.at(0);
+
     const auto& gamma = optional_input_tensors.at(0);
     const auto& beta = optional_input_tensors.at(1);
+    const auto& mean = optional_input_tensors.at(2);
+    const auto& rstd = optional_input_tensors.at(3);
 
-    TT_ASSERT(input.layout() == Layout::TILE, "moreh_layernorm only supports tiled layout.");
-    TT_ASSERT(input.dtype() == DataType::BFLOAT16, "moreh_layernorm only supports bfloat16.");
-    TT_ASSERT(input.storage_type() == StorageType::DEVICE, "Operands to moreh_layernorm need to be on device!");
-    TT_ASSERT(input.buffer() != nullptr, "Operands to moreh_layernorm need to be allocated in buffers on device!");
+    check_tensor(input, "moreh_layernorm");
 
     if (gamma.has_value()) {
-        TT_ASSERT(gamma.value().layout() == Layout::TILE, "moreh_layernorm only supports tiled layout.");
-        TT_ASSERT(gamma.value().dtype() == input.dtype(), "moreh_layernorm only supports bfloat16.");
+        check_tensor(gamma.value(), "moreh_layernorm");
         TT_ASSERT(
             input.shape()[3] == gamma.value().shape()[3],
             fmt::format("{} != {}", input.shape()[3], gamma.value().shape()[3]));
@@ -429,14 +465,10 @@ void MorehLayerNorm::validate(
             input.shape().without_padding()[3] == gamma.value().shape().without_padding()[3],
             fmt::format("{} != {}", input.shape().without_padding()[3], gamma.value().shape().without_padding()[3]));
         TT_ASSERT(input.device() == gamma.value().device());
-        TT_ASSERT(
-            gamma.value().buffer() != nullptr,
-            "Operands to moreh_layernorm need to be allocated in buffers on device!");
     }
 
     if (beta.has_value()) {
-        TT_ASSERT(beta.value().layout() == Layout::TILE, "moreh_layernorm only supports tiled layout.");
-        TT_ASSERT(beta.value().dtype() == input.dtype(), "moreh_layernorm only supports bfloat16.");
+        check_tensor(beta.value(), "moreh_layernorm");
         TT_ASSERT(
             input.shape()[3] == beta.value().shape()[3],
             fmt::format("{} != {}", input.shape()[3], beta.value().shape()[3]));
@@ -444,8 +476,14 @@ void MorehLayerNorm::validate(
             input.shape().without_padding()[3] == beta.value().shape().without_padding()[3],
             fmt::format("{} != {}", input.shape().without_padding()[3], beta.value().shape().without_padding()[3]));
         TT_ASSERT(input.device() == beta.value().device());
-        TT_ASSERT(
-            beta.value().buffer() != nullptr, "Operands to moreh_layernorm need to be allocated in buffers on device!");
+    }
+
+    if (mean.has_value()) {
+        check_tensor(mean.value(), "moreh_layernorm");
+    }
+
+    if (rstd.has_value()) {
+        check_tensor(rstd.value(), "moreh_layernorm");
     }
 }
 
@@ -465,10 +503,15 @@ operation::ProgramWithCallbacks MorehLayerNorm::create_program(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     const auto& input = input_tensors.at(0);
+
     const auto& gamma = optional_input_tensors.at(0);
     const auto& beta = optional_input_tensors.at(1);
+    auto& mean = optional_input_tensors.at(2);
+    auto& rstd = optional_input_tensors.at(3);
+
     auto& output = output_tensors.at(0);
-    return moreh_layernorm_(input, gamma, beta, output, this->eps, this->normalized_dims);
+
+    return moreh_layernorm_(input, gamma, beta, mean, rstd, output, this->eps, this->normalized_dims);
 }
 
 tt::stl::reflection::Attributes MorehLayerNorm::attributes() const {
