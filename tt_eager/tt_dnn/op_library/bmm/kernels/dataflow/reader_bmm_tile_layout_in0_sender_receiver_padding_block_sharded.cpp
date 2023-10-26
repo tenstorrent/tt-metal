@@ -45,19 +45,24 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in0_mcast_sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_addr);
 
     uint64_t remote_sender_noc_addrs[num_blocks];
-    uint32_t addr_idx = 0;
     if constexpr(transpose_mcast) {
-        for(uint32_t x = 0; x < num_x; ++x) {
-            for(uint32_t y = 0; y < num_y; ++y) {
-                remote_sender_noc_addrs[addr_idx] = get_noc_addr(in0_mcast_noc_x[x], in0_mcast_noc_y[y], in0_mcast_sender_semaphore_addr);
-                ++addr_idx;
+        uint32_t x = 0, y = 0;
+        for (uint32_t i = 0; i < num_blocks; i++) {
+            remote_sender_noc_addrs[i] = get_noc_addr(in0_mcast_noc_x[x], in0_mcast_noc_y[y], in0_mcast_sender_semaphore_addr);
+            ++y;
+            if (y == num_y) {
+                y = 0;
+                ++x;
             }
         }
     } else {
-        for(uint32_t y = 0; y < num_y; ++y) {
-            for(uint32_t x = 0; x < num_x; ++x) {
-                remote_sender_noc_addrs[addr_idx] = get_noc_addr(in0_mcast_noc_x[x], in0_mcast_noc_y[y], in0_mcast_sender_semaphore_addr);
-                ++addr_idx;
+        uint32_t x = 0, y = 0;
+        for (uint32_t i = 0; i < num_blocks; i++) {
+            remote_sender_noc_addrs[i] = get_noc_addr(in0_mcast_noc_x[x], in0_mcast_noc_y[y], in0_mcast_sender_semaphore_addr);
+            ++x;
+            if (x == num_x) {
+                x = 0;
+                ++y;
             }
         }
     }
