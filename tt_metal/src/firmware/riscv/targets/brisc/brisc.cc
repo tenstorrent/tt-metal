@@ -140,6 +140,9 @@ void l1_to_ncrisc_iram_copy(uint32_t src, uint32_t dst, uint16_t size) {
         dst,
         size,
         XMOV_L1_TO_L0);
+}
+
+void l1_to_ncrisc_iram_copy_wait() {
     // Wait for DMA to finish
     wait_tdma_movers_done(RISCV_TDMA_STATUS_FLAG_MOVER0_BUSY_MASK);
 }
@@ -228,6 +231,7 @@ inline void deassert_ncrisc_trisc()
     ncrisc_kernel_start_offset16 = fw_size16;
 
     l1_to_ncrisc_iram_copy(MEM_NCRISC_INIT_IRAM_L1_BASE >> 4, MEM_MOVER_VIEW_IRAM_BASE_ADDR, fw_size16);
+    l1_to_ncrisc_iram_copy_wait();
 
     // Bring ncrisc/triscs out of reset
     deassert_all_reset();
@@ -242,22 +246,23 @@ inline void set_ncrisc_kernel_resume_deassert_address()
     cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
 }
 
-inline void run_ncrisc_trisc()
+inline void run_triscs()
 {
     if (mailboxes->launch.enable_triscs) {
         mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_TRISCS_GO;
     }
+}
 
-    if (mailboxes->launch.enable_ncrisc) {
-        mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
+inline void finish_ncrisc_copy_and_run()
+{
+   if (mailboxes->launch.enable_ncrisc) {
+       mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
 
-        l1_to_ncrisc_iram_copy((MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + ncrisc_kernel_start_offset16,
-                               MEM_MOVER_VIEW_IRAM_BASE_ADDR + ncrisc_kernel_start_offset16,
-                               mailboxes->launch.ncrisc_kernel_size16);
+       l1_to_ncrisc_iram_copy_wait();
 
-        // Note: only ncrisc is in reset, so just deasserts ncrisc
-        deassert_all_reset();
-    }
+       // Note: only ncrisc is in reset, so just deasserts ncrisc
+       deassert_all_reset();
+   }
 }
 
 inline void wait_ncrisc_trisc()
@@ -306,13 +311,20 @@ int main() {
         kernel_profiler::init_profiler();
         kernel_profiler::mark_time(CC_MAIN_START);
 
+        // Always copy ncrisc even if its size is 0 (save branch)...
+        l1_to_ncrisc_iram_copy((MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + ncrisc_kernel_start_offset16,
+                               MEM_MOVER_VIEW_IRAM_BASE_ADDR + ncrisc_kernel_start_offset16,
+                               mailboxes->launch.ncrisc_kernel_size16);
+
         // Invalidate the i$ now the kernels have loaded and before running
         volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
         cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK;
 
-        run_ncrisc_trisc();
+        run_triscs();
 
         uint32_t noc_index = mailboxes->launch.brisc_noc_id;
+
+        finish_ncrisc_copy_and_run();
 
         // Run the BRISC kernel
         DEBUG_STATUS('R');
@@ -320,6 +332,7 @@ int main() {
             setup_cb_read_write_interfaces(true, true);
             kernel_init();
         } else {
+            // This was not initialized in kernel_init
             noc_local_state_init(noc_index);
         }
         DEBUG_STATUS('D');
