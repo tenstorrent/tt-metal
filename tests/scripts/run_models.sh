@@ -75,7 +75,7 @@ env pytest models/experimental/efficientnet/tests -k efficientnet_b0_model_real
 env pytest models/experimental/efficientnet/tests -k efficientnet_v2_s_model_real
 env pytest models/experimental/efficientnet/tests -k efficientnet_lite0_model_real
 
-env pytest tests/models/falcon/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT16-L1-falcon_7b-layers_32-prefill_seq128]
+env pytest models/demos/falcon7b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT16-L1-falcon_7b-layers_32-prefill_seq128]
 
 env pytest models/experimental/stable_diffusion/tests/test_embedding.py
 
@@ -129,7 +129,7 @@ env pytest models/demos/metal_BERT_large_15/tests/test_demo.py
 
 env pytest models/experimental/llama_old/tests -k llama_attention
 
-env pytest tests/models/falcon/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT16-L1-falcon_7b-layers_32-decode_batch32] # failed on WH: RuntimeError: TT_ASSERT @ tt_eager/tt_dnn/op_library/transformer_tms/transformer_tms.cpp:171: (this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size
+env pytest models/demos/falcon7b/tests/test_falcon_end_to_end.py::test_FalconCausalLM_end_to_end_with_program_cache[BFLOAT16-L1-falcon_7b-layers_32-decode_batch32] # failed on WH: RuntimeError: TT_ASSERT @ tt_eager/tt_dnn/op_library/transformer_tms/transformer_tms.cpp:171: (this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size
 
 env pytest models/experimental/mnist/tests -k mnist_inference
 
