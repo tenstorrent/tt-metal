@@ -84,13 +84,13 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     reader_defines["REDUCE_SCALER"] = "1";
     tt_metal::KernelID reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_transpose_wh_interleaved_input_cols_partitioned.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/reader_unary_transpose_wh_interleaved_input_cols_partitioned.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = reader_defines});
 
     tt_metal::KernelID writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 

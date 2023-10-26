@@ -86,13 +86,13 @@ operation::ProgramWithCallbacks copy_single_core(const Tensor &input, const Tens
     }
     tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        tilized ? "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp" : "tt_metal/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
+        tilized ? "tt_eager/tt_dnn/kernels/dataflow/reader_unary_interleaved_start_id.cpp" : "tt_eager/tt_dnn/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = kernel_defines});
 
     tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        tilized ? "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp" : "tt_metal/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
+        tilized ? "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp" : "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args, .defines = kernel_defines});
 
@@ -104,7 +104,7 @@ operation::ProgramWithCallbacks copy_single_core(const Tensor &input, const Tens
     };
     auto eltwise_unary_kernel = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_copy.cpp",
+        "tt_eager/tt_dnn/kernels/compute/eltwise_copy.cpp",
         core,
         compute_kernel_args,
         MathFidelity::HiFi4,

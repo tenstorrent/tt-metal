@@ -123,13 +123,13 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
 
     auto reader_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_transformer_attn_matmul.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/reader_transformer_attn_matmul.cpp",
         all_device_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     auto writer_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
@@ -139,7 +139,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
 
     auto eltwise_binary_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/compute/transformer_attn_matmul.cpp",
+        "tt_eager/tt_dnn/kernels/compute/transformer_attn_matmul.cpp",
         all_device_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args}
     );

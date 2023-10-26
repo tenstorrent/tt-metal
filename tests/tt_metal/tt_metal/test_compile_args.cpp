@@ -41,7 +41,7 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, int device_id) {
 
 
     tt_metal::KernelID unary_writer_kernel = tt_metal::CreateKernel(
-        program, "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        program, "tt_metal/kernels/dataflow/blank.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
@@ -50,7 +50,7 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, int device_id) {
     };
 
     auto eltwise_unary_kernel = tt_metal::CreateKernel(
-        program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp",
+        program, "tt_metal/kernels/compute/blank.cpp",
         core, tt_metal::ComputeConfig{.compile_args = compute_args});
 
     ////////////////////////////////////////////////////////////////////////////

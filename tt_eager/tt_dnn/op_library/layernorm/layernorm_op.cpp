@@ -200,7 +200,7 @@ operation::ProgramWithCallbacks layernorm_(
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args}
     );
@@ -211,7 +211,7 @@ operation::ProgramWithCallbacks layernorm_(
     bool math_approx_mode = true;
     auto compute_kernels_id = CreateKernel(
         program,
-        rms_norm ? "tt_metal/kernels/compute/rmsnorm.cpp" : "tt_metal/kernels/compute/layernorm.cpp",
+        rms_norm ? "tt_eager/tt_dnn/kernels/compute/rmsnorm.cpp" : "tt_eager/tt_dnn/kernels/compute/layernorm.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_args, .defines = eltwise_binary_defines}
     );

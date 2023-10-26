@@ -251,7 +251,7 @@ bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool
         std::vector<uint32_t> writer_rt_args;
         string writer_kernel;
         if (output_rm) {
-            writer_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp";
+            writer_kernel = "tt_metal/kernels/dataflow/writer_unary.cpp";
             writer_rt_args = {
                 dst_dram_buffer.address(),
                 (std::uint32_t)dram_dst_noc_xy.x,

@@ -37,7 +37,7 @@ const char* get_reader_name(bool multibank, BcastDim::Enum bcast_dim) {
     } if (bcast_dim == BcastDim::HW) {
         return multibank ?
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bcast_hw_8bank.cpp" :
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_diff_lengths.cpp";
+            "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp";
     }
     TT_ASSERT(false && "Unexpected bcast_dim!");
     return "";
@@ -215,7 +215,7 @@ int main(int argc, char **argv) {
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
-                      : "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+                      : "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 

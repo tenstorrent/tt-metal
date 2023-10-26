@@ -137,7 +137,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
 
     auto reader_kernel_id = tt_metal::CreateKernel(
                                         program,
-                                        "tt_metal/kernels/dataflow/embeddings_tilize.cpp",
+                                        "tt_eager/tt_dnn/kernels/dataflow/embeddings_tilize.cpp",
                                         all_cores,
                                         tt_metal::DataMovementConfig{.processor = risc_procs[0],
                                                                     .noc = noc_ports[0],
@@ -150,7 +150,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
         };
         auto tilize_kernel_id_1 = tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/compute/tilize.cpp",
+            "tt_eager/tt_dnn/kernels/compute/tilize.cpp",
             core_group_1,
             tt_metal::ComputeConfig{.compile_args = compute_args_1}
         );
@@ -163,7 +163,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
         };
         auto tilize_kernel_id_2 = tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/compute/tilize.cpp",
+            "tt_eager/tt_dnn/kernels/compute/tilize.cpp",
             core_group_2,
             tt_metal::ComputeConfig{.compile_args = compute_args_2}
         );
@@ -177,7 +177,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
     // Tilized writer
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = risc_procs[1],
                                     .noc = noc_ports[1],
@@ -407,7 +407,7 @@ operation::ProgramWithCallbacks embeddings_rm(
 
         kernIds[risc_id] = tt_metal::CreateKernel(
                                     program,
-                                    "tt_metal/kernels/dataflow/embeddings.cpp",
+                                    "tt_eager/tt_dnn/kernels/dataflow/embeddings.cpp",
                                     all_cores,
                                     tt_metal::DataMovementConfig{.processor = risc_procs[risc_id],
                                                                 .noc = noc_ports[risc_id],

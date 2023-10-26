@@ -62,7 +62,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> setup_prog
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
@@ -72,7 +72,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> setup_prog
     binary_defines["ELTWISE_OP"] = "add_tiles";
     auto eltwise_binary_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp",
+        "tt_metal/kernels/compute/eltwise_binary.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines}
     );
@@ -115,7 +115,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> setup_prog
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
