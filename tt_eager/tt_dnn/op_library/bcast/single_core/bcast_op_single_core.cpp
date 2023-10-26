@@ -85,7 +85,7 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
 
     KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 

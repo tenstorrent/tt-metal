@@ -69,13 +69,13 @@ int main(int argc, char **argv) {
 
         auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
+            "tt_metal/kernels/dataflow/reader_unary.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+            "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 

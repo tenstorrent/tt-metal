@@ -86,7 +86,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
 
     auto writer_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        "tt_metal/kernels/dataflow/writer_unary.cpp",
         test_config.core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
@@ -98,7 +98,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         {"ELTWISE_OP", binary_op_name_to_op_kernel.at(test_config.binary_op)}};
     auto binary_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp",
+        "tt_metal/kernels/compute/eltwise_binary.cpp",
         test_config.core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines});
 

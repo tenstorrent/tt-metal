@@ -87,13 +87,13 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
     //TODO: move this kernel, currently being used in reduce, can't move to op library
     tt_metal::KernelID reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     tt_metal::KernelID writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
@@ -248,7 +248,7 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
 
     tt_metal::KernelID writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
@@ -363,7 +363,7 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
 
     tt_metal::KernelID writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 

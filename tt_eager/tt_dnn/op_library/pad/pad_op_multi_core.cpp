@@ -192,13 +192,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
 
     KernelID reader_kernel_id = CreateKernel(program,
-                                                        "tt_metal/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
+                                                        "tt_eager/tt_dnn/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
                                                         all_cores,
                                                         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
                                                                             .noc = NOC::RISCV_1_default,
                                                                             .compile_args = reader_ct_args});
     KernelID writer_kernel_id = CreateKernel(program,
-                                                        "tt_metal/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
+                                                        "tt_eager/tt_dnn/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
                                                         all_cores,
                                                         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0,
                                                                             .noc = NOC::RISCV_0_default,

@@ -71,7 +71,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
 
         unary_reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/reader_unary_blocks_interleaved_start_id.cpp",
+            "tt_eager/tt_dnn/kernels/dataflow/reader_unary_blocks_interleaved_start_id.cpp",
             all_cores,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
     } else {
@@ -86,7 +86,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
 
         unary_reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/reader_unary_stick_layout_blocks_interleaved_start_id.cpp",
+            "tt_eager/tt_dnn/kernels/dataflow/reader_unary_stick_layout_blocks_interleaved_start_id.cpp",
             all_cores,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
     }
@@ -94,7 +94,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
     tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_sharded.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
@@ -236,7 +236,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
 
     tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_sharded.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
@@ -252,7 +252,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
 
         unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary_blocks_interleaved_start_id.cpp",
+            "tt_eager/tt_dnn/kernels/dataflow/writer_unary_blocks_interleaved_start_id.cpp",
             all_cores,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
     } else {
@@ -267,7 +267,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
 
         unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary_stick_layout_blocks_interleaved_start_id.cpp",
+            "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_blocks_interleaved_start_id.cpp",
             all_cores,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
     }

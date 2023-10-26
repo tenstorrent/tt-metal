@@ -166,7 +166,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
         auto reader_kernel = tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
+            "tt_metal/kernels/dataflow/reader_unary.cpp",
             test_config.cores,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
@@ -174,7 +174,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
         // Enqueue apis only supported on gs so far
         auto writer_kernel = tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+            "tt_metal/kernels/dataflow/writer_unary.cpp",
             test_config.cores,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
@@ -192,7 +192,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
         auto sfpu_kernel = tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
+            "tt_metal/kernels/compute/eltwise_sfpu.cpp",
             test_config.cores,
             tt_metal::ComputeConfig{
                 .math_approx_mode = test_config.approx_mode,
