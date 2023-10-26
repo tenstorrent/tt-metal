@@ -22,6 +22,7 @@ from models.utility_functions import (
     comp_allclose,
     disable_persistent_kernel_cache,
     profiler,
+    is_e75
 )
 
 
@@ -405,6 +406,9 @@ def test_bert_batch_dram(
     request,
     device,
 ):
+    if (is_e75(device)):
+        pytest.skip(f"Bert large 15 is not supported on E75")
+
     model_config = get_model_config(model_config_str)
 
     # This test will run BERT-Large once with cache disabled.
@@ -479,6 +483,9 @@ def test_bert_batch_dram_with_program_cache(
     request,
     device,
 ):
+    if (is_e75(device)):
+        pytest.skip(f"Bert large 15 is not supported on E75")
+
     model_config = get_model_config(model_config_str)
 
     # This test will run BERT-Large once with cache disabled.

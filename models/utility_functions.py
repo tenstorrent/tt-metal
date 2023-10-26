@@ -13,6 +13,7 @@ import struct
 
 from tt_lib.fused_ops.conv import conv as TtConv
 from tt_lib.fallback_ops import fallback_ops
+from tt_lib.device import Arch
 
 
 ### Math operations ###
@@ -999,3 +1000,9 @@ def run_conv_on_device_wrapper(
         return x
 
     return run_conv_on_device
+
+
+# detect E75 Grayskull card
+def is_e75(device):
+    compute_grid_size = device.compute_with_storage_grid_size()
+    return (device.arch() == Arch.GRAYSKULL) and (compute_grid_size.x * compute_grid_size.y == 88)

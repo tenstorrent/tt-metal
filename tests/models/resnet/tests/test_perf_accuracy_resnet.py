@@ -16,6 +16,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     profiler,
     prep_report,
+    is_e75,
 )
 from tests.models.resnet.tests.demo_utils import get_data
 from tests.models.resnet.metalResnetBlock50 import ResNet, Bottleneck
@@ -143,6 +144,9 @@ def test_perf_bare_metal(
     iterations,
     device,
 ):
+    if is_e75(device):
+        pytest.skip("Resnet is not supported on E75")
+
     run_perf_resnet(
         model_location_generator,
         expected_inference_time,
@@ -167,6 +171,9 @@ def test_perf_virtual_machine(
     iterations,
     device,
 ):
+    if is_e75(device):
+        pytest.skip("Resnet is not supported on E75")
+
     run_perf_resnet(
         model_location_generator,
         expected_inference_time,

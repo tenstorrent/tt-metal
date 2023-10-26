@@ -24,7 +24,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
 )
-from models.utility_functions import prep_report
+from models.utility_functions import prep_report, is_e75
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose,
@@ -136,6 +136,9 @@ def test_perf_bare_metal(
     hf_cat_image_sample_input,
     device,
 ):
+    if is_e75(device):
+        pytest.skip("Resnet is not supported on E75")
+
     run_perf_resnet(
         batch_size,
         expected_inference_time,
@@ -162,6 +165,9 @@ def test_perf_virtual_machine(
     hf_cat_image_sample_input,
     device,
 ):
+    if is_e75(device):
+        pytest.skip("Resnet is not supported on E75")
+
     run_perf_resnet(
         batch_size,
         expected_inference_time,

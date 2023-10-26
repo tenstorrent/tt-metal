@@ -78,7 +78,7 @@ def test_custom_cycle_count():
 
 def test_full_buffer():
     REF_COUNT_DICT = {
-        "grayskull" : [3240],  # 108(compute cores) x 5(riscs) x 6(buffer size in marker pairs)
+        "grayskull" : [3240, 2640],  # [108, 88](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
         "wormhole_b0" : [2160, 1920, 1680]  # [72,64,56](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
     }
 

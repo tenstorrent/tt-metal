@@ -17,6 +17,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     profiler,
     prep_report,
+    is_e75
 )
 
 BATCH_SIZE = 8
@@ -141,6 +142,9 @@ def test_perf_virtual_machine(
     model_location_generator,
     device,
 ):
+    if is_e75(device):
+        pytest.skip("Bert large 15 is not supported on E75")
+
     run_perf_bert15(
         expected_inference_time, expected_compile_time, model_location_generator, device
     )
@@ -158,6 +162,9 @@ def test_perf_bare_metal(
     model_location_generator,
     device,
 ):
+    if is_e75(device):
+        pytest.skip("Bert large 15 is not supported on E75")
+
     run_perf_bert15(
         expected_inference_time, expected_compile_time, model_location_generator, device
     )

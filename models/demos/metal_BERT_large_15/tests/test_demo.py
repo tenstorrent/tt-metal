@@ -5,6 +5,7 @@
 from models.demos.metal_BERT_large_15.demo.demo import test_demo as demo
 import pytest
 from loguru import logger
+from models.utility_functions import is_e75
 
 
 @pytest.mark.parametrize(
@@ -18,6 +19,9 @@ def test_demo(
     device,
     use_program_cache
 ):
+    if (is_e75(device)):
+        pytest.skip(f"Bert large 15 is not supported on E75")
+
     expected_answers = {
         0: "scientific archaeology",
         1: "Richard I of Normandy",
