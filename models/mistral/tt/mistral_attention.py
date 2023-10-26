@@ -61,27 +61,27 @@ class TtAttention(nn.Module):
             self.wo_weights,
         )
 
-        if self.args.FALLBACK_EMPTY:
-            self.cache_k = torch.empty(
-                args.max_batch_size,
-                args.sliding_window,
-                self.n_kv_heads,
-                self.args.head_dim,
+        self.cache_k = torch.empty(
+            args.max_batch_size,
+            args.sliding_window,
+            self.n_kv_heads,
+            self.args.head_dim,
+        )
+        self.cache_v = torch.empty(
+            args.max_batch_size,
+            args.sliding_window,
+            self.n_kv_heads,
+            self.args.head_dim)
+
+        if not self.args.FALLBACK_EMPTY:
+            cache_k = tt_lib.tensor.empty(
+                [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,tt_lib.tensor.BufferType.DRAM))
+            self.cache_k = tt_to_torch_tensor(cache_k).to(torch.float32)
+            cache_v = tt_lib.tensor.empty(
+                [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,tt_lib.tensor.BufferType.DRAM)
             )
-            self.cache_v = torch.empty(
-                args.max_batch_size,
-                args.sliding_window,
-                self.n_kv_heads,
-                self.args.head_dim,
-        else:
-                cache_k = tt_lib.tensor.empty(
-                    [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,tt_lib.tensor.BufferType.DRAM)
-                self.cache_k = tt_to_torch_tensor(cache_k).to(torch.float32)
-                cache_v = tt_lib.tensor.empty(
-                    [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,tt_lib.tensor.BufferType.DRAM)
-                )
-                self.cache_v = tt_to_torch_tensor(cache_v).to(torch.float32)
-        
+            self.cache_v = tt_to_torch_tensor(cache_v).to(torch.float32)
+
     def repeat_kv(self, keys: torch.Tensor, values: torch.Tensor, repeats: int) -> tt_lib.tensor.Tensor:
         dim = 2
         keys = torch_to_tt_tensor_rm(keys, self.device)
@@ -215,4 +215,3 @@ def apply_rotary_emb(
 
     xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
     return xq, xk
-
