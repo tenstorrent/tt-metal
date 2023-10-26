@@ -36,14 +36,14 @@ namespace local_test_functions {
 
 void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
     auto dummy_reader_kernel = CreateKernel(
-        program, "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp", cr_set,
+        program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     auto dummy_writer_kernel = CreateKernel(
-        program, "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp", cr_set,
+        program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto dummy_compute_kernel = CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", cr_set, ComputeConfig{});
+    auto dummy_compute_kernel = CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 }
 
 bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & program_config){
@@ -203,7 +203,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
     auto dummy_kernel1 = CreateKernel(
         program, "tests/tt_metal/tt_metal/gtest_unit_tests/command_queue/test_kernels/runtime_args_kernel1.cpp", cr_set, DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-    auto dummy_compute_kernel = CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", cr_set, ComputeConfig{});
+    auto dummy_compute_kernel = CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 
     vector<uint32_t> dummy_kernel0_args = {0, 1, 2, 3, 4, 5, 6, 7, 8};
     vector<uint32_t> dummy_kernel1_args = {9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20};
@@ -427,7 +427,7 @@ TEST_F(CommandQueueFixture, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode
     // Add an NCRISC blank manually, but in compile program, the BRISC blank will be
     // added separately
     auto dummy_reader_kernel = CreateKernel(
-        program, "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp", cr_set,
+        program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);

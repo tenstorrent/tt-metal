@@ -210,7 +210,7 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     std::vector<uint32_t> writer_rt_args;
     string writer_kernel_name;
     if (cfg.outputs_rm) {
-        writer_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp";
+        writer_kernel_name = "tt_metal/kernels/dataflow/writer_unary.cpp";
         writer_rt_args = {
             (std::uint32_t)output_dram_byte_address,
             (std::uint32_t)output_dram_noc_xy.x,

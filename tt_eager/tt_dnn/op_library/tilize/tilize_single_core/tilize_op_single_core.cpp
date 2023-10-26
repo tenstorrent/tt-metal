@@ -109,14 +109,14 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
     // Tilized reader
     tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     // Tilized writer
     tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
@@ -127,7 +127,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
 
     auto tilize_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/compute/tilize.cpp",
+        "tt_eager/tt_dnn/kernels/compute/tilize.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_args}
     );
@@ -311,14 +311,14 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     // Tilized reader
     tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary_pad_dims_split_rows.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/reader_unary_pad_dims_split_rows.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     // Tilized writer
     tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
@@ -329,7 +329,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
 
     auto tilize_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/compute/tilize.cpp",
+        "tt_eager/tt_dnn/kernels/compute/tilize.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );

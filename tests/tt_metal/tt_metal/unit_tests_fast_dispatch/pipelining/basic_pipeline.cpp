@@ -134,7 +134,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
                 .compile_args = sender_kernel_compile_time_args}));
 
         // Add blank compute kernel
-        tt_metal::CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", cores[core_id], ComputeConfig{});
+        tt_metal::CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cores[core_id], ComputeConfig{});
     }
 
     // TODO(agrebenisan): Once semaphores are properly allocated at 16B-aligned addresses, then

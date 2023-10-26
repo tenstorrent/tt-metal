@@ -93,7 +93,7 @@ operation::ProgramWithCallbacks bcast_multi_core_h(const Tensor &a, const Tensor
 
 	KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
 		program,
-		"tt_metal/kernels/dataflow/writer_unary_8bank_input_cols_batched.cpp",
+		"tt_eager/tt_dnn/kernels/dataflow/writer_unary_8bank_input_cols_batched.cpp",
 		all_device_cores,
 		tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 

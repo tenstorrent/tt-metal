@@ -228,7 +228,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 
         unary_reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/reader_unary_sharded.cpp",
+            "tt_eager/tt_dnn/kernels/dataflow/reader_unary_sharded.cpp",
             all_cores,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_ct_args});
     } else {
@@ -239,7 +239,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 
         unary_reader_kernel_id = CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+            "tt_eager/tt_dnn/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
             all_cores,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_1,
@@ -256,7 +256,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         };
         unary_writer_kernel_id = tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary_sharded.cpp",
+            "tt_eager/tt_dnn/kernels/dataflow/writer_unary_sharded.cpp",
             all_cores,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_ct_args});
     } else {
@@ -271,7 +271,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 
         unary_writer_kernel_id = CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary_stick_layout_split_rows_interleaved.cpp",
+            "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_split_rows_interleaved.cpp",
             all_cores,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
@@ -293,7 +293,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     if (core_range.ranges().size() > 0) {
         auto untilize_kernel_id = CreateKernel(
             program,
-            "tt_metal/kernels/compute/untilize.cpp",
+            "tt_eager/tt_dnn/kernels/compute/untilize.cpp",
             core_range,
             ComputeConfig{
                 .compile_args = compute_args});
@@ -301,7 +301,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     if (core_range_cliff.ranges().size() > 0) {
         auto untilize_cliff_kernel_id = CreateKernel(
             program,
-            "tt_metal/kernels/compute/untilize.cpp",
+            "tt_eager/tt_dnn/kernels/compute/untilize.cpp",
             core_range_cliff,
             ComputeConfig{
                 .compile_args = compute_args_cliff});

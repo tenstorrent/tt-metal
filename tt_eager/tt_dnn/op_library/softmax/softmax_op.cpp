@@ -134,7 +134,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = true;
     auto softmax_kernels_id = CreateKernel(
-        program, "kernels/compute/softmax.cpp", all_device_cores,
+        program, "tt_eager/tt_dnn/kernels/compute/softmax.cpp", all_device_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode,
             .compile_args = {},

@@ -120,7 +120,7 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = program_attributes.writer_processor, .noc = program_attributes.writer_noc});
 
