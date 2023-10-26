@@ -15,12 +15,17 @@ from models.utility_functions import (
     comp_allclose,
 )
 
-
+@pytest.mark.parametrize("rotary_embedding_ondevice",
+                         (True,False),
+)
+@pytest.mark.parametrize("softmax_ondevice",
+                         (True,False),
+)
 @pytest.mark.parametrize(
     "pcc",
     ((0.9793647197892646),),
 )
-def test_mistral_attention_inference(pcc, model_location_generator, device, reset_seeds):
+def test_mistral_attention_inference(pcc, model_location_generator, device, reset_seeds, rotary_embedding_ondevice, softmax_ondevice):
     mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
     state_dict = torch.load(mistral_path / "consolidated.00.pth")
     base_address = f""

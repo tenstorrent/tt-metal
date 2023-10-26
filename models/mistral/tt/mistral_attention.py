@@ -11,9 +11,6 @@ from models.mistral.tt.mistral_configuration import TtModelArgs
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor, torch_to_tt_tensor
 from models.helper_funcs import Linear as TtLinear
 
-FALLBACK_SOFTMAX = False
-FALLBACK_ROTARY_EMBEDDING = not True
-
 class TtAttention(nn.Module):
     def __init__(
         self,
@@ -109,11 +106,11 @@ class TtAttention(nn.Module):
 
         freqs_cis = tt_to_torch_tensor(freqs_cis).squeeze(0).squeeze(0)
         freqs_cis = freqs_cis.to(torch.float32)
-        if FALLBACK_ROTARY_EMBEDDING:
-            xq, xk = fallback_apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)            
+        if self.args.FALLBACK_ROTARY_EMBEDDING:
+            xq, xk = fallback_apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
         else:
             xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis, device=self.device)
-        
+
 
         # The cache is a rotating buffer
         positions = tt_to_torch_tensor(positions).squeeze(0).squeeze(0).squeeze(0)
@@ -149,7 +146,7 @@ class TtAttention(nn.Module):
 
         query = tt_to_torch_tensor(query)
         scores = torch_to_tt_tensor_rm(scores, self.device, put_on_device=False)
-        if FALLBACK_SOFTMAX:
+        if self.args.FALLBACK_SOFTMAX:
             scores = fallback_ops.softmax(scores, dim=-1)
         else:
             scores = tt_lib.tensor.softmax(scores)

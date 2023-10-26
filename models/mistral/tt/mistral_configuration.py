@@ -17,3 +17,5 @@ class TtModelArgs:
     vocab_size: int
 
     max_batch_size: int = 0
+    FALLBACK_SOFTMAX:bool = False
+    FALLBACK_ROTARY_EMBEDDING:bool = False
