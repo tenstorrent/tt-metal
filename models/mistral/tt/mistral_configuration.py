@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 @dataclass
 class TtModelArgs:
-    FALLBACK_EMPTY = False
     dim: int
     n_layers: int
     head_dim: int
@@ -18,4 +17,7 @@ class TtModelArgs:
     vocab_size: int
     
     max_batch_size: int = 0
-    
+    FALLBACK_SOFTMAX:bool = False
+    FALLBACK_ROTARY_EMBEDDING:bool = False
+    FALLBACK_EMPTY:bool = False
+
