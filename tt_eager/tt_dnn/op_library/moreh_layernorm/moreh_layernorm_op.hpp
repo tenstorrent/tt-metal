@@ -37,11 +37,13 @@ inline Tensor moreh_layernorm(
     std::vector<uint32_t> normalized_dims,
     std::optional<const Tensor> gamma = std::nullopt,
     std::optional<const Tensor> beta = std::nullopt,
+    std::optional<const Tensor> mean = std::nullopt,
+    std::optional<const Tensor> rstd = std::nullopt,
     const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return operation::run_with_autoformat(
                MorehLayerNorm{.eps = eps, .normalized_dims = normalized_dims, .output_mem_config = mem_config},
                {input},
-               {gamma, beta})
+               {gamma, beta, mean, rstd})
         .at(0);
 }
 
@@ -58,11 +60,13 @@ inline Tensor moreh_layernorm(
     std::vector<uint32_t> normalized_dims,
     std::optional<const Tensor> gamma = std::nullopt,
     std::optional<const Tensor> beta = std::nullopt,
+    std::optional<const Tensor> mean = std::nullopt,
+    std::optional<const Tensor> rstd = std::nullopt,
     const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return operation::run(
                MorehLayerNorm{.eps = eps, .normalized_dims = normalized_dims, .output_mem_config = mem_config},
                {input},
-               {gamma, beta})
+               {gamma, beta, mean, rstd})
         .at(0);
 }
 
