@@ -16,6 +16,8 @@ namespace operations {
 
 namespace primary {
 
+using namespace tt_metal;
+
 std::tuple<bool, bool> get_bcast_batch(const Shape &input0_shape, const Shape &input1_shape) {
     return {(input0_shape[1] < input1_shape[1]), (input0_shape[1] > input1_shape[1])};
 }
@@ -29,7 +31,6 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     uint32_t a_start_tile_id,
     uint32_t b_start_tile_id,
     uint32_t output_start_tile_id) {
-
     tt_metal::Program program{};
     const auto &ashape = a.shape(), bshape = b.shape();
 
