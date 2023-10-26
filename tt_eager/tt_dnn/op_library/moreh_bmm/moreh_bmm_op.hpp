@@ -10,12 +10,16 @@
 #include "tt_dnn/op_library/operation.hpp"
 
 namespace tt {
-namespace tt_metal {
+namespace operations {
+namespace primary {
 
-Tensor moreh_bmm(
-    const Tensor& input,
-    const Tensor& mat2,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+tt_metal::Tensor moreh_bmm(
+    const tt_metal::Tensor& input,
+    const tt_metal::Tensor& mat2,
+    const tt_metal::MemoryConfig& output_mem_config = tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-}  // namespace tt_metal
+}  // namespace primary
+
+}  // namespace operations
+
 }  // namespace tt
