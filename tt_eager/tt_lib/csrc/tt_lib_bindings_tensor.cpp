@@ -13,10 +13,7 @@
 #include "tt_dnn/op_library/pool/max_pool.hpp"
 #include "tt_dnn/op_library/fully_connected/fully_connected_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
-#include "tt_dnn/op_library/moreh_bmm/moreh_bmm_op.hpp"
-#include "tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
-#include "tt_dnn/op_library/moreh_linear/moreh_linear_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
@@ -323,24 +320,6 @@ void TensorModule(py::module &m_tensor) {
         +--------------+--------------------------------------------------------------------------------------------+-----------+-------------+----------+
     )doc");
 
-    // moreh_bmm
-    m_tensor.def("moreh_bmm", &moreh_bmm,
-        py::arg("input").noconvert(), py::arg("mat2").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-        "Performs a moreh_bmm operation.
-    )doc");
-
-    // moreh_bmm_backward
-    m_tensor.def(
-        "moreh_bmm_backward",
-        &moreh_bmm_backward,
-        py::arg("output_grad").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("mat2").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        "Performs a moreh_bmm_backward operation.
-    )doc");
-
     // moreh_layernorm
     m_tensor.def(
         "moreh_layernorm",
@@ -358,31 +337,10 @@ void TensorModule(py::module &m_tensor) {
         "Performs a moreh_layernorm operation.
     )doc");
 
-    // moreh_linear
-    m_tensor.def("moreh_linear", &moreh_linear,
-        py::arg("input").noconvert(), py::arg("weight").noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-        "Performs a moreh_linear operation.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input", "Input tensor", "Tensor", "", "Yes"
-            "weight", "Input weight tensor", "Tensor", "", "Yes"
-            "bias", "Input bias tensor", "Tensor", "", "No"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-    )doc");
-
-    // moreh_linear
+    // moreh_matmul
     m_tensor.def("moreh_matmul", &moreh_matmul,
         py::arg("input").noconvert(), py::arg("other").noconvert(),  py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-        "Performs a moreh_linear operation.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input", "Input tensor", "Tensor", "", "Yes"
-            "other", "Other tensor", "Tensor", "", "Yes"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        "Performs a moreh_matmul operation.
     )doc");
 
     // groupnorm

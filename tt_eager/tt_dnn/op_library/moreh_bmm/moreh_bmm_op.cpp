@@ -8,7 +8,10 @@
 #include "tt_metal/host_api.hpp"
 
 namespace tt {
-namespace tt_metal {
+namespace operations {
+namespace primary {
+
+using namespace tt_metal;
 
 inline void moreh_bmm_validate(const Tensor& input, const Tensor& mat2) {
     const auto& a_shape = input.shape();
@@ -20,7 +23,7 @@ inline void moreh_bmm_validate(const Tensor& input, const Tensor& mat2) {
 
 Tensor moreh_bmm_(const Tensor& input, const Tensor& mat2, const MemoryConfig& mem_config) {
     moreh_bmm_validate(input, mat2);
-    return tt::operations::primary::moreh_matmul(input, mat2, false, false, mem_config);
+    return tt::operations::primary::moreh_matmul(input, mat2, std::nullopt, false, false, mem_config);
 }
 
 Tensor moreh_bmm(const Tensor& input, const Tensor& mat2, const MemoryConfig& output_mem_config) {
@@ -31,5 +34,8 @@ Tensor moreh_bmm(const Tensor& input, const Tensor& mat2, const MemoryConfig& ou
     return moreh_bmm_(input, mat2, output_mem_config);
 }
 
-}  // namespace tt_metal
+}  // namespace primary
+
+}  // namespace operations
+
 }  // namespace tt

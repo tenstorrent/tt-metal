@@ -66,10 +66,10 @@ def test_run_moreh_linear(shapes, has_bias, device):
         if bias_shape != bias_shape_1d_padded:
             tt_bias = tt_bias.pad_to_tile(1.0)
 
-        out = ttl.tensor.moreh_linear(tt_input, tt_weight, tt_bias)
+        out = ttl.operations.primary.moreh_linear(tt_input, tt_weight, tt_bias)
     else:
         bias = None
-        out = ttl.tensor.moreh_linear(tt_input, tt_weight)
+        out = ttl.operations.primary.moreh_linear(tt_input, tt_weight)
 
     out = out.cpu().to(cpu_layout)
     if out_shape != out_shape_padded:
