@@ -66,6 +66,14 @@ size_t Device::detect_num_available_devices() {
 #endif
 }
 
+size_t Device::detect_num_pci_devices() {
+#ifdef TT_METAL_VERSIM_DISABLED
+    return tt::Cluster::instance().number_of_pci_devices();
+#else
+    return 1;
+#endif
+}
+
 void Device::initialize_cluster() {
     ZoneScoped;
     this->clear_l1_state();
@@ -117,6 +125,10 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
         const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
+    for (const auto &core : soc_desc.get_logical_ethernet_cores()) {
+        this->ethernet_cores_.insert(core);
+    }
+
     // L1_BANKING scheme creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
     // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
     static_assert(this->allocator_scheme_ == MemoryAllocator::L1_BANKING);
@@ -320,12 +332,30 @@ CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) c
     return worker_core;
 }
 
-std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) {
+std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
     std::vector<CoreCoord> worker_cores;
     for (auto logical_core : logical_cores) {
         worker_cores.push_back(worker_core_from_logical_core(logical_core));
     }
     return worker_cores;
+}
+
+CoreCoord Device::ethernet_core_from_logical_core(const CoreCoord &logical_core) const {
+    const auto &eth_cores = tt::Cluster::instance().get_soc_desc(id_).get_physical_ethernet_cores();
+    const auto &eth_chan_map = tt::Cluster::instance().get_soc_desc(id_).logical_eth_core_to_chan_map;
+    TT_ASSERT(
+        (eth_chan_map.find(logical_core) != eth_chan_map.end()),
+        "Bounds-Error -- Logical_core={} is outside of ethernet logical grid",
+        logical_core.str());
+    return eth_cores.at(eth_chan_map.at(logical_core));
+}
+
+std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
+    std::vector<CoreCoord> ethernet_cores;
+    for (auto logical_core : logical_cores) {
+        ethernet_cores.emplace_back(ethernet_core_from_logical_core(logical_core));
+    }
+    return ethernet_cores;
 }
 
 void Device::check_allocator_is_initialized() const {

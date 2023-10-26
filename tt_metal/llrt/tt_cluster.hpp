@@ -97,6 +97,19 @@ class Cluster {
     // Returns address in host space
     void *host_dma_address(uint64_t offset, chip_id_t src_device_id, uint16_t channel) const;
 
+    // Ethernet cluster api
+    // Returns set of connected chip ids
+    std::unordered_set<chip_id_t> get_ethernet_connected_chip_ids(chip_id_t chip_id) const;
+
+    // Returns set of logical active ethernet coordinates on chip
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(chip_id_t chip_id) const;
+
+    // Returns set of logical inactive ethernet coordinates on chip
+    std::unordered_set<CoreCoord> get_inactive_ethernet_cores(chip_id_t chip_id) const;
+
+    // Returns connected ethernet core on the other chip
+    std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const;
+
    private:
     Cluster();
     ~Cluster();

@@ -528,7 +528,7 @@ static void watcher_sanitize_host_noc(const char* what,
             print_stack_trace();
             log_fatal(LogLLRuntime, "Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
         }
-    } else if (coord_found_p(soc_d.get_ethernet_cores(), core)) {
+    } else if (coord_found_p(soc_d.get_physical_ethernet_cores(), core)) {
         if (!DEBUG_VALID_ETH_ADDR(addr, lbytes)) {
             print_stack_trace();
             log_fatal(LogLLRuntime, "Host watcher: bad {} eth address {}", what, noc_address(core, addr, lbytes));

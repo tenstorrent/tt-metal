@@ -535,6 +535,56 @@ void *Cluster::host_dma_address(uint64_t offset, chip_id_t src_device_id, uint16
     return this->device_->host_dma_address(offset, src_device_id, channel);
 }
 
+// Ethernet cluster api
+std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_chip_ids(chip_id_t chip_id) const {
+    std::unordered_set<chip_id_t> connected_chips;
+    const auto &all_eth_connections = this->cluster_desc_->get_ethernet_connections();
+    if (all_eth_connections.find(chip_id) == all_eth_connections.end()) {
+        return {};
+    }
+    for (const auto &[eth_chan, connected_chip_chan] : all_eth_connections.at(chip_id)) {
+        connected_chips.insert(std::get<0>(connected_chip_chan));
+    }
+    return connected_chips;
+}
+
+std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(chip_id_t chip_id) const {
+    std::unordered_set<CoreCoord> active_ethernet_cores;
+    const auto &connected_chips = this->get_ethernet_connected_chip_ids(chip_id);
+    for (auto &other_chip_id : connected_chips) {
+        for (const auto &channel_pair :
+             this->cluster_desc_->get_directly_connected_ethernet_channels_between_chips(chip_id, other_chip_id)) {
+            ethernet_channel_t local_chip_chan = std::get<0>(channel_pair);
+            active_ethernet_cores.insert(get_soc_desc(chip_id).chan_to_logical_eth_core_map.at(local_chip_chan));
+        }
+    }
+    return active_ethernet_cores;
+}
+
+std::unordered_set<CoreCoord> Cluster::get_inactive_ethernet_cores(chip_id_t chip_id) const {
+    std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
+    std::unordered_set<CoreCoord> inactive_ethernet_cores;
+    for (const auto &[eth_core, chan] : get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
+        if (active_ethernet_cores.find(eth_core) == active_ethernet_cores.end()) {
+            inactive_ethernet_cores.insert(eth_core);
+        }
+    }
+    return inactive_ethernet_cores;
+}
+
+std::tuple<chip_id_t, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const {
+    const auto &soc_desc = get_soc_desc(std::get<0>(eth_core));
+    ethernet_channel_t eth_chan = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
+    TT_ASSERT(
+        (this->cluster_desc_->ethernet_core_has_active_ethernet_link(std::get<0>(eth_core), eth_chan)),
+        "Logical eth core {} is not an active eth core.",
+        std::get<1>(eth_core).str());
+    auto connected_eth_core =
+        this->cluster_desc_->get_chip_and_channel_of_remote_ethernet_core(std::get<0>(eth_core), eth_chan);
+    return std::make_tuple(
+        std::get<0>(connected_eth_core), soc_desc.chan_to_logical_eth_core_map.at(std::get<1>(connected_eth_core)));
+}
+
 }  // namespace tt
 
 std::ostream &operator<<(std::ostream &os, tt_target_dram const &dram) {
