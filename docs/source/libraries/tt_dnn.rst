@@ -14,7 +14,7 @@ unified Python interface that provides both TT-DNN and the Tensor library.
 TT-DNN library supports 4 dimensional tensors with shape ``[W, Z, Y, X]``, in ROW_MAJOR layout, and with BFLOAT16 data type.
 
 Some OPs in this library might change layout of input tensors and pad them to better match expectations of execution kernels on TT Accelerator device.
-These OPs will unpad the result tensor befor it is returned to caller.
+These OPs will unpad the result tensor before it is returned to caller.
 
 There is a limitation that tensor in ROW_MAJOR layout on TT Accelerator device must have the size of last dimension ``X`` be divisible by 2.
 You can't create these type of tensors on TT Accelerator device or send them to TT Accelerator device with ```tt_lib.tensor.Tensor.to()``.
@@ -27,8 +27,8 @@ Operation Infrastructure
 
 TT-DNN has operation infrastructure which is used to launch, profile and cache operations generically.
 
-To add a new operation that can plug in to the infrastructure, all that's needed is a struct that implements methods needed by operation inferface.
-Below, is an example of how to declare a new on-device operation with all of the methods requred by the interface.
+To add a new operation that can plug in to the infrastructure, all that's needed is a struct that implements methods needed by operation interface.
+Below, is an example of how to declare a new on-device operation with all of the methods required by the interface.
 
 .. code-block::
 
@@ -40,7 +40,7 @@ Below, is an example of how to declare a new on-device operation with all of the
         tt::stl::reflection::Attributes attributes() const;
     };
 
-And below, is an example of how to declare a new on-host operation with all of the methods requred by the interface.
+And below, is an example of how to declare a new on-host operation with all of the methods required by the interface.
 
 .. code-block::
 
@@ -147,7 +147,7 @@ In order for an op to be cachable, it needs to implement the following:
 
 Logs
 ----------------------------
-To see logs related to operation infastructure, use the following environment variables:
+To see logs related to operation infrastructure, use the following environment variables:
 
 .. code-block::
 
