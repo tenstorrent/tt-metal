@@ -14,13 +14,15 @@ namespace tt {
 namespace tt_metal {
 
 Tensor moreh_matmul(const Tensor& input_tensor, const Tensor& other_tensor, const MemoryConfig& mem_config) {
-    return tt::operations::primary::moreh_matmul(input_tensor, other_tensor, false, false, mem_config);
+    return tt::operations::primary::moreh_matmul(input_tensor, other_tensor, std::nullopt, false, false, mem_config);
 }
 
 }  // namespace tt_metal
 
 namespace operations {
 namespace primary {
+
+using namespace tt_metal;
 
 void MorehMatmul::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
@@ -122,6 +124,7 @@ inline Tensor create_output_tensor(
 Tensor moreh_matmul_(
     const Tensor& input_tensor,
     const Tensor& other_tensor,
+    std::optional<std::reference_wrapper<const Tensor>> output_tensor,
     bool transpose_input,
     bool transpose_other,
     const MemoryConfig& mem_config) {
@@ -130,7 +133,8 @@ Tensor moreh_matmul_(
     const auto& input_shape = input_tensor.shape();
     const auto& other_shape = other_tensor.shape();
     const auto& output_shape = compute_output_shape(input_shape, other_shape, transpose_input, transpose_other);
-    auto output_tensor = create_output_tensor(input_tensor, output_shape, mem_config);
+    auto output_tensor_select =
+        (output_tensor) ? (output_tensor->get()) : (create_output_tensor(input_tensor, output_shape, mem_config));
 
     uint32_t input_other2MtKt = input_shape[1] * input_shape[2] * input_shape[3];
     uint32_t other_other2KtNt = other_shape[1] * other_shape[2] * other_shape[3];
@@ -150,15 +154,16 @@ Tensor moreh_matmul_(
                 .input_start_tile_id = input_start_tile_id,
                 .other_start_tile_id = other_start_tile_id,
                 .output_start_tile_id = output_start_tile_id},
-            {input_tensor, other_tensor, output_tensor});
+            {input_tensor, other_tensor, output_tensor_select});
     }
 
-    return output_tensor;
+    return output_tensor_select;
 }
 
 Tensor moreh_matmul(
     const Tensor& input_tensor,
     const Tensor& other_tensor,
+    std::optional<std::reference_wrapper<const Tensor>> output_tensor,
     bool transpose_input,
     bool transpose_other,
     const MemoryConfig& mem_config) {
@@ -169,7 +174,7 @@ Tensor moreh_matmul(
         return moreh_dot(input_tensor, other_tensor, mem_config);
     }
 
-    return moreh_matmul_(input_tensor, other_tensor, transpose_input, transpose_other, mem_config);
+    return moreh_matmul_(input_tensor, other_tensor, output_tensor, transpose_input, transpose_other, mem_config);
 }
 
 }  // namespace primary
