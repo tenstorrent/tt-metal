@@ -32,6 +32,19 @@ struct p_gpr_unpack
     constexpr static uint TMP1              = 13;   // Temp data
     constexpr static uint TILE_SIZE         = 14;   // Tile size stored for untilize llk
     constexpr static uint TILE_OFFSET       = 15;   // Tile offset address used by untilize llk
+    constexpr static uint PERF_FIRST_UNP_LO = 32;   // timestamp for first-unpack-instruction (low 32b)
+    constexpr static uint PERF_FIRST_UNP_HI = 33;   // timestamp for first-unpack-instruction (high 32b)
+    constexpr static uint PERF_UNPACK_NUM_TILES_0 = 34;   // num tiles for input operands 0-1
+    constexpr static uint PERF_UNPACK_NUM_TILES_1 = 35;   // num tiles for input operands 2-3
+    constexpr static uint PERF_UNPACK_NUM_TILES_2 = 36;   // num tiles for input operands 4-5
+    constexpr static uint PERF_UNPACK_NUM_TILES_3 = 37;   // num tiles for input operands 6-7
+    constexpr static uint FACE_DIM_1x16     = 44;   // Holds face dimension (1x16)
+    constexpr static uint SR_UNPACK_TILIZER_STATE_0 = 54;  // Save unpack state before tilizer is enabled for quick restore
+    constexpr static uint SR_UNPACK_TILIZER_STATE_1 = 55;
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_0 = 56;  // Save unpack state before tilizer is enabled for quick restore
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_1 = 57;
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_2 = 58;
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_3 = 59;
 };
 
 // Math GPR thread
