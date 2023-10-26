@@ -57,6 +57,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         in1_CB_tiles = in1_CB_tiles * 2; // double buffer
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+
     uint32_t out_block_tiles = per_core_M * per_core_N;
     uint32_t out_CB_tiles = out_block_tiles; // No double buffer
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
@@ -528,7 +529,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             // in0 sender
             if (in0_address.has_value()) {
                 uint32_t worker_shard_same_coord;
-                uint32_t idx;
                 std::vector<uint32_t> mm_in0_sender_args;
                 if (transpose_mcast) {
                     worker_shard_same_coord = device->worker_core_from_logical_core(core).x;
