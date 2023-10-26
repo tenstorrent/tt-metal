@@ -19,8 +19,82 @@ from models.utility_functions import (
     profiler
 )
 
+from models.demos.resnet.tests.demo_utils import get_data
+
 from loguru import logger
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
+
+
+
+def run_resnet_imagenet_inference(
+    batch_size,
+    imagenet_label_dict,
+    model_location_generator,
+    device,
+    model_version = "microsoft/resnet-50",
+):
+
+    disable_persistent_kernel_cache()
+    disable_compilation_reports()
+
+    # set up huggingface model - TT model will use weights from this model
+    torch_resnet50 = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
+    torch_resnet50.eval()
+
+    state_dict = torch_resnet50.state_dict()
+    # set up image processor
+    image_processor = AutoImageProcessor.from_pretrained(model_version)
+
+    # load inputs
+    logger.info("ImageNet-1k validation Dataset")
+    breakpoint()
+    input_loc = str(model_location_generator("ImageNet_data"))
+    image_examples = get_data(input_loc)
+
+    # inputs = image_processor(image, return_tensors="pt")
+    # inputs = inputs["pixel_values"]
+
+    predicted_labels = []
+
+    # TODO: make sure to load 8 different images!
+
+    # Create TT Model Start
+    # this will move weights to device
+    sharded = False
+    if batch_size == 8:
+        sharded = True
+    tt_resnet50 = ResNet(
+        Bottleneck,
+        [3, 4, 6, 3],
+        device=device,
+        state_dict=state_dict,
+        base_address="",
+        fold_batchnorm=True,
+        storage_in_dram=False,
+        batch_size=batch_size,
+        sharded=sharded,
+    )
+
+    iterations = 50
+    for i in range(iterations):
+        tt_inputs = tt_resnet50.preprocessing(inputs)
+        input_image = image_examples[i].image
+        if input_image.mode == "L":
+            input_image = input_image.convert(mode="RGB")
+        input = image_processor(input_image, return_tensors="pt")
+        input = input["pixel_values"]
+        tt_inputs = tt_resnet50.preprocessing(input)
+        tt_output = tt_resnet50(tt_inputs)
+        tt_output = tt_output.to_torch().to(torch.float)
+        prediction = tt_output[0][0][0].argmax()
+        breakpoint()
+        prediction = prediction.item()
+        predicted_labels.append(prediction)
+        # prediction = imagenet_label_dict[prediction]
+        del tt_output
+
+    prediction = imagenet_label_dict[prediction]
+    del tt_out
 
 
 def run_resnet_inference(
@@ -73,7 +147,6 @@ def run_resnet_inference(
     profiler.end(f"move_weights")
 
     profiler.start(f"preprocessing")
-
     tt_inputs = tt_resnet50.preprocessing(inputs)
     profiler.end(f"preprocessing")
 
@@ -85,7 +158,6 @@ def run_resnet_inference(
     prediction = tt_out[0][0][0].argmax()
     prediction = prediction.item()
     prediction = imagenet_label_dict[prediction]
-    # breakpoint()
     tt_lib.device.Synchronize()
     profiler.end("first_model_run_with_compile", force_enable=True)
     # tt_out.deallocate()
@@ -104,19 +176,32 @@ def run_resnet_inference(
     profiler.start(f"post_processing")
     prediction = tt_out[0][0][0].argmax()
     prediction = prediction.item()
+    prediction = imagenet_label_dict[prediction]
     profiler.end(f"post_processing")
 
     SINGLE_RUN = 1
     measurements = {
-        "preprocessing": profiler.get('processing_input_one') + profiler.get('processing_input_two'),
+        "preprocessing": profiler.get('preprocessing'),
         "moving_weights_to_device": profiler.get('move_weights'),
         "compile": profiler.get('first_model_run_with_compile') - (profiler.get('model_run_for_inference') / SINGLE_RUN),
         f"inference_for_single_run_batch_{batch_size}_without_cache": profiler.get('first_model_run_with_compile'),
         f"inference_for_{SINGLE_RUN}_run_batch_{batch_size}_without_cache": profiler.get('model_run_for_inference'),
         "inference_throughput": (SINGLE_RUN * batch_size) / profiler.get('model_run_for_inference'),
-        "post_processing": profiler.get("processing_output_to_string")
+        "post_processing": profiler.get("post_processing")
 
     }
+
+    logger.info(f"pre processing duration: {measurements['preprocessing']} s")
+    logger.info(f"moving weights to device duration: {measurements['moving_weights_to_device']} s")
+    logger.info(f"compile time: {measurements['compile']} s")
+    logger.info(f"inference time for single run of model with batch size {batch_size} without using cache: {measurements[f'inference_for_single_run_batch_{batch_size}_without_cache']} s")
+    logger.info(f"inference time for {SINGLE_RUN} run(s) of model with batch size {batch_size} and using cache: {measurements[f'inference_for_{SINGLE_RUN}_run_batch_{batch_size}_without_cache']} s")
+    logger.info(f"inference throughput: {measurements['inference_throughput'] } inputs/s")
+    logger.info(f"post processing time: {measurements['post_processing']} s")
+
+    del tt_out
+    return measurements, prediction
+
 
 @pytest.mark.parametrize(
     "batch_size",
@@ -124,7 +209,20 @@ def run_resnet_inference(
         (8),
     ),
 )
-def test_demo(
+def test_demo_imagenet(batch_size, imagenet_label_dict, model_location_generator, device):
+    run_resnet_imagenet_inference(batch_size,
+                                imagenet_label_dict,
+                                model_location_generator,
+                                device)
+
+
+@pytest.mark.parametrize(
+    "batch_size",
+    (
+        (8),
+    ),
+)
+def test_demo_sample(
     use_program_cache,
     batch_size,
     hf_cat_image_sample_input,
