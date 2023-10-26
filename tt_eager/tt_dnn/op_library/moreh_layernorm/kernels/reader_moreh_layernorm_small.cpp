@@ -24,10 +24,10 @@ void generate_epsilon() {
 }
 
 void kernel_main() {
-    uint32_t input_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_rows_per_core = get_arg_val<uint32_t>(1);
-    uint32_t Wt = get_arg_val<uint32_t>(2);
-    uint32_t tile_offset = get_arg_val<uint32_t>(3);
+    const uint32_t input_addr = get_arg_val<uint32_t>(0);
+    const uint32_t num_rows_per_core = get_arg_val<uint32_t>(1);
+    const uint32_t Wt = get_arg_val<uint32_t>(2);
+    const uint32_t tile_offset = get_arg_val<uint32_t>(3);
     const uint32_t scaler = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t cb_id_in0 = 0;
