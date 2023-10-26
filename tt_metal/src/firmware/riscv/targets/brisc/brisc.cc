@@ -23,6 +23,7 @@
 #include "risc_attribs.h"
 #include "noc_addr_ranges_gen.h"
 #include "generated_bank_to_noc_coord_mapping.h"
+#include "dataflow_api.h"
 
 #include "debug_status.h"
 #include "debug_print.h"

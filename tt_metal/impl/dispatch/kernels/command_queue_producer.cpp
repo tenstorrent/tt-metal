@@ -9,6 +9,8 @@
 static constexpr uint32_t COMMAND_START_ADDR =
     L1_UNRESERVED_BASE;  // Space between UNRESERVED_BASE -> data_start is for commands
 
+CQReadInterface cq_read_interface;
+
 FORCE_INLINE
 void program_local_cb(uint32_t num_pages, uint32_t page_size, uint32_t cb_size) {
     uint32_t cb_id = 0;
@@ -52,7 +54,21 @@ void program_consumer_cb(bool db_buf_switch, uint64_t consumer_noc_encoding, uin
     noc_async_write_barrier();  // barrier for now
 }
 
+// Only the read interface is set up on the device... the write interface
+// belongs to host
+void setup_cq_read_write_interface() {
+    uint fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;  // The fifo starts after the pointer addresses
+    uint fifo_size = ((1024 * 1024 * 1024) >> 4) - fifo_addr;
+
+    cq_read_interface.fifo_limit = fifo_addr + fifo_size;
+    cq_read_interface.fifo_rd_ptr = fifo_addr;
+    cq_read_interface.fifo_size = fifo_size;
+}
+
 void kernel_main() {
+
+    setup_cq_read_write_interface();
+
     // Initialize the producer/consumer DB semaphore
     // This represents how many buffers the producer can write to.
     // At the beginning, it can write to two different buffers.

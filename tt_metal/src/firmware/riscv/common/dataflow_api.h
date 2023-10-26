@@ -79,40 +79,6 @@ FORCE_INLINE T get_arg_val(int arg_idx) {
  */
 #define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_##arg_idx
 
-// can be used on NCRICS and/or BRISC, as both can act as tile producers into Tensix
-void setup_cb_read_write_interfaces() {
-    volatile tt_l1_ptr uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
-
-    for (uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
-        uint32_t fifo_addr = circular_buffer_config_addr[0];
-        uint32_t fifo_size = circular_buffer_config_addr[1];
-        uint32_t fifo_num_pages = circular_buffer_config_addr[2];
-        uint32_t fifo_page_size = circular_buffer_config_addr[3];
-        uint32_t fifo_limit = fifo_addr + fifo_size;
-
-        cb_interface[cb_id].fifo_limit = fifo_limit;  // to check if we need to wrap
-        cb_interface[cb_id].fifo_wr_ptr = fifo_addr;
-        cb_interface[cb_id].fifo_rd_ptr = fifo_addr;
-        cb_interface[cb_id].fifo_size = fifo_size;
-        cb_interface[cb_id].tiles_acked_received_init = 0;
-        cb_interface[cb_id].fifo_num_pages = fifo_num_pages;
-        cb_interface[cb_id].fifo_page_size = fifo_page_size;
-
-        circular_buffer_config_addr += UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG;
-    }
-}
-
-// Only the read interface is set up on the device... the write interface
-// belongs to host
-void setup_cq_read_write_interface() {
-    uint fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;  // The fifo starts after the pointer addresses
-    uint fifo_size = ((1024 * 1024 * 1024) >> 4) - fifo_addr;
-
-    cq_read_interface.fifo_limit = fifo_addr + fifo_size;
-    cq_read_interface.fifo_rd_ptr = fifo_addr;
-    cq_read_interface.fifo_size = fifo_size;
-}
-
 // replicated from ckernels_defs.h, which are currently not included in BRISC / NCRISC builds
 // TODO: look into ckernels_defs.h included in NCRISC/BRISC builds
 inline __attribute__((always_inline)) constexpr static std::int32_t GET_L1_TILE_SIZE(uint format) {

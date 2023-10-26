@@ -16,31 +16,9 @@
 
 using namespace ckernel;
 
-inline void llk_setup_cb_interface() {
-
-    volatile tt_l1_ptr std::uint32_t* buffer_config_addr = (volatile tt_l1_ptr uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
-
-    for (uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
-
-        // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
-        uint32_t fifo_addr = buffer_config_addr[0];
-        uint32_t fifo_size = buffer_config_addr[1];
-        uint32_t fifo_num_pages = buffer_config_addr[2]; // not used atm
-        uint32_t fifo_page_size = buffer_config_addr[3]; // not used atm
-
-        cb_interface[cb_id].fifo_rd_ptr = fifo_addr;
-        cb_interface[cb_id].fifo_size = fifo_size;
-        cb_interface[cb_id].fifo_limit = fifo_addr + fifo_size;  // Check if there is overflow
-        cb_interface[cb_id].tiles_acked = 0;
-        cb_interface[cb_id].fifo_page_size = fifo_page_size;
-
-        buffer_config_addr += UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG; // move by 3 uint32's
-    }
-}
-
 // "llk_setup_operands" is the old function name that HLKC emits
 inline void llk_setup_operands() {
-    llk_setup_cb_interface();
+    setup_cb_read_write_interfaces(true, false);
 }
 
 // Wait for N tiles available in the incoming stream
