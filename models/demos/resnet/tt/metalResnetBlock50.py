@@ -542,8 +542,8 @@ hardcoded_conv_blocking_and_parallelization_config = {
     8: {
         (25088, 64): [64 * 3, 256, 64, 128, 64, 256, (12, 9), 256, 64],
         (6272, 128): [128, 64, 128, 64, 128, 64, (12, 9), 64, 128],
-        (1568, 256): [256, 160, 32, 32, 32, 160, (10, 8), 160, 32],
-        (416, 512): [512, 64, 64, 32, 32, 64, (7, 8), 64, 64],
+        (1568, 256): [256, 160, 32, 160, 32, 160, (10, 8), 160, 32],
+        (416, 512): [512, 64, 64, 64, 64, 64, (7, 8), 64, 64],
         # bypass convs
         (6272, 512): [256, 64, 512, 32, 256, 64, (12, 9), 64, 512],
         (1568, 1024): [512, 160, 128, 32, 64, 160, (10, 8), 160, 128],
@@ -585,8 +585,9 @@ class Bottleneck(nn.Module):
         out_sharded=False,
         act_block_w_equals_input_channels_x_filter_width=False,
         use_downsample_op_and_mm_for_conv1x1_s2=False,
-        conv_halo=False,
         model_config=None,
+        conv_halo=False,
+        conv_2d=False,
     ) -> None:
         super().__init__()
         self.device = device
@@ -735,6 +736,7 @@ class Bottleneck(nn.Module):
             weights_dtype=model_config["WEIGHTS_DTYPE"],
             output_dtype=model_config["ACTIVATIONS_DTYPE"],
             math_fidelity=model_config["MATH_FIDELITY"],
+            act_c_num_blocks=grid_size[1] if self.conv_halo and conv_2d else 1,
         )
 
         self.conv3_params = [planes * self.expansion, width, 1, 1, 1, 1, 0, 0, dilation, groups]
@@ -1023,6 +1025,8 @@ class ResNet(nn.Module):
             out_sharded=False,
             use_downsample_op_and_mm_for_conv1x1_s2=True if sharded else False,
             model_config=model_config,
+            conv_halo=True if sharded else False,
+            conv_2d=True,
         )
         self.layer4, self.layer4_output_shape = self._make_layer(
             block,
@@ -1038,6 +1042,8 @@ class ResNet(nn.Module):
             out_sharded=True,
             use_downsample_op_and_mm_for_conv1x1_s2=True if sharded else False,
             model_config=model_config,
+            conv_halo=True if sharded else False,
+            conv_2d=True,
         )
 
         # All modules in RN50 are unrolled here. One variable for each module. Only specific number of modules supported - layers MUST equal to [3, 4, 6, 3]
@@ -1104,8 +1110,9 @@ class ResNet(nn.Module):
         out_sharded=False,
         act_block_w_equals_input_channels_x_filter_width=False,
         use_downsample_op_and_mm_for_conv1x1_s2=False,
-        conv_halo=False,
         model_config=None,
+        conv_halo=False,
+        conv_2d=False,
     ):
         norm_layer = self._norm_layer
         downsample = None
@@ -1290,8 +1297,9 @@ class ResNet(nn.Module):
                 out_sharded=sharded,
                 act_block_w_equals_input_channels_x_filter_width=act_block_w_equals_input_channels_x_filter_width,
                 use_downsample_op_and_mm_for_conv1x1_s2=use_downsample_op_and_mm_for_conv1x1_s2,
-                conv_halo=conv_halo if stride == 1 else False,
                 model_config=model_config,
+                conv_halo=conv_halo if stride == 1 else False,
+                conv_2d=conv_2d,
             )
         )
         self.inplanes = planes * block.expansion
@@ -1315,8 +1323,9 @@ class ResNet(nn.Module):
                     sharded=sharded,
                     out_sharded=True if block_num != blocks - 1 else out_sharded,
                     act_block_w_equals_input_channels_x_filter_width=act_block_w_equals_input_channels_x_filter_width,
-                    conv_halo=conv_halo,
                     model_config=model_config,
+                    conv_halo=conv_halo,
+                    conv_2d=conv_2d,
                 )
             )
         last_layer_shape = layers[-1].conv3_output_shape
