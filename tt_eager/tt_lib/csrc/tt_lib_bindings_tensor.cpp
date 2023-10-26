@@ -328,8 +328,18 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // moreh_layernorm
-    m_tensor.def("moreh_layernorm", &moreh_layernorm,
-        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("normalized_dims").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+    m_tensor.def(
+        "moreh_layernorm",
+        &moreh_layernorm,
+        py::arg("input").noconvert(),
+        py::arg("eps").noconvert(),
+        py::arg("normalized_dims").noconvert(),
+        py::arg("gamma").noconvert() = std::nullopt,
+        py::arg("beta").noconvert() = std::nullopt,
+        py::arg("mean").noconvert() = std::nullopt,
+        py::arg("rstd").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
         "Performs a moreh_layernorm operation.
     )doc");
 

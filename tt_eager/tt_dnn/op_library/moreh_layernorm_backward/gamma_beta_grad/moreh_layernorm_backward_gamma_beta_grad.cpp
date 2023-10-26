@@ -75,10 +75,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_(
 
     const auto output_grad_shape_without_padding = output_grad_shape.without_padding();
 
-    const auto origin_N = output_grad_shape_without_padding[0];
-    const auto origin_C = output_grad_shape_without_padding[1];
     const auto origin_H = output_grad_shape_without_padding[2];
-    const auto origin_W = output_grad_shape_without_padding[3];
 
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && is_lastdim_layernorm;
     const uint32_t mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
