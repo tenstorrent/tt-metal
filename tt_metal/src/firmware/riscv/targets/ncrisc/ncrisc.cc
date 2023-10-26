@@ -11,6 +11,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "tt_metal/src/firmware/riscv/common/risc_attribs.h"
 #include "generated_bank_to_noc_coord_mapping.h"
+#include "circular_buffer.h"
 
 #include "debug_status.h"
 #include "debug_print.h"
@@ -25,6 +26,8 @@ uint8_t my_y[NUM_NOCS] __attribute__((used));
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
+
+CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
@@ -53,6 +56,8 @@ int main(int argc, char *argv[]) {
 
       kernel_profiler::init_profiler();
       kernel_profiler::mark_time(CC_MAIN_START);
+
+      setup_cb_read_write_interfaces(true, true);
 
       DEBUG_STATUS('R');
       kernel_init();

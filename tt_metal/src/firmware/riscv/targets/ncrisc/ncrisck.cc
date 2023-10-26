@@ -16,8 +16,6 @@
 
 #include "kernel.cpp"
 
-CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
-
 uint8_t noc_index = NOC_INDEX;
 
 uint32_t noc_reads_num_issued[NUM_NOCS];
@@ -27,8 +25,6 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS];
 void kernel_launch() {
 
     firmware_kernel_common_init((void tt_l1_ptr *)MEM_NCRISC_INIT_LOCAL_L1_BASE);
-
-    setup_cb_read_write_interfaces(true, true);
 
     noc_local_state_init(noc_index);
 

@@ -14,11 +14,12 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "llk_pack_common.h"
 
+#include "debug_print.h"
+
 using namespace ckernel;
 
 // "llk_setup_outputs" is the old function name that HLKC emits
 inline void llk_setup_outputs() {
-    setup_cb_read_write_interfaces(false, true);
 }
 
 // Blocking call to wait for free space needed to pack N tiles

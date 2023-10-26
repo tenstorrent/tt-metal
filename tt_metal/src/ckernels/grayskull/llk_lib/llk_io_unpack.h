@@ -18,7 +18,6 @@ using namespace ckernel;
 
 // "llk_setup_operands" is the old function name that HLKC emits
 inline void llk_setup_operands() {
-    setup_cb_read_write_interfaces(true, false);
 }
 
 // Wait for N tiles available in the incoming stream
