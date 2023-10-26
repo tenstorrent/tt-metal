@@ -566,8 +566,6 @@ class TestEltwiseUnary:
         input_mem_config,
         output_mem_config,
     ):
-        if is_wormhole_b0() and fn_kind == "signbit":
-            pytest.skip("Signbit fails for WH B0 arch")
         if fn_kind == "signbit" and fill_val == 0.0:
             pytest.skip("Signbit fails for 0 value")
         datagen_func = [
