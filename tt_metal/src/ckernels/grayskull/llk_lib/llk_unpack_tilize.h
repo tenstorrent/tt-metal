@@ -42,6 +42,7 @@ inline void llk_unpack_tilize_hw_configure_disaggregated(
 
 inline void llk_unpack_tilize_init(const std::uint32_t operand=0, const std::uint32_t ct_dim=0) {
 
+    wait_for_idle();
     const std::uint32_t block_c_dim = ct_dim * TILE_C_DIM;
 
     // Save state of unpacker config for quick restore
@@ -72,14 +73,14 @@ inline void llk_unpack_tilize_uninit(const std::uint32_t face_r_dim = FACE_R_DIM
 
 inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t block_ct_dim) {
     std::uint32_t input = get_operand_id(operand);
-    std::uint32_t base_address = operands[input].f.fifo_rd_ptr - 1;  // Remove header size added by descriptor
+    std::uint32_t base_address = cb_interface[input].fifo_rd_ptr - 1;  // Remove header size added by descriptor
     std::uint32_t top_face_offset_address = SCALE_DATUM_SIZE((uint)unpack_src_format[input], tile_index)
                                             << 1;  // Each iteration unpacks 2 16x16 faces (1st 0,1 2nd 2,3)
                                                    // Offset address is in 16B words
                                                    // Datum count = tile_index*16 (/16 to get word count)
 
     std::uint32_t bot_face_offset_address =
-        SCALE_DATUM_SIZE((uint)unpack_src_format[input], block_ct_dim*TILE_C_DIM);  //*16 rows / 16 to get 16B word aligned address
+        SCALE_DATUM_SIZE((uint)unpack_src_format[input], block_ct_dim<<5);  //*16 rows / 16 to get 16B word aligned address
 
     // Program srcA and srcB base addresses
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
@@ -113,4 +114,10 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
         switch_config_context(unp_cfg_context);
     }
 
+}
+
+inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c_tiles) {
+    for (std::uint32_t tile_index = 0; tile_index < block_c_tiles; tile_index++) {
+        llk_unpack_tilize(operand, tile_index, block_c_tiles);
+    }
 }
