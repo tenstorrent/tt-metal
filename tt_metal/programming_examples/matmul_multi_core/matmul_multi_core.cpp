@@ -11,6 +11,7 @@
 #include "common/test_tiles.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/common/work_split.hpp"
 
 using namespace tt::constants;
 using namespace std;
@@ -104,16 +105,23 @@ void golden_matmul(vector<bfloat16> a, vector<bfloat16> b, vector<uint32_t>& out
     output = pack_bfloat16_vec_into_uint32_vec(c_bf);
 }
 
-void matmul_single_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t>& output, bool bcast_batch,
+void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t>& output, bool bcast_batch,
                         uint32_t M, uint32_t N, uint32_t K, uint32_t B, Device* device) {
 
     /*
     * Setup program to execute along with its buffers and kernels to use
-    * Core range is just single core
     */
     CommandQueue& cq = *detail::GLOBAL_CQ;
     Program program{};
-    CoreRange core = {.start={0, 0}, .end={0, 0}};
+
+    /*
+    * Multi-Core prep
+    */
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    auto num_output_tiles_total = (M * N) / TILE_HW;
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
 
     /*
     * EXtracting Matrix dimensions from input/output vectors
@@ -123,6 +131,9 @@ void matmul_single_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_
     uint32_t Mt = M / TILE_HEIGHT;
     uint32_t Kt = K / TILE_WIDTH;
     uint32_t Nt = N / TILE_WIDTH;
+    uint32_t KtNt = Kt * Nt;
+    uint32_t MtKt = Mt * Kt;
+    uint32_t MtNt = Mt * Nt;
 
     /*
     * Create DRAM Buffers for input and output vectors
@@ -137,9 +148,9 @@ void matmul_single_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_
     uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    Buffer src0_dram_buffer = CreateBuffer(device, dram_buffer_A_size, dram_buffer_A_size, BufferType::DRAM);
-    Buffer src1_dram_buffer = CreateBuffer(device, dram_buffer_B_size, dram_buffer_B_size, BufferType::DRAM);
-    Buffer dst_dram_buffer = CreateBuffer(device, dram_buffer_C_size, dram_buffer_C_size, BufferType::DRAM);
+    Buffer src0_dram_buffer = CreateBuffer(device, dram_buffer_A_size, single_tile_size, BufferType::DRAM);
+    Buffer src1_dram_buffer = CreateBuffer(device, dram_buffer_B_size, single_tile_size, BufferType::DRAM);
+    Buffer dst_dram_buffer = CreateBuffer(device, dram_buffer_C_size, single_tile_size, BufferType::DRAM);
     uint32_t src0_addr = src0_dram_buffer.address();
     uint32_t src1_addr = src1_dram_buffer.address();
     uint32_t dst_addr = dst_dram_buffer.address();
@@ -155,18 +166,18 @@ void matmul_single_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_
     uint32_t num_input_tiles = 2;
     CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
 		.set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t src1_cb_index = CB::c_in1; // 1
     CircularBufferConfig cb_src1_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
 		.set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     uint32_t output_cb_index = CB::c_out0; // output operands start at index 16
     uint32_t num_output_tiles = 2;
     CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
 		.set_page_size(output_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     /*
     * Compile time arguments
@@ -176,48 +187,93 @@ void matmul_single_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
 
     bool dst_is_dram = dst_dram_buffer.buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t) output_cb_index, (uint32_t)dst_is_dram};
 
     /*
     * Create Kernels (Reader, Writer, Compute)
     */
     auto reader_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_bmm_8bank.cpp",
-        core,
+        "tt_metal/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
+        all_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     auto writer_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_bmm_8bank.cpp",
-        core,
+        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        all_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
-    vector<uint32_t> compute_args = {
-        B, // B
-        Mt, // Mt
+    vector<uint32_t> compute_args_group_1 = {
+        1, // B
+        1, // Mt
         Kt, // Kt
-        Nt // Nt
-    };
-    auto matmul_single_core_kernel_id = tt_metal::CreateComputeKernel(
+        num_output_tiles_per_core_group_1 // Nt
+    }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
+
+    auto matmul_multi_core_kernel_group_1_id = tt_metal::CreateComputeKernel(
         program,
         "tt_metal/kernels/compute/bmm.cpp",
-        core,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args}
+        core_group_1,
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_1}
     );
+
+    if (!core_group_2.ranges().empty()) {
+        vector<uint32_t> compute_args_group_2 = {
+            1, // B
+            1, // Mt
+            Kt, // Kt
+            num_output_tiles_per_core_group_2 // Nt
+        }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
+
+        auto matmul_multi_core_kernel_group_2_id = tt_metal::CreateComputeKernel(
+            program,
+            "tt_metal/kernels/compute/bmm.cpp",
+            core_group_2,
+            tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_2}
+        );
+    }
 
     /*
     * Kernels - Runtime arguments
     */
-    tt_metal::SetRuntimeArgs(
-        program, reader_id, core,
-        {src0_addr, src1_addr, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B, uint32_t(bcast_batch ? 1 : 0)}
-    );
+    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
 
-    tt_metal::SetRuntimeArgs(
-        program, writer_id, core,
-        {dst_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
-    );
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+        uint32_t num_output_tiles_per_core;
+		if (core_group_1.core_coord_in_core_ranges(core)) {
+			num_output_tiles_per_core = num_output_tiles_per_core_group_1;
+		} else if (core_group_2.core_coord_in_core_ranges(core)) {
+			num_output_tiles_per_core = num_output_tiles_per_core_group_2;
+		} else {
+			TT_ASSERT(false, "Core not in specified core ranges");
+		}
+        tt_metal::SetRuntimeArgs(
+            program, reader_id, core,
+            {src0_addr,
+            src1_addr,
+            Mt,
+            Kt,
+            Nt,
+            MtKt,
+            KtNt,
+            B,
+            uint32_t(bcast_batch),
+            num_tiles_written,
+            num_output_tiles_per_core,
+            MtNt }
+        );
+        tt_metal::SetRuntimeArgs(
+            program,
+            writer_id,
+            core,
+            {dst_addr,
+            num_output_tiles_per_core,
+            num_tiles_written }
+        );
+        num_tiles_written += num_output_tiles_per_core;
+    }
 
     /* Launch program & read in output buffer result into the host vector */
     //LaunchProgram(device, program);
@@ -245,9 +301,9 @@ int main(int argc, char **argv) {
         Device *device = CreateDevice(device_id);
 
         /* Create source data */
-        constexpr uint32_t M = 32;  // user-defined
-        constexpr uint32_t N = 32;  // user-defined
-        constexpr uint32_t K = 32;  // user-defined
+        constexpr uint32_t M = 3200;  // user-defined
+        constexpr uint32_t N = 3200;  // user-defined
+        constexpr uint32_t K = 3200;  // user-defined
         constexpr uint32_t B = 1;  // user-defined
 
         uint32_t Mt = M / TILE_HEIGHT;
@@ -279,7 +335,7 @@ int main(int argc, char **argv) {
             float a1 = as.first.to_float();
             float a2 = as.second.to_float();
 
-            if (i % 128 == 0){
+            if (i % 1280 == 0){
                 cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << src0_vec.at(i) << endl;
             }
         }
@@ -299,14 +355,14 @@ int main(int argc, char **argv) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(tilized_src0_vec.at(i));
             float a1 = as.first.to_float();
             float a2 = as.second.to_float();
-            if (i % 128 == 0){
+            if (i % 1280 == 0){
                 cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << tilized_src0_vec.at(i) << endl;
             }
         }
 
         /* Calling the MatMul host program. Read in result into a host vector */
         vector<uint32_t> result_vec;
-        matmul_single_core(tilized_src0_vec, tilized_src1_vec, result_vec, false, M, N, K, B, device);
+        matmul_multi_core(tilized_src0_vec, tilized_src1_vec, result_vec, false, M, N, K, B, device);
 
         cout << "----metal--" << endl;
         cout << result_vec.size() << endl;
@@ -327,7 +383,7 @@ int main(int argc, char **argv) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(result_vec_untilized.at(i));
             float a1 = as.first.to_float();
             float a2 = as.second.to_float();
-            if (i % 128 == 0){
+            if (i % 1280 == 0){
                 cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << result_vec_untilized.at(i) << endl;
             }
         }
@@ -343,7 +399,7 @@ int main(int argc, char **argv) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(golden_vec.at(i));
             float a1 = as.first.to_float();
             float a2 = as.second.to_float();
-            if (i % 128 == 0){
+            if (i % 1280 == 0){
                 cout << "-- " << i << " -- " << a1 << "  " << a2 << "---" << golden_vec.at(i) << endl;
             }
         }
