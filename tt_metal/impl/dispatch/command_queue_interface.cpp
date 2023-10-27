@@ -39,8 +39,8 @@ void SystemMemoryWriter::cq_reserve_back(Device* device, uint32_t cmd_size_B) {
 }
 
 // Ideally, data should be an array or pointer, but vector for time-being
-void SystemMemoryWriter::cq_write(Device* device, vector<uint32_t>& data, uint32_t write_ptr) {
-    tt::Cluster::instance().write_sysmem_vec(data, write_ptr, device->id());
+void SystemMemoryWriter::cq_write(Device* device, const uint32_t* data, uint32_t size, uint32_t write_ptr) {
+    tt::Cluster::instance().write_sysmem_vec(data, size, write_ptr, device->id());
 }
 
 void SystemMemoryWriter::send_write_ptr(Device* device) {

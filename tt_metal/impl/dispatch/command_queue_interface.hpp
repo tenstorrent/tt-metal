@@ -33,7 +33,7 @@ class SystemMemoryWriter {
     void cq_reserve_back(Device* device, uint32_t cmd_size_B);
 
     // Ideally, data should be an array or pointer, but vector for time-being
-    void cq_write(Device* device, vector<uint32_t>& data, uint32_t write_ptr);
+    void cq_write(Device* device, const uint32_t* data, uint32_t size, uint32_t write_ptr);
 
     void send_write_ptr(Device* device);
     void send_write_toggle(Device* device);

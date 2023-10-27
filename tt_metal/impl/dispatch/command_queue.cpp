@@ -326,8 +326,6 @@ void EnqueueReadBufferCommand::process() {
     uint32_t system_memory_temporary_storage_address = write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     this->read_buffer_addr = system_memory_temporary_storage_address;
     const auto cmd = this->assemble_device_command(system_memory_temporary_storage_address);
-    const auto command_desc = cmd.get_desc();
-    vector<uint32_t> command_vector(command_desc.begin(), command_desc.end());
 
     uint32_t num_pages = this->buffer.size() / this->buffer.page_size();
     uint32_t padded_page_size = align(this->buffer.page_size(), 32);
@@ -335,7 +333,7 @@ void EnqueueReadBufferCommand::process() {
     uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
 
     this->writer.cq_reserve_back(this->device, cmd_size);
-    this->writer.cq_write(this->device, command_vector, write_ptr);
+    this->writer.cq_write(this->device, cmd.get_desc().data(), DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND, write_ptr);
     this->writer.cq_push_back(this->device, cmd_size);
 }
 
@@ -399,13 +397,11 @@ void EnqueueWriteBufferCommand::process() {
     uint32_t system_memory_temporary_storage_address = write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
     const auto cmd = this->assemble_device_command(system_memory_temporary_storage_address);
-    const auto command_desc = cmd.get_desc();
-    vector<uint32_t> command_vector(command_desc.begin(), command_desc.end());
     uint32_t data_size_in_bytes = cmd.get_data_size();
 
     uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
     this->writer.cq_reserve_back(this->device, cmd_size);
-    this->writer.cq_write(this->device, command_vector, write_ptr);
+    this->writer.cq_write(this->device, cmd.get_desc().data(), DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND, write_ptr);
 
     // Need to deal with the edge case where our page
     // size is not 32B aligned
@@ -416,12 +412,12 @@ void EnqueueWriteBufferCommand::process() {
         uint32_t dst = system_memory_temporary_storage_address;
         for (uint32_t i = 0; i < num_pages; i++) {
             vector<uint32_t> src_page(src_iterator, src_iterator + num_u32s_in_page);
-            this->writer.cq_write(this->device, src_page, dst);
+            this->writer.cq_write(this->device, src_page.data(), src_page.size(), dst);
             src_iterator += num_u32s_in_page;
             dst = align(dst + this->buffer.page_size(), 32);
         }
     } else {
-        this->writer.cq_write(this->device, this->src, system_memory_temporary_storage_address);
+        this->writer.cq_write(this->device, this->src.data(), this->src.size(), system_memory_temporary_storage_address);
     }
 
     this->writer.cq_push_back(this->device, cmd_size);
@@ -553,16 +549,14 @@ void EnqueueProgramCommand::process() {
     uint32_t system_memory_temporary_storage_address = write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
     const DeviceCommand cmd = this->assemble_device_command(system_memory_temporary_storage_address);
-    const auto command_desc = cmd.get_desc();
-    vector<uint32_t> command_vector(command_desc.begin(), command_desc.end());
 
     uint32_t data_size_in_bytes = cmd.get_data_size();
     const uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
     this->writer.cq_reserve_back(this->device, cmd_size);
-    this->writer.cq_write(this->device, command_vector, write_ptr);
+    this->writer.cq_write(this->device, cmd.get_desc().data(), DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND, write_ptr);
 
     if (this->host_data.size() != 0) {
-        this->writer.cq_write(this->device, this->host_data, system_memory_temporary_storage_address);
+        this->writer.cq_write(this->device, this->host_data.data(), this->host_data.size(), system_memory_temporary_storage_address);
     }
     this->writer.cq_push_back(this->device, cmd_size);
 }
@@ -580,13 +574,11 @@ const DeviceCommand FinishCommand::assemble_device_command(uint32_t) {
 
 void FinishCommand::process() {
     uint32_t write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
-    const auto command_desc = this->assemble_device_command(0).get_desc();
-    vector<uint32_t> command_vector(command_desc.begin(), command_desc.end());
-
+    const auto cmd = this->assemble_device_command(0);
     uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
     this->writer.cq_reserve_back(this->device, cmd_size);
-    this->writer.cq_write(this->device, command_vector, write_ptr);
+    this->writer.cq_write(this->device, cmd.get_desc().data(), DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND, write_ptr);
     this->writer.cq_push_back(this->device, cmd_size);
 }
 
@@ -612,7 +604,7 @@ void EnqueueWrapCommand::process() {
     command_vector[0] = 1;  // wrap
 
     this->writer.cq_reserve_back(this->device, space_left);
-    this->writer.cq_write(this->device, command_vector, write_ptr);
+    this->writer.cq_write(this->device, command_vector.data(), command_vector.size(), write_ptr);
     this->writer.cq_push_back(this->device, space_left);
 }
 
