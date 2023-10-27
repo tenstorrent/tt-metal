@@ -99,7 +99,7 @@ def run_resnet_imagenet_inference(
 
 def run_resnet_inference(
     batch_size,
-    hf_cat_image_sample_input,
+    input_loc,
     imagenet_label_dict,
     device,
     model_version = "microsoft/resnet-50",
@@ -117,15 +117,21 @@ def run_resnet_inference(
     image_processor = AutoImageProcessor.from_pretrained(model_version)
 
     # load inputs
-    image = hf_cat_image_sample_input
+    images = get_data(input_loc)
+
     profiler.start(f"processing_inputs")
-    inputs = image_processor(image, return_tensors="pt")
-    inputs = inputs["pixel_values"]
+    inputs = None
+    for i in range(batch_size):
+        input_image = images[i].image
+        if input_image.mode == "L":
+            input_image = input_image.convert(mode="RGB")
+        input = image_processor(input_image, return_tensors="pt")
+        input = input["pixel_values"]
+        if inputs == None:
+            inputs = input
+        else:
+            inputs = torch.cat((inputs, input), dim=0)
     profiler.end(f"processing_inputs")
-    inputs1 = inputs
-    # TODO: make sure to load 8 different images!
-    for i in range(batch_size - 1):
-        inputs = torch.cat((inputs, inputs1), dim=0)
 
     # Create TT Model Start
     # this will move weights to device
@@ -154,13 +160,9 @@ def run_resnet_inference(
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
     tt_out = tt_resnet50(tt_inputs)
-    tt_out = tt_out.to_torch().to(torch.float)
-    prediction = tt_out[0][0][0].argmax()
-    prediction = prediction.item()
-    prediction = imagenet_label_dict[prediction]
     tt_lib.device.Synchronize()
     profiler.end("first_model_run_with_compile", force_enable=True)
-    # tt_out.deallocate()
+    tt_out.deallocate()
     del tt_out
 
     profiler.enable()
@@ -169,15 +171,20 @@ def run_resnet_inference(
     ##### Run Forward on TT Model Start
     profiler.start(f"model_run_for_inference")
     tt_out = tt_resnet50(tt_inputs)
-    tt_out = tt_out.to_torch().to(torch.float)
     tt_lib.device.Synchronize()
     profiler.end(f"model_run_for_inference")
 
     profiler.start(f"post_processing")
-    prediction = tt_out[0][0][0].argmax()
-    prediction = prediction.item()
-    prediction = imagenet_label_dict[prediction]
+    predictions = []
+    tt_out = tt_out.to_torch().to(torch.float)
+
+    prediction = tt_out[:, 0, 0, :].argmax(dim=-1)
+    for i in range(batch_size):
+        predictions.append(imagenet_label_dict[prediction[i].item()])
     profiler.end(f"post_processing")
+
+    for pr, image in zip(predictions, images) :
+        logger.info(f"Expected Label: {imagenet_label_dict[image.label]}, Predicted Label: {pr}")
 
     SINGLE_RUN = 1
     measurements = {
@@ -217,21 +224,21 @@ def test_demo_imagenet(batch_size, imagenet_label_dict, model_location_generator
 
 
 @pytest.mark.parametrize(
-    "batch_size",
+    "batch_size, input_loc",
     (
-        (8),
+        (8, "models/demos/resnet/demo/images/"),
     ),
 )
 def test_demo_sample(
     use_program_cache,
     batch_size,
-    hf_cat_image_sample_input,
+    input_loc,
     imagenet_label_dict,
     device,
 ):
     run_resnet_inference(
         batch_size,
-        hf_cat_image_sample_input,
+        input_loc,
         imagenet_label_dict,
         device,
     )
