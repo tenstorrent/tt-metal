@@ -8,6 +8,7 @@
 #include <math.h>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 
 #include "llrt/llrt.hpp"
@@ -49,10 +50,10 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
         auto sticks_buffer = CreateBuffer(device, dram_buffer_size, stick_size, tt_metal::BufferType::DRAM);
         uint32_t dram_buffer_src_addr = sticks_buffer.address();
 
-        tt_metal::WriteToBuffer(sticks_buffer, src_vec);
+        tt_metal::detail::WriteToBuffer(sticks_buffer, src_vec);
 
         vector<uint32_t> dst_vec;
-        tt_metal::ReadFromBuffer(sticks_buffer, dst_vec);
+        tt_metal::detail::ReadFromBuffer(sticks_buffer, dst_vec);
 
         pass &= (src_vec == dst_vec);
         pass &= tt_metal::CloseDevice(device);
@@ -157,7 +158,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(
             dram_buffer_size, false);
 
-        tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
+        tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
 
         tt_metal::SetRuntimeArgs(
@@ -180,10 +181,10 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
 
         CoreCoord debug_core = {1,1};
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
@@ -323,7 +324,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
         std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(
             dram_buffer_size, false);
 
-        tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
+        tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
 
 
@@ -345,10 +346,10 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
             (uint32_t) stick_size,
             (uint32_t) log2(stick_size)});
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
@@ -438,7 +439,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
         TT_ASSERT((buffer_size % num_l1_banks) == 0);
 
         src = CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::L1);
-        tt_metal::WriteToBuffer(src, host_buffer);
+        tt_metal::detail::WriteToBuffer(src, host_buffer);
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -450,7 +451,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
         TT_ASSERT((buffer_size % num_dram_banks) == 0);
 
         src = CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::DRAM);
-        tt_metal::WriteToBuffer(src, host_buffer);
+        tt_metal::detail::WriteToBuffer(src, host_buffer);
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -473,9 +474,9 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
 
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
-        tt_metal::ReadFromBuffer(dst, readback_buffer);
+        tt_metal::detail::ReadFromBuffer(dst, readback_buffer);
 
     } else {
          dst = CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::DRAM);
@@ -490,9 +491,9 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
 
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
-        tt_metal::ReadFromBuffer(dst, readback_buffer);
+        tt_metal::detail::ReadFromBuffer(dst, readback_buffer);
     }
 
     pass = (host_buffer == readback_buffer);

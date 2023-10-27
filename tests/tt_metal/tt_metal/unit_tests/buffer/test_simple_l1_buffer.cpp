@@ -6,6 +6,7 @@
 #include "gtest/gtest.h"
 #include "test_buffer_utils.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -98,7 +99,7 @@ namespace tt::test::buffer::detail {
 
 
         writeL1Backdoor(device, core, input_local_address, inputs);
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
         readL1Backdoor(device, core, input_local_address, byte_size, outputs);
         tt::log_info("input readback inputs[0]={} == readback[0]={}", inputs[0], outputs[0]);
         readL1Backdoor(device, core, output_local_address, byte_size, outputs);

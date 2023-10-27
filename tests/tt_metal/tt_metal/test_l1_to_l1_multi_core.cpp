@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
                 auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
                 uint32_t dram_buffer_src_addr = src_dram_buffer.address();
                 auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
-                tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
+                tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
                 auto l1_to_l1_kernel = tt_metal::CreateKernel(
                         program,
@@ -100,7 +100,7 @@ int main(int argc, char **argv) {
 
 
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         for(uint32_t i = 0; i < 10; i++) {

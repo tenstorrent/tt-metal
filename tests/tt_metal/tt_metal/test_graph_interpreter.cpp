@@ -269,7 +269,7 @@ bool run_chained_sfpu_test(int chain_length) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
+        tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
 
 
@@ -279,10 +279,10 @@ bool run_chained_sfpu_test(int chain_length) {
 
 
         // TT_ASSERT(false);
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -493,8 +493,8 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::WriteToBuffer(src0_dram_buffer, src0_vec);
-        tt_metal::WriteToBuffer(src1_dram_buffer, src1_vec);
+        tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
+        tt_metal::detail::WriteToBuffer(src1_dram_buffer, src1_vec);
 
 
 
@@ -504,10 +504,10 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
 
 
         // TT_ASSERT(false);
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -960,7 +960,7 @@ bool run_forked_binary_test() {
         for(uint32_t i = 0; i < num_dram_channels; i++){
             vector<uint32_t> src_vec = create_random_ones_and_twos_vector_of_bfloat16(
                 src_dram_buffers[i].size(),  std::chrono::system_clock::now().time_since_epoch().count());
-            tt_metal::WriteToBuffer(src_dram_buffers[i], src_vec);
+            tt_metal::detail::WriteToBuffer(src_dram_buffers[i], src_vec);
             src_vecs.push_back(src_vec);
         }
 
@@ -975,10 +975,10 @@ bool run_forked_binary_test() {
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, unary_writer_args);
 
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

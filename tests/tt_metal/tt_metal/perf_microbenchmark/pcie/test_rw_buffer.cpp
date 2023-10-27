@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
 
       for (int i=0; i<iter; i++) {
         begin = std::chrono::steady_clock::now();
-        tt_metal::WriteToBuffer(buffer, src_vec);
+        tt_metal::detail::WriteToBuffer(buffer, src_vec);
         end = std::chrono::steady_clock::now();
         elapsed_sum += end - begin;
       }
@@ -86,7 +86,7 @@ int main(int argc, char** argv) {
       auto elapsed_us = duration_cast<microseconds>(elapsed_sum / iter).count();
       auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) /
                   (elapsed_us / 1000.0 / 1000.0);
-      log_info(LogTest, "WriteToBuffer {}: {:.3f}ms, {:.3f}GB/s",
+      log_info(LogTest, "detail::WriteToBuffer {}: {:.3f}ms, {:.3f}GB/s",
                 buffer_type == 0 ? "DRAM" : "L1", elapsed_us / 1000.0, bw);
     }
 
@@ -98,14 +98,14 @@ int main(int argc, char** argv) {
 
       for (int i=0; i<iter; i++) {
         begin = std::chrono::steady_clock::now();
-        tt_metal::ReadFromBuffer(buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(buffer, result_vec);
         end = std::chrono::steady_clock::now();
         elapsed_sum += end - begin;
       }
       auto elapsed_us = duration_cast<microseconds>(elapsed_sum / iter).count();
       auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) /
                   (elapsed_us / 1000.0 / 1000.0);
-      log_info(LogTest, "ReadFromBuffer {}: {:.3f}ms, {:.3f}GB/s",
+      log_info(LogTest, "detail::ReadFromBuffer {}: {:.3f}ms, {:.3f}GB/s",
                 buffer_type == 0 ? "DRAM" : "L1", elapsed_us / 1000.0, bw);
     }
 

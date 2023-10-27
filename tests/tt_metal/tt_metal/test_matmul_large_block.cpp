@@ -7,6 +7,7 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
@@ -354,13 +355,13 @@ bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool
             auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
             activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         }
-        tt_metal::WriteToBuffer(src0_dram_buffer, activations);
+        tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations);
 
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bflaot16 32x32 identity
         auto identity_tilized = tilize(identity, K * 32, N * 32);
         auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        tt_metal::WriteToBuffer(src1_dram_buffer, weights);
+        tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
 
 
 
@@ -380,9 +381,9 @@ bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool
 
 
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

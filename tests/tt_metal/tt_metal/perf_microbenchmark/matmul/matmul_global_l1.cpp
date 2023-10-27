@@ -1156,14 +1156,14 @@ int main(int argc, char** argv) {
     auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
     auto activations =
         pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-    tt_metal::WriteToBuffer(in0_buffer, activations);
+    tt_metal::detail::WriteToBuffer(in0_buffer, activations);
 
     auto identity =
         create_identity_matrix(Kt * 32, Nt * 32, std::min(Kt, Nt) * 32);
     auto identity_tilized = tilize(identity, Kt * 32, Nt * 32);
     auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-    tt_metal::WriteToBuffer(in1_buffer, weights);
+    tt_metal::detail::WriteToBuffer(in1_buffer, weights);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
@@ -1219,7 +1219,7 @@ int main(int argc, char** argv) {
     //                      Validation & Teardown
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> result_vec;
-    tt_metal::ReadFromBuffer(out_buffer, result_vec);
+    tt_metal::detail::ReadFromBuffer(out_buffer, result_vec);
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
     auto result_flat_layout = convert_to_flat_layout(result_bfp16);
     auto result_untilized = untilize(result_flat_layout, Mt * 32, Nt * 32);

@@ -185,7 +185,7 @@ int main(int argc, char **argv) {
 
 
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromDeviceDRAMChannel(

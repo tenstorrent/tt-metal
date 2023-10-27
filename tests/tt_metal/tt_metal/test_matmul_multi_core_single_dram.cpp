@@ -394,7 +394,7 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Running Matmul {} core test", num_cores_c * num_cores_r);
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
         log_info(LogTest, "Matmul test done");
         log_info(LogTest, "Gathering data back from dram and checking against golden");
         for(int i = 0; i < num_cores_r; i++) {

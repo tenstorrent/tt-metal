@@ -10,6 +10,7 @@
 #include "third_party/magic_enum/magic_enum.hpp"
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"
 #include "tt_dnn/op_library/eltwise_unary/eltwise_unary_op.hpp"
@@ -144,7 +145,7 @@ bool run_sfpu_test(string sfpu_name) {
         std::vector<uint32_t> src_vec = sfpu_op_to_init_func.at(sfpu_name)(
             dram_buffer_size, std::chrono::system_clock::now().time_since_epoch().count());
 
-        tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
+        tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
 
 
@@ -176,10 +177,10 @@ bool run_sfpu_test(string sfpu_name) {
 
 
         // tt::tt_metal::tt_gdb(device, 0, program->cores(), program->cores_to_ops());
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

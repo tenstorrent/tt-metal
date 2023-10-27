@@ -215,7 +215,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
 
 
     log_info(LogTest, "Writing to device buffer...");
-    tt_metal::WriteToBuffer(src_buffer, src_vec);
+    tt_metal::detail::WriteToBuffer(src_buffer, src_vec);
     log_info(LogTest, "Writing to device buffer Done.");
 
     EnqueueProgram(cq, program, false);
@@ -225,7 +225,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
 
     log_info(LogTest, "Reading results from device...");
     std::vector<uint32_t> result_vec;
-    tt_metal::ReadFromBuffer(dst_buffer, result_vec);
+    tt_metal::detail::ReadFromBuffer(dst_buffer, result_vec);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown

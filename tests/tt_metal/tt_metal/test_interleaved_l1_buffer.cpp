@@ -8,6 +8,8 @@
 
 #include "common/bfloat16.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
+
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 
 
@@ -26,10 +28,10 @@ bool test_interleaved_l1_buffer(tt_metal::Device *device, int num_pages_one, int
     std::vector<uint32_t> host_buffer = create_random_vector_of_bfloat16(
         buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
-    tt_metal::WriteToBuffer(interleaved_buffer, host_buffer);
+    tt_metal::detail::WriteToBuffer(interleaved_buffer, host_buffer);
 
     std::vector<uint32_t> readback_buffer;
-    tt_metal::ReadFromBuffer(interleaved_buffer, readback_buffer);
+    tt_metal::detail::ReadFromBuffer(interleaved_buffer, readback_buffer);
 
     pass &= (host_buffer == readback_buffer);
 
@@ -40,10 +42,10 @@ bool test_interleaved_l1_buffer(tt_metal::Device *device, int num_pages_one, int
     std::vector<uint32_t> second_host_buffer = create_random_vector_of_bfloat16(
         second_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
-    tt_metal::WriteToBuffer(second_interleaved_buffer, second_host_buffer);
+    tt_metal::detail::WriteToBuffer(second_interleaved_buffer, second_host_buffer);
 
     std::vector<uint32_t> second_readback_buffer;
-    tt_metal::ReadFromBuffer(second_interleaved_buffer, second_readback_buffer);
+    tt_metal::detail::ReadFromBuffer(second_interleaved_buffer, second_readback_buffer);
 
     pass &= (second_host_buffer == second_readback_buffer);
 

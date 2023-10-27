@@ -331,14 +331,14 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::WriteToBuffer(input0_dram_buffer, packed_activation);
-    tt_metal::WriteToBuffer(input1_dram_buffer, packed_identity);
+    tt_metal::detail::WriteToBuffer(input0_dram_buffer, packed_activation);
+    tt_metal::detail::WriteToBuffer(input1_dram_buffer, packed_identity);
     std::vector<uint32_t> input0_dram_readback_packed;
-    tt_metal::ReadFromBuffer(input0_dram_buffer, input0_dram_readback_packed);
+    tt_metal::detail::ReadFromBuffer(input0_dram_buffer, input0_dram_readback_packed);
     EXPECT_TRUE(input0_dram_readback_packed == packed_activation);
     print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(input0_dram_readback_packed), 32);
     std::vector<uint32_t> input1_dram_readback_packed;
-    tt_metal::ReadFromBuffer(input1_dram_buffer, input1_dram_readback_packed);
+    tt_metal::detail::ReadFromBuffer(input1_dram_buffer, input1_dram_readback_packed);
     EXPECT_TRUE(input1_dram_readback_packed == packed_identity);
     print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(input1_dram_readback_packed), 32);
 
@@ -347,7 +347,7 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     tt_metal::SetRuntimeArgs(program, writer_kernel, cfg.core, writer_rt_args);
 
 
-    tt_metal::LaunchProgram(device, program);
+    tt_metal::detail::LaunchProgram(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
@@ -362,7 +362,7 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     // std::vector<uint32_t> input1_l1_readback_packed;
     // std::vector<uint32_t> output_l1_readback_packed;
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
     auto dest_buffer_data_unpacked = unpack_vector<bfloat16, uint32_t>(dest_buffer_data);
     if (not cfg.outputs_rm) {
         dest_buffer_data_unpacked = convert_to_flat_layout(dest_buffer_data_unpacked);
@@ -455,8 +455,8 @@ bool single_tile_matmul(tt_metal::Device* device) {
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::WriteToBuffer(input0_dram_buffer, packed_input0);
-    tt_metal::WriteToBuffer(input1_dram_buffer, packed_input1);
+    tt_metal::detail::WriteToBuffer(input0_dram_buffer, packed_input0);
+    tt_metal::detail::WriteToBuffer(input1_dram_buffer, packed_input1);
 
 
     tt_metal::SetRuntimeArgs(
@@ -484,13 +484,13 @@ bool single_tile_matmul(tt_metal::Device* device) {
         });
 
 
-    tt_metal::LaunchProgram(device, program);
+    tt_metal::detail::LaunchProgram(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
     pass &= is_close_packed_vectors<bfloat16, uint32_t>(
         dest_buffer_data, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.015f); });
     return pass;
@@ -583,8 +583,8 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::WriteToBuffer(input0_dram_buffer, packed_input0);
-    tt_metal::WriteToBuffer(input1_dram_buffer, packed_input1);
+    tt_metal::detail::WriteToBuffer(input0_dram_buffer, packed_input0);
+    tt_metal::detail::WriteToBuffer(input1_dram_buffer, packed_input1);
 
 
     tt_metal::SetRuntimeArgs(
@@ -615,13 +615,13 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
             (uint32_t)M * N,
         });
 
-    tt_metal::LaunchProgram(device, program);
+    tt_metal::detail::LaunchProgram(device, program);
     sleep(1);
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
     int failed_index;
     pass &= is_close_packed_vectors<bfloat16, uint32_t>(
         dest_buffer_data,
@@ -739,8 +739,8 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::WriteToBuffer(input0_dram_buffer, packed_input0);
-    tt_metal::WriteToBuffer(input1_dram_buffer, packed_input1);
+    tt_metal::detail::WriteToBuffer(input0_dram_buffer, packed_input0);
+    tt_metal::detail::WriteToBuffer(input1_dram_buffer, packed_input1);
 
 
     tt_metal::SetRuntimeArgs(
@@ -771,13 +771,13 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
             (uint32_t)M * N,
         });
 
-    tt_metal::LaunchProgram(device, program);
+    tt_metal::detail::LaunchProgram(device, program);
     sleep(1);
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
     int failed_index;
     pass &= is_close_packed_vectors<bfloat16, uint32_t>(
         dest_buffer_data,

@@ -261,9 +261,9 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
 
         auto activations = pack_bfloat16_vec_into_uint32_vec(src_vec);
-        tt_metal::WriteToBuffer(src0_dram_buffer, activations);
+        tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tilized);
-        tt_metal::WriteToBuffer(src1_dram_buffer, weights);
+        tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
         std::cout << "DONE WRITING TO DEVICE. GOING TO CONFIGURE DEVICE WITH PROGRAM" << std::endl;
 
         tt_metal::SetRuntimeArgs(
@@ -289,11 +289,11 @@ int main(int argc, char **argv) {
         // END DEBUG
 
         std::cout << "DONE WRITING address map TO DEVICE L1. GOING TO LAUNCH KERNELS" << std::endl;
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
         std::cout << "DONE KERNELS. GOING TO READ FROM DRAM." << std::endl;
 
         std::vector<uint32_t> result_uint32;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_uint32);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_uint32);
         auto result_vec_tilized = unpack_uint32_vec_into_bfloat16_vec(result_uint32);
         assert(golden_act_matrix_tilized.size() == result_vec_tilized.size());
         auto result_vec = untilize(result_vec_tilized, act_rows, weight_cols);

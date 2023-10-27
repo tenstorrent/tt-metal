@@ -102,7 +102,7 @@ bool load_all_blank_kernels(tt_metal::Device* device) {
 
     CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", all_cores, ComputeConfig{});
 
-    tt_metal::LaunchProgram(device, program);
+    tt_metal::detail::LaunchProgram(device, program);
     return pass;
 }
 }  // namespace unit_tests::basic::device
@@ -324,7 +324,7 @@ TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
                 .noc = tt_metal::NOC::NOC_0,
                 .compile_args = {l1_address, intermediate_l1_addr, size_bytes}});
 
-        tt_metal::LaunchProgram(this->devices_.at(id), program);
+        tt_metal::detail::LaunchProgram(this->devices_.at(id), program);
 
         std::vector<uint32_t> output;
         for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {

@@ -146,7 +146,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
+    tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
     // Reader kernel on all cores reads from same location in DRAM
     std::vector<uint32_t> reader_rt_args = {
@@ -175,11 +175,11 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
     }
 
 
-    tt_metal::LaunchProgram(device, program);
+    tt_metal::detail::LaunchProgram(device, program);
 
     for (const auto &[core, dst_l1_buffer] : core_to_l1_buffer) {
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_l1_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_l1_buffer, result_vec);
         bool copied_data_correctly = src_vec == result_vec;
         TT_ASSERT(copied_data_correctly);
         pass &= copied_data_correctly;

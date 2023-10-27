@@ -1097,7 +1097,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     // DRAM to L1 writes should 32B aligned
     assert(scratch_pad_for_address_map_l1_address%32 == 0);
     // Create address map metadata buffers in L1
-    // Metadata vectors are copied to L1 buffers from host before calling LaunchProgram
+    // Metadata vectors are copied to L1 buffers from host before calling detail::LaunchProgram
     auto act_address_map_metadata_l1_b0_size = act_address_map_metadata.size() * sizeof(uint32_t);
     auto act_address_map_metadata_l1_buffer = CreateBuffer(device, act_address_map_metadata_l1_b0_size, act_address_map_metadata_l1_b0_size, tt_metal::BufferType::L1);
     uint32_t act_address_map_metadata_l1_address = act_address_map_metadata_l1_buffer.address();
