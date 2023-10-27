@@ -57,7 +57,6 @@ def run_eltwise_relu_min_tests(input_shape, dtype, dlayout, in_mem_config, out_m
             x=x,
             lower_limit=lower_limit,
             device=device,
-            device_id=0,
             dtype=[dtype],
             layout=[dlayout],
             input_mem_config=[in_mem_config],

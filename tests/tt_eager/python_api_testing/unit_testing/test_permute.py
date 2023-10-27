@@ -66,7 +66,6 @@ def run_permute_tests(
             tt_result = tt_permute(
                 x=x,
                 device=device,
-                device_id=0,
                 dtype=[dtype],
                 layout=[dlayout],
                 input_mem_config=[in_memory_config],

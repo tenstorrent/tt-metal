@@ -67,7 +67,6 @@ def run_eltwise_ne_tests(input_shape, in0_dtype, in1_dtype, in0_dlayout, in1_dla
             x=x,
             y=y,
             device=device,
-            device_id=0,
             dtype=[in0_dtype, in1_dtype],
             layout=[in0_dlayout, in1_dlayout],
             input_mem_config=[in0_in_mem_config, in1_in_mem_config],

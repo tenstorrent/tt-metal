@@ -44,7 +44,6 @@ def run_arange_tests(input_shape, dtype, dlayout, buffer_type, output_mem_config
         end=end,
         step=step,
         device=device,
-        device_id=0,
         dtype=[dtype],
         layout=[dlayout],
         input_mem_config=[ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, buffer_type)],

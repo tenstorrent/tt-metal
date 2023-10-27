@@ -39,7 +39,6 @@ def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_confi
     tt_result = tt_eltwise_softmax_in_place(
         x=x,
         device=device,
-        device_id=0,
         dtype=[dtype],
         layout=[dlayout],
         input_mem_config=[in_mem_config],

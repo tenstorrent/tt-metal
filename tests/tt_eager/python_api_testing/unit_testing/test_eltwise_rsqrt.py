@@ -40,7 +40,6 @@ def run_eltwise_rsqrt_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_
         x=x,
         fast_and_approx=fast_and_appx,
         device=device,
-        device_id=0,
         dtype=[dtype],
         layout=[dlayout],
         input_mem_config=[in_mem_config],

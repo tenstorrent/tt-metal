@@ -34,7 +34,6 @@ def run_var_hw_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config,
     tt_result = tt_var_hw(
         x=x,
         device=device,
-        device_id=0,
         dtype=[dtype],
         layout=[dlayout],
         input_mem_config=[in_mem_config],
