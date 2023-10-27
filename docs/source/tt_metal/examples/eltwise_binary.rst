@@ -72,7 +72,7 @@ Extra source tensor
         constexpr float val_to_add = -1.0f;
         std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, val_to_add);
 
-        WriteToBuffer(src1_dram_buffer, src1_vec);
+        detail::WriteToBuffer(src1_dram_buffer, src1_vec);
 
 In this program, we have a second source tensor. We will be adding this to the
 first source tensor.

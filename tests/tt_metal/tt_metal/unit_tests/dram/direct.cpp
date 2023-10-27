@@ -58,7 +58,7 @@ bool reader_only(
     ////////////////////////////////////////////////////////////////////////////
 
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
-    tt_metal::WriteToBuffer(input_dram_buffer, inputs);
+    tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -72,10 +72,10 @@ bool reader_only(
             (uint32_t)byte_size,
         });
 
-    tt_metal::LaunchProgram(device, program);
+    tt_metal::detail::LaunchProgram(device, program);
 
     std::vector<uint32_t> dest_core_data;
-    // tt_metal::ReadFromBuffer(l1_buffer, dest_core_data);
+    // tt_metal::detail::ReadFromBuffer(l1_buffer, dest_core_data);
     tt_metal::detail::ReadFromDeviceL1(device, reader_core, l1_byte_address, byte_size, dest_core_data);
     pass &= (dest_core_data == inputs);
     if (not pass) {
@@ -122,7 +122,7 @@ bool writer_only(
 
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     tt_metal::detail::WriteToDeviceL1(device, writer_core, l1_byte_address, inputs);
-    // tt_metal::WriteToBuffer(l1_buffer, inputs);
+    // tt_metal::detail::WriteToBuffer(l1_buffer, inputs);
 
 
     tt_metal::SetRuntimeArgs(
@@ -137,10 +137,10 @@ bool writer_only(
             (uint32_t)byte_size,
         });
 
-    tt_metal::LaunchProgram(device, program);
+    tt_metal::detail::LaunchProgram(device, program);
 
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
     pass &= (dest_buffer_data == inputs);
     if (not pass) {
         std::cout << "Mismatch at Core: " << writer_core.str() << std::endl;
@@ -206,7 +206,7 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::WriteToBuffer(input_dram_buffer, inputs);
+    tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
 
 
     tt_metal::SetRuntimeArgs(
@@ -230,10 +230,10 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
             (uint32_t)test_config.num_tiles,
         });
 
-    tt_metal::LaunchProgram(device, program);
+    tt_metal::detail::LaunchProgram(device, program);
 
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
     pass &= inputs == dest_buffer_data;
     return pass;
 }
@@ -310,7 +310,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::WriteToBuffer(input_dram_buffer, inputs);
+    tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
 
 
     tt_metal::SetRuntimeArgs(
@@ -334,10 +334,10 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
             (uint32_t)test_config.num_tiles,
         });
 
-    tt_metal::LaunchProgram(device, program);
+    tt_metal::detail::LaunchProgram(device, program);
 
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
     pass &= inputs == dest_buffer_data;
     return pass;
 }

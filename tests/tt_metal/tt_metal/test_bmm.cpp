@@ -7,6 +7,7 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "test_gold_impls.hpp"
 
@@ -105,8 +106,8 @@ int main(int argc, char **argv) {
 
         std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
         std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
-        tt_metal::WriteToBuffer(src0_dram_buffer, src0_vec);
-        tt_metal::WriteToBuffer(src1_dram_buffer, src1_vec);
+        tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
+        tt_metal::detail::WriteToBuffer(src1_dram_buffer, src1_vec);
 
         uint32_t do_bcast = 0;
         tt_metal::SetRuntimeArgs(
@@ -118,10 +119,10 @@ int main(int argc, char **argv) {
             {dram_buffer_dst_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
         );
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
         {
             // Read the result back from device DRAM and ref comparisone

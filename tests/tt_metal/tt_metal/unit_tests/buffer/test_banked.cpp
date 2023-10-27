@@ -121,16 +121,16 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
     auto input_packed = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
-    WriteToBuffer(input_buffer, input_packed);
+    detail::WriteToBuffer(input_buffer, input_packed);
     SetRuntimeArgs(program, reader_kernel, cfg.logical_core, reader_runtime_args);
     SetRuntimeArgs(program, writer_kernel, cfg.logical_core, writer_runtime_args);
 
-    LaunchProgram(device, program);
+    detail::LaunchProgram(device, program);
     std::vector<uint32_t> reread_input_packed;
-    ReadFromBuffer(input_buffer, reread_input_packed);
+    detail::ReadFromBuffer(input_buffer, reread_input_packed);
 
     std::vector<uint32_t> output_packed;
-    ReadFromBuffer(output_buffer, output_packed);
+    detail::ReadFromBuffer(output_buffer, output_packed);
 
     pass &= (output_packed == input_packed);
 
@@ -203,7 +203,7 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
     //                      Compile and Execute Appli   cation
     ////////////////////////////////////////////////////////////////////////////
 
-    WriteToBuffer(input_buffer, input_packed);
+    detail::WriteToBuffer(input_buffer, input_packed);
 
     SetRuntimeArgs(
         program,
@@ -223,9 +223,9 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
             (uint32_t)cfg.num_tiles,
         }
     );
-LaunchProgram(device, program);
+detail::LaunchProgram(device, program);
     std::vector<uint32_t> dest_buffer_data;
-    ReadFromBuffer(output_buffer, dest_buffer_data);
+    detail::ReadFromBuffer(output_buffer, dest_buffer_data);
     pass &= input_packed == dest_buffer_data;
 
     return pass;

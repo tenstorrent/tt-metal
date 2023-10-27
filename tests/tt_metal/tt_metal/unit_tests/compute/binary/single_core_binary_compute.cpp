@@ -15,6 +15,7 @@
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -141,8 +142,8 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::WriteToBuffer(input0_dram_buffer, packed_input0);
-    tt_metal::WriteToBuffer(input1_dram_buffer, packed_input1);
+    tt_metal::detail::WriteToBuffer(input0_dram_buffer, packed_input0);
+    tt_metal::detail::WriteToBuffer(input1_dram_buffer, packed_input1);
 
 
     tt_metal::SetRuntimeArgs(
@@ -169,13 +170,13 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
             (uint32_t)test_config.num_tiles,
         });
 
-    tt_metal::LaunchProgram(device, program);
+    tt_metal::detail::LaunchProgram(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
     pass &= is_close_packed_vectors<bfloat16, uint32_t>(
         dest_buffer_data, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.015f); });
     return pass;

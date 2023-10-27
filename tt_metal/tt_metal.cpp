@@ -87,6 +87,152 @@ inline void SetRuntimeArgs(const Program &program, KernelID kernel_id, const Cor
 
 namespace detail {
 
+    void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
+        ZoneScoped;
+        detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("WriteToDevice");
+
+        uint32_t host_buffer_size_bytes = host_buffer.size() * sizeof(uint32_t);
+        TT_ASSERT(
+            host_buffer_size_bytes <= buffer.size(),
+            "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer", host_buffer_size_bytes, buffer.size());
+
+        uint32_t page_size = buffer.page_size();
+        TT_ASSERT(buffer.size() % page_size == 0);
+        uint32_t num_pages = buffer.size() / page_size;
+
+        static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
+        TT_ASSERT(page_size % bytes_per_page_entry == 0);
+        uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
+
+        auto device = buffer.device();
+        auto num_banks = device->num_banks(buffer.buffer_type());
+        uint32_t bank_index = 0;
+        int data_index = 0;
+        for (int page_index = 0; page_index < num_pages; page_index++) {
+            auto absolute_address = buffer.page_address(bank_index, page_index);
+            std::vector<uint32_t> page;
+            page.insert(
+                page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_page);
+            switch (buffer.buffer_type()) {
+                case BufferType::DRAM: {
+                    auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
+                    tt::Cluster::instance().write_dram_vec(page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
+                } break;
+                case BufferType::L1: {
+                    auto noc_coordinates = buffer.noc_coordinates(bank_index);
+                    llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
+                } break;
+                default: TT_ASSERT(false && "Unsupported buffer type to write to device!");
+            }
+
+            bank_index = (bank_index + 1) % num_banks;
+            data_index += num_entries_per_page;
+        }
+    }
+
+    void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
+        switch (buffer.buffer_type()) {
+            case BufferType::DRAM:
+            case BufferType::L1: {
+                WriteToDevice(buffer, host_buffer);
+            } break;
+            case BufferType::SYSTEM_MEMORY: {
+                TT_ASSERT(false && "Writing to host memory is unsupported!");
+            } break;
+            default: TT_ASSERT(false && "Unsupported buffer type!");
+        }
+    }
+
+    void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
+        ZoneScoped;
+        detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ReadFromDevice");
+
+        host_buffer.clear();  // overwrite the data
+        uint32_t page_size = buffer.page_size();
+        TT_ASSERT(buffer.size() % page_size == 0);
+        uint32_t num_pages = buffer.size() / page_size;
+
+        auto device = buffer.device();
+        auto num_banks = device->num_banks(buffer.buffer_type());
+
+        uint32_t bank_index = 0;
+        for (int page_index = 0; page_index < num_pages; page_index++) {
+            auto absolute_address = buffer.page_address(bank_index, page_index);
+            std::vector<uint32_t> page;
+            switch (buffer.buffer_type()) {
+                case BufferType::DRAM: {
+                    auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
+                    tt::Cluster::instance().read_dram_vec(page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address, page_size);
+                } break;
+                case BufferType::L1: {
+                    auto noc_coordinates = buffer.noc_coordinates(bank_index);
+                    page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
+                } break;
+                default: TT_ASSERT(false && "Unsupported buffer type to write to device!");
+            }
+
+            // Copy page into host buffer
+            for (uint32_t entry : page) {
+                host_buffer.push_back(entry);
+            }
+
+            bank_index = (bank_index + 1) % num_banks;
+        }
+
+    }
+
+    void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
+        Device *device = buffer.device();
+        switch (buffer.buffer_type()) {
+            case BufferType::DRAM:
+            case BufferType::L1: {
+                if (buffer.buffer_type() == BufferType::DRAM) {
+                    tt::Cluster::instance().dram_barrier(device->id());
+                } else {
+                    tt::Cluster::instance().l1_barrier(device->id());
+                }
+                ReadFromDevice(buffer, host_buffer);
+            } break;
+            case BufferType::SYSTEM_MEMORY: {
+                TT_ASSERT(false && "Reading from host memory is unsupported!");
+            } break;
+            default: TT_ASSERT(false && "Unsupported buffer type!");
+        }
+    }
+
+    void LaunchProgram(Device *device, Program &program) {
+        {//Profiler scope start
+        ZoneScoped;
+        detail::DispatchStateCheck( false );
+        detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("LaunchProgram");
+        detail::CompileProgram(device, program);
+        detail::WriteRuntimeArgsToDevice(device, program);
+        detail::ConfigureDeviceWithProgram(device, program);
+        auto device_id = device->id();
+
+        tt::Cluster::instance().dram_barrier(device_id);
+
+        // Note: the l1_barrier below is needed to be sure writes to cores that
+        // don't get the GO mailbox (eg, storage cores) have all landed
+        tt::Cluster::instance().l1_barrier(device->id());
+
+        std::vector<CoreCoord> logical_cores_used_in_program = program.logical_cores();
+        std::unordered_set<CoreCoord> not_done_cores;
+        for (const auto &logical_core : logical_cores_used_in_program) {
+            launch_msg_t *msg = &program.kernels_on_core(logical_core)->launch_msg;
+            auto worker_core = device->worker_core_from_logical_core(logical_core);
+            not_done_cores.insert(worker_core);
+            tt::llrt::write_launch_msg_to_core(device->id(), worker_core, msg);
+        }
+
+        // Wait for all cores to be done
+        llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
+
+        }//Profiler scope end
+        DumpDeviceProfileResults(device, program);
+    }
+
+
     bool ConfigureDeviceWithProgram(Device *device, Program &program) {
         ZoneScoped;
         bool pass = true;
@@ -263,118 +409,6 @@ uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRang
         core_spec);
 }
 
-void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
-    ZoneScoped;
-    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("WriteToDevice");
-
-    uint32_t host_buffer_size_bytes = host_buffer.size() * sizeof(uint32_t);
-    TT_ASSERT(
-        host_buffer_size_bytes <= buffer.size(),
-        "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer", host_buffer_size_bytes, buffer.size());
-
-    uint32_t page_size = buffer.page_size();
-    TT_ASSERT(buffer.size() % page_size == 0);
-    uint32_t num_pages = buffer.size() / page_size;
-
-    static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
-    TT_ASSERT(page_size % bytes_per_page_entry == 0);
-    uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
-
-    auto device = buffer.device();
-    auto num_banks = device->num_banks(buffer.buffer_type());
-    uint32_t bank_index = 0;
-    int data_index = 0;
-    for (int page_index = 0; page_index < num_pages; page_index++) {
-        auto absolute_address = buffer.page_address(bank_index, page_index);
-        std::vector<uint32_t> page;
-        page.insert(
-            page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_page);
-        switch (buffer.buffer_type()) {
-            case BufferType::DRAM: {
-                auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
-                tt::Cluster::instance().write_dram_vec(page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
-            } break;
-            case BufferType::L1: {
-                auto noc_coordinates = buffer.noc_coordinates(bank_index);
-                llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
-            } break;
-            default: TT_ASSERT(false && "Unsupported buffer type to write to device!");
-        }
-
-        bank_index = (bank_index + 1) % num_banks;
-        data_index += num_entries_per_page;
-    }
-}
-
-void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
-    switch (buffer.buffer_type()) {
-        case BufferType::DRAM:
-        case BufferType::L1: {
-            WriteToDevice(buffer, host_buffer);
-        } break;
-        case BufferType::SYSTEM_MEMORY: {
-            TT_ASSERT(false && "Writing to host memory is unsupported!");
-        } break;
-        default: TT_ASSERT(false && "Unsupported buffer type!");
-    }
-}
-
-void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
-    ZoneScoped;
-    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ReadFromDevice");
-
-    host_buffer.clear();  // overwrite the data
-    uint32_t page_size = buffer.page_size();
-    TT_ASSERT(buffer.size() % page_size == 0);
-    uint32_t num_pages = buffer.size() / page_size;
-
-    auto device = buffer.device();
-    auto num_banks = device->num_banks(buffer.buffer_type());
-
-    uint32_t bank_index = 0;
-    for (int page_index = 0; page_index < num_pages; page_index++) {
-        auto absolute_address = buffer.page_address(bank_index, page_index);
-        std::vector<uint32_t> page;
-        switch (buffer.buffer_type()) {
-            case BufferType::DRAM: {
-                auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
-                tt::Cluster::instance().read_dram_vec(page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address, page_size);
-            } break;
-            case BufferType::L1: {
-                auto noc_coordinates = buffer.noc_coordinates(bank_index);
-                page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
-            } break;
-            default: TT_ASSERT(false && "Unsupported buffer type to write to device!");
-        }
-
-        // Copy page into host buffer
-        for (uint32_t entry : page) {
-            host_buffer.push_back(entry);
-        }
-
-        bank_index = (bank_index + 1) % num_banks;
-    }
-
-}
-
-void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
-    Device *device = buffer.device();
-    switch (buffer.buffer_type()) {
-        case BufferType::DRAM:
-        case BufferType::L1: {
-            if (buffer.buffer_type() == BufferType::DRAM) {
-                tt::Cluster::instance().dram_barrier(device->id());
-            } else {
-                tt::Cluster::instance().l1_barrier(device->id());
-            }
-            ReadFromDevice(buffer, host_buffer);
-        } break;
-        case BufferType::SYSTEM_MEMORY: {
-            TT_ASSERT(false && "Reading from host memory is unsupported!");
-        } break;
-        default: TT_ASSERT(false && "Unsupported buffer type!");
-    }
-}
 
 Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size, const BufferType buffer_type)
 {
@@ -419,37 +453,6 @@ std::vector<uint32_t> GetRuntimeArgs(const Program &program, KernelID kernel_id,
     return detail::GetKernel(program, kernel_id)->runtime_args(logical_core);
 }
 
-void LaunchProgram(Device *device, Program &program) {
-    {//Profiler scope start
-    ZoneScoped;
-    detail::DispatchStateCheck( false );
-    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("LaunchProgram");
-    detail::CompileProgram(device, program);
-    detail::WriteRuntimeArgsToDevice(device, program);
-    detail::ConfigureDeviceWithProgram(device, program);
-    auto device_id = device->id();
-
-    tt::Cluster::instance().dram_barrier(device_id);
-
-    // Note: the l1_barrier below is needed to be sure writes to cores that
-    // don't get the GO mailbox (eg, storage cores) have all landed
-    tt::Cluster::instance().l1_barrier(device->id());
-
-    std::vector<CoreCoord> logical_cores_used_in_program = program.logical_cores();
-    std::unordered_set<CoreCoord> not_done_cores;
-    for (const auto &logical_core : logical_cores_used_in_program) {
-        launch_msg_t *msg = &program.kernels_on_core(logical_core)->launch_msg;
-        auto worker_core = device->worker_core_from_logical_core(logical_core);
-        not_done_cores.insert(worker_core);
-        tt::llrt::write_launch_msg_to_core(device->id(), worker_core, msg);
-    }
-
-    // Wait for all cores to be done
-    llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
-
-    }//Profiler scope end
-    DumpDeviceProfileResults(device, program);
-}
 
 
 }  // namespace tt_metal

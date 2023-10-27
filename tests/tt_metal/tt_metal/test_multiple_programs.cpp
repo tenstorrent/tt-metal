@@ -7,6 +7,7 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
@@ -232,21 +233,21 @@ int main(int argc, char **argv) {
         tt::deprecated::Tensor<bfloat16> src0_tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto src0_activations_tile_layout = convert_to_tile_layout(src0_tensor.get_values());
         auto src0_activations = pack_bfloat16_vec_into_uint32_vec(src0_activations_tile_layout);
-        tt_metal::WriteToBuffer(src0_dram_buffer, src0_activations);
+        tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_activations);
 
         tt::deprecated::Tensor<bfloat16> src1_tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::ZEROS, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto src1_activations_tile_layout = convert_to_tile_layout(src1_tensor.get_values());
         auto src1_activations = pack_bfloat16_vec_into_uint32_vec(src1_activations_tile_layout);
-        tt_metal::WriteToBuffer(src1_dram_buffer, src1_activations);
+        tt_metal::detail::WriteToBuffer(src1_dram_buffer, src1_activations);
 
 
 
         write_program_runtime_args_to_device(device, program1, reader1_kernel_id, writer1_kernel_id, core, num_tiles, src0_dram_buffer, src1_dram_buffer, dst_dram_buffer);
 
-        tt_metal::LaunchProgram(device, program1);
+        tt_metal::detail::LaunchProgram(device, program1);
 
         std::vector<uint32_t> intermediate_result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, intermediate_result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, intermediate_result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validatie Intermediate Result
@@ -265,16 +266,16 @@ int main(int argc, char **argv) {
         auto identity = create_identity_matrix(32, 32, 32); //bflaot16 32x32 identity
         auto weights_tile_layout = convert_to_tile_layout(identity);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        tt_metal::WriteToBuffer(src1_dram_buffer, weights);
+        tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
 
 
 
         write_program_runtime_args_to_device(device, program2, reader2_kernel_id, writer2_kernel_id, core, num_tiles, src0_dram_buffer, src1_dram_buffer, dst_dram_buffer);
 
-        tt_metal::LaunchProgram(device, program2);
+        tt_metal::detail::LaunchProgram(device, program2);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

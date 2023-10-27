@@ -666,7 +666,7 @@ void send_dispatch_kernel_to_device(Device* device) {
 
     launch_msg_t msg = dispatch_program.kernels_on_core(producer_logical_core)->launch_msg;
 
-    // TODO(pkeller): Should use LaunchProgram once we have a mechanism to avoid running all RISCs
+    // TODO(pkeller): Should use detail::LaunchProgram once we have a mechanism to avoid running all RISCs
     tt::llrt::write_launch_msg_to_core(device->id(), producer_physical_core, &msg);
     tt::llrt::write_launch_msg_to_core(device->id(), consumer_physical_core, &msg);
 }

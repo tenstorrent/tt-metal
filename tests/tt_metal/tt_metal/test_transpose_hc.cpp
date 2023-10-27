@@ -9,6 +9,7 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 #include "test_gold_impls.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 #include "test_tiles.hpp"
 
@@ -125,7 +126,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 100, 0x1234);
         auto src_4f_16 = u16_from_u32_vector(src0_vec);
-        tt_metal::WriteToBuffer(src0_dram_buffer, src0_vec);
+        tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
 
 
 
@@ -155,10 +156,10 @@ int main(int argc, char **argv) {
 
 
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

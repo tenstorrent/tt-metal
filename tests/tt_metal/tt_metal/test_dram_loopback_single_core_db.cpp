@@ -7,6 +7,7 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -73,7 +74,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
             dram_buffer_size_bytes, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        tt_metal::WriteToBuffer(input_dram_buffer, input_vec);
+        tt_metal::detail::WriteToBuffer(input_dram_buffer, input_vec);
 
 
 
@@ -94,10 +95,10 @@ int main(int argc, char **argv) {
             total_l1_buffer_size_bytes});
 
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(output_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(output_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

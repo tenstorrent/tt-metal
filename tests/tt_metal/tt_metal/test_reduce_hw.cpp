@@ -9,6 +9,8 @@
 #include <string>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
+
 #include "common/bfloat16.hpp"
 #include "constants.hpp"
 
@@ -147,7 +149,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         auto seed = std::chrono::system_clock::now().time_since_epoch().count();
         vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 1.0f, 0x1234, -0.48f);
-        tt_metal::WriteToBuffer(src0_dram_buffer, src0_vec);
+        tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
 
 
 
@@ -178,11 +180,11 @@ int main(int argc, char **argv) {
 
 
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         // The kernel will view the input as TILED32_4FACES
         vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
         TT_ASSERT(result_vec.size() == NC*32*32/2); // we are expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
 
         ////////////////////////////////////////////////////////////////////////////
