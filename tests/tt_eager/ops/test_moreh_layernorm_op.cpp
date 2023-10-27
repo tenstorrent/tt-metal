@@ -18,19 +18,16 @@ int main(int argc, char **argv) {
     bool pass = true;
 
     const std::vector<std::string> run_types{"autoformat", "primary"};
-    const std::vector<std::vector<uint32_t>> normalized_dims_vec{
-        {3},
-        {2, 3},
-        {1, 2, 3},
-        {0, 1, 2, 3},
-    };
+
+    const std::vector<uint32_t> normalized_dims_vec{1, 2, 3, 4};
+
     const std::vector<std::vector<uint32_t>> input_shapes{
         {1, 1, TILE_HEIGHT, TILE_WIDTH},
         {2, 2, 2 * TILE_HEIGHT - 15, 2 * TILE_WIDTH - 17},
     };
 
     for (const auto &input_shape : input_shapes) {
-        for (const auto &normalized_dims : normalized_dims_vec) {
+        for (const auto normalized_dims : normalized_dims_vec) {
             for (const auto run_type : run_types) {
                 try {
                     ////////////////////////////////////////////////////////////////////////////
@@ -58,11 +55,13 @@ int main(int argc, char **argv) {
                         input_shape[2],
                         input_shape[3]);
 
-                    log_info(LogTest, "normalized_dims: [{}]", fmt::join(normalized_dims, ", "));
+                    log_info(LogTest, "normalized_dims: {}", normalized_dims);
 
                     // gamma_beta_shape
                     Shape gamma_beta_shape = {1, 1, 1, 1};
-                    for (const auto dim : normalized_dims) {
+                    const uint32_t input_dim = input_shape.size();
+                    for (uint32_t i = 0; i < normalized_dims; ++i) {
+                        const int64_t dim = input_dim - i - 1;
                         gamma_beta_shape[dim] = input_shape[dim];
                     }
 
@@ -83,8 +82,8 @@ int main(int argc, char **argv) {
                     log_info(LogTest, "{} test start.", run_type);
                     auto actual_npu =
                         is_autoformat
-                            ? tt_metal::moreh_layernorm(input, 1e-5f, normalized_dims, gamma, beta)
-                            : operations::primary::moreh_layernorm(input, 1e-5f, normalized_dims, gamma, beta);
+                            ? tt_metal::moreh_layernorm(input, normalized_dims, 1e-5f, gamma, beta)
+                            : operations::primary::moreh_layernorm(input, normalized_dims, 1e-5f, gamma, beta);
                     auto actual = actual_npu.cpu().to(Layout::ROW_MAJOR).unpad_from_tile(input_shape);
 
                     pass &= CloseDevice(device);
