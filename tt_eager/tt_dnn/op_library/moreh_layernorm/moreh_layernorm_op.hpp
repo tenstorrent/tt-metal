@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "tt_dnn/op_library/run_operation.hpp"
@@ -15,8 +16,8 @@ namespace tt {
 namespace tt_metal {
 
 struct MorehLayerNorm {
+    uint32_t normalized_dims;
     float eps;
-    std::vector<uint32_t> normalized_dims;
     MemoryConfig output_mem_config;
 
     void validate(
@@ -33,15 +34,16 @@ struct MorehLayerNorm {
 
 inline Tensor moreh_layernorm(
     const Tensor &input,
+    uint32_t normalized_dims,
     float eps,
-    std::vector<uint32_t> normalized_dims,
     std::optional<const Tensor> gamma = std::nullopt,
     std::optional<const Tensor> beta = std::nullopt,
     std::optional<const Tensor> mean = std::nullopt,
     std::optional<const Tensor> rstd = std::nullopt,
-    const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return operation::run_with_autoformat(
-               MorehLayerNorm{.eps = eps, .normalized_dims = normalized_dims, .output_mem_config = mem_config},
+               MorehLayerNorm{
+                   .normalized_dims = normalized_dims, .eps = eps, .output_mem_config = std::move(output_mem_config)},
                {input},
                {gamma, beta, mean, rstd})
         .at(0);
@@ -56,15 +58,16 @@ using namespace tt_metal;
 namespace primary {
 inline Tensor moreh_layernorm(
     const Tensor &input,
+    uint32_t normalized_dims,
     float eps,
-    std::vector<uint32_t> normalized_dims,
     std::optional<const Tensor> gamma = std::nullopt,
     std::optional<const Tensor> beta = std::nullopt,
     std::optional<const Tensor> mean = std::nullopt,
     std::optional<const Tensor> rstd = std::nullopt,
-    const MemoryConfig &mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     return operation::run(
-               MorehLayerNorm{.eps = eps, .normalized_dims = normalized_dims, .output_mem_config = mem_config},
+               MorehLayerNorm{
+                   .normalized_dims = normalized_dims, .eps = eps, .output_mem_config = std::move(output_mem_config)},
                {input},
                {gamma, beta, mean, rstd})
         .at(0);

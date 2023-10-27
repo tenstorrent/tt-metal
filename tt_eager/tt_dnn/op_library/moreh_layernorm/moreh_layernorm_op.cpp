@@ -29,27 +29,6 @@ inline bool is_dram(const std::optional<const Tensor> input_tensor) {
 }
 inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
 
-inline void are_valid_normalized_dims(const std::vector<uint32_t>& normalized_dims) {
-    // We assume that tensor is 4D.
-    if (normalized_dims.size() == 1) {
-        TT_ASSERT(normalized_dims.at(0) == 3);
-    } else if (normalized_dims.size() == 2) {
-        TT_ASSERT(normalized_dims.at(0) == 2);
-        TT_ASSERT(normalized_dims.at(1) == 3);
-    } else if (normalized_dims.size() == 3) {
-        TT_ASSERT(normalized_dims.at(0) == 1);
-        TT_ASSERT(normalized_dims.at(1) == 2);
-        TT_ASSERT(normalized_dims.at(2) == 3);
-    } else if (normalized_dims.size() == 4) {
-        TT_ASSERT(normalized_dims.at(0) == 0);
-        TT_ASSERT(normalized_dims.at(1) == 1);
-        TT_ASSERT(normalized_dims.at(2) == 2);
-        TT_ASSERT(normalized_dims.at(3) == 3);
-    } else {
-        TT_ASSERT(false, "Not supported case yet.");
-    }
-}
-
 inline uint32_t find_divisor_with_max_block_size(uint32_t val, uint32_t max_block_size) {
     uint32_t divisor{1};
     for (uint32_t current_divisor = max_block_size; current_divisor >= 1; current_divisor--) {
@@ -78,8 +57,8 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const std::optional<const Tensor> mean,
     const std::optional<const Tensor> rstd,
     Tensor& output,
-    float eps,
-    const std::vector<uint32_t>& normalized_dims) {
+    uint32_t normalized_dims,
+    float eps) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -91,9 +70,7 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     ////////////////////////////////////////////////////////////////////////////
     const auto input_shape = input.shape();
 
-    are_valid_normalized_dims(normalized_dims);
-
-    const bool is_lastdim_layernorm = normalized_dims.size() == 1;
+    const bool is_lastdim_layernorm = normalized_dims == 1;
 
     const auto input_shape_without_padding = input_shape.without_padding();
 
@@ -103,18 +80,18 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const auto origin_W = input_shape_without_padding[3];
 
     auto adjusted_input_shape = input_shape;
-    if (normalized_dims.size() == 2) {
+    if (normalized_dims == 2) {
         // HW
         // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (N, C, TILE_HEIGHT, Ht * Wt * TILE_WIDTH)
         adjusted_input_shape[2] = TILE_HEIGHT;
         adjusted_input_shape[3] = (input_shape[2] / TILE_HEIGHT) * input_shape[3];
-    } else if (normalized_dims.size() == 3) {
+    } else if (normalized_dims == 3) {
         // CHW
         // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (N, 1, TILE_HEIGHT, C * Ht * Wt * TILE_WIDTH)
         adjusted_input_shape[1] = 1;
         adjusted_input_shape[2] = TILE_HEIGHT;
         adjusted_input_shape[3] = input_shape[1] * (input_shape[2] / TILE_HEIGHT) * input_shape[3];
-    } else if (normalized_dims.size() == 4) {
+    } else if (normalized_dims == 4) {
         // NCHW
         // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (1, 1, TILE_HEIGHT, N * C * Ht * Wt * TILE_WIDTH)
         adjusted_input_shape[0] = 1;
@@ -129,8 +106,6 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const auto C = adjusted_input_shape[1];
     const auto H = adjusted_input_shape[2];
     const auto W = adjusted_input_shape[3];
-
-    const auto NC = N * C;
 
     const auto Ht = H / TILE_HEIGHT;
     const auto Wt = W / TILE_WIDTH;
@@ -191,7 +166,7 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto NCHt = NC * Ht;
+    const auto NCHt = N * C * Ht;
     tt_metal::CoreGridDesc core_grid(device);
     const auto num_cores_y = core_grid.y_;
     CoreCoord core_grid_coord = {.x = core_grid.x_, .y = num_cores_y};
@@ -340,13 +315,13 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const auto f_ht = static_cast<float>(origin_H) / static_cast<float>(TILE_HEIGHT);
     const auto f_wt = static_cast<float>(origin_W) / static_cast<float>(TILE_WIDTH);
 
-    if (normalized_dims.size() == 2) {
+    if (normalized_dims == 2) {
         // HW
         scaler.f = 1.0f / (static_cast<float>(TILE_WIDTH) * sqrt(f_ht * f_wt));
-    } else if (normalized_dims.size() == 3) {
+    } else if (normalized_dims == 3) {
         // CHW
         scaler.f = 1.0f / (static_cast<float>(TILE_WIDTH) * sqrt(f_c * f_ht * f_wt));
-    } else if (normalized_dims.size() == 4) {
+    } else if (normalized_dims == 4) {
         // NCHW
         scaler.f = 1.0f / (static_cast<float>(TILE_WIDTH) * sqrt(f_n * f_c * f_ht * f_wt));
     }
@@ -455,6 +430,7 @@ void MorehLayerNorm::validate(
     const auto& rstd = optional_input_tensors.at(3);
 
     check_tensor(input, "moreh_layernorm");
+    TT_ASSERT(this->normalized_dims <= input.shape().rank());
 
     if (gamma.has_value()) {
         check_tensor(gamma.value(), "moreh_layernorm");
@@ -511,13 +487,13 @@ operation::ProgramWithCallbacks MorehLayerNorm::create_program(
 
     auto& output = output_tensors.at(0);
 
-    return moreh_layernorm_(input, gamma, beta, mean, rstd, output, this->eps, this->normalized_dims);
+    return moreh_layernorm_(input, gamma, beta, mean, rstd, output, this->normalized_dims, this->eps);
 }
 
 tt::stl::reflection::Attributes MorehLayerNorm::attributes() const {
     return {
-        {"eps", this->eps},
         {"normalized_dims", this->normalized_dims},
+        {"eps", this->eps},
         {"output_mem_config", this->output_mem_config},
     };
 }

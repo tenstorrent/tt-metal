@@ -48,6 +48,8 @@ void MorehLayerNormBackwardInputGrad::validate(
     check_tensor(mean, "moreh_layernorm_backward_input_grad");
     check_tensor(rstd, "moreh_layernorm_backward_input_grad");
 
+    TT_ASSERT(this->normalized_dims <= output_grad.shape().rank());
+
     if (gamma.has_value()) {
         check_tensor(gamma.value(), "moreh_layernorm_backward_input_grad");
     }
@@ -113,6 +115,8 @@ void MorehLayerNormBackwardGammaBetaGrad::validate(
     check_tensor(mean, "moreh_layernorm_backward_gamma_beta_grad");
     check_tensor(rstd, "moreh_layernorm_backward_gamma_beta_grad");
 
+    TT_ASSERT(this->normalized_dims <= output_grad.shape().rank());
+
     if (gamma_grad.has_value()) {
         check_tensor(gamma_grad.value(), "moreh_layernorm_backward_gamma_beta_grad");
     }
@@ -171,17 +175,18 @@ namespace primary {
     const Tensor& input,
     const Tensor& mean,
     const Tensor& rstd,
-    std::vector<uint32_t> normalized_dims,
+    uint32_t normalized_dims,
     std::optional<const Tensor> gamma,
     std::optional<const Tensor> input_grad,
-    const MemoryConfig& mem_config) {
+    const MemoryConfig& output_mem_config) {
     if (!input_grad.has_value()) {
         return nullptr;
     }
 
     // Inplace
     operation::run(
-        MorehLayerNormBackwardInputGrad{.normalized_dims = normalized_dims, .output_mem_config = mem_config},
+        MorehLayerNormBackwardInputGrad{
+            .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
         {output_grad, input, mean, rstd},
         {gamma, input_grad});
 
@@ -194,10 +199,10 @@ namespace primary {
     const Tensor& input,
     const Tensor& mean,
     const Tensor& rstd,
-    std::vector<uint32_t> normalized_dims,
+    uint32_t normalized_dims,
     std::optional<const Tensor> gamma_grad,
     std::optional<const Tensor> beta_grad,
-    const MemoryConfig& mem_config) {
+    const MemoryConfig& output_mem_config) {
     std::vector<std::variant<Tensor, char*>> outputs{nullptr, nullptr};
     if (!gamma_grad.has_value() && !beta_grad.has_value()) {
         return outputs;
@@ -205,7 +210,8 @@ namespace primary {
 
     // Inplace
     operation::run(
-        MorehLayerNormBackwardGammaBetaGrad{.normalized_dims = normalized_dims, .output_mem_config = mem_config},
+        MorehLayerNormBackwardGammaBetaGrad{
+            .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
         {output_grad, input, mean, rstd},
         {gamma_grad, beta_grad});
 
@@ -225,22 +231,22 @@ namespace primary {
     const Tensor& input,
     const Tensor& mean,
     const Tensor& rstd,
-    std::vector<uint32_t> normalized_dims,
+    uint32_t normalized_dims,
     std::optional<const Tensor> gamma,
     std::optional<const Tensor> input_grad,
     std::optional<const Tensor> gamma_grad,
     std::optional<const Tensor> beta_grad,
-    const MemoryConfig& mem_config) {
+    const MemoryConfig& output_mem_config) {
     std::vector<std::variant<Tensor, char*>> outputs;
     outputs.reserve(3);
 
     // input_grad
     outputs.push_back(tt::operations::primary::moreh_layernorm_backward_input_grad(
-        output_grad, input, mean, rstd, normalized_dims, gamma, input_grad, mem_config));
+        output_grad, input, mean, rstd, normalized_dims, gamma, input_grad, output_mem_config));
 
     // gamma_grad and beta_grad
     const auto& gamma_beta_grad = tt::operations::primary::moreh_layernorm_backward_gamma_beta_grad(
-        output_grad, input, mean, rstd, normalized_dims, gamma_grad, beta_grad, mem_config);
+        output_grad, input, mean, rstd, normalized_dims, gamma_grad, beta_grad, output_mem_config);
     outputs.push_back(gamma_beta_grad[0]);
     outputs.push_back(gamma_beta_grad[1]);
 
