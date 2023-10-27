@@ -49,7 +49,7 @@ pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/fused
 pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_softmax.py -k "in0_L1 and batch_9"
 
 # Resnet18 tests with conv on cpu and with conv on device
-pytest $TT_METAL_HOME/tests/models/resnet/test_resnet18.py
+pytest $TT_METAL_HOME/models/demos/resnet/tests/test_resnet18.py
 
 # Falcon tests
 pytest $TT_METAL_HOME/models/demos/falcon7b/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
