@@ -97,16 +97,15 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
 
     DataFormat in_df = datatype_to_dataformat_converter(input.dtype());
     DataFormat out_df = datatype_to_dataformat_converter(output.dtype());
-    uint32_t in_nbytes = datum_size(in_df);
     uint32_t out_nbytes = datum_size(out_df);
 
-    DataFormat cb_df = in_df;
-    uint32_t tile_size = tt_metal::detail::TileSize(cb_df);
+    uint32_t in_tile_size = tt_metal::detail::TileSize(in_df);
+    uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
 
     uint32_t ntiles = input.volume() / TILE_HW;
     uint32_t ntiles_per_block = input_shape[3] / TILE_WIDTH;
     uint32_t nblocks = ceil((float) ntiles / ntiles_per_block);
-    uint32_t block_size_nbytes = input_shape[3] * input.element_size();
+    uint32_t block_size_nbytes = input_shape[3] * output.element_size();
 
     // TODO: hard coded for testing only. need to pass these args in.
     // These are the input values before inserting and padding or halo
@@ -177,7 +176,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
 
     uint32_t in_hw = in_h * in_w;
     uint32_t in_nhw = nbatch * in_hw;
-    uint32_t in_stick_nbytes = in_c * in_nbytes;
+    uint32_t in_stick_nbytes = in_c * out_nbytes;
     uint32_t in_nsticks = in_nhw;
     uint32_t in_nsticks_per_batch = in_hw;
     uint32_t in_nsticks_per_core = in_nhw / ncores;
@@ -238,23 +237,23 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
 
     uint32_t src_cb_id = CB::c_in0;
     uint32_t num_input_tiles = ntiles_per_block * nblocks_per_core;
-    auto src_cb_config = CircularBufferConfig(num_input_tiles * tile_size, {{src_cb_id, cb_df}})
-                            .set_page_size(src_cb_id, tile_size)
+    auto src_cb_config = CircularBufferConfig(num_input_tiles * in_tile_size, {{src_cb_id, in_df}})
+                            .set_page_size(src_cb_id, in_tile_size)
                             .set_globally_allocated_address(input.buffer()->address());
     auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
 
     // output of untilize from compute kernel goes into this CB
     uint32_t untilize_out_cb_id = CB::c_out0;
     uint32_t num_output_tiles = ntiles_per_block * nblocks_per_core;
-    auto untilize_out_cb_config = CircularBufferConfig(num_output_tiles * tile_size, {{untilize_out_cb_id, cb_df}})
-                                    .set_page_size(untilize_out_cb_id, tile_size);
+    auto untilize_out_cb_config = CircularBufferConfig(num_output_tiles * out_tile_size, {{untilize_out_cb_id, out_df}})
+                                    .set_page_size(untilize_out_cb_id, out_tile_size);
     auto untilize_out_cb = CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
 
     // output after concatenating halo and padding goes into this CB, as input to next op.
     uint32_t out_cb_id = CB::c_out1;
     uint32_t out_cb_pagesize = out_nbytes * in_c;
     uint32_t out_cb_npages = max_nsticks;
-    auto out_cb_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, cb_df}})
+    auto out_cb_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
                             .set_page_size(out_cb_id, out_cb_pagesize)
                             .set_globally_allocated_address(output.buffer()->address());
     auto out_cb = CreateCircularBuffer(program, all_cores, out_cb_config);
@@ -263,13 +262,13 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     uint32_t pad_cb_id = CB::c_in1;
     uint32_t pad_cb_pagesize = in_stick_nbytes;
     uint32_t pad_cb_npages = 1;
-    auto pad_cb_config = CircularBufferConfig(pad_cb_pagesize * pad_cb_npages, {{pad_cb_id, cb_df}})
+    auto pad_cb_config = CircularBufferConfig(pad_cb_pagesize * pad_cb_npages, {{pad_cb_id, out_df}})
                             .set_page_size(pad_cb_id, pad_cb_pagesize);
     auto pad_cb = CreateCircularBuffer(program, all_cores, pad_cb_config);
 
     {
-        log_debug(LogOp, "src cb: id = {}, pagesize = {}, npages = {}", src_cb_id, tile_size, num_input_tiles);
-        log_debug(LogOp, "untilize cb: id = {}, pagesize = {}, npages = {}", untilize_out_cb_id, tile_size, num_output_tiles);
+        log_debug(LogOp, "src cb: id = {}, pagesize = {}, npages = {}", src_cb_id, in_tile_size, num_input_tiles);
+        log_debug(LogOp, "untilize cb: id = {}, pagesize = {}, npages = {}", untilize_out_cb_id, out_tile_size, num_output_tiles);
         log_debug(LogOp, "out cb: id = {}, pagesize = {}, npages = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
     }
 
@@ -848,18 +847,17 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
 
     DataFormat in_df = datatype_to_dataformat_converter(a.dtype());
     DataFormat out_df = datatype_to_dataformat_converter(output.dtype());
-    uint32_t in_nbytes = datum_size(in_df);
     uint32_t out_nbytes = datum_size(out_df);
 
-    DataFormat cb_df = in_df;
-    uint32_t tile_size = tt_metal::detail::TileSize(cb_df);
+    uint32_t in_tile_size = tt_metal::detail::TileSize(in_df);
+    uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
 
     uint32_t ntiles = a.volume() / TILE_HW;
     uint32_t ntiles_per_block = input_shape[3] / TILE_WIDTH;
     TT_ASSERT(a.shard_spec().value().shard_shape[1] == input_shape[3], "Input shape in W should be same as shard width!");
 
     uint32_t nblocks = ceil((float) ntiles / ntiles_per_block);
-    uint32_t block_size_nbytes = input_shape[3] * a.element_size();
+    uint32_t block_size_nbytes = input_shape[3] * output.element_size();
 
     {
         log_debug(LogOp, "ntiles: {}", ntiles);
@@ -900,7 +898,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
 
     uint32_t in_hw = in_h * in_w;
     uint32_t in_nhw = nbatch * in_hw;
-    uint32_t in_stick_nbytes = in_c * in_nbytes;
+    uint32_t in_stick_nbytes = in_c * out_nbytes;
     uint32_t in_nsticks = in_nhw;
     uint32_t in_nsticks_per_batch = in_hw;
     uint32_t in_nsticks_per_core = in_nhw / ncores;
@@ -921,16 +919,16 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
 
     uint32_t src_cb_id = CB::c_in0;
     uint32_t num_input_tiles = ntiles_per_block * nblocks_per_core;
-    auto src_cb_config = CircularBufferConfig(num_input_tiles * tile_size, {{src_cb_id, cb_df}})
-                            .set_page_size(src_cb_id, tile_size)
+    auto src_cb_config = CircularBufferConfig(num_input_tiles * in_tile_size, {{src_cb_id, in_df}})
+                            .set_page_size(src_cb_id, in_tile_size)
                             .set_globally_allocated_address(a.buffer()->address());
     auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
 
     // output of untilize from compute kernel goes into this CB
     uint32_t untilize_out_cb_id = CB::c_out0;
     uint32_t num_output_tiles = ntiles_per_block * nblocks_per_core;
-    auto untilize_out_cb_config = CircularBufferConfig(num_output_tiles * tile_size, {{untilize_out_cb_id, cb_df}})
-                                    .set_page_size(untilize_out_cb_id, tile_size);
+    auto untilize_out_cb_config = CircularBufferConfig(num_output_tiles * out_tile_size, {{untilize_out_cb_id, out_df}})
+                                    .set_page_size(untilize_out_cb_id, out_tile_size);
     auto untilize_out_cb = CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
 
     // output after concatenating halo and padding goes into this CB, as input to next op.
@@ -941,7 +939,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
         log_debug(LogOp, "out_cb_pagesize: {}", out_cb_pagesize);
         log_debug(LogOp, "out_nsticks_per_core: {}", out_nsticks_per_core);
     }
-    auto out_cb_config = CircularBufferConfig(out_shard_size_max_per_core * out_cb_pagesize, {{out_cb_id, cb_df}})
+    auto out_cb_config = CircularBufferConfig(out_shard_size_max_per_core * out_cb_pagesize, {{out_cb_id, out_df}})
                             .set_page_size(out_cb_id, out_cb_pagesize)
                             .set_globally_allocated_address(output.buffer()->address());
     auto out_cb = CreateCircularBuffer(program, all_cores, out_cb_config);
@@ -950,7 +948,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
     uint32_t pad_cb_id = CB::c_in1;
     uint32_t pad_cb_pagesize = in_stick_nbytes;
     uint32_t pad_cb_npages = 1;
-    auto pad_cb_config = CircularBufferConfig(pad_cb_pagesize * pad_cb_npages, {{pad_cb_id, cb_df}})
+    auto pad_cb_config = CircularBufferConfig(pad_cb_pagesize * pad_cb_npages, {{pad_cb_id, out_df}})
                             .set_page_size(pad_cb_id, pad_cb_pagesize);
     auto pad_cb = CreateCircularBuffer(program, all_cores, pad_cb_config);
 
@@ -1371,7 +1369,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
 void UntilizeWithHalo::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to untilize need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16, "Only bloat16 dataformat supported");
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Input tensor is not TILE for untilize");
     TT_ASSERT(input_tensor_a.memory_config().is_sharded());
     TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Only works for sharded input");
@@ -1437,12 +1434,13 @@ std::vector<Shape> UntilizeWithHalo::compute_output_shapes(const std::vector<Ten
 
 std::vector<Tensor> UntilizeWithHalo::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
+    DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
     auto shard_spec = input_tensor.shard_spec().value();
     auto output_shape = this->compute_output_shapes(input_tensors).at(0);
     uint32_t ncores = input_tensor.shape()[0] * input_tensor.shape()[2] / shard_spec.shard_shape[0];
     shard_spec.shard_shape[0] = output_shape[0] * output_shape[2] / ncores;
     // log_debug(LogOp, "derived ncores: {}", ncores);
-    return {create_sharded_device_tensor(output_shape, input_tensor.dtype(), Layout::ROW_MAJOR, input_tensor.device(), this->output_mem_config, shard_spec)};
+    return {create_sharded_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), this->output_mem_config, shard_spec)};
 }
 
 operation::ProgramWithCallbacks UntilizeWithHalo::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {

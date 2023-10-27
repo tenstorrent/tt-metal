@@ -19,6 +19,7 @@ enum class TilizeOpParallelizationStrategy {
 
 struct Tilize {
     const MemoryConfig output_mem_config;
+    const DataType output_dtype;
     const bool use_multicore;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
@@ -39,6 +40,7 @@ struct TilizeWithValPadding {
     const Shape input_tensor_start;
     const float pad_value;
     const MemoryConfig output_mem_config;
+    const DataType output_dtype;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -53,9 +55,9 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value);
 operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value);
 
-Tensor tilize (const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, bool use_multicore = false);
-Tensor tilize_with_zero_padding (const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-Tensor tilize_with_val_padding (const Tensor &a, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor tilize (const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt, bool use_multicore = false);
+Tensor tilize_with_zero_padding (const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt);
+Tensor tilize_with_val_padding (const Tensor &a, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype=std::nullopt);
 
 }  // namespace tt_metal
 

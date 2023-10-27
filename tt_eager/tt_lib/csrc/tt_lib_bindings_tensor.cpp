@@ -206,7 +206,7 @@ void TensorModule(py::module &m_tensor) {
     );
 
     m_tensor.def("downsample", &downsample,
-        py::arg().noconvert(), py::arg().noconvert(),
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,
         R"doc(
         Performs a downsample on the input of a conv with a stride > 1 and a kernel window 1x1
         This op can be followed by a regular matmul to perform the conv1x1 with stride=1 operation
