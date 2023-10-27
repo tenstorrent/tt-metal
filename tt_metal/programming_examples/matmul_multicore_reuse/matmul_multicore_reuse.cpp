@@ -12,6 +12,7 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/common/work_split.hpp"
+#include "tt_metal/common/bmm_op.hpp"
 
 using namespace tt::constants;
 using namespace std;
@@ -120,6 +121,10 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
     uint32_t single_tile_size = detail::TileSize(cb_data_format);
     //uint32_t single_tile_size = 2 * 1024;
 
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+
     /*
     * EXtracting Matrix dimensions from input/output vectors
     */
@@ -135,10 +140,20 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
     // NOTE: Only supports matmuls where output is blocks of 16 x 16 tiles (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])2
     uint32_t in0_block_w = 2;
-    uint32_t out_subblock_h = 4;
-    uint32_t out_subblock_w = 2;
-    uint32_t per_core_M = 16;
-    uint32_t per_core_N = 16;
+    //uint32_t out_subblock_h = 4;
+    //uint32_t out_subblock_w = 2;
+    //uint32_t per_core_M = 16;
+    //uint32_t per_core_N = 16;
+
+    // Get large matmul params
+    auto matmul_params = bmm_op_utils::get_large_matmul_params(Mt, Nt, num_cores_y, num_cores_x, in0_block_w);
+    uint32_t per_core_M = std::get<0>(matmul_params);
+    uint32_t per_core_N = std::get<1>(matmul_params);
+    uint32_t out_subblock_h = std::get<2>(matmul_params);
+    uint32_t out_subblock_w = std::get<3>(matmul_params);
+
+    cout << "========= " << per_core_M << " == " << per_core_N << " == " <<  out_subblock_h << " == " << out_subblock_w << endl;
+
     TT_ASSERT(Mt % per_core_M == 0);
     TT_ASSERT(Nt % per_core_N == 0);
     TT_ASSERT(Kt % in0_block_w == 0);
@@ -187,9 +202,9 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
     /*
     * Multi-Core prep
     */
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    //auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    //uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    //uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     uint32_t num_blocks_y = Mt / per_core_M;
     uint32_t num_blocks_x = Nt / per_core_N;
@@ -404,7 +419,7 @@ int main(int argc, char **argv) {
             float a1 = as.first.to_float();
             float a2 = as.second.to_float();
 
-            if (i % 128 == 0){
+            if (i % 1280 == 0){
                 cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << src0_vec.at(i) << endl;
             }
         }
@@ -424,7 +439,7 @@ int main(int argc, char **argv) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(tilized_src0_vec.at(i));
             float a1 = as.first.to_float();
             float a2 = as.second.to_float();
-            if (i % 128 == 0){
+            if (i % 1280 == 0){
                 cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << tilized_src0_vec.at(i) << endl;
             }
         }
@@ -439,7 +454,7 @@ int main(int argc, char **argv) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(result_vec.at(i));
             float a1 = as.first.to_float();
             float a2 = as.second.to_float();
-            if (i % 128 == 0){
+            if (i % 1280 == 0){
                 cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << result_vec.at(i) << endl;
             }
         }
@@ -452,7 +467,7 @@ int main(int argc, char **argv) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(result_vec_untilized.at(i));
             float a1 = as.first.to_float();
             float a2 = as.second.to_float();
-            if (i % 128 == 0){
+            if (i % 1280 == 0){
                 cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << result_vec_untilized.at(i) << endl;
             }
         }
@@ -468,7 +483,7 @@ int main(int argc, char **argv) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(golden_vec.at(i));
             float a1 = as.first.to_float();
             float a2 = as.second.to_float();
-            if (i % 128 == 0){
+            if (i % 1280 == 0){
                 cout << "-- " << i << " -- " << a1 << "  " << a2 << "---" << golden_vec.at(i) << endl;
             }
         }
