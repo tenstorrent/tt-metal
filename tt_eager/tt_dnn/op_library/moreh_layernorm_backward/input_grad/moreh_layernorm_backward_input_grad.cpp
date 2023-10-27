@@ -27,27 +27,6 @@ inline bool is_dram(const std::optional<const Tensor> input_tensor) {
     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
 inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
-
-inline void are_valid_normalized_dims(const std::vector<uint32_t>& normalized_dims) {
-    // We assume that tensor is 4D.
-    if (normalized_dims.size() == 1) {
-        TT_ASSERT(normalized_dims.at(0) == 3);
-    } else if (normalized_dims.size() == 2) {
-        TT_ASSERT(normalized_dims.at(0) == 2);
-        TT_ASSERT(normalized_dims.at(1) == 3);
-    } else if (normalized_dims.size() == 3) {
-        TT_ASSERT(normalized_dims.at(0) == 1);
-        TT_ASSERT(normalized_dims.at(1) == 2);
-        TT_ASSERT(normalized_dims.at(2) == 3);
-    } else if (normalized_dims.size() == 4) {
-        TT_ASSERT(normalized_dims.at(0) == 0);
-        TT_ASSERT(normalized_dims.at(1) == 1);
-        TT_ASSERT(normalized_dims.at(2) == 2);
-        TT_ASSERT(normalized_dims.at(3) == 3);
-    } else {
-        TT_ASSERT(false, "Not supported case yet.");
-    }
-}
 }  // namespace
 
 operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
@@ -55,7 +34,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
     const Tensor& input,
     const Tensor& mean,
     const Tensor& rstd,
-    const std::vector<uint32_t>& normalized_dims,
+    uint32_t normalized_dims,
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> input_grad) {
     ////////////////////////////////////////////////////////////////////////////
@@ -69,9 +48,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
     ////////////////////////////////////////////////////////////////////////////
     const auto output_grad_shape = output_grad.shape();
 
-    are_valid_normalized_dims(normalized_dims);
-
-    const bool is_lastdim_layernorm = normalized_dims.size() == 1;
+    const bool is_lastdim_layernorm = normalized_dims == 1;
 
     const auto output_grad_shape_without_padding = output_grad_shape.without_padding();
 
@@ -89,13 +66,13 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
     auto normalized_numel = origin_W;
 
     auto adjusted_output_grad_shape = output_grad_shape;
-    if (normalized_dims.size() == 2) {
+    if (normalized_dims == 2) {
         // HW
         // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (N, C, TILE_HEIGHT, Ht * Wt * TILE_WIDTH)
         adjusted_output_grad_shape[2] = TILE_HEIGHT;
         adjusted_output_grad_shape[3] = (output_grad_shape[2] / TILE_HEIGHT) * output_grad_shape[3];
         normalized_numel *= origin_H;
-    } else if (normalized_dims.size() == 3) {
+    } else if (normalized_dims == 3) {
         // CHW
         // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (N, 1, TILE_HEIGHT, C * Ht * Wt * TILE_WIDTH)
         adjusted_output_grad_shape[1] = 1;
@@ -103,7 +80,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
         adjusted_output_grad_shape[3] =
             output_grad_shape[1] * (output_grad_shape[2] / TILE_HEIGHT) * output_grad_shape[3];
         normalized_numel *= origin_C * origin_H;
-    } else if (normalized_dims.size() == 4) {
+    } else if (normalized_dims == 4) {
         // NCHW
         // (N, C, Ht * TILE_HEIGHT, Wt * TILE_WIDTH) -> (1, 1, TILE_HEIGHT, N * C * Ht * Wt * TILE_WIDTH)
         adjusted_output_grad_shape[0] = 1;
@@ -124,8 +101,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
     const auto Ht = H / TILE_HEIGHT;
     const auto Wt = W / TILE_WIDTH;  // inner_size
 
-    const auto NC = N * C;
-    const auto NCHt = NC * Ht;  // outer_size
+    const auto NCHt = N * C * Ht;  // outer_size
 
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
