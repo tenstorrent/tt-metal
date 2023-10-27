@@ -126,11 +126,19 @@ void TensorModule(py::module &m_tensor) {
 
     py_core_coord
         .def(py::init<std::size_t, std::size_t>())
+        .def(
+            py::init<>(
+                [] (std::tuple<std::size_t, std::size_t> core_coord) {
+                    return CoreCoord(std::get<0>(core_coord), std::get<1>(core_coord));
+                }
+            )
+        )
         .def("__repr__", [](const CoreCoord& self) -> std::string {
             return self.str();
         })
         .def_readonly("x", &CoreCoord::x)
         .def_readonly("y", &CoreCoord::y);
+    py::implicitly_convertible<std::tuple<std::size_t, std::size_t>, CoreCoord>();
 
     auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
         Class defining memory configuration for storing tensor data on TT Accelerator device.
@@ -228,47 +236,16 @@ void TensorModule(py::module &m_tensor) {
 
     py::class_<OptimizedConvParallelizationConfig>(m_tensor, "OptimizedConvParallelizationConfig")
         .def(
-            py::init<>(
-                [] (
-                    std::tuple<std::size_t, std::size_t> grid_size,
-                    uint32_t per_core_out_matrix_height_ntiles,
-                    uint32_t per_core_weight_matrix_width_ntiles
-                ) {
-                    return OptimizedConvParallelizationConfig{
-                        .grid_size={std::get<0>(grid_size), std::get<1>(grid_size)},
-                        .per_core_out_matrix_height_ntiles=per_core_out_matrix_height_ntiles,
-                        .per_core_weight_matrix_width_ntiles=per_core_weight_matrix_width_ntiles
-                    };
-
-                }
-            ),
+            py::init<CoreCoord, uint32_t, uint32_t>(),
             py::kw_only(),
-            py::arg("grid_size").noconvert(),
+            py::arg("grid_size"),
             py::arg("per_core_out_matrix_height_ntiles").noconvert(),
             py::arg("per_core_weight_matrix_width_ntiles").noconvert()
         );
 
     py::class_<OptimizedConvBlockConfig>(m_tensor, "OptimizedConvBlockConfig")
         .def(
-            py::init<>(
-                [] (
-                    uint32_t act_block_h_ntiles,
-                    uint32_t act_block_w_ntiles,
-                    uint32_t weight_block_w_ntiles,
-                    uint32_t out_block_h_ntiles,
-                    uint32_t out_subblock_h_ntiles,
-                    uint32_t out_subblock_w_ntiles
-                ) {
-                    return OptimizedConvBlockConfig{
-                        .act_block_h_ntiles=act_block_h_ntiles,
-                        .act_block_w_ntiles=act_block_w_ntiles,
-                        .weight_block_w_ntiles=weight_block_w_ntiles,
-                        .out_block_h_ntiles=out_block_h_ntiles,
-                        .out_subblock_h_ntiles=out_subblock_h_ntiles,
-                        .out_subblock_w_ntiles=out_subblock_w_ntiles
-                    };
-                }
-            ),
+            py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(),
             py::kw_only(),
             py::arg("act_block_h_ntiles").noconvert(),
             py::arg("act_block_w_ntiles").noconvert(),
