@@ -19,6 +19,6 @@ struct address_map {
 
   static constexpr std::uint32_t FW_VERSION_ADDR = 0;
 
-  static constexpr std::int32_t ERISC_BARRIER_BASE =0x3E420;
+  static constexpr std::int32_t ERISC_BARRIER_BASE = 0;
 };
 }  // namespace llk
