@@ -207,7 +207,7 @@ def run_resnet_inference(
     logger.info(f"post processing time: {measurements['post_processing']} s")
 
     del tt_out
-    return measurements, prediction
+    return measurements, predictions
 
 
 @pytest.mark.parametrize(
