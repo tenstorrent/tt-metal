@@ -35,11 +35,11 @@ void program_consumer_cb(bool db_buf_switch, uint64_t consumer_noc_encoding, uin
     uint32_t num_pages_addr = get_db_cb_num_pages_addr(db_buf_switch);
     uint32_t page_size_addr = get_db_cb_page_size_addr(db_buf_switch);
     uint32_t total_size_addr = get_db_cb_total_size_addr(db_buf_switch);
-    reinterpret_cast<volatile uint32_t*>(acked_addr)[0] = 0;
-    reinterpret_cast<volatile uint32_t*>(recv_addr)[0] = 0;
-    reinterpret_cast<volatile uint32_t*>(num_pages_addr)[0] = num_pages;
-    reinterpret_cast<volatile uint32_t*>(page_size_addr)[0] = page_size >> 4;
-    reinterpret_cast<volatile uint32_t*>(total_size_addr)[0] = cb_size >> 4;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(acked_addr)[0] = 0;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_addr)[0] = 0;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(num_pages_addr)[0] = num_pages;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_size_addr)[0] = page_size >> 4;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(total_size_addr)[0] = cb_size >> 4;
 
     uint32_t rd_ptr_addr = get_db_cb_rd_ptr_addr(db_buf_switch);
     uint32_t wr_ptr_addr = get_db_cb_wr_ptr_addr(db_buf_switch);
@@ -61,7 +61,7 @@ void kernel_main() {
     uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
 
     volatile tt_l1_ptr uint32_t* db_semaphore_addr =
-        reinterpret_cast<volatile uint32_t*>(get_semaphore(0));  // Should be initialized to 2 by host
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));  // Should be initialized to 2 by host
 
     bool db_buf_switch = false;
 

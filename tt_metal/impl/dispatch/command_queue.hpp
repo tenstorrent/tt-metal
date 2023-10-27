@@ -34,18 +34,22 @@ using std::unique_ptr;
 struct transfer_info {
     uint32_t size_in_bytes;
     uint32_t dst;
-    uint32_t dst_noc_multicast_encoding;
+    uint32_t dst_noc_encoding;
     uint32_t num_receivers;
-    bool last_multicast_in_group;
+    bool last_transfer_in_group;
 };
 
 struct ProgramMap {
     uint32_t num_workers;
     vector<uint32_t> program_pages;
     vector<transfer_info> program_page_transfers;
-    vector<transfer_info> host_page_transfers;
+    vector<transfer_info> runtime_arg_page_transfers;
+    vector<transfer_info> cb_config_page_transfers;
+    vector<transfer_info> go_signal_page_transfers;
     vector<uint32_t> num_transfers_in_program_pages;
-    vector<uint32_t> num_transfers_in_host_data_pages;
+    vector<uint32_t> num_transfers_in_runtime_arg_pages;
+    vector<uint32_t> num_transfers_in_cb_config_pages;
+    vector<uint32_t> num_transfers_in_go_signal_pages;
 };
 
 // Only contains the types of commands which are enqueued onto the device
@@ -57,7 +61,7 @@ string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 #define NOC_X(x) x
 #define NOC_Y(y) y
 
-uint32_t noc_coord_to_u32(CoreCoord coord);
+uint32_t get_noc_unicast_encoding(CoreCoord coord);
 
 class Command {
     EnqueueCommandType type_ = EnqueueCommandType::INVALID;

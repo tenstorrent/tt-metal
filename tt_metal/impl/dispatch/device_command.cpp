@@ -5,6 +5,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
 #include "tt_metal/common/logger.hpp"
+#include "tt_metal/common/assert.hpp"
 
 DeviceCommand::DeviceCommand() {
     for (uint32_t idx = 0; idx < DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER; idx++) {
@@ -35,7 +36,26 @@ void DeviceCommand::set_producer_cb_num_pages(const uint32_t cb_num_pages) { thi
 
 void DeviceCommand::set_consumer_cb_num_pages(const uint32_t cb_num_pages) { this->desc[this->consumer_cb_num_pages_idx] = cb_num_pages; }
 
-void DeviceCommand::set_num_pages(const uint32_t num_pages) { this->desc[this->num_pages_idx] = num_pages; }
+void DeviceCommand::set_num_pages(uint32_t num_pages) { this->desc[this->num_pages_idx] = num_pages; }
+
+void DeviceCommand::set_num_pages(const DeviceCommand::TransferType transfer_type, const uint32_t num_pages) {
+    switch (transfer_type) {
+        case DeviceCommand::TransferType::RUNTIME_ARGS:
+            this->desc[this->num_runtime_arg_pages_idx] = num_pages;
+            break;
+        case DeviceCommand::TransferType::CB_CONFIGS:
+            this->desc[this->num_cb_config_pages_idx] = num_pages;
+            break;
+        case DeviceCommand::TransferType::PROGRAM_PAGES:
+            this->desc[this->num_program_pages_idx] = num_pages;
+            break;
+        case DeviceCommand::TransferType::GO_SIGNALS:
+            this->desc[this->num_go_signal_pages_idx] = num_pages;
+            break;
+        default:
+            TT_ASSERT(false, "Invalid transfer type.");
+    }
+}
 
 void DeviceCommand::set_data_size(const uint32_t data_size) { this->desc[this->data_size_idx] = data_size; }
 

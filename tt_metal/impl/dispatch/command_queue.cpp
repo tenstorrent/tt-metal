@@ -28,18 +28,23 @@ uint32_t get_noc_multicast_encoding(const CoreCoord& top_left, const CoreCoord& 
     return NOC_MULTICAST_ENCODING(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 }
 
+uint32_t get_noc_unicast_encoding(CoreCoord coord) { return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y)); }
+
 uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
-uint32_t noc_coord_to_u32(CoreCoord coord) { return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y)); }
 
 ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     /*
         TODO(agrebenisan): Move this logic to compile program
     */
+    vector<transfer_info> runtime_arg_page_transfers;
+    vector<transfer_info> cb_config_page_transfers;
     vector<transfer_info> program_page_transfers;
-    vector<transfer_info> host_page_transfers;
-    vector<uint32_t> num_transfers_in_program_pages; // This is a vector that corresponds to the number of transfers within program pages acros all program pages
-    vector<uint32_t> num_transfers_in_host_data_pages; // Same thing, but for runtime arg pages
+    vector<transfer_info> go_signal_page_transfers;
+    vector<uint32_t> num_transfers_in_runtime_arg_pages; // Corresponds to the number of transfers within host data pages across all host data pages
+    vector<uint32_t> num_transfers_in_cb_config_pages;
+    vector<uint32_t> num_transfers_in_program_pages;
+    vector<uint32_t> num_transfers_in_go_signal_pages;
     uint32_t num_transfers_within_page = 0;
 
     uint32_t src = 0;
@@ -50,19 +55,19 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
                                              uint32_t dst,
                                              vector<transfer_info>& transfers,
                                              vector<uint32_t>& num_transfers_per_page,
-                                             const vector<pair<uint32_t, uint32_t>>& dst_noc_multicast_info) -> uint32_t {
+                                             const vector<pair<uint32_t, uint32_t>>& dst_noc_transfer_info) -> uint32_t {
         while (num_bytes) {
             uint32_t num_bytes_left_in_page = DeviceCommand::PROGRAM_PAGE_SIZE - (src % DeviceCommand::PROGRAM_PAGE_SIZE);
             uint32_t num_bytes_in_transfer = std::min(num_bytes_left_in_page, num_bytes);
             src = align(src + num_bytes_in_transfer, noc_transfer_alignment_in_bytes);
 
-            uint32_t multicast_instruction_idx = 1;
-            for (const auto& [dst_noc_multicast_encoding, num_receivers] : dst_noc_multicast_info) {
-                bool last = multicast_instruction_idx == dst_noc_multicast_info.size();
-                transfer_info transfer_instruction = {.size_in_bytes = num_bytes_in_transfer, .dst = dst, .dst_noc_multicast_encoding = dst_noc_multicast_encoding, .num_receivers = num_receivers, .last_multicast_in_group = last};
+            uint32_t transfer_instruction_idx = 1;
+            for (const auto& [dst_noc_encoding, num_receivers] : dst_noc_transfer_info) {
+                bool last = transfer_instruction_idx == dst_noc_transfer_info.size();
+                transfer_info transfer_instruction = {.size_in_bytes = num_bytes_in_transfer, .dst = dst, .dst_noc_encoding = dst_noc_encoding, .num_receivers = num_receivers, .last_transfer_in_group = last};
                 transfers.push_back(transfer_instruction);
                 num_transfers_within_page++;
-                multicast_instruction_idx++;
+                transfer_instruction_idx++;
             }
 
             dst += num_bytes_in_transfer;
@@ -97,6 +102,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         {RISCV::NCRISC, NCRISC_L1_ARG_BASE},
         {RISCV::COMPUTE, TRISC_L1_ARG_BASE},
     };
+
     // Step 1: Get transfer info for runtime args (soon to just be host data). We
     // want to send host data first because of the higher latency to pull
     // in host data.
@@ -106,14 +112,21 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         for (const auto& [core_coord, runtime_args] : kernel->runtime_args()) {
             CoreCoord physical_core = device->worker_core_from_logical_core(core_coord);
             uint32_t num_bytes = runtime_args.size() * sizeof(uint32_t);
-            uint32_t dst_noc = get_noc_multicast_encoding(physical_core, physical_core);
+            uint32_t dst_noc = get_noc_unicast_encoding(physical_core);
 
             // Only one receiver per set of runtime arguments
             src = update_program_page_transfers(
-                src, num_bytes, dst, host_page_transfers, num_transfers_in_host_data_pages, {{dst_noc, 1}});
+                src, num_bytes, dst, runtime_arg_page_transfers, num_transfers_in_runtime_arg_pages, {{dst_noc, 1}});
         }
     }
 
+    // Cleanup step of separating runtime arg pages from program pages
+    if (num_transfers_within_page) {
+        num_transfers_in_runtime_arg_pages.push_back(num_transfers_within_page);
+        num_transfers_within_page = 0;
+    }
+
+    src = 0; // Resetting since in a new page
     // Step 2: Continue constructing pages for circular buffer configs
     for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
         vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info = extract_dst_noc_multicast_info(cb->core_ranges().ranges());
@@ -123,15 +136,15 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
                 src,
                 num_bytes,
                 CIRCULAR_BUFFER_CONFIG_BASE + buffer_index * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t),
-                host_page_transfers,
-                num_transfers_in_host_data_pages,
+                cb_config_page_transfers,
+                num_transfers_in_cb_config_pages,
                 dst_noc_multicast_info);
         }
     }
 
     // Cleanup step of separating runtime arg pages from program pages
     if (num_transfers_within_page) {
-        num_transfers_in_host_data_pages.push_back(num_transfers_within_page);
+        num_transfers_in_cb_config_pages.push_back(num_transfers_within_page);
         num_transfers_within_page = 0;
     }
 
@@ -187,7 +200,15 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
             dst_noc_multicast_info);
     }
 
+    if (num_transfers_within_page) {
+        num_transfers_in_program_pages.push_back(num_transfers_within_page);
+        num_transfers_within_page = 0;
+    }
+
+    vector<uint32_t> program_pages(align(src, DeviceCommand::PROGRAM_PAGE_SIZE) / sizeof(uint32_t), 0);
+
     // Step 5: Continue constructing pages for GO signals
+    src = 0;
     for (KernelGroup& kg : program.get_kernel_groups()) {
         kg.launch_msg.mode = DISPATCH_MODE_DEV;
         vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
@@ -197,18 +218,20 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
             src,
             sizeof(launch_msg_t),
             GET_MAILBOX_ADDRESS_HOST(launch),
-            program_page_transfers,
-            num_transfers_in_program_pages,
+            go_signal_page_transfers,
+            num_transfers_in_go_signal_pages,
             dst_noc_multicast_info
         );
     }
 
     if (num_transfers_within_page) {
-        num_transfers_in_program_pages.push_back(num_transfers_within_page);
+        num_transfers_in_go_signal_pages.push_back(num_transfers_within_page);
     }
 
+    // Allocate some more space for GO signal
+    program_pages.resize(program_pages.size() + align(src, DeviceCommand::PROGRAM_PAGE_SIZE) / sizeof(uint32_t));
+
     // Create a vector of all program binaries/cbs/semaphores
-    vector<uint32_t> program_pages(align(src, DeviceCommand::PROGRAM_PAGE_SIZE) / sizeof(uint32_t), 0);
     uint32_t program_page_idx = 0;
     for (KernelID kernel_id : program.kernel_ids()) {
         const Kernel* kernel = detail::GetKernel(program, kernel_id);
@@ -226,6 +249,8 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         program_page_idx += 4;
     }
 
+    // Since GO signal begin in a new page, I need to advance my idx
+    program_page_idx = align(program_page_idx, DeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t));
     for (const KernelGroup& kg: program.get_kernel_groups()) {
         uint32_t *launch_message_data = (uint32_t *)&kg.launch_msg;
         program_pages[program_page_idx] = launch_message_data[0];
@@ -239,9 +264,13 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         .num_workers = uint32_t(program.logical_cores().size()),
         .program_pages = std::move(program_pages),
         .program_page_transfers = std::move(program_page_transfers),
-        .host_page_transfers = std::move(host_page_transfers),
+        .runtime_arg_page_transfers = std::move(runtime_arg_page_transfers),
+        .cb_config_page_transfers = std::move(cb_config_page_transfers),
+        .go_signal_page_transfers = std::move(go_signal_page_transfers),
         .num_transfers_in_program_pages = std::move(num_transfers_in_program_pages),
-        .num_transfers_in_host_data_pages = std::move(num_transfers_in_host_data_pages),
+        .num_transfers_in_runtime_arg_pages = std::move(num_transfers_in_runtime_arg_pages),
+        .num_transfers_in_cb_config_pages = std::move(num_transfers_in_cb_config_pages),
+        .num_transfers_in_go_signal_pages = std::move(num_transfers_in_go_signal_pages),
     };
 }
 
@@ -436,16 +465,26 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
     // info
     constexpr static uint32_t dummy_dst_addr = 0;
     constexpr static uint32_t dummy_buffer_type = 0;
-    uint32_t num_host_data_pages = this->program_to_dev_map.num_transfers_in_host_data_pages.size();
+    uint32_t num_runtime_arg_pages = this->program_to_dev_map.num_transfers_in_runtime_arg_pages.size();
+    uint32_t num_cb_config_pages = this->program_to_dev_map.num_transfers_in_cb_config_pages.size();
     uint32_t num_program_binary_pages = this->program_to_dev_map.num_transfers_in_program_pages.size();
-    uint32_t num_pages = num_host_data_pages + num_program_binary_pages;
+    uint32_t num_go_signal_pages = this->program_to_dev_map.num_transfers_in_go_signal_pages.size();
+    uint32_t num_host_data_pages = num_runtime_arg_pages + num_cb_config_pages;
+    uint32_t num_cached_pages = num_program_binary_pages + num_go_signal_pages;
+    uint32_t total_num_pages = num_host_data_pages + num_cached_pages;
+
     command.set_page_size(DeviceCommand::PROGRAM_PAGE_SIZE);
-    command.set_num_pages(num_pages);
+    command.set_num_pages(DeviceCommand::TransferType::RUNTIME_ARGS, num_runtime_arg_pages);
+    command.set_num_pages(DeviceCommand::TransferType::CB_CONFIGS, num_cb_config_pages);
+    command.set_num_pages(DeviceCommand::TransferType::PROGRAM_PAGES, num_program_binary_pages);
+    command.set_num_pages(DeviceCommand::TransferType::GO_SIGNALS, num_go_signal_pages);
+    command.set_num_pages(total_num_pages);
+
     command.set_data_size(
         DeviceCommand::PROGRAM_PAGE_SIZE *
-        num_host_data_pages);  // Only the runtime args are part of the device command
+        num_host_data_pages);
 
-    if (num_host_data_pages != 0) {
+    if (num_host_data_pages) {
         command.add_buffer_transfer_instruction(
             host_data_src,
             dummy_dst_addr,
@@ -453,20 +492,36 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
             DeviceCommand::PROGRAM_PAGE_SIZE,
             uint32_t(BufferType::SYSTEM_MEMORY),
             dummy_buffer_type);
-        populate_program_data_transfer_instructions(
-            this->program_to_dev_map.num_transfers_in_host_data_pages, this->program_to_dev_map.host_page_transfers);
+
+        if (num_runtime_arg_pages) {
+            populate_program_data_transfer_instructions(
+                this->program_to_dev_map.num_transfers_in_runtime_arg_pages, this->program_to_dev_map.runtime_arg_page_transfers);
+        }
+
+        if (num_cb_config_pages) {
+            populate_program_data_transfer_instructions(
+                this->program_to_dev_map.num_transfers_in_cb_config_pages, this->program_to_dev_map.cb_config_page_transfers);
+        }
     }
 
-    if (num_program_binary_pages != 0) {
+    if (num_cached_pages) {
         command.add_buffer_transfer_instruction(
             this->buffer.address(),
             dummy_dst_addr,
-            num_program_binary_pages,
+            num_cached_pages,
             DeviceCommand::PROGRAM_PAGE_SIZE,
             uint32_t(this->buffer.buffer_type()),
             dummy_buffer_type);
-        populate_program_data_transfer_instructions(
-            this->program_to_dev_map.num_transfers_in_program_pages, this->program_to_dev_map.program_page_transfers);
+
+        if (num_program_binary_pages) {
+            populate_program_data_transfer_instructions(
+                this->program_to_dev_map.num_transfers_in_program_pages, this->program_to_dev_map.program_page_transfers);
+        }
+
+        if (num_go_signal_pages) {
+            populate_program_data_transfer_instructions(
+                this->program_to_dev_map.num_transfers_in_go_signal_pages, this->program_to_dev_map.go_signal_page_transfers);
+        }
     }
 
     constexpr static uint32_t producer_cb_num_pages = (DeviceCommand::PRODUCER_DATA_BUFFER_SIZE / DeviceCommand::PROGRAM_PAGE_SIZE);
@@ -505,6 +560,7 @@ void EnqueueProgramCommand::process() {
     const uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
     this->writer.cq_reserve_back(this->device, cmd_size);
     this->writer.cq_write(this->device, command_vector, write_ptr);
+
     if (this->host_data.size() != 0) {
         this->writer.cq_write(this->device, this->host_data, system_memory_temporary_storage_address);
     }
@@ -770,6 +826,10 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
         }
     }
 
+    // Separate runtime args and cb config data at the page
+    // boundary
+    host_data.resize(align(host_data.size(), DeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
+
     for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
         for (const auto buffer_index : cb->buffer_indices()) {
             host_data.push_back(cb->address() >> 4);
@@ -817,10 +877,10 @@ void CommandQueue::finish() {
     vector<uint32_t> finish_vec;
     do {
         tt::Cluster::instance().read_sysmem_vec(finish_vec, HOST_CQ_FINISH_PTR, 4, 0);
-    } while (finish_vec.at(0) != 1);
+    } while (finish_vec[0] != 1);
 
     // Reset this value to 0 before moving on
-    finish_vec.at(0) = 0;
+    finish_vec[0] = 0;
     tt::Cluster::instance().write_sysmem_vec(finish_vec, HOST_CQ_FINISH_PTR, 0);
 }
 
