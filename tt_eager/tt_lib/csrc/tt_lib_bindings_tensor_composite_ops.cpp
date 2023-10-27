@@ -675,13 +675,13 @@ namespace tt::tt_metal::detail{
             py::arg("input_a"), py::arg("input_b"),
             py::arg("output_mem_config").noconvert() = std::nullopt,R"doc(Perform an eltwise-binary divide ``input_a / input_b`` on two complex tensors.)doc");
 
-        detail::bind_binary_op<false, true>(m_tensor, "logical_xor", &logical_xor, R"doc(Performs eltwise-binary logical_xor (``{0} ^ {1}``) on two tensors.)doc");
-        detail::bind_binary_op<false, true>(m_tensor, "max", &tt::tt_metal::max, R"doc(Perform an eltwise-binary max on two tensors.)doc");
-        detail::bind_binary_op<false, true>(m_tensor, "min", &tt::tt_metal::min, R"doc(Perform an eltwise-binary min on two tensors.)doc");
-        detail::bind_binary_op<false, true>(m_tensor, "hypot", &hypot, R"doc(Returns tensor with the hypot activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
-        detail::bind_binary_op<false, true>(m_tensor, "xlogy", &xlogy, R"doc(Performs eltwise-binary xlogy (``{0} * log( {1} )``) on two tensors.)doc");
-        detail::bind_binary_op<false, true>(m_tensor, "atan2", &atan2, R"doc(Returns tensor with the atan2 activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
-        detail::bind_binary_op<false, true>(m_tensor, "nextafter", &nextafter, R"doc(Returns the next floating-point value after input towards other of the input tensors ``{0}`` and ``{1}``.)doc");
+        detail::bind_binary_op<false, true, false>(m_tensor, "logical_xor", &logical_xor, R"doc(Performs eltwise-binary logical_xor (``{0} ^ {1}``) on two tensors.)doc");
+        detail::bind_binary_op<false, true, false>(m_tensor, "max", &tt::tt_metal::max, R"doc(Perform an eltwise-binary max on two tensors.)doc");
+        detail::bind_binary_op<false, true, false>(m_tensor, "min", &tt::tt_metal::min, R"doc(Perform an eltwise-binary min on two tensors.)doc");
+        detail::bind_binary_op<false, true, false>(m_tensor, "hypot", &hypot, R"doc(Returns tensor with the hypot activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
+        detail::bind_binary_op<false, true, false>(m_tensor, "xlogy", &xlogy, R"doc(Performs eltwise-binary xlogy (``{0} * log( {1} )``) on two tensors.)doc");
+        detail::bind_binary_op<false, true, false>(m_tensor, "atan2", &atan2, R"doc(Returns tensor with the atan2 activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
+        detail::bind_binary_op<false, true, false>(m_tensor, "nextafter", &nextafter, R"doc(Returns the next floating-point value after input towards other of the input tensors ``{0}`` and ``{1}``.)doc");
 
 
     }

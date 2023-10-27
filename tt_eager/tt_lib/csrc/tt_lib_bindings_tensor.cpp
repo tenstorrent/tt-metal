@@ -205,7 +205,7 @@ void TensorModule(py::module &m_tensor) {
     );
 
     m_tensor.def("downsample", &downsample,
-        py::arg().noconvert(), py::arg().noconvert(),
+        py::arg().noconvert(), py::arg().noconvert(), py::arg("output_dtype").noconvert() = std::nullopt,
         R"doc(
         Performs a downsample on the input of a conv with a stride > 1 and a kernel window 1x1
         This op can be followed by a regular matmul to perform the conv1x1 with stride=1 operation
@@ -244,25 +244,7 @@ void TensorModule(py::module &m_tensor) {
 
     py::class_<OptimizedConvBlockConfig>(m_tensor, "OptimizedConvBlockConfig")
         .def(
-            py::init<>(
-                [] (
-                    uint32_t act_block_h_ntiles,
-                    uint32_t act_block_w_ntiles,
-                    uint32_t weight_block_w_ntiles,
-                    uint32_t out_block_h_ntiles,
-                    uint32_t out_subblock_h_ntiles,
-                    uint32_t out_subblock_w_ntiles
-                ) {
-                    return OptimizedConvBlockConfig{
-                        .act_block_h_ntiles=act_block_h_ntiles,
-                        .act_block_w_ntiles=act_block_w_ntiles,
-                        .weight_block_w_ntiles=weight_block_w_ntiles,
-                        .out_block_h_ntiles=out_block_h_ntiles,
-                        .out_subblock_h_ntiles=out_subblock_h_ntiles,
-                        .out_subblock_w_ntiles=out_subblock_w_ntiles
-                    };
-                }
-            ),
+            py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(),
             py::kw_only(),
             py::arg("act_block_h_ntiles").noconvert(),
             py::arg("act_block_w_ntiles").noconvert(),

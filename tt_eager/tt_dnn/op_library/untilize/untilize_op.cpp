@@ -24,7 +24,6 @@ void Untilize::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to untilize need to be on device!");
     TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to untilize need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16, "Only bloat16 dataformat supported");
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
     TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
@@ -59,9 +58,10 @@ std::vector<Shape> Untilize::compute_output_shapes(const std::vector<Tensor> &in
 
 std::vector<Tensor> Untilize::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
+    DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
     if (output_mem_config.is_sharded()) {
         if (input_tensor.memory_config().is_sharded()) {
-            return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.dtype(), Layout::ROW_MAJOR, input_tensor.device(), this->output_mem_config, input_tensor.shard_spec().value())};
+            return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), output_dtype, Layout::ROW_MAJOR, input_tensor.device(), this->output_mem_config, input_tensor.shard_spec().value())};
         } else {
             uint32_t ntiles = input_tensor.volume() / TILE_HW;
             uint32_t ntiles_per_block = input_tensor.shape()[-1] / TILE_WIDTH;
@@ -71,10 +71,10 @@ std::vector<Tensor> Untilize::create_output_tensors(const std::vector<Tensor> &i
             uint32_t fused_height = input_tensor.volume() / input_tensor.shape()[-1];
             std::array<uint32_t, 2> shard_shape = {fused_height / num_cores, input_tensor.shape()[-1]};
             ShardSpec shard_spec{.shard_grid=shard_grid, .shard_shape=shard_shape, .shard_orientation=ShardOrientation::ROW_MAJOR};
-            return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.dtype(), Layout::ROW_MAJOR, input_tensor.device(), this->output_mem_config, shard_spec)};
+            return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), output_dtype, Layout::ROW_MAJOR, input_tensor.device(), this->output_mem_config, shard_spec)};
         }
     } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::ROW_MAJOR, this->output_mem_config);
+        return operation::generic_create_output_tensors(*this, input_tensors, output_dtype, Layout::ROW_MAJOR, this->output_mem_config);
     }
 }
 
@@ -122,7 +122,6 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor> &input_tensors) c
     const auto& input_tensor_a = input_tensors.at(0);
     TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operandsneed to be on device!");
     TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16, "Only bloat16 dataformat supported");
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
     TT_ASSERT(
@@ -185,16 +184,17 @@ std::vector<Shape> UntilizeWithUnpadding::compute_output_shapes(const std::vecto
 }
 std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-     if (input_tensor_a.memory_config().is_sharded() && this->output_mem_config.is_sharded()) {
+    DataType output_dtype = input_tensor_a.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor_a.dtype();
+    if (input_tensor_a.memory_config().is_sharded() && this->output_mem_config.is_sharded()) {
         auto output_shape = this->compute_output_shapes(input_tensors).at(0);
         uint32_t fused_height = tt_metal::compute_volume(output_shape) / output_shape[-1];
         uint32_t num_cores = input_tensor_a.shard_spec().value().shard_grid.num_cores();
         std::array<uint32_t, 2> shard_shape = {fused_height, output_shape[-1] / num_cores};
         ShardSpec shard_spec = input_tensor_a.shard_spec().value();
         shard_spec.shard_shape = shard_shape;
-        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor_a.dtype(), Layout::ROW_MAJOR, input_tensor_a.device(), this->output_mem_config, shard_spec)};
+        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), output_dtype, Layout::ROW_MAJOR, input_tensor_a.device(), this->output_mem_config, shard_spec)};
     } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.dtype(), Layout::ROW_MAJOR, this->output_mem_config);
+        return operation::generic_create_output_tensors(*this, input_tensors, output_dtype, Layout::ROW_MAJOR, this->output_mem_config);
     }
 }
 

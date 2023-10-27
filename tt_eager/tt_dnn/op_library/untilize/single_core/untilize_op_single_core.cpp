@@ -24,21 +24,23 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
+    DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     tt_metal::Buffer *src0_buffer = a.buffer();
 
     int32_t num_tiles = a.volume() / TILE_HW;
 
     uint32_t num_sticks = a.shape()[0] * a.shape()[1] * a.shape()[2];
-    uint32_t stick_size = a.shape()[3] * a.element_size();
+    uint32_t stick_size = a.shape()[3] * output.element_size();
 
     uint32_t stick_s = a.shape()[3];
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
     // Ensure we don't intrude into storage space
     uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
-    uint32_t max_tiles = max_l1_size / (2 * single_tile_size); // 2 CBs
+    uint32_t max_tiles = max_l1_size / (2 * input_single_tile_size); // 2 CBs
     // Currently need the number of tiles in a row to be divisible by tiles in a block
     uint32_t num_tiles_per_block = 1;
     if (num_tiles_in_row <= max_tiles) {
@@ -51,10 +53,10 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
             }
         }
     }
-    uint32_t block_width_size = num_tiles_per_block * TILE_WIDTH * a.element_size();
+    uint32_t block_width_size = num_tiles_per_block * TILE_WIDTH * output.element_size();
     uint32_t num_full_blocks_in_row = num_tiles_in_row / num_tiles_per_block;
     uint32_t num_leftover_tiles = num_tiles_in_row % num_tiles_per_block;
-    uint32_t leftover_width_in_row = num_leftover_tiles * a.element_size();
+    uint32_t leftover_width_in_row = num_leftover_tiles * output.element_size();
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -64,14 +66,14 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
-    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-		.set_page_size(src0_cb_index, single_tile_size);
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
+		.set_page_size(src0_cb_index, input_single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
-    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
-		.set_page_size(output_cb_index, single_tile_size);
+    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
+		.set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     // Writer compile-time args
@@ -181,8 +183,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
+    uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
+    DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     tt_metal::Buffer *src0_buffer = a.buffer();
 
@@ -196,8 +200,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
 
     uint32_t num_padded_sticks = a.shape()[0] * a.shape()[1] * a.shape()[2];
     uint32_t num_unpadded_sticks = a.shape()[0] * a.shape()[1] * output_shape[2];
-    uint32_t padded_stick_size = a.shape()[3] * a.element_size(); // Assuming bfloat16 dataformat
-    uint32_t unpadded_stick_size = output_shape[3] * a.element_size();
+    uint32_t padded_stick_size = a.shape()[3] * output.element_size(); // Assuming bfloat16 dataformat
+    uint32_t unpadded_stick_size = output_shape[3] * output.element_size();
 
     constexpr uint32_t alignment = 32;
 
@@ -205,7 +209,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
     // Ensure we don't intrude into storage space
     uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
     // Memory usage is 2 CBs of width W, plus buffer of size alignment + (W * datum size)
-    uint32_t max_X = (max_l1_size - alignment) / (a.element_size() * TILE_HEIGHT * 2 + a.element_size());
+    uint32_t max_X = (max_l1_size - alignment) / (output.element_size() * TILE_HEIGHT * 2 + output.element_size());
     uint32_t max_tiles = max_X / TILE_WIDTH;
 
     // Currently need the number of tiles in a row to be divisible by tiles in a block
@@ -221,7 +225,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
         }
     }
     uint32_t block_width = num_tiles_per_block * TILE_WIDTH;
-    uint32_t block_row_size = block_width * a.element_size();
+    uint32_t block_row_size = block_width * output.element_size();
     uint32_t num_blocks_w_output = unpadded_stick_size / block_row_size;
     uint32_t num_blocks_w_input = padded_stick_size / block_row_size;
     uint32_t block_row_leftover_size = unpadded_stick_size - num_blocks_w_output * block_row_size;
@@ -236,14 +240,14 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
-    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-		.set_page_size(src0_cb_index, single_tile_size);
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
+		.set_page_size(src0_cb_index, input_single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t output_cb_index = 16; // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
-    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
-		.set_page_size(output_cb_index, single_tile_size);
+    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
+		.set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     vector<uint32_t> writer_kernel_args = {
