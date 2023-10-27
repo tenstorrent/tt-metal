@@ -87,6 +87,7 @@ def volume(shape):
         # 8,
     ),
 )
+@pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_run_max_pool(
     act_shape,
     kernel_size,
@@ -95,6 +96,7 @@ def test_run_max_pool(
     dilation,
     nblocks,
     device,
+    dtype,
 ):
     # ttl.device.EnableMemoryReports()
 
@@ -176,15 +178,13 @@ def test_run_max_pool(
 
     # ttl.device.EnableMemoryReports()
 
-    ttact = ttl.tensor.Tensor(
+    ttact_tilize = ttl.tensor.Tensor(
         act_padded.flatten().tolist(),
         act_shape_padded,
-        ttl.tensor.DataType.BFLOAT16,
+        dtype,
         ttl.tensor.Layout.ROW_MAJOR,
-    ).to(device, interleaved_mem_config)
+    ).to(ttl.tensor.Layout.TILE).to(device, interleaved_mem_config)
 
-    ttact_tilize = ttl.tensor.tilize(ttact, interleaved_mem_config)    ##, use_multicore=True)
-    ttact.deallocate()
     ttact_sharded = ttl.tensor.interleaved_to_sharded(ttact_tilize, grid_size, [in_height // ncores, act_padded.shape[-1]], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.ShardOrientation.ROW_MAJOR,)
     # ttact_tilize.deallocate()
     in_h = int(math.sqrt(act_shape_padded[-2]))
@@ -247,12 +247,12 @@ def test_run_max_pool(
     # print(f'GOLDEN: {golden_pytorch}')
     # torch.save(out_pytorch, 'output.pt')
     # torch.save(golden_pytorch, 'golden.pt')
-
     allclose = torch.allclose(out_pytorch, golden_pytorch)
-    isclose = torch.isclose(out_pytorch, golden_pytorch)
+    isclose = torch.all(torch.isclose(out_pytorch, golden_pytorch))
     isequal = torch.equal(out_pytorch, golden_pytorch)
 
     assert passing_pcc
-    assert allclose
-    assert torch.all(isclose)
-    assert isequal
+    if dtype == ttl.tensor.DataType.BFLOAT16:
+        assert allclose
+        assert isclose
+        assert isequal

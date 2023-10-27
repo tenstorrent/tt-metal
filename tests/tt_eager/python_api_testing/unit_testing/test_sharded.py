@@ -30,7 +30,8 @@ pytestmark = pytest.mark.skipif(is_wormhole_b0(), reason="Unsupported paralleliz
 @pytest.mark.parametrize(
     "shard_orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR]
 )
-def test_sharded_tile(device, input_shape, shard_size, shard_scheme, shard_orientation, function_level_defaults):
+@pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_tile(device, input_shape, shard_size, shard_scheme, shard_orientation, dtype, function_level_defaults):
     grid_size = (12, 9)
     input_size = torch.Size(input_shape)
     num_cores = 98
@@ -44,7 +45,7 @@ def test_sharded_tile(device, input_shape, shard_size, shard_scheme, shard_orien
         ttl.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
+            dtype,
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
@@ -71,8 +72,13 @@ def test_sharded_tile(device, input_shape, shard_size, shard_scheme, shard_orien
 
     tt_got_back = zt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
-    eq = torch.equal(tt_og, tt_got_back)
-    assert eq
+    if dtype == ttl.tensor.DataType.BFLOAT16:
+        passing, output = comp_equal(tt_og, tt_got_back)
+    else:
+        passing, output = comp_pcc(tt_og, tt_got_back, 0.999)
+    logger.info(output)
+
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -132,7 +138,8 @@ def test_sharded_rm(device, input_shape, shard_size, shard_scheme, shard_orienta
 @pytest.mark.parametrize("H, num_cores", [[100352, 98], [25088, 98]])
 @pytest.mark.parametrize("in_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
-def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, device, function_level_defaults):
+@pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, dtype, device, function_level_defaults):
     grid_size = (12, 9)
     N = 1
     C = 1
@@ -155,13 +162,13 @@ def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, device, functio
 
     out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
-    x = torch.arange(N * C * H * W).reshape((N, C, H, W)).bfloat16()
+    x = torch.randn((N, C, H, W)).bfloat16()
 
     xt = (
         ttl.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
+            dtype,
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
@@ -194,14 +201,18 @@ def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, device, functio
 
     tt_got_back = yt.cpu().to_torch()
 
-    passing, output = comp_equal(x, tt_got_back)
+    if dtype == ttl.tensor.DataType.BFLOAT16:
+        passing, output = comp_equal(x, tt_got_back)
+    else:
+        passing, output = comp_pcc(x, tt_got_back, 0.999)
     logger.info(output)
 
     assert passing
 
 
 @pytest.mark.parametrize("H, num_cores", [[25088, 98]])
-def test_sharded_tilize(H, num_cores, device, function_level_defaults):
+@pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defaults):
     grid_size = (12, 9)
     N = 1
     C = 1
@@ -241,6 +252,7 @@ def test_sharded_tilize(H, num_cores, device, function_level_defaults):
             buffer_type=ttl.tensor.BufferType.L1,
         ),
         use_multicore=True,
+        output_dtype=output_dtype,
     )
 
     zt = ttl.tensor.sharded_to_interleaved(
@@ -253,7 +265,10 @@ def test_sharded_tilize(H, num_cores, device, function_level_defaults):
 
     tt_got_back = zt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
-    passing, output = comp_equal(x, tt_got_back)
+    if output_dtype == ttl.tensor.DataType.BFLOAT16:
+        passing, output = comp_equal(x, tt_got_back)
+    else:
+        passing, output = comp_pcc(x, tt_got_back, 0.999)
     logger.info(output)
 
     assert passing
@@ -263,7 +278,11 @@ def test_sharded_tilize(H, num_cores, device, function_level_defaults):
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M, num_cores", [[25088, 98]])
 @pytest.mark.parametrize("N", [64, 256])
-def test_sharded_matmul_1d_in1(device, in0_sharded, out_sharded, M, N, num_cores, function_level_defaults):
+@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_matmul_1d_in1(
+    device, in0_sharded, out_sharded, M, N, num_cores, activations_dtype, weights_dtype, function_level_defaults
+):
     grid_size = (12, 9)
     K = 64
     in0_shape = [1, 1, M, K]
@@ -287,9 +306,9 @@ def test_sharded_matmul_1d_in1(device, in0_sharded, out_sharded, M, N, num_cores
     in1 = torch.randn(in1_shape).bfloat16().float()
     bias = torch.randn(bias_shape).bfloat16().float()
 
-    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config)
-    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config)
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config)[0]
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
+    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
+    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
 
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
@@ -321,6 +340,7 @@ def test_sharded_matmul_1d_in1(device, in0_sharded, out_sharded, M, N, num_cores
         bias=bias_t,
         program_config=program_config,
         output_mem_config=output_mem_config,
+        output_dtype=activations_dtype,
     )
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
@@ -337,7 +357,19 @@ def test_sharded_matmul_1d_in1(device, in0_sharded, out_sharded, M, N, num_cores
 @pytest.mark.parametrize("in1_sharded", [True, False], ids=["in1_sharded", "in1_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("H, num_cores", [[25088, 98]])
-def test_sharded_binary(device, in0_sharded, in1_sharded, out_sharded, H, num_cores, function_level_defaults):
+@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_binary(
+    device,
+    in0_sharded,
+    in1_sharded,
+    out_sharded,
+    H,
+    num_cores,
+    activations_dtype,
+    output_dtype,
+    function_level_defaults,
+):
     grid_size = (12, 9)
     in0_shape = [1, 1, H, 64]
     in1_shape = in0_shape
@@ -362,8 +394,8 @@ def test_sharded_binary(device, in0_sharded, in1_sharded, out_sharded, H, num_co
     in0 = torch.randn(in0_shape).bfloat16().float()
     in1 = torch.randn(in1_shape).bfloat16().float()
 
-    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config)
-    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config)
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
+    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
 
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
@@ -385,7 +417,7 @@ def test_sharded_binary(device, in0_sharded, in1_sharded, out_sharded, H, num_co
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    output_t = ttl.tensor.add(in0_t, in1_t, output_mem_config=output_mem_config)
+    output_t = ttl.tensor.add(in0_t, in1_t, output_mem_config=output_mem_config, output_dtype=output_dtype)
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
     pt_out = in0 + in1
@@ -496,7 +528,11 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M", [1600])
 @pytest.mark.parametrize("N", [1024])
-def test_sharded_matmul_2d(device, in0_sharded, out_sharded, M, N, function_level_defaults):
+@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_matmul_2d(
+    device, in0_sharded, out_sharded, M, N, activations_dtype, weights_dtype, function_level_defaults
+):
     K = 256
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
@@ -517,9 +553,9 @@ def test_sharded_matmul_2d(device, in0_sharded, out_sharded, M, N, function_leve
     in1 = torch.randn(in1_shape).bfloat16().float()
     bias = torch.randn(bias_shape).bfloat16().float()
 
-    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config)
-    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config)
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config)[0]
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
+    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
+    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
 
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
@@ -548,6 +584,7 @@ def test_sharded_matmul_2d(device, in0_sharded, out_sharded, M, N, function_leve
         bias=bias_t,
         program_config=program_config,
         output_mem_config=output_mem_config,
+        output_dtype=activations_dtype,
     )
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
@@ -564,7 +601,11 @@ def test_sharded_matmul_2d(device, in0_sharded, out_sharded, M, N, function_leve
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M", [1600])
 @pytest.mark.parametrize("N", [1024])
-def test_sharded_matmul_2d_transposed(device, in0_sharded, out_sharded, M, N, function_level_defaults):
+@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_matmul_2d_transposed(
+    device, in0_sharded, out_sharded, M, N, activations_dtype, weights_dtype, function_level_defaults
+):
     K = 256
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
@@ -585,9 +626,9 @@ def test_sharded_matmul_2d_transposed(device, in0_sharded, out_sharded, M, N, fu
     in1 = torch.randn(in1_shape).bfloat16().float()
     bias = torch.randn(bias_shape).bfloat16().float()
 
-    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config)
-    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config)
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config)[0]
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
+    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
+    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
 
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
@@ -616,6 +657,7 @@ def test_sharded_matmul_2d_transposed(device, in0_sharded, out_sharded, M, N, fu
         bias=bias_t,
         program_config=program_config,
         output_mem_config=output_mem_config,
+        output_dtype=activations_dtype,
     )
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
@@ -716,7 +758,8 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
 
 @pytest.mark.parametrize("in_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [False], ids=["out_unsharded"])
-def test_sharded_untilize_padded_shard(in_sharded, out_sharded, device, function_level_defaults):
+@pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_untilize_padded_shard(in_sharded, out_sharded, dtype, device, function_level_defaults):
     grid_size = (10, 8)
     N = 1
     C = 1
@@ -740,7 +783,7 @@ def test_sharded_untilize_padded_shard(in_sharded, out_sharded, device, function
         ttl.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
+            dtype,
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
@@ -773,7 +816,10 @@ def test_sharded_untilize_padded_shard(in_sharded, out_sharded, device, function
 
     tt_got_back = yt.cpu().to_torch()
 
-    passing, output = comp_equal(x, tt_got_back)
+    if dtype == ttl.tensor.DataType.BFLOAT16:
+        passing, output = comp_equal(x, tt_got_back)
+    else:
+        passing, output = comp_pcc(x, tt_got_back, 0.999)
     logger.info(output)
 
     assert passing
@@ -781,7 +827,11 @@ def test_sharded_untilize_padded_shard(in_sharded, out_sharded, device, function
 
 @pytest.mark.parametrize("in_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [False], ids=["out_unsharded"])
-def test_sharded_binary_padded_shard(in_sharded, out_sharded, device, function_level_defaults):
+@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_binary_padded_shard(
+    in_sharded, out_sharded, activations_dtype, output_dtype, device, function_level_defaults
+):
     grid_size = (10, 8)
     N = 1
     C = 1
@@ -800,13 +850,13 @@ def test_sharded_binary_padded_shard(in_sharded, out_sharded, device, function_l
     out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
     x = torch.ones((N, C, H, W)).bfloat16()
-    y = torch.ones((N, C, H, W)).bfloat16()
+    y = torch.ones((N, C, H, W)).bfloat16() * 2
 
     xt = (
         ttl.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
+            activations_dtype,
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
@@ -820,7 +870,7 @@ def test_sharded_binary_padded_shard(in_sharded, out_sharded, device, function_l
         ttl.tensor.Tensor(
             y.reshape(-1).tolist(),
             y.shape,
-            ttl.tensor.DataType.BFLOAT16,
+            activations_dtype,
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
@@ -846,11 +896,7 @@ def test_sharded_binary_padded_shard(in_sharded, out_sharded, device, function_l
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
 
-    zt = ttl.tensor.add(
-        xt,
-        yt,
-        output_mem_config=out_mem_config,
-    )
+    zt = ttl.tensor.add(xt, yt, output_mem_config=out_mem_config, output_dtype=output_dtype)
 
     if out_sharded:
         zt = ttl.tensor.sharded_to_interleaved(
@@ -868,7 +914,8 @@ def test_sharded_binary_padded_shard(in_sharded, out_sharded, device, function_l
 
 @pytest.mark.parametrize("in_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [False], ids=["out_unsharded"])
-def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, device, function_level_defaults):
+@pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, device, function_level_defaults):
     grid_size = (7, 8)
     N = 1
     C = 1
@@ -886,13 +933,13 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, device, 
 
     out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
-    x = torch.arange(N * C * H * W).reshape((N, C, H, W)).bfloat16()
+    x = torch.randn((N, C, H, W)).bfloat16()
 
     xt = (
         ttl.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
+            dtype,
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
@@ -927,7 +974,12 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, device, 
     tt_got_back = yt.cpu().to_torch()
 
     y = x[..., :392, :512]
-    passing, output = comp_equal(y, tt_got_back)
+
+    if dtype == ttl.tensor.DataType.BFLOAT16:
+        passing, output = comp_equal(y, tt_got_back)
+    else:
+        passing, output = comp_pcc(y, tt_got_back, 0.999)
+
     logger.info(output)
 
     assert passing
@@ -939,7 +991,8 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, device, 
     [[(8, 1, 32, 2048), True], [(1, 1, 32, 1024), False]],
     ids=["batched_shape_out_sharded", "unbatched_shape_out_interleaved"],
 )
-def test_width_sharded_untilize_with_unpadding(shape, in_sharded, out_sharded, device, function_level_defaults):
+@pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_width_sharded_untilize_with_unpadding(shape, in_sharded, out_sharded, dtype, device, function_level_defaults):
     grid_size = (8, 4)
     N, C, H, W = shape
 
@@ -954,13 +1007,13 @@ def test_width_sharded_untilize_with_unpadding(shape, in_sharded, out_sharded, d
 
     out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
-    x = torch.arange(N * C * H * W).reshape((N, C, H, W)).bfloat16()
+    x = torch.randn((N, C, H, W)).bfloat16()
 
     xt = (
         ttl.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
+            dtype,
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
@@ -995,7 +1048,10 @@ def test_width_sharded_untilize_with_unpadding(shape, in_sharded, out_sharded, d
     tt_got_back = yt.cpu().to_torch()
 
     y = x[..., :1, :]
-    passing, output = comp_equal(y, tt_got_back)
+    if dtype == ttl.tensor.DataType.BFLOAT16:
+        passing, output = comp_equal(y, tt_got_back)
+    else:
+        passing, output = comp_pcc(y, tt_got_back, 0.999)
     logger.info(output)
 
     assert passing
@@ -1003,7 +1059,8 @@ def test_width_sharded_untilize_with_unpadding(shape, in_sharded, out_sharded, d
 
 @pytest.mark.parametrize("in_sharded", [True], ids=["in0_sharded"])
 @pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
-def test_sharded_tilize_with_val_padding(in_sharded, out_sharded, device, function_level_defaults):
+@pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_tilize_with_val_padding(in_sharded, out_sharded, output_dtype, device, function_level_defaults):
     grid_size = (8, 4)
     N = 8
     C = 1
@@ -1043,11 +1100,7 @@ def test_sharded_tilize_with_val_padding(in_sharded, out_sharded, device, functi
         )
 
     yt = ttl.tensor.tilize_with_val_padding(
-        xt,
-        [8, 1, 64, 2048],
-        [0, 0, 0, 0],
-        1.0,
-        output_mem_config=out_mem_config,
+        xt, [8, 1, 64, 2048], [0, 0, 0, 0], 1.0, output_mem_config=out_mem_config, output_dtype=output_dtype
     )
 
     if out_sharded:
@@ -1060,7 +1113,10 @@ def test_sharded_tilize_with_val_padding(in_sharded, out_sharded, device, functi
 
     y = torch.nn.functional.pad(x, [0, 0, 0, 15], "constant", 1.0)
 
-    passing, output = comp_equal(y, tt_got_back)
+    if output_dtype == ttl.tensor.DataType.BFLOAT16:
+        passing, output = comp_equal(y, tt_got_back)
+    else:
+        passing, output = comp_pcc(y, tt_got_back, 0.999)
     logger.info(output)
 
     assert passing
@@ -1068,7 +1124,8 @@ def test_sharded_tilize_with_val_padding(in_sharded, out_sharded, device, functi
 
 @pytest.mark.parametrize("in_sharded", [True], ids=["in0_sharded"])
 @pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
-def test_sharded_reduce_h(in_sharded, out_sharded, device, function_level_defaults):
+@pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_reduce_h(in_sharded, out_sharded, dtype, device, function_level_defaults):
     grid_size = (8, 4)
     N = 8
     C = 1
@@ -1092,7 +1149,7 @@ def test_sharded_reduce_h(in_sharded, out_sharded, device, function_level_defaul
         ttl.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            ttl.tensor.DataType.BFLOAT16,
+            dtype,
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
@@ -1129,7 +1186,10 @@ def test_sharded_reduce_h(in_sharded, out_sharded, device, function_level_defaul
 
     y = torch.max(x, 2, True)[0]
 
-    passing, output = comp_equal(y, tt_got_back)
+    if dtype == ttl.tensor.DataType.BFLOAT16:
+        passing, output = comp_equal(y, tt_got_back)
+    else:
+        passing, output = comp_pcc(y, tt_got_back, 0.999)
     logger.info(output)
 
     assert passing
@@ -1139,7 +1199,11 @@ def test_sharded_reduce_h(in_sharded, out_sharded, device, function_level_defaul
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M", [32])
 @pytest.mark.parametrize("N", [1024])
-def test_sharded_matmul_1d_in0(device, in0_sharded, out_sharded, M, N, function_level_defaults):
+@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_matmul_1d_in0(
+    device, in0_sharded, out_sharded, M, N, activations_dtype, weights_dtype, function_level_defaults
+):
     grid_size = (8, 4)
     num_cores = grid_size[0] * grid_size[1]
     K = 2048
@@ -1160,9 +1224,9 @@ def test_sharded_matmul_1d_in0(device, in0_sharded, out_sharded, M, N, function_
     in1 = torch.randn(in1_shape).bfloat16().float()
     bias = torch.randn(bias_shape).bfloat16().float()
 
-    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config)
-    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config)
-    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config)[0]
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
+    in1_t = torch2tt_tensor(in1, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)
+    bias_t = pad_by_zero(bias, device, tt_memory_config=interleaved_mem_config, tt_dtype=weights_dtype)[0]
 
     output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
 
@@ -1192,6 +1256,7 @@ def test_sharded_matmul_1d_in0(device, in0_sharded, out_sharded, M, N, function_
         bias=bias_t,
         program_config=program_config,
         output_mem_config=output_mem_config,
+        output_dtype=activations_dtype,
     )
     if out_sharded:
         output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)

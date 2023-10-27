@@ -40,6 +40,7 @@ import torch
         (8, 1024, 1024, 14, 14, 2, 2, 56, (7,8), False),
     ),
 )
+@pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 @skip_for_wormhole_b0
 def test_run_downsample(
     use_program_cache,
@@ -53,9 +54,9 @@ def test_run_downsample(
     num_cores,
     grid_size,
     height_sharded,
+    dtype,
     device,
 ):
-
     assert(input_channels % 32 == 0)
     assert(output_channels % 32 == 0)
     assert(stride_h == stride_w)
@@ -80,7 +81,7 @@ def test_run_downsample(
     #        print(f"A_pyt_nhwc_2d[{i}][{j}]={A_pyt_nhwc[0][0][i][j]}")
     #print("A_pyt_nhwc_2d[32][0]=", A_pyt_nhwc[0][0][32][0])
     a_activation_shape_nhwc = [batch_size, input_height, input_width, input_channels]
-    A_cl_host = ttl.tensor.Tensor(A_pyt_nhwc, ttl.tensor.DataType.BFLOAT16).reshape(1, 1, batch_size*input_height*input_width, input_channels)
+    A_cl_host = ttl.tensor.Tensor(A_pyt_nhwc, dtype).reshape(1, 1, batch_size*input_height*input_width, input_channels)
     num_cores_height_slices = num_cores if height_sharded else grid_size[0]
     input_shape = [1, 1, _nearest_y(batch_size*input_height*input_width, 32), input_channels]
     A_cl_host = A_cl_host.pad(input_shape, (0,0,0,0), 0.0)
@@ -124,7 +125,7 @@ def test_run_downsample(
                 ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
             )
     # Run downsample op
-    A_downampled_sharded = ttl.tensor.downsample(A_sharded, downsample_params)
+    A_downampled_sharded = ttl.tensor.downsample(A_sharded, downsample_params, output_dtype=ttl.tensor.DataType.BFLOAT16)
     A_downsampled = ttl.tensor.sharded_to_interleaved(A_downampled_sharded, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1))
     out = A_downsampled
     out_shape = [1, 1, _nearest_y(batch_size*output_height*output_width, 32), input_channels]
@@ -155,7 +156,11 @@ def test_run_downsample(
             golden = torch.tensor(out_debug[0][0][i][j])
             atol_delta = torch.abs(golden - calculated).item()
             rtol_delta = torch.abs(golden - calculated) / torch.abs(calculated)
-            if atol_delta > 0.1 or rtol_delta > 0.1:
+            if dtype == ttl.tensor.DataType.BFLOAT8_B:
+                fail = atol_delta > 0.1
+            else:
+                fail = atol_delta > 0.1 or rtol_delta > 0.1
+            if fail:
                 print(f"Bad value at {i} (sharded index {i - start_i}),{j} with ATOL={atol_delta} and RTOL={rtol_delta}")
                 print(f"    result={calculated}, golden={golden}")
                 num_errors += 1

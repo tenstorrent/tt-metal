@@ -43,7 +43,7 @@ namespace tt::tt_metal::detail{
         detail::export_enum<BcastOpDim>(m_tensor);
 
         detail::bind_unary_op(m_tensor, "clone", &clone, R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.)doc");
-        detail::bind_binary_op<false, false>(m_tensor, "copy", &copy, R"doc(  Copies the elements from ``{0}`` into ``{1}``. ``{1}`` is modified in place.)doc");
+        detail::bind_binary_op<false, false, false>(m_tensor, "copy", &copy, R"doc(  Copies the elements from ``{0}`` into ``{1}``. ``{1}`` is modified in place.)doc");
 
         // *** tensor manipulation ***
         m_tensor.def("concat", &concat,
@@ -126,7 +126,7 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("tilize", &tilize,
-            py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt,
             py::arg("use_multicore").noconvert() = false, R"doc(
             Changes data layout of input tensor to TILE.
 
@@ -139,10 +139,12 @@ namespace tt::tt_metal::detail{
 
                 "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X] where Y%32=0 and X%32=0", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_dtype", "Output tensor data type", "DataType", "Default is None (Use input dtype)", "No"
+                "use_multicore", "Whether to use multi-core parallelization", "bool", "Default is false", "No"
         )doc");
 
         m_tensor.def("tilize_with_zero_padding", &tilize_with_zero_padding,
-            py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
             Tilizes a given tensor across memory on device. Pads zeroes height-wise and width-wise if required.
 
             .. csv-table::
@@ -150,13 +152,14 @@ namespace tt::tt_metal::detail{
 
                 "input", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_dtype", "Output tensor data type", "DataType", "Default is None (Use input dtype)", "No"
         )doc");
 
         m_tensor.def("tilize_with_val_padding",
-            [] (const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& output_mem_config) {
-                return tilize_with_val_padding(tensor, output_tensor_shape, input_tensor_start, pad_value, output_mem_config);
+            [] (const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype) {
+                return tilize_with_val_padding(tensor, output_tensor_shape, input_tensor_start, pad_value, output_mem_config, output_dtype);
             },
-            py::arg("input").noconvert(), py::arg("output_tensor_shape").noconvert(), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("input").noconvert(), py::arg("output_tensor_shape").noconvert(), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
             Tilizes a given tensor across memory on device. Pads to specified shape before tilizing.
 
             .. csv-table::
@@ -167,6 +170,7 @@ namespace tt::tt_metal::detail{
                 "input_tensor_start", "Start indices to place input tensor in output tensor", "List[int[4]]", "Must be all 0s", "Yes"
                 "pad_value", "Value to pad input tensor", "float", "", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_dtype", "Output tensor data type", "DataType", "Default is None (Use input dtype)", "No"
         )doc");
 
         m_tensor.def("untilize", &untilize,
