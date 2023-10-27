@@ -20,3 +20,4 @@ class TtModelArgs:
     FALLBACK_SOFTMAX: bool = False
     FALLBACK_ROTARY_EMBEDDING: bool = False
     FALLBACK_EMPTY: bool = False
+    FALLBACK_FUSED_ATTENTION: bool = False
