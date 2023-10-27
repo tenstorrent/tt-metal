@@ -29,13 +29,14 @@ std::string RISCID_to_string(RISCID id) {
         case TR0: return "TR0";
         case TR1: return "TR1";
         case TR2: return "TR2";
+        case ER: return "ER";
         default: TT_ASSERT(false);
     }
     return string();
 }
 
 struct CompileState {
-    RISCID           hwthread               { RISCID::NC }; // 0=NC, 1=UNPACK, BR=4
+    RISCID           hwthread               { RISCID::NC }; // 0=NC, 1=UNPACK, BR=4, ER=5
     uint32_t         perf_dump_level        { 0 };
     uint32_t         noc_index              { 0 };
     bool             profile_kernel         { false };
@@ -77,6 +78,7 @@ struct CompileState {
             case RISCID::TR0: thread_bin_subdir = "/tensix_thread0/"; break;
             case RISCID::TR1: thread_bin_subdir = "/tensix_thread1/"; break;
             case RISCID::TR2: thread_bin_subdir = "/tensix_thread2/"; break;
+            case RISCID::ER: thread_bin_subdir = "/erisc/"; break;
         }
     }
 
@@ -86,6 +88,7 @@ struct CompileState {
     bool is_trisc() const { return (hwthread >= RISCID::TR0) && (hwthread <= RISCID::TR2); }
     bool is_brisc() const { return hwthread == RISCID::BR; }
     bool is_ncrisc() const { return hwthread == RISCID::NC; }
+    bool is_erisc() const { return hwthread == RISCID::ER; }
 
     string generate_includes() const {
         vector<string> includes; // relative to home_
@@ -129,6 +132,21 @@ struct CompileState {
                 "tt_metal/third_party/umd/device/" + get_string_aliased_arch_lowercase(arch)}
             ));
             includes_abs.push_back(kernel_subdir_ + "/brisc");
+        } else if (is_erisc()) {
+            includes = move(vector<string>({
+                "",
+                "tt_metal/include",
+                "tt_metal/src/firmware/riscv/common",
+                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch),
+                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
+                "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch),
+                "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
+                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/noc",
+                "tt_metal",
+                "tt_metal/src/firmware/riscv/targets/erisc/",
+                "tt_metal/third_party/umd/device/" + get_string_aliased_arch_lowercase(arch)}
+            ));
+            includes_abs.push_back(kernel_subdir_ + "/erisc");
         } else {
             includes = move(vector<string>({
                 "",
@@ -208,6 +226,10 @@ struct CompileState {
                 result += " -Os";
                 result += " -fno-tree-loop-distribute-patterns";
             break;
+            case RISCID::ER:
+                result += " -Os";
+                result += " -fno-delete-null-pointer-checks";
+            break;
             default:
                 //result += " -finline-limit=1 --no-inline -fno-inline-functions -fno-inline-small-functions -fno-inline-functions-called-once ";
                 result += " -O3";
@@ -257,6 +279,12 @@ struct CompileState {
             case RISCID::BR:
                 result += " -DCOMPILE_FOR_BRISC ";
                 result += arch_define;
+            break;
+            case RISCID::ER:
+                result += " -DCOMPILE_FOR_ERISC ";
+                result += " -DERISC ";
+                result += " -DRISC_B0_HW ";
+                // result += "-DLOAD_ERISC_IRAM";
             break;
             default: break;
         }
@@ -369,6 +397,9 @@ struct CompileState {
             case RISCID::TR2:
                 elfname = "tensix_thread2";
             break;
+            case RISCID::ER:
+                elfname = "erisc_app";
+            break;
             default: TT_ASSERT(false); break;
         }
 
@@ -407,6 +438,10 @@ struct CompileState {
             case RISCID::TR2:
             link_str += " -O3";
             link_str += " -T" + home_ + "build/src/ckernels/out/trisc2.ld "; break;
+            case RISCID::ER:
+            link_str += " -Os";
+            // TODO: change to build ld
+            link_str += " -T" + home_ + "tt_metal/src/firmware/riscv/toolchain/erisc-b0-app.ld "; break;
             default:
             TT_ASSERT(hwthread == RISCID::BR);
             link_str += " -Os";
@@ -504,7 +539,7 @@ static void compile_for_risc(
     struct build_files_t {
         const vector<string> cpps, objs;
     };
-    static const build_files_t bf[3][2] = {
+    static const build_files_t bf[4][2] = {
         {   // ncrisc
             {   // kernel
                 {"ncrisck.cc", "risc_common.cc", "substitutes.cpp", "tmu-crt0k.S"},
@@ -533,6 +568,14 @@ static void compile_for_risc(
             {   // firmware
                 {"brisc.cc", "risc_common.cc", "tdma_xmov.c", "noc.c", "substitutes.cpp", "tmu-crt0.S"},
                 {"brisc.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o",     "tmu-crt0.o"},
+            },
+        },
+        {   // erisc
+            {   // kernel
+            },
+            {   // firmware
+                {"erisc.cc", "tt_eth_api.cpp"},
+                {"erisc.o", "tt_eth_api.o"},
             },
         },
     };
@@ -573,6 +616,13 @@ static void compile_for_risc(
             }
             risc_type = 1;
         break;
+        case RISCID::ER:
+            cwds.resize(4);
+            cwds[0] = "tt_metal/src/firmware/riscv/targets/erisc";
+            cwds[1] = "tt_metal/src/firmware/riscv/targets/erisc";
+            cwds[2] = "tt_metal/src/firmware/riscv/toolchain";
+            risc_type = 3;
+        break;
     }
 
     const vector<string> &cpps = bf[risc_type][build_opts->fw_build_].cpps;
@@ -604,7 +654,7 @@ void link_for_risc(RISCID risc_id,
 
     string pushd_cmd = string("cd ") + ctx.home_ + "tt_metal/src/ckernels && "; // TODO(AP): Optimize
 
-    vector<string> bobjl, nobjl, tobjl;
+    vector<string> bobjl, nobjl, tobjl, eobjl;
 
     if (!build_opts->fw_build_) {
         bobjl = {"brisck.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o", "tmu-crt0k.o"};
@@ -615,6 +665,7 @@ void link_for_risc(RISCID risc_id,
         nobjl = {"ncrisc.o", "risc_common.o", "substitutes.o", "ncrisc-halt.o", "tmu-crt0.o"};
         tobjl = {"substitutes.o", "ckernel.o", "tmu-crt0.o" };
     }
+    eobjl = {"erisc.o", "tt_eth_api.o"}; // TODO: add tmu-crtok
 
     vector<string> objls;
     switch (risc_id) {
@@ -628,6 +679,9 @@ void link_for_risc(RISCID risc_id,
         case RISCID::TR1:
         case RISCID::TR2:
             objls = move(tobjl);
+        break;
+        case RISCID::ER:
+            objls = move(eobjl);
         break;
     }
 
@@ -1327,6 +1381,13 @@ void generate_binaries_all_riscs(
 
     for (auto& th: threads)
         th.join();
+    if (arch_name == "wormhole_b0") {
+      // TODO: maybe add this to generate_binaries_param_t er_noc_index
+      std::uint8_t noc_index = 0;
+      generate_binary_for_erisc(opts, out_dir_path, arch_name, noc_index, p.er_kernel_compile_time_args);
+    } else {
+      log_info(tt::LogBuildKernels, "Skip generating erisc binaries for {}", arch_name);
+    }
 }
 
 void generate_binaries_for_triscs(

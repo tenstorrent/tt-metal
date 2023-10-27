@@ -27,9 +27,24 @@ enum NOC : uint8_t {
     NOC_1 = 1,
 };
 
+enum Eth : uint8_t {
+    SENDER = 0,
+    RECEIVER = 1,
+};
+
 struct DataMovementConfig {
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0;  // For data transfer kernels: NCRISC & BRISC
     NOC noc = NOC::RISCV_0_default;
+    std::vector<uint32_t> compile_args;
+    // Will cause CompileProgram to emit a file hlk_defines_generated.h
+    // Each unique combination of defines will produce a unique compiled instantiation
+    // This file is then automatically included in the generated compiled kernel files
+    std::map<std::string, std::string> defines;
+};
+
+struct EthernetConfig {
+    Eth eth_mode = Eth::SENDER;
+    NOC noc = NOC::NOC_0; // TODO: is this needed?
     std::vector<uint32_t> compile_args;
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation

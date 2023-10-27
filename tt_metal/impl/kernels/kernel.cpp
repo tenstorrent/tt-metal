@@ -59,6 +59,8 @@ bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
 
 uint8_t DataMovementKernel::expected_num_binaries() const { return 1; }
 
+uint8_t EthernetKernel::expected_num_binaries() const { return 1; }
+
 uint8_t ComputeKernel::expected_num_binaries() const {
     // Compute kernels generate binaries for all three TRISC processors
     return 3;
@@ -75,6 +77,10 @@ std::vector<ll_api::memory> const &Kernel::binaries(chip_id_t device_id) const {
 
 std::string DataMovementKernel::config_hash() const {
     return fmt::format("{}", magic_enum::enum_name(this->config_.noc));
+}
+
+std::string EthernetKernel::config_hash() const {
+    return fmt::format("{}", magic_enum::enum_name(this->config_.eth_mode));
 }
 
 std::string ComputeKernel::config_hash() const {
@@ -112,6 +118,12 @@ std::pair<uint64_t, uint64_t> DataMovementKernel::get_runtime_args_range() const
             arg_base_to_result_base = {BRISC_L1_ARG_BASE, BRISC_L1_RESULT_BASE};
         break;
     }
+    return arg_base_to_result_base;
+}
+
+std::pair<uint64_t, uint64_t> EthernetKernel::get_runtime_args_range() const {
+    // TODO: get this from eth l1 map
+    std::pair<uint64_t, uint64_t> arg_base_to_result_base = {0x3E420, 0x3E800};
     return arg_base_to_result_base;
 }
 
@@ -158,6 +170,9 @@ void DataMovementKernel::set_build_options(build_kernel_for_riscv_options_t &bui
     }
 }
 
+void EthernetKernel::set_build_options(build_kernel_for_riscv_options_t &build_options) const {
+}
+
 void ComputeKernel::set_build_options(build_kernel_for_riscv_options_t &build_options) const {
     build_options.set_hlk_file_name_all_cores(this->kernel_path_file_name_);
     build_options.set_hlk_math_fidelity_all_cores(this->config_.math_fidelity);
@@ -181,6 +196,11 @@ void DataMovementKernel::generate_binaries(Device *device, build_kernel_for_risc
         default:
             log_assert(false, "Unsupported data movement processor!");
     }
+}
+
+void EthernetKernel::generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const {
+    std::string arch_name = tt::get_string_lowercase(device->arch());
+    generate_binary_for_erisc(build_options, op_path_suffix, arch_name, this->config_.noc, this->compile_time_args_);
 }
 
 void ComputeKernel::generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const {
@@ -224,6 +244,17 @@ void DataMovementKernel::read_binaries(chip_id_t device_id) {
     this->set_binaries(device_id, std::move(binaries));
 }
 
+void EthernetKernel::read_binaries(int device_id) {
+   // untested
+    TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
+    std::vector<ll_api::memory> binaries;
+    uint32_t riscv_id;
+    std::string binary_path_suffix = "/erisc/erisc_app.hex";
+    ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, device_id, true);
+    binaries.push_back(binary_mem);
+    this->set_binaries(device_id, std::move(binaries));
+}
+
 void ComputeKernel::read_binaries(int device_id) {
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
@@ -247,6 +278,8 @@ RISCV DataMovementKernel::processor() const {
     }
     return RISCV::BRISC;
 }
+
+RISCV EthernetKernel::processor() const { return RISCV::ERISC; }
 
 RISCV ComputeKernel::processor() const { return RISCV::COMPUTE; }
 
@@ -273,6 +306,17 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
             TT_ASSERT(false, "Unsupported data movement processor!");
     }
 
+    pass &= tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, worker_core, riscv_id);
+    return pass;
+}
+
+bool EthernetKernel::configure(Device *device, const CoreCoord &worker_core) const {
+    // TODO: use logical core somehow
+    // untested
+    bool pass = true;
+    auto device_id = device->id();
+    ll_api::memory binary_mem = this->binaries(device_id).at(0);
+    int riscv_id = 5;
     pass &= tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, worker_core, riscv_id);
     return pass;
 }

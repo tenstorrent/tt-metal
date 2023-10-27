@@ -23,7 +23,7 @@ namespace tt {
 
 namespace tt_metal {
 
-using Config = std::variant<DataMovementConfig, ComputeConfig>;
+using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
 
 class Kernel {
    public:
@@ -114,6 +114,32 @@ class DataMovementKernel : public Kernel {
 
    private:
     const DataMovementConfig config_;
+
+    uint8_t expected_num_binaries() const;
+
+    std::string config_hash() const;
+
+    std::pair<uint64_t, uint64_t> get_runtime_args_range() const;
+};
+
+class EthernetKernel : public Kernel {
+   public:
+    EthernetKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const EthernetConfig &config) : Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) {}
+
+    ~EthernetKernel() {}
+
+    RISCV processor() const;
+
+    void set_build_options(build_kernel_for_riscv_options_t &build_options) const;
+    void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
+    void read_binaries(int device_id);
+
+    bool configure(Device *device, const CoreCoord &logical_core) const;
+
+    Config config() const { return this->config_; }
+
+   private:
+    const EthernetConfig config_;
 
     uint8_t expected_num_binaries() const;
 
