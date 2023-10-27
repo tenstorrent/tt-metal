@@ -144,6 +144,7 @@ constexpr auto relu_max = make_eltwise_unary_with_param<UnaryOpType::RELU_MAX>{}
 constexpr auto relu_min = make_eltwise_unary_with_param<UnaryOpType::RELU_MIN>{};
 constexpr auto power = make_eltwise_unary_with_param<UnaryOpType::POWER, uint32_t>{};
 constexpr auto leaky_relu = make_eltwise_unary_with_param<UnaryOpType::LEAKY_RELU>{};
+constexpr auto prelu = leaky_relu;
 constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
 constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};

@@ -122,6 +122,12 @@ def relu6(x, *args, **kwargs):
     return result
 
 
+def prelu(x, *args, **kwargs):
+    t_weight = torch.Tensor((kwargs["weight"],))
+    result = torch.nn.functional.prelu(x, t_weight)
+    return result
+
+
 def softsign(x, *args, **kwargs):
     result = torch.nn.functional.softsign(x)
     return result
