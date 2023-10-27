@@ -106,15 +106,15 @@ bool run_sfpu_test(string sfpu_name) {
         auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
             multibank ?
-                "tt_metal/kernels/dataflow/reader_unary_8bank.cpp" :
-                "tt_metal/kernels/dataflow/reader_unary_push_4.cpp",
+                "tests/tt_eager/kernels/dataflow/reader_unary_8bank.cpp" :
+                "tests/tt_eager/kernels/dataflow/reader_unary_push_4.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             multibank ?
-                "tt_metal/kernels/dataflow/writer_unary_8bank.cpp" :
+                "tests/tt_eager/kernels/dataflow/writer_unary_8bank.cpp" :
                 "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});

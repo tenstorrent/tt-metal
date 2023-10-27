@@ -5,4 +5,4 @@
 #define GENERATE_BCAST_SCALER 1
 #define BLOCK_SIZE 1
 
-#include "tt_metal/kernels/dataflow/reader_unary_8bank.cpp"
+#include "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank.cpp"
