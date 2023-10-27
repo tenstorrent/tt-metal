@@ -7,6 +7,7 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat8.hpp"
 // //#include "tt_metal/tools/tt_gdb/tt_gdb.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -102,7 +103,7 @@ int main(int argc, char **argv) {
             dram_buffer_size,
             /*is_exp_a=*/false,
             100, std::chrono::system_clock::now().time_since_epoch().count());
-        tt_metal::WriteToBuffer(src_dram_buffer, src_vec);
+        tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
 
 
@@ -125,10 +126,10 @@ int main(int argc, char **argv) {
             num_tiles});
 
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
         // ////////////////////////////////////////////////////////////////////////////
         // //                      Validation & Teardown
         // ////////////////////////////////////////////////////////////////////////////

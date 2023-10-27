@@ -7,6 +7,7 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat8.hpp"
 #include "tt_metal/detail/util.hpp"
 
@@ -111,7 +112,7 @@ int main(int argc, char **argv) {
             dram_buffer_size,
             /*is_exp_a=*/false,
             100, std::chrono::system_clock::now().time_since_epoch().count());
-        tt_metal::WriteToBuffer(src0_dram_buffer, activations);
+        tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations);
 
         int num_float_in_tile = 32 * 32;
         std::vector<float> vec(num_float_in_tile, (float)0);
@@ -120,7 +121,7 @@ int main(int argc, char **argv) {
         }
         std::vector<uint32_t> weights = pack_fp32_vec_as_bfp8_tiles(vec, /*row_major_input=*/true, /*is_exp_a=*/false);
 
-        tt_metal::WriteToBuffer(src1_dram_buffer, weights);
+        tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
 
 
 
@@ -150,10 +151,10 @@ int main(int argc, char **argv) {
             num_tiles});
 
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

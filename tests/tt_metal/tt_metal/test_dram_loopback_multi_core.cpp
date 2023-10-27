@@ -104,7 +104,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        pass &= tt_metal::WriteToBuffer(input_dram_buffer, src_vec);
+        pass &= tt_metal::detail::WriteToBuffer(input_dram_buffer, src_vec);
 
 
 
@@ -140,10 +140,10 @@ int main(int argc, char **argv) {
             transient_buffer_size_bytes});
 
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(output_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(output_dram_buffer, result_vec);
         auto dst_vec = unpack_uint32_vec_into_bfloat16_vec(result_vec);
 
         ////////////////////////////////////////////////////////////////////////////

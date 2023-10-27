@@ -7,6 +7,7 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
@@ -214,17 +215,17 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         auto activations_tile_transposed = transpose_tiles(activations, M, K);
-        tt_metal::WriteToBuffer(src0_dram_buffer, activations_tile_transposed);
+        tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations_tile_transposed);
 
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32); //bflaot16 32x32 identity
         auto identity_tilized = tilize(identity, K * 32, N * 32);
         auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        tt_metal::WriteToBuffer(src1_dram_buffer, weights);
+        tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
 
         if (with_bias) {
             vector<uint32_t> bias(N * 512, 0); // Just a zero bias, since the output check is identity
-            tt_metal::WriteToBuffer(src2_dram_buffer, bias);
+            tt_metal::detail::WriteToBuffer(src2_dram_buffer, bias);
         }
 
 
@@ -274,10 +275,10 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
             (std::uint32_t)dram_dst_noc_xy.y,
             M * N});
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

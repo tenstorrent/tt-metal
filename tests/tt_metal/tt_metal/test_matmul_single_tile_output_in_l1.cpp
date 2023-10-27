@@ -10,6 +10,7 @@
 #include "common/bfloat16.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -111,12 +112,12 @@ int main(int argc, char **argv) {
         tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto activations_tile_layout = convert_to_tile_layout(tensor.get_values());
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-        tt_metal::WriteToBuffer(src0_dram_buffer, activations);
+        tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations);
 
         auto identity = create_identity_matrix(32, 32, 32); //bflaot16 32x32 identity
         auto weights_tile_layout = convert_to_tile_layout(identity);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        tt_metal::WriteToBuffer(src1_dram_buffer, weights);
+        tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
 
 
 
@@ -147,10 +148,10 @@ int main(int argc, char **argv) {
 
 
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_l1_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_l1_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

@@ -215,7 +215,7 @@ TEST_F(DeviceFixture, LegallyModifyRTArgsCompute) {
                 }
             }
         }
-        tt_metal::LaunchProgram(this->devices_.at(id), program);
+        tt_metal::detail::LaunchProgram(this->devices_.at(id), program);
         EXPECT_TRUE(unit_tests::runtime_args::verify_result_compute(
             this->devices_.at(id), program, core_to_rt_args, KernelType::COMPUTE));
     }

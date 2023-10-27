@@ -9,6 +9,7 @@
 #include <map>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 
 #include "test_tiles.hpp"
@@ -199,7 +200,7 @@ int main(int argc, char **argv) {
         auto src1_dram_buffer = CreateBuffer(device, bcast_vals_nbytes, src1_page_size, tt_metal::BufferType::DRAM);
         uint32_t dram_buffer_src1_addr = src1_dram_buffer.address();
         auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
-        tt_metal::WriteToBuffer(src1_dram_buffer, bcast_tiled_u32);
+        tt_metal::detail::WriteToBuffer(src1_dram_buffer, bcast_tiled_u32);
 
         bool src0_is_dram = true;
         bool src1_is_dram = true;
@@ -269,16 +270,16 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         auto seed = std::chrono::system_clock::now().time_since_epoch().count();
         vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 10.0f, 0x1234);
-        tt_metal::WriteToBuffer(src0_dram_buffer, src0_vec);
+        tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
 
 
 
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         // The kernel will view the input as TILED32_4FACES
         vector<uint32_t> result_vec;
-        tt_metal::ReadFromBuffer(dst_dram_buffer, result_vec);
+        tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

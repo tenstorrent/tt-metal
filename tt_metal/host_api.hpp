@@ -145,30 +145,6 @@ uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRang
 Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size, const BufferType buffer_type);
 
 /**
-* Copies data from a host buffer into the specified buffer
-*
-* Return value: void
-*
-* | Argument    | Description                                     | Data type               | Valid range                                      | Required |
-* |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
-* | buffer      | Buffer to send data to                          | const Buffer &          |                                                  | Yes      |
-* | host_buffer | Buffer on host to copy data from                | std::vector<uint32_t> & | Host buffer size must match buffer               | Yes      |
-*/
-void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer);
-
-/**
-* Copies data from a buffer into a host buffer
-*
-* Return value: void
-*
-* | Argument    | Description                                     | Data type               | Valid range                                      | Required |
-* |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
-* | buffer      | Buffer to read data from                        | const Buffer &          |                                                  | Yes      |
-* | host_buffer | Buffer on host to copy data into                | std::vector<uint32_t> & |                                                  | Yes      |
-*/
-void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer);
-
-/**
 *  Deallocates buffer from device by marking its memory as free.
 *
 *  Return value: void
@@ -178,8 +154,6 @@ void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer);
 *  | buffer   | The buffer to deallocate from device | Buffer & |             | Yes      |
 */
 void DeallocateBuffer(Buffer &buffer);
-
-
 
 // ==================================================
 //           COMPILE & EXECUTE KENRNELS
@@ -212,10 +186,6 @@ void SetRuntimeArgs(const Program &program, KernelID kernel, const std::variant<
  * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate | Yes      |
  */
 std::vector<uint32_t> GetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreCoord &logical_core);
-
-// Launches all kernels on cores specified with kernels in the program.
-// All kernels on a given Tensix core must be launched.
-void LaunchProgram(Device *device, Program &program);
 
 /**
  * Reads a buffer from the device

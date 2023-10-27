@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
         auto input_vector = unpack_uint32_vec_into_bfloat16_vec(input_vec);
-        tt_metal::WriteToBuffer(input_dram_buffer, input_vec);
+        tt_metal::detail::WriteToBuffer(input_dram_buffer, input_vec);
 
 
 
@@ -114,7 +114,7 @@ int main(int argc, char **argv) {
             (std::uint32_t) address_map.size()});
 
 
-        tt_metal::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromDeviceL1(device, core, l1_buffer_addr, dram_buffer_size, result_vec);

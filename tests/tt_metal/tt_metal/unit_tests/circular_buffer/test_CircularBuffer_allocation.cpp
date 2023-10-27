@@ -15,7 +15,7 @@ using namespace tt::tt_metal;
 namespace basic_tests::circular_buffer {
 
 void validate_cb_address(Program &program, Device *device, const CoreRangeSet &cr_set, const std::map<CoreCoord, std::map<uint8_t, uint32_t>> &core_to_address_per_buffer_index) {
-    LaunchProgram(device, program);
+    detail::LaunchProgram(device, program);
 
     vector<uint32_t> cb_config_vector;
     uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
@@ -164,7 +164,7 @@ TEST_F(DeviceFixture, TestInvalidCircularBufferAddress) {
     auto cb2 = CreateCircularBuffer(program, cr_set, config2);
 
     initialize_program(program, cr_set);
-    EXPECT_ANY_THROW(LaunchProgram(this->devices_.at(id), program));
+    EXPECT_ANY_THROW(detail::LaunchProgram(this->devices_.at(id), program));
 }
 }
 
@@ -253,7 +253,7 @@ TEST_F(DeviceFixture, TestInvalidUpdateCircularBufferSize) {
 
     // Update size of the first CB
     GetCircularBufferConfig(program, cb_ids[0]).set_total_size(cb_config.page_size / 2);
-    EXPECT_ANY_THROW(LaunchProgram(this->devices_.at(id), program));
+    EXPECT_ANY_THROW(detail::LaunchProgram(this->devices_.at(id), program));
 }
 }
 
@@ -315,7 +315,7 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferPageSize) {
         expected_cb_addr += cb_config.page_size;
     }
 
-    LaunchProgram(this->devices_.at(id), program);
+    detail::LaunchProgram(this->devices_.at(id), program);
 
     vector<uint32_t> cb_config_vector;
     uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
@@ -342,7 +342,7 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferPageSize) {
     GetCircularBufferConfig(program, cb_ids[1]).set_page_size(1, cb_config.page_size / 2);
     golden_num_pages_per_core[core0][1] = 2;
 
-    LaunchProgram(this->devices_.at(id), program);
+    detail::LaunchProgram(this->devices_.at(id), program);
 
     // addresses should not be changed
     for (const CoreRange &core_range : cr_set.ranges()) {
@@ -425,12 +425,12 @@ TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    WriteToBuffer(src_dram_buffer, src_vec);
+    detail::WriteToBuffer(src_dram_buffer, src_vec);
 
-    LaunchProgram(this->devices_.at(id), program);
+    detail::LaunchProgram(this->devices_.at(id), program);
 
     std::vector<uint32_t> result_vec;
-    ReadFromBuffer(dst_dram_buffer, result_vec);
+    detail::ReadFromBuffer(dst_dram_buffer, result_vec);
     EXPECT_EQ(src_vec, result_vec);
 
     std::vector<uint32_t> input_cb_data;
@@ -443,13 +443,13 @@ TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
 
     // zero out dst buffer
     std::vector<uint32_t> zero_vec = create_constant_vector_of_bfloat16(buffer_size, 0);
-    WriteToBuffer(dst_dram_buffer, zero_vec);
+    detail::WriteToBuffer(dst_dram_buffer, zero_vec);
 
     // relaunch program
-    LaunchProgram(this->devices_.at(id), program);
+    detail::LaunchProgram(this->devices_.at(id), program);
 
     std::vector<uint32_t> second_result_vec;
-    ReadFromBuffer(dst_dram_buffer, second_result_vec);
+    detail::ReadFromBuffer(dst_dram_buffer, second_result_vec);
     EXPECT_EQ(src_vec, second_result_vec);
 
     std::vector<uint32_t> second_cb_data;

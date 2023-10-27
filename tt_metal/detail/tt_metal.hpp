@@ -32,6 +32,34 @@ namespace tt::tt_metal{
             return fd;
         }
 
+        /**
+        * Copies data from a host buffer into the specified buffer
+        *
+        * Return value: void
+        *
+        * | Argument    | Description                                     | Data type               | Valid range                                      | Required |
+        * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
+        * | buffer      | Buffer to send data to                          | const Buffer &          |                                                  | Yes      |
+        * | host_buffer | Buffer on host to copy data from                | std::vector<uint32_t> & | Host buffer size must match buffer               | Yes      |
+        */
+        void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer);
+
+        /**
+        * Copies data from a buffer into a host buffer
+        *
+        * Return value: void
+        *
+        * | Argument    | Description                                     | Data type               | Valid range                                      | Required |
+        * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
+        * | buffer      | Buffer to read data from                        | const Buffer &          |                                                  | Yes      |
+        * | host_buffer | Buffer on host to copy data into                | std::vector<uint32_t> & |                                                  | Yes      |
+        */
+        void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer);
+
+
+        // Launches all kernels on cores specified with kernels in the program.
+        // All kernels on a given Tensix core must be launched.
+        void LaunchProgram(Device *device, Program &program);
 
         /**
          *  Compiles all kernels within the program, and generates binaries that are written to `$TT_METAL_HOME/built/<device>/kernels/<kernel name>/<kernel hash>`

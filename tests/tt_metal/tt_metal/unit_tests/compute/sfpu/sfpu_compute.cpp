@@ -213,9 +213,9 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
     }
 
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::WriteToBuffer(input_dram_buffer, packed_input);
-    tt_metal::LaunchProgram(device, program);
-    tt_metal::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    tt_metal::detail::WriteToBuffer(input_dram_buffer, packed_input);
+    tt_metal::detail::LaunchProgram(device, program);
+    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
 
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
 }
