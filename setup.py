@@ -155,7 +155,7 @@ class BUDAEagerBuild(build_ext):
         return not os.path.exists(self.build_lib)
 
 # Include tt_metal_C for kernels and src/ and tools
-packages = ["tt_lib", "tt_lib.tt_metal", "tt_lib.models", "tt_lib.scripts"]
+packages = ["tt_lib", "tt_lib.tt_metal", "tt_lib.models", "tt_lib.scripts", "tt_lib.tt_eager.tt_dnn"]
 
 # Empty sources in order to force a BUDAEagerBuild execution
 buda_eager_lib_C = Extension("tt_lib._C", sources=[])
@@ -171,6 +171,7 @@ setup(
         "tt_lib.tt_metal": "tt_metal",
         "tt_lib.models": "tests/models",
         "tt_lib.scripts": "scripts",
+        "tt_lib.tt_eager.tt_dnn": "tt_eager/tt_dnn",
     },
     include_package_data=True,
     long_description_content_type="text/markdown",
