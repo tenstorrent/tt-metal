@@ -25,7 +25,7 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_act_tensor,
     create_conv_weight_tensor,
 )
-from tests.models.resnet.utils import (
+from models.demos.resnet.utils import (
     conv3x3,
     conv1x1,
     fold_bn_to_conv,
