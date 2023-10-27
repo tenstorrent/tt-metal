@@ -181,10 +181,7 @@ sudo apt update
 Then, install the dependencies:
 
 ```
-sudo apt install software-properties-common=0.99.9.12
-build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.8
-libgoogle-glog-dev=0.4.0-1build1 libyaml-cpp-dev=0.6.2-4ubuntu1
-libboost-all-dev=1.71.0.0ubuntu2 libsndfile1=1.0.28-7ubuntu0.1 libhwloc-dev
+sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.8 libgoogle-glog-dev=0.4.0-1build1 libyaml-cpp-dev=0.6.2-4ubuntu1 libboost-all-dev=1.71.0.0ubuntu2 libsndfile1=1.0.28-7ubuntu0.1 libhwloc-dev
 ```
 
 Additionally, you will need developer-level dependencies if you plan to install things from source or run tests from the repository.
