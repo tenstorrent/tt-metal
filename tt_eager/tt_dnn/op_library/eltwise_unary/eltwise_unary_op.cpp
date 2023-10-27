@@ -65,6 +65,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string,std::string>
         case UnaryOpType::RELU_MAX:
         case UnaryOpType::RELU_MIN:
         case UnaryOpType::LEAKY_RELU:
+        case UnaryOpType::PRELU:
             defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
             break;
         case UnaryOpType::RDIV:
@@ -100,6 +101,7 @@ std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType op_type
     TT_ASSERT( is_parametrized_type(op_type) && "operator should support one parameter" );
 
     switch (op_type) {
+        case UnaryOpType::PRELU: op_init_and_name = {"prelu_tile_init();", fmt::format("prelu_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
         case UnaryOpType::RELU_MAX: op_init_and_name = {"relu_max_tile_init();", fmt::format("relu_max_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
         case UnaryOpType::RELU_MIN: op_init_and_name = {"relu_min_tile_init();", fmt::format("relu_min_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
         case UnaryOpType::POWER: op_init_and_name = {"power_tile_init();", fmt::format("power_tile({}, {}u);", idst, std::to_string((uint32_t)param0))}; break;

@@ -118,16 +118,21 @@ namespace tt::tt_metal::detail {
             R"doc(Returns tensor with the relu max of all of elements of the input tensor ``{0}``. This is equivalent
             to relu_max[x] = relu(min(x, ``{1}``)). It caps off the input to a max value and a min value of 0.)doc",
             R"doc("max value", "float", "")doc"
-
         );
         detail::bind_unary_op_with_param(
+            m_tensor, "prelu", prelu,
+            py::arg("weight"),
+            R"doc(Returns tensor with the prelu of all of elements of the input tensor ``{0}``. This is equivalent
+            to prelu[x] = max(0,x) + ``{1}``*min(x,0).)doc",
+            R"doc("max value", "float", "")doc"
+        );
+	detail::bind_unary_op_with_param(
             m_tensor, "relu_min", relu_min,
             py::arg("lower_limit"),
             R"doc(Returns tensor with the relu min of all of elements of the input tensor ``{0}``. This is equivalent
             to relu_min[x] = max(x, ``{1}``). It moves relu function down to carry out operation at minvalue
             instead of the standard 0.)doc",
             R"doc("min value", "float", "")doc"
-
         );
         detail::bind_unary_op_with_param(
             m_tensor, "elu", elu,

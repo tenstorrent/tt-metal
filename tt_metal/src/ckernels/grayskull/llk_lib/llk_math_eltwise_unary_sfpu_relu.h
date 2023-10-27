@@ -16,6 +16,19 @@ namespace ckernel {
 
 // New LLK SFPU APIs
 
+// PRELU
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_prelu_init() {
+    llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::prelu_init<APPROXIMATE>);
+}
+template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_prelu(uint dst_index, uint param0) {
+    llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
+                                (ckernel::sfpu::prelu<APPROXIMATE,4>,
+                                ckernel::sfpu::prelu<APPROXIMATE,4>,
+				 dst_index, Dim::RC, param0);
+}
+
 // RELU MAX
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_relu_max_init() {

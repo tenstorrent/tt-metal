@@ -20,6 +20,28 @@
 
 namespace ckernel {
 
+
+/**
+ * Performs element-wise computation of PReLU = max(0,x) + weight*min(0,x) each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | weight         | scaling of positive portion                                                | uint32_t | Greater than 0                                        | True     |
+ */
+ALWI void prelu_tile(uint32_t idst,uint32_t param0) {
+  MATH(( llk_math_eltwise_unary_sfpu_prelu<APPROX, SyncHalf>(idst,param0) ));
+}
+
+ALWI void prelu_tile_init() {
+  MATH(( llk_math_eltwise_unary_sfpu_prelu_init<APPROX>() ));
+}
+
 /**
  * Performs element-wise computation of relu max (relu(max(x, upper_limit))) on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
@@ -31,7 +53,7 @@ namespace ckernel {
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | upper_limit    | Upper limit of relu_min                                                    | uint32_t | Greater than 0                                        | True     |
+ * | upper_limit    | Lowe limit of relu_max                                                    | uint32_t | Greater than 0                                        | True     |
  */
 ALWI void relu_max_tile(uint32_t idst,uint32_t param0) {
   MATH(( llk_math_eltwise_unary_sfpu_relu_max<APPROX, SyncHalf>(idst,param0) ));
