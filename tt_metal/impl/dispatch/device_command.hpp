@@ -13,8 +13,10 @@ class DeviceCommand {
    public:
     DeviceCommand();
 
+    enum class TransferType : uint8_t { RUNTIME_ARGS, CB_CONFIGS, PROGRAM_PAGES, GO_SIGNALS, NUM_TRANSFER_TYPES };
+
     // Constants
-    static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = 16;
+    static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = 20;
     static constexpr uint32_t NUM_ENTRIES_IN_DEVICE_COMMAND = 5632;
     static constexpr uint32_t NUM_BYTES_IN_DEVICE_COMMAND = NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t);
     static constexpr uint32_t DATA_SECTION_ADDRESS = L1_UNRESERVED_BASE + NUM_BYTES_IN_DEVICE_COMMAND;
@@ -27,7 +29,7 @@ class DeviceCommand {
     static constexpr uint32_t NUM_POSSIBLE_BUFFER_TRANSFERS = 2;
 
     // Ensure any changes to this device command have asserts modified/extended
-    static_assert(NUM_ENTRIES_IN_COMMAND_HEADER == 16);
+    static_assert(NUM_ENTRIES_IN_COMMAND_HEADER == 20);
     static_assert((NUM_BYTES_IN_DEVICE_COMMAND % 32) == 0);
 
     // Command header
@@ -43,15 +45,18 @@ class DeviceCommand {
     static constexpr uint32_t producer_cb_num_pages_idx = 9;
     static constexpr uint32_t consumer_cb_num_pages_idx = 10;
     static constexpr uint32_t num_pages_idx = 11;
-    static constexpr uint32_t data_size_idx = 12;
-    static constexpr uint32_t producer_consumer_transfer_num_pages_idx = 13;
+    static constexpr uint32_t num_runtime_arg_pages_idx = 12;
+    static constexpr uint32_t num_cb_config_pages_idx = 13;
+    static constexpr uint32_t num_program_pages_idx = 14;
+    static constexpr uint32_t num_go_signal_pages_idx = 15;
+    static constexpr uint32_t data_size_idx = 16;
+    static constexpr uint32_t producer_consumer_transfer_num_pages_idx = 17;
 
     void wrap();
 
     void finish();
 
     void set_num_workers(const uint32_t num_workers);
-
 
     void set_is_program();
 
@@ -68,6 +73,8 @@ class DeviceCommand {
     void set_consumer_cb_num_pages(const uint32_t cb_num_pages);
 
     void set_num_pages(const uint32_t num_pages);
+
+    void set_num_pages(const DeviceCommand::TransferType transfer_type, const uint32_t num_pages);
 
     void set_data_size(const uint32_t data_size);
 
@@ -86,7 +93,11 @@ class DeviceCommand {
     void write_program_entry(const uint32_t val);
 
     void add_write_page_partial_instruction(
-        const uint32_t num_bytes, const uint32_t dst, const uint32_t dst_noc, const uint32_t num_receivers, const bool advance);
+        const uint32_t num_bytes,
+        const uint32_t dst,
+        const uint32_t dst_noc,
+        const uint32_t num_receivers,
+        const bool advance);
 
     const std::array<uint32_t, NUM_ENTRIES_IN_DEVICE_COMMAND>& get_desc() const;
 

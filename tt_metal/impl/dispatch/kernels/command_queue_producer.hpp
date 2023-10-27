@@ -38,9 +38,9 @@ bool cb_consumer_space_available(bool db_buf_switch, int32_t num_pages) {
 
     DEBUG_STATUS('C', 'R', 'B', 'W');
 
-    uint16_t pages_acked = *reinterpret_cast<volatile uint32_t*>(get_db_cb_ack_addr(db_buf_switch));
-    uint16_t pages_recv = *reinterpret_cast<volatile uint32_t*>(get_db_cb_recv_addr(db_buf_switch));
-    uint32_t num_pages_consumer = *reinterpret_cast<volatile uint32_t*>(get_db_cb_num_pages_addr(db_buf_switch));
+    uint16_t pages_acked = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_ack_addr(db_buf_switch));
+    uint16_t pages_recv = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_recv_addr(db_buf_switch));
+    uint32_t num_pages_consumer = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_num_pages_addr(db_buf_switch));
 
     uint16_t free_space_pages_wrap = num_pages_consumer - (pages_recv - pages_acked);
     int32_t free_space_pages = (int32_t)free_space_pages_wrap;
@@ -52,8 +52,8 @@ bool cb_consumer_space_available(bool db_buf_switch, int32_t num_pages) {
 FORCE_INLINE
 void multicore_cb_push_back(uint64_t consumer_noc_encoding, uint32_t consumer_fifo_limit, uint32_t consumer_fifo_size, bool db_buf_switch, uint32_t page_size, uint32_t num_to_write) {
     // TODO(agrebenisan): Should create a multi-core CB interface... struct in L1
-    volatile uint32_t* CQ_CONSUMER_CB_RECV_PTR = reinterpret_cast<volatile uint32_t*>(get_db_cb_recv_addr(db_buf_switch));
-    volatile uint32_t* CQ_CONSUMER_CB_WRITE_PTR = reinterpret_cast<volatile uint32_t*>(get_db_cb_wr_ptr_addr(db_buf_switch));
+    volatile tt_l1_ptr uint32_t* CQ_CONSUMER_CB_RECV_PTR = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_recv_addr(db_buf_switch));
+    volatile tt_l1_ptr uint32_t* CQ_CONSUMER_CB_WRITE_PTR = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_wr_ptr_addr(db_buf_switch));
 
     *CQ_CONSUMER_CB_RECV_PTR += num_to_write;
     *CQ_CONSUMER_CB_WRITE_PTR += (page_size * num_to_write) >> 4;
@@ -126,7 +126,7 @@ void produce(
                     num_reads_completed = num_reads_issued;
                 }
 
-                uint32_t dst_addr = reinterpret_cast<volatile uint32_t*>(get_db_cb_wr_ptr_addr(db_buf_switch))[0] << 4;
+                uint32_t dst_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_wr_ptr_addr(db_buf_switch))[0] << 4;
                 uint64_t dst_noc_addr = consumer_noc_encoding | dst_addr;
                 uint32_t l1_read_ptr = get_read_ptr(0);
                 noc_async_write(l1_read_ptr, dst_noc_addr, page_size * num_to_write);
