@@ -1306,8 +1306,7 @@ void cq_wait_front() {
 FORCE_INLINE
 void notify_host_of_cq_read_pointer() {
     // These are the PCIE core coordinates
-    uint64_t pcie_address = get_noc_addr(0, 4, HOST_CQ_READ_PTR);  // For now, we are writing to host hugepages at offset
-                                                              // 0 (nothing else currently writing to it)
+    constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | HOST_CQ_READ_PTR;  // For now, we are writing to host hugepages at offset
     uint32_t rd_ptr = cq_read_interface.fifo_rd_ptr;
     volatile tt_l1_ptr uint32_t* rd_ptr_addr = get_cq_read_ptr();
     rd_ptr_addr[0] = rd_ptr;
