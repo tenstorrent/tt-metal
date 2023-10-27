@@ -193,7 +193,7 @@ bool CloseDevice(Device *device) {
     return device->close();
 }
 
-KernelID CreateKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig,ComputeConfig> &config) {
+KernelID CreateKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig,ComputeConfig, EthernetConfig> &config) {
     return std::visit( [&](auto&& cfg) -> KernelID
                         {
                             CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
@@ -205,6 +205,9 @@ KernelID CreateKernel(Program &program, const std::string &file_name, const std:
                             }
                             else if constexpr (std::is_same_v<T, ComputeConfig>) {
                                 kernel = new ComputeKernel(file_name, core_ranges, cfg);
+                            }
+                            else if constexpr (std::is_same_v<T, EthernetConfig>) {
+                                kernel = new EthernetKernel(file_name, core_ranges, cfg);
                             }
                             detail::AddKernel(program, kernel);
                             return kernel->id();

@@ -135,7 +135,8 @@ enum class RISCV : uint8_t {
     TRISC0 = 2,
     TRISC1 = 3,
     TRISC2 = 4,
-    COMPUTE = 5     // Encompasses TRISC0, TRISC1, and TRISC2
+    ERISC = 5,
+    COMPUTE = 6,     // Encompasses TRISC0, TRISC1, and TRISC2
 };
 
 inline std::ostream& operator<<(std::ostream& os, const RISCV& riscv) {

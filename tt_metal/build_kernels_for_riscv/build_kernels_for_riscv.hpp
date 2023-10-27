@@ -18,7 +18,7 @@
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 namespace tt::tt_metal {
-enum RISCID { NC = 0, TR0 = 1, TR1 = 2, TR2 = 3, BR = 4 };
+enum RISCID { NC = 0, TR0 = 1, TR1 = 2, TR2 = 3, BR = 4, ER = 5};
 static_assert(RISCID::TR1 == RISCID::TR0+1 && RISCID::TR2 == RISCID::TR1+1);
 
 void generate_data_format_descriptors(
@@ -48,6 +48,7 @@ struct generate_binaries_params_t {
 
     std::vector<std::uint32_t> br_kernel_compile_time_args = {};
     std::vector<std::uint32_t> nc_kernel_compile_time_args = {};
+    std::vector<std::uint32_t> er_kernel_compile_time_args = {};
     std::vector<std::uint32_t> compute_kernel_compile_time_args = {};
 };
 
@@ -79,6 +80,19 @@ inline void generate_binary_for_ncrisc(
     const std::string tracyPrefix = "generate_binary_for_ncrisc_";
     ZoneName( (tracyPrefix + dir).c_str(), dir.length() + tracyPrefix.length());
     generate_binary_for_risc(RISCID::NC, topts, dir, arch_name, noc_index, kernel_compile_time_args);
+}
+
+inline void generate_binary_for_erisc(
+    tt::build_kernel_for_riscv_options_t* topts,
+    const std::string &dir,
+    const std::string& arch_name,
+    const std::uint8_t noc_index=0,
+    const std::vector<std::uint32_t>& kernel_compile_time_args = {})
+{
+    ZoneScoped;
+    const std::string tracyPrefix = "generate_binary_for_erisc_";
+    ZoneName( (tracyPrefix + dir).c_str(), dir.length() + tracyPrefix.length());
+    generate_binary_for_risc(RISCID::ER, topts, dir, arch_name, noc_index, kernel_compile_time_args);
 }
 
 void generate_src_for_triscs(
