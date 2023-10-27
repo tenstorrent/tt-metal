@@ -163,10 +163,11 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
         }
 
         ll_api::memory binary_mem = llrt::get_risc_binary(fname, this->id(), true);
+        uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, riscv_id);
         if (riscv_id == 1) {
-            launch_msg->ncrisc_kernel_size16 = llrt::get_binary_code_size16(binary_mem, riscv_id);
+            launch_msg->ncrisc_kernel_size16 = kernel_size16;
         }
-        log_debug("RISC {} fw binary size: {} in bytes", riscv_id, launch_msg->ncrisc_kernel_size16 * 16);
+        log_debug("RISC {} fw binary size: {} in bytes", riscv_id, kernel_size16 * 16);
         llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
     }
 
