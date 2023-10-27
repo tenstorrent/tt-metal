@@ -478,6 +478,11 @@ void Cluster::write_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, chip_id_t s
     this->device_->write_to_sysmem(vec, addr, channel, src_device_id);
 }
 
+void Cluster::write_sysmem_vec(const uint32_t* vec, uint32_t size, uint64_t addr, chip_id_t src_device_id) const {
+    constexpr uint16_t channel = 0;
+    this->device_->write_to_sysmem(vec, size, addr, channel, src_device_id);
+}
+
 void Cluster::read_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, uint32_t size, chip_id_t src_device_id) const {
     // TODO: Uplift
     constexpr uint16_t channel = 0;
