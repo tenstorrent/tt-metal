@@ -43,14 +43,15 @@ def to_npu(cpu_tensor,
 def torch_layernorm(input,
                     output_grad,
                     *,
-                    normalized_dims=(3, ),
+                    normalized_dims=1,
+                    eps=1e-5,
                     gamma=None,
-                    beta=None,
-                    eps=1e-5):
-    normalized_shape = input.shape[-len(normalized_dims):]
+                    beta=None):
+    normalized_shape = input.shape[-normalized_dims:]
+    mean_var_dims = tuple(range(-normalized_dims, 0))
 
-    mean = input.clone().mean(dim=normalized_dims, keepdim=True)
-    var = ((input.clone() - mean)**2).mean(dim=normalized_dims, keepdim=True)
+    mean = input.clone().mean(dim=mean_var_dims, keepdim=True)
+    var = ((input.clone() - mean)**2).mean(dim=mean_var_dims, keepdim=True)
     rstd = (var + eps).sqrt()
 
     input.requires_grad_()
@@ -81,22 +82,21 @@ def torch_layernorm(input,
 def tt_layernorm(input,
                  output_grad,
                  *,
-                 normalized_dims=(3, ),
+                 normalized_dims=1,
+                 eps=1e-5,
                  gamma=None,
                  beta=None,
-                 eps=1e-5,
                  device=None):
     # rank
     input_shape = list(input.shape)
     input_rank = len(input_shape)
-    normalized_rank = len(normalized_dims)
 
     # mean_rstd_shape
-    mean_rstd_shape = input_shape[:-normalized_rank] + [1] * normalized_rank
+    mean_rstd_shape = input_shape[:-normalized_dims] + [1] * normalized_dims
 
     # gamma_beta_shape
     gamma_beta_shape = [1] * (input_rank -
-                              normalized_rank) + input_shape[-normalized_rank:]
+                              normalized_dims) + input_shape[-normalized_dims:]
 
     # dtype
     cpu_dtype = torch.bfloat16
@@ -141,10 +141,10 @@ def tt_layernorm(input,
                                    dtype=cpu_dtype)
         npu_beta_grad = to_npu(cpu_beta_grad, device)
 
-    # Compute output and mean and rstd
+    # Do forward
     npu_output = ttl.operations.primary.moreh_layernorm(npu_input,
-                                                        eps,
                                                         normalized_dims,
+                                                        eps,
                                                         gamma=npu_gamma,
                                                         beta=npu_beta,
                                                         mean=npu_mean,
@@ -177,14 +177,13 @@ def tt_layernorm(input,
 def make_cpu_tensors(input_shape, normalized_dims, elementwise_affine):
     # rank
     input_rank = len(input_shape)
-    normalized_rank = len(normalized_dims)
 
     # output_grad_shape
     output_grad_shape = input_shape
 
     # gamma_beta_shape
     gamma_beta_shape = [1] * (input_rank -
-                              normalized_rank) + input_shape[-normalized_rank:]
+                              normalized_dims) + input_shape[-normalized_dims:]
 
     # dtype
     cpu_dtype = torch.bfloat16
@@ -209,9 +208,8 @@ def make_cpu_tensors(input_shape, normalized_dims, elementwise_affine):
 
 
 @skip_for_wormhole_b0
-@pytest.mark.parametrize('eps', [1e-5, 1e-6], ids=['1e-5', '1e-6'])
-@pytest.mark.parametrize('normalized_dims',
-                         [[3], [2, 3], [1, 2, 3], [0, 1, 2, 3]],
+@pytest.mark.parametrize('eps', [1e-5, 1e-12], ids=['1e-5', '1e-12'])
+@pytest.mark.parametrize('normalized_dims', [1, 2, 3, 4],
                          ids=['W', 'HW', 'CHW', 'NCHW'])
 @pytest.mark.parametrize(
     'elementwise_affine',
@@ -239,25 +237,25 @@ def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps,
         cpu_input,
         cpu_output_grad,
         normalized_dims=normalized_dims,
+        eps=eps,
         gamma=cpu_gamma,
-        beta=cpu_beta,
-        eps=eps)
+        beta=cpu_beta)
 
     # actual
     actual_output, actual_input_grad, actual_gamma_grad, actual_beta_grad, actual_mean, actual_rstd = tt_layernorm(
         cpu_input,
         cpu_output_grad,
         normalized_dims=normalized_dims,
+        eps=eps,
         gamma=cpu_gamma,
         beta=cpu_beta,
-        eps=eps,
         device=device)
 
     # Set rtol and atol and pcc for output
     rtol = atol = 0.1
-    if len(normalized_dims) in (2, 3):
+    if normalized_dims in (2, 3):
         rtol = atol = 0.15
-    elif len(normalized_dims) == 4:
+    elif normalized_dims == 4:
         rtol = atol = 0.2
     output_pcc = 0.99
 
@@ -276,7 +274,7 @@ def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps,
     rstd_pcc = 0.9
     # TODO(seunghwan100): Debug this case.
     if (input_shape == [6, 6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH]
-            and normalized_dims == [1, 2, 3]):
+            and normalized_dims == 3):
         rstd_pcc = 0.8
 
     # Check mean and rstd
@@ -311,9 +309,9 @@ def test_moreh_layernorm(input_shape, normalized_dims, elementwise_affine, eps,
 
     # I divide gamma_grad and beta_grad by (N * C * Ht * Wt), because the error of bf16 sum increases.
     n, c, h, w = input_shape
-    Ht = (h + TILE_HEIGHT - 1) // TILE_HEIGHT
-    Wt = (w + TILE_WIDTH - 1) // TILE_WIDTH
-    numerator = n * c * Ht * Wt
+    ht = (h + TILE_HEIGHT - 1) // TILE_HEIGHT
+    wt = (w + TILE_WIDTH - 1) // TILE_WIDTH
+    numerator = n * c * ht * wt
 
     # Check gamma_grad
     if expected_gamma_grad is not None:
