@@ -136,11 +136,10 @@ inline std::tuple<int32_t, int32_t, int32_t, int32_t, CoreRangeSet, CoreRangeSet
 operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, Tensor& output) {
     tt_metal::Program program = tt_metal::Program();
 
-    TT_ASSERT(a.dtype() == DataType::BFLOAT16, "Only BFLOAT16 data type supported for tilize.");
-    TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Input is not in RM. This case is not yet supported");
-
-    DataFormat cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = detail::TileSize(cb_data_format);
+    DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
+    uint32_t input_single_tile_size = detail::TileSize(input_cb_data_format);
+    DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    uint32_t output_single_tile_size = detail::TileSize(output_cb_data_format);
 
     int32_t ntiles = a.volume() / TILE_HW;
     uint32_t ntiles_per_block = a.shape()[3] / TILE_WIDTH;
@@ -169,14 +168,14 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
 
     uint32_t src0_cb_index = CB::c_in0;
     uint32_t num_input_tiles = ntiles_per_block;
-    tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-		.set_page_size(src0_cb_index, single_tile_size);
+    tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
+		.set_page_size(src0_cb_index, input_single_tile_size);
 	auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
     uint32_t output_cb_index = CB::c_out0;
     uint32_t num_output_tiles = ntiles_per_block;
-    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
-		.set_page_size(output_cb_index, single_tile_size);
+    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
+		.set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     Buffer *src0_buffer = a.buffer();
@@ -377,8 +376,10 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
 operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor &input, Tensor &output) {
     tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
+    uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
+    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     uint32_t num_tiles = input.volume() / TILE_HW;
 
@@ -393,14 +394,14 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor &input, T
 
     uint32_t src0_cb_index = CB::c_in0;
     uint32_t num_input_tiles = num_tiles_per_shard;
-    tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-		.set_page_size(src0_cb_index, single_tile_size).set_globally_allocated_address(input.buffer()->address());
+    tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
+		.set_page_size(src0_cb_index, input_single_tile_size).set_globally_allocated_address(input.buffer()->address());
 	auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
     uint32_t output_cb_index = CB::c_out0;
     uint32_t num_output_tiles = num_tiles_per_shard;
-    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
-		.set_page_size(output_cb_index, single_tile_size).set_globally_allocated_address(output.buffer()->address());
+    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
+		.set_page_size(output_cb_index, output_single_tile_size).set_globally_allocated_address(output.buffer()->address());
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     auto src_buffer = input.buffer();

@@ -58,9 +58,9 @@ std::vector<Shape> Tilize::compute_output_shapes(const std::vector<Tensor> &inpu
 std::vector<Tensor> Tilize::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     if (input_tensor.memory_config().is_sharded()) {
-        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.dtype(), Layout::TILE, input_tensor.device(), input_tensor.memory_config(), input_tensor.shard_spec().value())};
+        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor.device(), this->output_mem_config, input_tensor.shard_spec().value())};
     } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
+        return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
     }
 }
 
@@ -87,10 +87,12 @@ TilizeOpParallelizationStrategy Tilize::get_parallelization_strategy(const std::
 tt::stl::reflection::Attributes Tilize::attributes() const {
     return {
         {"output_mem_config", this->output_mem_config},
+        {"output_dtype", this->output_dtype},
+        {"use_multicore", this->use_multicore},
     };
 }
 
-Tensor tilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_config, bool use_multicore) {
+Tensor tilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype, bool use_multicore) {
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::TILE) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
@@ -100,7 +102,7 @@ Tensor tilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_confi
             return input_tensor_a;
         }
     }
-    return operation::run_without_autoformat(Tilize{output_mem_config, use_multicore}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(Tilize{output_mem_config, output_dtype.value_or(input_tensor_a.dtype()), use_multicore}, {input_tensor_a}).at(0);
 }
 
 void TilizeWithValPadding::validate(const std::vector<Tensor> &input_tensors) const {
@@ -148,9 +150,9 @@ std::vector<Tensor> TilizeWithValPadding::create_output_tensors(const std::vecto
         auto output_shape = this->compute_output_shapes(input_tensors).at(0);
         auto shard_spec = input_tensor_a.shard_spec().value();
         shard_spec.shard_shape[0] = tt_metal::compute_volume(output_shape) / output_shape[-1];
-        return {create_sharded_device_tensor(output_shape, input_tensor_a.dtype(), Layout::TILE, input_tensor_a.device(), input_tensor_a.memory_config(), shard_spec)};
+        return {create_sharded_device_tensor(output_shape, this->output_dtype, Layout::TILE, input_tensor_a.device(), this->output_mem_config, shard_spec)};
     } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.dtype(), Layout::TILE, this->output_mem_config);
+        return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
     }
 }
 
@@ -182,10 +184,11 @@ tt::stl::reflection::Attributes TilizeWithValPadding::attributes() const {
         {"input_tensor_start", this->input_tensor_start},
         {"pad_value", this->pad_value},
         {"output_mem_config", this->output_mem_config},
+        {"output_dtype", this->output_dtype},
     };
 }
 
-Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value, const MemoryConfig& output_mem_config) {
+Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype) {
     // No-op (Will do a tensor copy)
     // TODO: We need to run asserts before this
     if (input_tensor_a.layout() == Layout::TILE) {
@@ -196,11 +199,11 @@ Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const Shape &output
             TT_ASSERT(false, "Cannot tilize and pad tensor that is already tilized");
         }
     }
-    return operation::run_without_autoformat(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value, output_mem_config}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(TilizeWithValPadding{output_tensor_shape, input_tensor_start, pad_value, output_mem_config, output_dtype.value_or(input_tensor_a.dtype())}, {input_tensor_a}).at(0);
 
 }
 
-Tensor tilize_with_zero_padding(const Tensor &input_tensor_a, const MemoryConfig& output_mem_config) {
+Tensor tilize_with_zero_padding(const Tensor &input_tensor_a, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype) {
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::TILE) {
         log_warning("Perf warning: tilize called on already tilized tensor.");
@@ -215,7 +218,7 @@ Tensor tilize_with_zero_padding(const Tensor &input_tensor_a, const MemoryConfig
 
     shape[2] = round_up(shape[2], TILE_HEIGHT);
     shape[3] = round_up(shape[3], TILE_WIDTH);
-    return tilize_with_val_padding(input_tensor_a, shape, {0, 0, 0, 0}, 0, output_mem_config);
+    return tilize_with_val_padding(input_tensor_a, shape, {0, 0, 0, 0}, 0, output_mem_config, output_dtype);
 }
 
 }  // namespace tt_metal

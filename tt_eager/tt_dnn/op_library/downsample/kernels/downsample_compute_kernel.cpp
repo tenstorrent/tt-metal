@@ -7,7 +7,9 @@
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/tilize.h"
 #include "debug_print.h"
-
+inline void kernel_sleep(uint32_t loop_count = 1000) {
+    for (volatile uint32_t i = 0; i < loop_count; ++ i);
+}
 namespace NAMESPACE {
 void MAIN {
 
@@ -82,12 +84,17 @@ void MAIN {
             cb_pop_front(halo_next_input_cb_index, num_input_tiles_in_row);
         }
     }
+    untilize_uninit(input_cb_index);
 
     // Tilize downsampled input
     cb_wait_front(untilize_downsampled_cb_index, num_output_tiles);
     cb_reserve_back(tilize_out_cb_index, num_output_tiles);
 
-    tilize_init(untilize_downsampled_cb_index, num_output_tiles_in_row, tilize_out_cb_index);
+    // tilize_init(untilize_downsampled_cb_index, num_output_tiles_in_row, tilize_out_cb_index);
+    unpack_reconfig_data_format_srca(input_cb_index, untilize_downsampled_cb_index);
+    pack_reconfig_data_format(tilize_out_cb_index);
+    kernel_sleep(1000);
+    tilize_init_short(untilize_downsampled_cb_index, num_output_tiles_in_row);
 
     for(uint32_t b=0;b<num_output_rows_of_tiles;++b)
     {

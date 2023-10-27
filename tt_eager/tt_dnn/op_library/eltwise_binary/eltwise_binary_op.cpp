@@ -179,9 +179,9 @@ std::vector<Tensor> EltwiseBinary::create_output_tensors(
             shard_spec.shard_shape = {num_blocks / target_num_cores * TILE_HEIGHT, input_tensor_a.shape()[-1]};
             shard_spec.shard_orientation = ShardOrientation::ROW_MAJOR;
         }
-        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor_a.dtype(), Layout::TILE, input_tensor_a.device(), this->output_mem_config, shard_spec)};
+        return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), this->output_dtype, Layout::TILE, input_tensor_a.device(), this->output_mem_config, shard_spec)};
     }
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor_a.dtype(), Layout::TILE, this->output_mem_config);
+    return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
@@ -216,6 +216,7 @@ tt::stl::reflection::Attributes EltwiseBinary::attributes() const {
         {"op_type", this->op_type},
         {"fused_activations", this->fused_activations},
         {"output_mem_config", this->output_mem_config},
+        {"output_dtype", this->output_dtype},
     };
 }
 
@@ -223,14 +224,15 @@ const operation::Hash EltwiseBinary::compute_program_hash(
     const std::vector<Tensor> &input_tensors) const {
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
     return fmt::format(
-        "{}_{}_{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}_{}_{}",
         *this,
         parallelization_strategy,
         input_tensors.at(0).memory_config(),
         input_tensors.at(0).dtype(),
         input_tensors.at(1).memory_config(),
         input_tensors.at(1).dtype(),
-        this->output_mem_config
+        this->output_mem_config,
+        this->output_dtype
     );
 }
 
