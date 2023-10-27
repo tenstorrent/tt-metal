@@ -90,8 +90,7 @@ bool load_all_blank_kernels(tt_metal::Device* device) {
     CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
     CoreRange all_cores = CoreRange(
         CoreCoord{.x = 0, .y = 0},
-        CoreCoord{.x = 0, .y = 0}
-        // CoreCoord{.x = compute_grid_size.x - 1, .y = compute_grid_size.y -1}
+        CoreCoord{.x = compute_grid_size.x - 1, .y = compute_grid_size.y -1}
     );
     CreateKernel(
         program, "tt_metal/kernels/dataflow/blank.cpp", all_cores,
