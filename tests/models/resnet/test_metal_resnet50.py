@@ -20,18 +20,34 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 from models.utility_functions import is_e75
 
 @pytest.mark.parametrize("batch_size", [1, 2, 8], ids=["batch_1", "batch_2", "batch_8"])
-@pytest.mark.parametrize("weights_dtype", [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B], ids=["BFLOAT16", "BFLOAT8_B"])
-@pytest.mark.parametrize("math_fidelity", [tt_lib.tensor.MathFidelity.HiFi4, tt_lib.tensor.MathFidelity.LoFi], ids=["HiFi4", "LoFi"])
-def test_run_resnet50_inference(use_program_cache, device, batch_size, weights_dtype, math_fidelity, imagenet_sample_input):
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    ids=["weights_BFLOAT16", "weights_BFLOAT8_B"],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
+    ids=["activations_BFLOAT16", "activations_BFLOAT8_B"],
+)
+@pytest.mark.parametrize(
+    "math_fidelity", [tt_lib.tensor.MathFidelity.HiFi4, tt_lib.tensor.MathFidelity.LoFi], ids=["HiFi4", "LoFi"]
+)
+def test_run_resnet50_inference(
+    use_program_cache, device, batch_size, weights_dtype, activations_dtype, math_fidelity, imagenet_sample_input
+):
     if is_e75(device):
         pytest.skip("Resnet50 is not supported on E75")
+
+    if activations_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
+        pytest.skip("BFP8_B currently has low pcc for activations")
 
     image1 = imagenet_sample_input
     image = image1
     model_config = {
         "MATH_FIDELITY": math_fidelity,
         "WEIGHTS_DTYPE": weights_dtype,
-        "ACTIVATIONS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+        "ACTIVATIONS_DTYPE": activations_dtype,
     }
     for i in range(batch_size - 1):
         image = torch.cat((image, image1), dim=0)
@@ -78,9 +94,15 @@ def test_run_resnet50_inference(use_program_cache, device, batch_size, weights_d
         logger.info(info)
         if batch_size == 8:
             if model_config["MATH_FIDELITY"] == tt_lib.tensor.MathFidelity.LoFi:
-                golden_pcc = 0.9446551761853834
+                if weights_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
+                    golden_pcc = 0.9392607666771678
+                else:
+                    golden_pcc = 0.9450991418256837
             else:
-                golden_pcc = 0.9899485705112977
+                if weights_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
+                    golden_pcc = 0.9905268223455689
+                else:
+                    golden_pcc = 0.9900861228915353
         else:
             if model_config["MATH_FIDELITY"] == tt_lib.tensor.MathFidelity.LoFi:
                 golden_pcc = 0.93
