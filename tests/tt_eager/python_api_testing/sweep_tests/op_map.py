@@ -364,6 +364,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_leaky_relu,
         "pytorch_op": pytorch_ops.leaky_relu,
     },
+    "eltwise-prelu": {
+        "tt_lib_op": tt_lib_ops.eltwise_prelu,
+        "pytorch_op": pytorch_ops.prelu,
+    },
     "eltwise-hardshrink": {
         "tt_lib_op": tt_lib_ops.eltwise_hardshrink,
         "pytorch_op": pytorch_ops.hardshrink,

@@ -171,6 +171,12 @@ namespace tt::tt_metal::detail {
             R"doc("slope value", "float", "")doc"
         );
         detail::bind_unary_op_with_param(
+            m_tensor, "prelu", prelu,
+            py::arg("weight"),
+            R"doc(Returns tensor with the prelu of all of elements of the input tensor ``{0}`` with negative slope as ``{1}``.)doc",
+            R"doc("weight value", "float", "")doc"
+        );
+        detail::bind_unary_op_with_param(
             m_tensor, "unary_chain", &unary_chain,
             py::arg("unary_chain"),
             R"doc(Returns tensor with the unary op chain applied to all of elements of the input tensor ``{0}``.)doc",
