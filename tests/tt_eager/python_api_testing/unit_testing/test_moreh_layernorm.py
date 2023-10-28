@@ -145,8 +145,8 @@ def tt_layernorm(input,
     npu_output = ttl.operations.primary.moreh_layernorm(npu_input,
                                                         normalized_dims,
                                                         eps,
-                                                        gamma=npu_gamma,
-                                                        beta=npu_beta,
+                                                        npu_gamma,
+                                                        npu_beta,
                                                         mean=npu_mean,
                                                         rstd=npu_rstd)
 
