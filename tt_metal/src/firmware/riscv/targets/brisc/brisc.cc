@@ -35,6 +35,8 @@ constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x4;
 constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x8;
 constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK;
 
+constexpr uint32_t num_cbs_to_early_init = 4;  // safe small number to overlap w/ ncrisc copy
+
 tt_l1_ptr mailboxes_t * const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
 uint32_t ncrisc_kernel_start_offset16;
 
@@ -324,12 +326,13 @@ int main() {
 
         uint32_t noc_index = mailboxes->launch.brisc_noc_id;
 
+        setup_cb_read_write_interfaces(0, num_cbs_to_early_init, true, true);
         finish_ncrisc_copy_and_run();
 
         // Run the BRISC kernel
         DEBUG_STATUS('R');
         if (mailboxes->launch.enable_brisc) {
-            setup_cb_read_write_interfaces(mailboxes->launch.max_cb_index, true, true);
+            setup_cb_read_write_interfaces(num_cbs_to_early_init, mailboxes->launch.max_cb_index, true, true);
             kernel_init();
         } else {
             // This was not initialized in kernel_init
