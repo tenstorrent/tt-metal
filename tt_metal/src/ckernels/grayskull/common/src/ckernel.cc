@@ -96,7 +96,7 @@ int main(int argc, char *argv[])
         kernel_profiler::mark_time(CC_MAIN_START);
 
 #if !defined(UCK_CHLKC_MATH)
-        setup_cb_read_write_interfaces(mailboxes->launch.max_cb_index, cb_init_read, cb_init_write);
+        setup_cb_read_write_interfaces(0, mailboxes->launch.max_cb_index, cb_init_read, cb_init_write);
 #endif
 
         DEBUG_STATUS('R');

@@ -42,10 +42,10 @@ extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
 // NCRISC and BRISC setup read and write
 // TRISC sets up read or write
-inline void setup_cb_read_write_interfaces(uint32_t max_cb_index, bool read, bool write) {
-    volatile tt_l1_ptr uint32_t* circular_buffer_config_addr = (volatile tt_l1_ptr uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
+inline void setup_cb_read_write_interfaces(uint32_t start_cb_index, uint32_t max_cb_index, bool read, bool write) {
+    volatile tt_l1_ptr uint32_t* circular_buffer_config_addr = (volatile tt_l1_ptr uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE) + start_cb_index * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG;
 
-    for (uint32_t cb_id = 0; cb_id < max_cb_index; cb_id++) {
+    for (uint32_t cb_id = start_cb_index; cb_id < max_cb_index; cb_id++) {
 
         // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
         uint32_t fifo_addr = circular_buffer_config_addr[0];
