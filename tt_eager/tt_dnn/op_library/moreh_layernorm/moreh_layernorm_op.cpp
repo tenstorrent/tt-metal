@@ -4,17 +4,16 @@
 
 #include "tt_eager/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 
+#include <map>
 #include <optional>
 #include <utility>
+#include <vector>
 
-#include "third_party/magic_enum/magic_enum.hpp"
-#include "tt_dnn/op_library/math.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_eager/tensor/tensor.hpp"
 #include "tt_eager/tensor/tensor_impl.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
-#include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -52,13 +51,13 @@ inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
 
 operation::ProgramWithCallbacks moreh_layernorm_(
     const Tensor& input,
+    uint32_t normalized_dims,
+    float eps,
+    Tensor& output,
     const std::optional<const Tensor> gamma,
     const std::optional<const Tensor> beta,
     const std::optional<const Tensor> mean,
-    const std::optional<const Tensor> rstd,
-    Tensor& output,
-    uint32_t normalized_dims,
-    float eps) {
+    const std::optional<const Tensor> rstd) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -125,7 +124,10 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const auto rstd_has_value = rstd.has_value();
 
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && !is_lastdim_layernorm;
+    const auto mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
+
     const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
+    const auto mask_w = do_mask_w ? origin_W % TILE_WIDTH : TILE_WIDTH;
 
     uint32_t in0_t = 2 * Wt;                                      // input
     const uint32_t in1_t = 1;                                     // scaler
@@ -229,10 +231,10 @@ operation::ProgramWithCallbacks moreh_layernorm_(
 
     std::map<string, string> reader_defines{};
     if (gamma_has_value) {
-        reader_defines["FUSE_GAMMA"] = "1";
+        reader_defines["GAMMA_HAS_VALUE"] = "1";
     }
     if (beta_has_value) {
-        reader_defines["FUSE_BETA"] = "1";
+        reader_defines["BETA_HAS_VALUE"] = "1";
     }
     if (do_mask_h) {
         reader_defines["DO_MASK_H"] = "1";
@@ -340,9 +342,6 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const auto mean_addr = mean_has_value ? mean.value().buffer()->address() : 0;
     const auto rstd_addr = rstd_has_value ? rstd.value().buffer()->address() : 0;
 
-    const auto mask_h = origin_H % TILE_HEIGHT;
-    const auto mask_w = origin_W % TILE_WIDTH;
-
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -430,6 +429,8 @@ void MorehLayerNorm::validate(
     const auto& rstd = optional_input_tensors.at(3);
 
     check_tensor(input, "moreh_layernorm");
+
+    TT_ASSERT(this->normalized_dims > 0);
     TT_ASSERT(this->normalized_dims <= input.shape().rank());
 
     if (gamma.has_value()) {
@@ -487,7 +488,7 @@ operation::ProgramWithCallbacks MorehLayerNorm::create_program(
 
     auto& output = output_tensors.at(0);
 
-    return moreh_layernorm_(input, gamma, beta, mean, rstd, output, this->normalized_dims, this->eps);
+    return moreh_layernorm_(input, this->normalized_dims, this->eps, output, gamma, beta, mean, rstd);
 }
 
 tt::stl::reflection::Attributes MorehLayerNorm::attributes() const {

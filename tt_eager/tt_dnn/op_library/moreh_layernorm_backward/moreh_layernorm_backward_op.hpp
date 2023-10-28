@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <variant>
 #include <vector>
 
 #include "tt_dnn/op_library/run_operation.hpp"

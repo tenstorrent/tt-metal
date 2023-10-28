@@ -50,7 +50,7 @@ void MAIN {
     constexpr auto cb_xmm2 = tt::CB::c_intermed2;        // (x - E[x])^2
     constexpr auto cb_xmm2sum = tt::CB::c_intermed3;     // Sum[(x - E[x])^2]
     constexpr auto cb_var = tt::CB::c_intermed4;         // E[(x - E[x])^2] = Var[x]
-    constexpr auto cb_ex2pe = tt::CB::c_intermed5;       // 1.0/(sqrt(Var[x] + eps))
+    constexpr auto cb_recip_rstd = tt::CB::c_intermed5;  // 1.0/(sqrt(Var[x] + eps))
     constexpr auto cb_gamma_beta = tt::CB::c_intermed6;  // p * gamm + beta
     constexpr auto cb_xsum = tt::CB::c_intermed7;        // Sum[x]
 
@@ -278,8 +278,8 @@ void MAIN {
          * cb_var
          */
         ACQ();
-        cb_reserve_back(cb_var, onetile);
         cb_wait_front(cb_xmm2sum, onetile);
+        cb_reserve_back(cb_var, onetile);
 
         reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
         reduce_tile(REDUCE_OP, REDUCE_DIM, cb_xmm2sum, cb_scaler, first_tile, first_tile, dst0);
@@ -287,8 +287,8 @@ void MAIN {
 
         pack_tile(dst0, cb_var);
 
-        cb_push_back(cb_var, onetile);
         cb_pop_front(cb_xmm2sum, onetile);
+        cb_push_back(cb_var, onetile);
         REL();
 
         cb_wait_front(cb_var, onetile);
@@ -312,10 +312,10 @@ void MAIN {
 
         /*
          * 1.0/(sqrt(E[(x-E[x])^2] + eps))
-         * cb_ex2pe
+         * cb_recip_rstd
          */
         ACQ();
-        cb_reserve_back(cb_ex2pe, onetile);
+        cb_reserve_back(cb_recip_rstd, onetile);
 
         add_tiles_init();
         add_tiles(cb_var, cb_eps, first_tile, first_tile, dst0);
@@ -326,10 +326,10 @@ void MAIN {
         recip_tile_init();
         recip_tile(dst0);
 
-        pack_tile(dst0, cb_ex2pe);
+        pack_tile(dst0, cb_recip_rstd);
 
         cb_pop_front(cb_var, onetile);
-        cb_push_back(cb_ex2pe, onetile);
+        cb_push_back(cb_recip_rstd, onetile);
         REL();
 
         /*
@@ -338,17 +338,17 @@ void MAIN {
          * cb_out
          */
         constexpr auto cb_gamma_beta_or_out = (gamma_has_value || beta_has_value) ? cb_gamma_beta : cb_out;
-        cb_wait_front(cb_ex2pe, onetile);
+        cb_wait_front(cb_recip_rstd, onetile);
         for (uint32_t wt = 0; wt < Wt; wt += block_size) {
             cb_reserve_back(cb_gamma_beta_or_out, block_size);
             for (uint32_t j = 0; j < block_size; j++) {
                 ACQ();
                 if (is_lastdim_layernorm) {
                     mul_bcast_cols_init_short();
-                    mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + j, first_tile, j);
+                    mul_tiles_bcast_cols(cb_xmm, cb_recip_rstd, wt + j, first_tile, j);
                 } else {
                     mul_tiles_bcast_scalar_init_short();
-                    mul_tiles_bcast_scalar(cb_xmm, cb_ex2pe, wt + j, first_tile, j);
+                    mul_tiles_bcast_scalar(cb_xmm, cb_recip_rstd, wt + j, first_tile, j);
                 }
                 pack_tile(j, cb_gamma_beta_or_out);
                 REL();
@@ -400,7 +400,7 @@ void MAIN {
                 cb_push_back(cb_out, block_size);
             }  // if (beta_has_value)
         }      // Wt loop
-        cb_pop_front(cb_ex2pe, onetile);
+        cb_pop_front(cb_recip_rstd, onetile);
         cb_pop_front(cb_xmm, Wt);
     }  // NCHt loop
     cb_pop_front(cb_scaler, onetile);
