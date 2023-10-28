@@ -329,7 +329,7 @@ int main() {
         // Run the BRISC kernel
         DEBUG_STATUS('R');
         if (mailboxes->launch.enable_brisc) {
-            setup_cb_read_write_interfaces(true, true);
+            setup_cb_read_write_interfaces(mailboxes->launch.max_cb_index, true, true);
             kernel_init();
         } else {
             // This was not initialized in kernel_init

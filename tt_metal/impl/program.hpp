@@ -43,7 +43,9 @@ struct KernelGroup {
     KernelGroup(const Program& program,
                 std::optional<KernelID> brisc_id,
                 std::optional<KernelID> ncrisc_id,
-                std::optional<KernelID> trisc_id);
+                std::optional<KernelID> trisc_id,
+                int last_cb_index,
+                const CoreRangeSet& new_ranges);
 };
 
 class Program {
