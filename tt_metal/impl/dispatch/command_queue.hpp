@@ -42,6 +42,7 @@ struct transfer_info {
 struct ProgramMap {
     uint32_t num_workers;
     vector<uint32_t> program_pages;
+    uint32_t host_data_num_entries;
     vector<transfer_info> program_page_transfers;
     vector<transfer_info> runtime_arg_page_transfers;
     vector<transfer_info> cb_config_page_transfers;

@@ -126,6 +126,8 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         num_transfers_within_page = 0;
     }
 
+    uint32_t host_data_num_entries = align(src, DeviceCommand::PROGRAM_PAGE_SIZE) / sizeof(uint32_t);
+
     src = 0; // Resetting since in a new page
     // Step 2: Continue constructing pages for circular buffer configs
     for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
@@ -141,6 +143,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
                 dst_noc_multicast_info);
         }
     }
+    host_data_num_entries = align(host_data_num_entries + src, DeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t));
 
     // Cleanup step of separating runtime arg pages from program pages
     if (num_transfers_within_page) {
@@ -206,7 +209,6 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     }
 
     vector<uint32_t> program_pages(align(src, DeviceCommand::PROGRAM_PAGE_SIZE) / sizeof(uint32_t), 0);
-
     // Step 5: Continue constructing pages for GO signals
     src = 0;
     for (KernelGroup& kg : program.get_kernel_groups()) {
@@ -263,6 +265,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     return {
         .num_workers = uint32_t(program.logical_cores().size()),
         .program_pages = std::move(program_pages),
+        .host_data_num_entries = host_data_num_entries,
         .program_page_transfers = std::move(program_page_transfers),
         .runtime_arg_page_transfers = std::move(runtime_arg_page_transfers),
         .cb_config_page_transfers = std::move(cb_config_page_transfers),
@@ -803,31 +806,29 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
     }
 
     tt::log_debug(tt::LogDispatch, "EnqueueProgram");
-    vector<uint32_t> host_data;
+
+    vector<uint32_t> host_data(program_to_dev_map.at(program_id).host_data_num_entries, 0);
 
     // Writing runtime args and circular buffer configs
+    uint32_t src = 0;
     constexpr static uint32_t padding_alignment = 16;
     for (const auto kernel_id : program.kernel_ids()) {
         const Kernel* kernel = detail::GetKernel(program, kernel_id);
         for (const auto& [_, core_runtime_args] : kernel->runtime_args()) {
-            host_data.insert(host_data.end(), core_runtime_args.begin(), core_runtime_args.end());
-            uint32_t num_padding = align(host_data.size(), padding_alignment / sizeof(uint32_t)) - host_data.size();
-            for (uint32_t i = 0; i < num_padding; i++) {
-                host_data.push_back(0);
-            }
+            host_data.insert(host_data.begin() + src, core_runtime_args.begin(), core_runtime_args.end());
+            src = align(src + core_runtime_args.size(), padding_alignment / sizeof(uint32_t));
         }
     }
 
-    // Separate runtime args and cb config data at the page
-    // boundary
-    host_data.resize(align(host_data.size(), DeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
+    src = align(src, DeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t));
 
     for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
         for (const auto buffer_index : cb->buffer_indices()) {
-            host_data.push_back(cb->address() >> 4);
-            host_data.push_back(cb->size() >> 4);
-            host_data.push_back(cb->num_pages(buffer_index));
-            host_data.push_back((cb->size() / cb->num_pages(buffer_index)) >> 4);
+            host_data[src] = cb->address() >> 4;
+            host_data[src + 1] = cb->size() >> 4;
+            host_data[src + 2] = cb->num_pages(buffer_index);
+            host_data[src + 3] = (cb->size() / cb->num_pages(buffer_index)) >> 4;
+            src += 4;
         }
     }
 
