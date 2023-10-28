@@ -48,7 +48,7 @@ struct launch_msg_t {  // must be cacheline aligned
     volatile uint8_t enable_brisc;
     volatile uint8_t enable_ncrisc;
     volatile uint8_t enable_triscs;
-    volatile uint8_t pad0;
+    volatile uint8_t max_cb_index;
     volatile uint8_t pad1;
     volatile uint8_t run;  // must be in last cacheline of this msg
 };

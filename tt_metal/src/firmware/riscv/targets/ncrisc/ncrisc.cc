@@ -57,7 +57,7 @@ int main(int argc, char *argv[]) {
       kernel_profiler::init_profiler();
       kernel_profiler::mark_time(CC_MAIN_START);
 
-      setup_cb_read_write_interfaces(true, true);
+      setup_cb_read_write_interfaces(mailboxes->launch.max_cb_index, true, true);
 
       DEBUG_STATUS('R');
       kernel_init();

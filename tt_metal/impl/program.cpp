@@ -114,7 +114,11 @@ KernelGroup::KernelGroup() : core_ranges({}) {
 KernelGroup::KernelGroup(const Program& program,
                          std::optional<KernelID> brisc_id,
                          std::optional<KernelID> ncrisc_id,
-                         std::optional<KernelID> trisc_id) : core_ranges({}) {
+                         std::optional<KernelID> trisc_id,
+                         int last_cb_index,
+                         const CoreRangeSet& new_ranges) : core_ranges({}) {
+
+    this->core_ranges = this->core_ranges.merge(new_ranges);
 
     this->riscv0_id = brisc_id;
     this->riscv1_id = ncrisc_id;
@@ -155,6 +159,7 @@ KernelGroup::KernelGroup(const Program& program,
         this->launch_msg.enable_triscs = false;
     }
 
+    this->launch_msg.max_cb_index = last_cb_index + 1;
     this->launch_msg.run = RUN_MSG_GO;
 }
 
@@ -258,20 +263,35 @@ void Program::update_kernel_groups() {
         int index = 0;
         core_to_kernel_group_index_table_.resize(grid_extent_.x * grid_extent_.y, core_to_kernel_group_invalid_index);
         for (auto& kg_to_cores : map) {
-            kernel_groups_.push_back(KernelGroup(*this,
-                                                 kg_to_cores.first.brisc_id,
-                                                 kg_to_cores.first.ncrisc_id,
-                                                 kg_to_cores.first.trisc_id));
-            kernel_groups_.back().core_ranges = kernel_groups_.back().core_ranges.merge( kg_to_cores.second);
+
+            int last_cb_index = -1;
 
             // Map from core X,Y back to the unique KernelGroup
             for (CoreRange range : kg_to_cores.second) {
                 for (auto y = range.start.y; y <= range.end.y; y++) {
                     for (auto x = range.start.x; x <= range.end.x; x++) {
                         core_to_kernel_group_index_table_[y * grid_extent_.x + x] = index;
+
+                        auto val = per_core_cb_allocator_.find(CoreCoord({x, y}));
+                        if (val != per_core_cb_allocator_.end()) {
+                            int i;
+                            for (i = NUM_CIRCULAR_BUFFERS - 1; i >= 0; i--) {
+                                if (val->second.indices[i]) {
+                                    break;
+                                }
+                            }
+                            last_cb_index = (i > last_cb_index) ? i : last_cb_index;
+                        }
                     }
                 }
             }
+
+            kernel_groups_.push_back(KernelGroup(*this,
+                                                 kg_to_cores.first.brisc_id,
+                                                 kg_to_cores.first.ncrisc_id,
+                                                 kg_to_cores.first.trisc_id,
+                                                 last_cb_index,
+                                                 kg_to_cores.second));
             index++;
         }
     }

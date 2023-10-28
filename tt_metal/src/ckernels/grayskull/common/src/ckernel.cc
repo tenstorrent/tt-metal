@@ -39,6 +39,7 @@ const uint8_t thread_id = COMPILE_FOR_TRISC;
 #define GET_TRISC_RUN_EVAL(x, t) x##t
 #define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
 volatile tt_l1_ptr uint8_t * const trisc_run = &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE))->slave_sync.trisc, COMPILE_FOR_TRISC);
+tt_l1_ptr mailboxes_t * const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
 } // namespace ckernel
 
 volatile tt_l1_ptr uint32_t l1_buffer[16] __attribute__ ((section ("l1_data"))) __attribute__ ((aligned (16))) __attribute__((used));
@@ -95,7 +96,7 @@ int main(int argc, char *argv[])
         kernel_profiler::mark_time(CC_MAIN_START);
 
 #if !defined(UCK_CHLKC_MATH)
-        setup_cb_read_write_interfaces(cb_init_read, cb_init_write);
+        setup_cb_read_write_interfaces(mailboxes->launch.max_cb_index, cb_init_read, cb_init_write);
 #endif
 
         DEBUG_STATUS('R');
