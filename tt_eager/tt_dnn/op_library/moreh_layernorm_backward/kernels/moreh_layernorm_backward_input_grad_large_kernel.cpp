@@ -315,10 +315,10 @@ void MAIN {
 
         reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
         reduce_tile(REDUCE_OP, REDUCE_DIM, cb_dyadd, cb_scaler, 0, 0, dst0);
+        reduce_revert_delta();
 
         pack_tile(dst0, cb_dysum);
 
-        reduce_revert_delta();
         cb_pop_front(cb_dyadd, onetile);
         cb_push_back(cb_dysum, onetile);
         REL();
@@ -331,10 +331,10 @@ void MAIN {
 
         reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
         reduce_tile(REDUCE_OP, REDUCE_DIM, cb_ydyadd, cb_scaler, 0, 0, dst0);
+        reduce_revert_delta();
 
         pack_tile(dst0, cb_ydysum);
 
-        reduce_revert_delta();
         cb_pop_front(cb_ydyadd, onetile);
         cb_push_back(cb_ydysum, onetile);
         REL();

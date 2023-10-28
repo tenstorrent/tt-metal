@@ -6,9 +6,8 @@
 
 #include <optional>
 #include <utility>
-
-#include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_eager/tensor/tensor.hpp"
+#include <variant>
+#include <vector>
 
 namespace tt {
 
@@ -48,6 +47,7 @@ void MorehLayerNormBackwardInputGrad::validate(
     check_tensor(mean, "moreh_layernorm_backward_input_grad");
     check_tensor(rstd, "moreh_layernorm_backward_input_grad");
 
+    TT_ASSERT(this->normalized_dims > 0);
     TT_ASSERT(this->normalized_dims <= output_grad.shape().rank());
 
     if (gamma.has_value()) {
@@ -115,6 +115,7 @@ void MorehLayerNormBackwardGammaBetaGrad::validate(
     check_tensor(mean, "moreh_layernorm_backward_gamma_beta_grad");
     check_tensor(rstd, "moreh_layernorm_backward_gamma_beta_grad");
 
+    TT_ASSERT(this->normalized_dims > 0);
     TT_ASSERT(this->normalized_dims <= output_grad.shape().rank());
 
     if (gamma_grad.has_value()) {

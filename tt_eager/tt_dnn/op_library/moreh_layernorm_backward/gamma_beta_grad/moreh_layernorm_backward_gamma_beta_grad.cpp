@@ -2,18 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <map>
 #include <optional>
 #include <utility>
+#include <vector>
 
-#include "third_party/magic_enum/magic_enum.hpp"
-#include "tt_dnn/op_library/math.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_eager/tensor/tensor.hpp"
 #include "tt_eager/tensor/tensor_impl.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
 #include "tt_eager/tt_dnn/op_library/work_split.hpp"
-#include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
