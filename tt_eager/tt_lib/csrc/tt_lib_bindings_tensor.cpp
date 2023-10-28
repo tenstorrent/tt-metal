@@ -336,6 +336,7 @@ void TensorModule(py::module &m_tensor) {
         py::arg("eps").noconvert() = 1e-5f,
         py::arg("gamma").noconvert() = std::nullopt,
         py::arg("beta").noconvert() = std::nullopt,
+        py::kw_only(),
         py::arg("mean").noconvert() = std::nullopt,
         py::arg("rstd").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,

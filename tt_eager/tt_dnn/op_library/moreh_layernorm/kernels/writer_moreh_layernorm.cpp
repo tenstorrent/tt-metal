@@ -25,21 +25,21 @@ void kernel_main() {
 
     // output
     const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
-    const DataFormat output_data_format = get_dataformat(cb_id_output);
+    const auto output_data_format = get_dataformat(cb_id_output);
 
     const InterleavedAddrGenFast<output_is_dram> output_addrg = {
         .bank_base_address = output_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
 
     // mean
     const uint32_t mean_tile_bytes = get_tile_size(cb_id_mean);
-    const DataFormat mean_data_format = get_dataformat(cb_id_mean);
+    const auto mean_data_format = get_dataformat(cb_id_mean);
 
     const InterleavedAddrGenFast<mean_is_dram> mean_addrg = {
         .bank_base_address = mean_addr, .page_size = mean_tile_bytes, .data_format = mean_data_format};
 
     // rstd
     const uint32_t rstd_tile_bytes = get_tile_size(cb_id_rstd);
-    const DataFormat rstd_data_format = get_dataformat(cb_id_rstd);
+    const auto rstd_data_format = get_dataformat(cb_id_rstd);
 
     const InterleavedAddrGenFast<rstd_is_dram> rstd_addrg = {
         .bank_base_address = rstd_addr, .page_size = rstd_tile_bytes, .data_format = rstd_data_format};
@@ -70,7 +70,7 @@ void kernel_main() {
         // output
         for (uint32_t wt = 0; wt < Wt; wt += block_size) {
             cb_wait_front(cb_id_output, block_size);
-            uint32_t output_l1_read_addr = get_read_ptr(cb_id_output);
+            auto output_l1_read_addr = get_read_ptr(cb_id_output);
             for (uint32_t r = 0; r < block_size; r++) {
                 noc_async_write_tile(offs + wt + r + tile_offset, output_addrg, output_l1_read_addr);
                 output_l1_read_addr += output_tile_bytes;
