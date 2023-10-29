@@ -59,6 +59,18 @@ ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t cbid) {
     #endif
 }
 
+ALWI void copy_tile_matmul_partials_init_short_with_dt(uint32_t cbid) {
+    #ifdef ARCH_GRAYSKULL
+    UNPACK(( llk_unpack_A_init_cm<BroadcastType::NONE, false>(1, 0, 255) ));
+    UNPACK(( llk_unpack_reconfig_data_format(1, cbid, 0, 0) ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
+    #else
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
+    UNPACK(( llk_unpack_reconfig_data_format(1, cbid, 0, 0) ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, cbid) ));
+    #endif
+}
+
 ALWI void copy_tile_to_dst_init_short()
 {
     #ifdef ARCH_GRAYSKULL
@@ -97,10 +109,14 @@ ALWI void copy_tile_init()
  * */
 ALWI void copy_tile(uint32_t icb, uint32_t itile, uint32_t idst)
 {
-    MATH(( llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, SyncHalf>(idst)  ));
-
-    UNPACK(( llk_unpack_A(icb, itile)  ));
+    UNPACK(( llk_unpack_A_cm<BroadcastType::NONE, false>(icb, itile)  ));
+    MATH(( llk_math_eltwise_unary_datacopy_cm<A2D, BroadcastType::NONE, SyncHalf>(idst)  ));
 }
 
+ALWI void copy_tile_matmul_partials(uint32_t icb, uint32_t itile, uint32_t idst)
+{
+    UNPACK(( llk_unpack_A_cm(icb, itile, true)  ));
+    MATH(( llk_math_eltwise_unary_datacopy_cm<A2D, BroadcastType::NONE, SyncHalf>(idst)  ));
+}
 
 }
