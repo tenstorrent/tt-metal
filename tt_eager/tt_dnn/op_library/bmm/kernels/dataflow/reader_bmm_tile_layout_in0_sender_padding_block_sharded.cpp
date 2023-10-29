@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
+
 void kernel_main() {
     // in0 tensor args
     const uint32_t in0_tensor_addr                    = get_arg_val<uint32_t>(0);
@@ -80,6 +81,7 @@ void kernel_main() {
     cb_reserve_back(cb_id_in2, in0_block_num_tiles);
     uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
     uint32_t l1_write_addr_in2_step = in0_block_num_tiles * in0_single_tile_size_bytes;
+
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;

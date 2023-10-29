@@ -10,9 +10,16 @@
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary.h"
+#include "llk_math_matmul.h"
+#include "llk_math_common.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB.h"
+#include "llk_unpack_A.h"
+#endif
+#ifdef TRISC_PACK
+#include "llk_pack.h"
+#include "llk_pack_common.h"
 #endif
 
 
@@ -195,6 +202,30 @@ ALWI void add_bcast_rows_init_short()
     // FIXME: API Update needed in compute kernel?
     UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>(0, 1) ));
     #endif
+}
+
+ALWI void add_bcast_rows_init_short_post_matmul()
+{
+    // unpacker
+    #ifdef ARCH_GRAYSKULL
+    UNPACK(( llk_unpack_A_init_cm<BroadcastType::NONE, false, 0>(0, 255) ));
+    UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>() ));
+    #else
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
+    UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>(0, 1) ));
+    #endif
+    // math
+    #ifdef ARCH_GRAYSKULL
+    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>() ));
+    #else
+    MATH(( llk_math_matmul_init<MATH_FIDELITY>(0, 1) ));
+    #endif
+    MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW>() ));
+    MATH(( llk_math_pack_sync_init<SYNC>()  ));
+    // packer
+    PACK(( llk_pack_init<false, false, DstTileFaceLayout::RowMajor>()  ));
+    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>()  ));
+    PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>()  ));
 }
 
 /**
