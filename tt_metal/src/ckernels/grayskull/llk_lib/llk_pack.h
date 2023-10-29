@@ -148,6 +148,65 @@ inline void llk_pack_init() {
     llk_pack_mop_config<untilize, zero_output, FaceLayout>();
 }
 
+
+template <bool out_of_order_output, bool untilize>
+inline std::uint16_t get_output_tile_address(std::uint8_t output_id, std::uint32_t output_tile_index) {
+
+    std::uint16_t pack_tile_addr;
+    if constexpr (out_of_order_output) {
+        // pack_tile_addr = cb_interface[output_id].f.fifo_wr_ptr +
+        //                  MUL_TILE_SIZE_AND_INDEX((std::uint8_t)pack_dst_format[output_id], (std::uint16_t)output_tile_index);
+    } else {
+        // if constexpr (untilize) {
+        //     std::uint16_t out_tile_index = (outputs[output_id].f.ublock_tile_cnt/outputs[output_id].f.ublock_ct)*outputs[output_id].f.row_tile_dim +
+        //                                     outputs[output_id].f.ublock_tile_cnt%outputs[output_id].f.ublock_ct; //FIXME: optimize perf
+        //     pack_tile_addr = outputs[output_id].f.fifo_wr_ptr + outputs[output_id].f.fifo_wr_tile_ptr - 1;
+        //     pack_tile_addr += out_tile_index*GET_L1_HEADERLESS_TILE_SIZE((std::uint8_t)pack_dst_format[output_id]);
+
+        //     //outputs[output_id].f.fifo_wr_tile_ptr += GET_L1_HEADERLESS_TILE_SIZE((std::uint8_t)pack_dst_format[output_id]);
+
+        //     outputs[output_id].f.ublock_tile_cnt++;
+
+        //     if (outputs[output_id].f.ublock_tile_cnt == outputs[output_id].f.ublock_tile_dim) {
+        //        outputs[output_id].f.ublock_tile_cnt=0;
+        //        outputs[output_id].f.fifo_wr_tile_ptr += GET_L1_HEADERLESS_TILE_SIZE((std::uint8_t)pack_dst_format[output_id])*outputs[output_id].f.ublock_ct; //FIXME: optimize perf
+        //     }
+        // } else {
+            pack_tile_addr = cb_interface[output_id].fifo_wr_ptr + cb_interface[output_id].fifo_wr_tile_ptr - 1;
+            cb_interface[output_id].fifo_wr_tile_ptr += GET_L1_TILE_SIZE((std::uint8_t)pack_dst_format[output_id]);
+        // }
+    }
+    return pack_tile_addr;
+}
+template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false /* unused*/>
+inline void llk_mm_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
+    // TT_LLK_DUMP("llk_pack<{}, {}, {}, {}>({}, {}, {})", out_of_order_output, Dst, untilize, is_fp32_dest_acc_en, tile_index, output, output_tile_index);
+    // Todo: figure out tile dims based on output
+    std::uint8_t output_id = get_output_id(output);
+
+    static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
+
+    std::uint16_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
+
+    if constexpr (Dst == DstSync::SyncTile16) {
+        // Z-counter points to the next tile in dest
+    } else if constexpr (Dst == DstSync::SyncTile2) {
+        TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Z, pack_sync_tile_dst_ptr);
+        pack_sync_tile_dst_ptr = pack_sync_tile_dst_ptr + 8;
+    } else {
+        TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Z, tile_index);
+    }
+
+    program_mm_packer_destination(pack_tile_addr, output_id);
+
+    mop_run(1, 1);
+
+    if constexpr (untilize) {
+        TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Y, 0);
+        TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1);
+    }
+}
+
 template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false>
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
 

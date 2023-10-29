@@ -327,6 +327,46 @@ namespace ckernel::packer
    }
 
    // Program packer destination addresses from GPRs
+   // Note: DMAREG_SHFT takes a pre-shifted SigSel to generate cleaner asm
+   template <PackSelMask PackSel=PACK_ALL>
+   inline void program_mm_packer_destination(uint32_t addr, uint8_t pack_output)
+   {
+      const uint8_t fmt = (uint8_t)(pack_dst_format[pack_output] & 0x3);
+      if constexpr (PackSel == PACK_ALL) {
+         const uint32_t offset1 = fmt == (uint8_t)DataFormat::Float32 ? (0x40 << 8) : fmt == (uint8_t)DataFormat::Float16 ? (0x20 << 8) : (0x1 << 8);
+         const uint32_t offset2 = fmt == (uint8_t)DataFormat::Float32 ? (0x80 << 8) : fmt == (uint8_t)DataFormat::Float16 ? (0x40 << 8) : (0x2 << 8);
+         const uint32_t offset3 = fmt == (uint8_t)DataFormat::Float32 ? (0xC0 << 8) : fmt == (uint8_t)DataFormat::Float16 ? (0x60 << 8) : (0x3 << 8);
+         addr <<= 8;
+
+         TT_SETDMAREG_SHFT(0, addr, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+0));
+         TT_SETDMAREG_SHFT(0, addr+offset1, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+1));
+         TT_SETDMAREG_SHFT(0, addr+offset2, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+2));
+         TT_SETDMAREG_SHFT(0, addr+offset3, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+3));
+	 TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK0 | p_stall::PACK1);
+         TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR,     p_cfg::WRCFG_32b, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+         TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+1,   p_cfg::WRCFG_32b, THCON_SEC0_REG8_L1_Dest_addr_ADDR32);
+         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK2 | p_stall::PACK3);
+         TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+2,   p_cfg::WRCFG_32b, THCON_SEC1_REG1_L1_Dest_addr_ADDR32);
+         TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+3,   p_cfg::WRCFG_32b, THCON_SEC1_REG8_L1_Dest_addr_ADDR32);
+     } else if constexpr (PackSel == PACK_01) {
+         const uint32_t offset1 = fmt == (uint8_t)DataFormat::Float32 ? (0x40 << 8) : fmt == (uint8_t)DataFormat::Float16 ? (0x20 << 8) : (0x1 << 8);
+         addr <<= 8;
+
+         TT_SETDMAREG_SHFT(0, addr, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+0));
+         TT_SETDMAREG_SHFT(0, addr+offset1, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+1));
+         TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK0|p_stall::PACK1);
+         TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_L1_Dest_addr_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR);
+         TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_L1_Dest_addr_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR+1);
+     } else if constexpr (PackSel == PACK_0) {
+         TT_SETDMAREG(0, addr, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+0));
+         TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK0);
+         TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_L1_Dest_addr_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR);
+     } else {
+        FWASSERT("Unsupported pack select mask!", false);
+     }
+   }
+
+   // Program packer destination addresses from GPRs
    template <PackSelMask PackSel=PACK_ALL>
    inline void program_packer_destination(uint32_t addr, uint8_t pack_output)
    {
