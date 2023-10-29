@@ -47,7 +47,10 @@ void MAIN {
 
     constexpr bool spill = num_blocks > 1;
 
-    mm_init(in0_cb_id, in1_cb_id, out_cb_id);
+    bool one_time_matmul_wait = true;
+
+    mm_block_init(in0_cb_id, in1_cb_id, out_cb_id);
+    // mm_init(in0_cb_id, in1_cb_id, out_cb_id);
     for (uint32_t b = 0; b < batch; b++){
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
@@ -79,37 +82,31 @@ void MAIN {
 
                     if (enable_reload) {
                         // Reconfigure input
-                        copy_tile_to_dst_init_short();
-                        unpack_reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+                        copy_tile_matmul_partials_init_short_with_dt(mm_partials_cb_id);                                             // nothing to be done
                         cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
                         tile_regs_acquire();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            copy_tile(mm_partials_cb_id, i, i);
+                            copy_tile_matmul_partials(mm_partials_cb_id, i, i);                                                             // seems nothing to be done
                         }
                         cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
-                        // Reconfigure srcA back
-                        mm_init_short();
-                        unpack_reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+                        // // Reconfigure srcA back
+                        mm_block_init_short_with_dt(in0_cb_id, in1_cb_id, mm_partials_cb_id);                               // done
+                        // mm_init_short_with_dt(mm_partials_cb_id);
                     } else {
                         // just acquire
                         tile_regs_acquire();
                     }
 
-                    // Compute output sub-block from in0_subblock x in1_subblock
-                    int dst_index = 0;
-                    int in0_index_h_offset = 0;
-                    for (uint32_t h = 0; h < out_subblock_h; h++) {
-                        for (uint32_t w = 0; w < out_subblock_w; w++) {
-                            int in1_index_inner_dim_offset = 0;
-                            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                                int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
-                                int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                matmul_tiles(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, false /* transpose */);
-                                in1_index_inner_dim_offset += in1_per_core_w;
-                            }
-                            dst_index++;
-                        }
-                        in0_index_h_offset += in0_block_w;
+                    // Compute output sub-block
+                    int dst_index = 0; // start at 0, each call to matmul_block internally increments dst_index
+                    int in0_index = in0_index_subblock_offset; // offset into in0 block
+                    int in1_index = in1_index_subblock_offset; // offset into in1 block
+                    for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
+                        // matmul outer product of out_subblock_h x out_subblock_w tiles that fill dst
+                        // accumulation is done by iterating matmul_block across inner dim
+                        matmul_block(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, out_subblock_w, out_subblock_h, in0_block_w);
+                        in0_index++; // stride right by 1
+                        in1_index += in1_per_core_w; // to stride down by 1 need to stride by in_per_core_w (should be called in1_block_w)
                     }
 
                     if (last_out) {
@@ -124,6 +121,7 @@ void MAIN {
                         cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                            // mm_pack_tile(i, mm_out_cb_id);                                                             // done
                             pack_tile(i, mm_out_cb_id);
                         }
                         tile_regs_release();
@@ -139,6 +137,7 @@ void MAIN {
                         cb_reserve_back(mm_partials_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                            // mm_pack_tile(i, mm_partials_cb_id);                                                        // done
                             pack_tile(i, mm_partials_cb_id);
                         }
                         tile_regs_release();

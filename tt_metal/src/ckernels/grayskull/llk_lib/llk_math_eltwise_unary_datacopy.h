@@ -19,6 +19,41 @@ using namespace ckernel;
 // local function declarations
 inline void eltwise_unary_configure_addrmod();
 
+
+template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, DstSync Dst = DstSync::SyncFull, bool is_fp32_dest_acc_en = false /* unused */>
+inline void llk_math_eltwise_unary_datacopy_cm(uint dst_index, uint stream = 0) {
+    // TT_LLK_DUMP("llk_math_eltwise_unary_datacopy<{}, {}, {}, {}>({})", type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, dst_index);
+    if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
+        math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
+    } else {
+        math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
+    }
+
+    if constexpr (type == A2D) {
+        ckernel_template::run(instrn_buffer);
+    } else if constexpr (type == B2D) {
+        if constexpr (src_b_bcast_type == BroadcastType::SCALAR) {
+            // Manually clear B once mop is done
+            ckernel_template::run(instrn_buffer);
+            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
+        } else if constexpr (src_b_bcast_type == BroadcastType::COL) {
+            // Mop for col broadcast only does 2 outerloops.  Needs to clear B manually and call twice
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD);
+            TTI_ZEROSRC(0, 1, 0, 1);  // Zero out SrcA current read bank
+            ckernel_template::run(instrn_buffer);
+            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
+            ckernel_template::run(instrn_buffer);
+            TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0);
+        } else {
+            ckernel_template::run(instrn_buffer);
+        }
+    } else {
+        FWASSERT("Unsupported op!", false);
+    }
+
+    math::clear_dst_reg_addr();
+}
+
 template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, DstSync Dst = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_datacopy(uint dst_index) {
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
