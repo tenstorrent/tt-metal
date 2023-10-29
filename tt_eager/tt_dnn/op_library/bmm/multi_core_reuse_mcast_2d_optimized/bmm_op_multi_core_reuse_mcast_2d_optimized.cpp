@@ -47,7 +47,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
-    if (in0_CB_tiles < 98 && B * num_blocks > 1) {
+    if (B * num_blocks > 1) {
         in0_CB_tiles = in0_CB_tiles * 2; // double buffer
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
