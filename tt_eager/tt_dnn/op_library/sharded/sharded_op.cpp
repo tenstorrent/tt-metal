@@ -19,6 +19,7 @@ void Sharded::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
     TT_ASSERT(input_tensor.buffer() != nullptr , "Operands to shard need to be allocated in buffers on device!");
+    // TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16);
     if (this->sharded_op_type == ShardedOpType::InterleavedToSharded) {
         TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
     } else if (this->sharded_op_type == ShardedOpType::ShardedToInterleaved) {
