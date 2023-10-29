@@ -70,5 +70,4 @@ ALWI void tile_regs_release() {
     PACK(( llk_pack_dest_section_done<SYNC>()  ));
 }
 
-
 } // namespace ckernel
