@@ -18,6 +18,52 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 
+# golden pcc is ordered fidelity, weight dtype, activation dtype
+golden_pcc = {
+    8: {
+        (
+            tt_lib.tensor.MathFidelity.HiFi4,
+            tt_lib.tensor.DataType.BFLOAT16,
+            tt_lib.tensor.DataType.BFLOAT16,
+        ): 0.9900861228915353,  # Max ATOL Delta: 1.982335090637207, Max RTOL Delta: 221.08363342285156, PCC: 0.9900861228915353
+        (
+            tt_lib.tensor.MathFidelity.HiFi4,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+            tt_lib.tensor.DataType.BFLOAT16,
+        ): 0.9905268223455689,  # Max ATOL Delta: 1.633270263671875, Max RTOL Delta: 609.134521484375, PCC: 0.9905268223455689
+        (
+            tt_lib.tensor.MathFidelity.HiFi4,
+            tt_lib.tensor.DataType.BFLOAT16,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+        ): 0.9700243646676288,  # Max ATOL Delta: 2.027195930480957, Max RTOL Delta: inf, PCC: 0.9700243646676288
+        (
+            tt_lib.tensor.MathFidelity.HiFi4,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+        ): 0.9560413660709707,  # Max ATOL Delta: 3.205164909362793, Max RTOL Delta: inf, PCC: 0.9560413660709707
+        (
+            tt_lib.tensor.MathFidelity.LoFi,
+            tt_lib.tensor.DataType.BFLOAT16,
+            tt_lib.tensor.DataType.BFLOAT16,
+        ): 0.9450991418256837,  # Max ATOL Delta: 3.455164909362793, Max RTOL Delta: 2949.2197265625, PCC: 0.9450991418256837
+        (
+            tt_lib.tensor.MathFidelity.LoFi,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+            tt_lib.tensor.DataType.BFLOAT16,
+        ): 0.9392607666771678,  # Max ATOL Delta: 3.830164909362793, Max RTOL Delta: 434.328369140625, PCC: 0.9392607666771678
+        (
+            tt_lib.tensor.MathFidelity.LoFi,
+            tt_lib.tensor.DataType.BFLOAT16,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+        ): 0.8369879885166531,  # Max ATOL Delta: 8.205164909362793, Max RTOL Delta: inf, PCC: 0.8369879885166531
+        (
+            tt_lib.tensor.MathFidelity.LoFi,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+        ): 0.8629922303807895,  # Max ATOL Delta: 7.705164909362793, Max RTOL Delta: inf, PCC: 0.8629922303807895
+    }
+}
+
 
 @pytest.mark.parametrize("batch_size", [1, 2, 8], ids=["batch_1", "batch_2", "batch_8"])
 @pytest.mark.parametrize(
@@ -36,8 +82,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 def test_run_resnet50_inference(
     use_program_cache, device, batch_size, weights_dtype, activations_dtype, math_fidelity, imagenet_sample_input
 ):
-    if activations_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
-        pytest.skip("BFP8_B currently has low pcc for activations")
     image1 = imagenet_sample_input
     image = image1
     model_config = {
@@ -88,22 +132,23 @@ def test_run_resnet50_inference(
 
         _, _, _, info = get_atol_rtol_pcc(torch_output, tt_output)
         logger.info(info)
+
+        valid_pcc = 1.0
         if batch_size == 8:
-            if model_config["MATH_FIDELITY"] == tt_lib.tensor.MathFidelity.LoFi:
-                if weights_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
-                    golden_pcc = 0.9392607666771678
-                else:
-                    golden_pcc = 0.9450991418256837
-            else:
-                if weights_dtype == tt_lib.tensor.DataType.BFLOAT8_B:
-                    golden_pcc = 0.9905268223455689
-                else:
-                    golden_pcc = 0.9900861228915353
+            valid_pcc = golden_pcc[batch_size][
+                (model_config["MATH_FIDELITY"], model_config["WEIGHTS_DTYPE"], model_config["ACTIVATIONS_DTYPE"])
+            ]
         else:
-            if model_config["MATH_FIDELITY"] == tt_lib.tensor.MathFidelity.LoFi:
-                golden_pcc = 0.93
+            if model_config["ACTIVATIONS_DTYPE"] == tt_lib.tensor.DataType.BFLOAT8_B:
+                if model_config["MATH_FIDELITY"] == tt_lib.tensor.MathFidelity.LoFi:
+                    valid_pcc = 0.87
+                else:
+                    valid_pcc = 0.96
             else:
-                golden_pcc = 0.985
-        passing_pcc, _ = comp_pcc(torch_output, tt_output, pcc=golden_pcc)
+                if model_config["MATH_FIDELITY"] == tt_lib.tensor.MathFidelity.LoFi:
+                    valid_pcc = 0.93
+                else:
+                    valid_pcc = 0.985
+        passing_pcc, _ = comp_pcc(torch_output, tt_output, pcc=valid_pcc)
         assert passing_pcc
         # assert passing # fails because of torch.allclose
