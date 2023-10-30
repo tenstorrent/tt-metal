@@ -185,7 +185,7 @@ class CommandQueue {
 
     map<uint64_t, ProgramMap> program_to_dev_map;
 
-    void enqueue_command(shared_ptr<Command> command, bool blocking);
+    void enqueue_command(Command& command, bool blocking);
 
     void enqueue_read_buffer(Buffer& buffer, vector<uint32_t>& dst, bool blocking);
 

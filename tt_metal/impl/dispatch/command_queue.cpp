@@ -690,11 +690,11 @@ CommandQueue::CommandQueue(Device* device) {
 
 CommandQueue::~CommandQueue() {}
 
-void CommandQueue::enqueue_command(shared_ptr<Command> command, bool blocking) {
+void CommandQueue::enqueue_command(Command& command, bool blocking) {
     // For the time-being, doing the actual work of enqueing in
     // the main thread.
     // TODO(agrebenisan): Perform the following in a worker thread
-    command->process();
+    command.process();
 
     if (blocking) {
         this->finish();
@@ -710,8 +710,7 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<uint32_t>& dst, bo
     }
     tt::log_debug(tt::LogDispatch, "EnqueueReadBuffer");
 
-    shared_ptr<EnqueueReadBufferCommand> command =
-        std::make_shared<EnqueueReadBufferCommand>(this->device, buffer, dst, this->sysmem_writer);
+    EnqueueReadBufferCommand command(this->device, buffer, dst, this->sysmem_writer);
 
     // TODO(agrebenisan): Provide support so that we can achieve non-blocking
     // For now, make read buffer blocking since after the
@@ -725,7 +724,7 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<uint32_t>& dst, bo
     uint32_t padded_page_size = align(buffer.page_size(), 32);
     uint32_t data_size_in_bytes = padded_page_size * num_pages;
 
-    tt::Cluster::instance().read_sysmem_vec(dst, command->read_buffer_addr, data_size_in_bytes, 0);
+    tt::Cluster::instance().read_sysmem_vec(dst, command.read_buffer_addr, data_size_in_bytes, 0);
 
     // This vector is potentially padded due to alignment constraints, so need to now remove the padding
     if ((buffer.page_size() % 32) != 0) {
@@ -767,8 +766,7 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<uint32_t>& src, b
 
     // TODO(agrebenisan): This could just be a stack variable since we
     // are just running in one thread
-    shared_ptr<EnqueueWriteBufferCommand> command =
-        std::make_shared<EnqueueWriteBufferCommand>(this->device, buffer, src, this->sysmem_writer);
+    EnqueueWriteBufferCommand command(this->device, buffer, src, this->sysmem_writer);
     this->enqueue_command(command, blocking);
 }
 
@@ -841,16 +839,17 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
         this->wrap();
     }
 
-    shared_ptr<EnqueueProgramCommand> command = std::make_shared<EnqueueProgramCommand>(
-        this->device,
+    EnqueueProgramCommand command(this->device,
         *this->program_to_buffer.at(program_id),
         this->program_to_dev_map.at(program_id),
         this->sysmem_writer,
         host_data,
-        stall
-        );
+        stall);
 
-    this->enqueue_command(command, blocking);
+    command.process();
+    if (blocking) {
+        this->finish();
+    }
 }
 
 void CommandQueue::finish() {
@@ -862,8 +861,7 @@ void CommandQueue::finish() {
     tt::log_debug(tt::LogDispatch, "Finish");
 
     FinishCommand command(this->device, this->sysmem_writer);
-    shared_ptr<FinishCommand> p = std::make_shared<FinishCommand>(std::move(command));
-    this->enqueue_command(p, false);
+    this->enqueue_command(command, false);
 
     // We then poll to check that we're done.
     vector<uint32_t> finish_vec;
@@ -880,8 +878,7 @@ void CommandQueue::wrap() {
     ZoneScopedN("CommandQueue_wrap");
     tt::log_debug(tt::LogDispatch, "EnqueueWrap");
     EnqueueWrapCommand command(this->device, this->sysmem_writer);
-    shared_ptr<EnqueueWrapCommand> p = std::make_shared<EnqueueWrapCommand>(std::move(command));
-    this->enqueue_command(p, false);
+    this->enqueue_command(command, false);
 }
 
 // OpenCL-like APIs
