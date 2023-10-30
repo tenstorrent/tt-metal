@@ -8,194 +8,75 @@ import sys
 import time
 import os
 from loguru import logger
+import random
 
 f = f"{Path(__file__).parent}"
 sys.path.append(f"{f}/../../../../..")
 
 import pytest
 import torch
-import random
+
 import tt_lib as ttl
 
-from tt_lib.utils import (
-    pad_weight,
-    tilize_to_list,
-    untilize,
-    is_close,
-)
+from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
+from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_scale_mask_softmax_in_place as tt_eltwise_scale_mask_softmax_in_place
 
 
-
-def ref_stable_softmax(x):
-    torch.set_printoptions(
-        precision=2, threshold=1000, sci_mode=False, edgeitems=8, linewidth=480
-    )
-    z = x  # - torch.max(x, dim=3, keepdim=True)[0]
-    numerator = torch.exp(z)
-    # print(x.shape)
-    H = x.shape[-2]
-    # print("H=", H)
-    pw0, pw1 = 0, 1  # prints a tile slice with these tile coord range
-    ph0, ph1 = 0, 1
-    sh, sw = 16, 16  # stride inside the tile
-    ow0, ow1 = 0, 0  # offset inside the tile
-    oh0, oh1 = 0, 0
-    # print(
-    #     "Ref x=\n",
-    #     x[
-    #         0,
-    #         0,
-    #         ph0 * 32 + oh0 : ph1 * 32 + oh1 : sh,
-    #         pw0 * 32 + ow0 : pw1 * 32 + ow1 : sw,
-    #     ],
-    # )
-    # print("Ref exps=\n", numerator[0, 0, ph0*32 : ph1*32 : sh, pw0*32 : pw1*32 : sw])
-    denominator = torch.sum(numerator, 3, keepdim=True)
-    # print("denom shape=", denominator.shape)
-    # print("Ref sumexp=\n", torch.reshape(denominator, (-1,H))[:, ph0*32:ph1*32])
-
-    denom1 = torch.reciprocal(denominator)
-    # print("ref 1/sumexp=\n", denom1[0, 0, 0:32:8, 0:64:8])
-    softmax = numerator * denom1
-    # print("softmaxManual=\n", softmax[0, 0, 0:32:8, 0:64:8])
-    softmax = torch.nn.Softmax(3)(x)
-    # print("softmaxTorch=\n", softmax[0, 0, 0:32:8, 0:64:8])
-
-    return softmax
-
-# This ref implementation is only here for debugging
-def ref_scale_mask_softmax_in_place(x, scale, y):
-    x1 = scale * x
-    x2 = x1 + y
-    retval = ref_stable_softmax(x2)
-    return retval
-
-def run_eltwise_scale_mask_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
+def run_eltwise_scale_mask_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
 
-    # Initialize the device
-    tensor = ttl.tensor
-    dev = device
+    if in_mem_config == "SYSTEM_MEMORY":
+        in_mem_config = None
 
-    test_dims = (input_shape,)
-
-    for N, C, H, W in test_dims:
-        for nrepeat in range(0, 100):
-            x = torch.Tensor(size=(N, C, H, W)).uniform_(-1, 1)
-            x_ref = x
-
-            if dlayout == ttl.tensor.Layout.TILE:
-                x = tilize_to_list(x)
-            else:
-                x = x.reshape(-1).tolist()
-
-            if in_mem_config == "SYSTEM_MEMORY":
-                ttx = tensor.Tensor(
-                    x,
-                    [N, C, H, W],
-                    dtype,
-                    dlayout,
-                    dev,
-                ).cpu()
-            else:
-                ttx = tensor.Tensor(
-                    x,
-                    [N, C, H, W],
-                    dtype,
-                    dlayout,
-                    dev,
-                    in_mem_config,
-                )
+    x = torch.Tensor(size=input_shape).uniform_(-1.0, 1.0)
+    x_ref = x.detach().clone()
 
 
-            y = torch.Tensor(size=(N, C, H, W)).uniform_(-1, 1)
-            y_ref = y
+    y = torch.Tensor(size=input_shape).uniform_(-1.0, 1.0)
+    y_ref = y.detach().clone()
 
-            if dlayout == ttl.tensor.Layout.TILE:
-                y = tilize_to_list(y)
-            else:
-                y = y.reshape(-1).tolist()
+    scale = random.uniform(1.0,100.0)
 
-            if in_mem_config == "SYSTEM_MEMORY":
-                tty = tensor.Tensor(
-                    y,
-                    [N, C, H, W],
-                    dtype,
-                    dlayout,
-                    dev,
-                ).cpu()
-            else:
-                tty = tensor.Tensor(
-                    y,
-                    [N, C, H, W],
-                    dtype,
-                    dlayout,
-                    dev,
-                    in_mem_config,
-                )
-            scale = random.uniform(1.0,100.0)
+    # get ref result
+    ref_value = pytorch_ops.scale_mask_softmax_in_place(x_ref, y_ref, scale)
 
+    tt_result = tt_eltwise_scale_mask_softmax_in_place(
+        x=x,
+        y=y,
+        scale = scale,
+        device=device,
+        dtype=dtype,
+        layout=dlayout,
+        input_mem_config=in_mem_config,
+        output_mem_config=None
+    )
 
-            logger.info("Running Eltwise scale_mask_softmax_in_place test")
-            ttz = ttl.operations.primary.transformers.scale_mask_softmax_in_place(ttx, scale, tty)
+    # compare tt and golden outputs
+    success, pcc_value = comp_pcc(ref_value, tt_result)
+    logger.debug(pcc_value)
 
-            logger.info("Done")
-
-            if in_mem_config != "SYSTEM_MEMORY":
-                assert ttx.memory_config().buffer_type == in_mem_config.buffer_type
-                logger.debug(f"ttx is on: {ttx.memory_config().buffer_type}")
-            else:
-                logger.debug(f"ttx is on: SYSTEM_MEMORY")
-
-
-            if in_mem_config != "SYSTEM_MEMORY":
-                assert tty.memory_config().buffer_type == in_mem_config.buffer_type
-                logger.debug(f"tty is on: {tty.memory_config().buffer_type}")
-            else:
-                logger.debug(f"tty is on: SYSTEM_MEMORY")
-
-
-            assert ttz.memory_config().buffer_type == out_mem_config.buffer_type
-            logger.debug(f"ttz is on: {ttz.memory_config().buffer_type}")
-
-            t2_data = ttz.cpu().to_torch()
-
-            tt_got_back = torch.Tensor(t2_data).reshape((N, C, H, W))
-
-            if dlayout == ttl.tensor.Layout.TILE:
-                tt_got_back = untilize(tt_got_back)
-
-            # get referent value
-            ref_value = ref_scale_mask_softmax_in_place(x_ref, scale, y_ref)
-
-
-
-            # compare tt and golden outputs
-            success, pcc_value = comp_pcc(tt_got_back, ref_value)
-            print("pc-------------------------")
-            print(pcc_value)
-            logger.debug(pcc_value)
-
-            assert success
+    assert success
 
 
 test_sweep_args=[
-    ((2, 10, 160, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), 3074662),
-    ((2, 10, 320, 320), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), 307462),
-    ((2, 10, 32, 32), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), 307466),
+    #fail
+    ( (1, 1, 32, 32), (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16), (ttl.tensor.Layout.TILE,ttl.tensor.Layout.TILE), (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)), 38346),
+    #pass
+    ( (1, 1, 32, 32), (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16), (ttl.tensor.Layout.TILE,ttl.tensor.Layout.TILE), (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 38346),
+    #fail
+    ( (1, 1, 32, 96), (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16), (ttl.tensor.Layout.TILE,ttl.tensor.Layout.TILE), (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 38346),
 ]
-
 @skip_for_wormhole_b0
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
+    "input_shape, dtype, dlayout, in_mem_config, data_seed",
     (
         test_sweep_args
     ),
 )
 
 def test_eltwise_scale_mask_softmax_in_place_test(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
+    input_shape, dtype, dlayout, in_mem_config, data_seed, device
 ):
-    run_eltwise_scale_mask_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
+    run_eltwise_scale_mask_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_config, data_seed, device)
