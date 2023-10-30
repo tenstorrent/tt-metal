@@ -232,6 +232,7 @@ tt::stl::reflection::Attributes ShardSpec::attributes() const {
         {"shard_grid", this->shard_grid.str()},
         {"shard_shape", this->shard_shape},
         {"shard_orientation", this->shard_orientation},
+        {"halo", this->halo},
     };
 }
 
