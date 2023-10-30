@@ -55,7 +55,11 @@ ALWI void tilize_init_short(uint32_t icb, uint32_t block)
 }
 
 ALWI void tilize_init_short_with_dt(uint32_t icb, uint32_t block) {
+    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
+    #else
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, icb) ));
+    #endif
     UNPACK(( llk_unpack_reconfig_data_format_srca(1, 0) ));
     UNPACK(( llk_unpack_tilize_init(icb, block) ));
 }
