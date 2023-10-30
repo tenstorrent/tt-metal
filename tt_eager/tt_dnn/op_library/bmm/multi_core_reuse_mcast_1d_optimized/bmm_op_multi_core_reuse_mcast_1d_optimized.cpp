@@ -553,7 +553,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             auto writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
 
             // in0 sender
-            if (!src0_sharded && core_idx_y == 0) {
+            if (!src0_sharded && core_idx_x == 0 and core_idx_y == 0) {
                 reader_runtime_args[0] = src_buffer_a->address();
                 SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
             // in0 receiver
