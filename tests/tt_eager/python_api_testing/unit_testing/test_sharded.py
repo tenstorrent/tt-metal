@@ -234,6 +234,7 @@ def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defau
             buffer_type=ttl.tensor.BufferType.L1,
         ),
         use_multicore=True,
+        output_dtype=output_dtype,
     )
 
     zt = ttl.tensor.sharded_to_interleaved(

@@ -40,7 +40,7 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
     // Ensure we don't intrude into storage space
     uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
-    uint32_t max_tiles = max_l1_size / (2 * input_single_tile_size); // 2 CBs
+    uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size); // 2 CBs
     // Currently need the number of tiles in a row to be divisible by tiles in a block
     uint32_t num_tiles_per_block = 1;
     if (num_tiles_in_row <= max_tiles) {
