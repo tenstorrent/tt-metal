@@ -288,10 +288,12 @@ void MAIN {
                     } else {
                         tile_regs_commit();
                         // Wait for tiles in output buffer to be written out since interm and output share memory
-                        // if (block == 0) {
-                        //     cb_reserve_back(out_cb_id, out_num_tiles_to_wait);
-                        //     out_num_tiles_to_wait += out_subblock_num_tiles;
-                        // }
+                        if constexpr (batch > 1) {
+                            if (block == 0) {
+                                cb_reserve_back(out_cb_id, out_num_tiles_to_wait);
+                                out_num_tiles_to_wait += out_subblock_num_tiles;
+                            }
+                        }
                         // Move partial result to interm buffer
                         cb_reserve_back(mm_partials_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
