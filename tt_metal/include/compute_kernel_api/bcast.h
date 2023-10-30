@@ -10,9 +10,16 @@
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary.h"
+#include "llk_math_matmul.h"
+#include "llk_math_common.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB.h"
+#include "llk_unpack_A.h"
+#endif
+#ifdef TRISC_PACK
+#include "llk_pack.h"
+#include "llk_pack_common.h"
 #endif
 
 
