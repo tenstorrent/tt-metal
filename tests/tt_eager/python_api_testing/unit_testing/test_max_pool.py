@@ -219,6 +219,7 @@ def test_run_max_pool(
 
     out_padded = ttl.tensor.max_pool2d(
         ttact,
+        in_n,
         in_h,
         in_w,
         kernel_h,
