@@ -7,6 +7,7 @@
 #include <random>
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
@@ -51,9 +52,6 @@ std::map<string, string> get_defines(BinaryOpType::Enum op_type){
 int main(int argc, char **argv) {
     bool pass = true;
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
-
     try {
         /*
         * Silicon accelerator setup
@@ -63,16 +61,17 @@ int main(int argc, char **argv) {
             CreateDevice(device_id);
 
 
-
         /*
         * Setup program to execute along with its buffers and kernels to use
         */
+        CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
+
         Program program = Program();
 
         constexpr CoreCoord core = {0, 0};
 
         constexpr uint32_t single_tile_size = 2 * 1024;
-        constexpr uint32_t num_tiles = 2048;
+        constexpr uint32_t num_tiles = 64;
         constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         Buffer src0_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferType::DRAM);
@@ -148,12 +147,12 @@ int main(int argc, char **argv) {
         std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
 
-        WriteToBuffer(src0_dram_buffer, src0_vec);
+        EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
 
         constexpr float val_to_add = -1.0f;
         std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, val_to_add);
 
-        WriteToBuffer(src1_dram_buffer, src1_vec);
+        EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
 
         /*
          * Configure program and runtime kernel arguments, then execute.
@@ -201,12 +200,14 @@ int main(int argc, char **argv) {
 
 
 
-        LaunchProgram(device, program);
+        EnqueueProgram(cq, program, false);
+        Finish(cq);
+
         /*
          * Read in result into a host vector.
          */
         std::vector<uint32_t> result_vec;
-        ReadFromBuffer(dst_dram_buffer, result_vec);
+        EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
 
         /*
          * Move src data back into DRAM src buffer 0 to do another eltwise calculation
@@ -252,14 +253,12 @@ int main(int argc, char **argv) {
         /*
          * Send new input data.
          */
-        WriteToBuffer(src0_dram_buffer, result_vec);
+        EnqueueWriteBuffer(cq, src0_dram_buffer, result_vec, false);
 
         constexpr float val_to_mul = 2.0f;
         src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, val_to_mul);
 
-        WriteToBuffer(src1_dram_buffer, src1_vec);
-
-
+        EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
 
         /*
          * Configure program and runtime kernel arguments.
@@ -307,13 +306,14 @@ int main(int argc, char **argv) {
          * Execute.
          */
 
-        LaunchProgram(device, program_mul);
+        EnqueueProgram(cq, program_mul, false);
+        Finish(cq);
 
         /*
          * Read the result and compare to a golden result. Record pass/fail
          * and teardown.
          */
-        ReadFromBuffer(dst_dram_buffer, result_vec);
+        EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
 
         std::function<bfloat16(const bfloat16 &)> transform_to_golden = [](const bfloat16 &a) {
             return bfloat16((a.to_float() + val_to_add) * val_to_mul);

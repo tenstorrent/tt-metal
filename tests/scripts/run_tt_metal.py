@@ -264,12 +264,12 @@ if __name__ == "__main__":
 
     pe_test_report = {}
     if dispatch_mode == "slow":
-        logger.info("Running Programming Example tests")
-        programming_example_entries = get_programming_example_entries()
-        pe_test_report = run_programming_examples(programming_example_entries, timeout)
         logger.info("Running slow-dispatch mode tests")
         tt_metal_test_entries = get_tt_metal_slow_dispatch_test_entries()
     else:
+        logger.info("Running Programming Example tests")
+        programming_example_entries = get_programming_example_entries()
+        pe_test_report = run_programming_examples(programming_example_entries, timeout)
         logger.info("Running fast-dispatch mode tests")
         tt_metal_test_entries = get_tt_metal_fast_dispatch_test_entries()
 

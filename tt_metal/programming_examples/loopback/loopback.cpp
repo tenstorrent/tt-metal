@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 
 /*
@@ -16,9 +17,6 @@ using namespace tt::tt_metal;
 
 int main(int argc, char **argv) {
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
-
     bool pass = true;
 
     try {
@@ -29,11 +27,10 @@ int main(int argc, char **argv) {
         Device *device =
             CreateDevice(device_id);
 
-
-
         /*
         * Setup program to execute along with its buffers and kernels to use
         */
+        CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
         Program program = Program();
 
         constexpr CoreCoord core = {0, 0};
@@ -62,9 +59,7 @@ int main(int argc, char **argv) {
         */
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        WriteToBuffer(input_dram_buffer, input_vec);
-
-
+        EnqueueWriteBuffer(cq, input_dram_buffer, input_vec, false);
 
         const std::vector<uint32_t> runtime_args = {
             l1_buffer.address(),
@@ -77,8 +72,6 @@ int main(int argc, char **argv) {
             l1_buffer.size()
         };
 
-        std::cout << "done creating runtime args " << std::endl;
-
         SetRuntimeArgs(
             program,
             dram_copy_kernel_id,
@@ -86,16 +79,14 @@ int main(int argc, char **argv) {
             runtime_args
         );
 
-        std::cout << "done setting runtime args " << std::endl;
+        EnqueueProgram(cq, program, false);
+        Finish(cq);
 
-
-
-        LaunchProgram(device, program);
         /*
         * Validation & Teardown
         */
         std::vector<uint32_t> result_vec;
-        ReadFromBuffer(output_dram_buffer, result_vec);
+        EnqueueReadBuffer(cq, output_dram_buffer, result_vec, true);
 
         pass &= input_vec == result_vec;
 
