@@ -53,9 +53,7 @@ def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_confi
 
 
 test_sweep_args=[
-    # only test that passes out of all sweeps run for pytorch_eltwise_softmax_in_place_test.yaml:
     ((1, 9, 32, 32), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), 38346),
-    # rest failed:
     ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), 17155532),
     ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), 16305027),
 ]
