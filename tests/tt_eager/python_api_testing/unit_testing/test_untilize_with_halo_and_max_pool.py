@@ -37,46 +37,31 @@ def volume(shape):
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
-        (   ## [1, 32, 32, 32],
-            [1, 64, 64, 64],
+        (   ## Only resnet shapes supported for now in untilize with halo + maxpool
             [1, 64, 112, 112],
-
-            [2, 64, 64, 64],
-            [8, 64, 64, 64],
-            [8, 64, 128, 128],
-
             [4, 64, 112, 112],
             [8, 64, 112, 112],
-
-            # [9, 32, 32, 32],
-            # [9, 64, 64, 64],
-            # [9, 1, 128, 128],
-
-            # [16, 32, 32, 32],
-            # [16, 64, 64, 64],
-            # [16, 64, 112, 112],
-            # [16, 1, 128, 128],
+            # [2, 64, 64, 64],
+            # [8, 64, 64, 64],
+            # [8, 64, 128, 128],
         )
     ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        # (1, 1),
         (3, 3),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
-        # (0, 0),  ## default
         (1, 1),
     ),
 )
 @pytest.mark.parametrize(
     "stride",
     (
-        # (1, 1),  ## default
         (2, 2),
     ),
 )
@@ -84,9 +69,7 @@ def volume(shape):
 @pytest.mark.parametrize(
     "nblocks",
     (
-        1,  ## default
-        # 4,
-        # 8,
+        1,
     ),
 )
 @pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
@@ -195,13 +178,6 @@ def test_run_max_pool(
     out_untilize = ttl.tensor.untilize_with_halo(ttact_sharded, 0xf7ff, in_n, in_h, in_w, 2, out_mem_config)
     # ttl.device.DumpDeviceMemoryState(device)
     ttact_sharded.deallocate()
-
-    # ttact = ttl.tensor.tilize(ttact, interleaved_mem_config)    ##, use_multicore=True)
-    # ttact = ttl.tensor.interleaved_to_sharded(ttact, ncores, [in_height // ncores, act_padded.shape[-1]], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,)
-    # ttact = ttl.tensor.untilize_with_halo(ttact, 0xf7ff, 2, out_mem_config)
-
-
-    assert True
 
     out_padded = ttl.tensor.max_pool2d(
         out_untilize,
