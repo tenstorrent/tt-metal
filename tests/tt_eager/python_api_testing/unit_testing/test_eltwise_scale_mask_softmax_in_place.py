@@ -61,11 +61,8 @@ def run_eltwise_scale_mask_softmax_in_place_tests(input_shape, dtype, dlayout, i
 
 
 test_sweep_args=[
-    #fail
     ( (1, 1, 32, 32), (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16), (ttl.tensor.Layout.TILE,ttl.tensor.Layout.TILE), (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)), 38346),
-    #pass
     ( (1, 1, 32, 32), (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16), (ttl.tensor.Layout.TILE,ttl.tensor.Layout.TILE), (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 38346),
-    #fail
     ( (1, 1, 32, 96), (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16), (ttl.tensor.Layout.TILE,ttl.tensor.Layout.TILE), (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 38346),
 ]
 @skip_for_wormhole_b0
