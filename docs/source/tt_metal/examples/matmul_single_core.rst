@@ -1,22 +1,24 @@
 .. _MatMul_Single_Core example:
 
-Matmul
-======
+Matmul (Single Core)
+=====================
 
 We'll build a program that will perform matmul operations on two tensors
 with equal-size inner dimension.
 
 The full example program is in
-``tt_metal/programming_examples/matmul/matmul_single_core.cpp``
+``tt_metal/programming_examples/matmul_single_core/matmul_single_core.cpp``
 
 
 Host Code
 ----------------
 - Create Device
 - Set input and output vector variables, using the user-defined parameters (M, N, K, B)
+- Tilizing the input vector, and untilizing the device output to vector (row-major layout)
 - Call matmul_single_core() program and retrieve output results (details in next section)
 - Validate the device compuation results vs. golden results on cpu
 - Close Device
+
     .. code-block:: cpp
 
         /* Create source data */
@@ -44,6 +46,7 @@ Host Code
         /* Calling the MatMul host program. Read in result into a host vector */
         vector<uint32_t> result_vec;
         matmul_single_core(tilized_src0_vec, tilized_src1_vec, result_vec, false, M, N, K, B, device);
+        vector<uint32_t> result_vec_untilized = pack_bfloat16_vec_into_uint32_vec(untilize(unpack_uint32_vec_into_bfloat16_vec(result_vec), M, N));
 
         CloseDevice(device);
 
@@ -56,6 +59,14 @@ matmul_single_core function details
 - Create L1 Circular buffers
 - Kernels declarations and related compile and runtime arguments
 - Program launch and reading data from DRAM output buffer to result vector
+
+
+Create Program, Enqueue initialization, and core range definition
+-----------------------------------------------------------------
+    .. code-block:: cpp
+        CommandQueue& cq = *detail::GLOBAL_CQ;
+        Program program{};
+        CoreRange core = {.start={0, 0}, .end={0, 0}};
 
 
 Create DRAM buffers & Circular buffers
@@ -80,15 +91,14 @@ Writing data from input vectors to source buffers
         uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        Buffer src0_dram_buffer = CreateBuffer(device, dram_buffer_A_size, dram_buffer_A_size, BufferType::DRAM);
-        Buffer src1_dram_buffer = CreateBuffer(device, dram_buffer_B_size, dram_buffer_B_size, BufferType::DRAM);
-        Buffer dst_dram_buffer = CreateBuffer(device, dram_buffer_C_size, dram_buffer_C_size, BufferType::DRAM);
+        /* DRAM buffer size = input full size */
+        /* limiting page_size = single tile size; to allow DRAM channels interleaving */
+        Buffer src0_dram_buffer = CreateBuffer(device, dram_buffer_A_size, single_tile_size, BufferType::DRAM);
+        Buffer src1_dram_buffer = CreateBuffer(device, dram_buffer_B_size, single_tile_size, BufferType::DRAM);
+        Buffer dst_dram_buffer = CreateBuffer(device, dram_buffer_C_size, single_tile_size, BufferType::DRAM);
         uint32_t src0_addr = src0_dram_buffer.address();
         uint32_t src1_addr = src1_dram_buffer.address();
         uint32_t dst_addr = dst_dram_buffer.address();
-
-        WriteToBuffer(src0_dram_buffer, a);
-        WriteToBuffer(src1_dram_buffer, b);
 
 
 We need to declare three circular buffers to enable data transfer
@@ -96,18 +106,18 @@ between the reader, compute, and writer engines.
 Input tiles count is = 2 because it's single tile process, and double-buffer
     .. code-block:: cpp
 
-        uint32_t src0_cb_index = 0;
+        uint32_t src0_cb_index = CB::c_in0; //0
         uint32_t num_input_tiles = 2;
         tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
         auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-        uint32_t src1_cb_index = 1;
+        uint32_t src1_cb_index = CB::c_in1; // 1
         tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size);
         auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-        uint32_t output_cb_index = 16; // output operands start at index 16
+        uint32_t output_cb_index = CB::c_out0; // output operands start at index 16
         uint32_t num_output_tiles = 2;
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
             .set_page_size(output_cb_index, single_tile_size);
@@ -176,11 +186,13 @@ Runtime arguments and program launch
         );
 
 
-Launch program & read in output buffer result into the host vector.
+Launch program, enqueue & read in output buffer result into the host vector.
     .. code-block:: cpp
 
-        LaunchProgram(device, program);
-        ReadFromBuffer(dst_buffer, output);
+        EnqueueWriteBuffer(cq, src0_dram_buffer, a, false);
+        EnqueueWriteBuffer(cq, src1_dram_buffer, b, false);
+        EnqueueProgram(cq, program, false);
+        EnqueueReadBuffer(cq, dst_dram_buffer, output, true);
 
 In this program,  we're using a separate reader kernel to take in data from
 DRAM into L1, and a separate writer kernel to write out results from the
