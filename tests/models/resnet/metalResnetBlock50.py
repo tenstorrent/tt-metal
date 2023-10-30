@@ -1474,7 +1474,12 @@ class ResNet(nn.Module):
             x = tt_lib.tensor.pad(
                 x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config, use_multicore=True
             )
-            x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config, use_multicore=True)
+            x = tt_lib.tensor.tilize(
+                x,
+                output_mem_config=self.memory_config,
+                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+                use_multicore=True,
+            )
 
         x = self.avgpool(x, self.width_sharded_memory_config)
 
@@ -1509,7 +1514,12 @@ class ResNet(nn.Module):
             x = tt_lib.tensor.pad(
                 x, padded_shape, [0, 0, 0, 0], 0, output_mem_config=self.memory_config, use_multicore=True
             )
-            x = tt_lib.tensor.tilize(x, output_mem_config=self.memory_config, use_multicore=True)
+            x = tt_lib.tensor.tilize(
+                x,
+                output_mem_config=self.memory_config,
+                output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
+                use_multicore=True,
+            )
 
         x = self.fc(x)
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
