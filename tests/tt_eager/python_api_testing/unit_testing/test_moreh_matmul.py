@@ -92,15 +92,15 @@ def test_moreh_matmul_1d(input_shape, device):
 
     # test for equivalance
     rtol = atol = 0.1
-    passing_pcc, output_pcc = comp_allclose_and_pcc(torch_out,
-                                                    tt_out[0][0][0][0],
-                                                    pcc=0.999,
-                                                    rtol=rtol,
-                                                    atol=atol)
-    logger.info(f"Out passing={passing_pcc}")
+    passing, output_pcc = comp_allclose_and_pcc(torch_out,
+                                                tt_out[0][0][0][0],
+                                                pcc=0.999,
+                                                rtol=rtol,
+                                                atol=atol)
+    logger.info(f"Out passing={passing}")
     logger.info(f"Output pcc={output_pcc}")
 
-    assert passing_pcc
+    assert passing
 
 
 @skip_for_wormhole_b0
@@ -143,29 +143,29 @@ def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
         ttcpu_input_grad = tt_input_grad.cpu().to(cpu_layout).unpad_from_tile(
             input_shape).to_torch()
 
-        passing_pcc, output_pcc = comp_allclose_and_pcc(
+        passing, output_pcc = comp_allclose_and_pcc(
             torch_input.grad,
             ttcpu_input_grad.reshape(-1),
             pcc=0.999,
             rtol=rtol,
             atol=atol)
-        logger.info(f"input_grad passing={passing_pcc}")
+        logger.info(f"input_grad passing={passing}")
         logger.info(f"input_grad pcc={output_pcc}")
-        assert passing_pcc
+        assert passing
 
     if require_other_grad:
         ttcpu_other_grad = tt_other_grad.cpu().to(cpu_layout).unpad_from_tile(
             input_shape).to_torch()
 
-        passing_pcc, output_pcc = comp_allclose_and_pcc(
+        passing, output_pcc = comp_allclose_and_pcc(
             torch_other.grad,
             ttcpu_other_grad.reshape(-1),
             pcc=0.999,
             rtol=rtol,
             atol=atol)
-        logger.info(f"other_grad passing={passing_pcc}")
+        logger.info(f"other_grad passing={passing}")
         logger.info(f"other_grad pcc={output_pcc}")
-        assert passing_pcc
+        assert passing
 
 
 @skip_for_wormhole_b0
@@ -223,27 +223,27 @@ def test_moreh_matmul_backward(params, input_b1, input_b2, other_b1, other_b2,
                 2] == 511:
             atol = 1
 
-        passing_pcc, output_pcc = comp_allclose_and_pcc(torch_input.grad,
-                                                        ttcpu_input_grad,
-                                                        pcc=0.999,
-                                                        rtol=rtol,
-                                                        atol=atol)
-        logger.info(f"input_grad passing={passing_pcc}")
+        passing, output_pcc = comp_allclose_and_pcc(torch_input.grad,
+                                                    ttcpu_input_grad,
+                                                    pcc=0.999,
+                                                    rtol=rtol,
+                                                    atol=atol)
+        logger.info(f"input_grad passing={passing}")
         logger.info(f"input_grad pcc={output_pcc}")
-        assert passing_pcc
+        assert passing
 
     if require_other_grad:
         ttcpu_other_grad = tt_other_grad.cpu().to(cpu_layout).unpad_from_tile(
             other_shape).to_torch()
 
-        passing_pcc, output_pcc = comp_allclose_and_pcc(torch_other.grad,
-                                                        ttcpu_other_grad,
-                                                        pcc=0.999,
-                                                        rtol=rtol,
-                                                        atol=atol)
-        logger.info(f"other_grad passing={passing_pcc}")
+        passing, output_pcc = comp_allclose_and_pcc(torch_other.grad,
+                                                    ttcpu_other_grad,
+                                                    pcc=0.999,
+                                                    rtol=rtol,
+                                                    atol=atol)
+        logger.info(f"other_grad passing={passing}")
         logger.info(f"other_grad pcc={output_pcc}")
-        assert passing_pcc
+        assert passing
 
 
 @pytest.mark.parametrize(
@@ -279,15 +279,15 @@ def test_moreh_matmul(params, device):
 
     # test for equivalance
     rtol = atol = 0.1
-    passing_pcc, output_pcc = comp_allclose_and_pcc(torch_out,
-                                                    tt_output,
-                                                    pcc=0.999,
-                                                    rtol=rtol,
-                                                    atol=atol)
-    logger.info(f"Out passing={passing_pcc}")
+    passing, output_pcc = comp_allclose_and_pcc(torch_out,
+                                                tt_output,
+                                                pcc=0.999,
+                                                rtol=rtol,
+                                                atol=atol)
+    logger.info(f"Out passing={passing}")
     logger.info(f"Output pcc={output_pcc}")
 
-    assert passing_pcc
+    assert passing
 
 
 @pytest.mark.parametrize(
@@ -337,12 +337,12 @@ def test_primary_moreh_matmul(params, device):
     torch_out = torch.matmul(torch_input, torch_other)
 
     # test for equivalance
-    passing_pcc, output_pcc = comp_allclose_and_pcc(torch_out,
-                                                    tt_output,
-                                                    pcc=0.999,
-                                                    rtol=rtol,
-                                                    atol=atol)
-    logger.info(f"Out passing={passing_pcc}")
+    passing, output_pcc = comp_allclose_and_pcc(torch_out,
+                                                tt_output,
+                                                pcc=0.999,
+                                                rtol=rtol,
+                                                atol=atol)
+    logger.info(f"Out passing={passing}")
     logger.info(f"Output pcc={output_pcc}")
 
-    assert passing_pcc
+    assert passing
