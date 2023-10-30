@@ -208,7 +208,12 @@ def apply_rotary_emb(
     freqs_cis = _reshape_for_broadcast(freqs_cis, xq_shape, 4)
     freqs_cis = torch_to_tt_tensor_rm(freqs_cis, device)
 
-    freqs_cis = tt_lib.tensor.concat([freqs_cis, freqs_cis], -1)
+    reshape_out_1 = tt_lib.tensor.reshape(freqs_cis, 1, 1, freqs_cis.shape()[1], freqs_cis.shape()[3])
+    freqs_concat = tt_lib.tensor.concat([reshape_out_1, reshape_out_1], 1)
+    permute_out = tt_lib.tensor.permute(freqs_concat, (0, 2, 3, 1))
+
+    # Added the fallback, since reshape is not supported from [1, 11, 64, 2] to 1, 11, 1, 128
+    freqs_cis = fallback_ops.reshape(permute_out, 1, freqs_concat.shape()[2], 1, freqs_concat.shape()[3] * 2)
     xq = torch_to_tt_tensor_rm(t_xq, device)
     xk = torch_to_tt_tensor_rm(t_xk, device)
 
@@ -218,4 +223,5 @@ def apply_rotary_emb(
     xk_out = tt_lib.tensor.bcast(xk, freqs_cis, BCMUL, BCH)
 
     xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
+
     return xq, xk
