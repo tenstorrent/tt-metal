@@ -2,17 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}")
-sys.path.append(f"{f}/..")
-sys.path.append(f"{f}/../tt")
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/../../..")
-sys.path.append(f"{f}/../../../..")
-
 import torch
 from loguru import logger
 from torchvision import models
@@ -33,6 +22,12 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 from loguru import logger
 from tests.models.resnet.metalResnetBlock50 import ResNet, Bottleneck
 
+model_config = {
+    "MATH_FIDELITY": tt_lib.tensor.MathFidelity.LoFi,
+    "WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
+    "ACTIVATIONS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
+}
+
 
 def run_perf_resnet(
     batch_size,
@@ -52,9 +47,7 @@ def run_perf_resnet(
     inputs = image_processor(image, return_tensors="pt")
 
     inputs = inputs["pixel_values"]
-    comments = (
-        f"{list(inputs.shape)[-2]}x{list(inputs.shape)[-1]}_batchsize{batch_size}"
-    )
+    comments = f"{list(inputs.shape)[-2]}x{list(inputs.shape)[-1]}_batchsize{batch_size}"
 
     inputs1 = inputs
     for i in range(batch_size - 1):
@@ -64,12 +57,8 @@ def run_perf_resnet(
     torch_resnet50.eval()
 
     state_dict = torch_resnet50.state_dict()
-    dtype = tt_lib.tensor.DataType.BFLOAT16
-    math_fidelity = tt_lib.tensor.MathFidelity.HiFi4
     sharded = False
     if batch_size == 8:
-        dtype = tt_lib.tensor.DataType.BFLOAT16
-        math_fidelity = tt_lib.tensor.MathFidelity.LoFi
         sharded = True
     tt_resnet50 = ResNet(
         Bottleneck,
@@ -80,8 +69,7 @@ def run_perf_resnet(
         fold_batchnorm=True,
         storage_in_dram=False,
         batch_size=batch_size,
-        dtype=dtype,
-        math_fidelity=math_fidelity,
+        model_config=model_config,
         sharded=sharded,
     )
 
