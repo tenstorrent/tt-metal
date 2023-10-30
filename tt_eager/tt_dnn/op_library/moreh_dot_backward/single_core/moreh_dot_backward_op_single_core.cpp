@@ -73,8 +73,8 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
             .set_page_size(output1_cb_index, single_tile_size);
     auto cb_output1 = tt_metal::CreateCircularBuffer(program, core, cb_output1_config);
 
-    bool has_input_grad = (input_grad) ? (true) : (false);
-    bool has_other_grad = (other_grad) ? (true) : (false);
+    bool has_input_grad = input_grad.has_value();
+    bool has_other_grad = other_grad.has_value();
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -172,8 +172,8 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
             const auto &input_grad = optional_input_tensors.at(0);
             const auto &other_grad = optional_input_tensors.at(1);
 
-            bool has_input_grad = (input_grad) ? (true) : (false);
-            bool has_other_grad = (other_grad) ? (true) : (false);
+            bool has_input_grad = input_grad.has_value();
+            bool has_other_grad = other_grad.has_value();
 
             Buffer *src0_buffer = output_grad.buffer();
             Buffer *src1_buffer = input.buffer();
@@ -195,9 +195,6 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
             }
 
             CoreCoord core = {0, 0};
-
-            uint32_t num_tiles = input_tensors.at(0).volume() / TILE_HW;
-
             {
                 auto runtime_args = GetRuntimeArgs(program, binary_reader_kernel_id, core);
                 runtime_args[0] = (std::uint32_t)has_input_grad;
@@ -205,7 +202,6 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
                 runtime_args[2] = src0_buffer->address();
                 runtime_args[3] = src1_buffer->address();
                 runtime_args[4] = src2_buffer->address();
-                runtime_args[5] = num_tiles;
                 SetRuntimeArgs(program, binary_reader_kernel_id, core, runtime_args);
             }
 
@@ -213,7 +209,6 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
                 auto runtime_args = GetRuntimeArgs(program, dot_backward_kernel, core);
                 runtime_args[0] = (std::uint32_t)has_input_grad;
                 runtime_args[1] = (std::uint32_t)has_input_grad;
-                runtime_args[2] = num_tiles;
                 SetRuntimeArgs(program, dot_backward_kernel, core, runtime_args);
             }
 
@@ -223,7 +218,6 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
                 runtime_args[1] = (std::uint32_t)has_input_grad;
                 runtime_args[2] = dst0_address;
                 runtime_args[3] = dst1_address;
-                runtime_args[4] = num_tiles;
                 SetRuntimeArgs(program, binary_writer_kernel_id, core, runtime_args);
             }
         };
