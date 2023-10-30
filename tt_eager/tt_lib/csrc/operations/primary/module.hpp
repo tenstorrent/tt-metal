@@ -10,6 +10,8 @@
 #include "transformers/module.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
+#include "tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 
 #include <pybind11/pybind11.h>
@@ -329,6 +331,20 @@ void py_module(py::module& m_primary) {
         py::arg("transpose_other").noconvert() = false,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a moreh_matmul operation.");
+
+    // moreh_matmul_backward
+    m_primary.def(
+        "moreh_matmul_backward",
+        &moreh_matmul_backward,
+        py::arg("output_grad").noconvert(),
+        py::arg("input").noconvert(),
+        py::arg("other").noconvert(),
+        py::arg("input_grad").noconvert() = std::nullopt,
+        py::arg("other_grad").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+        "Performs a moreh_matmul_backward operation.
+    )doc");
 
     // softmax
     m_primary.def(
