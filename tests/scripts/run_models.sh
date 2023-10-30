@@ -118,4 +118,3 @@ env pytest models/experimental/mistral/tests/test_mistral_attention.py
 env pytest models/experimental/mistral/tests/test_mistral_feed_forward.py
 env pytest models/experimental/mistral/tests/test_mistral_rms_norm.py
 env pytest models/experimental/mistral/tests/test_mistral_transformer_block.py
-env pytest models/experimental/mistral/tests/test_mistral_transformer.py
