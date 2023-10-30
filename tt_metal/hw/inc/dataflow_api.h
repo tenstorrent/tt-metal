@@ -288,12 +288,6 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
         // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
         // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
         uint16_t pages_acked = reg_read16(pages_acked_ptr);
-#ifdef ARCH_GRAYSKULL
-        // The following test slows down by 5% when removing the barrier
-        // TODO(pgk) investigate GS arbiter WAR in compiler, is this fixing an issue there?
-        // models/experimental/stable_diffusion/tests/test_perf_unbatched_stable_diffusion.py::test_perf_bare_metal
-        volatile uint32_t local_mem_barrier = pages_acked;
-#endif
         uint16_t free_space_pages_wrap =
             cb_interface[operand].fifo_num_pages - (pages_received - pages_acked);
         free_space_pages = (int32_t)free_space_pages_wrap;
