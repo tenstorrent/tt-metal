@@ -281,17 +281,17 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
     uint32_t pages_received = get_cb_tiles_received_ptr(operand)[0];
+    uint32_t tmp = cb_interface[operand].fifo_num_pages - pages_received;
 
     int32_t free_space_pages;
     DEBUG_STATUS('C', 'R', 'B', 'W');
+    uint32_t free_space_pages_wrap;
     do {
         // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
         // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
         uint16_t pages_acked = reg_read16(pages_acked_ptr);
-        uint16_t free_space_pages_wrap =
-            cb_interface[operand].fifo_num_pages - (pages_received - pages_acked);
-        free_space_pages = (int32_t)free_space_pages_wrap;
-    } while (free_space_pages < num_pages);
+        free_space_pages_wrap = tmp + pages_acked;
+    } while ((free_space_pages_wrap << 16) < ((uint32_t)num_pages << 16));
     DEBUG_STATUS('C', 'R', 'B', 'D');
 }
 
