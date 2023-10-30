@@ -70,6 +70,19 @@ namespace tt::tt_metal{
         // - Takes the device out of reset
         bool ConfigureDeviceWithProgram(Device *device, Program &program);
 
+
+        /**
+         * Read device side profiler data and dump results into device side CSV log
+         *
+         * Return value: void
+         *
+         * | Argument      | Description                                       | Type                      | Valid Range               | Required |
+         * |---------------|---------------------------------------------------|---------------------------|---------------------------|----------|
+         * | device        | The device holding the program being profiled.    | Device *                  |                           | True     |
+         * | core_coords   | The logical core coordinates being profiled.      | const vector<CoreCoord> & |                           | True     |
+         * */
+        void DumpDeviceProfileResults(Device *device, const vector<CoreCoord>& logical_cores);
+
         /**
          * Read device side profiler data and dump results into device side CSV log
          *
