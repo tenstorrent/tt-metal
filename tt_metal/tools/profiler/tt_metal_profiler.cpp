@@ -17,7 +17,7 @@ namespace detail {
 
 static Profiler tt_metal_profiler = Profiler();
 
-void DumpDeviceProfileResults(Device *device, const Program &program) {
+void DumpDeviceProfileResults(Device *device, const vector<CoreCoord> &logical_cores) {
 #if defined(PROFILER)
     ZoneScoped;
     if (getDeviceProfilerState())
@@ -29,12 +29,17 @@ void DumpDeviceProfileResults(Device *device, const Program &program) {
         }
         TT_ASSERT(tt_is_print_server_running() == false, "Debug print server is running, cannot dump device profiler data");
         auto worker_cores_used_in_program =\
-            device->worker_cores_from_logical_cores(program.logical_cores());
+            device->worker_cores_from_logical_cores(logical_cores);
         auto device_id = device->id();
         tt_metal_profiler.setDeviceArchitecture(device->arch());
         tt_metal_profiler.dumpDeviceResults(device_id, worker_cores_used_in_program);
     }
 #endif
+}
+
+
+void DumpDeviceProfileResults(Device *device, const Program &program) {
+    DumpDeviceProfileResults(device, program.logical_cores());
 }
 
 void SetProfilerDir(std::string output_dir){
