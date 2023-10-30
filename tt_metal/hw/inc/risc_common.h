@@ -110,6 +110,12 @@ inline __attribute__((always_inline)) uint32_t reg_read(uint32_t addr)
     return p_reg[0];
 }
 
+inline __attribute__((always_inline)) uint16_t reg_read16(uint32_t addr)
+{
+    volatile tt_reg_ptr uint16_t *p_reg = reinterpret_cast<volatile tt_reg_ptr uint16_t *> (addr);
+    return p_reg[0];
+}
+
 inline void assert_trisc_reset() {
   uint32_t soft_reset_0 = READ_REG(RISCV_DEBUG_REG_SOFT_RESET_0);
   uint32_t trisc_reset_mask = RISCV_SOFT_RESET_0_TRISCS;

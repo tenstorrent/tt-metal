@@ -287,7 +287,7 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
     do {
         // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
         // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
-        uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
+        uint16_t pages_acked = reg_read16(pages_acked_ptr);
 #ifdef ARCH_GRAYSKULL
         // The following test slows down by 5% when removing the barrier
         // TODO(pgk) investigate GS arbiter WAR in compiler, is this fixing an issue there?
@@ -332,7 +332,7 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
 
     DEBUG_STATUS('C', 'W', 'F', 'W');
     do {
-        pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
+        pages_received = (reg_read16(pages_received_ptr)) - pages_acked;
     } while (pages_received < num_pages);
     DEBUG_STATUS('C', 'W', 'F', 'D');
 }
