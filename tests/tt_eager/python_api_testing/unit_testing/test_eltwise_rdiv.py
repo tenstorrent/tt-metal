@@ -33,9 +33,10 @@ def set_dispatch_mode(set_var):
         os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = ""
         logger.info("Set fast dispatch mode")
 
-def run_eltwise_rdiv_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, factor, device):
+def run_eltwise_rdiv_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, factor, dispatch_mode, device):
     random.seed(0)
     torch.manual_seed(data_seed)
+    set_dispatch_mode(dispatch_mode)
 
     if in_mem_config == "SYSTEM_MEMORY":
         in_mem_config = None
@@ -62,26 +63,23 @@ def run_eltwise_rdiv_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_c
 
     assert success
 
-
-# eltwise-rdiv,"[[4, 24, 192, 384]]","{'dtype': [<DataType.BFLOAT16: 0>], 'layout': [<Layout.TILE: 1>], 'input_mem_config': [tt::tt_metal::MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED, buffer_type=BufferType::L1)], 'output_mem_config': tt::tt_metal::MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED, buffer_type=BufferType::DRAM), 'factor': 1.9915642058736664}",4781318,"(('TT_METAL_SLOW_DISPATCH_MODE', ''),)",completed,"Max ATOL Delta: inf, Max RTOL Delta: inf, PCC: 6.787768461855196e-08, PCC check failed",fail
-
 test_sweep_args=[
-    ((4, 24, 192, 384), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE,  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)),  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 1.9915642058736664, 4781318),
-    # ((11, 18, 320, 352), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE,  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 1.6659720483442477, 19325774),
-    # ((12, 14, 448, 352), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE,  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 1.7265079618522368, 5371386),
-    # ((11, 3, 448, 384), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE,  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)),  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 1.132563580694432, 10609144),
+    ((4, 24, 192, 384), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE,  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)),  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 4781318, 1.9915642058736664, False),
+    ((11, 18, 320, 352), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE,  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 19325774, 1.6659720483442477, False),
+    ((12, 14, 448, 352), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE,  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 1.7265079618522368, 5371386, True),
+    ((11, 3, 448, 384), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE,  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)),  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),10609144, 1.132563580694432, False),
 
 ]
 
 @skip_for_wormhole_b0
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, factor",
+    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, factor, dispatch_mode",
     (
         test_sweep_args
     ),
 )
 
 def test_eltwise_rdiv(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, factor, device
+    input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, factor, dispatch_mode, device
 ):
-    run_eltwise_rdiv_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, factor, device)
+    run_eltwise_rdiv_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, factor, dispatch_mode, device)
