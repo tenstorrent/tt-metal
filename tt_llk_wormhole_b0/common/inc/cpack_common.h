@@ -398,8 +398,14 @@ namespace ckernel::packer
             config.f.exp_threshold = 113;
             TT_SETDMAREG(0, UPPER_HALFWORD(config.val[3]), 0, HI_16(p_gpr_pack::TMP_HI));
             TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32+3-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_HI);
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32+3-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_HI);
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32+3-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_HI);
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG8_Row_start_section_size_ADDR32+3-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_HI);
          } else {
             TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32+3-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32+3-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32+3-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG8_Row_start_section_size_ADDR32+3-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
          }
       }
 
