@@ -27,7 +27,6 @@ def run_transpose_nh_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_c
     tt_result = tt_transpose_nh(
         x=x,
         device=device,
-        device_id=0,
         dtype=[dtype],
         layout=[dlayout],
         input_mem_config=[in_mem_config],

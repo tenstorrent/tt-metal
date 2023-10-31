@@ -55,7 +55,6 @@ def run_layernorm_tests(
     tt_result = tt_layernorm(
         x=x,
         device=device,
-        device_id=0,
         dtype=dtype,
         layout=dlayout,
         input_mem_config=in_mem_config,
