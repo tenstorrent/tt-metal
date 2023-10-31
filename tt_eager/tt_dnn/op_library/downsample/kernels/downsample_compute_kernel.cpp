@@ -133,9 +133,9 @@ void MAIN {
     // cb_wait_front(untilize_downsampled_cb_index, num_output_tiles);
     // cb_reserve_back(tilize_out_cb_index, num_output_tiles);
 
+    unpack_reconfig_data_format_srca(input_cb_index, untilize_downsampled_cb_index);
     tilize_init_short(untilize_downsampled_cb_index, num_output_tiles_in_row);
     pack_reconfig_data_format(tilize_out_cb_index);
-    unpack_reconfig_data_format_srca(input_cb_index, untilize_downsampled_cb_index);
 
     for(uint32_t b=0;b<num_output_rows_of_tiles;++b)
     {
