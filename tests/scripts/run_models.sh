@@ -111,8 +111,9 @@ env pytest models/experimental/efficientnet/tests -k efficientnet_lite0_model_re
 
 env pytest models/experimental/nanogpt/tests -k nanogpt_model_real
 
-env pytest tests/models/resnet/test_metal_resnet50.py -k "not 8"
-env pytest tests/models/resnet/test_metal_resnet50.py::test_run_resnet50_inference[8]
+env pytest tests/models/resnet/test_metal_resnet50.py::test_run_resnet50_inference[HiFi4-activations_BFLOAT16-weights_BFLOAT16-batch_1]
+env pytest tests/models/resnet/test_metal_resnet50.py::test_run_resnet50_inference[HiFi4-activations_BFLOAT16-weights_BFLOAT16-batch_2]
+env pytest tests/models/resnet/test_metal_resnet50.py::test_run_resnet50_inference -k batch_8
 
 env pytest models/experimental/mistral/tests/test_mistral_attention.py
 env pytest models/experimental/mistral/tests/test_mistral_feed_forward.py
