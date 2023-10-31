@@ -7,7 +7,7 @@
 #include "debug_print.h"
 
 #ifdef FUSE_BIAS
-    #include "kernels/dataflow/reader_bmm_single_core_bias.hpp"
+    #include "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_single_core_bias.hpp"
 #endif
 
 FORCE_INLINE void read_weight_blocks_inner_h_dim(uint32_t cb_id_weight,
