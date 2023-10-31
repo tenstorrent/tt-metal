@@ -729,7 +729,7 @@ void generate_binary_for_risc(RISCID risc_id,
 //////////////////
 // TRISCs       //
 //////////////////
-void generate_data_format_descriptors(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path);
+void generate_data_format_descriptors(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path, const tt::ARCH arch);
 void generate_math_approx_mode_descriptor(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path);
 void generate_math_fidelity_descriptor(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path);
 
@@ -934,10 +934,10 @@ void emit_unpack_data_formats(std::string unpack_data_format_descs, std::vector<
 }
 
 std::pair<std::vector<DataFormat>, std::vector<DataFormat>>
-generate_pack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en) {
+generate_pack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, const tt::ARCH arch) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
         desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr,
-        desc.output_buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en);
+        desc.output_buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, false, arch);
 
     vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
         desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr, desc.output_buf_dataformat_arr);
@@ -999,7 +999,7 @@ void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataF
     }
 }
 
-void generate_data_format_descriptors(build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path) {
+void generate_data_format_descriptors(build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path, const tt::ARCH arch) {
     string out_file_name_base = "chlkc_";
     string out_file_name_suffix = "_data_format.h";
     string unpack_data_format_descs = build_kernel_for_riscv_options->outpath + out_dir_path + "/" + out_file_name_base + "unpack" + out_file_name_suffix;
@@ -1038,7 +1038,7 @@ void generate_data_format_descriptors(build_kernel_for_riscv_options_t* build_ke
     tie(unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs) = generate_unpack_data_formats(desc, unpack_conditional_dst_format, build_kernel_for_riscv_options->fp32_dest_acc_en);
 
     vector<DataFormat> pack_src_formats_all_cbs, pack_dst_formats_all_cbs;
-    tie(pack_src_formats_all_cbs, pack_dst_formats_all_cbs) = generate_pack_data_formats(desc, unpack_conditional_dst_format, build_kernel_for_riscv_options->fp32_dest_acc_en);
+    tie(pack_src_formats_all_cbs, pack_dst_formats_all_cbs) = generate_pack_data_formats(desc, unpack_conditional_dst_format, build_kernel_for_riscv_options->fp32_dest_acc_en, arch);
 
     // equalize "upack src" and "pack dst" data format vectors
     // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
@@ -1369,7 +1369,7 @@ void generate_noc_addr_ranges_header(
 }
 
 void generate_binaries_all_riscs(
-    tt::build_kernel_for_riscv_options_t* opts, const std::string& out_dir_path, const std::string& arch_name,
+    tt::build_kernel_for_riscv_options_t* opts, const std::string& out_dir_path, const tt::ARCH arch,
     generate_binaries_params_t p)
 {
     ZoneScoped;
@@ -1377,8 +1377,10 @@ void generate_binaries_all_riscs(
     ZoneName( (tracyPrefix + out_dir_path).c_str(), out_dir_path.length() + tracyPrefix.length());
 
     if (!opts->fw_build_) {
-        generate_descriptors(opts, out_dir_path);
+        generate_descriptors(opts, out_dir_path, arch);
     }
+
+    const std::string arch_name = tt::get_string_lowercase(arch);
 
     std::vector<std::thread> threads;
     std::function<void()> lambdas[] = {
@@ -1442,7 +1444,7 @@ void generate_binaries_for_triscs(
 
 // TODO(AP): can move joins for these threads to happen later (to compiler launch)
 void generate_descriptors(
-    tt::build_kernel_for_riscv_options_t* opts, const std::string &op_dir)
+    tt::build_kernel_for_riscv_options_t* opts, const std::string &op_dir, const tt::ARCH arch)
 {
     ZoneScoped;
     const std::string tracyPrefix = "generate_descriptors_";
@@ -1450,7 +1452,7 @@ void generate_descriptors(
     string full_path = opts->outpath + op_dir;
     fs::create_directories(full_path);
     try {
-        std::thread td( [=]() { generate_data_format_descriptors(opts, op_dir); } );
+        std::thread td( [=]() { generate_data_format_descriptors(opts, op_dir, arch); } );
         std::thread tm( [=]() { generate_math_fidelity_descriptor(opts, op_dir); } );
         std::thread ta( [=]() { generate_math_approx_mode_descriptor(opts, op_dir); } );
         td.join();

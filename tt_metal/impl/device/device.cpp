@@ -139,11 +139,11 @@ void Device::initialize_build() {
     ZoneScoped;
     build_kernel_for_riscv_options_t build_options(this->id());
     detail::GenerateDeviceHeaders(this, &build_options, "");
-    std::string arch_name = tt::get_string_lowercase(this->arch());
+    tt::ARCH arch = this->arch();
     generate_binaries_params_t default_params;
     generate_binaries_all_riscs(&build_options,
                                 "",
-                                arch_name,
+                                arch,
                                 default_params);
 }
 

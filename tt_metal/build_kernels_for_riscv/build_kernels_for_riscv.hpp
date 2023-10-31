@@ -23,7 +23,7 @@ static_assert(RISCID::TR1 == RISCID::TR0+1 && RISCID::TR2 == RISCID::TR1+1);
 
 void generate_data_format_descriptors(
     tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
-    std::string out_dir_path);
+    std::string out_dir_path, const tt::ARCH arch);
 
 void generate_binary_for_risc(
     RISCID id,
@@ -53,7 +53,7 @@ struct generate_binaries_params_t {
 };
 
 void generate_binaries_all_riscs(
-    tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const std::string& out_dir_path, const std::string& arch_name,
+    tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, const std::string& out_dir_path, const tt::ARCH arch,
     generate_binaries_params_t params);
 
 inline void generate_binary_for_brisc(
@@ -133,7 +133,7 @@ void generate_noc_addr_ranges_header(
     const std::vector<CoreCoord>& dispatch_cores);
 
 void generate_descriptors(
-    tt::build_kernel_for_riscv_options_t* opts, const std::string &op_dir);
+    tt::build_kernel_for_riscv_options_t* opts, const std::string &op_dir, const tt::ARCH arch);
 
 std::string get_string_aliased_arch_lowercase(tt::ARCH arch);
 

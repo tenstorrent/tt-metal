@@ -306,8 +306,11 @@ bool test_compile_program_with_modified_program(Device *device) {
     kernel_name_to_hash = compile_program_with_modified_kernel(device, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
 
     // Modify compute kernel fp32_dest_acc_en - expect cache miss for compute kernel
-    attributes.fp32_dest_acc_en = true;
-    kernel_name_to_hash = compile_program_with_modified_kernel(device, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
+    // Grayskull does not support fp32 accumulation
+    if (device->arch() != ARCH::GRAYSKULL) {
+        attributes.fp32_dest_acc_en = true;
+        kernel_name_to_hash = compile_program_with_modified_kernel(device, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
+    }
 
     // Modify compute kernel math_approx_mode - expect cache miss for compute kernel
     attributes.math_approx_mode = true;

@@ -42,7 +42,7 @@ void run_compile_blank(tt_metal::Device *device) {
 
     generate_binaries_params_t params;
     tt_metal::detail::GenerateDeviceHeaders(device, &build_kernel_for_riscv_options, build_kernel_for_riscv_options.name);
-    generate_binaries_all_riscs(&build_kernel_for_riscv_options, build_kernel_for_riscv_options.name, "grayskull", params);
+    generate_binaries_all_riscs(&build_kernel_for_riscv_options, build_kernel_for_riscv_options.name, tt::ARCH::GRAYSKULL, params);
 }
 
 const map<string, tt::OpCode> sfpu_name_to_op_code = {
