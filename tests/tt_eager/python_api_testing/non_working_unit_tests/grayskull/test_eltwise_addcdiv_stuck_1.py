@@ -4,12 +4,10 @@
 
 import random
 from loguru import logger
-
 import pytest
 import torch
-
 import tt_lib as ttl
-from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
+
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import setup_tt_tensor
 from models.utility_functions import tt2torch_tensor
 
@@ -95,7 +93,6 @@ test_sweep_args = [
 ]
 
 
-@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, buffer_type, output_mem_config, data_seed, scalar",
     (test_sweep_args),
