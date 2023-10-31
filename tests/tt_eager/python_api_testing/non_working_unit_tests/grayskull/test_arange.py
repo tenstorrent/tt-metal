@@ -6,11 +6,9 @@ import random
 from loguru import logger
 import pytest
 import torch
-
 import tt_lib as ttl
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
 
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import arange as tt_arange
 
 
@@ -107,7 +105,6 @@ test_sweep_args = [
 ]
 
 
-@skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, buffer_type, out_mem_config, data_seed, start, end, step",
     (test_sweep_args),

@@ -5,9 +5,8 @@
 import random
 from loguru import logger
 import torch
-
 import tt_lib as ttl
-from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
+
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import setup_tt_tensor
 from models.utility_functions import tt2torch_tensor
 
@@ -60,7 +59,6 @@ def run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, dat
     logger.info(f"Finished running addcdiv")
 
 
-@skip_for_wormhole_b0
 def test_addcdiv_test():
     run_addcdiv(
         (3, 10, 73, 388),
