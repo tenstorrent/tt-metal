@@ -39,6 +39,32 @@
 
 #define DPRINT DebugPrinter()
 
+#ifdef UCK_CHLKC_UNPACK
+#define DPRINT_UNPACK(x) x
+#else
+#define DPRINT_UNPACK(x)
+#endif
+
+#ifdef UCK_CHLKC_MATH
+#define DPRINT_MATH(x) x
+#else
+#define DPRINT_MATH(x)
+#endif
+
+#ifdef UCK_CHLKC_PACK
+#define DPRINT_PACK(x) x
+#else
+#define DPRINT_PACK(x)
+#endif
+
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
+#define DPRINT_DATA0(x) if(noc_index == 0) x
+#define DPRINT_DATA1(x) if(noc_index == 1) x
+#else
+#define DPRINT_DATA0(x)
+#define DPRINT_DATA1(x)
+#endif
+
 struct BF16 { uint16_t val; BF16(uint16_t val) : val(val) {} } ATTR_PACK;
 struct F32  { float val; F32(float val) : val(val) {} } ATTR_PACK;
 struct U32  { uint32_t val; U32(uint32_t val) : val(val) {} } ATTR_PACK;
