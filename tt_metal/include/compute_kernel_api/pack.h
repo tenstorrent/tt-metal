@@ -52,11 +52,6 @@ ALWI void matmul_pack_tile(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles)
     PACK((  llk_matmul_pack<false, SYNC, false >(ifrom_dst, icb, ntiles)  ));
 }
 
-ALWI void matmul_pack_tile_sync_full(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles)
-{
-    PACK((  llk_matmul_pack<false, SyncFull, false >(ifrom_dst, icb, ntiles)  ));
-}
-
 /**
  * Helper function to reconfigure packer output data format.
  */
