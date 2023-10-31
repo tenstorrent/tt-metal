@@ -67,15 +67,15 @@ def test_run_downsample(
 
     torch.manual_seed(0)
     a_activation_shape = [batch_size, input_channels, input_height, input_width]
-    # A_pyt = torch.normal(mean=0, std=0.1, size=a_activation_shape)
+    A_pyt = torch.normal(mean=0, std=0.1, size=a_activation_shape)
 
     # A_pyt = torch.rand(a_activation_shape)
-    A_pyt = torch.ones(a_activation_shape)
-    for n in range(a_activation_shape[0]):
-        for c in range(a_activation_shape[1]):
-            for h in range(a_activation_shape[2]):
-                for w in range(a_activation_shape[3]):
-                    A_pyt[n, c, h, w] = n + h + w + 1
+    # A_pyt = torch.ones(a_activation_shape)
+    # for n in range(a_activation_shape[0]):
+    #     for c in range(a_activation_shape[1]):
+    #         for h in range(a_activation_shape[2]):
+    #             for w in range(a_activation_shape[3]):
+    #                 A_pyt[n, c, h, w] = n + h + w + 1
 
     b_weights_shape = [output_channels, input_channels, 1, 1]
     B_pyt = torch.normal(mean=0, std=0.1, size=b_weights_shape)
@@ -137,7 +137,6 @@ def test_run_downsample(
                 ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
             )
     # Run downsample op
-    # A_downampled_sharded = ttl.tensor.downsample(A_sharded, downsample_params, output_dtype=ttl.tensor.DataType.BFLOAT16)
     A_downampled_sharded = ttl.tensor.downsample(A_sharded, downsample_params, output_dtype=dtype)
     A_downsampled = ttl.tensor.sharded_to_interleaved(A_downampled_sharded, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1))
     out = A_downsampled
@@ -150,8 +149,6 @@ def test_run_downsample(
 
     out_debug = out
     out_debug = out_debug.to_torch().float()
-
-    print (f'OUTPUT: {out_debug}')
 
     # DEBUG
     # for i in range(16):
