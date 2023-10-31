@@ -315,22 +315,24 @@ DownsampleReadPatternParams generate_downsample_read_pattern(ImgTrackingVars & v
     }
     TT_ASSERT(v.img_h < img_height && v.img_w < img_width);
 
-    log_debug(LogOp, "   top_partial_middle_aligned_row_width: {}", top_partial_middle_aligned_row_width);
-    log_debug(LogOp, "   skip_top_partial_middle_aligned_row: {}", skip_top_partial_middle_aligned_row);
-    log_debug(LogOp, "   top_partial_right_aligned_row_width: {}", top_partial_right_aligned_row_width);
-    log_debug(LogOp, "   skip_top_partial_right_aligned_row: {}", skip_top_partial_right_aligned_row);
-    log_debug(LogOp, "   num_rows_top_partial_image: {}", num_rows_top_partial_image);
-    log_debug(LogOp, "   num_skip_rows_top_partial_image: {}", num_skip_rows_top_partial_image);
-    log_debug(LogOp, "   num_full_images: {}", num_full_images);
-    log_debug(LogOp, "   num_rows_bottom_partial_image: {}", num_rows_bottom_partial_image);
-    log_debug(LogOp, "   num_skip_rows_bottom_partial_image: {}", num_skip_rows_bottom_partial_image);
-    log_debug(LogOp, "   bottom_partial_left_aligned_row_width: {}", bottom_partial_left_aligned_row_width);
-    log_debug(LogOp, "   skip_bottom_partial_left_aligned_row: {}", skip_bottom_partial_left_aligned_row);
-    log_debug(LogOp, "   v.input_flat_h: {}", v.input_flat_h);
-    log_debug(LogOp, "   v.output_flat_h: {}", v.output_flat_h);
-    log_debug(LogOp, "   input_end_flat_h: {}", input_end_flat_h);
-    log_debug(LogOp, "   output_end_flat_h: {}", output_end_flat_h);
-    //cout << "img_h=" << v.img_h << ", img_w=" << v.img_w << ", next_img_h=" << v.next_img_h << ", next_img_w=" << v.img_w << endl;
+    if (0) {
+        log_debug(LogOp, "   top_partial_middle_aligned_row_width: {}", top_partial_middle_aligned_row_width);
+        log_debug(LogOp, "   skip_top_partial_middle_aligned_row: {}", skip_top_partial_middle_aligned_row);
+        log_debug(LogOp, "   top_partial_right_aligned_row_width: {}", top_partial_right_aligned_row_width);
+        log_debug(LogOp, "   skip_top_partial_right_aligned_row: {}", skip_top_partial_right_aligned_row);
+        log_debug(LogOp, "   num_rows_top_partial_image: {}", num_rows_top_partial_image);
+        log_debug(LogOp, "   num_skip_rows_top_partial_image: {}", num_skip_rows_top_partial_image);
+        log_debug(LogOp, "   num_full_images: {}", num_full_images);
+        log_debug(LogOp, "   num_rows_bottom_partial_image: {}", num_rows_bottom_partial_image);
+        log_debug(LogOp, "   num_skip_rows_bottom_partial_image: {}", num_skip_rows_bottom_partial_image);
+        log_debug(LogOp, "   bottom_partial_left_aligned_row_width: {}", bottom_partial_left_aligned_row_width);
+        log_debug(LogOp, "   skip_bottom_partial_left_aligned_row: {}", skip_bottom_partial_left_aligned_row);
+        log_debug(LogOp, "   v.input_flat_h: {}", v.input_flat_h);
+        log_debug(LogOp, "   v.output_flat_h: {}", v.output_flat_h);
+        log_debug(LogOp, "   input_end_flat_h: {}", input_end_flat_h);
+        log_debug(LogOp, "   output_end_flat_h: {}", output_end_flat_h);
+        //cout << "img_h=" << v.img_h << ", img_w=" << v.img_w << ", next_img_h=" << v.next_img_h << ", next_img_w=" << v.img_w << endl;
+    }
 
     // Sanity check
     TT_ASSERT(v.input_flat_h <= input_end_flat_h+1);
