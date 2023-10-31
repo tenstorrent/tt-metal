@@ -541,17 +541,6 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
         tt_metal::ComputeConfig{.compile_args = compute_args}
     );
 
-    // for (auto cbid : {input_cb, untilize_cb, untilize_downsampled_cb, final_tilize_output_cb}) {
-    //     auto cbconfig = GetCircularBufferConfig(program, cbid);
-    //     log_info(LogOp, "input_cb size: {}, ", cbconfig.total_size());
-    //     for (auto f : cbconfig.data_formats()) {
-    //         log_info(LogOp, "DF: {}", f);
-    //     }
-    //     for (auto ps : cbconfig.page_sizes()) {
-    //         log_info(LogOp, "PS: {}", ps);
-    //     }
-    // }
-
     // track img h, img w, across cores
     ImgTrackingVars v;
     CoreCoord prev_core = {0,0};

@@ -15,8 +15,6 @@
 #include "llk_pack_common.h"
 #include "ckernel_globals.h"
 
-#include "debug_print.h"
-
 using namespace ckernel;
 using namespace ckernel::packer;
 
