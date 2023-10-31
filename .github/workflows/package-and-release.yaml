@@ -97,6 +97,11 @@ jobs:
         uses: actions/download-artifact@v3
         with:
           name: changelog
+      - name: Assert wheels exist
+        # Issue #3443 wants us to delete the wheel from the release assets.
+        # We are still committed to making this eventually work for proper
+        # releases to allow for easier installing for Python users.
+        run: ls -arhl metal_libs-*+*.whl
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
@@ -105,7 +110,6 @@ jobs:
           draft: true
           body_path: CHANGELOG.txt
           files: |
-            metal_libs-*+*.whl
             VERSION
             CHANGELOG.txt
           fail_on_unmatched_files: true
