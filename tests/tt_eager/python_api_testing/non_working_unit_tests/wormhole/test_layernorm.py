@@ -57,7 +57,6 @@ def run_layernorm_tests(
         y=y,
         z=z,
         device=device,
-        device_id=0,
         dtype=dtype,
         layout=dlayout,
         input_mem_config=in_mem_config,

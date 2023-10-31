@@ -7,10 +7,6 @@ import os
 import sys
 from loguru import logger
 import random
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../../..")
-
 import pytest
 import torch
 import tt_lib as ttl
