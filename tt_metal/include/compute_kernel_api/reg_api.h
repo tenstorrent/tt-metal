@@ -38,10 +38,6 @@ ALWI void tile_regs_acquire() {
     MATH(( llk_math_wait_for_dest_available<SYNC>()  ));
 }
 
-ALWI void tile_regs_acquire_sync_full() {
-    MATH(( llk_math_wait_for_dest_available<SyncFull>()  ));
-}
-
 ALWI void tile_regs_wait() {
     PACK(( llk_packer_wait_for_math_done()  ));
 }
@@ -70,17 +66,8 @@ ALWI void tile_regs_commit() {
     MATH(( llk_math_dest_section_done<SYNC>()  ));
 }
 
-ALWI void tile_regs_commit_sync_full() {
-    MATH(( llk_math_dest_section_done<SyncFull>()  ));
-}
-
 ALWI void tile_regs_release() {
     PACK(( llk_pack_dest_section_done<SYNC>()  ));
-}
-
-
-ALWI void tile_regs_release_sync_full() {
-    PACK(( llk_pack_dest_section_done<SyncFull>()  ));
 }
 
 } // namespace ckernel

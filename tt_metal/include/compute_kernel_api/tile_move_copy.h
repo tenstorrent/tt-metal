@@ -119,16 +119,4 @@ ALWI void copy_block_matmul_partials(uint32_t icb, uint32_t start_itile, uint32_
     MATH(( llk_math_eltwise_unary_datacopy_cm<A2D, BroadcastType::NONE, SyncHalf>(start_idst, ntiles)  ));
 }
 
-ALWI void copy_block_matmul_partials_sync_full(uint32_t icb, uint32_t start_itile, uint32_t start_idst, uint32_t ntiles)
-{
-    UNPACK(( llk_unpack_A_cm<BroadcastType::NONE, false, 1>(icb, start_itile, ntiles)  ));
-    MATH(( llk_math_eltwise_unary_datacopy_cm<A2D, BroadcastType::NONE, SyncFull>(start_idst, ntiles)  ));
-}
-
-// ALWI void copy_tile_matmul_partials(uint32_t icb, uint32_t itile, uint32_t idst)
-// {
-//     UNPACK(( llk_unpack_A_cm<BroadcastType::NONE, false, 1>(icb, itile)  ));
-//     MATH(( llk_math_eltwise_unary_datacopy_cm<A2D, BroadcastType::NONE, SyncHalf>(idst)  ));
-// }
-
 }
