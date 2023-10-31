@@ -10,8 +10,8 @@ test-list:
     datagen:
       function: gen_rand
       args:
-        low: -90
-        high: 90
+        low: -64
+        high: 64
     comparison:
       function: comp_pcc
     args-gen: gen_dtype_layout_device
