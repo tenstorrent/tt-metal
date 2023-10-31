@@ -18,7 +18,6 @@ Host Code
 - Call matmul_single_core() program and retrieve output results (details in next section)
 - Validate the device compuation results vs. golden results on cpu
 - Close Device
-
     .. code-block:: cpp
 
         /* Create source data */
@@ -34,7 +33,8 @@ Host Code
         uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt; // num_tiles of FP16_B
         uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B
 
-        /* input vectors */std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
+        /* input vectors */
+        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
             dram_buffer_A_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
         std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(
             dram_buffer_B_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
@@ -52,26 +52,26 @@ Host Code
 
 Keeping all code details inside matmul_single_core(), allowing for calling consecutive functions in the main function
 
-matmul_single_core function details
------------------------------------
-- Program and core range
+Main blocks in matmul_single_core function
+------------------------------------------
+- Program, enqueue and core range settings
 - Create DRAM buffers based on input and output vectors
 - Create L1 Circular buffers
 - Kernels declarations and related compile and runtime arguments
 - Program launch and reading data from DRAM output buffer to result vector
 
 
-Create Program, Enqueue initialization, and core range definition
------------------------------------------------------------------
+A- Create Program, Enqueue initialization, and core range definition
+--------------------------------------------------------------------
+Setting core range to be just one core at (0,0)
     .. code-block:: cpp
         CommandQueue& cq = *detail::GLOBAL_CQ;
         Program program{};
         CoreRange core = {.start={0, 0}, .end={0, 0}};
 
 
-Create DRAM buffers & Circular buffers
---------------------------------------
-
+B- Create DRAM buffers & Circular buffers
+----------------------------------------
 In terms of DRAM buffers, We need two source buffers and one destination buffer.
 Writing data from input vectors to source buffers
     .. code-block:: cpp
@@ -91,8 +91,8 @@ Writing data from input vectors to source buffers
         uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        /* DRAM buffer size = input full size */
-        /* limiting page_size = single tile size; to allow DRAM channels interleaving */
+        /* DRAM buffer size == input full size */
+        /* limiting page_size == single tile size; to allow DRAM channels interleaving */
         Buffer src0_dram_buffer = CreateBuffer(device, dram_buffer_A_size, single_tile_size, BufferType::DRAM);
         Buffer src1_dram_buffer = CreateBuffer(device, dram_buffer_B_size, single_tile_size, BufferType::DRAM);
         Buffer dst_dram_buffer = CreateBuffer(device, dram_buffer_C_size, single_tile_size, BufferType::DRAM);
@@ -101,9 +101,8 @@ Writing data from input vectors to source buffers
         uint32_t dst_addr = dst_dram_buffer.address();
 
 
-We need to declare three circular buffers to enable data transfer
-between the reader, compute, and writer engines.
-Input tiles count is = 2 because it's single tile process, and double-buffer
+We need to declare three circular buffers to enable data transfer between the reader, compute, and writer engines.
+Input tiles count is = 2 because it's single tile process, and double-buffer.
     .. code-block:: cpp
 
         uint32_t src0_cb_index = CB::c_in0; //0
@@ -125,8 +124,10 @@ Input tiles count is = 2 because it's single tile process, and double-buffer
 
 
 
-Compile-time kernels arguments
-------------------------------
+C- Compile-time kernels arguments
+---------------------------------
+We have to declare some compile-time arguments for read/write kernels. Some default
+parameters here will suffice.
     .. code-block:: cpp
 
         bool src0_is_dram = src0_dram_buffer.buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -143,12 +144,11 @@ Compile-time kernels arguments
             Nt // Nt
         };
 
-We have to declare some compile-time arguments for read/write kernels. Some default
-parameters here will suffice.
 
-
-Compute kernel declaration and compile-time defines
+D- Compute kernel declaration and compile-time defines
 ---------------------------------------------------
+We're using a reader kernel to take in data from DRAM into L1, and a writer kernel to write out results from the
+compute engine back to the destination DRAM buffer.
     .. code-block:: cpp
 
         auto reader_id = tt_metal::CreateDataMovementKernel(
@@ -171,8 +171,9 @@ Compute kernel declaration and compile-time defines
         );
 
 
-Runtime arguments and program launch
+E- Runtime arguments and program launch
 -----------------------------------------
+Runtime settings to loop on the input tiles to run the matmul on the single core (one tile operation)
     .. code-block:: cpp
 
         tt_metal::SetRuntimeArgs(
@@ -194,13 +195,9 @@ Launch program, enqueue & read in output buffer result into the host vector.
         EnqueueProgram(cq, program, false);
         EnqueueReadBuffer(cq, dst_dram_buffer, output, true);
 
-In this program,  we're using a separate reader kernel to take in data from
-DRAM into L1, and a separate writer kernel to write out results from the
-compute engine back to the destination DRAM buffer.
 
 
 Conclusion
 ----------
-
 Those are the additional steps for getting matmul_single_core operations up and
 running on the compute engine.
