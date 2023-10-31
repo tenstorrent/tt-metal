@@ -22,7 +22,7 @@ def get_bias_tensors(bias_shape, require_bias_grad, device):
     bias = torch.randint(-2, 3, bias_shape, dtype=cpu_dtype)
     tt_bias = (ttl.tensor.Tensor(
         bias.reshape(-1).tolist(), bias_shape, npu_dtype,
-        cpu_layout).pad_to_tile(1).to(npu_layout).to(device))
+        cpu_layout).pad_to_tile(float('nan')).to(npu_layout).to(device))
 
     tt_bias_grad = None
     if require_bias_grad:
@@ -62,7 +62,7 @@ def get_bias_tensors(bias_shape, require_bias_grad, device):
     ),
 )
 @pytest.mark.parametrize("has_bias", [False, True])
-def test_run_moreh_linear(shapes, has_bias, device):
+def test_moreh_linear(shapes, has_bias, device):
     input_shape, weight_shape, bias_shape, output_shape = shapes
     tt_input, tt_weight, _, _, _, torch_input, torch_weight, _ = get_tensors(
         input_shape, weight_shape, output_shape, False, False, False, device)
@@ -126,7 +126,7 @@ def test_run_moreh_linear(shapes, has_bias, device):
     (True, True),
 ))
 @pytest.mark.parametrize("requires_bias_grad", [True, False])
-def test_run_moreh_linear_backward(shapes, requires_grads, requires_bias_grad,
+def test_moreh_linear_backward(shapes, requires_grads, requires_bias_grad,
                                    device):
     input_shape, weight_shape, bias_shape, output_shape = shapes
     requires_input_grad, requires_weight_grad = requires_grads
