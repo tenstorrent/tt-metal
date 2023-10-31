@@ -73,30 +73,23 @@ inline void llk_pack_dest_section_done() {
     }
 }
 
-template <DstSync Dst, DstTileFaceLayout FaceLayout = RowMajor, bool untilize = false, bool is_fp32_dest_acc_en = false>
-inline void llk_pack_dest_init() {
-    TT_LLK_DUMP("llk_pack_dest_init<{}, {}, {}, {}>()", Dst, FaceLayout, untilize, is_fp32_dest_acc_en);
-    tensix_sync();
-    reset_dest_offset_id();
-    init_packer_dest_offset_registers<FaceLayout, untilize, is_fp32_dest_acc_en>();
-    select_packer_dest_registers<Dst>();
-    packer_addr_counter_init();
-    pack_sync_tile_dst_ptr = 0;
-}
-
 template <DstSync Dst, DstTileFaceLayout FaceLayout, bool untilize = false>
 inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output) {
     // Todo: get tile dims based on pack_output
     TT_LLK_DUMP("llk_init_packer_dest_offset_registers<{}, {}, {}>({})", Dst, FaceLayout, untilize, pack_output);
     TTI_STALLWAIT(p_stall::STALL_TDMA|p_stall::STALL_THCON, p_stall::PACK);  // wait for pack to finish
     if constexpr (untilize) {
+       const std::uint32_t output_id = get_output_id(pack_output);
+       const uint face_r_dim = get_face_r_dim(output_id);
+       const bool narrow_tile = get_narrow_tile(output_id);
+       const uint face_r_offset = narrow_tile ? FACE_R_DIM : face_r_dim/2;
        if constexpr (FaceLayout == ColMajor) {
           // Packer0 :  0,32,  1,33 ...  7, 39
           // Packer1 :  8,40,  9,41 ... 15, 47
           // Packer2 : 16,48, 17,49 ... 23, 55		  
           // Packer3 : 23,56, 24,57 ... 31, 63		  
           TT_SETDMAREG(0, 0x000 + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
-          TT_SETDMAREG(0, 0x000 + 0x08, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
+          TT_SETDMAREG(0, 0x000 + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
           TT_SETDMAREG(0, 0x000 + 0x10, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
           TT_SETDMAREG(0, 0x000 + 0x18, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 3));
           TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
@@ -109,7 +102,7 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
           // Packer2 : 32,48, 33,49 ... 39, 55		  
           // Packer3 : 40,56, 41,57 ... 47, 63		  
           TT_SETDMAREG(0, 0x000 + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
-          TT_SETDMAREG(0, 0x000 + 0x08, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
+          TT_SETDMAREG(0, 0x000 + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
           TT_SETDMAREG(0, 0x000 + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
           TT_SETDMAREG(0, 0x000 + 0x28, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 3));
           TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
@@ -140,6 +133,17 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
     }   
     select_packer_dest_registers<Dst>();
 }
+
+template <DstSync Dst, DstTileFaceLayout FaceLayout = RowMajor, bool untilize = false, bool is_fp32_dest_acc_en = false>
+inline void llk_pack_dest_init(const std::uint32_t pack_output) {
+    TT_LLK_DUMP("llk_pack_dest_init<{}, {}, {}, {}>({})", Dst, FaceLayout, untilize, is_fp32_dest_acc_en, pack_output);
+    tensix_sync();
+    reset_dest_offset_id();
+    llk_init_packer_dest_offset_registers<Dst,FaceLayout,untilize>(pack_output);
+    packer_addr_counter_init();
+    pack_sync_tile_dst_ptr = 0;
+}
+
 
 template <bool mail2math=true, bool mail2pack=true>
 inline void llk_pack_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t *p_tile) {
