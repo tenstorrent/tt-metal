@@ -100,7 +100,9 @@ On your mac you need install tracy GUI with brew. On your mac terminal run:
 
 ..  code-block:: sh
 
-    brew install tracy
+    wget -P ~/ https://raw.githubusercontent.com/Homebrew/homebrew-core/52ec9be8d6fbef66888abe0fbdb96f8b4f4e4e0c/Formula/t/tracy.rb
+    brew install ~/tracy.rb
+    rm ~/tracy.rb
 
 Once installed run tracy GUI with:
 
