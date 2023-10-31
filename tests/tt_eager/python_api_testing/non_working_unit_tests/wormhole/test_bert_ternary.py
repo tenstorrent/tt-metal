@@ -8,10 +8,6 @@ from loguru import logger
 import numpy as np
 import random
 from itertools import product
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../../..")
-
 import pytest
 import torch
 import tt_lib as ttl
