@@ -148,36 +148,6 @@ inline void llk_pack_init() {
     llk_pack_mop_config<untilize, zero_output, FaceLayout>();
 }
 
-
-template <bool out_of_order_output, bool untilize>
-inline std::uint16_t get_output_tile_address(std::uint8_t output_id, std::uint32_t output_tile_index) {
-
-    std::uint16_t pack_tile_addr;
-    if constexpr (out_of_order_output) {
-        // pack_tile_addr = cb_interface[output_id].f.fifo_wr_ptr +
-        //                  MUL_TILE_SIZE_AND_INDEX((std::uint8_t)pack_dst_format[output_id], (std::uint16_t)output_tile_index);
-    } else {
-        // if constexpr (untilize) {
-        //     std::uint16_t out_tile_index = (outputs[output_id].f.ublock_tile_cnt/outputs[output_id].f.ublock_ct)*outputs[output_id].f.row_tile_dim +
-        //                                     outputs[output_id].f.ublock_tile_cnt%outputs[output_id].f.ublock_ct; //FIXME: optimize perf
-        //     pack_tile_addr = outputs[output_id].f.fifo_wr_ptr + outputs[output_id].f.fifo_wr_tile_ptr - 1;
-        //     pack_tile_addr += out_tile_index*GET_L1_HEADERLESS_TILE_SIZE((std::uint8_t)pack_dst_format[output_id]);
-
-        //     //outputs[output_id].f.fifo_wr_tile_ptr += GET_L1_HEADERLESS_TILE_SIZE((std::uint8_t)pack_dst_format[output_id]);
-
-        //     outputs[output_id].f.ublock_tile_cnt++;
-
-        //     if (outputs[output_id].f.ublock_tile_cnt == outputs[output_id].f.ublock_tile_dim) {
-        //        outputs[output_id].f.ublock_tile_cnt=0;
-        //        outputs[output_id].f.fifo_wr_tile_ptr += GET_L1_HEADERLESS_TILE_SIZE((std::uint8_t)pack_dst_format[output_id])*outputs[output_id].f.ublock_ct; //FIXME: optimize perf
-        //     }
-        // } else {
-            pack_tile_addr = cb_interface[output_id].fifo_wr_ptr + cb_interface[output_id].fifo_wr_tile_ptr - 1;
-            cb_interface[output_id].fifo_wr_tile_ptr += GET_L1_TILE_SIZE((std::uint8_t)pack_dst_format[output_id]);
-        // }
-    }
-    return pack_tile_addr;
-}
 template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false>
 inline void llk_matmul_pack(std::uint32_t start_tile_index, std::uint32_t output, uint32_t ntiles, std::uint32_t output_tile_index = 0) {
     std::uint8_t output_id = get_output_id(output);
