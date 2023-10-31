@@ -454,7 +454,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
 		.set_page_size(input_cb_index, input_single_tile_size);
     input_cb_config = input_cb_config.set_globally_allocated_address(a.buffer()->address());
     auto input_cb = tt_metal::CreateCircularBuffer(program, core_range, input_cb_config);
-    log_info(LogOp, "CB {}: PS = {} NP = {}", input_cb_index, input_single_tile_size, num_input_tiles);
+    log_debug(LogOp, "CB {}: PS = {} NP = {}", input_cb_index, input_single_tile_size, num_input_tiles);
 
     // CB to store halo data
     // hardcode to store 1 row of tiles
@@ -484,7 +484,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     tt_metal::CircularBufferConfig untilize_cb_config = tt_metal::CircularBufferConfig(num_tiles_untilize_cb * untilized_single_tile_size, {{untilize_cb_index, untilized_cb_data_format}})
 		.set_page_size(untilize_cb_index, untilized_single_tile_size);
     auto untilize_cb = tt_metal::CreateCircularBuffer(program, core_range, untilize_cb_config);
-    log_info(LogOp, "CB {}: PS = {} NP = {}", untilize_cb_index, untilized_single_tile_size, num_tiles_untilize_cb);
+    log_debug(LogOp, "CB {}: PS = {} NP = {}", untilize_cb_index, untilized_single_tile_size, num_tiles_untilize_cb);
 
     uint32_t num_output_tiles = num_output_tiles_in_row * num_rows_of_output_tiles;
     uint32_t untilize_downsampled_cb_index = CB::c_intermed3;
