@@ -48,10 +48,10 @@ int main(int argc, char **argv) {
         TT_ASSERT(total_l1_buffer_size_tiles % 2 == 0);
         uint32_t total_l1_buffer_size_bytes = total_l1_buffer_size_tiles * single_tile_size;
 
-        auto input_dram_buffer = CreateBuffer(device, dram_buffer_size_bytes, dram_buffer_size_bytes, tt_metal::BufferType::DRAM);
+        auto input_dram_buffer = CreateBuffer(device, dram_buffer_size_bytes, dram_buffer_size_bytes, tt_metal::BufferStorage::DRAM);
         uint32_t input_dram_buffer_addr = input_dram_buffer.address();
 
-        auto output_dram_buffer = CreateBuffer(device, dram_buffer_size_bytes, dram_buffer_size_bytes, tt_metal::BufferType::DRAM);
+        auto output_dram_buffer = CreateBuffer(device, dram_buffer_size_bytes, dram_buffer_size_bytes, tt_metal::BufferStorage::DRAM);
         uint32_t output_dram_buffer_addr = output_dram_buffer.address();
 
         auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();

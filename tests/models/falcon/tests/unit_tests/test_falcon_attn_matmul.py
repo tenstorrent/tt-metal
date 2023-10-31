@@ -102,20 +102,20 @@ def run_falcon_attn_matmul_test(
         )
 
     # Check memory and dtype of inputs and outputs
-    assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
+    assert a_t.memory_config().buffer_storage == in0_mem_config.buffer_storage
     assert a_t.dtype() == in0_dtype
-    assert b_t.memory_config().buffer_type == in1_mem_config.buffer_type
+    assert b_t.memory_config().buffer_storage == in1_mem_config.buffer_storage
     assert b_t.dtype() == in1_dtype
-    assert out.memory_config().buffer_type == out_mem_config.buffer_type
+    assert out.memory_config().buffer_storage == out_mem_config.buffer_storage
     assert out.dtype() == out_dtype
     logger.debug(
-        f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.dtype()}"
+        f"in0 ({a_shape}): {a_t.memory_config().buffer_storage} and {a_t.dtype()}"
     )
     logger.debug(
-        f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.dtype()}"
+        f"in1 ({b_shape}): {b_t.memory_config().buffer_storage} and {b_t.dtype()}"
     )
     logger.debug(
-        f"out ({expected_output_shape}): {out.memory_config().buffer_type} and {out.dtype()}"
+        f"out ({expected_output_shape}): {out.memory_config().buffer_storage} and {out.dtype()}"
     )
 
     assert out.shape() == expected_output_shape
@@ -135,9 +135,9 @@ def run_falcon_attn_matmul_test(
     "in0_mem_config, in1_mem_config, out_mem_config",
     (
         (
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
         ),
     ),
     ids=["DRAM"],

@@ -91,8 +91,8 @@ operation::ProgramWithCallbacks multi_core_split_fused_qkv_and_split_heads(const
         .end={(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1},
     };
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in0_is_dram = in0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool out_is_dram = q_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
             // interleaved accessor args
             (std::uint32_t) in0_is_dram,

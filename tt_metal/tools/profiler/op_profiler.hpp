@@ -71,7 +71,7 @@ namespace op_profiler {
             {
                 tensorStorageStr = fmt::format("DEV_{}_{}_{}",
                         tensor.device()->id(),
-                        magic_enum::enum_name(tensor.memory_config().buffer_type),
+                        magic_enum::enum_name(tensor.memory_config().buffer_storage),
                         magic_enum::enum_name(tensor.memory_config().memory_layout));
             }
             else

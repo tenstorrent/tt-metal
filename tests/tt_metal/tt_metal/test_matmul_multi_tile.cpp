@@ -115,15 +115,15 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        auto src0_dram_buffer = CreateBuffer(device, dram_buffer_size_act, dram_buffer_size_act, tt_metal::BufferType::DRAM);
-        auto src1_dram_buffer = CreateBuffer(device, dram_buffer_size_weights, dram_buffer_size_weights, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = CreateBuffer(device, dram_buffer_size_act, dram_buffer_size_act, tt_metal::BufferStorage::DRAM);
+        auto src1_dram_buffer = CreateBuffer(device, dram_buffer_size_weights, dram_buffer_size_weights, tt_metal::BufferStorage::DRAM);
 
         tt_metal::Buffer src2_dram_buffer;
         if (with_bias) {
-            src2_dram_buffer = CreateBuffer(device, single_tile_size * N, single_tile_size * N, tt_metal::BufferType::DRAM);
+            src2_dram_buffer = CreateBuffer(device, single_tile_size * N, single_tile_size * N, tt_metal::BufferStorage::DRAM);
         }
 
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size_out, dram_buffer_size_out, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size_out, dram_buffer_size_out, tt_metal::BufferStorage::DRAM);
 
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
         auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();

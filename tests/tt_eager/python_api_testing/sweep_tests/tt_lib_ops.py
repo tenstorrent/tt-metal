@@ -677,7 +677,7 @@ def eltwise_assign_binary(
     layout,
     input_mem_config,
     output_mem_config=ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM
     ),
     **kwargs,
 ):
@@ -1728,7 +1728,7 @@ def make_unary_op(ttl_tensor_unop):
         layout,
         input_mem_config,
         output_mem_config=ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM
         ),
         **kwargs,
     ):

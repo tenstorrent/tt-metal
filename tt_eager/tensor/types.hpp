@@ -12,7 +12,7 @@
 #include "common/bfloat16.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 
-#include "tt_stl/reflection.hpp"
+#include "tt_metal/tt_stl/reflection.hpp"
 
 #include <memory>
 #include <variant>
@@ -41,22 +41,7 @@ enum class StorageType {
     BORROWED,  // for storing torch/numpy/etc tensors
 };
 
-enum class TensorMemoryLayout {
-    INTERLEAVED,
-    SINGLE_BANK,
-    HEIGHT_SHARDED,
-    WIDTH_SHARDED,
-    BLOCK_SHARDED,
-};
-
-enum class ShardOrientation {
-    ROW_MAJOR,
-    COL_MAJOR,
-};
-
-
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
-
 
 static constexpr std::size_t MAX_NUM_DIMENSIONS = 8;
 
@@ -126,7 +111,7 @@ bool operator!=(const Shape& shape_a, const Shape& shape_b);
 
 struct MemoryConfig {
     TensorMemoryLayout memory_layout = TensorMemoryLayout::INTERLEAVED;    // Interleave the data across multiple banks
-    BufferType buffer_type = BufferType::DRAM; // Can be either DRAM or L1
+    BufferStorage buffer_storage = BufferStorage::DRAM; // Can be either DRAM or L1
     bool is_sharded() const;
     tt::stl::reflection::Attributes attributes() const;
 };
@@ -219,15 +204,6 @@ constexpr void raise_unsupported_storage() {
     static_assert(detail::unsupported_storage<T>, "Unsupported Storage");
 }
 
-struct ShardSpec {
-    CoreRangeSet shard_grid;
-    std::array<uint32_t, 2> shard_shape;
-    ShardOrientation shard_orientation;
-    bool halo = false;
-    const uint32_t num_cores() const { return this->shard_grid.num_cores(); }
-    const uint32_t numel() const { return this->shard_shape[0] * this->shard_shape[1]; }
-    tt::stl::reflection::Attributes attributes() const;
-};
 
 bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b);
 bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b);

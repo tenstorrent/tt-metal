@@ -66,7 +66,7 @@ operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &in
     for(uint32_t i = 0; i < num_input_tensors; i++) {
         auto buffer = input_tensors[i].buffer();
         src_addr[i] = buffer->address();
-        is_dram[i] = buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+        is_dram[i] = buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
         uint32_t dim_tiles = input_tensors[i].shape()[dim] / scale_factor;
         num_tiles_per_block[i] = num_accum_tiles * dim_tiles;
         num_output_tiles_per_block += num_accum_tiles * dim_tiles;
@@ -83,7 +83,7 @@ operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &in
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t) src0_cb_index

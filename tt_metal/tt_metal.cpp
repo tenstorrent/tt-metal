@@ -20,6 +20,7 @@
 
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
+#include "common/core_coord.h"
 namespace tt {
 
 namespace tt_metal {
@@ -226,10 +227,7 @@ uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, u
     return address.value();
 }
 
-void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
-    ZoneScoped;
-    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("WriteToDevice");
-
+void WriteToDeviceInterleavedContiguous(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
     uint32_t host_buffer_size_bytes = host_buffer.size() * sizeof(uint32_t);
     TT_ASSERT(
         host_buffer_size_bytes <= buffer.size(),
@@ -244,7 +242,7 @@ void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
     uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
 
     auto device = buffer.device();
-    auto num_banks = device->num_banks(buffer.buffer_type());
+    auto num_banks = device->num_banks(buffer.buffer_storage());
     uint32_t bank_index = 0;
     int data_index = 0;
     for (int page_index = 0; page_index < num_pages; page_index++) {
@@ -252,12 +250,12 @@ void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
         std::vector<uint32_t> page;
         page.insert(
             page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_page);
-        switch (buffer.buffer_type()) {
-            case BufferType::DRAM: {
+        switch (buffer.buffer_storage()) {
+            case BufferStorage::DRAM: {
                 auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
                 tt::Cluster::instance().write_dram_vec(page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
             } break;
-            case BufferType::L1: {
+            case BufferStorage::L1: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
                 llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
             } break;
@@ -269,41 +267,183 @@ void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
     }
 }
 
+
+void WriteToDeviceHeightSharded(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
+    uint32_t host_buffer_size_bytes = host_buffer.size() * sizeof(uint32_t);
+    TT_ASSERT(
+        host_buffer_size_bytes <= buffer.size(),
+        "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer", host_buffer_size_bytes, buffer.size());
+
+    uint32_t page_size = buffer.page_size();
+    TT_ASSERT(buffer.size() % page_size == 0);
+
+    static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
+    TT_ASSERT(page_size % bytes_per_page_entry == 0);
+    uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
+
+    auto device = buffer.device();
+
+    TT_ASSERT(buffer.buffer_storage() == BufferStorage::L1 && "Only L1 Buffers support sharding");
+
+    auto shard_grid_set = buffer.shard_grid();
+    std::cout << "Writing to Device Sharded " << std::endl;
+    for(auto core_range : shard_grid_set.ranges()){
+        auto start_coord = core_range.start;
+        auto end_coord = core_range.end;
+        auto num_cores_x = (end_coord.x+1) - start_coord.x;
+        auto num_cores_y = (end_coord.y+1) - start_coord.y;
+        auto row_major = buffer.shard_orientation() == ShardOrientation::ROW_MAJOR;
+
+
+        auto cores = grid_to_cores(num_cores_x * num_cores_y, num_cores_x, num_cores_y, row_major);
+        int data_index = 0;
+        int global_page_index = 0;
+        std::cout << "In core range " << core_range.str() << std::endl;
+        for(auto core: cores){
+            std::cout << "Core: " << core.str() << std::endl;
+            auto bank_ids = device->bank_ids_from_logical_core(core);
+            for(auto bank_index: bank_ids){
+                auto num_pages = buffer.shard_size();
+                for(int page_index = 0; page_index < num_pages; page_index++){
+                    std::cout << "global_page_index " << global_page_index << std::endl;
+                    auto absolute_address = buffer.page_address(bank_index, global_page_index);
+                    std::cout << "l1_address " << absolute_address << std::endl;
+                    std::vector<uint32_t> page;
+                    page.insert(
+                        page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_page);
+                    auto noc_coordinates = buffer.noc_coordinates(bank_index);
+                    llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
+                    std::cout << "writing page " << std::endl << "0x";
+                    for(auto entry: page){
+                        std::cout << std::hex << entry << std::dec;
+                    }
+                    std::cout << std::dec << std::endl;
+
+                    data_index += num_entries_per_page;
+                    global_page_index++;
+
+
+                }
+            }
+        }
+    }
+}
+
+void WriteToDeviceWidthSharded(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
+    uint32_t host_buffer_size_bytes = host_buffer.size() * sizeof(uint32_t);
+    TT_ASSERT(
+        host_buffer_size_bytes <= buffer.size(),
+        "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer", host_buffer_size_bytes, buffer.size());
+
+    uint32_t page_size = buffer.page_size();
+    TT_ASSERT(buffer.size() % page_size == 0);
+
+    static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
+    TT_ASSERT(page_size % bytes_per_page_entry == 0);
+    uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
+
+    auto device = buffer.device();
+
+    TT_ASSERT(buffer.buffer_storage() == BufferStorage::L1 && "Only L1 Buffers support sharding");
+
+    auto shard_grid_set = buffer.shard_grid();
+    std::cout << "Writing to Device Sharded " << std::endl;
+    for(auto core_range : shard_grid_set.ranges()){
+        auto start_coord = core_range.start;
+        auto end_coord = core_range.end;
+        auto num_cores_x = (end_coord.x+1) - start_coord.x;
+        auto num_cores_y = (end_coord.y+1) - start_coord.y;
+        auto row_major = buffer.shard_orientation() == ShardOrientation::ROW_MAJOR;
+
+
+        auto cores = grid_to_cores(num_cores_x * num_cores_y, num_cores_x, num_cores_y, row_major);
+        int data_index = 0;
+        int global_page_index = 0;
+        std::cout << "In core range " << core_range.str() << std::endl;
+        for(auto core: cores){
+            std::cout << "Core: " << core.str() << std::endl;
+            auto bank_ids = device->bank_ids_from_logical_core(core);
+            for(auto bank_index: bank_ids){
+                auto num_pages = buffer.shard_size();
+                for(int page_index = 0; page_index < num_pages; page_index++){
+                    std::cout << "global_page_index " << global_page_index << std::endl;
+                    auto absolute_address = buffer.page_address(bank_index, global_page_index);
+                    std::cout << "l1_address " << absolute_address << std::endl;
+                    std::vector<uint32_t> page;
+                    page.insert(
+                        page.end(), host_buffer.begin() + data_index, host_buffer.begin() + data_index + num_entries_per_page);
+                    auto noc_coordinates = buffer.noc_coordinates(bank_index);
+                    llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
+                    std::cout << "writing page " << std::endl << "0x";
+                    for(auto entry: page){
+                        std::cout << std::hex << entry << std::dec;
+                    }
+                    std::cout << std::dec << std::endl;
+
+                    data_index += num_entries_per_page;
+                    global_page_index++;
+
+
+                }
+            }
+        }
+    }
+}
+
+
+
+void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
+    ZoneScoped;
+    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("WriteToDevice");
+    if(buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED || buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK){
+        WriteToDeviceInterleavedContiguous(buffer, host_buffer);
+    }
+    else if(is_sharded(buffer.buffer_layout())){
+        if(buffer.buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED){
+            WriteToDeviceHeightSharded(buffer, host_buffer);
+        }
+        else{
+            TT_ASSERT(false && "Unsupported buffer layout");
+        }
+    }
+    else{
+        TT_ASSERT(false && "Unsupported buffer layout");
+    }
+
+}
+
 void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
-    switch (buffer.buffer_type()) {
-        case BufferType::DRAM:
-        case BufferType::L1: {
+    switch (buffer.buffer_storage()) {
+        case BufferStorage::DRAM:
+        case BufferStorage::L1: {
             WriteToDevice(buffer, host_buffer);
         } break;
-        case BufferType::SYSTEM_MEMORY: {
+        case BufferStorage::SYSTEM_MEMORY: {
             TT_ASSERT(false && "Writing to host memory is unsupported!");
         } break;
         default: TT_ASSERT(false && "Unsupported buffer type!");
     }
 }
 
-void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
-    ZoneScoped;
-    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ReadFromDevice");
+void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
 
-    host_buffer.clear();  // overwrite the data
     uint32_t page_size = buffer.page_size();
     TT_ASSERT(buffer.size() % page_size == 0);
     uint32_t num_pages = buffer.size() / page_size;
 
     auto device = buffer.device();
-    auto num_banks = device->num_banks(buffer.buffer_type());
+    auto num_banks = device->num_banks(buffer.buffer_storage());
 
     uint32_t bank_index = 0;
     for (int page_index = 0; page_index < num_pages; page_index++) {
         auto absolute_address = buffer.page_address(bank_index, page_index);
         std::vector<uint32_t> page;
-        switch (buffer.buffer_type()) {
-            case BufferType::DRAM: {
+        switch (buffer.buffer_storage()) {
+            case BufferStorage::DRAM: {
                 auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
                 tt::Cluster::instance().read_dram_vec(page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address, page_size);
             } break;
-            case BufferType::L1: {
+            case BufferStorage::L1: {
                 auto noc_coordinates = buffer.noc_coordinates(bank_index);
                 page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
             } break;
@@ -317,31 +457,161 @@ void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
 
         bank_index = (bank_index + 1) % num_banks;
     }
+}
+
+void ReadFromDeviceHeightSharded(const Buffer &buffer, std::vector<uint32_t> &host_buffer, std::optional<TensorMemoryLayout> override_layout){
+
+    TensorMemoryLayout buffer_layout;
+    if(override_layout == std::nullopt)
+        buffer_layout = buffer.buffer_layout();
+    else
+        buffer_layout = override_layout.value();
+
+    auto shard_grid_set = buffer.shard_grid();
+    auto device = buffer.device();
+    uint32_t page_size = buffer.page_size();
+    std::cout << "Reading From Device Height Sharded " << std::endl;
+    for(auto core_range : shard_grid_set.ranges()){
+        auto start_coord = core_range.start;
+        auto end_coord = core_range.end;
+        auto num_cores_x = (end_coord.x + 1) - start_coord.x;
+        auto num_cores_y = (end_coord.y + 1) - start_coord.y;
+        auto row_major = buffer.shard_orientation() == ShardOrientation::ROW_MAJOR;
+
+
+        std::cout << "In core range " << core_range.str() << std::endl;
+        auto cores = grid_to_cores(num_cores_x * num_cores_y, num_cores_x, num_cores_y, row_major);
+        int global_page_index =0;
+        for(auto core: cores){
+            std::cout << "Core: " << core.str() << std::endl;
+            auto bank_ids = device->bank_ids_from_logical_core(core);
+            for(auto bank_index: bank_ids){
+                std::cout << "Bank Index: " << bank_index << std::endl;
+                auto num_pages = buffer.shard_size();
+                for(int page_index = 0; page_index < num_pages; page_index++){
+                    std::cout << "global_page_index " << global_page_index << std::endl;
+                    auto absolute_address = buffer.page_address(bank_index, global_page_index);
+                    std::cout << "l1_address " << absolute_address << std::endl;
+                    auto noc_coordinates = buffer.noc_coordinates(bank_index);
+                    auto page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
+                    host_buffer.insert(host_buffer.end(), page.begin(), page.end());
+                    std::cout << "reading page " << std::endl << "0x";
+                    for(auto entry: page){
+                        std::cout << std::hex << entry << std::dec;
+                    }
+                    std::cout << std::dec << std::endl;
+                    global_page_index++;
+                }
+            }
+        }
+
+    }
+}
+
+void ReadFromDeviceWidthSharded(const Buffer &buffer, std::vector<uint32_t> &host_buffer, std::optional<TensorMemoryLayout> override_layout){
+
+
+    TensorMemoryLayout buffer_layout;
+    if(override_layout == std::nullopt)
+        buffer_layout = buffer.buffer_layout();
+    else
+        buffer_layout = override_layout.value();
+
+    auto shard_grid_set = buffer.shard_grid();
+    auto device = buffer.device();
+    uint32_t page_size = buffer.page_size();
+    std::cout << "Reading From Device Width Sharded " << std::endl;
+    for(auto core_range : shard_grid_set.ranges()){
+        auto start_coord = core_range.start;
+        auto end_coord = core_range.end;
+        auto num_cores_x = (end_coord.x + 1) - start_coord.x;
+        auto num_cores_y = (end_coord.y + 1) - start_coord.y;
+        auto row_major = buffer.shard_orientation() == ShardOrientation::ROW_MAJOR;
+
+
+        std::cout << "In core range " << core_range.str() << std::endl;
+        auto cores = grid_to_cores(num_cores_x * num_cores_y, num_cores_x, num_cores_y, row_major);
+        int global_page_index =0;
+
+
+        //each column is on a core
+        for(auto core: cores){
+            std::cout << "Core/Column: " << core.str() << std::endl;
+            auto bank_ids = device->bank_ids_from_logical_core(core);
+            for(auto bank_index: bank_ids){
+                std::cout << "Bank Index: " << bank_index << std::endl;
+                auto num_pages = buffer.shard_size();
+                for(int page_index = 0; page_index < num_pages; page_index++){
+                    std::cout << "global_page_index " << global_page_index << std::endl;
+                    auto absolute_address = buffer.page_address(bank_index, global_page_index);
+                    std::cout << "l1_address " << absolute_address << std::endl;
+                    auto noc_coordinates = buffer.noc_coordinates(bank_index);
+                    auto page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
+                    host_buffer.insert(host_buffer.end(), page.begin(), page.end());
+                    std::cout << "reading page " << std::endl << "0x";
+                    for(auto entry: page){
+                        std::cout << std::hex << entry << std::dec;
+                    }
+                    std::cout << std::dec << std::endl;
+                    global_page_index++;
+                }
+            }
+        }
+
+    }
+
 
 }
 
-void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
+void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer, std::optional<TensorMemoryLayout> override_layout) {
+    ZoneScoped;
+    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ReadFromDevice");
+
+    host_buffer.clear();  // overwrite the data
+    if(buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED
+        || buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK){
+        ReadFromDeviceInterleavedContiguous(buffer, host_buffer);
+    }
+    else if(is_sharded(buffer.buffer_layout())){
+        TT_ASSERT(buffer.buffer_storage() == BufferStorage::L1 && "Only L1 Buffers support sharding");
+        if(buffer.buffer_layout() == TensorMemoryLayout::HEIGHT_SHARDED){
+            ReadFromDeviceHeightSharded(buffer, host_buffer, std::nullopt);
+        }
+        else if(buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED){
+            ReadFromDeviceWidthSharded(buffer, host_buffer, std::nullopt);
+        }
+        else{
+            TT_ASSERT(false && "Unsupported buffer layout");
+        }
+    }
+    else{
+        TT_ASSERT(false && "Unsupported buffer layout");
+    }
+}
+
+void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer, std::optional<TensorMemoryLayout> override_layout) {
     Device *device = buffer.device();
-    switch (buffer.buffer_type()) {
-        case BufferType::DRAM:
-        case BufferType::L1: {
-            if (buffer.buffer_type() == BufferType::DRAM) {
+    switch (buffer.buffer_storage()) {
+        case BufferStorage::DRAM:
+        case BufferStorage::L1: {
+            if (buffer.buffer_storage() == BufferStorage::DRAM) {
                 tt::Cluster::instance().dram_barrier(device->id());
             } else {
                 tt::Cluster::instance().l1_barrier(device->id());
             }
-            ReadFromDevice(buffer, host_buffer);
+            ReadFromDevice(buffer, host_buffer, override_layout);
         } break;
-        case BufferType::SYSTEM_MEMORY: {
+        case BufferStorage::SYSTEM_MEMORY: {
             TT_ASSERT(false && "Reading from host memory is unsupported!");
         } break;
         default: TT_ASSERT(false && "Unsupported buffer type!");
     }
 }
 
-Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size, const BufferType buffer_type)
+Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size, const BufferStorage buffer_storage,
+            const TensorMemoryLayout buffer_layout, std::optional<ShardSpec> shard_parameter)
 {
-    return Buffer(device, size, page_size, buffer_type);
+    return Buffer(device, size, page_size, buffer_storage, buffer_layout, shard_parameter);
 }
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }

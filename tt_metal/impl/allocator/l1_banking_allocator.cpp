@@ -116,7 +116,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
     u64 allocatable_l1_size = static_cast<u64>(alloc_config.l1_bank_size) - STORAGE_ONLY_UNRESERVED_BASE;
     // Assuming top down allocation for L1 buffers so the allocatable memory space is the top alloc_config.l1_bank_size bytes of L1
     u64 alloc_offset = static_cast<u64>(alloc_config.worker_l1_size - alloc_config.l1_bank_size) + STORAGE_ONLY_UNRESERVED_BASE;
-    allocator.l1_manager = BankManager(BufferType::L1, bank_id_to_bank_offset, allocatable_l1_size, alloc_offset);
+    allocator.l1_manager = BankManager(BufferStorage::L1, bank_id_to_bank_offset, allocatable_l1_size, alloc_offset);
 }
 
 }   // namespace allocator

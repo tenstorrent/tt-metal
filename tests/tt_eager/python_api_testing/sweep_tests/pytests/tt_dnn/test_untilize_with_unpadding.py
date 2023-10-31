@@ -38,8 +38,8 @@ params += [
         {
             "dtype": [ttl.tensor.DataType.BFLOAT16],
             "layout": [ttl.tensor.Layout.TILE],
-            "input_mem_config": [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
-            "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            "input_mem_config": [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM)],
+            "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
             "output_tensor_start": [0, 0, 0, 0],
             "output_tensor_end": [0, 0, 119, 7299],
         },

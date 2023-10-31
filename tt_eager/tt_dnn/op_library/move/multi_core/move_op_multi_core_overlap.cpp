@@ -73,7 +73,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
-    const auto num_dram_banks = device->num_banks(BufferType::DRAM);
+    const auto num_dram_banks = device->num_banks(BufferStorage::DRAM);
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     uint32_t size_per_l1_bank = tt_metal::detail::SizeBytesPerBank(output.buffer()->size(), output.buffer()->page_size(), num_l1_banks);
@@ -89,8 +89,8 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_storage() == BufferStorage::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == BufferStorage::DRAM ? 1 : 0;
 
     uint32_t log2_page_size = 0;
     std::vector<uint32_t> compile_time_args = {cb_index, (uint32_t)src_is_dram, (uint32_t)dst_is_dram};

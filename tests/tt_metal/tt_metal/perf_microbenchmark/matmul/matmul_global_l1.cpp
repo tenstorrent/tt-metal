@@ -193,16 +193,16 @@ tt_metal::Program create_program_mcast_in0_in1(
       device->worker_core_from_logical_core(bottom_right_core);
 
   bool in0_is_dram =
-      in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+      in0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
   bool in1_is_dram =
-      in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+      in1_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
   bool in3_is_dram = true;
   if (bias_buffer != nullptr) {
     in3_is_dram =
-        bias_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+        bias_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
   }
   bool out_is_dram =
-      out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+      out_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
   std::vector<uint32_t> in0_sender_compile_time_args = {
       // interleaved accessor args
       (std::uint32_t)in0_is_dram,
@@ -1134,18 +1134,18 @@ int main(int argc, char** argv) {
     uint32_t in0_buffer_size = single_tile_size * Mt * Kt;
     uint32_t in1_buffer_size = single_tile_size * Kt * Nt;
     uint32_t out_buffer_size = single_tile_size * Mt * Nt;
-    BufferType in0_buffer_type =
-        (l1_in0 == 0) ? (BufferType::DRAM) : (BufferType::L1);
-    BufferType in1_buffer_type =
-        (l1_in1 == 0) ? (BufferType::DRAM) : (BufferType::L1);
-    BufferType out_buffer_type =
-        (l1_out == 0) ? (BufferType::DRAM) : (BufferType::L1);
+    BufferStorage in0_buffer_storage =
+        (l1_in0 == 0) ? (BufferStorage::DRAM) : (BufferStorage::L1);
+    BufferStorage in1_buffer_storage =
+        (l1_in1 == 0) ? (BufferStorage::DRAM) : (BufferStorage::L1);
+    BufferStorage out_buffer_storage =
+        (l1_out == 0) ? (BufferStorage::DRAM) : (BufferStorage::L1);
     auto in0_buffer = CreateBuffer(device, in0_buffer_size,
-                                       single_tile_size, in0_buffer_type);
+                                       single_tile_size, in0_buffer_storage);
     auto in1_buffer = CreateBuffer(device, in1_buffer_size,
-                                       single_tile_size, in1_buffer_type);
+                                       single_tile_size, in1_buffer_storage);
     auto out_buffer = CreateBuffer(device, out_buffer_size,
-                                       single_tile_size, out_buffer_type);
+                                       single_tile_size, out_buffer_storage);
 
     SHAPE in0_shape = {1, 1, Mt * 32, Kt * 32};
     tt::deprecated::Tensor<bfloat16> tensor =

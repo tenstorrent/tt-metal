@@ -306,14 +306,14 @@ void Device::check_allocator_is_initialized() const {
     }
 }
 
-uint32_t Device::num_banks(const BufferType &buffer_type) const {
+uint32_t Device::num_banks(const BufferStorage &buffer_storage) const {
     this->check_allocator_is_initialized();
-    return allocator::num_banks(*this->allocator_, buffer_type);
+    return allocator::num_banks(*this->allocator_, buffer_storage);
 }
 
-uint32_t Device::bank_size(const BufferType &buffer_type) const {
+uint32_t Device::bank_size(const BufferStorage &buffer_storage) const {
     this->check_allocator_is_initialized();
-    return allocator::bank_size(*this->allocator_, buffer_type);
+    return allocator::bank_size(*this->allocator_, buffer_storage);
 }
 
 uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id) const {
@@ -356,14 +356,14 @@ std::vector<uint32_t> Device::bank_ids_from_logical_core(const CoreCoord &logica
     return allocator::bank_ids_from_logical_core(*this->allocator_, logical_core);
 }
 
-allocator::Statistics Device::get_memory_allocation_statistics(const BufferType &buffer_type) const {
+allocator::Statistics Device::get_memory_allocation_statistics(const BufferStorage &buffer_storage) const {
     this->check_allocator_is_initialized();
-    return allocator::get_statistics(*this->allocator_, buffer_type);
+    return allocator::get_statistics(*this->allocator_, buffer_storage);
 }
 
-void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const {
+void Device::dump_memory_blocks(const BufferStorage &buffer_storage, std::ofstream &out) const {
     this->check_allocator_is_initialized();
-    return allocator::dump_memory_blocks(*this->allocator_, buffer_type, out);
+    return allocator::dump_memory_blocks(*this->allocator_, buffer_storage, out);
 }
 
 void Device::deallocate_buffers(){

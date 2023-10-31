@@ -25,6 +25,7 @@ namespace tt::tt_metal::detail{
     }
 
     inline uint32_t SizeBytesPerBank(uint32_t size_bytes, uint32_t page_size_bytes, uint32_t num_banks) {
+        std::cout << "Page_size_bytes " << page_size_bytes << " size bytes " << size_bytes << std::endl;
         TT_ASSERT(page_size_bytes > 0 and size_bytes % page_size_bytes == 0, "Page size {} should be divisible by buffer size {}", page_size_bytes, size_bytes);
         uint32_t num_pages = size_bytes / page_size_bytes;
         int num_equally_distributed_pages = num_pages == 1 ? 1 : 1 + ((num_pages - 1) / num_banks);

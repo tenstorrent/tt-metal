@@ -99,9 +99,9 @@ void TensorModule(py::module &m_tensor) {
 
     detail::export_enum<ShardOrientation>(m_tensor);
 
-    py::enum_<BufferType>(m_tensor, "BufferType")
-        .value("DRAM", BufferType::DRAM)
-        .value("L1", BufferType::L1);
+    py::enum_<BufferStorage>(m_tensor, "BufferStorage")
+        .value("DRAM", BufferStorage::DRAM)
+        .value("L1", BufferStorage::L1);
 
     // Fusible Activations
     detail::export_enum<UnaryOpType>(m_tensor, "FusibleActivation");
@@ -147,12 +147,12 @@ void TensorModule(py::module &m_tensor) {
     pyMemoryConfig
         .def(
             py::init<>(
-                [](TensorMemoryLayout memory_layout, BufferType buffer_type) {
-                    return MemoryConfig{.memory_layout=memory_layout, .buffer_type=buffer_type};
+                [](TensorMemoryLayout memory_layout, BufferStorage buffer_storage) {
+                    return MemoryConfig{.memory_layout=memory_layout, .buffer_storage=buffer_storage};
                 }
             ),
             py::arg("memory_layout") = TensorMemoryLayout::INTERLEAVED,
-            py::arg("buffer_type") = BufferType::DRAM, R"doc(
+            py::arg("buffer_storage") = BufferStorage::DRAM, R"doc(
                 Create MemoryConfig class.
                 If interleaved is set to True, tensor data will be interleaved across multiple DRAM banks on TT Accelerator device.
                 Otherwise, tensor data will be stored in a DRAM bank selected by dram_channel (valid values are 0, 1, ..., 7).
@@ -173,7 +173,7 @@ void TensorModule(py::module &m_tensor) {
             return memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED;
         }, "Whether tensor data is interleaved across multiple DRAM channels"
         )
-        .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1")
+        .def_readonly("buffer_storage", &MemoryConfig::buffer_storage, "Buffer type to store tensor data. Can be DRAM or L1")
         .def(py::self == py::self)
         .def(py::self != py::self);
 

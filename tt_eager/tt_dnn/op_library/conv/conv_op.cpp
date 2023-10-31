@@ -401,12 +401,12 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
             reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast.cpp";
             compute_kernel = "tt_metal/kernels/compute/bmm_tilize_untilize.cpp";
         }
-        reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
+        reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0),
                 (uint32_t) stride_h, (uint32_t) stride_w, (uint32_t) conv_act_size_w, (uint32_t) conv_output_size_w,
                 (uint32_t) conv_act_size_c * num_bytes_of_df, (uint32_t) std::log2(conv_act_size_c * num_bytes_of_df)};
     } else {
         reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations.cpp";
-        reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
+        reader_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0)};
         compute_kernel = "tt_metal/kernels/compute/bmm_tilize_untilize.cpp";
     }
     if (use_fast_reader && rn50_first_conv) {
@@ -471,7 +471,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         } else {
             writer_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_unary_stick_layout_8bank_blocks_reader_weight_tile_layout.cpp";
         }
-        writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0), out0_cb, weight_cb, (uint32_t) std::log2(out_row_size_bytes)};
+        writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0), out0_cb, weight_cb, (uint32_t) std::log2(out_row_size_bytes)};
         writer_rt_args = {
             out_dram_addr,
             weight_dram_addr,
@@ -502,13 +502,13 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
             writer_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_reader_conv_weights_tiled.cpp";
         }
         writer_compile_time_args = {
-            (uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
+            (uint32_t) (src0_dram_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0),
             out0_cb,
             weight_cb,
             bias_cb,
             bias_log2_of_pagesize,
             bias_tile_nbytes,
-            (uint32_t) (bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0))};
+            (uint32_t) (bias_buffer == nullptr ? 0 : (bias_buffer->buffer_storage() == BufferStorage::DRAM ? 1 : 0))};
         writer_rt_args = {
             out_dram_addr,
             weight_dram_addr,
@@ -1052,9 +1052,9 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 
     uint32_t dram_bank_id = 0;
     auto act_address_map_buffer_size_in_dram = act_address_map.size() * sizeof(uint32_t);
-    auto act_address_map_dram_buffer = CreateBuffer(device, act_address_map_buffer_size_in_dram, act_address_map_buffer_size_in_dram, tt_metal::BufferType::DRAM);
+    auto act_address_map_dram_buffer = CreateBuffer(device, act_address_map_buffer_size_in_dram, act_address_map_buffer_size_in_dram, tt_metal::BufferStorage::DRAM);
     auto weight_address_map_buffer_size_in_dram = weight_address_map.size() * sizeof(uint32_t);
-    auto weight_address_map_dram_buffer = CreateBuffer(device, weight_address_map_buffer_size_in_dram, weight_address_map_buffer_size_in_dram, tt_metal::BufferType::DRAM);
+    auto weight_address_map_dram_buffer = CreateBuffer(device, weight_address_map_buffer_size_in_dram, weight_address_map_buffer_size_in_dram, tt_metal::BufferStorage::DRAM);
     uint32_t act_address_map_dram_addr = act_address_map_dram_buffer.address();
     // DRAM to L1 writes should 32B aligned
     assert(act_address_map_dram_addr%32 == 0);
@@ -1092,17 +1092,17 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     auto scratch_pad_for_address_map_in_l1_b0_size_bytes = 32;
     // Scratchpad buffer size must also be a multiple of address map fields per transfer. We need all address map fields for a transfer in scratchpad.
     assert(scratch_pad_for_address_map_in_l1_b0_size_bytes % (num_address_map_fields_per_transfer*sizeof(uint32_t)) == 0);
-    auto scratch_pad_for_address_map_l1_buffer = CreateBuffer(device, scratch_pad_for_address_map_in_l1_b0_size_bytes, scratch_pad_for_address_map_in_l1_b0_size_bytes, tt_metal::BufferType::L1);
+    auto scratch_pad_for_address_map_l1_buffer = CreateBuffer(device, scratch_pad_for_address_map_in_l1_b0_size_bytes, scratch_pad_for_address_map_in_l1_b0_size_bytes, tt_metal::BufferStorage::L1);
     uint32_t scratch_pad_for_address_map_l1_address = scratch_pad_for_address_map_l1_buffer.address();
     // DRAM to L1 writes should 32B aligned
     assert(scratch_pad_for_address_map_l1_address%32 == 0);
     // Create address map metadata buffers in L1
     // Metadata vectors are copied to L1 buffers from host before calling LaunchProgram
     auto act_address_map_metadata_l1_b0_size = act_address_map_metadata.size() * sizeof(uint32_t);
-    auto act_address_map_metadata_l1_buffer = CreateBuffer(device, act_address_map_metadata_l1_b0_size, act_address_map_metadata_l1_b0_size, tt_metal::BufferType::L1);
+    auto act_address_map_metadata_l1_buffer = CreateBuffer(device, act_address_map_metadata_l1_b0_size, act_address_map_metadata_l1_b0_size, tt_metal::BufferStorage::L1);
     uint32_t act_address_map_metadata_l1_address = act_address_map_metadata_l1_buffer.address();
     auto weight_address_map_metadata_l1_b0_size = weight_address_map_metadata.size() * sizeof(uint32_t);
-    auto weight_address_map_metadata_l1_buffer = CreateBuffer(device, weight_address_map_metadata_l1_b0_size, weight_address_map_metadata_l1_b0_size, tt_metal::BufferType::L1);
+    auto weight_address_map_metadata_l1_buffer = CreateBuffer(device, weight_address_map_metadata_l1_b0_size, weight_address_map_metadata_l1_b0_size, tt_metal::BufferStorage::L1);
     uint32_t weight_address_map_metadata_l1_address = weight_address_map_metadata_l1_buffer.address();
 
     // out
@@ -1248,7 +1248,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         reader_kernel,
         core,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0)};
     auto writer_id = tt_metal::CreateDataMovementKernel(
         program,
         writer_kernel,

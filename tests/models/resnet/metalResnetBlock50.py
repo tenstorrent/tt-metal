@@ -47,7 +47,7 @@ def ResnetLinear(
     bias: Optional[tt_lib.tensor.Tensor] = None,
     transpose: bool = True,
     output_mem_config=tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.DRAM
     ),
     model_config=None,
     device=None,
@@ -603,14 +603,14 @@ class Bottleneck(nn.Module):
         self.model_config = model_config
         if self.storage_in_dram:
             self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.DRAM
             )
         else:
             self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1
             )
         if sharded is not None:
-            self.sharded_memory_config = tt_lib.tensor.MemoryConfig(sharded, tt_lib.tensor.BufferType.L1)
+            self.sharded_memory_config = tt_lib.tensor.MemoryConfig(sharded, tt_lib.tensor.BufferStorage.L1)
         else:
             self.sharded_memory_config = self.memory_config
         self.out_memory_config = self.sharded_memory_config if out_sharded else self.memory_config
@@ -873,18 +873,18 @@ class ResNet(nn.Module):
         self.model_config = model_config
         if self.storage_in_dram:
             self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.DRAM
             )
         else:
             self.memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1
             )
         if sharded:
             self.height_sharded_memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferStorage.L1
             )
             self.width_sharded_memory_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.WIDTH_SHARDED, tt_lib.tensor.BufferType.L1
+                tt_lib.tensor.TensorMemoryLayout.WIDTH_SHARDED, tt_lib.tensor.BufferStorage.L1
             )
         else:
             self.height_sharded_memory_config = self.memory_config
@@ -1121,7 +1121,7 @@ class ResNet(nn.Module):
         self.downsample_conv_on_tt = None
         self.norm_layer_after_downsample_conv_on_tt = None
         if sharded is not None:
-            self.ds_conv_output_memory_config = tt_lib.tensor.MemoryConfig(sharded, tt_lib.tensor.BufferType.L1)
+            self.ds_conv_output_memory_config = tt_lib.tensor.MemoryConfig(sharded, tt_lib.tensor.BufferStorage.L1)
         else:
             self.ds_conv_output_memory_config = self.memory_config
         if use_downsample_op_and_mm_for_conv1x1_s2:
@@ -1370,7 +1370,7 @@ class ResNet(nn.Module):
         # Relu is fused with conv1
         # x = self.relu(x, self.memory_config)
         # tt_lib.device.DumpDeviceMemoryState(self.device)
-        # x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM))
+        # x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.DRAM))
 
         if self.sharded:
             x = tt_lib.tensor.untilize_with_halo(
@@ -1588,7 +1588,7 @@ class ResNet(nn.Module):
         # x = self.relu(x, self.memory_config)
         # tt_lib.device.DumpDeviceMemoryState(self.device)
 
-        # x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM))
+        # x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.DRAM))
         x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
         # time.sleep(2)
         x = x.reshape(

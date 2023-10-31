@@ -48,7 +48,7 @@ struct ProfilerInfo {
     std::optional<std::string> parallelization_strategy;
 };
 
-inline auto DEFAULT_OUTPUT_MEMORY_CONFIG = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type=BufferType::DRAM};
+inline auto DEFAULT_OUTPUT_MEMORY_CONFIG = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_storage=BufferStorage::DRAM};
 
 static void set_default_operation_output_memory_config(const MemoryConfig& memory_config) {
     DEFAULT_OUTPUT_MEMORY_CONFIG = memory_config;

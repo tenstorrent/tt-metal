@@ -155,13 +155,13 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     auto in1_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in1_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in0_is_dram = in0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool in1_is_dram = in1_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     bool in3_is_dram = true;
     if (bias_buffer != nullptr) {
-        in3_is_dram = bias_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+        in3_is_dram = bias_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     }
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = out_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
 
     uint32_t in0_num_subblocks = (per_core_M/out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h*in0_block_w*in0_num_subblocks;

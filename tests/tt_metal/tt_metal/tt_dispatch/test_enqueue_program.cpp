@@ -25,9 +25,9 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
         single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
     uint32_t page_size = single_tile_size;
-    auto src0_dram_buffer = CreateBuffer(device, dram_buffer_size, page_size, tt_metal::BufferType::DRAM);
+    auto src0_dram_buffer = CreateBuffer(device, dram_buffer_size, page_size, tt_metal::BufferStorage::DRAM);
     uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
-    auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size, page_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size, page_size, tt_metal::BufferStorage::DRAM);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
 
@@ -92,8 +92,8 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
         CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
         // Enqueue program inputs
-        Buffer buf(device, NUM_TILES * 2048, 2048, BufferType::DRAM);
-        Buffer out(device, NUM_TILES * 2048, 2048, BufferType::DRAM);
+        Buffer buf(device, NUM_TILES * 2048, 2048, BufferStorage::DRAM);
+        Buffer out(device, NUM_TILES * 2048, 2048, BufferStorage::DRAM);
 
         // Absolutely disgusting way to query for the kernel I want to set runtime args for... needs to be cleaned up
         const KernelGroup *kernel_group = program.kernels_on_core(worker_core);

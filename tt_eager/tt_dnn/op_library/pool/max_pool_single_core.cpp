@@ -111,7 +111,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                  DataType::BFLOAT16,
                                                  Layout::ROW_MAJOR)
                                             .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED,
-                                                                     .buffer_type = BufferType::L1});
+                                                                     .buffer_storage = BufferStorage::L1});
     auto minus_inf_const_tensor_addr = minus_inf_const_tensor.buffer()->address();
 
     /**
@@ -119,8 +119,8 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
      */
     float one = 1.;
     uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
-    std::vector<uint32_t> reader_ct_args = {input.memory_config().buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
-                                            out_mem_config.buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
+    std::vector<uint32_t> reader_ct_args = {input.memory_config().buffer_storage == BufferStorage::DRAM ? (uint) 1 : (uint) 0,
+                                            out_mem_config.buffer_storage == BufferStorage::DRAM ? (uint) 1 : (uint) 0,
                                             bf16_one_u32,
                                             out_nelems,
                                             static_cast<uint32_t>(((in_nbytes_c & (in_nbytes_c - 1)) == 0) ? 1 : 0),    // is in_nbytes_c power of 2

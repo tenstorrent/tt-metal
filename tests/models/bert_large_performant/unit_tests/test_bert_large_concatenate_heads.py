@@ -43,11 +43,11 @@ def run_bert_large_concatenate_heads_test(
     )
 
     # Check memory of inputs and outputs
-    assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
-    assert out.memory_config().buffer_type == out_mem_config.buffer_type
+    assert a_t.memory_config().buffer_storage == in0_mem_config.buffer_storage
+    assert out.memory_config().buffer_storage == out_mem_config.buffer_storage
 
-    logger.debug(f"in0: {a_t.memory_config().buffer_type} and {a_t.dtype()}")
-    logger.debug(f"out: {out.memory_config().buffer_type} and {out.dtype()}")
+    logger.debug(f"in0: {a_t.memory_config().buffer_storage} and {a_t.dtype()}")
+    logger.debug(f"out: {out.memory_config().buffer_storage} and {out.dtype()}")
 
     assert out.shape() == [batch, 1, 384, 1024]
     tt_host_rm_out = out.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
@@ -66,16 +66,16 @@ import pytest
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
     ),
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
     ),
     ids=["in0_DRAM", "in0_L1"],
 )
@@ -106,13 +106,13 @@ def test_bert_large_concatenate_heads_test(
 
 def test_bert_large_concatenate_heads_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
-    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM)
     for _ in range(2):
         run_bert_large_concatenate_heads_test(
             device, 9, dtype, dram_mem_config, dram_mem_config
         )
 
-    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1)
     for _ in range(2):
         run_bert_large_concatenate_heads_test(
             device, 9, dtype, dram_mem_config, dram_mem_config

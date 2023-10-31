@@ -161,9 +161,9 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     };
 
     bool tile_dtype_is_bfloat16 = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16;
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = out0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    TT_ASSERT(out0_buffer->buffer_type() == out1_buffer->buffer_type(), "Output buffers should be the same type");
+    bool in0_is_dram = in0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool out_is_dram = out0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    TT_ASSERT(out0_buffer->buffer_storage() == out1_buffer->buffer_storage(), "Output buffers should be the same type");
 
     uint32_t num_tiles_per_z = (per_core_tiles_x * num_cores_x) * (per_core_tiles_y * num_cores_y);
     uint32_t z_stride_read = num_tiles_per_z;

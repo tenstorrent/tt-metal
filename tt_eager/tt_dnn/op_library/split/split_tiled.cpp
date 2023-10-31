@@ -40,7 +40,7 @@ void SplitTiled::shape_asserts(const Tensor &a) const {
         TT_ASSERT((chunk_size % TILE_HEIGHT == 0), "Chunk not divisible by tile");
 }
 
-inline bool is_dram(const Tensor &a) { return a.memory_config().buffer_type == BufferType::DRAM; }
+inline bool is_dram(const Tensor &a) { return a.memory_config().buffer_storage == BufferStorage::DRAM; }
 
 Shape SplitTiled::get_single_output_shape(const Shape &input_shape) const {
     auto output_shape = input_shape;

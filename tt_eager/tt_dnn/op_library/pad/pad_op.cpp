@@ -37,7 +37,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
     const Tensor pad_value_const_tensor = Tensor(OwnedStorage{pad_value_const_buffer},
                                                  Shape({1, 1, 1, pad_value_const_buffer_size}),
                                                  DataType::BFLOAT16, Layout::ROW_MAJOR)
-                                            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
+                                            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_storage = BufferStorage::L1});
     auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
 
     CoreRange cores = {.start = {0, 0}, .end = {0, 0}};
@@ -54,8 +54,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
     Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == BufferStorage::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == BufferStorage::DRAM ? 1 : 0;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(unpadded_row_size_nbytes);
     uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t) std::log2(unpadded_row_size_nbytes) : 0;
     bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(padded_row_size_nbytes);
@@ -186,7 +186,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
     TT_ASSERT(unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
     Device *device = a.device();
-    auto dst_buffer_l1 = Buffer(device, padded_row_size_nbytes, padded_row_size_nbytes, BufferType::L1);
+    auto dst_buffer_l1 = Buffer(device, padded_row_size_nbytes, padded_row_size_nbytes, BufferStorage::L1);
 
     // construct const buffer with the pad_value
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
@@ -195,15 +195,15 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
     const Tensor pad_value_const_tensor = Tensor(OwnedStorage{pad_value_const_buffer},
                                                  Shape({1, 1, 1, pad_value_const_buffer_size}),
                                                  DataType::BFLOAT16, Layout::ROW_MAJOR)
-                                            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
+                                            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_storage = BufferStorage::L1});
     auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
 
     Buffer *src0_buffer = a.buffer();
     Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == BufferStorage::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == BufferStorage::DRAM ? 1 : 0;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(unpadded_row_size_nbytes);
     uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t) std::log2(unpadded_row_size_nbytes) : 0;
     bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(padded_row_size_nbytes);
@@ -313,7 +313,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
 
     uint32_t dst_buffer_size = dst_stick_size;
 
-    auto dst_buffer_l1 = CreateBuffer(device, dst_buffer_size, dst_buffer_size, tt_metal::BufferType::L1);
+    auto dst_buffer_l1 = CreateBuffer(device, dst_buffer_size, dst_buffer_size, tt_metal::BufferStorage::L1);
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
@@ -335,8 +335,8 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
         packed_pad_value,
         dst_buffer_l1.address()
     };
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(src_stick_size);
     uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t) std::log2(src_stick_size) : 0;
     bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(dst_stick_size);
@@ -455,8 +455,8 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t) src0_is_dram

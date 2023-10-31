@@ -34,7 +34,7 @@ class TtRobertaClassificationHead(nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
         self.device = device
-        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1)
 
         self.dense_weight = pad_by_zero(
             state_dict[f"{base_address}.dense.weight"], self.device

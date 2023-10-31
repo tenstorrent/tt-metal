@@ -46,10 +46,10 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
 		.set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) src0_is_dram};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) src0_cb_index,
         (std::uint32_t) dst_is_dram
@@ -175,7 +175,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     // Reader compile-time args
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     bool old_stick_size_is_power_of_two = is_power_of_two_at_least_32(old_stick_size);
     vector<uint32_t> reader_kernel_args = {src0_buffer->address(), num_old_sticks, old_stick_size};
     std::vector<uint32_t> reader_compile_time_args = {src0_is_dram};
@@ -189,7 +189,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
     }
 
     // Writer compile-time args
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     bool new_stick_size_is_power_of_two = is_power_of_two_at_least_32(new_stick_size);
     vector<uint32_t> writer_kernel_args = {dst_buffer->address(), num_new_sticks, new_stick_size};
     std::vector<uint32_t> writer_compile_time_args {dst_is_dram};
@@ -272,7 +272,7 @@ void Reshape::validate(const std::vector<Tensor> &input_tensors) const {
     TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
     TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to reshape need to be allocated in buffers on device!");
     TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
-    TT_ASSERT((input_tensor_a.buffer()->buffer_type() == BufferType::DRAM));
+    TT_ASSERT((input_tensor_a.buffer()->buffer_storage() == BufferStorage::DRAM));
 
     TT_ASSERT(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR, "Only tile and row major reshape supported!");
 

@@ -105,7 +105,7 @@ operation::ProgramWithCallbacks unpad_rm_single_core(const Tensor &a, Tensor& ou
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     auto all_runtime_args = get_unpad_runtime_args_rm(a, output);
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(src_stick_size);
     uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(src_stick_size) : 0;
     std::vector<uint32_t> reader_compile_time_args_vec = {
@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks unpad_rm_single_core(const Tensor &a, Tensor& ou
         (std::uint32_t) src_stick_size_is_power_of_two,
         (std::uint32_t) src_log2_stick_size
     };
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(dst_stick_size);
     uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)log2(dst_stick_size) : 0;
     std::vector<uint32_t> writer_compile_time_args_vec = {
@@ -268,8 +268,8 @@ operation::ProgramWithCallbacks unpad_tile_single_core(const Tensor &a, Tensor& 
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t) src0_is_dram

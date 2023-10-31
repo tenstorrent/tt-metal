@@ -75,11 +75,11 @@ int main(int argc, char **argv) {
         constexpr uint32_t num_tiles = 2048;
         constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        Buffer src0_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferType::DRAM);
+        Buffer src0_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferStorage::DRAM);
         const uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
-        Buffer src1_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferType::DRAM);
+        Buffer src1_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferStorage::DRAM);
         const uint32_t dram_buffer_src1_addr = src1_dram_buffer.address();
-        Buffer dst_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferType::DRAM);
+        Buffer dst_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferStorage::DRAM);
         const uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         /*

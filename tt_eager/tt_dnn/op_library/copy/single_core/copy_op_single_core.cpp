@@ -50,8 +50,8 @@ operation::ProgramWithCallbacks copy_single_core(const Tensor &input, const Tens
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
 
     // NOTE: If both src and dst is DRAM, need to read forwards since DRAM is allocated bottom up.
     //       If src and dst is not the same, it doesn't matter which way we read.

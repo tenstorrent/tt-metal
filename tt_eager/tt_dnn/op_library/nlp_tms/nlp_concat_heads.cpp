@@ -62,8 +62,8 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
     uint32_t src0_cb_index = 0;
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in0_is_dram = in0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool out_is_dram = out_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
             // interleaved accessor args
             (std::uint32_t) in0_is_dram,

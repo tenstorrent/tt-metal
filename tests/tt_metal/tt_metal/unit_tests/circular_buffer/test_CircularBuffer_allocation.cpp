@@ -113,7 +113,7 @@ TEST_F(DeviceFixture, TestValidCircularBufferAddress) {
     CBConfig cb_config;
 
     auto buffer_size = cb_config.page_size;
-    auto l1_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferType::L1);
+    auto l1_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferStorage::L1);
 
     CoreRange cr = {.start = {0, 0}, .end = {0, 2}};
     CoreRangeSet cr_set({cr});
@@ -174,7 +174,7 @@ TEST_F(DeviceFixture, TestCircularBuffersAndL1BuffersCollision) {
     uint32_t page_size = TileSize(tt::DataFormat::Float16_b);
 
     auto buffer_size = page_size * 128;
-    auto l1_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferType::L1);
+    auto l1_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferStorage::L1);
 
     // L1 buffer is entirely in bank 0
     auto core = l1_buffer.logical_core_from_bank_id(0);
@@ -266,7 +266,7 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferAddress) {
     CoreRangeSet cr_set({cr});
 
     auto buffer_size = cb_config.page_size;
-    auto l1_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferType::L1);
+    auto l1_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferStorage::L1);
 
     initialize_program(program, cr_set);
 
@@ -375,9 +375,9 @@ TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
     uint32_t num_tiles = 2;
     uint32_t buffer_size = single_tile_size * num_tiles;
 
-    auto src_dram_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferType::DRAM);
-    auto dst_dram_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferType::DRAM);
-    auto global_cb_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferType::L1);
+    auto src_dram_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferStorage::DRAM);
+    auto dst_dram_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferStorage::DRAM);
+    auto global_cb_buffer = CreateBuffer(this->devices_.at(id), buffer_size, buffer_size, BufferStorage::L1);
 
     uint32_t cb_index = 0;
     uint32_t num_input_tiles = num_tiles;

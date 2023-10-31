@@ -30,10 +30,10 @@ def run_bert_large_ff1_matmul_test(
 ):
     if (
         dtype == ttl.tensor.DataType.BFLOAT16
-        and out_mem_config.buffer_type == ttl.tensor.BufferType.L1
+        and out_mem_config.buffer_storage == ttl.tensor.BufferStorage.L1
         and (
-            in0_mem_config.buffer_type == ttl.tensor.BufferType.L1
-            or in1_mem_config.buffer_type == ttl.tensor.BufferType.L1
+            in0_mem_config.buffer_storage == ttl.tensor.BufferStorage.L1
+            or in1_mem_config.buffer_storage == ttl.tensor.BufferStorage.L1
         )
     ):
         pytest.skip("Skipping test since these tensors won't fit on device!")
@@ -102,16 +102,16 @@ def run_bert_large_ff1_matmul_test(
         output_mem_config=out_mem_config,
     )
     # Check memory of inputs and outputs
-    assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
-    assert b_t.memory_config().buffer_type == in1_mem_config.buffer_type
+    assert a_t.memory_config().buffer_storage == in0_mem_config.buffer_storage
+    assert b_t.memory_config().buffer_storage == in1_mem_config.buffer_storage
     if bias_mem_config is not None:
-        assert bias_t.memory_config().buffer_type == bias_mem_config.buffer_type
-    assert t2.memory_config().buffer_type == out_mem_config.buffer_type
-    logger.debug(f"in0 is on: {a_t.memory_config().buffer_type}")
-    logger.debug(f"in1 is on: {b_t.memory_config().buffer_type}")
+        assert bias_t.memory_config().buffer_storage == bias_mem_config.buffer_storage
+    assert t2.memory_config().buffer_storage == out_mem_config.buffer_storage
+    logger.debug(f"in0 is on: {a_t.memory_config().buffer_storage}")
+    logger.debug(f"in1 is on: {b_t.memory_config().buffer_storage}")
     if bias_mem_config is not None:
-        logger.debug(f"bias is on: {bias_t.memory_config().buffer_type}")
-    logger.debug(f"out is on: {t2.memory_config().buffer_type}")
+        logger.debug(f"bias is on: {bias_t.memory_config().buffer_storage}")
+    logger.debug(f"out is on: {t2.memory_config().buffer_storage}")
 
     assert t2.shape() == [9, 1, 384, 4096]
     tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
@@ -140,16 +140,16 @@ def run_bert_large_ff1_matmul_test(
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
     ),
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "bias_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
         None,
     ),
     ids=["bias_DRAM", "bias_L1", "bias_None"],
@@ -157,16 +157,16 @@ def run_bert_large_ff1_matmul_test(
 @pytest.mark.parametrize(
     "in1_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
     ),
     ids=["in1_DRAM", "in1_L1"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
     ),
     ids=["in0_DRAM", "in0_L1"],
 )
@@ -201,7 +201,7 @@ def test_bert_large_ff1_matmul_test(
 
 def test_bert_large_ff1_matmul_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
-    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM)
     for _ in range(2):
         run_bert_large_ff1_matmul_test(
             device,
@@ -213,7 +213,7 @@ def test_bert_large_ff1_matmul_with_program_cache(device, use_program_cache):
             fused_activation=None,
         )
 
-    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1)
     for _ in range(2):
         run_bert_large_ff1_matmul_test(
             device,

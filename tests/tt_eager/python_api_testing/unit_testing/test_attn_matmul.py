@@ -51,7 +51,7 @@ def test_attn_matmul(device):
             tt_input_tensor_a,
             tt_input_tensor_b,
             compute_with_storage_grid_size=ttl.tensor.CoreCoord(12, 9),
-            output_mem_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            output_mem_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
             output_dtype=ttl.tensor.DataType.BFLOAT16,
         )
         tt_output_tensor = tt_output_tensor_on_device.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -86,7 +86,7 @@ def test_attn_matmul_with_program_cache(device, use_program_cache):
             tt_input_tensor_a,
             tt_input_tensor_b,
             compute_with_storage_grid_size=ttl.tensor.CoreCoord(12, 9),
-            output_mem_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            output_mem_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
             output_dtype=ttl.tensor.DataType.BFLOAT16,
         )
         tt_output_tensor = tt_output_tensor_on_device.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()

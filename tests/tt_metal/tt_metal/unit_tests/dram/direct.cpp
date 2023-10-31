@@ -38,13 +38,13 @@ bool reader_only(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::Program();
 
-    auto input_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto input_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferStorage::DRAM);
     uint32_t dram_byte_address = input_dram_buffer.address();
     auto dram_noc_xy = input_dram_buffer.noc_coordinates();
     // TODO (abhullar): Use L1 buffer after bug with L1 banking and writing to < 1 MB is fixed.
     //                  Try this after KM uplifts TLB setup
     // auto l1_buffer =
-    //     CreateBuffer(device, byte_size, l1_byte_address, byte_size, tt_metal::BufferType::L1);
+    //     CreateBuffer(device, byte_size, l1_byte_address, byte_size, tt_metal::BufferStorage::L1);
 
     auto reader_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -100,14 +100,14 @@ bool writer_only(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::Program();
 
-    auto output_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto output_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferStorage::DRAM);
     uint32_t dram_byte_address = output_dram_buffer.address();
     auto dram_noc_xy = output_dram_buffer.noc_coordinates();
     auto l1_bank_ids = device->bank_ids_from_logical_core(writer_core);
     // TODO (abhullar): Use L1 buffer after bug with L1 banking and writing to < 1 MB is fixed.
     //                  Try this after KM uplifts TLB setup
     // auto l1_buffer =
-    //     CreateBuffer(device, byte_size, l1_byte_address, byte_size, tt_metal::BufferType::L1);
+    //     CreateBuffer(device, byte_size, l1_byte_address, byte_size, tt_metal::BufferStorage::L1);
 
     auto writer_kernel = tt_metal::CreateDataMovementKernel(
         program,
@@ -168,10 +168,10 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::Program();
-    auto input_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto input_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferStorage::DRAM);
     uint32_t input_dram_byte_address = input_dram_buffer.address();
     auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
-    auto output_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto output_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferStorage::DRAM);
     uint32_t output_dram_byte_address = output_dram_buffer.address();
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 
@@ -259,10 +259,10 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::Program();
-    auto input_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto input_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferStorage::DRAM);
     uint32_t input_dram_byte_address = input_dram_buffer.address();
     auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
-    auto output_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto output_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferStorage::DRAM);
     uint32_t output_dram_byte_address = output_dram_buffer.address();
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 

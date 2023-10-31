@@ -74,8 +74,8 @@ void create_and_run_row_pipeline(tt_metal::Device* device, u32 num_cores) {
     u32 dst_address;
     CoreCoord dst_noc_xy;
 
-    src_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
-    dst_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
+    src_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferStorage::DRAM);
+    dst_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferStorage::DRAM);
 
     src_address = src_buffer.address();
     src_noc_xy = src_buffer.noc_coordinates();

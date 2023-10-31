@@ -285,7 +285,7 @@ TEST_F(DeviceFixture, PingIllegalL1Cores) {
 // Purpose of this test is to ensure that L1 reader/writer APIs do not target harvested cores
 TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        uint32_t num_l1_banks = this->devices_.at(id)->num_banks(BufferType::L1);
+        uint32_t num_l1_banks = this->devices_.at(id)->num_banks(BufferStorage::L1);
         std::vector<uint32_t> host_input(1);
         std::map<uint32_t, uint32_t> bank_id_to_value;
         uint32_t l1_address = this->devices_.at(id)->l1_size_per_core() - 2048;

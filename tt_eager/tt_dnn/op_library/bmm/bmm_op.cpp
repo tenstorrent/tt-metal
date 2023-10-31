@@ -403,7 +403,7 @@ Tensor bert_large_fused_qkv_matmul(const Tensor &input_tensor_a, const Tensor &i
 Tensor bert_large_ff1_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<UnaryWithParam> fused_activation, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype) {
     auto batch_size = input_tensor_a.shape()[0];
 
-    TT_ASSERT((input_tensor_a.dtype() != DataType::BFLOAT16 or input_tensor_b.dtype() != DataType::BFLOAT16 or output_dtype != DataType::BFLOAT16) or (mem_config.buffer_type == BufferType::DRAM) or (input_tensor_a.memory_config().buffer_type == BufferType::DRAM and input_tensor_b.memory_config().buffer_type == BufferType::DRAM), "For BFLOAT16, if output is on L1, one of in0 or in1 must be on DRAM!");
+    TT_ASSERT((input_tensor_a.dtype() != DataType::BFLOAT16 or input_tensor_b.dtype() != DataType::BFLOAT16 or output_dtype != DataType::BFLOAT16) or (mem_config.buffer_storage == BufferStorage::DRAM) or (input_tensor_a.memory_config().buffer_storage == BufferStorage::DRAM and input_tensor_b.memory_config().buffer_storage == BufferStorage::DRAM), "For BFLOAT16, if output is on L1, one of in0 or in1 must be on DRAM!");
     TT_ASSERT((input_tensor_a.shape() == Shape({batch_size, 1, 384, 1024})), "Unsupported input shape");
     TT_ASSERT((input_tensor_b.shape() == Shape({1, 1, 1024, 4096})), "Unsupported input shape");
 

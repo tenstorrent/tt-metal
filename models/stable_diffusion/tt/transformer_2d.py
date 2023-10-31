@@ -62,7 +62,7 @@ class TtBasicTransformerBlock(nn.Module):
         self.host = host
         self.only_cross_attention = only_cross_attention
         self.base_address = base_address
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1)
 
         self.use_ada_layer_norm_zero = (
             num_embeds_ada_norm is not None
@@ -329,7 +329,7 @@ class TtTransformer2DModel(nn.Module):
         self.use_linear_projection = use_linear_projection
         self.num_attention_heads = num_attention_heads
         self.attention_head_dim = attention_head_dim
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1)
 
         inner_dim = num_attention_heads * attention_head_dim
 

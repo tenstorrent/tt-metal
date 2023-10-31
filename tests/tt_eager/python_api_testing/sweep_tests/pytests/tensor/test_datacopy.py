@@ -27,10 +27,10 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import r
 @pytest.mark.parametrize(
     "memory_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.SINGLE_BANK, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.SINGLE_BANK, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.SINGLE_BANK, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.SINGLE_BANK, ttl.tensor.BufferStorage.L1),
     ),
 )
 def test_run_datacopy_test(
@@ -56,7 +56,7 @@ def test_run_datacopy_test(
         {
             "dtype": [dtype],
             "layout": [ttl.tensor.Layout.TILE],
-            "input_mem_config": [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
+            "input_mem_config": [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM)],
             "output_mem_config": memory_config,
         },
     )

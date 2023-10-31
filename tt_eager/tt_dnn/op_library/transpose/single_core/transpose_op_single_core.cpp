@@ -76,9 +76,9 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
 		.set_page_size(output_cb_index, dst_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) src0_is_dram};
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
         (std::uint32_t) dst_is_dram
@@ -229,12 +229,12 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
 		.set_page_size(src0_cb_index, src0_single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) src0_is_dram,
         (std::uint32_t) sub_tile_line_bytes
     };
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) src0_cb_index,
         (std::uint32_t) dst_is_dram
@@ -347,9 +347,9 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
 		.set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) src0_is_dram};
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) src0_cb_index,
         (std::uint32_t) dst_is_dram

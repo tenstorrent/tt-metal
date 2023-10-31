@@ -139,12 +139,12 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     tt_metal::Buffer *src0_buffer = a.buffer();
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) src0_is_dram,
         (std::uint32_t) sub_tile_line_bytes
     };
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) src0_cb_index,
         (std::uint32_t) dst_is_dram

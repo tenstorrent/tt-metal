@@ -66,7 +66,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
 
     auto dst_buffer = output.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
 
     tt_metal::KernelID unary_reader_kernel_id;
     if (input.layout() == Layout::TILE) {
@@ -270,7 +270,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
 
     tt_metal::KernelID unary_writer_kernel_id;
     if (input.layout() == Layout::TILE) {

@@ -679,7 +679,7 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     // For old readers, this is used for bank page size for interleaved; offset is from conv_act_c_read_bytes
     uint32_t log_base_2_of_conv_act_size_c_bytes = reader_with_indices ? std::log2(conv_act_c_read_bytes) : std::log2(conv_act_size_c * a.element_size());
     reader_compile_time_args = {(uint32_t)
-        (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
+        (src0_dram_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0),
         (uint32_t) stride_h,
         (uint32_t) stride_w,
         (uint32_t) conv_act_size_w,
@@ -710,11 +710,11 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     }
 
     writer_compile_time_args = {
-        (uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
+        (uint32_t) (src0_dram_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0),
         out0_cb,
         weight_cb,
         bias_cb,
-        (uint32_t) (bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0))};
+        (uint32_t) (bias_buffer == nullptr ? 0 : (bias_buffer->buffer_storage() == BufferStorage::DRAM ? 1 : 0))};
 
     uint32_t in0_block_w = act_block_w_ntiles / conv_act_c_blocks;
     uint32_t in0_block_num_tiles = act_block_num_tiles / conv_act_c_blocks;

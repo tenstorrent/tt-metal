@@ -18,7 +18,7 @@ namespace tt {
 namespace tt_metal {
 
 // Fwd declares
-enum class BufferType;
+enum class BufferStorage;
 class Buffer;
 class Program;
 
@@ -83,8 +83,8 @@ class Device {
 
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores);
 
-    uint32_t num_banks(const BufferType &buffer_type) const;
-    uint32_t bank_size(const BufferType &buffer_type) const;
+    uint32_t num_banks(const BufferStorage &buffer_storage) const;
+    uint32_t bank_size(const BufferStorage &buffer_storage) const;
 
     uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
 
@@ -100,9 +100,9 @@ class Device {
 
     std::vector<uint32_t> bank_ids_from_logical_core(const CoreCoord &logical_core) const;
 
-    allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const;
+    allocator::Statistics get_memory_allocation_statistics(const BufferStorage &buffer_storage) const;
 
-    void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const;
+    void dump_memory_blocks(const BufferStorage &buffer_storage, std::ofstream &out) const;
 
     // Set of logical storage only core coordinates
     const std::set<CoreCoord> &storage_only_cores() const { return this->storage_only_cores_; }

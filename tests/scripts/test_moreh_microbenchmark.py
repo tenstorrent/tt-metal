@@ -76,66 +76,66 @@ def profile_noc_results():
     return min, max
 
 # pcie write
-def test_write_device_l1(iter=1, buffer_type=0, size=2048):
+def test_write_device_l1(iter=1, buffer_storage=0, size=2048):
     command = "./build/test/tt_metal/perf_microbenchmark/pcie/test_rw_device_l1 " + \
-                "--iter " + str(iter) + " --buffer_type " + str(buffer_type) + " --size " + str(size)
+                "--iter " + str(iter) + " --buffer_storage " + str(buffer_storage) + " --size " + str(size)
     result = run_moreh_single_test('pcie write to device l1', command)
     line = capture_terminal_line(result, 'WriteToDeviceL1')
     bw = capture_line_result(line, -1)
     return bw
 
-def test_write_device_dram_channel(iter=1, buffer_type=0, size=2048):
+def test_write_device_dram_channel(iter=1, buffer_storage=0, size=2048):
     command = "./build/test/tt_metal/perf_microbenchmark/pcie/test_rw_device_dram " + \
-                "--iter " + str(iter) + " --buffer_type " + str(buffer_type) + " --size " + str(size)
+                "--iter " + str(iter) + " --buffer_storage " + str(buffer_storage) + " --size " + str(size)
     result = run_moreh_single_test('pcie write to device dram', command)
     line = capture_terminal_line(result, 'WriteToDeviceDRAMChannel')
     bw = capture_line_result(line, -1)
     return bw
 
-def test_write_buffer(iter=1, buffer_type=0, size=2048):
+def test_write_buffer(iter=1, buffer_storage=0, size=2048):
     command = "./build/test/tt_metal/perf_microbenchmark/pcie/test_rw_buffer " + \
-                "--iter " + str(iter) + " --buffer_type " + str(buffer_type) + " --size " + str(size)
+                "--iter " + str(iter) + " --buffer_storage " + str(buffer_storage) + " --size " + str(size)
     result = run_moreh_single_test('pcie write to buffer', command)
     line = capture_terminal_line(result, 'WriteToBuffer')
     bw = capture_line_result(line, -1)
     return bw
 
-def test_enqueue_write_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
+def test_enqueue_write_buffer(iter=1, buffer_storage=0, size=2048, timeout=600):
     command = "./build/test/tt_metal/perf_microbenchmark/pcie/test_enqueue_rw_buffer " + \
-                "--iter " + str(iter) + " --buffer_type " + str(buffer_type) + " --size " + str(size)
+                "--iter " + str(iter) + " --buffer_storage " + str(buffer_storage) + " --size " + str(size)
     result = run_moreh_single_test('pcie enqueue write to buffer', command)
     line = capture_terminal_line(result, 'EnqueueWriteBuffer')
     bw = capture_line_result(line, -1)
     return bw
 
 # pcie read
-def test_read_device_l1(iter=1, buffer_type=0, size=2048):
+def test_read_device_l1(iter=1, buffer_storage=0, size=2048):
     command = "./build/test/tt_metal/perf_microbenchmark/pcie/test_rw_device_l1 " + \
-                "--iter " + str(iter) + " --buffer_type " + str(buffer_type) + " --size " + str(size)
+                "--iter " + str(iter) + " --buffer_storage " + str(buffer_storage) + " --size " + str(size)
     result = run_moreh_single_test('pcie read from device l1', command)
     line = capture_terminal_line(result, 'ReadFromDeviceL1')
     bw = capture_line_result(line, -1)
     return bw
 
-def test_read_device_dram_channel(iter=1, buffer_type=0, size=2048):
+def test_read_device_dram_channel(iter=1, buffer_storage=0, size=2048):
     command = "./build/test/tt_metal/perf_microbenchmark/pcie/test_rw_device_dram " + \
-                "--iter " + str(iter) + " --buffer_type " + str(buffer_type) + " --size " + str(size)
+                "--iter " + str(iter) + " --buffer_storage " + str(buffer_storage) + " --size " + str(size)
     result = run_moreh_single_test('pcie read from device dram', command)
     line = capture_terminal_line(result, 'ReadFromDeviceDRAMChannel')
     bw = capture_line_result(line, -1)
     return bw
 
-def test_read_buffer(iter=1, buffer_type=0, size=2048):
+def test_read_buffer(iter=1, buffer_storage=0, size=2048):
     command = "./build/test/tt_metal/perf_microbenchmark/pcie/test_rw_buffer " + \
-                "--iter " + str(iter) + " --buffer_type " + str(buffer_type) + " --size " + str(size)
+                "--iter " + str(iter) + " --buffer_storage " + str(buffer_storage) + " --size " + str(size)
     result = run_moreh_single_test('pcie read from buffer', command)
     line = capture_terminal_line(result, 'ReadFromBuffer')
     bw = capture_line_result(line, -1)
     return bw
 
-def test_enqueue_read_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
+def test_enqueue_read_buffer(iter=1, buffer_storage=0, size=2048, timeout=600):
     command = "./build/test/tt_metal/perf_microbenchmark/pcie/test_enqueue_rw_buffer " + \
-                "--iter " + str(iter) + " --buffer_type " + str(buffer_type) + " --size " + str(size)
+                "--iter " + str(iter) + " --buffer_storage " + str(buffer_storage) + " --size " + str(size)
     result = run_moreh_single_test('pcie enqueue read from buffer', command)
     line = capture_terminal_line(result, 'EnqueueReadBuffer')
     bw = capture_line_result(line, -1)

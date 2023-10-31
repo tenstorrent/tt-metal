@@ -45,7 +45,7 @@ from models.utility_functions import pad_by_zero
 class TtBloomMLP(torch.nn.Module):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1)
         self.hidden_size = config.hidden_size
         self.hidden_dropout = config.hidden_dropout
         self.training = False

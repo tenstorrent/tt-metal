@@ -6,7 +6,7 @@ import tt_lib
 import tests.models.bloom.bloom_utils as bloom_utils
 
 mem_config = tt_lib.tensor.MemoryConfig(
-    tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+    tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1
 )
 
 

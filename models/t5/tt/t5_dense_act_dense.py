@@ -43,7 +43,7 @@ class TtT5DenseActDense(nn.Module):
         d_model = config["d_model"]
         d_ff = config["d_ff"]
         dropout_rate = config["dropout_rate"]
-        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1)
 
         # dense_act_fn = config["dense_act_fn"]
 

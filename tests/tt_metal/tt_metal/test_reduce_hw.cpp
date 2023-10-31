@@ -76,9 +76,9 @@ int main(int argc, char **argv) {
             dst_page_size = dram_buffer_bytes/(Ht*Wt);
         }
 
-        auto src0_dram_buffer = CreateBuffer(device, dram_buffer_bytes, src_page_size, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = CreateBuffer(device, dram_buffer_bytes, src_page_size, tt_metal::BufferStorage::DRAM);
         uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_bytes/(Ht*Wt), dst_page_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_bytes/(Ht*Wt), dst_page_size, tt_metal::BufferStorage::DRAM);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();

@@ -43,14 +43,14 @@ def run_split_fused_qkv_and_split_heads_test(
     )
 
     # Check memory of inputs and outputs
-    assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
-    assert q.memory_config().buffer_type == out_mem_config.buffer_type
-    assert k.memory_config().buffer_type == out_mem_config.buffer_type
-    assert v.memory_config().buffer_type == out_mem_config.buffer_type
-    logger.debug(f"in0: {a_t.memory_config().buffer_type} and {a_t.dtype()}")
-    logger.debug(f"q: {q.memory_config().buffer_type} and {q.dtype()}")
-    logger.debug(f"k: {k.memory_config().buffer_type} and {k.dtype()}")
-    logger.debug(f"v: {v.memory_config().buffer_type} and {v.dtype()}")
+    assert a_t.memory_config().buffer_storage == in0_mem_config.buffer_storage
+    assert q.memory_config().buffer_storage == out_mem_config.buffer_storage
+    assert k.memory_config().buffer_storage == out_mem_config.buffer_storage
+    assert v.memory_config().buffer_storage == out_mem_config.buffer_storage
+    logger.debug(f"in0: {a_t.memory_config().buffer_storage} and {a_t.dtype()}")
+    logger.debug(f"q: {q.memory_config().buffer_storage} and {q.dtype()}")
+    logger.debug(f"k: {k.memory_config().buffer_storage} and {k.dtype()}")
+    logger.debug(f"v: {v.memory_config().buffer_storage} and {v.dtype()}")
 
     assert q.shape() == [batch, 16, 384, 64]
     assert k.shape() == [batch, 16, 64, 384]
@@ -89,16 +89,16 @@ import pytest
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
     ),
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
     ),
     ids=["in0_DRAM", "in0_L1"],
 )
@@ -129,13 +129,13 @@ def test_split_fused_qkv_and_split_heads(
 
 def test_split_fused_qkv_and_split_heads_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
-    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM)
     for _ in range(2):
         run_split_fused_qkv_and_split_heads_test(
             device, 9, dtype, dram_mem_config, dram_mem_config
         )
 
-    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1)
     for _ in range(2):
         run_split_fused_qkv_and_split_heads_test(
             device, 9, dtype, dram_mem_config, dram_mem_config

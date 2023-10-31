@@ -98,11 +98,11 @@ tt_metal::operation::ProgramWithCallbacks create_program(
         .set_page_size(interm0_cb_index, single_tile_size);
 	auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in0_is_dram = in0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool in1_is_dram = in1_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)in0_is_dram, (uint32_t)in1_is_dram};
 
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = out_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)out_is_dram};
 
     // Create reader and writer kernels per core

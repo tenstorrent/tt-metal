@@ -47,9 +47,9 @@ int main(int argc, char **argv) {
         uint32_t num_tiles = 2048;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of BFP8_B
 
-        auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferStorage::DRAM);
         uint32_t dram_buffer_src_addr = src_dram_buffer.address();
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferStorage::DRAM);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();

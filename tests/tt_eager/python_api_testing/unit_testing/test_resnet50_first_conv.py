@@ -138,7 +138,7 @@ def test_resnet50_first_conv(
         )
         print("A_cl_host shape", A_cl_host.shape())
         memory_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1
         )
 
         # save original shape (N, H, W, C)
@@ -193,7 +193,7 @@ def test_resnet50_first_conv(
         per_core_weight_matrix_w_ntiles = (int)(K / 32)
         output_mem_config = (
             ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
+                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferStorage.L1
             )
             if sharded_out
             else None

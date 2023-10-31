@@ -54,6 +54,6 @@ def test_run_outer_test(input_shapes, device, dtype, function_level_defaults):
             "dtype": [dtype, dtype],
             "layout": [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
             "input_mem_config": [None, None],
-            "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
         },
     )

@@ -317,7 +317,7 @@ class TtT5Attention(nn.Module):
         self.dropout = config["dropout_rate"]
         self.inner_dim = self.n_heads * self.key_value_proj_dim
         self.device = device
-        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1)
 
         self.q_weights = torch2tt_tensor(state_dict[f"{base_address}.q.weight"], device)
         self.k_weights = torch2tt_tensor(state_dict[f"{base_address}.k.weight"], device)

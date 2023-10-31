@@ -48,7 +48,7 @@ def test_sharded_tile(device, input_shape, shard_size, shard_scheme, shard_orien
             device,
             ttl.tensor.MemoryConfig(
                 memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-                buffer_type=ttl.tensor.BufferType.L1,
+                buffer_storage=ttl.tensor.BufferStorage.L1,
             ),
         )
     )
@@ -59,7 +59,7 @@ def test_sharded_tile(device, input_shape, shard_size, shard_scheme, shard_orien
         yt,
         ttl.tensor.MemoryConfig(
             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+            buffer_storage=ttl.tensor.BufferStorage.L1,
         ),
     )
 
@@ -102,7 +102,7 @@ def test_sharded_rm(device, input_shape, shard_size, shard_scheme, shard_orienta
         device,
         ttl.tensor.MemoryConfig(
             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+            buffer_storage=ttl.tensor.BufferStorage.L1,
         ),
     )
 
@@ -112,7 +112,7 @@ def test_sharded_rm(device, input_shape, shard_size, shard_scheme, shard_orienta
         yt,
         ttl.tensor.MemoryConfig(
             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+            buffer_storage=ttl.tensor.BufferStorage.L1,
         ),
     )
 
@@ -140,11 +140,11 @@ def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, dtype, device, 
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
     sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
 
     out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
@@ -215,7 +215,7 @@ def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defau
         device,
         ttl.tensor.MemoryConfig(
             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+            buffer_storage=ttl.tensor.BufferStorage.L1,
         ),
     )
 
@@ -231,7 +231,7 @@ def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defau
         yt,
         output_mem_config=ttl.tensor.MemoryConfig(
             memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-            buffer_type=ttl.tensor.BufferType.L1,
+            buffer_storage=ttl.tensor.BufferStorage.L1,
         ),
         use_multicore=True,
         output_dtype=output_dtype,
@@ -241,7 +241,7 @@ def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defau
         yt_tilized,
         ttl.tensor.MemoryConfig(
             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+            buffer_storage=ttl.tensor.BufferStorage.L1,
         ),
     )
 
@@ -273,11 +273,11 @@ def test_sharded_matmul_1d_in1(
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
     sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
 
     in0 = torch.randn(in0_shape).bfloat16().float()
@@ -358,11 +358,11 @@ def test_sharded_binary(
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
     sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
 
     in0 = torch.randn(in0_shape).bfloat16().float()
@@ -425,7 +425,7 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
             device,
             ttl.tensor.MemoryConfig(
                 memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-                buffer_type=ttl.tensor.BufferType.L1,
+                buffer_storage=ttl.tensor.BufferStorage.L1,
             ),
         )
     )
@@ -442,7 +442,7 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
         yt,
         ttl.tensor.MemoryConfig(
             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+            buffer_storage=ttl.tensor.BufferStorage.L1,
         ),
     )
 
@@ -458,7 +458,7 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
             device,
             ttl.tensor.MemoryConfig(
                 memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-                buffer_type=ttl.tensor.BufferType.L1,
+                buffer_storage=ttl.tensor.BufferStorage.L1,
             ),
         )
     )
@@ -475,14 +475,14 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
         yt2,
         ttl.tensor.MemoryConfig(
             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+            buffer_storage=ttl.tensor.BufferStorage.L1,
         ),
     )
     zt = ttl.tensor.sharded_to_interleaved(
         yt,
         ttl.tensor.MemoryConfig(
             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-            buffer_type=ttl.tensor.BufferType.L1,
+            buffer_storage=ttl.tensor.BufferStorage.L1,
         ),
     )
 
@@ -514,11 +514,11 @@ def test_sharded_matmul_2d(
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
     sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
 
     in0 = torch.randn(in0_shape).bfloat16().float()
@@ -587,11 +587,11 @@ def test_sharded_matmul_2d_transposed(
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
     sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
 
     in0 = torch.randn(in0_shape).bfloat16().float()
@@ -655,15 +655,15 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
     height_sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
     block_sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
 
     in0 = torch.randn(in0_shape).bfloat16().float()
@@ -740,11 +740,11 @@ def test_sharded_untilize_padded_shard(in_sharded, out_sharded, dtype, device, f
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
     sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
 
     out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
@@ -812,11 +812,11 @@ def test_sharded_binary_padded_shard(
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
     sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
 
     out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
@@ -896,11 +896,11 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, d
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
     sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
 
     out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
@@ -970,11 +970,11 @@ def test_width_sharded_untilize_with_unpadding(shape, in_sharded, out_sharded, d
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
     sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
 
     out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
@@ -1041,11 +1041,11 @@ def test_sharded_tilize_with_val_padding(in_sharded, out_sharded, output_dtype, 
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
     sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
 
     out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
@@ -1106,11 +1106,11 @@ def test_sharded_reduce_h(in_sharded, out_sharded, dtype, device, function_level
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
     sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
 
     out_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
@@ -1185,11 +1185,11 @@ def test_sharded_matmul_1d_in0(
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
     sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_storage=ttl.tensor.BufferStorage.L1,
     )
 
     in0 = torch.randn(in0_shape).bfloat16().float()

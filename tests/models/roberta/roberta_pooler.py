@@ -37,7 +37,7 @@ class TtRobertaPooler(nn.Module):
         device,
     ):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1)
         self.device = device
 
         self.dense_weight = pad_by_zero(

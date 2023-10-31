@@ -73,10 +73,10 @@ int main(int argc, char **argv) {
 
         TT_ASSERT(num_output_tiles % transient_buffer_size_tiles == 0);
 
-        auto input_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto input_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferStorage::DRAM);
         uint32_t dram_buffer_src_addr = input_dram_buffer.address();
 
-        auto output_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto output_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferStorage::DRAM);
         uint32_t dram_buffer_dst_addr = output_dram_buffer.address();
 
         auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();

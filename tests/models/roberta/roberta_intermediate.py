@@ -35,7 +35,7 @@ class TtRobertaIntermediate(nn.Module):
         self, config, state_dict, base_address, device, fall_back_to_torch_gelu=True
     ):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1)
         self.device = device
 
         self.fall_back_to_torch_gelu = fall_back_to_torch_gelu

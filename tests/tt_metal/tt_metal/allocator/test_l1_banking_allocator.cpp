@@ -24,25 +24,25 @@ bool test_l1_buffers_allocated_top_down(tt_metal::Device *device, BufferKeeper &
     buffers.resize(5);
 
     uint32_t buffer_0_size_bytes = 128 * 1024;
-    buffers[0] = std::move(std::make_unique<tt_metal::Buffer>(device, buffer_0_size_bytes, buffer_0_size_bytes, tt_metal::BufferType::L1));
+    buffers[0] = std::move(std::make_unique<tt_metal::Buffer>(device, buffer_0_size_bytes, buffer_0_size_bytes, tt_metal::BufferStorage::L1));
     auto total_buffer_size = buffer_0_size_bytes;
     pass &= buffers[0]->address() == (device->l1_size_per_core() - total_buffer_size);
 
     uint32_t buffer_1_size_bytes = 64 * 1024;
-    buffers[1] = std::move(std::make_unique<tt_metal::Buffer>(device, buffer_1_size_bytes, buffer_1_size_bytes, tt_metal::BufferType::L1));
+    buffers[1] = std::move(std::make_unique<tt_metal::Buffer>(device, buffer_1_size_bytes, buffer_1_size_bytes, tt_metal::BufferStorage::L1));
     total_buffer_size += buffer_1_size_bytes;
     pass &= buffers[1]->address() == (device->l1_size_per_core() - total_buffer_size);
 
     uint32_t buffer_2_size_bytes = 64 * 1024;
-    buffers[2] = std::move(std::make_unique<tt_metal::Buffer>(device, buffer_2_size_bytes, buffer_2_size_bytes, tt_metal::BufferType::L1));
+    buffers[2] = std::move(std::make_unique<tt_metal::Buffer>(device, buffer_2_size_bytes, buffer_2_size_bytes, tt_metal::BufferStorage::L1));
     total_buffer_size += buffer_2_size_bytes;
     pass &= buffers[2]->address() == (device->l1_size_per_core() - total_buffer_size);
 
-    buffers[3] = std::move(std::make_unique<tt_metal::Buffer>(device, buffer_0_size_bytes, buffer_0_size_bytes, tt_metal::BufferType::L1));
+    buffers[3] = std::move(std::make_unique<tt_metal::Buffer>(device, buffer_0_size_bytes, buffer_0_size_bytes, tt_metal::BufferStorage::L1));
     total_buffer_size += buffer_0_size_bytes;
     pass &= buffers[3]->address() == ((device->l1_size_per_core()) - total_buffer_size);
 
-    buffers[4] = std::move(std::make_unique<tt_metal::Buffer>(device, buffer_1_size_bytes, buffer_1_size_bytes, tt_metal::BufferType::L1));
+    buffers[4] = std::move(std::make_unique<tt_metal::Buffer>(device, buffer_1_size_bytes, buffer_1_size_bytes, tt_metal::BufferStorage::L1));
     total_buffer_size += buffer_1_size_bytes;
     pass &= buffers[4]->address() == ((device->l1_size_per_core()) - total_buffer_size);
 
@@ -103,7 +103,7 @@ bool test_l1_buffer_do_not_grow_beyond_512KB(tt_metal::Device *device) {
 
     try {
         uint32_t buffer_size_bytes = 128 * 1024;
-        auto l1_buffer = CreateBuffer(device, buffer_size_bytes, buffer_size_bytes, tt_metal::BufferType::L1);
+        auto l1_buffer = CreateBuffer(device, buffer_size_bytes, buffer_size_bytes, tt_metal::BufferStorage::L1);
     } catch (const std::exception &e) {
         pass = true;
     }

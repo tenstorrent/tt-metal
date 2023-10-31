@@ -78,18 +78,18 @@ int main(int argc, char **argv) {
 
         TT_ASSERT(num_output_tiles % transient_buffer_size_tiles == 0);
 
-        auto input_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto input_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferStorage::DRAM);
         uint32_t dram_buffer_src_addr = input_dram_buffer.address();
 
         // auto l1_b0_a = tt_metal::CreateL1Buffer(
-        //     device, transient_buffer_size_bytes, loader_buffer_address1, loader_l1_bank_id, transient_buffer_size_bytes, tt_metal::BufferType::L1);
+        //     device, transient_buffer_size_bytes, loader_buffer_address1, loader_l1_bank_id, transient_buffer_size_bytes, tt_metal::BufferStorage::L1);
         // auto l1_b0_b = tt_metal::CreateL1Buffer(
-        //     device, transient_buffer_size_bytes, loader_buffer_address2, loader_l1_bank_id, transient_buffer_size_bytes, tt_metal::BufferType::L1);
+        //     device, transient_buffer_size_bytes, loader_buffer_address2, loader_l1_bank_id, transient_buffer_size_bytes, tt_metal::BufferStorage::L1);
 
         // auto l1_b1_a = tt_metal::CreateL1Buffer(
-        //     device, transient_buffer_size_bytes, writer_buffer_address1, writer_l1_bank_id, transient_buffer_size_bytes, tt_metal::BufferType::L1);
+        //     device, transient_buffer_size_bytes, writer_buffer_address1, writer_l1_bank_id, transient_buffer_size_bytes, tt_metal::BufferStorage::L1);
         // auto l1_b1_b = tt_metal::CreateL1Buffer(
-        //     device, transient_buffer_size_bytes, writer_buffer_address2, writer_l1_bank_id, transient_buffer_size_bytes, tt_metal::BufferType::L1);
+        //     device, transient_buffer_size_bytes, writer_buffer_address2, writer_l1_bank_id, transient_buffer_size_bytes, tt_metal::BufferStorage::L1);
 
         // auto output_dram_buffer = tt_metal::CreateDramBuffer(device, dram_channel_id, dram_buffer_size, dram_buffer_dst_addr);
 

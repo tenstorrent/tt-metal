@@ -149,9 +149,9 @@ int main(int argc, char **argv) {
         log_info(LogTest, "total_bytes_moved: {}", total_bytes_moved);
 
         // semaphores in L1, 32B aligned for NOC transfers
-        auto sender_semaphore = CreateBuffer(device, 32, 32, tt_metal::BufferType::L1);
-        auto receiver_semaphore = CreateBuffer(device, 32, 32, tt_metal::BufferType::L1);
-        auto l1_valid_value = CreateBuffer(device, 32, 32, tt_metal::BufferType::L1);
+        auto sender_semaphore = CreateBuffer(device, 32, 32, tt_metal::BufferStorage::L1);
+        auto receiver_semaphore = CreateBuffer(device, 32, 32, tt_metal::BufferStorage::L1);
+        auto l1_valid_value = CreateBuffer(device, 32, 32, tt_metal::BufferStorage::L1);
         uint32_t sender_semaphore_addr = sender_semaphore.address();
         uint32_t receiver_semaphore_addr = receiver_semaphore.address();
         uint32_t l1_valid_value_addr = l1_valid_value.address();
@@ -177,16 +177,16 @@ int main(int argc, char **argv) {
         CoreCoord dst_noc_xy;
 
         if (IO_data_in_dram) {
-            src_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
-            dst_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
+            src_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferStorage::DRAM);
+            dst_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferStorage::DRAM);
 
             src_address = src_buffer.address();
             src_noc_xy = src_buffer.noc_coordinates();
             dst_address = dst_buffer.address();
             dst_noc_xy = dst_buffer.noc_coordinates();
         } else {
-            src_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::L1);
-            dst_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::L1);
+            src_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferStorage::L1);
+            dst_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferStorage::L1);
 
             src_address = src_buffer.address();
             src_noc_xy = src_buffer.noc_coordinates();

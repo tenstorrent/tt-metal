@@ -17,7 +17,7 @@ void bind_op_with_mem_config_and_dtype(py::module_ &module, std::string op_name,
         const std::string mem_config_name = "output_mem_config";
         docstring += fmt::format(R"doc(
             "{0}", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is {1} in {2}", "No")doc",
-            mem_config_name, magic_enum::enum_name(operation::DEFAULT_OUTPUT_MEMORY_CONFIG.memory_layout), magic_enum::enum_name(operation::DEFAULT_OUTPUT_MEMORY_CONFIG.buffer_type)
+            mem_config_name, magic_enum::enum_name(operation::DEFAULT_OUTPUT_MEMORY_CONFIG.memory_layout), magic_enum::enum_name(operation::DEFAULT_OUTPUT_MEMORY_CONFIG.buffer_storage)
         );
         const std::string dtype_name = "output_dtype";
         docstring += fmt::format(R"doc(
@@ -31,7 +31,7 @@ void bind_op_with_mem_config_and_dtype(py::module_ &module, std::string op_name,
         const std::string mem_config_name = "output_mem_config";
         docstring += fmt::format(R"doc(
             "{0}", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is {1} in {2}", "No")doc",
-            mem_config_name, magic_enum::enum_name(operation::DEFAULT_OUTPUT_MEMORY_CONFIG.memory_layout), magic_enum::enum_name(operation::DEFAULT_OUTPUT_MEMORY_CONFIG.buffer_type)
+            mem_config_name, magic_enum::enum_name(operation::DEFAULT_OUTPUT_MEMORY_CONFIG.memory_layout), magic_enum::enum_name(operation::DEFAULT_OUTPUT_MEMORY_CONFIG.buffer_storage)
         );
         module.def(op_name.c_str(), f,
             std::forward<Extra>(extra)..., py::arg(mem_config_name.c_str()).noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, docstring.c_str()

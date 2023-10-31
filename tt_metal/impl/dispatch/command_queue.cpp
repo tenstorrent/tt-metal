@@ -297,7 +297,7 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(u32 dst_ad
         burst_size,
         this->buffer.page_size(),
         padded_page_size,
-        (u32) this->buffer.buffer_type());
+        (u32) this->buffer.buffer_storage());
 
     return command;
 }
@@ -326,7 +326,7 @@ EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
     Device* device, Buffer& buffer, vector<u32>& src, SystemMemoryWriter& writer) :
     writer(writer), src(src), buffer(buffer) {
     TT_ASSERT(
-        buffer.buffer_type() == BufferType::DRAM or buffer.buffer_type() == BufferType::L1,
+        buffer.buffer_storage() == BufferStorage::DRAM or buffer.buffer_storage() == BufferStorage::L1,
         "Trying to write to an invalid buffer");
 
     this->device = device;
@@ -359,7 +359,7 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(u32 src_a
         burst_size,
         this->buffer.page_size(),
         padded_page_size,
-        (u32)(this->buffer.buffer_type()));
+        (u32)(this->buffer.buffer_storage()));
 
     return command;
 }
@@ -799,7 +799,7 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
         this->program_to_buffer.emplace(
             program_id,
             std::make_unique<Buffer>(
-                this->device, program_data_size_in_bytes, program_data_size_in_bytes, BufferType::DRAM));
+                this->device, program_data_size_in_bytes, program_data_size_in_bytes, BufferStorage::DRAM));
 
         this->enqueue_write_buffer(*this->program_to_buffer.at(program_id), program_vector, blocking);
 

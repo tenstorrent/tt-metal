@@ -53,15 +53,15 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::Program();
-    auto input0_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto input0_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferStorage::DRAM);
     uint32_t input0_dram_byte_address = input0_dram_buffer.address();
     auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
 
-    auto input1_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto input1_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferStorage::DRAM);
     uint32_t input1_dram_byte_address = input1_dram_buffer.address();
     auto input1_dram_noc_xy = input1_dram_buffer.noc_coordinates();
 
-    auto output_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto output_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferStorage::DRAM);
     uint32_t output_dram_byte_address = output_dram_buffer.address();
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 

@@ -91,7 +91,7 @@ def test_run_downsample(
     A_cl_host = A_cl_host.pad(input_shape, (0,0,0,0), 0.0)
     A_interleaved = A_cl_host.to(ttl.tensor.Layout.TILE).to(device, ttl.tensor.MemoryConfig(
                 memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-                buffer_type=ttl.tensor.BufferType.L1,
+                buffer_storage=ttl.tensor.BufferStorage.L1,
         ))
     assert A_interleaved.shape()[0] == 1 and A_interleaved.shape()[1] == 1
 
@@ -126,11 +126,11 @@ def test_run_downsample(
 
     downsample_params = [batch_size, input_height, input_width, stride_h, stride_w]
     sharded_memory_config = ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
+                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferStorage.L1
             )
     # Run downsample op
     A_downampled_sharded = ttl.tensor.downsample(A_sharded, downsample_params, output_dtype=dtype)
-    A_downsampled = ttl.tensor.sharded_to_interleaved(A_downampled_sharded, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1))
+    A_downsampled = ttl.tensor.sharded_to_interleaved(A_downampled_sharded, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1))
     out = A_downsampled
     out_shape = [1, 1, _nearest_y(batch_size*output_height*output_width, 32), input_channels]
     assert out_shape == out.shape()

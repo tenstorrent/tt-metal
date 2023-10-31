@@ -68,10 +68,10 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     tt_metal::Buffer *src_buffer = a.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, packed_scaler_value};
     tt_metal::Buffer *dst_buffer = output.buffer();
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
         (std::uint32_t) dst_is_dram

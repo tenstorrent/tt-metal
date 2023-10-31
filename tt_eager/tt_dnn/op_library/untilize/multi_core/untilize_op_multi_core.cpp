@@ -246,7 +246,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             all_cores,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_ct_args});
     } else {
-        bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+        bool src0_is_dram = src0_buffer->buffer_storage() == BufferStorage::DRAM ? 1 : 0;
         vector<uint32_t> reader_ct_args = {
             (uint32_t) src0_is_dram
         };
@@ -274,7 +274,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             all_cores,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_ct_args});
     } else {
-        bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+        bool out_is_dram = dst_buffer->buffer_storage() == BufferStorage::DRAM ? 1 : 0;
         if (src_block_sharded) {
             vector<uint32_t> writer_ct_args = {
                 (uint32_t) out_is_dram
@@ -704,7 +704,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
                 .noc = NOC::RISCV_0_default,
                 .compile_args = writer_ct_args});
     } else {
-        bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+        bool out_is_dram = dst_buffer->buffer_storage() == BufferStorage::DRAM ? 1 : 0;
         vector<uint32_t> writer_ct_args = {
             (uint32_t) out_is_dram
         };

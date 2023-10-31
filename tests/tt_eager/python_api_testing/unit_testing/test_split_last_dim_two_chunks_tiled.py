@@ -43,16 +43,16 @@ def getTensorFromBuff(buff):
 @pytest.mark.parametrize(
     "in_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
     ),
     ids=["in_DRAM", "in_L1"],
 )
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
     ),
     ids=["out_DRAM", "out_L1"],
 )
@@ -138,13 +138,13 @@ def test_split_tiled_w(
     ttl.profiler.stop_profiling("Run")
 
     # Check memory of inputs and outputs
-    logger.debug(f"in0 is on: {a_t.memory_config().buffer_type}")
+    logger.debug(f"in0 is on: {a_t.memory_config().buffer_storage}")
 
     pyt_buff_list = []
 
     assert len(dev_buffers) == num_splits
     for index, buff in enumerate(dev_buffers):
-        logger.debug(f"buff{index} is on: {buff.memory_config().buffer_type}")
+        logger.debug(f"buff{index} is on: {buff.memory_config().buffer_storage}")
         assert buff.shape() == [W, Z, Y, int(X / num_splits)]
         tt_host_rm_buff = buff.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
         pyt_got_back_rm_buff = tt_host_rm_buff.to_torch()

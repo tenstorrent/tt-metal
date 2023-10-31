@@ -139,7 +139,7 @@ def get_random_shape(start_shape, end_shape, interval):
     return shape
 
 
-def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, test_tt_layouts, test_buffer_types):
+def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, test_tt_layouts, test_buffer_storage):
     num_shapes = shape_dict["num-shapes"]
 
     # Datagen functions
@@ -169,7 +169,7 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
 
     # Helper
     def _gen_args(input_shapes):
-        args = test_args_gen(input_shapes, test_tt_dtypes, test_tt_layouts, test_buffer_types)
+        args = test_args_gen(input_shapes, test_tt_dtypes, test_tt_layouts, test_buffer_storage)
         args = list(args)
 
         # Default "args-sampling-strategy" is "all". If random is not specified test will be run for all generated args

@@ -82,8 +82,8 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = cache_tensor.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)dst_is_dram,
         (uint32_t)src_is_dram,
@@ -223,10 +223,10 @@ operation::ProgramWithCallbacks fill_cache_single_core(const Tensor& cache_tenso
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = cache_tensor.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
         (std::uint32_t) dst_is_dram

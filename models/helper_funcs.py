@@ -8,7 +8,7 @@ import tt_lib as ttl
 from loguru import logger
 import tt_lib
 
-def Linear(in_features: int, out_features: int, weight: tensor.Tensor, bias: Optional[tensor.Tensor] = None, output_mem_config=tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)):
+def Linear(in_features: int, out_features: int, weight: tensor.Tensor, bias: Optional[tensor.Tensor] = None, output_mem_config=tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.DRAM)):
     """
     Returns a function that performs a Linear operation with optional bias.
 

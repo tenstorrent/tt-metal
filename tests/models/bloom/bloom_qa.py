@@ -96,7 +96,7 @@ from typing import Optional
 
 class TtBloomForQuestionAnswering:
     def __init__(self, config, state_dict, device):
-        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1)
         self.transformer = bloom_model.TtBloomModel(
             config, state_dict, "transformer", device
         )

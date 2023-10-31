@@ -164,9 +164,9 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        auto src0_dram_buffer = CreateBuffer(device, dram_buffer_size_act, dram_buffer_size_act, tt_metal::BufferType::DRAM);
-        auto src1_dram_buffer = CreateBuffer(device, dram_buffer_size_weights, dram_buffer_size_weights, tt_metal::BufferType::DRAM);
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size_out, dram_buffer_size_out, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = CreateBuffer(device, dram_buffer_size_act, dram_buffer_size_act, tt_metal::BufferStorage::DRAM);
+        auto src1_dram_buffer = CreateBuffer(device, dram_buffer_size_weights, dram_buffer_size_weights, tt_metal::BufferStorage::DRAM);
+        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size_out, dram_buffer_size_out, tt_metal::BufferStorage::DRAM);
 
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
         auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
@@ -217,7 +217,7 @@ int main(int argc, char **argv) {
         uint32_t src0_num_bytes_per_block = src0_num_tiles_per_block * single_tile_size;
         uint32_t src1_num_bytes_per_block = src1_num_tiles_per_block * single_tile_size;
         TT_ASSERT(source_addresses.size() == num_blocks * src0_num_reads_per_block);
-        auto source_addresses_in_l1 = CreateBuffer(device, source_addresses.size() * sizeof(uint32_t), source_addresses.size() * sizeof(uint32_t), tt_metal::BufferType::L1);
+        auto source_addresses_in_l1 = CreateBuffer(device, source_addresses.size() * sizeof(uint32_t), source_addresses.size() * sizeof(uint32_t), tt_metal::BufferStorage::L1);
         auto source_addresses_in_l1_addr = source_addresses_in_l1.address();
 
         std::vector<uint32_t> generic_binary_reader_args {

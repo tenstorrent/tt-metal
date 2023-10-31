@@ -232,21 +232,6 @@ inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, 
 	return std::make_tuple(target_num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2);
 }
 
-inline std::vector<CoreCoord> grid_to_cores(uint32_t num_cores, uint32_t grid_size_x, uint32_t grid_size_y, bool row_wise=false) {
-    std::vector<CoreCoord> cores;
-    cores.reserve(num_cores);
-    TT_ASSERT(num_cores <= grid_size_x * grid_size_y);
-    if (row_wise) {
-        for(uint32_t i = 0; i < num_cores; ++i) {
-            cores.push_back({i % grid_size_x, i / grid_size_x});
-        }
-    } else {
-        for(uint32_t i = 0; i < num_cores; ++i) {
-            cores.push_back({i / grid_size_y, i % grid_size_y});
-        }
-    }
 
-    return cores;
-}
 
 } } // namespace tt::tt_metal

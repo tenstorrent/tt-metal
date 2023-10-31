@@ -159,11 +159,11 @@ operation::ProgramWithCallbacks unpad_rm_multi_core(const Tensor &a, Tensor& out
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args_vec = {
         (std::uint32_t) src0_is_dram
     };
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
 
 
     std::vector<uint32_t> writer_compile_time_args_vec = {
@@ -380,8 +380,8 @@ operation::ProgramWithCallbacks unpad_tile_multi_core(const Tensor &a, Tensor& o
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t) src0_is_dram

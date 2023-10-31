@@ -71,7 +71,7 @@ need
   constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
   constexpr uint32_t l1_buffer_addr = 400 * 1024;
 
-  Buffer l1_buffer = CreateBuffer(device, dram_buffer_size, l1_buffer_addr, dram_buffer_size, BufferType::L1);
+  Buffer l1_buffer = CreateBuffer(device, dram_buffer_size, l1_buffer_addr, dram_buffer_size, BufferStorage::L1);
 
 For simplicity, let's make the size of all our buffers 50 tiles. We'll also put
 this particular L1 Buffer at location ``400KB``.
@@ -81,10 +81,10 @@ Let's make the input and output DRAM buffers.
 .. code-block:: cpp
 
   constexpr uint32_t input_dram_buffer_addr = 0;
-  Buffer input_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferType::DRAM);
+  Buffer input_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferStorage::DRAM);
 
   constexpr uint32_t output_dram_buffer_addr = 512 * 1024;
-  Buffer output_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferType::DRAM);
+  Buffer output_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferStorage::DRAM);
 
 Sending real data into DRAM
 ---------------------------

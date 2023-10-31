@@ -63,10 +63,10 @@ int main(int argc, char **argv) {
             page_size = dram_buffer_bytes;
         }
 
-        auto src0_dram_buffer = CreateBuffer(device, dram_buffer_bytes, page_size, tt_metal::BufferType::DRAM);
+        auto src0_dram_buffer = CreateBuffer(device, dram_buffer_bytes, page_size, tt_metal::BufferStorage::DRAM);
         uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_bytes, page_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_bytes, page_size, tt_metal::BufferStorage::DRAM);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 

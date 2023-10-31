@@ -202,7 +202,7 @@ int main(int argc, char **argv) {
     for (int r = 0; r < num_cores_r; ++r) {
       for (int c = 0; c < num_cores_c; ++c) {
         l1_buffers.emplace_back(device, total_tiles_size_bytes,
-                                single_tile_size, tt_metal::BufferType::L1);
+                                single_tile_size, tt_metal::BufferStorage::L1);
         tt_metal::WriteToBuffer(l1_buffers[r * num_cores_c + c],
                                 packed_tensors[r * num_cores_c + c]);
 

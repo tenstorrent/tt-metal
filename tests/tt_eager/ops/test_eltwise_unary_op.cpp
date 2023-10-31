@@ -79,7 +79,7 @@ void test_operation_infrastructure() {
 
     auto program_hash = op.compute_program_hash({input_tensor}, {});
     TT_ASSERT(
-        program_hash == "tt::tt_metal::EltwiseUnary(op_chain={tt::tt_metal::UnaryWithParam(op_type=UnaryOpType::SQRT, param=std::nullopt)}, output_mem_config=tt::tt_metal::MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED, buffer_type=BufferType::DRAM))_tt::tt_metal::Tensor(storage=tt::tt_metal::OwnedStorage(), shape=tt::tt_metal::Shape(dimensions={1, 1, 32, 32}), dtype=DataType::BFLOAT16, layout=Layout::TILE, shard_spec=std::nullopt)",
+        program_hash == "tt::tt_metal::EltwiseUnary(op_chain={tt::tt_metal::UnaryWithParam(op_type=UnaryOpType::SQRT, param=std::nullopt)}, output_mem_config=tt::tt_metal::MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED, buffer_storage=BufferStorage::DRAM))_tt::tt_metal::Tensor(storage=tt::tt_metal::OwnedStorage(), shape=tt::tt_metal::Shape(dimensions={1, 1, 32, 32}), dtype=DataType::BFLOAT16, layout=Layout::TILE, shard_spec=std::nullopt)",
         fmt::format("Actual value is {}", program_hash)
     );
 

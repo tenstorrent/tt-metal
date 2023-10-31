@@ -114,7 +114,7 @@ namespace tt::test::buffer::detail {
 TEST_F(DeviceFixture, TestSimpleL1BufferReadOnlyLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         size_t lo_address =
-            this->devices_.at(id)->l1_size_per_core() - this->devices_.at(id)->bank_size(tt::tt_metal::BufferType::L1);
+            this->devices_.at(id)->l1_size_per_core() - this->devices_.at(id)->bank_size(tt::tt_metal::BufferStorage::L1);
         ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), lo_address, 4));
         ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), lo_address, 8));
         ASSERT_TRUE(SimpleL1ReadOnly(this->devices_.at(id), lo_address, 16));
@@ -137,7 +137,7 @@ TEST_F(DeviceFixture, TestSimpleL1BufferReadOnlyHi) {
 TEST_F(DeviceFixture, TestSimpleL1BufferWriteOnlyLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         size_t lo_address =
-            this->devices_.at(id)->l1_size_per_core() - this->devices_.at(id)->bank_size(tt::tt_metal::BufferType::L1);
+            this->devices_.at(id)->l1_size_per_core() - this->devices_.at(id)->bank_size(tt::tt_metal::BufferStorage::L1);
         ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), lo_address, 4));
         ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), lo_address, 8));
         ASSERT_TRUE(SimpleL1WriteOnly(this->devices_.at(id), lo_address, 16));

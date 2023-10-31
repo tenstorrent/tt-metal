@@ -414,7 +414,7 @@ hardcoded_conv_blocking_and_parallelization_config = {
 )
 def test_resnet50_conv(use_program_cache, device, N, K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w):
     interleaved_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1
     )
 
     for i in range(1):  # increase num of iterations to test op caching

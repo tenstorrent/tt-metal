@@ -75,12 +75,12 @@ import pytest
 @skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "out_mem_config",
-    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
+    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),),
     ids=["out_DRAM"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
-    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
+    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),),
     ids=["in0_DRAM"],
 )
 @pytest.mark.parametrize(

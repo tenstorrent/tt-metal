@@ -46,10 +46,10 @@ def run_bert_large_matmul_test(
             in0_dtype == ttl.tensor.DataType.BFLOAT16
             and in1_dtype == ttl.tensor.DataType.BFLOAT16
             and out_dtype == ttl.tensor.DataType.BFLOAT16
-            and out_mem_config.buffer_type == ttl.tensor.BufferType.L1
+            and out_mem_config.buffer_storage == ttl.tensor.BufferStorage.L1
             and (
-                in0_mem_config.buffer_type == ttl.tensor.BufferType.L1
-                or in1_mem_config.buffer_type == ttl.tensor.BufferType.L1
+                in0_mem_config.buffer_storage == ttl.tensor.BufferStorage.L1
+                or in1_mem_config.buffer_storage == ttl.tensor.BufferStorage.L1
             )
         ):
             pytest.skip("Skipping test since these tensors won't fit on device!")
@@ -121,27 +121,27 @@ def run_bert_large_matmul_test(
         t2 = bert_large_op(a_t, b_t, bias_t, out_mem_config, out_dtype)
 
     # Check memory and dtype of inputs and outputs
-    assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
+    assert a_t.memory_config().buffer_storage == in0_mem_config.buffer_storage
     assert a_t.dtype() == in0_dtype
-    assert b_t.memory_config().buffer_type == in1_mem_config.buffer_type
+    assert b_t.memory_config().buffer_storage == in1_mem_config.buffer_storage
     assert b_t.dtype() == in1_dtype
     if bias_mem_config is not None:
-        assert bias_t.memory_config().buffer_type == bias_mem_config.buffer_type
+        assert bias_t.memory_config().buffer_storage == bias_mem_config.buffer_storage
         assert bias_t.dtype() == bias_dtype
-    assert t2.memory_config().buffer_type == out_mem_config.buffer_type
+    assert t2.memory_config().buffer_storage == out_mem_config.buffer_storage
     assert t2.dtype() == out_dtype
     logger.debug(
-        f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.dtype()}"
+        f"in0 ({a_shape}): {a_t.memory_config().buffer_storage} and {a_t.dtype()}"
     )
     logger.debug(
-        f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.dtype()}"
+        f"in1 ({b_shape}): {b_t.memory_config().buffer_storage} and {b_t.dtype()}"
     )
     if bias_mem_config is not None:
         logger.debug(
-            f"bias ({bias_shape}): {bias_t.memory_config().buffer_type} and {bias_t.dtype()}"
+            f"bias ({bias_shape}): {bias_t.memory_config().buffer_storage} and {bias_t.dtype()}"
         )
     logger.debug(
-        f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.dtype()}"
+        f"out ({expected_output_shape}): {t2.memory_config().buffer_storage} and {t2.dtype()}"
     )
 
     assert t2.shape() == expected_output_shape
@@ -224,20 +224,20 @@ def run_bert_large_bmm_test(
     t2 = bert_large_op(a_t, b_t, out_mem_config, out_dtype)
 
     # Check memory and dtype of inputs and outputs
-    assert a_t.memory_config().buffer_type == in0_mem_config.buffer_type
+    assert a_t.memory_config().buffer_storage == in0_mem_config.buffer_storage
     assert a_t.dtype() == in0_dtype
-    assert b_t.memory_config().buffer_type == in1_mem_config.buffer_type
+    assert b_t.memory_config().buffer_storage == in1_mem_config.buffer_storage
     assert b_t.dtype() == in1_dtype
-    assert t2.memory_config().buffer_type == out_mem_config.buffer_type
+    assert t2.memory_config().buffer_storage == out_mem_config.buffer_storage
     assert t2.dtype() == out_dtype
     logger.debug(
-        f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.dtype()}"
+        f"in0 ({a_shape}): {a_t.memory_config().buffer_storage} and {a_t.dtype()}"
     )
     logger.debug(
-        f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.dtype()}"
+        f"in1 ({b_shape}): {b_t.memory_config().buffer_storage} and {b_t.dtype()}"
     )
     logger.debug(
-        f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.dtype()}"
+        f"out ({expected_output_shape}): {t2.memory_config().buffer_storage} and {t2.dtype()}"
     )
 
     assert t2.shape() == expected_output_shape
@@ -262,16 +262,16 @@ def run_bert_large_bmm_test(
     "in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config",
     (
         (
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
         ),
         (
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
         ),
     ),
     ids=["DRAM", "L1"],
@@ -352,14 +352,14 @@ def test_bert_large_matmul(
     "in0_mem_config, in1_mem_config, out_mem_config",
     (
         (
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
         ),
         (
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
         ),
     ),
     ids=["DRAM", "L1"],

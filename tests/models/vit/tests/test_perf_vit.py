@@ -52,7 +52,7 @@ def run_perf_vit(
     )
 
     tt_inputs = tt_inputs.to(
-        device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1)
     )
     tt_model = vit_for_image_classification(device)
 

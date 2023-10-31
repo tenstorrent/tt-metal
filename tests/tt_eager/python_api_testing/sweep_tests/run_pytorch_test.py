@@ -40,8 +40,8 @@ LAYOUTS_TT_DICT = {
 }
 
 MEM_CONFIGS_TT_DICT = {
-    "DRAM": tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-    "L1": tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1),
+    "DRAM": tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.DRAM),
+    "L1": tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1),
     "SYSTEM_MEMORY": None,
 }
 
@@ -163,8 +163,8 @@ def run_pytorch_test(args):
                     for layout in input_spec['data-layout']:
                         test_tt_layouts[-1].append(LAYOUTS_TT_DICT[layout])
 
-                    for buffer_type in input_spec['buffer-type']:
-                        test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_type])
+                    for buffer_storage in input_spec['buffer-storage']:
+                        test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_storage])
             else:
                 for i in range(shape_dict["num-shapes"]):
                     test_tt_dtypes.append([])
@@ -183,9 +183,9 @@ def run_pytorch_test(args):
                     else:
                         test_tt_dtypes[-1] = generation_funcs.supported_tt_dtypes
 
-                    if 'buffer-type' in test_args:
-                        for buffer_type in test_args['buffer-type']:
-                            test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_type])
+                    if 'buffer-storage' in test_args:
+                        for buffer_storage in test_args['buffer-storage']:
+                            test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_storage])
                     else:
                         test_mem_configs[-1] = generation_funcs.supported_mem_configs
 
@@ -193,16 +193,16 @@ def run_pytorch_test(args):
                 for out_spec in test_args["outputs"]:
                     test_mem_configs.append([])
 
-                    assert 'out-buffer-type' in out_spec, f"For output you need to specify 'out-buffer-type'"
+                    assert 'out-buffer-storage' in out_spec, f"For output you need to specify 'out-buffer-storage'"
 
-                    for buffer_type in out_spec['out-buffer-type']:
-                        test_mem_configs[-1].append(buffer_type)
+                    for buffer_storage in out_spec['out-buffer-storage']:
+                        test_mem_configs[-1].append(buffer_storage)
             else:
                 test_mem_configs.append([])
 
-                if 'out-buffer-type' in test_args:
-                    for buffer_type in test_args['out-buffer-type']:
-                        test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_type])
+                if 'out-buffer-storage' in test_args:
+                    for buffer_storage in test_args['out-buffer-storage']:
+                        test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_storage])
                 else:
                     test_mem_configs[-1] = [MEM_CONFIGS_TT_DICT["DRAM"]]
             # Set tests parameters --------------------------

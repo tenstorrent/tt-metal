@@ -116,10 +116,10 @@ struct SfpuConfig {
 bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::Program();
-    auto input_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto input_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferStorage::DRAM);
     uint32_t input_dram_byte_address = input_dram_buffer.address();
     auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
-    auto output_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto output_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferStorage::DRAM);
     uint32_t output_dram_byte_address = output_dram_buffer.address();
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 

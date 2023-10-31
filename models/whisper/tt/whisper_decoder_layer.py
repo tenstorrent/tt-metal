@@ -37,7 +37,7 @@ class TtWhisperDecoderLayer(nn.Module):
         self.embed_dim = embed_dim
         self.decoder_ffn_dim = decoder_ffn_dim
         self.out_mem_config_l1 = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1
         )
 
         # Do not use dropout for now

@@ -61,11 +61,11 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
 		.set_page_size(output_cb_index, single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool src1_is_dram = src1_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
 
     auto reader_id = tt_metal::CreateDataMovementKernel(

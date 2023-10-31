@@ -407,18 +407,18 @@ int main(int argc, char **argv) {
         auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
 
-        Buffer activation_buffer(device, activations.size() * sizeof(u32), 1024 * 2, BufferType::DRAM);
+        Buffer activation_buffer(device, activations.size() * sizeof(u32), 1024 * 2, BufferStorage::DRAM);
         pass &= move_tiles_to_dram(cq, activation_buffer, activations, M, K);
 
         auto identity_tilized = tilize(identity, K * 32, N * 32);
         auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
 
-        Buffer weight_buffer(device, weights.size() * sizeof(u32), 1024 * 2, BufferType::DRAM);
+        Buffer weight_buffer(device, weights.size() * sizeof(u32), 1024 * 2, BufferStorage::DRAM);
         pass &= move_tiles_to_dram(cq, weight_buffer, weights, K, N);
         log_info(LogTest, "Copying inputs to dram complete");
 
-        Buffer out_buffer(device, M * N * sizeof(u32) * 32 * 32, 1024 * 2, BufferType::DRAM);
+        Buffer out_buffer(device, M * N * sizeof(u32) * 32 * 32, 1024 * 2, BufferStorage::DRAM);
         u32 out_dram_addr = out_buffer.address();
 
         log_info(LogTest, "Writing kernel runtime args to device");

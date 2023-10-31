@@ -26,7 +26,7 @@ void BankManager::init_allocator(u64 size_bytes, u64 offset) {
     );
 }
 
-BankManager::BankManager(const BufferType &buffer_type, const std::vector<i64> &bank_offsets, u64 size_bytes, u64 alloc_offset) : buffer_type_(buffer_type) {
+BankManager::BankManager(const BufferStorage &buffer_storage, const std::vector<i64> &bank_offsets, u64 size_bytes, u64 alloc_offset) : buffer_storage_(buffer_storage) {
     unsigned int bank_id = 0;
     for (const auto bank_offset : bank_offsets) {
         this->bank_id_to_bank_offset_.insert({bank_id, bank_offset});
@@ -35,7 +35,7 @@ BankManager::BankManager(const BufferType &buffer_type, const std::vector<i64> &
     this->init_allocator(size_bytes, alloc_offset);
 }
 
-BankManager::BankManager(const BufferType &buffer_type, const std::unordered_map<u32, i64> &bank_id_to_bank_offset, u64 size_bytes, u64 alloc_offset) : buffer_type_(buffer_type), bank_id_to_bank_offset_(bank_id_to_bank_offset) {
+BankManager::BankManager(const BufferStorage &buffer_storage, const std::unordered_map<u32, i64> &bank_id_to_bank_offset, u64 size_bytes, u64 alloc_offset) : buffer_storage_(buffer_storage), bank_id_to_bank_offset_(bank_id_to_bank_offset) {
     this->init_allocator(size_bytes, alloc_offset);
 }
 
@@ -68,7 +68,7 @@ u64 BankManager::allocate_buffer(u32 size, u32 page_size, bool bottom_up) {
 
     auto address = this->allocator_->allocate(size_per_bank, bottom_up);
     if (not address.has_value()) {
-        log_fatal(tt::LogMetal, "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to store {} B", size, magic_enum::enum_name(this->buffer_type_), num_banks, size_per_bank);
+        log_fatal(tt::LogMetal, "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to store {} B", size, magic_enum::enum_name(this->buffer_storage_), num_banks, size_per_bank);
     }
     allocated_buffers_.insert(address.value());
     return address.value();
@@ -115,7 +115,7 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
     for (u32 channel_id = 0; channel_id < alloc_config.num_dram_channels; channel_id++) {
         bank_offsets.at(channel_id) = static_cast<i32>(alloc_config.dram_bank_offsets.at(channel_id));
     }
-    allocator.dram_manager = BankManager(BufferType::DRAM, bank_offsets, dram_bank_size, offset_bytes);
+    allocator.dram_manager = BankManager(BufferStorage::DRAM, bank_offsets, dram_bank_size, offset_bytes);
     for (u32 bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
         allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
         allocator.dram_channel_to_bank_ids.insert({bank_id, {bank_id}});
@@ -128,7 +128,7 @@ void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_con
     u64 offset_bytes = static_cast<u64>(L1_UNRESERVED_BASE);
     u32 l1_bank_size = alloc_config.worker_l1_size - L1_UNRESERVED_BASE;
     std::vector<i64> bank_offsets (num_l1_banks, 0);
-    allocator.l1_manager = BankManager(BufferType::L1, bank_offsets, l1_bank_size, offset_bytes);
+    allocator.l1_manager = BankManager(BufferStorage::L1, bank_offsets, l1_bank_size, offset_bytes);
 
     u32 bank_id = 0;
     for (u32 y = 0; y < alloc_config.worker_grid_size.y; y++) {
@@ -141,10 +141,10 @@ void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_con
     }
 }
 
-u32 num_banks(const Allocator &allocator, const BufferType &buffer_type) {
-    switch (buffer_type) {
-        case BufferType::DRAM: return allocator.dram_manager.num_banks();
-        case BufferType::L1: return allocator.l1_manager.num_banks();
+u32 num_banks(const Allocator &allocator, const BufferStorage &buffer_storage) {
+    switch (buffer_storage) {
+        case BufferStorage::DRAM: return allocator.dram_manager.num_banks();
+        case BufferStorage::L1: return allocator.l1_manager.num_banks();
         default: {
             TT_ASSERT(false && "Unsupported buffer type!");
         }
@@ -152,10 +152,10 @@ u32 num_banks(const Allocator &allocator, const BufferType &buffer_type) {
     return 0;
 }
 
-u32 bank_size(const Allocator &allocator, const BufferType &buffer_type) {
-    switch (buffer_type) {
-        case BufferType::DRAM: return allocator.dram_manager.bank_size();
-        case BufferType::L1: return allocator.l1_manager.bank_size();
+u32 bank_size(const Allocator &allocator, const BufferStorage &buffer_storage) {
+    switch (buffer_storage) {
+        case BufferStorage::DRAM: return allocator.dram_manager.bank_size();
+        case BufferStorage::L1: return allocator.l1_manager.bank_size();
         default: {
             log_fatal(tt::LogMetal, "Unsupported buffer type!");
         }
@@ -191,26 +191,26 @@ std::vector<u32> bank_ids_from_logical_core(const Allocator &allocator, const Co
     return allocator.logical_core_to_bank_ids.at(logical_core);
 }
 
-Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_type) {
+Statistics get_statistics(const Allocator &allocator, const BufferStorage &buffer_storage) {
     Statistics stats;
-    switch (buffer_type) {
-        case BufferType::DRAM: return allocator.dram_manager.get_statistics();
-        case BufferType::L1: return allocator.l1_manager.get_statistics();
+    switch (buffer_storage) {
+        case BufferStorage::DRAM: return allocator.dram_manager.get_statistics();
+        case BufferStorage::L1: return allocator.l1_manager.get_statistics();
         default: {
-            log_assert(false, "Unsupported buffer type!");
+            log_assert(false, "Unsupported buffer storage!");
         }
     }
     return stats;
 }
 
-void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_type, std::ofstream &out) {
-    switch (buffer_type) {
-        case BufferType::DRAM: allocator.dram_manager.dump_blocks(out);
+void dump_memory_blocks(const Allocator &allocator, const BufferStorage &buffer_storage, std::ofstream &out) {
+    switch (buffer_storage) {
+        case BufferStorage::DRAM: allocator.dram_manager.dump_blocks(out);
         break;
-        case BufferType::L1: allocator.l1_manager.dump_blocks(out);
+        case BufferStorage::L1: allocator.l1_manager.dump_blocks(out);
         break;
         default: {
-            log_assert(false, "Unsupported buffer type!");
+            log_assert(false, "Unsupported buffer storage!");
         }
     }
 }
@@ -223,11 +223,11 @@ u64 base_alloc(const AllocatorConfig &config, BankManager &bank_manager, u64 siz
     return bank_manager.allocate_buffer(size, page_size, bottom_up);
 }
 
-u64 allocate_buffer(Allocator &allocator, u32 size, u32 page_size, const BufferType &buffer_type, bool bottom_up) {
+u64 allocate_buffer(Allocator &allocator, u32 size, u32 page_size, const BufferStorage &buffer_storage, bool bottom_up) {
     u64 address = 0;
-    switch (buffer_type) {
-        case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, size, page_size, bottom_up);
-        case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, size, page_size, bottom_up);
+    switch (buffer_storage) {
+        case BufferStorage::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, size, page_size, bottom_up);
+        case BufferStorage::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, size, page_size, bottom_up);
         default: {
             TT_ASSERT(false && "Unsupported buffer type!");
         }
@@ -235,12 +235,12 @@ u64 allocate_buffer(Allocator &allocator, u32 size, u32 page_size, const BufferT
     return address;
 }
 
-void deallocate_buffer(Allocator &allocator, u64 address, const BufferType &buffer_type) {
-    switch (buffer_type) {
-        case BufferType::DRAM:
+void deallocate_buffer(Allocator &allocator, u64 address, const BufferStorage &buffer_storage) {
+    switch (buffer_storage) {
+        case BufferStorage::DRAM:
             allocator.dram_manager.deallocate_buffer(address);
         break;
-        case BufferType::L1:
+        case BufferStorage::L1:
             allocator.l1_manager.deallocate_buffer(address);
         break;
         default: {

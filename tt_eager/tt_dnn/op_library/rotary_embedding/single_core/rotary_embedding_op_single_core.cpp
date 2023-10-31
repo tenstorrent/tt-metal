@@ -143,9 +143,9 @@ operation::ProgramWithCallbacks rotary_embedding_single_core(const Tensor &input
     auto sin_buffer = sin.buffer();
     auto dst_buffer = output.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool cos_is_dram = cos_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool sin_is_dram = sin_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = src_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool cos_is_dram = cos_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool sin_is_dram = sin_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_cb_index,
         (std::uint32_t)rotated_input_cb_index,
@@ -161,7 +161,7 @@ operation::ProgramWithCallbacks rotary_embedding_single_core(const Tensor &input
         (std::uint32_t)HtWt,
         (std::uint32_t)half_Wt,
     };
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
         (std::uint32_t) dst_is_dram

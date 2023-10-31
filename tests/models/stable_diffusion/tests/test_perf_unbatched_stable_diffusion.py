@@ -239,13 +239,13 @@ def run_perf_unbatched_stable_diffusion(
         tt_conditioned = tt_conditioned.to(
             device,
             ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1
             ),
         )
         tt_unconditioned = tt_unconditioned.to(
             device,
             ttl.tensor.MemoryConfig(
-                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+                ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1
             ),
         )
 

@@ -21,7 +21,7 @@ uint32_t packed_buffer_size_bytes_wrapper(DataType dtype, uint32_t volume_unpack
 
 Tensor to_host_wrapper(const Tensor &tensor);
 
-Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const MemoryConfig &mem_config);
+Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const MemoryConfig &mem_config, std::optional<ShardSpec> shard_spec = std::nullopt);
 
 Tensor to_layout_wrapper(const Tensor &tensor, Layout target_layout);
 

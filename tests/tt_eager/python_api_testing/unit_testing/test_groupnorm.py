@@ -121,11 +121,11 @@ def run_groupnorm_tests(
                 assert False
             logger.info("Done")
 
-            assert ttx.memory_config().buffer_type == in0_mem_config.buffer_type
-            assert tty.memory_config().buffer_type == in0_mem_config.buffer_type
+            assert ttx.memory_config().buffer_storage == in0_mem_config.buffer_storage
+            assert tty.memory_config().buffer_storage == in0_mem_config.buffer_storage
 
-            logger.debug(f"ttx is on: {ttx.memory_config().buffer_type}")
-            logger.debug(f"tty is on: {tty.memory_config().buffer_type}")
+            logger.debug(f"ttx is on: {ttx.memory_config().buffer_storage}")
+            logger.debug(f"tty is on: {tty.memory_config().buffer_storage}")
 
             tt_got_back = ttz.cpu().to_torch()
             tt_got_back = untilize(tt_got_back)
@@ -136,12 +136,12 @@ def run_groupnorm_tests(
 
 @pytest.mark.parametrize(
     "out_mem_config",
-    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
+    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),),
     ids=["out_DRAM"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
-    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
+    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),),
     ids=["in0_DRAM"],
 )
 @pytest.mark.parametrize(

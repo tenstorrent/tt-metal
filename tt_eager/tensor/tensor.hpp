@@ -31,7 +31,8 @@ class Tensor {
         // ======================================================================================
         //                                  Hi Level APIs
         // ======================================================================================
-        Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout, std::optional<ShardSpec> shard_spec);
+        Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout,
+                std::optional<ShardSpec> shard_spec);
         Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout);
 
         Tensor(const Tensor &other) = default;
@@ -44,7 +45,8 @@ class Tensor {
 
         void deallocate();
 
-        Tensor to(Device *target_device, const MemoryConfig &mem_config={.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
+        Tensor to(Device *target_device, const MemoryConfig &mem_config={.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+                std::optional<ShardSpec> shard_spec = std::nullopt) const;
 
         Tensor to(Layout target_layout) const;
 
@@ -109,6 +111,8 @@ class Tensor {
         std::optional<ShardSpec> shard_spec_;
 
 };
+
+std::array<u32, 2> sharded_page_dims(ShardSpec shard_spec, uint32_t element_size,  MemoryConfig memory_config, Layout layout, Shape shape, DataType data_type);
 
 Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
 

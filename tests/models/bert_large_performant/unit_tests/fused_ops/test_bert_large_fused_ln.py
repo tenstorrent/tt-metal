@@ -97,13 +97,13 @@ def run_layernorm_tests(device, test_id, batch, dtype, in0_mem_config, out_mem_c
                 assert False
             logger.info("Done")
 
-            assert ttx.memory_config().buffer_type == in0_mem_config.buffer_type
-            assert tty.memory_config().buffer_type == in0_mem_config.buffer_type
-            assert ttz.memory_config().buffer_type == out_mem_config.buffer_type
+            assert ttx.memory_config().buffer_storage == in0_mem_config.buffer_storage
+            assert tty.memory_config().buffer_storage == in0_mem_config.buffer_storage
+            assert ttz.memory_config().buffer_storage == out_mem_config.buffer_storage
 
-            logger.debug(f"ttx is on: {ttx.memory_config().buffer_type}")
-            logger.debug(f"tty is on: {tty.memory_config().buffer_type}")
-            logger.debug(f"ttz is on: {ttz.memory_config().buffer_type}")
+            logger.debug(f"ttx is on: {ttx.memory_config().buffer_storage}")
+            logger.debug(f"tty is on: {tty.memory_config().buffer_storage}")
+            logger.debug(f"ttz is on: {ttz.memory_config().buffer_storage}")
 
             tt_got_back = ttz.cpu().to_torch()
             tt_got_back = untilize(tt_got_back)
@@ -119,16 +119,16 @@ import pytest
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
     ),
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
     ),
     ids=["in0_DRAM", "in0_L1"],
 )

@@ -51,10 +51,10 @@ operation::ProgramWithCallbacks embeddings_tilized(
     Program program{};
 
     uint32_t num_tiles_per_cb = 1;
-    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in0_is_dram = a.buffer()->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool weights_is_dram = weights.buffer()->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     bool weights_dtype_is_bfloat16 = weights.dtype() == tt::tt_metal::DataType::BFLOAT16;
-    bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = output.buffer()->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
 
     uint32_t last_dim = 3;
     uint32_t element_size_in_bytes = 2; // size of float
@@ -99,7 +99,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
     tt_metal::Buffer dst_buffer_l1 = CreateBuffer(device,
                                                         sizeof(uint32_t)*2,
                                                         sizeof(uint32_t)*2,
-                                                        tt_metal::BufferType::L1);
+                                                        tt_metal::BufferStorage::L1);
 
     std::vector<tt_metal::DataMovementProcessor> risc_procs = {tt_metal::DataMovementProcessor::RISCV_0, tt_metal::DataMovementProcessor::RISCV_1};
     std::vector<tt_metal::NOC> noc_ports = {tt_metal::NOC::RISCV_0_default, tt_metal::NOC::RISCV_1_default};
@@ -325,10 +325,10 @@ operation::ProgramWithCallbacks embeddings_rm(
 
     uint32_t cb_id = 0;
     uint32_t num_tiles_per_cb = 1;
-    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool in0_is_dram = a.buffer()->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool weights_is_dram = weights.buffer()->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     bool weights_dtype_is_bfloat16 = weights.dtype() == tt::tt_metal::DataType::BFLOAT16;
-    bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = output.buffer()->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
 
     uint32_t last_dim = 3;
     uint32_t element_size_in_bytes = 2; // size of float
@@ -378,12 +378,12 @@ operation::ProgramWithCallbacks embeddings_rm(
                                         CreateBuffer(device,
                                                         sizeof(uint32_t)*2,
                                                         sizeof(uint32_t)*2,
-                                                        tt_metal::BufferType::L1));
+                                                        tt_metal::BufferStorage::L1));
     std::vector <tt_metal::Buffer> weights_buffer_l1 (embedding_risc_cores_per_tensix,
                                         CreateBuffer(device,
                                                         single_page_size*2,
                                                         single_page_size,
-                                                        tt_metal::BufferType::L1));
+                                                        tt_metal::BufferStorage::L1));
 
     std::vector< std::vector<uint32_t> > compile_time_args(embedding_risc_cores_per_tensix);
     std::vector<tt_metal::DataMovementProcessor> risc_procs = {tt_metal::DataMovementProcessor::RISCV_0, tt_metal::DataMovementProcessor::RISCV_1};

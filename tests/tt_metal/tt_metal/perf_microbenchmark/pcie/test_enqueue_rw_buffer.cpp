@@ -24,22 +24,22 @@ int main(int argc, char** argv) {
     // Initial Runtime Args Parse
     std::vector<std::string> input_args(argv, argv + argc);
 
-    string buffer_type_string = "";
+    string buffer_storage_string = "";
     uint32_t iter;
     try {
       std::tie(iter, input_args) =
           test_args::get_command_option_uint32_and_remaining_args(input_args,
                                                            "--iter", 1);
-      std::tie(buffer_type_string, input_args) =
+      std::tie(buffer_storage_string, input_args) =
           test_args::get_command_option_and_remaining_args(input_args,
-                                                           "--buffer_type");
+                                                           "--buffer_storage");
     } catch (const std::exception& e) {
       log_fatal(tt::LogTest,
-                "Please input type of the buffer with \"--buffer_type <0: "
+                "Please input type of the buffer with \"--buffer_storage <0: "
                 "DRAM, 1: L1>\"",
                 e.what());
     }
-    int buffer_type = stoi(buffer_type_string);
+    int buffer_storage = stoi(buffer_storage_string);
 
     string size_string = "";
     try {
@@ -53,8 +53,8 @@ int main(int argc, char** argv) {
     }
     uint64_t buffer_size = stoul(size_string);
 
-    log_info(LogTest, "Measuring performance for buffer_type={}, size={}bytes",
-             buffer_type == 0 ? "DRAM" : "L1", buffer_size);
+    log_info(LogTest, "Measuring performance for buffer_storage={}, size={}bytes",
+             buffer_storage == 0 ? "DRAM" : "L1", buffer_size);
 
     // Device Setup
     int device_id = 0;
@@ -65,8 +65,8 @@ int main(int argc, char** argv) {
     uint32_t single_tile_size = 2 * 1024;
     auto page_size = single_tile_size;
     auto buffer = CreateBuffer(device, buffer_size, page_size,
-                                   buffer_type == 0 ? tt_metal::BufferType::DRAM
-                                                    : tt_metal::BufferType::L1);
+                                   buffer_storage == 0 ? tt_metal::BufferStorage::DRAM
+                                                    : tt_metal::BufferStorage::L1);
 
     // Execute Application
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
       auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) /
                   (elapsed_us / 1000.0 / 1000.0);
       log_info(LogTest, "EnqueueWriteBuffer to {}: {:.3f}ms, {:.3f}GB/s",
-                buffer_type == 0 ? "DRAM" : "L1", elapsed_us / 1000.0, bw);
+                buffer_storage == 0 ? "DRAM" : "L1", elapsed_us / 1000.0, bw);
     }
 
     std::vector<uint32_t> result_vec;
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
       auto bw = (buffer_size / 1024.0 / 1024.0 / 1024.0) /
                   (elapsed_us / 1000.0 / 1000.0);
       log_info(LogTest, "EnqueueReadBuffer from {}: {:.3f}ms, {:.3f}GB/s",
-                buffer_type == 0 ? "DRAM" : "L1", elapsed_us / 1000.0, bw);
+                buffer_storage == 0 ? "DRAM" : "L1", elapsed_us / 1000.0, bw);
     }
 
     // Validation & Teardown

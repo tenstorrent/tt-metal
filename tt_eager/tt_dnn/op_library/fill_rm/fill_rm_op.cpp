@@ -39,7 +39,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
 		.set_page_size(1, single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) dst_is_dram};
 
     tt_metal::KernelID binary_reader_kernel_id = tt_metal::CreateDataMovementKernel(

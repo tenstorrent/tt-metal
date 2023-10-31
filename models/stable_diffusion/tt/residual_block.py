@@ -52,7 +52,7 @@ class TtResnetBlock2D(nn.Module):
         self.output_scale_factor = output_scale_factor
         self.device = device
         self.host = host
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1)
 
         if groups_out is None:
             groups_out = groups
@@ -167,7 +167,7 @@ class TtResnetBlock2D(nn.Module):
             )
 
     def forward(self, input_tensor: ttl.tensor.Tensor, temb: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
-        out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+        out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1)
         hidden_states = input_tensor
         hidden_states = self.norm1(hidden_states)
         hidden_states = self.nonlinearity(hidden_states, )

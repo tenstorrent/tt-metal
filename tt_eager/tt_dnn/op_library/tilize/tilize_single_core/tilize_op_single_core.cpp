@@ -93,7 +93,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
     };
 
     // Reader compile-time args
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(stick_size) : 0;
     std::vector<uint32_t> reader_compile_time_args = {
@@ -102,7 +102,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
         (std::uint32_t) log2_stick_size,
     };
 
-    bool out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
         (std::uint32_t) out_is_dram
@@ -297,7 +297,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     };
 
     // Reader compile-time args
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     uint32_t stick_size = unpadded_row_size_bytes;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(stick_size) : 0;
@@ -307,7 +307,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
         (std::uint32_t) log2_stick_size,
     };
 
-    bool out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index,
         (std::uint32_t) out_is_dram

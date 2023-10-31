@@ -178,7 +178,7 @@ bool MemoryConfig::is_sharded() const {
 }
 
 bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
-    return config_a.buffer_type == config_b.buffer_type && config_a.memory_layout == config_b.memory_layout;
+    return config_a.buffer_storage == config_b.buffer_storage && config_a.memory_layout == config_b.memory_layout;
 }
 
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b){
@@ -189,7 +189,7 @@ bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b){
 tt::stl::reflection::Attributes MemoryConfig::attributes() const {
     return {
         {"memory_layout", this->memory_layout},
-        {"buffer_type", this->buffer_type},
+        {"buffer_storage", this->buffer_storage},
     };
 }
 
@@ -227,14 +227,7 @@ bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b) {
     return !(spec_a == spec_b);
 }
 
-tt::stl::reflection::Attributes ShardSpec::attributes() const {
-    return {
-        {"shard_grid", this->shard_grid.str()},
-        {"shard_shape", this->shard_shape},
-        {"shard_orientation", this->shard_orientation},
-        {"halo", this->halo},
-    };
-}
+
 
 }  // namespace tt_metal
 

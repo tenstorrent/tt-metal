@@ -466,7 +466,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         };
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0)};
 
     auto writer_id = CreateDataMovementKernel(
         program,                        // program

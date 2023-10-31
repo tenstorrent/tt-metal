@@ -77,7 +77,7 @@ def run_perf_whisper(expected_inference_time, expected_compile_time, device):
             input_features, device, tt_lib.tensor.Layout.ROW_MAJOR
         )
         input_features = input_features.to(
-            device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+            device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1)
         )
         profiler.start(first_key)
         ttm_output = tt_whisper(

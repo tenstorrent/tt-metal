@@ -83,8 +83,8 @@ def test_run_max_pool(
 ):
     # ttl.device.EnableMemoryReports()
 
-    in_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
-    out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
+    in_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferStorage.L1)
+    out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferStorage.L1)
 
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
@@ -110,7 +110,7 @@ def test_run_max_pool(
         logger.info("Current maxpool writer needs nchannels to be 64!")
         pytest.skip()
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    interleaved_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1)
 
     assert(out_mem_config.is_sharded() and in_mem_config.is_sharded())
 

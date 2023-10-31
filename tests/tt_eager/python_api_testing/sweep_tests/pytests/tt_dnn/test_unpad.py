@@ -33,7 +33,7 @@ params = [
         [[5, 5, 50, 50]],
         dtypes=[[tt_lib.tensor.DataType.BFLOAT16]],
         layouts=[[tt_lib.tensor.Layout.ROW_MAJOR]],
-        mem_configs=[[tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)]])
+        mem_configs=[[tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.DRAM)]])
 ]
 
 params += [
@@ -42,7 +42,7 @@ params += [
         [[5, 5, 64, 96]],
         dtypes=[[tt_lib.tensor.DataType.BFLOAT16]],
         layouts=[[tt_lib.tensor.Layout.TILE]],
-        mem_configs=[[tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)]])
+        mem_configs=[[tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.DRAM)]])
 ]
 
 

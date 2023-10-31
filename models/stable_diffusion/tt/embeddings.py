@@ -30,7 +30,7 @@ class TtTimestepEmbedding(nn.Module):
 
         weights = state_dict[f"{base_address}.linear_1.weight"]
         bias = state_dict[f"{base_address}.linear_1.bias"]
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1)
 
         self.linear_1 = make_linear(
             in_features=in_channels,

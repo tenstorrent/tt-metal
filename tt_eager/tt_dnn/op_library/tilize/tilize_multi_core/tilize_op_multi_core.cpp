@@ -190,7 +190,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
 
     /** reader
      */
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == BufferStorage::DRAM ? 1 : 0;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(block_size_nbytes);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t) std::log2(block_size_nbytes) : 0;
     std::vector<uint32_t> reader_ct_args = {
@@ -209,7 +209,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
 
     /** writer
      */
-    bool out_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_ct_args = {
         (std::uint32_t) output_cb_index,
         (std::uint32_t) out_is_dram
@@ -413,7 +413,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor &input, T
         (std::uint32_t) src0_cb_index
     };
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool dst_is_dram = dst_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t) output_cb_index
     };
@@ -579,7 +579,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
     /** writer
      */
     KernelID unary_writer_kernel_id;
-    bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool out_is_dram = dst_buffer->buffer_storage() == BufferStorage::DRAM ? 1 : 0;
     vector<uint32_t> writer_ct_args = {
         output_cb_index,
     };

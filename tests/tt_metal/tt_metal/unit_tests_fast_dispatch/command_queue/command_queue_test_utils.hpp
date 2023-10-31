@@ -10,7 +10,7 @@
 struct BufferConfig {
     u32 num_pages;
     u32 page_size;
-    BufferType buftype;
+    BufferStorage buftype;
 };
 
 inline pair<Buffer, vector<u32>> EnqueueWriteBuffer_prior_to_wrap(Device* device, CommandQueue& cq, const BufferConfig& config) {

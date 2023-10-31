@@ -21,11 +21,11 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
+inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_storage == BufferStorage::DRAM; }
 inline bool is_dram(const std::optional<const Tensor> input_tensor) {
      return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
-inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
+inline bool is_dram(const Buffer* b) { return b->buffer_storage() == BufferStorage::DRAM; }
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
 operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, const Tensor &output_tensor, const std::optional<const Tensor> mask, std::optional<float> scale) {
@@ -89,14 +89,14 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     auto all_device_cores = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = split_work_to_cores(grid_size, num_tile_rows, true);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out0_is_dram = out0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
+    bool out0_is_dram = out0_buffer->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
         src0_is_dram
     };
     if (mask.has_value()) {
-        bool mask_is_dram = mask.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+        bool mask_is_dram = mask.value().buffer()->buffer_storage() == tt_metal::BufferStorage::DRAM ? 1 : 0;
         reader_compile_time_args.push_back(mask_is_dram);
     }
 

@@ -21,7 +21,7 @@ namespace tt {
 namespace tt_metal {
 
 // Fwd declares
-enum class BufferType;
+enum class BufferStorage;
 struct Allocator;
 
 namespace allocator {
@@ -30,8 +30,8 @@ class BankManager {
    public:
     BankManager() {}
 
-    BankManager(const BufferType &buffer_type, const std::vector<i64> &bank_descriptors, u64 size_bytes, u64 alloc_offset=0);
-    BankManager(const BufferType &buffer_type, const std::unordered_map<u32, i64> &bank_id_to_descriptor, u64 size_bytes, u64 alloc_offset=0);
+    BankManager(const BufferStorage &buffer_storage, const std::vector<i64> &bank_descriptors, u64 size_bytes, u64 alloc_offset=0);
+    BankManager(const BufferStorage &buffer_storage, const std::unordered_map<u32, i64> &bank_id_to_descriptor, u64 size_bytes, u64 alloc_offset=0);
 
     u32 num_banks() const;
 
@@ -55,8 +55,8 @@ class BankManager {
    private:
     constexpr static u32 min_allocation_size_bytes_ = 32;
 
-    // Types of buffers allocated in the banks
-    BufferType buffer_type_;
+    // Storage of buffers allocated in the banks
+    BufferStorage buffer_storage_;
     std::unordered_set<u64> allocated_buffers_;
     // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all banks using only bank_id
     // Set to 0 for cores/nodes with only 1 bank
@@ -73,9 +73,9 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
 
 void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_config);
 
-u32 num_banks(const Allocator &allocator, const BufferType &buffer_type);
+u32 num_banks(const Allocator &allocator, const BufferStorage &buffer_storage);
 
-u32 bank_size(const Allocator &allocator, const BufferType &buffer_type);
+u32 bank_size(const Allocator &allocator, const BufferStorage &buffer_storage);
 
 u32 dram_channel_from_bank_id(const Allocator &allocator, u32 bank_id);
 
@@ -89,17 +89,17 @@ std::vector<u32> bank_ids_from_dram_channel(const Allocator &allocator, u32 dram
 
 std::vector<u32> bank_ids_from_logical_core(const Allocator &allocator, const CoreCoord &logical_core);
 
-Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_type);
+Statistics get_statistics(const Allocator &allocator, const BufferStorage &buffer_storage);
 
-void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_type, std::ofstream &out);
+void dump_memory_blocks(const Allocator &allocator, const BufferStorage &buffer_storage, std::ofstream &out);
 
 std::optional<u64> lowest_occupied_l1_address(const Allocator &allocator, u32 bank_id);
 
 u64 base_alloc(const AllocatorConfig & config, BankManager &bank_manager, u64 size, u64 page_size, bool bottom_up);
 
-u64 allocate_buffer(Allocator &allocator, u32 size, u32 page_size, const BufferType &buffer_type, bool bottom_up);
+u64 allocate_buffer(Allocator &allocator, u32 size, u32 page_size, const BufferStorage &buffer_storage, bool bottom_up);
 
-void deallocate_buffer(Allocator &allocator, u64 address, const BufferType &buffer_type);
+void deallocate_buffer(Allocator &allocator, u64 address, const BufferStorage &buffer_storage);
 void deallocate_buffers(Allocator &allocator);
 
 void clear(Allocator &allocatator);

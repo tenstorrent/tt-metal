@@ -248,7 +248,7 @@ namespace tt::tt_metal{
                                           const std::string &op_path_suffix)
         {
             // Basic Allocator generates number of banks which may not be power of 2, so we could just pad and alias for now
-            const size_t num_dram_banks = device->num_banks(BufferType::DRAM);
+            const size_t num_dram_banks = device->num_banks(BufferStorage::DRAM);
             const size_t num_dram_banks_pow2 = std::pow(2, std::ceil(std::log2(num_dram_banks)));
             std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
             std::vector<i32> dram_offsets_per_bank(num_dram_banks);
@@ -256,7 +256,7 @@ namespace tt::tt_metal{
                 dram_noc_coord_per_bank[bank_id] = device->core_from_dram_channel(device->dram_channel_from_bank_id(bank_id));
                 dram_offsets_per_bank[bank_id] = device->dram_bank_offset_from_bank_id(bank_id);
             }
-            const size_t num_l1_banks = device->num_banks(BufferType::L1);
+            const size_t num_l1_banks = device->num_banks(BufferStorage::L1);
             const size_t num_l1_banks_pow2 = std::pow(2, std::ceil(std::log2(num_l1_banks)));
             std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks_pow2);
             std::vector<i32> l1_offset_per_bank(num_l1_banks_pow2);

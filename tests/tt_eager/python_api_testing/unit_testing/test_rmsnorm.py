@@ -87,11 +87,11 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
             assert False
         logger.info("Done")
 
-        assert ttx.memory_config().buffer_type == in0_mem_config.buffer_type
-        assert ttz.memory_config().buffer_type == out_mem_config.buffer_type
+        assert ttx.memory_config().buffer_storage == in0_mem_config.buffer_storage
+        assert ttz.memory_config().buffer_storage == out_mem_config.buffer_storage
 
-        logger.debug(f"ttx is on: {ttx.memory_config().buffer_type}")
-        logger.debug(f"ttz is on: {ttz.memory_config().buffer_type}")
+        logger.debug(f"ttx is on: {ttx.memory_config().buffer_storage}")
+        logger.debug(f"ttz is on: {ttz.memory_config().buffer_storage}")
 
         t2_data = ttz.cpu().to_torch()
 
@@ -108,16 +108,16 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
 @pytest.mark.parametrize(
     "out_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
     ),
     ids=["out_DRAM", "out_L1"],
 )
 @pytest.mark.parametrize(
     "in0_mem_config",
     (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.L1),
     ),
     ids=["in0_DRAM", "in0_L1"],
 )

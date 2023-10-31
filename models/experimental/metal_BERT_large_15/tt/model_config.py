@@ -96,7 +96,7 @@ def pretty_print_model_config(model_config):
     print_str = []
     for key, val in model_config.items():
         if key.endswith("MEMCFG"):
-            print_str.append(f"{key}: {val.buffer_type}")
+            print_str.append(f"{key}: {val.buffer_storage}")
 
         elif key.endswith("DTYPE") or key.endswith("BOOL"):
             print_str.append(f"{key}: {val}")
@@ -110,9 +110,9 @@ def pretty_print_model_config(model_config):
 def get_model_config(model_config_str):
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
     DRAM_MEMCFG = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.DRAM
     )
-    L1_MEMCFG = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+    L1_MEMCFG = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferStorage.L1)
 
     # Set default dtype and mem_config based on model_config_str
     if model_config_str in (

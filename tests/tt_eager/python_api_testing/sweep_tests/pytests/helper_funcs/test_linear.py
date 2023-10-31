@@ -45,8 +45,8 @@ def test_linear_no_bias(input_shapes, device):
             "weight": weight,
             "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
             "dtype": [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-            "input_mem_config": [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)] * 2,
-            "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            "input_mem_config": [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM)] * 2,
+            "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
             "bias": None,
         },
     )
@@ -82,7 +82,7 @@ def test_linear_with_bias(input_shapes, device):
             "bias": bias,
             "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.ROW_MAJOR],
             "dtype": [ttl.tensor.DataType.BFLOAT16] * 3,
-            "input_mem_config": [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)] * 3,
-            "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            "input_mem_config": [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM)] * 3,
+            "output_mem_config": ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferStorage.DRAM),
         },
     )

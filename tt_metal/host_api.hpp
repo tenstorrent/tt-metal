@@ -12,7 +12,7 @@
 #include "common/core_coord.h"
 #include "tt_metal/impl/program.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
-
+#include <optional>
 /** @file */
 
 /** \mainpage tt-metal Internal C++ Documentation
@@ -155,14 +155,16 @@ uint32_t CreateSemaphore(Program &program, const CoreRangeSet &core_range_set, u
 *
 *  Return value: Buffer
 *
-*  | Argument    | Description                             | Type       | Valid Range | Required |
-*  |-------------|---------------------------------------- |------------|-------------|----------|
-*  | device      | The device that the buffer will reside  | Device     |             | Yes      |
-*  | size        | size of buffer                          | uint64_t   |             | Yes      |
-*  | page_size   | buffer page size                        | uint64_t   |             | Yes      |
-*  | buffer_type | type of buffer (L1 or DRAM)             | BufferType |             | Yes      |
+*  | Argument       | Description                                | Type           | Valid Range | Required |
+*  |----------------|------------------------------------------- |----------------|-------------|----------|
+*  | device         | The device that the buffer will reside     | Device         |             | Yes      |
+*  | size           | size of buffer                             | uint64_t       |             | Yes      |
+*  | page_size      | buffer page size                           | uint64_t       |             | Yes      |
+*  | buffer_storage | storage of buffer (L1 or DRAM)             | BufferStorage  |             | Yes      |
 */
-Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size, const BufferType buffer_type);
+Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size, const BufferStorage buffer_storage,
+        const TensorMemoryLayout buffer_layout=TensorMemoryLayout::INTERLEAVED,
+        std::optional<ShardSpec> shard_parameter = std::nullopt);
 
 /**
 * Copies data from a host buffer into the specified buffer
@@ -181,12 +183,13 @@ void WriteToBuffer(const Buffer &buffer, const std::vector<uint32_t> &host_buffe
 *
 * Return value: void
 *
-* | Argument    | Description                                     | Data type               | Valid range                                      | Required |
-* |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
-* | buffer      | Buffer to read data from                        | const Buffer &          |                                                  | Yes      |
-* | host_buffer | Buffer on host to copy data into                | std::vector<uint32_t> & |                                                  | Yes      |
+* | Argument        | Description                                                                | Data type                           | Valid range                                      | Required |
+* |-----------------|----------------------------------------------------------------------------|-------------------------------------|--------------------------------------------------|----------|
+* | buffer          | Buffer to read data from                                                   | const Buffer &                      |                                                  | Yes      |
+* | host_buffer     | Buffer on host to copy data into                                           | std::vector<uint32_t> &             |                                                  | Yes      |
+* | override_layout | Overrides tensor memory layout to a diff layout than buffer                | std::optional<TensorMemoryLayout> & |                                                  | No       |
 */
-void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer);
+void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer, std::optional<TensorMemoryLayout> override_layout = std::nullopt);
 
 /**
 *  Deallocates buffer from device by marking its memory as free.
