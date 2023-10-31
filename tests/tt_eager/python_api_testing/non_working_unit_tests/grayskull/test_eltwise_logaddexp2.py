@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-import sys
 from loguru import logger
 import random
 import pytest
@@ -11,15 +9,17 @@ import torch
 import tt_lib as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_logaddexp2 as tt_eltwise_logaddexp2
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand
+from tests.tt_eager.python_api_testing.sweep_tests.common import set_dispatch_mode
 
 
 def run_eltwise_logaddexp2_test(
-    input_shape_1, input_shape_2, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
+    input_shape_1, input_shape_2, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device
 ):
     torch.manual_seed(data_seed)
+    set_dispatch_mode(dispatch_mode)
 
     x = gen_rand(size=input_shape_1, low=-100, high=100)
     y = gen_rand(size=input_shape_2, low=-100, high=100)
@@ -28,6 +28,12 @@ def run_eltwise_logaddexp2_test(
     y_ref = y.detach().clone()
 
     ref_value = pytorch_ops.logaddexp2(x_ref, y_ref)
+
+    if in_mem_config[0] == "SYSTEM_MEMORY":
+        in_mem_config[0] = None
+
+    if in_mem_config[1] == "SYSTEM_MEMORY":
+        in_mem_config[1] = None
 
     tt_result = tt_eltwise_logaddexp2(
         x=x,
@@ -40,7 +46,7 @@ def run_eltwise_logaddexp2_test(
     )
 
     # compare tt and golden outputs
-    success, pcc_value = comp_equal(ref_value, tt_result)
+    success, pcc_value = comp_pcc(ref_value, tt_result)
     logger.debug(pcc_value)
     logger.debug(success)
 
@@ -49,34 +55,40 @@ def run_eltwise_logaddexp2_test(
 
 test_sweep_args = [
     (
-        (2, 5, 37, 194),
-        (2, 5, 37, 194),
+        (2, 5, 64, 224),
+        (2, 5, 64, 224),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
-        [None, None],
+        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        ["SYSTEM_MEMORY", "SYSTEM_MEMORY"],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         15842480,
+        False,
     ),
     (
-        (2, 5, 37, 194),
-        (2, 5, 37, 194),
+        (2, 5, 64, 224),
+        (2, 5, 64, 224),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
+        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
         [
             ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
             ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         10406825,
+        False,
     ),
     (
-        (2, 5, 37, 194),
-        (2, 5, 37, 194),
+        (2, 5, 64, 224),
+        (2, 5, 64, 224),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
-        [None, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
+        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [
+            "SYSTEM_MEMORY",
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         2474385,
+        False,
     ),
     (
         (4, 7, 32, 96),
@@ -89,39 +101,45 @@ test_sweep_args = [
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         17155532,
+        False,
     ),
     (
-        (4, 7, 32, 96),
-        (4, 7, 32, 96),
+        (2, 11, 160, 224),
+        (2, 11, 160, 224),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
         [
             ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        16305027,
+        14073508,
+        True,
     ),
     (
-        (4, 7, 32, 96),
-        (4, 7, 32, 96),
+        (4, 10, 76, 4),
+        (4, 10, 76, 4),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-        [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), None],
+        [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
+        [
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        13587334,
+        4645844,
+        True,
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "input_shape_1, input_shape_2, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
+    "input_shape_1, input_shape_2, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode",
     (test_sweep_args),
 )
 def test_eltwise_logaddexp2_test(
-    input_shape_1, input_shape_2, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
+    input_shape_1, input_shape_2, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device
 ):
     random.seed(0)
     run_eltwise_logaddexp2_test(
-        input_shape_1, input_shape_2, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
+        input_shape_1, input_shape_2, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device
     )

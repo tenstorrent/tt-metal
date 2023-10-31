@@ -1533,7 +1533,7 @@ def gen_rop_args(
         dtype,
     ):
         # the n(int) order of the polygamma function is b/w 1 to 10
-        factor = random.randint(1, 10)
+        factor = random.uniform(0.1, 10.0)
         input_info.update({"factor": factor})
         yield input_info
 
