@@ -6,10 +6,8 @@
 
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/tilize.h"
-#include "debug_print.h"
-inline void kernel_sleep(uint32_t loop_count = 1000) {
-    for (volatile uint32_t i = 0; i < loop_count; ++ i);
-}
+
+
 namespace NAMESPACE {
 void MAIN {
 
@@ -36,6 +34,13 @@ void MAIN {
     uint32_t num_output_tiles = num_output_rows_of_tiles * num_output_tiles_in_row;
 
     untilize_init(input_cb_index, untilize_cb_index);
+    pack_reconfig_data_format(untilize_cb_index);
+
+    // print_cb_details(input_cb_index);
+    // print_cb_details(untilize_cb_index);
+    // print_cb_details(untilize_downsampled_cb_index);
+    // print_cb_details(tilize_out_cb_index);
+
     if (halo_prev_enabled) {
         // not required since cb has same data format and untilize init already configured unpacker
         //untilize_init_short(halo_prev_input_cb_index);
@@ -90,11 +95,9 @@ void MAIN {
     cb_wait_front(untilize_downsampled_cb_index, num_output_tiles);
     cb_reserve_back(tilize_out_cb_index, num_output_tiles);
 
-    // tilize_init(untilize_downsampled_cb_index, num_output_tiles_in_row, tilize_out_cb_index);
     unpack_reconfig_data_format_srca(input_cb_index, untilize_downsampled_cb_index);
-    pack_reconfig_data_format(tilize_out_cb_index);
-    kernel_sleep(1000);
     tilize_init_short(untilize_downsampled_cb_index, num_output_tiles_in_row);
+    pack_reconfig_data_format(tilize_out_cb_index);
 
     for(uint32_t b=0;b<num_output_rows_of_tiles;++b)
     {

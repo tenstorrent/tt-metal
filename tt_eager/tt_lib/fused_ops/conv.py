@@ -433,7 +433,7 @@ def resnet50_1x1_conv_s2_as_downsample_and_matmul(
 
     def conv_(activation):
         # downsample op
-        output = tensor.downsample(activation, downsample_params, output_dtype=tensor.DataType.BFLOAT16)
+        output = tensor.downsample(activation, downsample_params, output_dtype=output_dtype)
         output = operations.primary.matmul(
             output,
             weight_on_device,

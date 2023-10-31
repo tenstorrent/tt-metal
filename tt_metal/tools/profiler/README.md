@@ -14,7 +14,7 @@ through `generate_binaries_all_riscs`
 e.g.
 ```
     constexpr bool profiler_kernel = true;
-    generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, "grayskull", params, profiler_kernel);
+    generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, tt::ARCH::GRAYSKULL, params, profiler_kernel);
 ```
 
 2. Under `tests/tt_metal/llrt/`, for whichever test that you want to profile, instantiate a local `Profiler` object,

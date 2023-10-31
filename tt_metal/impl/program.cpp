@@ -29,7 +29,7 @@ namespace{
         const std::string tracyPrefix = "GenerateBinaries_";
         ZoneName( (tracyPrefix + op_path_suffix).c_str(), op_path_suffix.length() + tracyPrefix.length());
         try {
-            generate_descriptors(build_options, op_path_suffix);
+            generate_descriptors(build_options, op_path_suffix, device->arch());
             kernel->generate_binaries(device, build_options, op_path_suffix);
         } catch (std::runtime_error &ex) {
             log_fatal("Failed to generate binaries for {} {}", kernel->name(), ex.what());

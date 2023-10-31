@@ -315,22 +315,24 @@ DownsampleReadPatternParams generate_downsample_read_pattern(ImgTrackingVars & v
     }
     TT_ASSERT(v.img_h < img_height && v.img_w < img_width);
 
-    // cout << "   top_partial_middle_aligned_row_width=" << top_partial_middle_aligned_row_width << endl;
-    // cout << "   skip_top_partial_middle_aligned_row=" << skip_top_partial_middle_aligned_row << endl;
-    // cout << "   top_partial_right_aligned_row_width=" << top_partial_right_aligned_row_width << endl;
-    // cout << "   skip_top_partial_right_aligned_row=" << skip_top_partial_right_aligned_row << endl;
-    // cout << "   num_rows_top_partial_image=" << num_rows_top_partial_image << endl;
-    // cout << "   num_skip_rows_top_partial_image=" << num_skip_rows_top_partial_image << endl;
-    // cout << "   num_full_images=" << num_full_images << endl;
-    // cout << "   num_rows_bottom_partial_image=" << num_rows_bottom_partial_image << endl;
-    // cout << "   num_skip_rows_bottom_partial_image=" << num_skip_rows_bottom_partial_image << endl;
-    // cout << "   bottom_partial_left_aligned_row_width=" << bottom_partial_left_aligned_row_width << endl;
-    // cout << "   skip_bottom_partial_left_aligned_row=" << skip_bottom_partial_left_aligned_row << endl;
-    // cout << "   v.input_flat_h=" << v.input_flat_h << endl;
-    // cout << "   v.output_flat_h=" << v.output_flat_h << endl;
-    // cout << "   input_end_flat_h=" << input_end_flat_h << endl;
-    // cout << "   output_end_flat_h=" << output_end_flat_h << endl;
-    //cout << "img_h=" << v.img_h << ", img_w=" << v.img_w << ", next_img_h=" << v.next_img_h << ", next_img_w=" << v.img_w << endl;
+    if (0) {
+        log_debug(LogOp, "   top_partial_middle_aligned_row_width: {}", top_partial_middle_aligned_row_width);
+        log_debug(LogOp, "   skip_top_partial_middle_aligned_row: {}", skip_top_partial_middle_aligned_row);
+        log_debug(LogOp, "   top_partial_right_aligned_row_width: {}", top_partial_right_aligned_row_width);
+        log_debug(LogOp, "   skip_top_partial_right_aligned_row: {}", skip_top_partial_right_aligned_row);
+        log_debug(LogOp, "   num_rows_top_partial_image: {}", num_rows_top_partial_image);
+        log_debug(LogOp, "   num_skip_rows_top_partial_image: {}", num_skip_rows_top_partial_image);
+        log_debug(LogOp, "   num_full_images: {}", num_full_images);
+        log_debug(LogOp, "   num_rows_bottom_partial_image: {}", num_rows_bottom_partial_image);
+        log_debug(LogOp, "   num_skip_rows_bottom_partial_image: {}", num_skip_rows_bottom_partial_image);
+        log_debug(LogOp, "   bottom_partial_left_aligned_row_width: {}", bottom_partial_left_aligned_row_width);
+        log_debug(LogOp, "   skip_bottom_partial_left_aligned_row: {}", skip_bottom_partial_left_aligned_row);
+        log_debug(LogOp, "   v.input_flat_h: {}", v.input_flat_h);
+        log_debug(LogOp, "   v.output_flat_h: {}", v.output_flat_h);
+        log_debug(LogOp, "   input_end_flat_h: {}", input_end_flat_h);
+        log_debug(LogOp, "   output_end_flat_h: {}", output_end_flat_h);
+        //cout << "img_h=" << v.img_h << ", img_w=" << v.img_w << ", next_img_h=" << v.next_img_h << ", next_img_w=" << v.img_w << endl;
+    }
 
     // Sanity check
     TT_ASSERT(v.input_flat_h <= input_end_flat_h+1);
@@ -452,6 +454,8 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
 		.set_page_size(input_cb_index, input_single_tile_size);
     input_cb_config = input_cb_config.set_globally_allocated_address(a.buffer()->address());
     auto input_cb = tt_metal::CreateCircularBuffer(program, core_range, input_cb_config);
+    log_debug(LogOp, "CB {}: PS = {} NP = {}", input_cb_index, input_single_tile_size, num_input_tiles);
+
     // CB to store halo data
     // hardcode to store 1 row of tiles
     uint32_t halo_prev_input_cb_index = CB::c_in1;
@@ -480,6 +484,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     tt_metal::CircularBufferConfig untilize_cb_config = tt_metal::CircularBufferConfig(num_tiles_untilize_cb * untilized_single_tile_size, {{untilize_cb_index, untilized_cb_data_format}})
 		.set_page_size(untilize_cb_index, untilized_single_tile_size);
     auto untilize_cb = tt_metal::CreateCircularBuffer(program, core_range, untilize_cb_config);
+    log_debug(LogOp, "CB {}: PS = {} NP = {}", untilize_cb_index, untilized_single_tile_size, num_tiles_untilize_cb);
 
     uint32_t num_output_tiles = num_output_tiles_in_row * num_rows_of_output_tiles;
     uint32_t untilize_downsampled_cb_index = CB::c_intermed3;
@@ -611,6 +616,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
             halo_prev_input_num_rows_of_tiles = halo_prev_num_tiles / num_input_tiles_in_row;
             halo_prev_addr_offset = num_input_tiles_in_row * halo_prev_start_tile_id_h * input_single_tile_size;
             halo_prev_start_addr = GetCircularBufferConfig(program, input_cb).globally_allocated_address().value();
+
             TT_ASSERT((halo_prev_start_addr + halo_prev_addr_offset) % 32 == 0); // read address should be 32 byte aligned
             auto halo_noc_coords = device->worker_core_from_logical_core(prev_core);
             halo_prev_noc_x = halo_noc_coords.x;
