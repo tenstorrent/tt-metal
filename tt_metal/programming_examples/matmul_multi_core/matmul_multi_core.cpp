@@ -155,9 +155,6 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
     uint32_t src1_addr = src1_dram_buffer.address();
     uint32_t dst_addr = dst_dram_buffer.address();
 
-    //WriteToBuffer(src0_dram_buffer, a);
-    //WriteToBuffer(src1_dram_buffer, b);
-
     /*
     * Config of Circular Buffer in the device L1
     * input tiles count is = 2 because it's single tile process, and double-buffer
@@ -293,7 +290,6 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
 
 int main(int argc, char **argv) {
     bool pass = true;
-    //auto slow_dispatch_mode = 1;
 
     try {
         /* Silicon accelerator setup */
@@ -316,11 +312,11 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B
 
         /* input vectors */
-        //std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_A_size, 1, 123);
-        //std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(dram_buffer_B_size, 1, 125);
+        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_A_size, 1, 123);
+        std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(dram_buffer_B_size, 1, 125);
 
-        std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(dram_buffer_A_size, false);
-        std::vector<uint32_t> src1_vec = pack_bfloat16_vec_into_uint32_vec(create_identity_matrix(K, N, K));
+        //std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(dram_buffer_A_size, false);
+        //std::vector<uint32_t> src1_vec = pack_bfloat16_vec_into_uint32_vec(create_identity_matrix(K, N, K));
 
         /* Input vector tilizing */
         std::vector<uint32_t> tilized_src0_vec = pack_bfloat16_vec_into_uint32_vec(tilize(unpack_uint32_vec_into_bfloat16_vec(src0_vec), M, K));
@@ -370,7 +366,7 @@ int main(int argc, char **argv) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(result_vec.at(i));
             float a1 = as.first.to_float();
             float a2 = as.second.to_float();
-            if (i % 128 == 0){
+            if (i % 1280 == 0){
                 cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << result_vec.at(i) << endl;
             }
         }
