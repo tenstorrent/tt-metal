@@ -1,82 +1,142 @@
 Device Program Profiler
 =======================
 
-Any point on the device side code can be marked with a time marker. The markers are stored in a statically assigned L1 location.
-As part of tt_metal api ``LaunchProgram`` the markers are fetched from all the cores on the device.
+Overview
+--------
 
-Because downloading profiler results from device has high overheads, ``TT_METAL_DEVICE_PROFILER=1`` environment variable has to be set for ``LaunchProgram`` to perform the download.
+Device-side performance profiling is done by annotating device-side code with timestamp markers.
 
-Default markers are present in device FW(i.e. ``.cc`` files) that mark kernel and FW start and end times.
+``kernel_profiler::mark_time(uint32_t timer_id)`` is the inline function for storing the execution timestamp of events and associating them with a ``timer_id``.
 
-Default markers are:
+Example
+-------
 
-1. FW start
-2. Kernel start
-3. Kernel end
-4. FW end
+Description
+~~~~~~~~~~~
 
-The generated csv is ``profile_log_device.csv`` and is saved under ``tt_metal/tools/profiler/logs`` by default.
+``full_buffer`` is a profiler programming example. It show cases how we can use ``mark_time`` to annotate time on kernel code.
 
-Sample generated csv for a run on core 0,0:
+In this example device side profiling is used to measure the cycle count on the series of "nop" instructions that are looped.
+
+The host code of the ``full_buffer`` example is in ``{$TT_METAL_HOME}/tt_metal/programming_examples/profiler/test_full_buffer/test_full_buffer.cpp``
+
+On top of tt_metal's program dispatch API calls, two additional steps specific to this example are taken, which are:
+
+1. Setting ``LOOP_COUNT`` and ``LOOP_SIZE`` defines for the kernels
+2. Calling :ref:`DumpDeviceProfileResults<DumpDeviceProfileResults>` after the call to Finish to collect the device side profiling data
+
+The kernel code for full buffer is in ``{$TT_METAL_HOME}/tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp`` and demonstrated below:
+
+..  code-block:: c++
+    :linenos:
+
+    // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+    //
+    // SPDX-License-Identifier: Apache-2.0
+
+    #include <cstdint>
+
+    void kernel_main() {
+        for (int i = 0; i < LOOP_COUNT; i ++)
+        {
+            kernel_profiler::mark_time(5);
+    //Max unroll size
+    #pragma GCC unroll 65534
+            for (int j = 0 ; j < LOOP_SIZE; j++)
+            {
+                asm("nop");
+            }
+        }
+    }
+
+The inner for loop of "nop" instructions is executed multiple times. The count is determined by the define variable ``LOOP_COUNT`` defined by the host side code.
+
+The beginning of each iteration of the outer loop is timestamped under id number 5. The profiler output csv of this kernel for NCRISC on core 0,0 on device 0 looks as follows:
 
 ..  code-block:: c++
 
-    0, 0, 0, NCRISC, 1, 1882735035004
-    0, 0, 0, NCRISC, 2, 1882735036049
-    0, 0, 0, NCRISC, 3, 1882735036091
-    0, 0, 0, NCRISC, 4, 1882735036133
-    0, 0, 0, BRISC, 1, 1882735032214
-    0, 0, 0, BRISC, 2, 1882735035364
-    0, 0, 0, BRISC, 3, 1882735035433
-    0, 0, 0, BRISC, 4, 1882735035518
+    ARCH: grayskull, CHIP_FREQ[MHz]: 1202
+    PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset]
+    0, 0, 0, NCRISC, 1, 161095200021778
+    0, 0, 0, NCRISC, 2, 161095200021933
+    0, 0, 0, NCRISC, 5, 161095200021976
+    0, 0, 0, NCRISC, 5, 161095200022211
+    0, 0, 0, NCRISC, 5, 161095200022443
+    0, 0, 0, NCRISC, 5, 161095200022675
+    0, 0, 0, NCRISC, 5, 161095200022907
+    0, 0, 0, NCRISC, 5, 161095200023139
+    0, 0, 0, NCRISC, 5, 161095200023371
+    0, 0, 0, NCRISC, 5, 161095200023603
+    0, 0, 0, NCRISC, 5, 161095200023835
+    0, 0, 0, NCRISC, 5, 161095200024067
+    0, 0, 0, NCRISC, 5, 161095200024299
+    0, 0, 0, NCRISC, 5, 161095200024531
+    0, 0, 0, NCRISC, 3, 161095200026549
+    0, 0, 0, NCRISC, 4, 161095200026598
+
+ID numbers 1-4 mark default events that are always reported by the device profiler. You can see that additional to default markers 12 more markers can be recorded on each RISC.
+
+Default markers mark kernel and FW start and end events and are part of the tt_metal device infrastructure.
+
+.. list-table:: Default ID to Event table
+   :widths: 15 15
+   :header-rows: 1
+
+   * - ID
+     - Event
+   * - 1
+     - FW Start
+   * - 2
+     - Kernel Start
+   * - 3
+     - Kernel End
+   * - 4
+     - FW End
+
+For example, In this run, FW start to Kernel start for the NCRISC took ``161095200021778 - 161095200021933 = 155`` cycles.
+Due to non-deterministic HW behaviour, **Profiling overhead** fluctuates. On average, around 40 cycles is from profiling overhead when calculating durations. Kernels typically take 1000s of cycles and so this overhead is negligible.
+
+Post-processing the data on ID number 5 can provide stats on how many cycles the inner loop of "nop" instructions took. The difference between each pair of adjacent ID number 5s denotes the duration of one iteration of the outer loop.
+
+In this example, stats on inner loop durations are:
+
+..  code-block:: c++
+
+               Count  =          6
+     Average [cycles] =        232
+         Max [cycles] =        235
+      Median [cycles] =        232
+         Min [cycles] =        232
 
 
-Post-processing device profiler
--------------------------------
+How to Run
+~~~~~~~~~~
 
-1. Follow the tt-metal :ref:`Getting Started<Getting Started>` guide and README make sure ``PYTHONPATH``
-   and other tt-metal environment variables are set. Activate the python environment as suggested by the guides.
+Device side profiling is only allowed in profiler builds.
 
-2. Run plotter webapp with:
+Because downloading profiler results from device adds high runtime overhead, ``TT_METAL_DEVICE_PROFILER=1`` environment variable has to be set to perform the download.
+
+The commands to build and run the ``full_buffer`` example after following :ref:`Getting Started<Getting Started>`:
 
 ..  code-block:: sh
 
-    cd $TT_METAL_HOME/tt_metal/tools/profiler/
-    ./process_device_log.py
+    cd $TT_METAL_HOME
+    scripts/build_scripts/build_with_profiler_opt.sh
+    make programming_examples
+    TT_METAL_DEVICE_PROFILER=1 ./build/programming_examples/profiler/test_full_buffer
 
-3. Navigate to ``<machine IP>:<PORT>`` to the Device Profiler Dashboard to view
-   stats and timeline plots. ``<PORT>`` default is ``8050`` if not set by the
-   ``-p/--port`` cli option. Note that if you are using a Tenstorrent cloud
-   machine and are viewing the dashboard through a localhost port forwarded via
-   SSH, you will need to forward port ``<PORT>`` using the ``-L`` option when
-   you connect via ``ssh``.  Otherwise, you will not be able to access the
-   dashboard.
-
-4. The following are the notable artifacts that will be generated under the ``tt_metal/tools/profiler/output/device`` folder:
-    - ``device_perf.html`` contains the interactive time series plot
-    - ``device_stats.txt`` contains the extended stats for the run
-    - ``device_rearranged_timestamps.csv`` contains all timestamps arranged by each row dedicated to cores
-
-5. For convenience all of these artifacts are tarballed into ``device_perf_results.tar``. The file is under the same output folder as the artifacts and can be downloaded by clicking the ``DOWNLOAD ARTIFACTS`` button on the webapp.
-
-6. Use  ``./process_device_log.py --help`` to get a list of available cli options to run the post processes differently. Some of the notable options are:
-    - Path to device side profiler log csv
-    - Path to artifacts output folder
-    - Custom webapp port
-    - Disabling printing stats, running webapp, generating plots and other portions of the default post-process flow
+The generated csv is ``profile_log_device.csv`` and is saved under ``{$TT_METAL_HOME}/generated/profiler/.logs`` by default.
 
 
 Limitations
 -----------
 
-* Each core has limited L1 buffer for recording device side markers. Flushing mechanism are in progress
-  to push the data to DRAM and eventually the host to alleviate this limitation.
+* Each core has limited L1 buffer for recording device side markers. 16 total markers are supported, 12 spots for custom markers and 4 for default markers.
 
-* The cycle counts give very good relative numbers with regards to various events that are marked
-  on the kernel. Syncing this with the wall clock is not brought in yet. This will require
-  collection on core reset times on the host side and syncing every cycle count accordingly
+* The cycle count from RISCs on the same core are perfectly synced as they all read from the same clock counter.
 
-* It is relatively safe to assume that all RISCs on all cores are taken out of reset at the same
-  time so processing the cycle counts read from various RISCs is reasonable.
+* The cycle counts from RISCs on different cores are closely synced with minor skews, allowing for accurate comparisons on event timestamps across cores.
+  **Note** on Grayskull ``tensix_reset`` and ``tt-smi`` soft resets will significantly worsen the skew between core clocks making core to core comparison inaccurate and wrong. Full host
+  reboot is required for syncing core clocks if soft reset is used.
 
-* Debug print can not used in kernels that are being profiled.Correct usage of DPRINT and profiler is suggested in the `add_two_ints.cpp` tt_metal test. If `profile_device` is set, it profiles, if not it prints. The test will error out if DRPRINT and profiler are attempted to be used together.
+* Debug print can not used in kernels that are being profiled.
