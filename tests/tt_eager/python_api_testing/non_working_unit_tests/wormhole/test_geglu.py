@@ -9,10 +9,6 @@ import time
 import os
 from loguru import logger
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../../..")
-
 import pytest
 import torch
 

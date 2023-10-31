@@ -8,10 +8,6 @@ import sys
 import time
 import os
 from loguru import logger
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../../../../..")
-
 import pytest
 import torch
 
