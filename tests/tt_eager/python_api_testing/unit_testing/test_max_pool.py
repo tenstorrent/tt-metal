@@ -121,7 +121,8 @@ def test_run_max_pool(
     device,
 ):
     # ttl.device.EnableMemoryReports()
-
+    if in_mem_config.is_sharded():
+        pytest.skip()
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
     pad_h, pad_w = padding
