@@ -66,19 +66,8 @@ inline void llk_pack_dest_section_done() {
     }
 }
 
-template <DstSync Dst, DstTileFaceLayout FaceLayout = RowMajor, bool untilize = false, bool is_fp32_dest_acc_en = false /* unused */>
-inline void llk_pack_dest_init() {
-    TT_LLK_DUMP("llk_pack_dest_init<{}, {}, {}, {}>()", Dst, FaceLayout, untilize, is_fp32_dest_acc_en);
-    tensix_sync();
-    reset_dest_offset_id();
-    init_packer_dest_offset_registers<FaceLayout, untilize>();
-    select_packer_dest_registers<Dst>();
-    packer_addr_counter_init();
-    pack_sync_tile_dst_ptr = 0;
-}
-
 template <DstSync Dst, DstTileFaceLayout FaceLayout, bool untilize = false>
-inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output) {
+inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output /*not used*/) {
     TT_LLK_DUMP("llk_init_packer_dest_offset_registers<{}, {}, {}>({})", Dst, FaceLayout, untilize, pack_output);
     // Todo: get tile dims based on pack_output
     TTI_STALLWAIT(p_stall::STALL_TDMA, p_stall::PACK);  // wait for pack to finish
@@ -132,6 +121,16 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
        }
     }   
     select_packer_dest_registers<Dst>();
+}
+
+template <DstSync Dst, DstTileFaceLayout FaceLayout = RowMajor, bool untilize = false, bool is_fp32_dest_acc_en = false /* unused */>
+inline void llk_pack_dest_init(const std::uint32_t pack_output /*not used*/) {
+    TT_LLK_DUMP("llk_pack_dest_init<{}, {}, {}, {}>({})", Dst, FaceLayout, untilize, is_fp32_dest_acc_en, pack_output);
+    tensix_sync();
+    reset_dest_offset_id();
+    llk_init_packer_dest_offset_registers<Dst,FaceLayout,untilize>(pack_output);
+    packer_addr_counter_init();
+    pack_sync_tile_dst_ptr = 0;
 }
 
 template <bool mail2math=true, bool mail2pack=true>
