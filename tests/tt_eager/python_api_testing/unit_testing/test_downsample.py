@@ -69,14 +69,6 @@ def test_run_downsample(
     a_activation_shape = [batch_size, input_channels, input_height, input_width]
     A_pyt = torch.normal(mean=0, std=0.1, size=a_activation_shape)
 
-    # A_pyt = torch.rand(a_activation_shape)
-    # A_pyt = torch.ones(a_activation_shape)
-    # for n in range(a_activation_shape[0]):
-    #     for c in range(a_activation_shape[1]):
-    #         for h in range(a_activation_shape[2]):
-    #             for w in range(a_activation_shape[3]):
-    #                 A_pyt[n, c, h, w] = n + h + w + 1
-
     b_weights_shape = [output_channels, input_channels, 1, 1]
     B_pyt = torch.normal(mean=0, std=0.1, size=b_weights_shape)
 
