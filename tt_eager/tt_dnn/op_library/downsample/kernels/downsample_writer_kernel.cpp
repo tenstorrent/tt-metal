@@ -6,6 +6,29 @@
 
 #include "debug_print.h"
 
+inline void print_cb_details(uint32_t cb_id) {
+    DPRINT << "cb_id " << cb_id << ": { "
+            << "size: " << cb_interface[cb_id].fifo_size << ", "
+            << "limit: " << cb_interface[cb_id].fifo_limit << ", "
+            << "page_size: " << cb_interface[cb_id].fifo_page_size << ", "
+            << "num_pages: " << cb_interface[cb_id].fifo_num_pages << ", "
+            << "rd_ptr: " << cb_interface[cb_id].fifo_rd_ptr << ", "
+            << "wr_ptr: " << cb_interface[cb_id].fifo_wr_ptr << ", "
+            << "wr_tile_ptr: " << cb_interface[cb_id].fifo_wr_tile_ptr << " }" << ENDL();
+}
+
+inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
+    for (uint32_t page = 0; page < npages; ++ page) {
+        DPRINT << start + page << ": ";
+        for (uint32_t j = 0; j < pagelen; ++ j, ++ ptr) {
+            DPRINT << BF16(*ptr) << " ";
+        }
+        DPRINT << ENDL();
+    }
+}
+
+
 inline uint32_t generate_reader_pattern_indices(uint32_t image_height,
                                         uint32_t image_width,
                                         uint32_t stride_h,
@@ -191,6 +214,10 @@ void kernel_main() {
     constexpr uint32_t log_base_2_of_conv_act_size_c_bytes = get_compile_time_arg_val(8);
     constexpr uint32_t stride_h_x_image_width = get_compile_time_arg_val(9);
 
+    print_cb_details(untilize_cb_index);
+    print_cb_details(untilize_downsampled_cb_index);
+    print_cb_details(final_tilize_output_cb_index);
+
     // // checking halo address
     // uint32_t input_cb_address = get_write_ptr(0);
     // DPRINT << "shard_input_address" << "=" << input_cb_address << ENDL();
@@ -229,6 +256,7 @@ void kernel_main() {
         cb_push_back(halo_next_input_cb_index, halo_next_num_tiles);
     }
 
+    DPRINT << "READER PATTERN INDEX: " << reader_pattern_index << ENDL();
     if (halo_prev_read_enabled) {
         img_flat_h_idx = halo_prev_read_pattern_offset;
         // generate reader pattern - halo from prev core region
@@ -256,6 +284,7 @@ void kernel_main() {
     // img flat h idx is index within the concatenated untilized halo and local data
     // compute reader pattern - local region
     img_flat_h_idx = local_read_pattern_offset;
+    DPRINT << "READER PATTERN INDEX: " << reader_pattern_index << ENDL();
     reader_pattern_index = generate_reader_pattern_indices(image_height,
                                                             image_width,
                                                             stride_h,
@@ -276,6 +305,7 @@ void kernel_main() {
                                                             local_bottom_partial_left_aligned_row_width,
                                                             local_skip_bottom_partial_left_aligned_row);
 
+    DPRINT << "READER PATTERN INDEX: " << reader_pattern_index << ENDL();
     if (halo_next_read_enabled) {
         img_flat_h_idx = halo_next_read_pattern_offset;
         // generate reader pattern - halo from prev core region
@@ -300,23 +330,33 @@ void kernel_main() {
                                                                 halo_next_skip_bottom_partial_left_aligned_row);
     }
 
+    DPRINT << "READER PATTERN INDEX: " << reader_pattern_index << ENDL();
+    for (uint32_t i = 0; i < reader_pattern_index; ++ i) {
+        DPRINT << i << " <--> " << reader_pattern[i] << ENDL();
+    }
+    DPRINT << "NUM_UNTILIZED_INPUT_BLOCKS: " << num_untilized_input_blocks << ENDL();
+    DPRINT << "CONV_ACT_SIZE_C_BYTES: " << conv_act_size_c_bytes << ENDL();
+
     // wait for untilized blocks from compute, drop rows based on reader_pattern and push to untilize_downsampled_cb_index
     reader_pattern_index = 0;
     uint32_t untilize_block_offset = 0;
     cb_reserve_back(untilize_downsampled_cb_index, num_output_tiles);
     //DPRINT << "reserved tiles in untilize downsampled cb" << ENDL();
     uint32_t untilize_downsampled_cb_l1_write_addr = get_write_ptr(untilize_downsampled_cb_index);
-    uint32_t untilize_downsampled_cb_l1_write_addr_start = untilize_downsampled_cb_l1_write_addr;
     // num_untilized_input_blocks contains halo as well as local data
     for (uint32_t untilized_input_block_i = 0; untilized_input_block_i < num_untilized_input_blocks; untilized_input_block_i++) {
         cb_wait_front(untilize_cb_index, num_tiles_untilized_input_block); // 1 row of tiles
         uint32_t untilize_block_l1_read_addr = get_read_ptr(untilize_cb_index);
 
+        // print_pages(untilize_block_l1_read_addr, 64, 32);
+
         // untilize block is only 1 row of tiles
         while(reader_pattern[reader_pattern_index] < 32 + untilize_block_offset) {
             // local read into untilized downsampled l1, read_address = l1_read_addr + (reader_pattern[reader_pattern_index] * conv_act_c_bytes), read_size = conv_act_c_bytes, write_address = untilize_downsampled_cb_l1_write_addr
             // reader pattern indices are for the whole sharded input. Need to subtract by block offset to read from the block which is 1 row of tiles.
-            uint32_t read_address = untilize_block_l1_read_addr + ((reader_pattern[reader_pattern_index]-untilize_block_offset) << log_base_2_of_conv_act_size_c_bytes);
+            uint32_t read_address = untilize_block_l1_read_addr + ((uint32_t) ((int32_t) reader_pattern[reader_pattern_index] - (int32_t) untilize_block_offset) << log_base_2_of_conv_act_size_c_bytes);
+            DPRINT << "READ ADDRESS: " << read_address << ", WRITE ADDRESS: " << untilize_downsampled_cb_l1_write_addr << ", SIZE: " << conv_act_size_c_bytes << " :: " << log_base_2_of_conv_act_size_c_bytes << ENDL();
+            print_pages(read_address, 64, 1);
             noc_async_read(get_noc_addr(read_address), untilize_downsampled_cb_l1_write_addr, conv_act_size_c_bytes);
             untilize_downsampled_cb_l1_write_addr += conv_act_size_c_bytes;
             reader_pattern_index += 1;
@@ -327,13 +367,7 @@ void kernel_main() {
         cb_pop_front(untilize_cb_index, num_tiles_untilized_input_block);
         untilize_block_offset += 32;
     }
-    // tt_l1_ptr BF16* untilize_ds_array = (tt_l1_ptr BF16*)(untilize_downsampled_cb_l1_write_addr_start);
-    // // for(uint32_t i = 0; i < 64; i += 1) {
-    // //     DPRINT << "untilize_ds_array[" << i << "]=" << BF16(untilize_ds_array[i]) << ENDL();
-    // // }
-
     cb_push_back(untilize_downsampled_cb_index, num_output_tiles); // to be tilized by compute kernel
-    //DPRINT << "Pushed untilize downsampled cb" << ENDL();
     // wait for tilized cb
     cb_wait_front(final_tilize_output_cb_index, num_output_tiles); // wait we dont need this.. sharded output.
 }

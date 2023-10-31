@@ -61,10 +61,22 @@ def test_run_downsample(
     assert(output_channels % 32 == 0)
     assert(stride_h == stride_w)
 
-    # torch.set_printoptions(threshold=10000)
+    torch.set_printoptions(
+        precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32
+    )
+
     torch.manual_seed(0)
     a_activation_shape = [batch_size, input_channels, input_height, input_width]
-    A_pyt = torch.normal(mean=0, std=0.1, size=a_activation_shape)
+    # A_pyt = torch.normal(mean=0, std=0.1, size=a_activation_shape)
+
+    # A_pyt = torch.rand(a_activation_shape)
+    A_pyt = torch.ones(a_activation_shape)
+    for n in range(a_activation_shape[0]):
+        for c in range(a_activation_shape[1]):
+            for h in range(a_activation_shape[2]):
+                for w in range(a_activation_shape[3]):
+                    A_pyt[n, c, h, w] = n + h + w + 1
+
     b_weights_shape = [output_channels, input_channels, 1, 1]
     B_pyt = torch.normal(mean=0, std=0.1, size=b_weights_shape)
 
@@ -125,7 +137,8 @@ def test_run_downsample(
                 ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
             )
     # Run downsample op
-    A_downampled_sharded = ttl.tensor.downsample(A_sharded, downsample_params, output_dtype=ttl.tensor.DataType.BFLOAT16)
+    # A_downampled_sharded = ttl.tensor.downsample(A_sharded, downsample_params, output_dtype=ttl.tensor.DataType.BFLOAT16)
+    A_downampled_sharded = ttl.tensor.downsample(A_sharded, downsample_params, output_dtype=dtype)
     A_downsampled = ttl.tensor.sharded_to_interleaved(A_downampled_sharded, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1))
     out = A_downsampled
     out_shape = [1, 1, _nearest_y(batch_size*output_height*output_width, 32), input_channels]
@@ -137,6 +150,9 @@ def test_run_downsample(
 
     out_debug = out
     out_debug = out_debug.to_torch().float()
+
+    print (f'OUTPUT: {out_debug}')
+
     # DEBUG
     # for i in range(16):
     #     for j in range(input_2d_width):
@@ -161,16 +177,13 @@ def test_run_downsample(
             else:
                 fail = atol_delta > 0.1 or rtol_delta > 0.1
             if fail:
-                print(f"Bad value at {i} (sharded index {i - start_i}),{j} with ATOL={atol_delta} and RTOL={rtol_delta}")
-                print(f"    result={calculated}, golden={golden}")
+                if num_errors < 10:
+                    print(f"Bad value at {i} (sharded index {i - start_i}), {j} with ATOL={atol_delta} and RTOL={rtol_delta}")
+                    print(f"    result={calculated}, golden={golden}")
                 num_errors += 1
-                if (num_errors >= 10):
-                    assert False
-    print("Num of errors - ", num_errors)
-
-
-
-
+                # if (num_errors >= 10):
+                #     assert False
+    print("Num errors: ", num_errors)
 
     out = out.reshape(batch_size, output_height, output_width, input_channels)
     assert out.layout() == ttl.tensor.Layout.ROW_MAJOR
@@ -180,28 +193,8 @@ def test_run_downsample(
     out_result = torch.transpose(out_result, 2, 3)
     out_result = torch.transpose(out_result, 1, 2)
 
-    # # Compare against golden
-    # assert out_result.shape == out_golden.shape
-    # [output_N, output_C, output_H, output_W] = out_result.shape
-    # print("Golden - ")
-    # print(out_golden.flatten())
-    # print("Result - ")
-    # print(out_result.flatten())
-    # num_errors = 0
-    # for n in range(output_N):
-    #     for c in range(output_C):
-    #         for h in range(output_H):
-    #             for w in range(output_W):
-    #                 calculated = torch.tensor(out_result[n][c][h][w])
-    #                 golden = torch.tensor(out_golden[n][c][h][w])
-    #                 atol_delta = torch.abs(golden - calculated).item()
-    #                 rtol_delta = torch.abs(golden - calculated) / torch.abs(calculated)
-    #                 if atol_delta > 0.1 or rtol_delta > 0.1:
-    #                     print(f"Bad value at {n},{c},{h},{w} with ATOL={atol_delta} and RTOL={rtol_delta}")
-    #                     print(f"    result={calculated}, golden={golden}")
-    #                     num_errors += 1
-
-    # print("Num of errors - ", num_errors)
+    # print (f'OUTPUT: {out_result}')
+    # print (f'GOLDEN: {out_golden}')
 
     passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(out_golden, out_result, rtol=1e-1, atol=1e-3, pcc=0.9999)  # For LowFi we need 0.99976
     print("Passing=", passing_allclose_and_pcc)

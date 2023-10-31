@@ -80,7 +80,6 @@ struct TileSlice : TileSliceHostDev<MAXCOUNT> {
             for (int w = s.w0; w < s.w1; w += s.ws) {
                 int i = w + (h<<5);
                 if (print_untilized) i = TileSlice::tilize_rm_index(i); // tilize the index
-                //DPRINT << "UI=" << i << ENDL();
                 this->samples_[this->count_] = t->vals[i];
                 this->count_ ++;
                 if (this->count_ >= MAXCOUNT)
