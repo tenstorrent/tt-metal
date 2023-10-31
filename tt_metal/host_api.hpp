@@ -262,6 +262,19 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
  */
 void Finish(CommandQueue& cq);
 
+/**
+ * Read device side profiler data and dump results into device side CSV log
+ *
+ * Return value: void
+ *
+ * | Argument      | Description                                       | Type            | Valid Range               | Required |
+ * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
+ * | device        | The device holding the program being profiled.    | Device *        |                           | True     |
+ * | program       | The program being profiled.                       | const Program & |                           | True     |
+ * */
+void DumpDeviceProfileResults(Device *device, const Program &program);
+
+
 }  // namespace tt_metal
 
 }  // namespace tt

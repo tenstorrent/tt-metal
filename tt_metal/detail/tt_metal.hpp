@@ -84,18 +84,6 @@ namespace tt::tt_metal{
         void DumpDeviceProfileResults(Device *device, const vector<CoreCoord>& logical_cores);
 
         /**
-         * Read device side profiler data and dump results into device side CSV log
-         *
-         * Return value: void
-         *
-         * | Argument      | Description                                       | Type            | Valid Range               | Required |
-         * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
-         * | device        | The device holding the program being profiled.    | Device *        |                           | True     |
-         * | program       | The program being profiled.                       | const Program & |                           | True     |
-         * */
-        void DumpDeviceProfileResults(Device *device, const Program &program);
-
-        /**
          * Set the directory for all CSV logs produced by the profiler instance in the tt-metal module
          *
          * Return value: void
