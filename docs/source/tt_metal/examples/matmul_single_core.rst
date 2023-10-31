@@ -65,7 +65,9 @@ Main blocks in matmul_single_core function
 A- Create Program, Enqueue initialization, and core range definition
 --------------------------------------------------------------------
 Setting core range to be just one core at (0,0)
+
     .. code-block:: cpp
+
         CommandQueue& cq = *detail::GLOBAL_CQ;
         Program program{};
         CoreRange core = {.start={0, 0}, .end={0, 0}};
