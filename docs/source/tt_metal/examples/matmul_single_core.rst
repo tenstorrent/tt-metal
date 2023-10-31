@@ -18,6 +18,7 @@ Host Code
 - Call matmul_single_core() program and retrieve output results (details in next section)
 - Validate the device compuation results vs. golden results on cpu
 - Close Device
+
     .. code-block:: cpp
 
         /* Create source data */
