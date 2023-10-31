@@ -106,7 +106,7 @@ void golden_matmul(vector<bfloat16> a, vector<bfloat16> b, vector<uint32_t>& out
     output = pack_bfloat16_vec_into_uint32_vec(c_bf);
 }
 
-void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t>& output, bool bcast_batch,
+void matmul_multicore_reuse(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t>& output, bool bcast_batch,
                         uint32_t M, uint32_t N, uint32_t K, uint32_t B, Device* device) {
 
     /*
@@ -222,6 +222,7 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
     uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
+
     Buffer src0_dram_buffer = CreateBuffer(device, dram_buffer_A_size, single_tile_size, BufferType::DRAM);
     Buffer src1_dram_buffer = CreateBuffer(device, dram_buffer_B_size, single_tile_size, BufferType::DRAM);
     Buffer dst_dram_buffer = CreateBuffer(device, dram_buffer_C_size, single_tile_size, BufferType::DRAM);
@@ -262,7 +263,8 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
 
     bool dst_is_dram = dst_dram_buffer.buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t) output_cb_index, (uint32_t)dst_is_dram};
+    //std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t) output_cb_index, (uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
 
     /*
     * Create Kernels (Reader, Writer, Compute)
@@ -276,7 +278,7 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
 
     auto writer_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_bmm_tile_layout.cpp",
+        "tt_metal/kernels/dataflow/writer_bmm_tile_layout.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
@@ -371,7 +373,6 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
 
 int main(int argc, char **argv) {
     bool pass = true;
-    //auto slow_dispatch_mode = 1;
 
     try {
         /* Silicon accelerator setup */
@@ -385,9 +386,9 @@ int main(int argc, char **argv) {
         // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
 
         /* Create source data */
-        constexpr uint32_t M = 512;  // user-defined
-        constexpr uint32_t N = 512;  // user-defined
-        constexpr uint32_t K = 512;  // user-defined
+        constexpr uint32_t M = 3200;  // user-defined
+        constexpr uint32_t N = 3200;  // user-defined
+        constexpr uint32_t K = 3200;  // user-defined
         constexpr uint32_t B = 1;  // user-defined
 
         uint32_t Mt = M / TILE_HEIGHT;
@@ -400,11 +401,15 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B
 
         /* input vectors */
-        //std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_A_size, 1, 123);
+        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_A_size, 1, 123);
         //std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(dram_buffer_B_size, 1, 125);
 
-        std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(dram_buffer_A_size, false);
+        //std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(dram_buffer_A_size, false);
         std::vector<uint32_t> src1_vec = pack_bfloat16_vec_into_uint32_vec(create_identity_matrix(K, N, K));
+
+        //constexpr float val_to_add = 2.0f;
+        //std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(dram_buffer_A_size, val_to_add);
+        //std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_B_size, val_to_add);
 
         /* Input vector tilizing */
         std::vector<uint32_t> tilized_src0_vec = pack_bfloat16_vec_into_uint32_vec(tilize(unpack_uint32_vec_into_bfloat16_vec(src0_vec), M, K));
@@ -433,7 +438,7 @@ int main(int argc, char **argv) {
         }
         */
 
-
+        /*
         cout << "----tiled input--" << endl;
         for (int i = 0; i < src0_vec.size(); i++) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(tilized_src0_vec.at(i));
@@ -443,11 +448,13 @@ int main(int argc, char **argv) {
                 cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << tilized_src0_vec.at(i) << endl;
             }
         }
+        */
 
         /* Calling the MatMul host program. Read in result into a host vector */
         vector<uint32_t> result_vec;
-        matmul_multi_core(tilized_src0_vec, tilized_src1_vec, result_vec, false, M, N, K, B, device);
+        matmul_multicore_reuse(tilized_src0_vec, tilized_src1_vec, result_vec, false, M, N, K, B, device);
 
+        /*
         cout << "----metal--" << endl;
         cout << result_vec.size() << endl;
         for (int i = 0; i < result_vec.size(); i++) {
@@ -458,6 +465,7 @@ int main(int argc, char **argv) {
                 cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << result_vec.at(i) << endl;
             }
         }
+        */
 
 
         vector<uint32_t> result_vec_untilized = pack_bfloat16_vec_into_uint32_vec(untilize(unpack_uint32_vec_into_bfloat16_vec(result_vec), M, N));
