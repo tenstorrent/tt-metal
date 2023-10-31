@@ -135,7 +135,7 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
 }
 
 template <DstSync Dst, DstTileFaceLayout FaceLayout = RowMajor, bool untilize = false, bool is_fp32_dest_acc_en = false>
-inline void llk_pack_dest_init(const std::uint32_t pack_output) {
+inline void llk_pack_dest_init(const std::uint32_t pack_output = 0) {
     TT_LLK_DUMP("llk_pack_dest_init<{}, {}, {}, {}>({})", Dst, FaceLayout, untilize, is_fp32_dest_acc_en, pack_output);
     tensix_sync();
     reset_dest_offset_id();
