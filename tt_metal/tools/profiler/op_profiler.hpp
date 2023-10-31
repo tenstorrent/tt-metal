@@ -535,7 +535,7 @@ namespace op_profiler {
 #if defined(PROFILER)
         if (getDeviceProfilerState())
         {
-            tt::tt_metal::detail::DumpDeviceProfileResults(device, program);
+            tt::tt_metal::DumpDeviceProfileResults(device, program);
         }
 #endif
     }

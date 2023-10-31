@@ -13,6 +13,11 @@ namespace tt {
 
 namespace tt_metal {
 
+void DumpDeviceProfileResults(Device *device, const Program &program) {
+    detail::DumpDeviceProfileResults(device, program.logical_cores());
+}
+
+
 namespace detail {
 
 static Profiler tt_metal_profiler = Profiler();
@@ -37,10 +42,6 @@ void DumpDeviceProfileResults(Device *device, const vector<CoreCoord> &logical_c
 #endif
 }
 
-
-void DumpDeviceProfileResults(Device *device, const Program &program) {
-    DumpDeviceProfileResults(device, program.logical_cores());
-}
 
 void SetProfilerDir(std::string output_dir){
 #if defined(PROFILER)

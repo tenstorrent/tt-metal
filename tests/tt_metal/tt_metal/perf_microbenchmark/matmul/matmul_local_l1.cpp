@@ -385,7 +385,7 @@ int main(int argc, char **argv) {
     Finish(*::detail::GLOBAL_CQ);
     auto end = std::chrono::high_resolution_clock::now();
     duration = end - start;
-    tt_metal::detail::DumpDeviceProfileResults(device, program);
+    tt_metal::DumpDeviceProfileResults(device, program);
 
     uint64_t num_of_matmul_ops =
         (2 * static_cast<uint64_t>(Kt) * 32 - 1) *

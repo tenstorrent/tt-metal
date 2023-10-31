@@ -280,7 +280,7 @@ int main(int argc, char **argv) {
               (elapsed_us / 1000.0 / 1000.0);
     log_info(LogTest, "Total bytes transfered: {} Bytes", total_tiles_size_bytes);
     log_info(LogTest, "Read global to L1: {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
-    tt_metal::detail::DumpDeviceProfileResults(device, program);
+    tt_metal::DumpDeviceProfileResults(device, program);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown

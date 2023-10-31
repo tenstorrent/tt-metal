@@ -444,7 +444,7 @@ void LaunchProgram(Device *device, Program &program) {
     llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
 
     }//Profiler scope end
-    detail::DumpDeviceProfileResults(device,program);
+    DumpDeviceProfileResults(device, program);
 }
 
 

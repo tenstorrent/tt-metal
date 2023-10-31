@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt;
 
@@ -41,16 +42,15 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = 
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines}
     );
 
-    tt_metal::LaunchProgram(device, program);
+    EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
+    Finish(*::detail::GLOBAL_CQ);
+    tt_metal::DumpDeviceProfileResults(device, program);
 
     return pass;
 }
 
 int main(int argc, char **argv) {
     bool pass = true;
-
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {
         ////////////////////////////////////////////////////////////////////////////
@@ -59,8 +59,6 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
-
-
 
         int loop_count = 20;
         pass &= RunCustomCycle(device, loop_count);
