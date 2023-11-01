@@ -12,7 +12,9 @@ import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
-from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_scale_mask_softmax_in_place as tt_eltwise_scale_mask_softmax_in_place
+from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import (
+    eltwise_scale_mask_softmax_in_place as tt_eltwise_scale_mask_softmax_in_place,
+)
 
 
 def run_eltwise_scale_mask_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_config, data_seed, device):
@@ -24,11 +26,10 @@ def run_eltwise_scale_mask_softmax_in_place_tests(input_shape, dtype, dlayout, i
     x = torch.Tensor(size=input_shape).uniform_(-1.0, 1.0)
     x_ref = x.detach().clone()
 
-
     y = torch.Tensor(size=input_shape).uniform_(-1.0, 1.0)
     y_ref = y.detach().clone()
 
-    scale = random.uniform(1.0,100.0)
+    scale = random.uniform(1.0, 100.0)
 
     # get ref result
     ref_value = pytorch_ops.scale_mask_softmax_in_place(x_ref, y_ref, scale)
@@ -36,12 +37,12 @@ def run_eltwise_scale_mask_softmax_in_place_tests(input_shape, dtype, dlayout, i
     tt_result = tt_eltwise_scale_mask_softmax_in_place(
         x=x,
         y=y,
-        scale = scale,
+        scale=scale,
         device=device,
         dtype=dtype,
         layout=dlayout,
         input_mem_config=in_mem_config,
-        output_mem_config=None
+        output_mem_config=None,
     )
 
     # compare tt and golden outputs
@@ -51,20 +52,44 @@ def run_eltwise_scale_mask_softmax_in_place_tests(input_shape, dtype, dlayout, i
     assert success
 
 
-test_sweep_args=[
-    ( (1, 1, 32, 32), (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16), (ttl.tensor.Layout.TILE,ttl.tensor.Layout.TILE), (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)), 38346),
-    ( (1, 1, 32, 32), (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16), (ttl.tensor.Layout.TILE,ttl.tensor.Layout.TILE), (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 38346),
-    ( (1, 1, 32, 96), (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16), (ttl.tensor.Layout.TILE,ttl.tensor.Layout.TILE), (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 38346),
+test_sweep_args = [
+    (
+        (1, 1, 32, 32),
+        (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16),
+        (ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE),
+        (
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ),
+        38346,
+    ),
+    (
+        (1, 1, 32, 32),
+        (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16),
+        (ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE),
+        (
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ),
+        38346,
+    ),
+    (
+        (1, 1, 32, 96),
+        (ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16),
+        (ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE),
+        (
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ),
+        38346,
+    ),
 ]
+
+
 @skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, in_mem_config, data_seed",
-    (
-        test_sweep_args
-    ),
+    (test_sweep_args),
 )
-
-def test_eltwise_scale_mask_softmax_in_place_test(
-    input_shape, dtype, dlayout, in_mem_config, data_seed, device
-):
+def test_eltwise_scale_mask_softmax_in_place_test(input_shape, dtype, dlayout, in_mem_config, data_seed, device):
     run_eltwise_scale_mask_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_config, data_seed, device)

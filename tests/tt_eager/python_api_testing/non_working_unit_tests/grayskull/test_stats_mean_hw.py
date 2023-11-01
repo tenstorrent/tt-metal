@@ -31,7 +31,7 @@ def run_mean_hw_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config
         dtype=[dtype],
         layout=[dlayout],
         input_mem_config=[in_mem_config],
-        output_mem_config=out_mem_config
+        output_mem_config=out_mem_config,
     )
 
     # compare tt and golden outputs
@@ -41,22 +41,46 @@ def run_mean_hw_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config
     assert success
 
 
-test_sweep_args=[
-    ((4, 11, 106, 232), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), 19096254),
-    ((2, 10, 160, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, "SYSTEM_MEMORY", ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), 3074662),
-    ((1, 6, 256, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), 16417740),
-    ((6, 7, 192, 224), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, "SYSTEM_MEMORY", ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), 11178160),
+test_sweep_args = [
+    (
+        (4, 11, 106, 232),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        19096254,
+    ),
+    (
+        (2, 10, 160, 160),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.TILE,
+        "SYSTEM_MEMORY",
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        3074662,
+    ),
+    (
+        (1, 6, 256, 160),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.TILE,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        16417740,
+    ),
+    (
+        (6, 7, 192, 224),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.TILE,
+        "SYSTEM_MEMORY",
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        11178160,
+    ),
 ]
+
 
 @skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
-    (
-        test_sweep_args
-    ),
+    (test_sweep_args),
 )
-
-def test_eltwise_mean_hw_test(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
-):
+def test_eltwise_mean_hw_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     run_mean_hw_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
