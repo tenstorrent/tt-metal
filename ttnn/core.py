@@ -3,9 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import pathlib
 from typing import Optional, Tuple, Union
-
-from loguru import logger
 
 import tt_lib as ttl
 
@@ -17,11 +16,14 @@ from ttnn.tensor import (
     from_device,
     to_layout,
     MemoryConfig,
+    DRAM_MEMORY_CONFIG,
+    Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
-    DRAM_MEMORY_CONFIG,
     TILE_SIZE,
 )
+
+MODEL_CACHE_PATH = pathlib.Path().home() / ".cache" / "tenstorrent"
 
 
 MAX_RANK = 4
@@ -73,7 +75,7 @@ def _shape_is_broadcastable(input_shape_a, input_shape_b):
     return all(x == y or (x == 1 and y != 1) or (x != 1 and y == 1) for x, y in zip(batch_shape_a, batch_shape_b))
 
 
-# TODO: remove this once underlying C++ code can handle non-4D shapes
+# TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
 def _reshape_to_4D(tensor):
     if len(tensor.shape) > 4:
         raise RuntimeError("Tensor cannot have more than 4 dimensions!")
@@ -340,6 +342,14 @@ def add(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, al
         output_tensor = Tensor(ttl.tensor.add_unary(ttl_input_tensor_a, input_tensor_b * alpha))
         return reshape(output_tensor, original_shape)
     elif isinstance(input_tensor_b, Tensor):
+        input_shape_b = input_tensor_b._tensor.shape_without_padding()
+
+        if len(input_shape_b) == 1:
+            height_b = 1
+            (width_b,) = input_shape_b
+        else:
+            *_, height_b, width_b = input_shape_b
+
         input_tensor_b = _reshape_to_4D(input_tensor_b)
         ttl_input_tensor_b = input_tensor_b._tensor
         if ttl_input_tensor_b.storage_type() != ttl.tensor.StorageType.DEVICE:
@@ -348,16 +358,8 @@ def add(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, al
         raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
 
     ttl_input_tensor_b = input_tensor_b._tensor
-    input_shape_b = ttl_input_tensor_b.shape()
-
     if alpha != 1:
         ttl_input_tensor_b = ttl.tensor.mul_unary(ttl_input_tensor_b, alpha)
-
-    if len(input_shape_b) == 1:
-        height_b = 1
-        (width_b,) = input_shape_b
-    else:
-        *_, height_b, width_b = input_shape_b
 
     if height_b == 1 and width_b == 1:
         output_tensor = Tensor(
@@ -571,7 +573,7 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
         return input_tensor
 
     if input_tensor.layout == ROW_MAJOR_LAYOUT:
-        # TODO: figure out how to make this work
+        # TODO(arakhmati): figure out how to make this work
         if input_tensor.shape != [1, 64, 4, 32]:
             return Tensor(ttl_input_tensor.reshape(shape))
 
@@ -591,7 +593,6 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
         return Tensor(ttl.tensor.reshape(ttl_input_tensor, w, z, y, x))
     except:
 
-        @ttl.tensor.decorate_external_operation
         def torch_reshape(tensor, shape):
             return tensor.reshape(shape).contiguous()
 
@@ -600,6 +601,7 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
         tensor = from_device(tensor)
         tensor = to_torch(tensor)
         tensor = torch_reshape(tensor, shape)
+        tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.shape")(tensor, shape)
         tensor = from_torch(tensor, input_tensor.dtype)
         tensor = to_device(tensor, device)
         return tensor
@@ -633,7 +635,6 @@ def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
         return Tensor(ttl.tensor.permute(input_tensor._tensor, order))
     except:
 
-        @ttl.tensor.decorate_external_operation
         def torch_permute(tensor, order):
             return tensor.permute(order).contiguous()
 
@@ -641,7 +642,7 @@ def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
         tensor = to_layout(input_tensor, ROW_MAJOR_LAYOUT)
         tensor = from_device(tensor)
         tensor = to_torch(tensor)
-        tensor = torch_permute(tensor, order)
+        tensor = ttl.tensor.decorate_external_operation(torch_permute, function_name="torch.permute")(tensor, order)
         tensor = from_torch(tensor, input_tensor.dtype)
         tensor = to_device(tensor, device)
         return tensor
@@ -681,6 +682,7 @@ def embedding(
     input_tensor: Tensor,
     weights: Tensor,
     *,
+    layout: Layout = ROW_MAJOR_LAYOUT,
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
 ):
     """
@@ -722,7 +724,7 @@ def embedding(
     input_tensor = reshape(input_tensor, shape=(batch_size, 1, sentence_size, 1))
 
     split_weights = False
-    tilized = False
+    tilized = layout == TILE_LAYOUT
     embeddings = Tensor(
         ttl.tensor.embeddings(input_tensor._tensor, weights._tensor, split_weights, tilized, memory_config)
     )

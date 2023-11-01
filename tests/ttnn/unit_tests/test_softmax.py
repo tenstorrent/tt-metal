@@ -8,9 +8,11 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, update_process_id
+from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_wormhole_b0
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [2 * 32])
 def test_softmax(device, h, w):
@@ -26,4 +28,4 @@ def test_softmax(device, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.985)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)

@@ -48,9 +48,7 @@ def torch_multi_head_attention(
     context_layer = attention_probs @ value
 
     context_layer = torch.permute(context_layer, (0, 2, 1, 3))
-    context_layer = torch.reshape(
-        context_layer, (batch_size, sequence_size, hidden_size)
-    )
+    context_layer = torch.reshape(context_layer, (batch_size, sequence_size, hidden_size))
 
     self_output = context_layer @ output_weight
     self_output = self_output + output_bias
@@ -58,9 +56,7 @@ def torch_multi_head_attention(
     return self_output
 
 
-def torch_feedforward(
-    hidden_states, intermediate_weight, intermediate_bias, output_weight, output_bias
-):
+def torch_feedforward(hidden_states, intermediate_weight, intermediate_bias, output_weight, output_bias):
     hidden_states = hidden_states @ intermediate_weight
     hidden_states = hidden_states + intermediate_bias
     hidden_states = F.gelu(hidden_states)
@@ -81,13 +77,13 @@ def torch_bert_encoder(
     multi_head_attention_output = torch_multi_head_attention(
         hidden_states,
         attention_mask,
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.query.weight"],
+        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.query.weight"].T,
         parameters[f"bert.encoder.layer.{encoder_index}.attention.self.query.bias"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.key.weight"],
+        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.key.weight"].T,
         parameters[f"bert.encoder.layer.{encoder_index}.attention.self.key.bias"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.value.weight"],
+        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.value.weight"].T,
         parameters[f"bert.encoder.layer.{encoder_index}.attention.self.value.bias"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.output.dense.weight"],
+        parameters[f"bert.encoder.layer.{encoder_index}.attention.output.dense.weight"].T,
         parameters[f"bert.encoder.layer.{encoder_index}.attention.output.dense.bias"],
         head_size=head_size,
     )
@@ -95,12 +91,8 @@ def torch_bert_encoder(
     multi_head_attention_add_and_layer_norm_output = F.layer_norm(
         hidden_states + multi_head_attention_output,
         (hidden_size,),
-        parameters[
-            f"bert.encoder.layer.{encoder_index}.attention.output.LayerNorm.weight"
-        ],
-        parameters[
-            f"bert.encoder.layer.{encoder_index}.attention.output.LayerNorm.bias"
-        ],
+        parameters[f"bert.encoder.layer.{encoder_index}.attention.output.LayerNorm.weight"],
+        parameters[f"bert.encoder.layer.{encoder_index}.attention.output.LayerNorm.bias"],
     )
 
     feedforward_output = torch_feedforward(
@@ -130,12 +122,8 @@ def torch_bert(
     num_encoders,
     head_size,
 ):
-    word_embeddings = F.embedding(
-        input_ids, parameters["bert.embeddings.word_embeddings.weight"]
-    )
-    token_type_embeddings = F.embedding(
-        token_type_ids, parameters["bert.embeddings.token_type_embeddings.weight"]
-    )
+    word_embeddings = F.embedding(input_ids, parameters["bert.embeddings.word_embeddings.weight"])
+    token_type_embeddings = F.embedding(token_type_ids, parameters["bert.embeddings.token_type_embeddings.weight"])
     encoder_input = word_embeddings + token_type_embeddings
 
     *_, hidden_size = encoder_input.shape
