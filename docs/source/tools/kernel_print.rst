@@ -15,6 +15,7 @@ To generate kernel debug prints on the device:
 .. code-block::
 
     #include "debug_print.h"
+
     void kernel_main() {
         DPRINT << 5 << ENDL();
         DPRINT << "this is a string" << 1 << SETW(8) << F32(2.2f) << ENDL();
@@ -29,7 +30,7 @@ To generate kernel debug prints on the device:
     }
 
 The ``TSLICE`` macros support printing tile contents with a given sample count, starting index and stride.  The
-example above extracts a numpy slice ``[0:32:16, 0:32:16]`` from tile 0 from CB::c_intermed1.
+example above extracts a numpy slice ``[0:32:16, 0:32:16]`` from tile ``0`` from ``CB::c_intermed1``.
 
 To display the kernel debug prints on the host:
 

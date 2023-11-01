@@ -50,22 +50,21 @@ below:
         DEBUG_STATUS('N', 'S', 'D');
     }
 
-By convention, the last character of each way point is one of:
+The characters used are a mnemonic unique to each way point.  By convention, the last character is one of:
 
 - ``W``: waiting at the top of a loop
 - ``D``: done waiting after a loop
 
-The other characters are a mnemonic unique to each loop.
+When dumping state for each RISC V, the Watcher always dumps in the order BRISC, NCRISC, TRISC0, TRISC1, TRISC2.
 
-When dumping state for each RISC V, the Watcher always dumps the processors in the order BRISC, NCRISC, TRISC0, TRISC1,
-TRISC2.
+The path to the log file is printed to the screen during application initialization when the watcher is enabled.
 
 gdb Integration
 ---------------
 
 The Watcher state can be dumped using ``gdb`` regardless of whether or not the Watcher was enabled; however, if it is
 disabled the dumped state won't include the debug only state such as way points.  In the example below, gdb's responses
-tocommands have been removed for brevity.  After attaching to the program and stopping it with ``ctl-c``:
+to commands have been removed for brevity.  After attaching to the program and stopping it with ``ctl-c``:
 
 .. code-block::
 
@@ -74,7 +73,7 @@ tocommands have been removed for brevity.  After attaching to the program and st
     call tt::llrt::watcher::dump(stderr, true) # the "true" at the end enables dumping HW registers
 
 Example
----------
+-------
 
 The log file will contain lines such as the following:
 
