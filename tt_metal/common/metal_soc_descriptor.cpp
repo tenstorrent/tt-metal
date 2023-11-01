@@ -64,6 +64,7 @@ const std::vector<CoreCoord>& metal_SocDescriptor::get_logical_ethernet_cores() 
 
 void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
   YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
+  int num_dram_channels = this->get_num_dram_channels();
   this->preferred_eth_dram_core.clear();
   for (const auto& core_node: device_descriptor_yaml["dram_preferred_eth_endpoint"]) {
     if (core_node.IsScalar()) {
@@ -71,6 +72,9 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     } else {
       tt::log_fatal ("Only NOC coords supported for dram_preferred_eth_endpoint cores");
     }
+  }
+  if (this->preferred_eth_dram_core.size() != num_dram_channels) {
+    tt::log_fatal("Expected to specify preferred DRAM endpoint for ethernet core for {} channels but yaml specifies {} channels", num_dram_channels, this->preferred_eth_dram_core.size());
   }
 
   this->preferred_worker_dram_core.clear();
@@ -81,8 +85,31 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
       tt::log_fatal ("Only NOC coords supported for dram_preferred_worker_endpoint");
     }
   }
+  if (this->preferred_worker_dram_core.size() != num_dram_channels) {
+    tt::log_fatal("Expected to specify preferred DRAM endpoint for worker core for {} channels but yaml specifies {} channels", num_dram_channels, this->preferred_worker_dram_core.size());
+  }
 
   this->dram_address_offsets = device_descriptor_yaml["dram_address_offsets"].as<std::vector<size_t>>();
+  if (this->dram_address_offsets.size() != num_dram_channels) {
+    tt::log_fatal("Expected DRAM offsets for {} channels but yaml specified {} channels", num_dram_channels, this->dram_address_offsets.size());
+  }
+
+  int dram_banks_per_prev_core = 0;
+  int dram_banks_per_core = 0;
+  for (int dram_channel = 0; dram_channel < this->dram_address_offsets.size(); dram_channel++) {
+    if (this->dram_address_offsets.at(dram_channel) == 0) {
+      if (dram_banks_per_prev_core > 0 and dram_banks_per_prev_core != dram_banks_per_core) {
+        tt::log_fatal("Expected {} DRAM banks per DRAM core", dram_banks_per_prev_core);
+      } else if (dram_banks_per_core != 0) {
+        dram_banks_per_prev_core = dram_banks_per_core;
+      }
+      dram_banks_per_core = 1;
+    } else {
+      dram_banks_per_core++;
+    }
+  }
+
+  this->dram_core_size = dram_banks_per_core * this->dram_bank_size;
 }
 
 // UMD expects virtual NOC coordinates for worker cores
@@ -115,8 +142,6 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
 
     return;
   }
-
-  // TODO: CHECK THAT THE LOGIC WORKS FOR GS SINCE IT HAS NO TRANSLATION TABLES
 
   std::set<int> row_coordinates_to_remove;
   int row_coordinate = 0;

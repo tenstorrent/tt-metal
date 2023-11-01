@@ -26,6 +26,7 @@ struct metal_SocDescriptor : public tt_SocDescriptor {
   std::vector<RelativeCoreCoord> dispatch_cores; // saved as CoreType::WORKER
   std::vector<CoreCoord> logical_ethernet_cores;
   int l1_bank_size;
+  uint32_t dram_core_size;
 
   // in tt_SocDescriptor worker_log_to_routing_x and worker_log_to_routing_y map logical coordinates to NOC virtual coordinates
   // UMD accepts NOC virtual coordinates but Metal needs NOC physical coordinates to ensure a harvested core is not targetted
