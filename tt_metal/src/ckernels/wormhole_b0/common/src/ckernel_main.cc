@@ -27,8 +27,6 @@ volatile uint tt_reg_ptr * const instrn_buffer = reinterpret_cast<volatile uint 
 volatile uint tt_reg_ptr * const pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
 }
 
-CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
-
 void kernel_launch()
 {
     uint *local_l1_start_addr = (uint *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE);
