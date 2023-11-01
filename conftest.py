@@ -226,7 +226,7 @@ def reset_tensix(request, silicon_arch_name):
         assert result.returncode == 0, "Tensix reset script raised error"
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def device_init_destroy(request):
     import tt_lib as ttl
 
