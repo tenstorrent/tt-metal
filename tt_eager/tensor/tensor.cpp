@@ -120,7 +120,18 @@ Tensor Tensor::pad(const Shape &output_tensor_shape, const Shape &input_tensor_s
     ZoneScoped;
     TT_ASSERT(this->storage_type() == StorageType::OWNED or this->storage_type() == StorageType::BORROWED && "Tensor must be on host for padding");
     TT_ASSERT(this->layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for padding");
-    return tensor_impl::pad_wrapper(*this, output_tensor_shape, input_tensor_start, pad_value);
+
+    auto input_shape = this->shape();
+    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    for (auto index = 0; index < input_shape.rank(); index++) {
+        auto front = input_tensor_start[index];
+        auto back = output_tensor_shape[index] - (input_tensor_start[index] + input_shape[index]);
+        dimensions_pads.push_back(Padding::PadDimension{.front=front, .back=back});
+    }
+    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
+    auto output_shape_with_padding = Shape(output_tensor_shape, padding);
+
+    return tensor_impl::pad_wrapper(*this, output_shape_with_padding, input_tensor_start, pad_value);
 }
 
 Tensor Tensor::unpad(const Shape &output_tensor_start, const Shape &output_tensor_end) const {

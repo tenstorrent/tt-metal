@@ -49,6 +49,10 @@ def float_to_bits(x):
     return struct.unpack(">l", s)[0]
 
 
+def torch_random(shape, low, high, dtype):
+    return torch.zeros(shape, dtype=dtype).uniform_(low, high)
+
+
 ### Profiling ###
 class Profiler:
     def __init__(self):

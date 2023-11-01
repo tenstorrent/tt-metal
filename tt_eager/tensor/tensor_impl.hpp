@@ -121,16 +121,34 @@ constexpr inline uint32_t packed_buffer_size_bytes<float>(uint32_t volume_unpack
 // ======================================================================================
 //                                  Layout converters
 // ======================================================================================
+namespace detail {
+static std::vector<uint32_t> to_4D_shape(const Shape& shape) {
+    if (shape.rank() == 1) {
+        return {1, 1, 1, shape[-1]};
+    } else if (shape.rank() == 2) {
+        return {1, 1, shape[-2], shape[-1]};
+    } else if (shape.rank() == 3) {
+        return {1, shape[-3], shape[-2], shape[-1]};
+    } else if (shape.rank() == 4) {
+        return {shape[-4], shape[-3], shape[-2], shape[-1]};
+    } else {
+        TT_THROW("Rank {} is not supported!", shape.rank());
+    }
+}
+}  // namespace detail
+
 template <typename T, template<typename> typename BufferType>
 inline std::vector<T> convert_layout_row_major_to_tile(const Shape& shape, const BufferType<T>& data_to_convert) {
-    TT_ASSERT((shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0), "Unsupported shape for tensor conversion");
-    std::vector<uint32_t> shape_vec = {shape[0], shape[1], shape[2], shape[3]};
+    TT_ASSERT(
+        (shape[-2] % tt::constants::TILE_HEIGHT == 0 && shape[-1] % tt::constants::TILE_WIDTH == 0),
+        "Unsupported shape for tensor conversion");
+    auto shape_vec = detail::to_4D_shape(shape);
     return convert_layout(data_to_convert, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
 }
 
 template <typename T, template<typename> typename BufferType>
 inline std::vector<T> convert_layout_tile_to_row_major(const Shape& shape, const BufferType<T>& data_to_convert) {
-    std::vector<uint32_t> shape_vec = {shape[0], shape[1], shape[2], shape[3]};
+    auto shape_vec = detail::to_4D_shape(shape);
     return convert_layout(data_to_convert, shape_vec, TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
 }
 
@@ -408,7 +426,9 @@ inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, con
                     fmt::format("Tensor buffer size and number of data elements does not match: {} != {}", compute_buffer_size(shape, data_type), data_to_write.size())
                 );
                 if (layout == Layout::TILE) {
-                    TT_ASSERT((shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0), "Tensor shape incompatible for specified layout");
+                    TT_ASSERT(
+                        (shape[-2] % tt::constants::TILE_HEIGHT == 0 && shape[-1] % tt::constants::TILE_WIDTH == 0),
+                        "Tensor shape incompatible for specified layout");
                 }
                 return initialize_data_on_device<T>(data_to_write, device, shape, data_type, layout, memory_config);
             }
@@ -423,7 +443,9 @@ inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, con
                         fmt::format("Tensor buffer size and number of data elements does not match: {} != {}", compute_buffer_size(shape, data_type), data_to_write.size())
                     );
                     if (layout == Layout::TILE) {
-                        TT_ASSERT((shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0), "Tensor shape incompatible for specified layout");
+                        TT_ASSERT(
+                            (shape[-2] % tt::constants::TILE_HEIGHT == 0 && shape[-1] % tt::constants::TILE_WIDTH == 0),
+                            "Tensor shape incompatible for specified layout");
                     }
                     return initialize_data_on_device<T>(data_to_write, device, shape, data_type, layout, memory_config);
                 }
@@ -486,7 +508,7 @@ inline Tensor to_layout(const Tensor &tensor, Layout target_layout) {
 
     auto shape = tensor.shape();
     auto source_layout = tensor.layout();
-    auto convert = [&shape, source_layout, target_layout] (const auto& input_data) -> std::vector<T> {
+    auto convert = [&shape, source_layout, target_layout](const auto& input_data) -> std::vector<T> {
         switch (source_layout) {
             case Layout::ROW_MAJOR:
                 if (target_layout == Layout::TILE) {

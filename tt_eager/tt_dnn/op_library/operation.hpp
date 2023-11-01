@@ -431,11 +431,11 @@ struct DeviceOperation final {
 };
 
 struct ExternalOperation {
-    std::string function_name_;
-    tt::stl::reflection::Attributes attributes_;
+    const std::string function_name_;
+    const tt::stl::reflection::Attributes attributes_;
 
-    std::string get_type_name() const { return fmt::format("{}", this->function_name_); }
-    tt::stl::reflection::Attributes attributes() const { return this->attributes_; }
+    const std::string get_type_name() const { return this->function_name_; }
+    const tt::stl::reflection::Attributes attributes() const { return this->attributes_; }
 };
 
 using Operation = std::variant<HostOperation, DeviceOperation, ExternalOperation>;

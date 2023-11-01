@@ -22,9 +22,12 @@ from ttnn.tensor import (
     from_device,
     to_layout,
     free,
+    load_tensor,
+    dump_tensor,
 )
 
 from ttnn.core import (
+    MODEL_CACHE_PATH,
     # initialization
     open,
     close,
