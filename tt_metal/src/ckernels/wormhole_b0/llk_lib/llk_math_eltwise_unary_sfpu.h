@@ -373,4 +373,15 @@ inline void llk_math_eltwise_unary_sfpu_acos_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::acos, APPROXIMATE>();
 }
 
+//silu
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_silu(uint dst_index) {
+    llk_math_eltwise_unary_sfpu<SfpuType::silu, APPROXIMATE, dst_sync>(dst_index);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_silu_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::silu, APPROXIMATE>();
+}
+
 }
