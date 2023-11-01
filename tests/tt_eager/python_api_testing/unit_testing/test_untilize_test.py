@@ -3,14 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from pathlib import Path
-import sys
 import torch
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
-
-import numpy as np
 
 import tt_lib as ttl
 from models.utility_functions import untilize
@@ -27,7 +20,6 @@ from models.utility_functions import untilize
         (1, 1, 49, 1),
         (1, 1, 49, 16),
         (1, 1, 49, 32),
-
         (1, 1, 196, 4),
         (1, 1, 196, 8),
         (1, 1, 196, 16),
@@ -41,7 +33,7 @@ def test_run_untilize_test(nb, nc, nh, nw, device):
     nt = nb * nc * nh * nw
     shape = [nb, nc, 32 * nh, 32 * nw]
 
-    inp = np.random.rand(*shape)
+    inp = torch.rand(*shape).bfloat16()
 
     a = ttl.tensor.Tensor(
         inp.flatten().tolist(),
@@ -51,9 +43,8 @@ def test_run_untilize_test(nb, nc, nh, nw, device):
         device,
     )
     b = ttl.tensor.untilize(a, use_multicore=True)
-    c = b.cpu().to_torch().to(torch.float32).reshape(shape).numpy()
+    c = b.cpu().to_torch()
 
-    untilized_inp = untilize(inp.reshape(*shape))
-    assert (
-        abs(untilized_inp - c) < 0.02
-    ).all(), "Max abs difference for untilize can be 0.02 due to bfloat conversions"
+    untilized_inp = untilize(inp)
+    passing = torch.equal(untilized_inp, c)
+    assert passing
