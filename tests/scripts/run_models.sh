@@ -112,5 +112,8 @@ env pytest models/experimental/mistral/tests/test_mistral_attention.py
 env pytest models/experimental/mistral/tests/test_mistral_feed_forward.py
 env pytest models/experimental/mistral/tests/test_mistral_rms_norm.py
 env pytest models/experimental/mistral/tests/test_mistral_transformer_block.py
+
 env pytest models/demos/resnet/tests/test_metal_resnet50.py -k "not 8"
 env pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference[8]
+env pytest models/demos/resnet/tests/test_demo.py::test_demo_sample[8-models/demos/resnet/demo/images/]
+env pytest models/demos/resnet/tests/test_demo.py::test_demo_imagenet[8-400]

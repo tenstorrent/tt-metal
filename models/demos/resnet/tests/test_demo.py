@@ -4,7 +4,7 @@
 
 from loguru import logger
 import pytest
-from models.demos.resnet.demo.demo import run_resnet_inference
+from models.demos.resnet.demo.demo import run_resnet_inference, run_resnet_imagenet_inference
 
 @pytest.mark.parametrize(
     "batch_size, input_loc",
@@ -29,3 +29,12 @@ def test_demo_sample(
 
     for predicted, expected in zip(predictions, expected_prediction):
         assert predicted == expected, "Some predictions are not what we expected!"
+
+
+
+@pytest.mark.parametrize(
+    "batch_size, iterations",
+    ((8, 400),),
+)
+def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_location_generator, device):
+    run_resnet_imagenet_inference(batch_size, iterations, imagenet_label_dict, model_location_generator, device)

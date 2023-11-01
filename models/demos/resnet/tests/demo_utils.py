@@ -63,6 +63,7 @@ def get_data_loader(input_loc, batch_size):
             )
             if len(examples) == batch_size:
                 yield examples
+                del examples
                 examples = []
 
     return loader()

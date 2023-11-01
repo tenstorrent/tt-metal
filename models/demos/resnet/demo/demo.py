@@ -66,10 +66,10 @@ def run_resnet_imagenet_inference(
     )
 
 
-    predictions = []
     # load ImageNet batch by batch
     # and run inference
     for iter in range(iterations):
+        predictions = []
         inputs, labels = get_batch(data_loader, image_processor)
         tt_inputs = tt_resnet50.preprocessing(inputs)
         tt_output = tt_resnet50(tt_inputs)
@@ -78,7 +78,7 @@ def run_resnet_imagenet_inference(
         for i in range(batch_size):
             predictions.append(imagenet_label_dict[prediction[i].item()])
             logger.info(f"Iter: {iter} Sample: {i} - Expected Label: {imagenet_label_dict[labels[i]]} Predicted Label: {predictions[-1]}")
-        del tt_output
+        del tt_output, tt_inputs, inputs, labels, predictions
 
 
 
@@ -200,7 +200,7 @@ def run_resnet_inference(
 
 @pytest.mark.parametrize(
     "batch_size, iterations",
-    ((8, 50),),
+    ((8, 400),),
 )
 def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_location_generator, device):
     run_resnet_imagenet_inference(batch_size, iterations, imagenet_label_dict, model_location_generator, device)
