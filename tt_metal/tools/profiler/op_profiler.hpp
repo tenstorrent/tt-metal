@@ -347,6 +347,7 @@ namespace op_profiler {
                     {
                         profileFolder = logFolderDevice;
                         tt::log_info("Device profiling detected, logs folder location changed to {}", profileFolder);
+                        add_log_location_record(logFolderDevice);
                     }
                     else
                     {

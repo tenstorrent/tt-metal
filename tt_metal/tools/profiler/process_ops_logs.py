@@ -237,7 +237,8 @@ def parse_ops_logs(opsFolder):
     assert paths, f"{opsFolder} is empty. Use -i option to choose the correct logs dir"
 
     opsDeviceFolder = os.path.normpath(opsFolder)
-    if "_device" not in opsDeviceFolder:
+    tmpSplit = opsDeviceFolder.rsplit("_",1)
+    if  tmpSplit[-1] != "device":
         opsDeviceFolder = f"{os.path.normpath(opsFolder)}_device"
 
     for opCandidate in paths:
