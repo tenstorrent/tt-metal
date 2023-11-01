@@ -19,7 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_r
 def run_transpose_nh_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
 
-    x = gen_rand(size = input_shape, low = -100, high = 100).to(torch.bfloat16)
+    x = gen_rand(size=input_shape, low=-100, high=100).to(torch.bfloat16)
     # compute ref value
     x_ref = x.detach().clone()
     ref_value = pytorch_ops.transpose(x_ref, dim0=0, dim1=-2)
@@ -30,7 +30,7 @@ def run_transpose_nh_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_c
         dtype=[dtype],
         layout=[dlayout],
         input_mem_config=[in_mem_config],
-        output_mem_config=out_mem_config
+        output_mem_config=out_mem_config,
     )
 
     # compare tt and golden outputs
@@ -41,19 +41,22 @@ def run_transpose_nh_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_c
     assert success
 
 
-test_sweep_args=[
-    ((12, 21, 464, 236), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), 14610962),
+test_sweep_args = [
+    (
+        (12, 21, 464, 236),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        14610962,
+    ),
 ]
+
 
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
-    (
-        test_sweep_args
-    ),
+    (test_sweep_args),
 )
-
-def test_transpose_nh_test(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
-):
+def test_transpose_nh_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     random.seed(0)
     run_transpose_nh_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
