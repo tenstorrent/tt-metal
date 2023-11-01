@@ -263,10 +263,10 @@ int main(int argc, char **argv) {
 
         /* input vectors */
         std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_A_size, 1, 123);
-        //std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(dram_buffer_B_size, 1, 125);
+        std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(dram_buffer_B_size, 1, 12522);
 
         //std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(dram_buffer_A_size, false);
-        std::vector<uint32_t> src1_vec = pack_bfloat16_vec_into_uint32_vec(create_identity_matrix(K, N, K));
+        //std::vector<uint32_t> src1_vec = pack_bfloat16_vec_into_uint32_vec(create_identity_matrix(K, N, K));
 
         /* Input vector tilizing */
         std::vector<uint32_t> tilized_src0_vec = pack_bfloat16_vec_into_uint32_vec(tilize(unpack_uint32_vec_into_bfloat16_vec(src0_vec), M, K));
@@ -356,6 +356,13 @@ int main(int argc, char **argv) {
         std::function<bool(const float, const float)> comparison_function = [](const float a, const float b) {
             return is_close(a, b, rel_tolerance, abs_tolerance);
         };
+
+        float calc_pcc = packed_uint32_t_vector_pcc(golden_vec_tilized, result_vec);
+        cout << "PCC= " << calc_pcc << endl;
+
+        float pearson = packed_uint32_t_vector_pcc_v2(golden_vec_tilized, result_vec);
+        cout << "PCC_v2= " << pearson << endl;
+
 
         //pass &= packed_uint32_t_vector_comparison(golden_vec, result_vec_untilized, comparison_function);
         pass &= packed_uint32_t_vector_comparison(golden_vec_tilized, result_vec, comparison_function);

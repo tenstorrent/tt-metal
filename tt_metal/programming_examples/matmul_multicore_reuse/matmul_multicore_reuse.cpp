@@ -386,9 +386,9 @@ int main(int argc, char **argv) {
         // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
 
         /* Create source data */
-        constexpr uint32_t M = 3200;  // user-defined
-        constexpr uint32_t N = 3200;  // user-defined
-        constexpr uint32_t K = 3200;  // user-defined
+        constexpr uint32_t M = 640;  // user-defined
+        constexpr uint32_t N = 640;  // user-defined
+        constexpr uint32_t K = 640;  // user-defined
         constexpr uint32_t B = 1;  // user-defined
 
         uint32_t Mt = M / TILE_HEIGHT;
@@ -401,11 +401,11 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B
 
         /* input vectors */
-        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_A_size, 1, 123);
-        //std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(dram_buffer_B_size, 1, 125);
+        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_A_size, 1, 123, -0.4);
+        std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(dram_buffer_B_size, 1, 12522, -0.3);
 
         //std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(dram_buffer_A_size, false);
-        std::vector<uint32_t> src1_vec = pack_bfloat16_vec_into_uint32_vec(create_identity_matrix(K, N, K));
+        //std::vector<uint32_t> src1_vec = pack_bfloat16_vec_into_uint32_vec(create_identity_matrix(K, N, K));
 
         //constexpr float val_to_add = 2.0f;
         //std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(dram_buffer_A_size, val_to_add);
@@ -502,6 +502,12 @@ int main(int argc, char **argv) {
         std::function<bool(const float, const float)> comparison_function = [](const float a, const float b) {
             return is_close(a, b, rel_tolerance, abs_tolerance);
         };
+
+        float calc_pcc = packed_uint32_t_vector_pcc(golden_vec_tilized, result_vec);
+        cout << "PCC= " << calc_pcc << endl;
+
+        float pearson = packed_uint32_t_vector_pcc_v2(golden_vec_tilized, result_vec);
+        cout << "PCC_v2= " << pearson << endl;
 
         //pass &= packed_uint32_t_vector_comparison(golden_vec, result_vec_untilized, comparison_function);
         pass &= packed_uint32_t_vector_comparison(golden_vec_tilized, result_vec, comparison_function);
