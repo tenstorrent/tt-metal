@@ -17,8 +17,7 @@ New buffers
 In terms of DRAM buffers, We just need a new buffer for a 2nd source, because
 we have two source tensors (vectors).
 
-However, we need to declare some circular buffers to enable data transfer
-between the reader, compute, and writer engines.
+We already have set the circular buffers needed for compute data communication.
 
 .. code-block:: cpp
 
@@ -44,44 +43,29 @@ between the reader, compute, and writer engines.
 We will create two input circular buffers to accommodate our two input tensors,
 and an output one for the result of the eltwise binary operation.
 
-Compile-time compute kernel arguments
--------------------------------------
-
-.. code-block:: cpp
-
-  std::vector<uint32_t> eltwise_binary_compile_args = {
-      /*.per_core_block_cnt =*/ 2048,
-      /*.per_core_block_size =*/ 1
-  };
-
-We have to declare some compile-time arguments for compute kernel. Some default
-parameters here will suffice.
-
-These two parameters essentially tell the kernel how much data we'll be moving
-in one invocation. A high number for total block count like that specified here
-is sufficient.
-
 Compute kernel declaration and compile-time defines
 ---------------------------------------------------
 
 .. code-block:: cpp
 
-  ComputeKernel *eltwise_binary_kernel = CreateComputeKernel(
-      program,
-      "kernels/compute/eltwise_binary.cpp",
-      core,
-      eltwise_binary_args,
-      MathFidelity::HiFi4,
-      fp32_dest_acc_en,
-      math_approx_mode
-  );
-  eltwise_binary_kernel->add_define("ELTWISE_OP", "add_tiles");
+    KernelID eltwise_binary_kernel_id = CreateKernel(
+        program,
+        "tt_metal/kernels/compute/eltwise_binary.cpp",
+        core,
+        ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_kernel_args,
+            .defines = get_defines(BinaryOpType::ADD)
+        }
+    );
 
 We will declare what kind of compute kernel we're using and further specify we
 want to use the ``add_tiles`` eltwise binary op, for eltwise adding.
 
-Extra runtime arguments and source tensor
------------------------------------------
+Extra source tensor
+-------------------
 
 .. code-block:: cpp
 
@@ -92,27 +76,6 @@ Extra runtime arguments and source tensor
 
 In this program, we have a second source tensor. We will be adding this to the
 first source tensor.
-
-.. code-block:: cpp
-
-        SetRuntimeArgs(
-            program,
-            unary_writer_kernel_id,
-            core,
-            {
-                dst_dram_buffer.address(),
-                static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().x),
-                static_cast<uint32_t>(dst_dram_buffer.noc_coordinates().y),
-                num_tiles
-            }
-        );
-
-In this program,  we're using a separate reader kernel to take in data from
-DRAM into L1, and a separate writer kernel to write out results from the
-compute engine back to the destination DRAM buffer.
-
-That means two sets of runtime arguments for data movement kernels. In the DRAM
-loopback example, we only had a single data movement kernel.
 
 Conclusion
 ----------
