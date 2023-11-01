@@ -14,7 +14,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormho
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import arange as tt_arange
 
 
-
 def tensor_to_device(x, device, buffer_type):
     if buffer_type == None:
         return x
@@ -23,7 +22,6 @@ def tensor_to_device(x, device, buffer_type):
 
 
 def run_arange_tests(input_shape, dtype, dlayout, buffer_type, output_mem_config, data_seed, start, end, step, device):
-
     random.seed(0)
     torch.manual_seed(data_seed)
 
@@ -40,7 +38,8 @@ def run_arange_tests(input_shape, dtype, dlayout, buffer_type, output_mem_config
         dtype=[dtype],
         layout=[dlayout],
         input_mem_config=[ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, buffer_type)],
-        output_mem_config=output_mem_config)
+        output_mem_config=output_mem_config,
+    )
 
     # compare tt and golden outputs
     success, pcc_value = comp_pcc(ttz, ref_value)
@@ -49,22 +48,69 @@ def run_arange_tests(input_shape, dtype, dlayout, buffer_type, output_mem_config
     assert success
 
 
-test_sweep_args=[
-    ((7, 14, 32, 160), ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.Layout.TILE, ttl.tensor.BufferType.L1, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), 15991940, -75, -56, 7),
-    ((2, 20, 416, 160), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.BufferType.L1, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), 18784230, 41, 46, 5),
-    ((10, 21, 480, 128), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.BufferType.L1, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), 16005792, 30, 94, 5),
-    ((10, 21, 480, 128), ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.Layout.TILE, ttl.tensor.BufferType.DRAM, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), 17493725, 34, 71, 6),
-    ((10, 21, 480, 128), ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.Layout.TILE, ttl.tensor.BufferType.L1, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), 8740671, 38, 51, 2),
+test_sweep_args = [
+    (
+        (7, 14, 32, 160),
+        ttl.tensor.DataType.BFLOAT8_B,
+        ttl.tensor.Layout.TILE,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        15991940,
+        -75,
+        -56,
+        7,
+    ),
+    (
+        (2, 20, 416, 160),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.TILE,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        18784230,
+        41,
+        46,
+        5,
+    ),
+    (
+        (10, 21, 480, 128),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.TILE,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        16005792,
+        30,
+        94,
+        5,
+    ),
+    (
+        (10, 21, 480, 128),
+        ttl.tensor.DataType.BFLOAT8_B,
+        ttl.tensor.Layout.TILE,
+        ttl.tensor.BufferType.DRAM,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        17493725,
+        34,
+        71,
+        6,
+    ),
+    (
+        (10, 21, 480, 128),
+        ttl.tensor.DataType.BFLOAT8_B,
+        ttl.tensor.Layout.TILE,
+        ttl.tensor.BufferType.L1,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        8740671,
+        38,
+        51,
+        2,
+    ),
 ]
+
 
 @skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, buffer_type, out_mem_config, data_seed, start, end, step",
-    (
-        test_sweep_args
-    ),
+    (test_sweep_args),
 )
-def test_arange_test(
-    input_shape, dtype, dlayout, buffer_type, out_mem_config, data_seed, start, end, step, device
-):
+def test_arange_test(input_shape, dtype, dlayout, buffer_type, out_mem_config, data_seed, start, end, step, device):
     run_arange_tests(input_shape, dtype, dlayout, buffer_type, out_mem_config, data_seed, start, end, step, device)

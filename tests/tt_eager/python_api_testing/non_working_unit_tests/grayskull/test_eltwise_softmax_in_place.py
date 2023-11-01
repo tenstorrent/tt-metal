@@ -11,7 +11,9 @@ import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
-from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_softmax_in_place as tt_eltwise_softmax_in_place
+from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import (
+    eltwise_softmax_in_place as tt_eltwise_softmax_in_place,
+)
 
 
 def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_config, data_seed, device):
@@ -27,12 +29,7 @@ def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_confi
     ref_value = pytorch_ops.softmax_in_place(x_ref)
 
     tt_result = tt_eltwise_softmax_in_place(
-        x=x,
-        device=device,
-        dtype=[dtype],
-        layout=[dlayout],
-        input_mem_config=[in_mem_config],
-        output_mem_config=None
+        x=x, device=device, dtype=[dtype], layout=[dlayout], input_mem_config=[in_mem_config], output_mem_config=None
     )
 
     # compare tt and golden outputs
@@ -42,21 +39,35 @@ def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_confi
     assert success
 
 
-test_sweep_args=[
-    ((1, 9, 32, 32), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), 38346),
-    ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), 17155532),
-    ((4, 7, 32, 96), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.TILE, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), 16305027),
+test_sweep_args = [
+    (
+        (1, 9, 32, 32),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.TILE,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        38346,
+    ),
+    (
+        (4, 7, 32, 96),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.TILE,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        17155532,
+    ),
+    (
+        (4, 7, 32, 96),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.TILE,
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        16305027,
+    ),
 ]
+
 
 @skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, in_mem_config, data_seed",
-    (
-        test_sweep_args
-    ),
+    (test_sweep_args),
 )
-
-def test_eltwise_softmax_in_place_test(
-    input_shape, dtype, dlayout, in_mem_config, data_seed, device
-):
+def test_eltwise_softmax_in_place_test(input_shape, dtype, dlayout, in_mem_config, data_seed, device):
     run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_config, data_seed, device)
