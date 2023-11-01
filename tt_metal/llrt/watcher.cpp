@@ -453,36 +453,6 @@ static void watcher_loop(int sleep_usecs) {
 
 } // namespace watcher
 
-static void init_device(int device_id,
-                        std::function<CoreCoord ()>get_grid_size,
-                        std::function<CoreCoord (CoreCoord)>worker_from_logical) {
-
-    // Initialize debug status values to "unknown"
-    std::vector<uint32_t> debug_status_init_val = { 'X', 'X', 'X', 'X', 'X' };
-
-    // Initialize debug sanity L1/NOC addresses to sentinel "all ok"
-    std::vector<uint32_t> debug_sanity_init_val;
-    debug_sanity_init_val.resize(NUM_NOCS * sizeof(debug_sanitize_noc_addr_msg_t) / sizeof(uint32_t));
-    static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
-    debug_sanitize_noc_addr_msg_t *data = reinterpret_cast<debug_sanitize_noc_addr_msg_t *>(&(debug_sanity_init_val[0]));
-    for (int i = 0; i < NUM_NOCS; i++) {
-        data[i].addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_64;
-        data[i].len = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
-        data[i].which = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
-        data[i].invalid = DebugSanitizeNocInvalidOK;
-    }
-
-    CoreCoord grid_size = get_grid_size();
-    for (uint32_t y = 0; y < grid_size.y; y++) {
-        for (uint32_t x = 0; x < grid_size.x; x++) {
-            CoreCoord logical_core(x, y);
-            CoreCoord worker_core = worker_from_logical(logical_core);
-            tt::llrt::write_hex_vec_to_core(device_id, worker_core, debug_status_init_val, GET_MAILBOX_ADDRESS_HOST(debug_status));
-            tt::llrt::write_hex_vec_to_core(device_id, worker_core, debug_sanity_init_val, GET_MAILBOX_ADDRESS_HOST(sanitize_noc));
-        }
-    }
-}
-
 static bool coord_found_p(vector<CoreCoord>coords, CoreCoord core) {
     for (CoreCoord item : coords) {
         if (item == core) return true;
@@ -545,6 +515,38 @@ static void watcher_sanitize_host_noc(const char* what,
     }
 }
 
+void watcher_init(int device_id,
+                  std::function<CoreCoord ()>get_grid_size,
+                  std::function<CoreCoord (CoreCoord)>worker_from_logical) {
+
+    // Initialize debug status values to "unknown"
+    std::vector<uint32_t> debug_status_init_val = { 'X', 'X', 'X', 'X', 'X' };
+
+    // Initialize debug sanity L1/NOC addresses to sentinel "all ok"
+    std::vector<uint32_t> debug_sanity_init_val;
+    debug_sanity_init_val.resize(NUM_NOCS * sizeof(debug_sanitize_noc_addr_msg_t) / sizeof(uint32_t));
+    static_assert(sizeof(debug_sanitize_noc_addr_msg_t) % sizeof(uint32_t) == 0);
+    debug_sanitize_noc_addr_msg_t *data = reinterpret_cast<debug_sanitize_noc_addr_msg_t *>(&(debug_sanity_init_val[0]));
+    for (int i = 0; i < NUM_NOCS; i++) {
+        data[i].addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_64;
+        data[i].len = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
+        data[i].which = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
+        data[i].invalid = DebugSanitizeNocInvalidOK;
+    }
+
+    CoreCoord grid_size = get_grid_size();
+    for (uint32_t y = 0; y < grid_size.y; y++) {
+        for (uint32_t x = 0; x < grid_size.x; x++) {
+            CoreCoord logical_core(x, y);
+            CoreCoord worker_core = worker_from_logical(logical_core);
+            tt::llrt::write_hex_vec_to_core(device_id, worker_core, debug_status_init_val, GET_MAILBOX_ADDRESS_HOST(debug_status));
+            tt::llrt::write_hex_vec_to_core(device_id, worker_core, debug_sanity_init_val, GET_MAILBOX_ADDRESS_HOST(sanitize_noc));
+        }
+    }
+
+    log_debug(LogLLRuntime, "Watcher initialized device {}", device_id);
+}
+
 void watcher_attach(void *dev,
                     int device_id,
                     const std::function<CoreCoord ()>& get_grid_size,
@@ -572,7 +574,6 @@ void watcher_attach(void *dev,
     }
 
     if (watcher::enabled) {
-        init_device(device_id, get_grid_size, worker_from_logical);
         log_info(LogLLRuntime, "Watcher attached device {}", device_id);
     }
 

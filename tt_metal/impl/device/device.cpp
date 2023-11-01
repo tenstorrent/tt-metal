@@ -250,14 +250,21 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     if (!already_initialized) {
         this->initialize_build();
     }
+
     tt_start_debug_print_server();
+    llrt::watcher_init(this->id(),
+                       [&, this]() { return this->logical_grid_size(); },
+                       [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); }
+                       );
+
+    this->initialize_and_launch_firmware();
+
     llrt::watcher_attach(this, this->id(),
                          [&, this]() { return this->logical_grid_size(); },
                          [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); },
                          [&, this]() -> const std::set<CoreCoord>& { return this->storage_only_cores(); },
                          get_compile_outpath()
                          );
-    this->initialize_and_launch_firmware();
 
     this->initialized_ = true;
     return true;
