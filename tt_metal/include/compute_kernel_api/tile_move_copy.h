@@ -62,11 +62,11 @@ ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t cbid) {
 ALWI void copy_tile_matmul_partials_init_short_with_dt(uint32_t cbid) {
     #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_A_init_cm<BroadcastType::NONE, false, 1>(0, 255) ));
-    UNPACK(( llk_unpack_reconfig_data_format(1, cbid, 0, 0) ));
+    UNPACK(( llk_unpack_reconfig_data_format_srca(1, cbid) ));
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
     #else
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
-    UNPACK(( llk_unpack_reconfig_data_format(1, cbid, 0, 0) ));
+    UNPACK(( llk_unpack_reconfig_data_format_srca(1, cbid) ));
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, cbid) ));
     #endif
 }
