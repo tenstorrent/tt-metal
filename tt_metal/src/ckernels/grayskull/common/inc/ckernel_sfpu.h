@@ -865,6 +865,30 @@ inline void calculate_heaviside(uint value)
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_silu()
+{
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat val = dst_reg[0];
+        v_if ( val < 0.0f ) {
+            val = -val;
+        }
+        v_endif;
+
+	    vFloat result = sigmoid_piecewise_linear_positive(val);
+
+	    val = dst_reg[0];
+        v_if ( val < 0.0f ) {
+            result = 1.0f - result;
+        }
+        v_endif;
+        result = val * result;
+        dst_reg[0] = result;
+        dst_reg++;
+    }
+}
+
 template <SfpuType operation, bool APPROXIMATION_MODE, int SfpuType_PARAM = 0, int ITERATIONS = 4>
 inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0)
 {
@@ -955,6 +979,9 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::atan) {
         calculate_atan<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::silu) {
+        calculate_silu<APPROXIMATION_MODE, ITERATIONS>();
     }
     //erf, erfc are dispatched directly.
 }

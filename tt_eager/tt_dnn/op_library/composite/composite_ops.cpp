@@ -79,19 +79,6 @@ Tensor softsign(const Tensor& a, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _softsign)(a, output_mem_config);
 }
 
-// Function SILU (same as Swish)
-// use activation Silu[x] = x*Sigmoid[x]
-// Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
-Tensor _silu(const Tensor& a, const MemoryConfig& output_mem_config) {
-    //x / (1.0f + exp(-x))
-    Tensor sigmoid_a = sigmoid(a, output_mem_config);
-    Tensor silu_a = mul(a, sigmoid_a, std::nullopt, output_mem_config);
-    return silu_a;
-}
-Tensor silu(const Tensor& a, const MemoryConfig& output_mem_config) {
-    return operation::decorate_as_composite(__func__, _silu)(a, output_mem_config);
-}
-
 Tensor _swish(const Tensor& a, const MemoryConfig& output_mem_config) {
     //x / (1.0f + exp(-x))
     return silu(a, output_mem_config);
