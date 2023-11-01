@@ -3,15 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from pathlib import Path
-import sys
 import torch
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
-sys.path.append(f"{f}/..")
-
-import numpy as np
 
 import tt_lib as ttl
 from models.utility_functions import tilize
@@ -39,20 +31,15 @@ def test_run_tilize_test(nb, nc, nh, nw, multicore, device):
     nt = nb * nc * nh * nw
     shape = [nb, nc, 32 * nh, 32 * nw]
 
-    inp = np.random.rand(*shape)
+    inp = torch.rand(*shape).bfloat16()
 
     a = ttl.tensor.Tensor(
-        inp.flatten().tolist(),
-        shape,
+        inp,
         ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-        device,
-    )
-    b = ttl.tensor.tilize(a, use_multicore = multicore)
-    c = b.cpu().to_torch().to(torch.float32).reshape(shape).numpy()
+    ).to(device)
+    b = ttl.tensor.tilize(a, use_multicore=multicore)
+    c = b.cpu().to_torch()
 
-    tilized_inp = tilize(inp.reshape(*shape))
-
-    assert (
-        abs(tilized_inp - c) < 0.02
-    ).all(), "Max abs difference for tilize can be 0.02 due to bfloat conversions"
+    tilized_inp = tilize(inp)
+    passing = torch.equal(tilized_inp, c)
+    assert passing
