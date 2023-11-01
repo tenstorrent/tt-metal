@@ -180,7 +180,6 @@ int main(int argc, char **argv) {
             }
         );
 
-
         SetRuntimeArgs(
             program,
             eltwise_binary_kernel_id,
