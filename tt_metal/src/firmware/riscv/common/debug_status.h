@@ -15,6 +15,8 @@
 //
 #pragma once
 
+#include "dev_msgs.h"
+
 #if defined (WATCHER_ENABLED)
 
 inline uint32_t get_debug_status()
