@@ -177,8 +177,6 @@ class CommandQueue {
    private:
     Device* device;
     SystemMemoryWriter sysmem_writer;
-    TSQueue<shared_ptr<Command>>
-        processing_thread_queue;  // These are commands that have not been placed in system memory
     // thread processing_thread;
     map<uint64_t, unique_ptr<Buffer>>
         program_to_buffer;
@@ -201,6 +199,7 @@ class CommandQueue {
     friend void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& src, bool blocking);
     friend void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
     friend void Finish(CommandQueue& cq);
+    friend void ClearProgramCache(CommandQueue& cq);
 };
 
 } // namespace tt::tt_metal

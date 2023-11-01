@@ -908,4 +908,10 @@ void Finish(CommandQueue& cq) {
     cq.finish();
 }
 
+void ClearProgramCache(CommandQueue& cq) {
+    detail::DispatchStateCheck(true);
+    cq.program_to_buffer.clear();
+    cq.program_to_dev_map.clear();
+}
+
 }  // namespace tt::tt_metal

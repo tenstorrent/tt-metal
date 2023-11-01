@@ -247,6 +247,7 @@ def device(device_init_destroy):
     import tt_lib as ttl
     device = ttl.device.GetDefaultDevice()
     yield device
+    ttl.device.ClearCommandQueueProgramCache()
     ttl.device.DeallocateBuffers(device)
 
 
