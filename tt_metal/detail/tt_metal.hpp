@@ -245,6 +245,13 @@ namespace tt::tt_metal{
             device->deallocate_buffers();
         }
 
+        inline void ClearCommandQueueProgramCache()
+        {
+            if (detail::GLOBAL_CQ) {
+                ClearProgramCache(*detail::GLOBAL_CQ);
+            }
+        }
+
         inline void GenerateDeviceHeaders(Device *device,
                                           build_kernel_for_riscv_options_t *build_options,
                                           const std::string &op_path_suffix)
