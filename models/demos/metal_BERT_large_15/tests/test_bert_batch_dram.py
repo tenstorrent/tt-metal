@@ -11,7 +11,7 @@ from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 import tt_lib
 
 from models.demos.metal_BERT_large_15.tt.bert_model import TtBertBatchDram
-from models.demos.metal_BERT_large_15.tt.model_config import get_model_config
+from models.demos.metal_BERT_large_15.tt.model_config import get_model_config, get_tt_cache_path
 
 from models.utility_functions import (
     enable_persistent_kernel_cache,
@@ -20,9 +20,8 @@ from models.utility_functions import (
     comp_allclose,
     disable_persistent_kernel_cache,
     profiler,
-    is_e75
+    is_e75,
 )
-
 
 
 def run_bert_question_and_answering_inference(
@@ -34,6 +33,7 @@ def run_bert_question_and_answering_inference(
     token_type_ids,
     pcc,
     model_config,
+    tt_cache_path,
     model_location_generator,
     PERF_CNT,
     device,
@@ -50,6 +50,7 @@ def run_bert_question_and_answering_inference(
         hugging_face_reference_model,
         device,
         model_config,
+        tt_cache_path,
     )
 
     profiler.start("processing_of_input")
@@ -267,10 +268,11 @@ def test_bert_batch_dram(
     request,
     device,
 ):
-    if (is_e75(device)):
+    if is_e75(device):
         pytest.skip(f"Bert large 15 is not supported on E75")
 
     model_config = get_model_config(model_config_str)
+    tt_cache_path = get_tt_cache_path(model_version)
 
     # This test will run BERT-Large once with cache disabled.
     # Then it will enable cache and run BERT-Large PERF_CNT number of times.
@@ -291,6 +293,7 @@ def test_bert_batch_dram(
         token_type_ids,
         pcc,
         model_config,
+        tt_cache_path,
         model_location_generator,
         PERF_CNT,
         device,
@@ -344,10 +347,11 @@ def test_bert_batch_dram_with_program_cache(
     request,
     device,
 ):
-    if (is_e75(device)):
+    if is_e75(device):
         pytest.skip(f"Bert large 15 is not supported on E75")
 
     model_config = get_model_config(model_config_str)
+    tt_cache_path = get_tt_cache_path(model_version)
 
     # This test will run BERT-Large once with cache disabled.
     # Then it will enable cache and run BERT-Large PERF_CNT number of times.
@@ -370,6 +374,7 @@ def test_bert_batch_dram_with_program_cache(
         token_type_ids,
         pcc,
         model_config,
+        tt_cache_path,
         model_location_generator,
         PERF_CNT,
         device,

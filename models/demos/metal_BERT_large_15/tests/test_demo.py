@@ -14,13 +14,8 @@ from models.utility_functions import is_e75
     (("models/demos/metal_BERT_large_15/demo/input_data.json"),),
     ids=["default_input"],
 )
-def test_demo(
-    input_path,
-    model_location_generator,
-    device,
-    use_program_cache
-):
-    if (is_e75(device)):
+def test_demo(input_path, model_location_generator, device, use_program_cache):
+    if is_e75(device):
         pytest.skip(f"Bert large 15 is not supported on E75")
 
     expected_answers = {
@@ -42,12 +37,10 @@ def test_demo(
     for key, value in expected_answers.items():
         assert value == answers[key]
 
-def test_demo_squadv2(
-    model_location_generator,
-    device,
-    use_program_cache):
+
+def test_demo_squadv2(model_location_generator, device, use_program_cache):
     loop_count = 100
     evals = demo_squadv2(model_location_generator, device, use_program_cache, loop_count)
 
-    assert evals['exact'] > 80
-    assert evals['f1'] > 88
+    assert evals["exact"] > 80
+    assert evals["f1"] > 88

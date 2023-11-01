@@ -4,6 +4,7 @@
 
 import tt_lib
 from loguru import logger
+from pathlib import Path
 
 
 OP_MEMCFG_KEYS = (
@@ -232,3 +233,12 @@ def get_model_config(model_config_str):
     logger.debug(f"BERT model config: \n{pretty_print_model_config(model_config)}")
 
     return model_config
+
+
+# TODO: Generalize TT tensor caching
+def get_tt_cache_path(model_version):
+    tt_cache_path = Path("/mnt/MLPerf/tt_dnn-models/tt/Bert") / model_version
+    if tt_cache_path.exists():
+        return tt_cache_path
+    else:
+        return None

@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-
 import torch
 
 from loguru import logger
@@ -17,7 +16,7 @@ from tt_lib.utils import pad_activation, pad_weight
 
 
 class TtBertBatchDram(torch.nn.Module):
-    def __init__(self, config, hugging_face_reference_model, device, model_config):
+    def __init__(self, config, hugging_face_reference_model, device, model_config, tt_cache_path):
         super().__init__()
         self.device = device
         self.model_config = model_config
@@ -33,41 +32,50 @@ class TtBertBatchDram(torch.nn.Module):
             hugging_face_reference_model,
             device,
             model_config=model_config,
+            tt_cache_path=tt_cache_path,
         )
 
         self.get_extended_attention_mask = hugging_face_reference_model.get_extended_attention_mask
 
         self.encoders = torch.nn.ModuleList(
             [
-                TtBertEncoder(config, encoder_idx, state_dict, device, model_config)
+                TtBertEncoder(config, encoder_idx, state_dict, device, model_config, tt_cache_path)
                 for encoder_idx in range(config.num_hidden_layers)
             ]
         )
 
         num_classes, hidden_size = state_dict["qa_outputs.weight"].shape
 
-        weight = pad_weight(torch.transpose(state_dict["qa_outputs.weight"], -2, -1))
-        weight = (
-            tt_lib.tensor.Tensor(
-                weight.reshape(-1).tolist(),
-                weight.shape,
-                model_config["QA_LINEAR_WEIGHTS_DTYPE"],
-                tt_lib.tensor.Layout.ROW_MAJOR,
+        if tt_cache_path is not None:
+            weight = tt_lib.tensor.load_tensor(
+                str(tt_cache_path / f"qa_outputs.weight_{self.model_config['QA_LINEAR_WEIGHTS_DTYPE'].name}.bin")
+            ).to(device, self.model_config["QA_LINEAR_WEIGHTS_MEMCFG"])
+            bias = tt_lib.tensor.load_tensor(
+                str(tt_cache_path / f"qa_outputs.bias_{self.model_config['QA_LINEAR_BIAS_DTYPE'].name}.bin")
+            ).to(device, self.model_config["QA_LINEAR_BIAS_MEMCFG"])
+        else:
+            weight = pad_weight(torch.transpose(state_dict["qa_outputs.weight"], -2, -1))
+            weight = (
+                tt_lib.tensor.Tensor(
+                    weight.reshape(-1).tolist(),
+                    weight.shape,
+                    model_config["QA_LINEAR_WEIGHTS_DTYPE"],
+                    tt_lib.tensor.Layout.ROW_MAJOR,
+                )
+                .to(tt_lib.tensor.Layout.TILE)
+                .to(device, model_config["QA_LINEAR_WEIGHTS_MEMCFG"])
             )
-            .to(tt_lib.tensor.Layout.TILE)
-            .to(device, model_config["QA_LINEAR_WEIGHTS_MEMCFG"])
-        )
-        bias = pad_weight(state_dict["qa_outputs.bias"])
-        bias = (
-            tt_lib.tensor.Tensor(
-                bias.reshape(-1).tolist(),
-                bias.shape,
-                model_config["QA_LINEAR_BIAS_DTYPE"],
-                tt_lib.tensor.Layout.ROW_MAJOR,
+            bias = pad_weight(state_dict["qa_outputs.bias"])
+            bias = (
+                tt_lib.tensor.Tensor(
+                    bias.reshape(-1).tolist(),
+                    bias.shape,
+                    model_config["QA_LINEAR_BIAS_DTYPE"],
+                    tt_lib.tensor.Layout.ROW_MAJOR,
+                )
+                .to(tt_lib.tensor.Layout.TILE)
+                .to(device, model_config["QA_LINEAR_BIAS_MEMCFG"])
             )
-            .to(tt_lib.tensor.Layout.TILE)
-            .to(device, model_config["QA_LINEAR_BIAS_MEMCFG"])
-        )
 
         # QA linear
         # TODO: Replace with custom op with fused bias?
@@ -133,7 +141,6 @@ class TtBertBatchDram(torch.nn.Module):
     def forward(self, tt_embeddings, tt_attention_mask=None):
         print(f"Num encoders {len(self.encoders)}")
 
-
         # profiler.start("_run_encoders")
         hidden_states = tt_embeddings
         attention_mask = tt_attention_mask
@@ -152,9 +159,6 @@ class TtBertBatchDram(torch.nn.Module):
         # profiler.end("_qa_linear")
 
         return res
-
-
-
 
 
 # class TtBertBatchDram(torch.nn.Module):

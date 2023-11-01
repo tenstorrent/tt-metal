@@ -9,7 +9,7 @@ from tt_lib.utils import pad_weight
 
 
 class TtEmbeddings(torch.nn.Module):
-    def __init__(self, hugging_face_reference_model, device, model_config):
+    def __init__(self, hugging_face_reference_model, device, model_config, tt_cache_path):
         super().__init__()
 
         self.device = device
@@ -19,30 +19,62 @@ class TtEmbeddings(torch.nn.Module):
         self.embedding_dim = config.hidden_size
 
         base_address = "bert.embeddings"
-        self.word_embeddings_weight = ttl.tensor.Tensor(
-            pad_weight(state_dict[f"{base_address}.word_embeddings.weight"]),
-            model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
-        ).to(device, model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
+        if tt_cache_path is not None:
+            self.word_embeddings_weight = ttl.tensor.load_tensor(
+                str(
+                    tt_cache_path
+                    / f"{base_address}.word_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.bin"
+                )
+            ).to(device, self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
+            self.position_embeddings_weight = ttl.tensor.load_tensor(
+                str(
+                    tt_cache_path
+                    / f"{base_address}.position_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.bin"
+                )
+            ).to(device, self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
+            self.token_type_embeddings_weight = ttl.tensor.load_tensor(
+                str(
+                    tt_cache_path
+                    / f"{base_address}.token_type_embeddings.weight_{self.model_config['INPUT_EMBEDDINGS_WEIGHTS_DTYPE'].name}.bin"
+                )
+            ).to(device, self.model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
+            self.layerNorm_gamma = ttl.tensor.load_tensor(
+                str(
+                    tt_cache_path
+                    / f"{base_address}.LayerNorm.weight_{self.model_config['EMBEDDINGS_LAYERNORM_GAMMA_DTYPE'].name}.bin"
+                )
+            ).to(device, self.model_config["EMBEDDINGS_LAYERNORM_GAMMA_MEMCFG"])
+            self.layerNorm_beta = ttl.tensor.load_tensor(
+                str(
+                    tt_cache_path
+                    / f"{base_address}.LayerNorm.beta_{self.model_config['EMBEDDINGS_LAYERNORM_BETA_DTYPE'].name}.bin"
+                )
+            ).to(device, self.model_config["EMBEDDINGS_LAYERNORM_BETA_MEMCFG"])
+        else:
+            self.word_embeddings_weight = ttl.tensor.Tensor(
+                pad_weight(state_dict[f"{base_address}.word_embeddings.weight"]),
+                model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
+            ).to(device, model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
 
-        self.position_embeddings_weight = ttl.tensor.Tensor(
-            pad_weight(state_dict[f"{base_address}.position_embeddings.weight"]),
-            model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
-        ).to(device, model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
+            self.position_embeddings_weight = ttl.tensor.Tensor(
+                pad_weight(state_dict[f"{base_address}.position_embeddings.weight"]),
+                model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
+            ).to(device, model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
 
-        self.token_type_embeddings_weight = ttl.tensor.Tensor(
-            pad_weight(state_dict[f"{base_address}.token_type_embeddings.weight"]),
-            model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
-        ).to(device, model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
+            self.token_type_embeddings_weight = ttl.tensor.Tensor(
+                pad_weight(state_dict[f"{base_address}.token_type_embeddings.weight"]),
+                model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
+            ).to(device, model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
 
-        self.layerNorm_gamma = ttl.tensor.Tensor(
-            state_dict[f"{base_address}.LayerNorm.weight"].reshape([1, 1, -1, 32]),
-            model_config["EMBEDDINGS_LAYERNORM_GAMMA_DTYPE"],
-        ).to(device, model_config["EMBEDDINGS_LAYERNORM_GAMMA_MEMCFG"])
+            self.layerNorm_gamma = ttl.tensor.Tensor(
+                state_dict[f"{base_address}.LayerNorm.weight"].reshape([1, 1, -1, 32]),
+                model_config["EMBEDDINGS_LAYERNORM_GAMMA_DTYPE"],
+            ).to(device, model_config["EMBEDDINGS_LAYERNORM_GAMMA_MEMCFG"])
 
-        self.layerNorm_beta = ttl.tensor.Tensor(
-            state_dict[f"{base_address}.LayerNorm.bias"].reshape([1, 1, -1, 32]),
-            model_config["EMBEDDINGS_LAYERNORM_BETA_DTYPE"],
-        ).to(device, model_config["EMBEDDINGS_LAYERNORM_BETA_MEMCFG"])
+            self.layerNorm_beta = ttl.tensor.Tensor(
+                state_dict[f"{base_address}.LayerNorm.bias"].reshape([1, 1, -1, 32]),
+                model_config["EMBEDDINGS_LAYERNORM_BETA_DTYPE"],
+            ).to(device, model_config["EMBEDDINGS_LAYERNORM_BETA_MEMCFG"])
 
         self.layerNorm_eps = config.layer_norm_eps
 

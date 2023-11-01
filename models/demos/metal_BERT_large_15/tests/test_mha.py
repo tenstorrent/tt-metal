@@ -16,10 +16,8 @@ from models.utility_functions import (
     comp_allclose,
     profiler,
 )
-from models.demos.metal_BERT_large_15.tt.model_config import get_model_config
+from models.demos.metal_BERT_large_15.tt.model_config import get_model_config, get_tt_cache_path
 from models.demos.metal_BERT_large_15.tt.mha import TtMultiHeadAttentionModel
-
-
 
 
 class PytorchMultiHeadAttentionModel(torch.nn.Module):
@@ -36,33 +34,27 @@ class PytorchMultiHeadAttentionModel(torch.nn.Module):
 
 
 def run_mha_inference(
-    device, model_version, batch, seq_len, pcc, model_config, model_location_generator
+    device, model_version, batch, seq_len, pcc, model_config, tt_cache_path, model_location_generator
 ):
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
-        model_name, torchscript=False
-    )
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     tt_mha_model = TtMultiHeadAttentionModel(
         hugging_face_reference_model.config,
         0,
         hugging_face_reference_model.state_dict(),
         device,
         model_config,
+        tt_cache_path,
     )
     pytorch_mha_model = PytorchMultiHeadAttentionModel(hugging_face_reference_model)
 
     # Prepare input
     torch.manual_seed(0)
-    mha_input = (
-        torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size)
-        * 2
-    ) - 1
+    mha_input = (torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size) * 2) - 1
     bert_attention_mask = torch.zeros(batch, 1, 1, seq_len)
     extended_bert_attention_mask = torch.zeros(batch, 1, 32, seq_len)
-    pytorch_out = pytorch_mha_model(
-        mha_input.squeeze(1), bert_attention_mask
-    ).unsqueeze(1)
+    pytorch_out = pytorch_mha_model(mha_input.squeeze(1), bert_attention_mask).unsqueeze(1)
 
     pad_mha_input = pad_activation(mha_input)
     tt_mha_input = tt_lib.tensor.Tensor(
@@ -71,9 +63,7 @@ def run_mha_inference(
         model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"],
         tt_lib.tensor.Layout.ROW_MAJOR,
     ).to(tt_lib.tensor.Layout.TILE)
-    tt_mha_input = tt_mha_input.to(
-        device, model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"]
-    )
+    tt_mha_input = tt_mha_input.to(device, model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"])
 
     tt_bert_attention_mask = (
         tt_lib.tensor.Tensor(
@@ -102,6 +92,7 @@ def run_mha_inference(
         pytest.xfail("PCC is garbage for BFLOAT8_B. Numbers are for perf only!")
 
     assert passing
+
 
 @pytest.mark.parametrize(
     "batch, model_config_str",
@@ -138,10 +129,9 @@ def test_mha_inference(
     request,
 ):
     model_config = get_model_config(model_config_str)
+    tt_cache_path = get_tt_cache_path(model_version)
 
-    tt_lib.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/BERT_large_mha_{request.node.callspec.id}"
-    )
+    tt_lib.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/BERT_large_mha_{request.node.callspec.id}")
 
     run_mha_inference(
         device,
@@ -150,5 +140,6 @@ def test_mha_inference(
         seq_len,
         pcc,
         model_config,
+        tt_cache_path,
         model_location_generator,
     )

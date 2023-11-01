@@ -17,7 +17,7 @@ from models.utility_functions import (
 )
 
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
-from models.demos.metal_BERT_large_15.tt.model_config import get_model_config
+from models.demos.metal_BERT_large_15.tt.model_config import get_model_config, get_tt_cache_path
 from models.demos.metal_BERT_large_15.tt.bert_model import TtBertBatchDram
 
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
@@ -45,6 +45,7 @@ def run_bert_question_and_answering_inference_squadv2(model_version,
         return_attention_mask,
         return_token_type_ids,
         model_config,
+        tt_cache_path,
         model_location_generator,
         device,
         loop_count):
@@ -97,6 +98,7 @@ def run_bert_question_and_answering_inference_squadv2(model_version,
         hugging_face_reference_model,
         device,
         model_config,
+        tt_cache_path,
     )
     with torch.no_grad():
         pred_labels = []
@@ -143,6 +145,7 @@ def run_bert_question_and_answering_inference(
     return_attention_mask,
     return_token_type_ids,
     model_config,
+    tt_cache_path,
     NUM_RUNS,
     input_path,
     model_location_generator,
@@ -206,6 +209,7 @@ def run_bert_question_and_answering_inference(
         hugging_face_reference_model,
         device,
         model_config,
+        tt_cache_path,
     )
     profiler.end(f"move_weights")
 
@@ -350,6 +354,7 @@ def test_demo(
         return_attention_mask = True,
         return_token_type_ids = True,
         model_config = get_model_config("MIXED_PRECISION_BATCH8"),
+        tt_cache_path = get_tt_cache_path("phiyodr/bert-large-finetuned-squad2"),
         NUM_RUNS = NUM_RUNS,
         input_path = input_path,
         model_location_generator = model_location_generator,
@@ -377,6 +382,7 @@ def test_demo_squadv2(
         return_attention_mask = True,
         return_token_type_ids = True,
         model_config = get_model_config("MIXED_PRECISION_BATCH8"),
+        tt_cache_path = get_tt_cache_path("phiyodr/bert-large-finetuned-squad2"),
         model_location_generator = model_location_generator,
         device = device,
         loop_count=loop_count

@@ -11,13 +11,13 @@ from transformers import BertForQuestionAnswering, BertTokenizer
 import tt_lib
 
 from models.demos.metal_BERT_large_15.tt.bert_model import TtBertBatchDram
-from models.demos.metal_BERT_large_15.tt.model_config import get_model_config
+from models.demos.metal_BERT_large_15.tt.model_config import get_model_config, get_tt_cache_path
 from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     profiler,
     prep_report,
-    is_e75
+    is_e75,
 )
 
 BATCH_SIZE = 8
@@ -30,10 +30,9 @@ token_type_ids = True
 model_config_str = "MIXED_PRECISION_BATCH8"
 
 
-def run_perf_bert15(
-    expected_inference_time, expected_compile_time, model_location_generator, device
-):
+def run_perf_bert15(expected_inference_time, expected_compile_time, model_location_generator, device):
     model_config = get_model_config(model_config_str)
+    tt_cache_path = get_tt_cache_path(model_version)
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
     tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
@@ -52,7 +51,8 @@ def run_perf_bert15(
         HF_model.config,
         HF_model,
         device,
-        model_config
+        model_config,
+        tt_cache_path,
     )
 
     tokenizer = BertTokenizer.from_pretrained(tokenizer_name)
@@ -145,9 +145,7 @@ def test_perf_virtual_machine(
     if is_e75(device):
         pytest.skip("Bert large 15 is not supported on E75")
 
-    run_perf_bert15(
-        expected_inference_time, expected_compile_time, model_location_generator, device
-    )
+    run_perf_bert15(expected_inference_time, expected_compile_time, model_location_generator, device)
 
 
 @pytest.mark.models_performance_bare_metal
@@ -165,6 +163,4 @@ def test_perf_bare_metal(
     if is_e75(device):
         pytest.skip("Bert large 15 is not supported on E75")
 
-    run_perf_bert15(
-        expected_inference_time, expected_compile_time, model_location_generator, device
-    )
+    run_perf_bert15(expected_inference_time, expected_compile_time, model_location_generator, device)
