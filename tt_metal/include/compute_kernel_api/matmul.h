@@ -114,7 +114,7 @@ ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t
 }
 
 ALWI void matmul_block(uint32_t c_in0, uint32_t c_in1, uint32_t itile0, uint32_t itile1, uint32_t idst, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
-    UNPACK(( llk_unpack_AB_matmul_cm(c_in0,c_in1,itile0,itile1, ct_dim, rt_dim, kt_dim) ));
+    UNPACK(( llk_unpack_AB_matmul_cm(c_in0, c_in1, itile0, itile1, ct_dim, rt_dim, kt_dim) ));
     MATH(( llk_math_matmul_cm<MATH_FIDELITY, DstTileFaceLayout::ColMajor>(idst, transpose, ct_dim, rt_dim, kt_dim)  ));
 }
 
@@ -122,11 +122,11 @@ ALWI void matmul_block(uint32_t c_in0, uint32_t c_in1, uint32_t itile0, uint32_t
 ALWI void mm_block_init_short_with_dt(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t cbid=2) {
     #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_AB_matmul_init_cm<false>(in0_cb_id, in1_cb_id) ));
-    UNPACK(( llk_unpack_reconfig_data_format(cbid, 1, 0, 0) ));
+    UNPACK(( llk_unpack_reconfig_data_format_srca(cbid, in1_cb_id) ));
     MATH(( llk_math_matmul_init_cm<MATH_FIDELITY, DstTileFaceLayout::ColMajor, false>(in0_cb_id, in1_cb_id) ));
     #else
     UNPACK(( llk_unpack_AB_matmul_init(cbid, 1) ));
-    UNPACK(( llk_unpack_reconfig_data_format(cbid, 1, 0, 0) ));
+    UNPACK(( llk_unpack_reconfig_data_format_srca(cbid, 1) ));
     MATH(( llk_math_matmul_init<MATH_FIDELITY>(cbid, 1) ));
     #endif
 }
