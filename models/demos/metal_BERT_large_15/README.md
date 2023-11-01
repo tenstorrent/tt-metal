@@ -6,4 +6,6 @@ Our second demo is designed to run SQuADV2 dataset, run this with 'pytest models
 Inputs by default are provided from 'input_data.json'. If you wish you to change the inputs or provide a different path to 'test_demo'. We do not recommend modifying 'input_data.json' file.
 
 # Details
-The entry point to metal bert model is 'TtBertBatchDram' in 'bert_model.py'. The model picks up certain configs and weights from huggingface pretrained model. We have used 'phiyodr/bert-large-finetuned-squad2' version from huggginface as our reference.
+The entry point to metal bert model is 'TtBertBatchDram' in 'bert_model.py'. The model picks up certain configs and weights from huggingface pretrained model. We have used 'phiyodr/bert-large-finetuned-squad2' version from huggingface as our reference.
+For fast model loading, we have cached preprocessed weights for TT tensors on Weka. These weights are directly read in and loaded to device.
+If your machine does not have access to Weka, during model loading it will preprocess and convert the pytorch weights from huggingface to TT tensors before placing on device.
