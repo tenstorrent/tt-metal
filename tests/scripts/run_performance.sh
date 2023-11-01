@@ -9,6 +9,7 @@ fi
 
 run_perf_models() {
     local pipeline_type=$1
+    echo $pipeline_type
 
     env pytest models/demos/falcon7b/tests -m $pipeline_type
 
@@ -38,6 +39,13 @@ run_perf_models() {
     env python models/merge_perf_results.py
 }
 
+run_device_perf_models() {
+    local pipeline_type=$1
+    echo $pipeline_type
+
+    env pytest models/demos/resnet/tests -m $pipeline_type
+}
+
 main() {
     # Parse the arguments
     while [[ $# -gt 0 ]]; do
@@ -59,7 +67,11 @@ main() {
       exit 1
     fi
 
-    run_perf_models "$pipeline_type"
+    if [[ "$pipeline_type" == *"device_performance"* ]]; then
+        run_device_perf_models "$pipeline_type"
+    else
+        run_perf_models "$pipeline_type"
+    fi
 }
 
 main "$@"
