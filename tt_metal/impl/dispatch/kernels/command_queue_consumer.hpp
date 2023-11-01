@@ -108,7 +108,7 @@ FORCE_INLINE void write_program_page(uint32_t page_addr, volatile tt_l1_ptr uint
         if constexpr (multicast) {
             noc_async_write_multicast(src, dst_noc_addr, num_bytes, num_recv);
         } else {
-            noc_async_write(src, dst_noc_addr, num_bytes);
+            noc_async_write_one_packet(src, dst_noc_addr, num_bytes);
         }
 
         command_ptr += 5;
