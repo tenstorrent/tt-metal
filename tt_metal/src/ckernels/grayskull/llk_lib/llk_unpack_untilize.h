@@ -112,16 +112,22 @@ inline void llk_unpack_untilize_init(const std::uint32_t operand) {
     llk_unpack_untilize_mop_config();
 }
 
-inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
-    unpacker_addr_counter_init();
-    TT_SETADCXX(p_setadc::UNP0, face_r_dim*FACE_C_DIM-1, 0x0);
-    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG0_TileDescriptor_ADDR32+0-THCON_CFGREG_BASE_ADDR32,  p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1); // Restore descriptor 0
-    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG0_TileDescriptor_ADDR32+1-THCON_CFGREG_BASE_ADDR32,  p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2); // Restore descriptor 1
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
-    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32);
-    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, UNP0_ADDR_BASE_REG_0_Base_ADDR32); // Clear base address register
-    TTI_NOP; TTI_NOP;
+inline void llk_unpack_untilize_uninit(uint32_t operand) {
+    wait_for_idle();
+
+    configure_unpack_AB(operand, operand, 16, 16, false, true);
 }
+
+// inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
+//     unpacker_addr_counter_init();
+//     TT_SETADCXX(p_setadc::UNP0, face_r_dim*FACE_C_DIM-1, 0x0);
+//     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG0_TileDescriptor_ADDR32+0-THCON_CFGREG_BASE_ADDR32,  p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1); // Restore descriptor 0
+//     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG0_TileDescriptor_ADDR32+1-THCON_CFGREG_BASE_ADDR32,  p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2); // Restore descriptor 1
+//     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+//     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32);
+//     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, UNP0_ADDR_BASE_REG_0_Base_ADDR32); // Clear base address register
+//     TTI_NOP; TTI_NOP;
+// }
 
 template <bool first_pass = true>
 inline void llk_unpack_untilize_pass(std::uint32_t operand, std::uint32_t block_tile_cols) {
