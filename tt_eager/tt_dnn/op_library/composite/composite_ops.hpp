@@ -72,11 +72,6 @@ Tensor mac(const Tensor& a, float b, float c, const MemoryConfig& output_mem_con
 //inline
 //Tensor sign(const Tensor& x);
 
-// Function SILU
-// use activation Silu[x] = x*Sigmoid[x]
-// Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
-Tensor silu(const Tensor& a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 //log1p 1
 //use transformation y = log(1.0 + x) by broadcast
 Tensor log1p(const Tensor& x, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
