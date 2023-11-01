@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from PIL import Image
+import torch
 import os
 import glob
 from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
@@ -25,6 +26,46 @@ def get_label(image_path):
     _, label_id = image_name_exact.rsplit("_", 1)
     label = list(IMAGENET2012_CLASSES).index(label_id)
     return label
+
+
+def get_batch(data_loader, image_processor):
+        loaded_images = next(data_loader)
+        images = None
+        labels = []
+        for image in loaded_images:
+            img = image.image
+            labels.append(image.label)
+            if img.mode == "L":
+                img = img.convert(mode="RGB")
+            img = image_processor(img, return_tensors="pt")
+            img = img["pixel_values"]
+
+            if images is None:
+                images = img
+            else:
+                images = torch.cat((images, img), dim=0)
+        return images, labels
+
+
+def get_data_loader(input_loc, batch_size):
+    img_dir = input_loc + "/"
+    data_path = os.path.join(img_dir, "*G")
+    files = glob.glob(data_path)
+
+    def loader():
+        examples = []
+        for f1 in files:
+            examples.append(
+            InputExample(
+                image=get_input(f1),
+                label=get_label(f1),
+                )
+            )
+            if len(examples) == batch_size:
+                yield examples
+                examples = []
+
+    return loader()
 
 
 def get_data(input_loc):
