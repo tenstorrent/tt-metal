@@ -16,9 +16,6 @@ from loguru import logger
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
 
-pytestmark = pytest.mark.skipif(is_wormhole_b0(), reason="Unsupported parallelizations for WH B0")
-
-
 @pytest.mark.parametrize(
     "input_shape, shard_scheme, shard_size",
     [
@@ -32,11 +29,11 @@ pytestmark = pytest.mark.skipif(is_wormhole_b0(), reason="Unsupported paralleliz
 )
 @pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_tile(device, input_shape, shard_size, shard_scheme, shard_orientation, dtype, function_level_defaults):
-    grid_size = (12, 9)
+    grid_size = device.compute_with_storage_grid_size()
     input_size = torch.Size(input_shape)
     num_cores = 98
     compute_grid_size = device.compute_with_storage_grid_size()
-    if (num_cores > (compute_grid_size.x * compute_grid_size.y)):
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
 
     x = torch.arange(input_size.numel()).reshape(input_size).bfloat16().float()
@@ -94,11 +91,11 @@ def test_sharded_tile(device, input_shape, shard_size, shard_scheme, shard_orien
     [ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR],
 )
 def test_sharded_rm(device, input_shape, shard_size, shard_scheme, shard_orientation, function_level_defaults):
-    grid_size = (12, 9)
+    grid_size = device.compute_with_storage_grid_size()
     input_size = torch.Size(input_shape)
     num_cores = 98
     compute_grid_size = device.compute_with_storage_grid_size()
-    if (num_cores > (compute_grid_size.x * compute_grid_size.y)):
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
     x = torch.arange(input_size.numel()).reshape(input_size).bfloat16().float()
 
@@ -140,16 +137,16 @@ def test_sharded_rm(device, input_shape, shard_size, shard_scheme, shard_orienta
 @pytest.mark.parametrize("out_sharded", [True, False])
 @pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, dtype, device, function_level_defaults):
-    grid_size = (12, 9)
+    grid_size = device.compute_with_storage_grid_size()
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+
     N = 1
     C = 1
     W = 64
     if out_sharded and not in_sharded and H == 100352:
         pytest.skip("Unsupported config for sharding")
-
-    compute_grid_size = device.compute_with_storage_grid_size()
-    if (num_cores > (compute_grid_size.x * compute_grid_size.y)):
-        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
@@ -213,14 +210,14 @@ def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, dtype, device, 
 @pytest.mark.parametrize("H, num_cores", [[25088, 98]])
 @pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defaults):
-    grid_size = (12, 9)
+    grid_size = device.compute_with_storage_grid_size()
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+
     N = 1
     C = 1
     W = 64
-
-    compute_grid_size = device.compute_with_storage_grid_size()
-    if (num_cores > (compute_grid_size.x * compute_grid_size.y)):
-        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
 
     x = torch.arange(N * C * H * W).reshape((N, C, H, W)).bfloat16()
 
@@ -283,15 +280,16 @@ def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defau
 def test_sharded_matmul_1d_in1(
     device, in0_sharded, out_sharded, M, N, num_cores, activations_dtype, weights_dtype, function_level_defaults
 ):
-    grid_size = (12, 9)
+    grid_size = device.compute_with_storage_grid_size()
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
+    if activations_dtype != weights_dtype and is_wormhole_b0():
+        pytest.skip("WH does not work with mixed precision")
     K = 64
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, 1, N]
-
-    compute_grid_size = device.compute_with_storage_grid_size()
-    if (num_cores > (compute_grid_size.x * compute_grid_size.y)):
-        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
@@ -370,17 +368,16 @@ def test_sharded_binary(
     output_dtype,
     function_level_defaults,
 ):
-    grid_size = (12, 9)
+    grid_size = device.compute_with_storage_grid_size()
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
     in0_shape = [1, 1, H, 64]
     in1_shape = in0_shape
     W = in0_shape[-1]
 
     if out_sharded and not in0_sharded and not in1_sharded and H == 25088:
         pytest.skip("Unsupported sharding config")
-
-    compute_grid_size = device.compute_with_storage_grid_size()
-    if (num_cores > (compute_grid_size.x * compute_grid_size.y)):
-        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
@@ -430,12 +427,15 @@ def test_sharded_binary(
 
 
 def test_sharded_program_cache(device, use_program_cache, function_level_defaults):
-    grid_size = (12, 9)
+    grid_size = device.compute_with_storage_grid_size()
+    num_cores = 98
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
     N = 1
     C = 1
     H = 25088
     W = 64
-    num_cores = 98
     x = torch.ones((N, C, H, W)).bfloat16().float()
     x2 = torch.zeros((N, C, H, W)).bfloat16().float()
 
@@ -539,6 +539,11 @@ def test_sharded_matmul_2d(
     bias_shape = [1, 1, 1, N]
 
     grid_size = (8, 5)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+    if activations_dtype != weights_dtype and is_wormhole_b0():
+        pytest.skip("WH does not work with mixed precision")
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
@@ -612,6 +617,11 @@ def test_sharded_matmul_2d_transposed(
     bias_shape = [1, 1, 1, N]
 
     grid_size = (10, 8)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+    if activations_dtype != weights_dtype and is_wormhole_b0():
+        pytest.skip("WH does not work with mixed precision")
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
@@ -671,9 +681,14 @@ def test_sharded_matmul_2d_transposed(
 
 
 def test_resharded_binary_to_matmul(device, function_level_defaults):
-    grid_size_binary = (12, 9)
+    grid_size_binary = device.compute_with_storage_grid_size()
     num_cores_binary = 98
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if num_cores_binary > (compute_grid_size.x * compute_grid_size.y):
+        pytest.skip(f"Need {num_cores_binary} cores to run this test but core grid is {compute_grid_size}")
     grid_size_matmul = (10, 8)
+    if grid_size_matmul[0] > compute_grid_size.x or grid_size_matmul[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size_matmul} grid size to run this test but core grid is {compute_grid_size}")
     in0_shape = [1, 1, 6272, 512]
     in1_shape = in0_shape
     weight_shape = [1, 1, 512, 256]
@@ -761,6 +776,9 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
 @pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_untilize_padded_shard(in_sharded, out_sharded, dtype, device, function_level_defaults):
     grid_size = (10, 8)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
     N = 1
     C = 1
     H = 6272
@@ -833,6 +851,9 @@ def test_sharded_binary_padded_shard(
     in_sharded, out_sharded, activations_dtype, output_dtype, device, function_level_defaults
 ):
     grid_size = (10, 8)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
     N = 1
     C = 1
     H = 1568
@@ -917,6 +938,9 @@ def test_sharded_binary_padded_shard(
 @pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, device, function_level_defaults):
     grid_size = (7, 8)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
     N = 1
     C = 1
     H = 416
@@ -994,6 +1018,9 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, d
 @pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_width_sharded_untilize_with_unpadding(shape, in_sharded, out_sharded, dtype, device, function_level_defaults):
     grid_size = (8, 4)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
     N, C, H, W = shape
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
@@ -1062,6 +1089,9 @@ def test_width_sharded_untilize_with_unpadding(shape, in_sharded, out_sharded, d
 @pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_tilize_with_val_padding(in_sharded, out_sharded, output_dtype, device, function_level_defaults):
     grid_size = (8, 4)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
     N = 8
     C = 1
     H = 49
@@ -1127,6 +1157,9 @@ def test_sharded_tilize_with_val_padding(in_sharded, out_sharded, output_dtype, 
 @pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_reduce_h(in_sharded, out_sharded, dtype, device, function_level_defaults):
     grid_size = (8, 4)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
     N = 8
     C = 1
     H = 64
@@ -1205,6 +1238,11 @@ def test_sharded_matmul_1d_in0(
     device, in0_sharded, out_sharded, M, N, activations_dtype, weights_dtype, function_level_defaults
 ):
     grid_size = (8, 4)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+    if activations_dtype != weights_dtype and is_wormhole_b0():
+        pytest.skip("WH does not work with mixed precision")
     num_cores = grid_size[0] * grid_size[1]
     K = 2048
     in0_shape = [1, 1, M, K]
