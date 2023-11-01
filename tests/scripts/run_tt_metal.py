@@ -172,6 +172,9 @@ PROGRAMMING_EXAMPLE_ENTRIES = (
     TestEntry(
         "programming_examples/eltwise_binary", "programming_examples/eltwise_binary"
     ),
+    TestEntry(
+        "programming_examples/eltwise_sfpu", "programming_examples/eltwise_sfpu"
+    ),
 )
 
 

@@ -50,6 +50,10 @@ std::map<string, string> get_defines(BinaryOpType::Enum op_type){
 }
 
 int main(int argc, char **argv) {
+    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+        tt::log_fatal("Test not supported w/ slow dispatch, exiting");
+    }
+
     bool pass = true;
 
     try {
