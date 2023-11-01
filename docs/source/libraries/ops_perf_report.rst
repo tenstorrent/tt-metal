@@ -126,6 +126,10 @@ CLI options of the  ``profile_this.py`` script are:
 
 - ``-n``, ``--name-append``: Name to be appended to ``csv`` and ``tgz`` filenames and also be used as the folder name under the given or default output folder
 
+- ``-d``, ``--device-only``: Only profile device side, note in this mode host side readings will still be reported but should be ignored
+
+- ``-m``, ``--host-only``: Only profile host side
+
 This scripts performs the following items:
 
 1. Checks if the project is correctly built with ``PROFILER="enabled"``
