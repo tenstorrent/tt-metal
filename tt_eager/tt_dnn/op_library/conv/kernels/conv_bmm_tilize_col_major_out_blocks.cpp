@@ -61,9 +61,9 @@ inline void tilize_in(
         uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
         cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 
-        int within_block_index = 0;
+        uint32_t within_block_index = 0;
         for (uint32_t h = 0; h < out_subblock_h; h++) {
-            int block_offset = 0;
+            uint32_t block_offset = 0;
 
             // Reblock
             copy_tile_to_dst_init_short();
@@ -198,9 +198,9 @@ void MAIN {
                     #endif
                     curr_matmul_out_cb = mm_out_cb_id;
                 }
-                int in0_index_subblock_offset = 0;
+                uint32_t in0_index_subblock_offset = 0;
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
-                    int in1_index_subblock_offset = 0;
+                    uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
                         if (enable_reload) {
                             // Reconfigure input
@@ -221,11 +221,11 @@ void MAIN {
                         }
 
                         // Compute output sub-block from in0_subblock x in1_subblock
-                        int dst_index = 0;
-                        int in0_index_h_offset = 0;
+                        uint32_t dst_index = 0;
+                        uint32_t in0_index_h_offset = 0;
                         for (uint32_t h = 0; h < out_subblock_h; ++h) {
                             for (uint32_t w = 0; w < out_subblock_w; ++w) {
-                                int in1_index_inner_dim_offset = 0;
+                                uint32_t in1_index_inner_dim_offset = 0;
                                 for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
                                     matmul_tiles(mm_in0_cb_id,                    // in0_cb
                                                  in1_cb_id,                                                     // in1_cb
@@ -267,7 +267,7 @@ void MAIN {
             add_bcast_rows_init_short();
             unpack_reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
             for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
-                int in1_index_subblock_offset = 0;
+                uint32_t in1_index_subblock_offset = 0;
                 for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
                     // if bias is to be added, add it to the data in dst before packing into the out cb
                     // reconfig unpacker df for src B

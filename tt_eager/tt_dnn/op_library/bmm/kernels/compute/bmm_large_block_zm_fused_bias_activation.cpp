@@ -74,9 +74,9 @@ void MAIN {
             cb_wait_front(in0_cb_id, in0_block_num_tiles);
             cb_wait_front(in1_cb_id, in1_block_num_tiles);
 
-            int in0_index_subblock_offset = 0;
+            uint32_t in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                int in1_index_subblock_offset = 0;
+                uint32_t in1_index_subblock_offset = 0;
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
 
                     if (enable_reload) {
@@ -85,8 +85,8 @@ void MAIN {
                         cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
                         tile_regs_acquire();
 
-                        int start_dst_index = 0;
-                        int start_tile_index = 0;
+                        uint32_t start_dst_index = 0;
+                        uint32_t start_tile_index = 0;
                         copy_block_matmul_partials(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
                         cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
@@ -98,9 +98,9 @@ void MAIN {
                     }
 
                     // Compute output sub-block
-                    int dst_index = 0; // start at 0, each call to matmul_block internally increments dst_index
-                    int in0_index = in0_index_subblock_offset; // offset into in0 block
-                    int in1_index = in1_index_subblock_offset; // offset into in1 block
+                    uint32_t dst_index = 0; // start at 0, each call to matmul_block internally increments dst_index
+                    uint32_t in0_index = in0_index_subblock_offset; // offset into in0 block
+                    uint32_t in1_index = in1_index_subblock_offset; // offset into in1 block
                     // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
                     for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
                         // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
@@ -123,7 +123,7 @@ void MAIN {
                         cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
 
-                        int start_dst_index = 0;
+                        uint32_t start_dst_index = 0;
                         matmul_pack_tile(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
 
                         tile_regs_release();
@@ -141,7 +141,7 @@ void MAIN {
                         cb_reserve_back(mm_partials_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
 
-                        int start_dst_index = 0;
+                        uint32_t start_dst_index = 0;
                         matmul_pack_tile(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
 
                         tile_regs_release();
@@ -169,7 +169,7 @@ void MAIN {
         unpack_reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
         cb_wait_front(bias_cb_id, in1_per_core_w);
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-            int in1_index_subblock_offset = 0;
+            uint32_t in1_index_subblock_offset = 0;
             for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                 // Redundant wait since we know data was just pushed
                 cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
