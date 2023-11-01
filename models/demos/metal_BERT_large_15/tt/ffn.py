@@ -61,76 +61,95 @@ def feed_forward(
 
 
 class TtFeedForwardModel(torch.nn.Module):
-    def __init__(self, encoder_idx, state_dict, device, model_config):
+    def __init__(self, encoder_idx, state_dict, device, model_config, tt_cache_path):
         super().__init__()
 
         # FF1 params
-        encoder0_ff1_weight = pad_weight(
-            torch.transpose(
-                state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.weight"],
-                -2,
-                -1,
-            )
-        )
-        encoder0_ff1_bias = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.bias"])
+        layer_name = f"bert.encoder.layer.{encoder_idx}"
+        encoder_ff1_str = f"{layer_name}.intermediate.dense"
+        encoder_ff2_str = f"{layer_name}.output.dense"
+        if tt_cache_path is not None:
+            encoder0_ff1_weight = ttl.tensor.load_tensor(
+                str(tt_cache_path / f"{encoder_ff1_str}.weight_{model_config['OP13_FF1_MM_WEIGHTS_DTYPE'].name}.bin")
+            ).to(device, model_config["OP13_FF1_MM_WEIGHTS_MEMCFG"])
+            encoder0_ff1_bias = ttl.tensor.load_tensor(
+                str(tt_cache_path / f"{encoder_ff1_str}.bias_{model_config['OP13_FF1_MM_BIAS_DTYPE'].name}.bin")
+            ).to(device, model_config["OP13_FF1_MM_BIAS_MEMCFG"])
+            encoder0_ff1_weight_shape = encoder0_ff1_weight.shape()
 
-        encoder0_ff1_weight_shape = encoder0_ff1_weight.shape
-        encoder0_ff1_bias_shape = encoder0_ff1_bias.shape
+            encoder0_ff2_weight = ttl.tensor.load_tensor(
+                str(tt_cache_path / f"{encoder_ff2_str}.weight_{model_config['OP14_FF2_MM_WEIGHTS_DTYPE'].name}.bin")
+            ).to(device, model_config["OP14_FF2_MM_WEIGHTS_MEMCFG"])
+            encoder0_ff2_bias = ttl.tensor.load_tensor(
+                str(tt_cache_path / f"{encoder_ff2_str}.bias_{model_config['OP14_FF2_MM_BIAS_DTYPE'].name}.bin")
+            ).to(device, model_config["OP14_FF2_MM_BIAS_MEMCFG"])
+        else:
+            encoder0_ff1_weight = pad_weight(
+                torch.transpose(
+                    state_dict[f"{encoder_ff1_str}.weight"],
+                    -2,
+                    -1,
+                )
+            )
+            encoder0_ff1_bias = pad_weight(state_dict[f"{encoder_ff1_str}.bias"])
 
-        encoder0_ff1_weight = (
-            ttl.tensor.Tensor(
-                encoder0_ff1_weight.reshape(-1).tolist(),
-                encoder0_ff1_weight.shape,
-                model_config["OP13_FF1_MM_WEIGHTS_DTYPE"],
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device, model_config["OP13_FF1_MM_WEIGHTS_MEMCFG"])
-        )
-        encoder0_ff1_bias = (
-            ttl.tensor.Tensor(
-                encoder0_ff1_bias.reshape(-1).tolist(),
-                encoder0_ff1_bias.shape,
-                model_config["OP13_FF1_MM_BIAS_DTYPE"],
-                ttl.tensor.Layout.ROW_MAJOR,
-            )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device, model_config["OP13_FF1_MM_BIAS_MEMCFG"])
-        )
+            encoder0_ff1_weight_shape = encoder0_ff1_weight.shape
+            encoder0_ff1_bias_shape = encoder0_ff1_bias.shape
 
-        # FF2 params
-        encoder0_ff2_weight = pad_weight(
-            torch.transpose(
-                state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.weight"],
-                -2,
-                -1,
+            encoder0_ff1_weight = (
+                ttl.tensor.Tensor(
+                    encoder0_ff1_weight.reshape(-1).tolist(),
+                    encoder0_ff1_weight.shape,
+                    model_config["OP13_FF1_MM_WEIGHTS_DTYPE"],
+                    ttl.tensor.Layout.ROW_MAJOR,
+                )
+                .to(ttl.tensor.Layout.TILE)
+                .to(device, model_config["OP13_FF1_MM_WEIGHTS_MEMCFG"])
             )
-        )
-        encoder0_ff2_bias = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.bias"])
+            encoder0_ff1_bias = (
+                ttl.tensor.Tensor(
+                    encoder0_ff1_bias.reshape(-1).tolist(),
+                    encoder0_ff1_bias.shape,
+                    model_config["OP13_FF1_MM_BIAS_DTYPE"],
+                    ttl.tensor.Layout.ROW_MAJOR,
+                )
+                .to(ttl.tensor.Layout.TILE)
+                .to(device, model_config["OP13_FF1_MM_BIAS_MEMCFG"])
+            )
 
-        encoder0_ff2_weight_shape = encoder0_ff2_weight.shape
-        encoder0_ff2_bias_shape = encoder0_ff2_bias.shape
+            # FF2 params
+            encoder0_ff2_weight = pad_weight(
+                torch.transpose(
+                    state_dict[f"{encoder_ff2_str}.weight"],
+                    -2,
+                    -1,
+                )
+            )
+            encoder0_ff2_bias = pad_weight(state_dict[f"{encoder_ff2_str}.bias"])
 
-        encoder0_ff2_weight = (
-            ttl.tensor.Tensor(
-                encoder0_ff2_weight.reshape(-1).tolist(),
-                encoder0_ff2_weight.shape,
-                model_config["OP14_FF2_MM_WEIGHTS_DTYPE"],
-                ttl.tensor.Layout.ROW_MAJOR,
+            encoder0_ff2_weight_shape = encoder0_ff2_weight.shape
+            encoder0_ff2_bias_shape = encoder0_ff2_bias.shape
+
+            encoder0_ff2_weight = (
+                ttl.tensor.Tensor(
+                    encoder0_ff2_weight.reshape(-1).tolist(),
+                    encoder0_ff2_weight.shape,
+                    model_config["OP14_FF2_MM_WEIGHTS_DTYPE"],
+                    ttl.tensor.Layout.ROW_MAJOR,
+                )
+                .to(ttl.tensor.Layout.TILE)
+                .to(device, model_config["OP14_FF2_MM_WEIGHTS_MEMCFG"])
             )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device, model_config["OP14_FF2_MM_WEIGHTS_MEMCFG"])
-        )
-        encoder0_ff2_bias = (
-            ttl.tensor.Tensor(
-                encoder0_ff2_bias.reshape(-1).tolist(),
-                encoder0_ff2_bias.shape,
-                model_config["OP14_FF2_MM_BIAS_DTYPE"],
-                ttl.tensor.Layout.ROW_MAJOR,
+            encoder0_ff2_bias = (
+                ttl.tensor.Tensor(
+                    encoder0_ff2_bias.reshape(-1).tolist(),
+                    encoder0_ff2_bias.shape,
+                    model_config["OP14_FF2_MM_BIAS_DTYPE"],
+                    ttl.tensor.Layout.ROW_MAJOR,
+                )
+                .to(ttl.tensor.Layout.TILE)
+                .to(device, model_config["OP14_FF2_MM_BIAS_MEMCFG"])
             )
-            .to(ttl.tensor.Layout.TILE)
-            .to(device, model_config["OP14_FF2_MM_BIAS_MEMCFG"])
-        )
 
         self.ffn = feed_forward(
             *encoder0_ff1_weight_shape[-2:],

@@ -12,32 +12,8 @@ from tt_lib.utils import pad_weight
 from models.utility_functions import torch2tt_tensor
 
 
-def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
+def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     assert isinstance(num_heads, int) and num_heads > 0
-
-    # Weights pre-transposed on host​. No on-the fly transpose of W​
-    qw = torch.transpose(qw, -1, -2)
-    kw = torch.transpose(kw, -1, -2)
-    vw = torch.transpose(vw, -1, -2)
-
-    qkv_weight = torch.cat((qw, kw, vw), -1)
-    qkv_bias = torch.cat((qb, kb, vb), -1)
-
-    qkv_weight = torch2tt_tensor(
-        qkv_weight,
-        device,
-        tt_layout=tt_lib.tensor.Layout.TILE,
-        tt_memory_config=model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"],
-        tt_dtype=model_config["OP1_FUSED_QKV_MM_WEIGHTS_DTYPE"],
-    )
-
-    qkv_bias = torch2tt_tensor(
-        qkv_bias,
-        device,
-        tt_layout=tt_lib.tensor.Layout.TILE,
-        tt_memory_config=model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"],
-        tt_dtype=model_config["OP1_FUSED_QKV_MM_BIAS_DTYPE"],
-    )
 
     # Used to scale down the input to the softmax
     freciprocal_of_sqrt_hidden_dim = 1 / math.sqrt(hidden_dim // num_heads)
@@ -138,25 +114,58 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device, model_config):
 
 
 class TtMultiHeadAttentionModel(torch.nn.Module):
-    def __init__(self, config, encoder_idx, state_dict, device, model_config):
+    def __init__(self, config, encoder_idx, state_dict, device, model_config, tt_cache_path):
         super().__init__()
-        qw = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.weight"])
-        qb = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.bias"])
-        kw = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.key.weight"])
-        kb = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.key.bias"])
-        vw = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.value.weight"])
-        vb = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.value.bias"])
+
+        layer_name = f"bert.encoder.layer.{encoder_idx}.attention.self"
+
+        if tt_cache_path is not None:
+            qkv_weight = tt_lib.tensor.load_tensor(
+                str(
+                    tt_cache_path / f"{layer_name}.qkv.weight_{model_config['OP1_FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin"
+                )
+            ).to(device, model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"])
+            qkv_bias = tt_lib.tensor.load_tensor(
+                str(tt_cache_path / f"{layer_name}.qkv.bias_{model_config['OP1_FUSED_QKV_MM_BIAS_DTYPE'].name}.bin")
+            ).to(device, model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"])
+        else:
+            qw = pad_weight(state_dict[f"{layer_name}.query.weight"])
+            qb = pad_weight(state_dict[f"{layer_name}.query.bias"])
+            kw = pad_weight(state_dict[f"{layer_name}.key.weight"])
+            kb = pad_weight(state_dict[f"{layer_name}.key.bias"])
+            vw = pad_weight(state_dict[f"{layer_name}.value.weight"])
+            vb = pad_weight(state_dict[f"{layer_name}.value.bias"])
+
+            # Weights pre-transposed on host​. No on-the fly transpose of W​
+            qw = torch.transpose(qw, -1, -2)
+            kw = torch.transpose(kw, -1, -2)
+            vw = torch.transpose(vw, -1, -2)
+
+            qkv_weight = torch.cat((qw, kw, vw), -1)
+            qkv_bias = torch.cat((qb, kb, vb), -1)
+
+            qkv_weight = torch2tt_tensor(
+                qkv_weight,
+                device,
+                tt_layout=tt_lib.tensor.Layout.TILE,
+                tt_memory_config=model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"],
+                tt_dtype=model_config["OP1_FUSED_QKV_MM_WEIGHTS_DTYPE"],
+            )
+
+            qkv_bias = torch2tt_tensor(
+                qkv_bias,
+                device,
+                tt_layout=tt_lib.tensor.Layout.TILE,
+                tt_memory_config=model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"],
+                tt_dtype=model_config["OP1_FUSED_QKV_MM_BIAS_DTYPE"],
+            )
 
         # Hidden dim
-        hidden_dim = qw.shape[-1]
+        hidden_dim = qkv_weight.shape()[-1] // 3
 
         self.mha = mha(
-            qw,
-            qb,
-            kw,
-            kb,
-            vw,
-            vb,
+            qkv_weight,
+            qkv_bias,
             hidden_dim,
             config.num_attention_heads,
             device,
