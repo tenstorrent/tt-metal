@@ -435,7 +435,7 @@ def run_dashbaord_webapp(ops, opsFolder, port=None):
 
 
 def print_ops_csv(ops, opsFolder, outputFolder, date, nameAppend):
-    logger.info(f"OPs' perf analysis is finised! Generating csv ...")
+    logger.info(f"OPs' perf analysis is finished! Generating csv ...")
     outFolder = OUT_FOLDER
     if outputFolder:
         outFolder = outputFolder
