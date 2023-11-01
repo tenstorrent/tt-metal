@@ -16,11 +16,13 @@ from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_log
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand
 
 
-def run_eltwise_logaddexp2_test(input_shape_1, input_shape_2, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
+def run_eltwise_logaddexp2_test(
+    input_shape_1, input_shape_2, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
+):
     torch.manual_seed(data_seed)
 
-    x = gen_rand(size = input_shape_1, low = -100, high = 100)
-    y = gen_rand(size = input_shape_2, low = -100, high = 100)
+    x = gen_rand(size=input_shape_1, low=-100, high=100)
+    y = gen_rand(size=input_shape_2, low=-100, high=100)
     # compute ref value
     x_ref = x.detach().clone()
     y_ref = y.detach().clone()
@@ -34,7 +36,7 @@ def run_eltwise_logaddexp2_test(input_shape_1, input_shape_2, dtype, dlayout, in
         dtype=dtype,
         layout=dlayout,
         input_mem_config=in_mem_config,
-        output_mem_config=out_mem_config
+        output_mem_config=out_mem_config,
     )
 
     # compare tt and golden outputs
@@ -45,66 +47,81 @@ def run_eltwise_logaddexp2_test(input_shape_1, input_shape_2, dtype, dlayout, in
     assert success
 
 
-test_sweep_args=[
-    ((2, 5, 37, 194),
-    (2, 5, 37, 194),
-    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-    [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
-    [None, None],
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-    15842480
+test_sweep_args = [
+    (
+        (2, 5, 37, 194),
+        (2, 5, 37, 194),
+        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
+        [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
+        [None, None],
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        15842480,
     ),
-    ((2, 5, 37, 194),
-    (2, 5, 37, 194),
-    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-    [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
-    [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)],
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-    10406825
+    (
+        (2, 5, 37, 194),
+        (2, 5, 37, 194),
+        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
+        [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
+        [
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ],
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        10406825,
     ),
-    ((2, 5, 37, 194),
-    (2, 5, 37, 194),
-    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-    [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
-    [None, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-    2474385
+    (
+        (2, 5, 37, 194),
+        (2, 5, 37, 194),
+        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
+        [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
+        [None, ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        2474385,
     ),
-    ((4, 7, 32, 96),
-    (4, 7, 32, 96),
-    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-    [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-    [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-    17155532
+    (
+        (4, 7, 32, 96),
+        (4, 7, 32, 96),
+        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
+        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ],
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        17155532,
     ),
-    ((4, 7, 32, 96),
-    (4, 7, 32, 96),
-    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-    [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-    [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)],
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-    16305027
+    (
+        (4, 7, 32, 96),
+        (4, 7, 32, 96),
+        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
+        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ],
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        16305027,
     ),
-    ((4, 7, 32, 96),
-    (4, 7, 32, 96),
-    [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-    [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-    [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), None],
-    ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-    13587334
+    (
+        (4, 7, 32, 96),
+        (4, 7, 32, 96),
+        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
+        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), None],
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        13587334,
     ),
 ]
 
+
 @pytest.mark.parametrize(
     "input_shape_1, input_shape_2, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
-    (
-        test_sweep_args
-    ),
+    (test_sweep_args),
 )
-
 def test_eltwise_logaddexp2_test(
     input_shape_1, input_shape_2, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
 ):
     random.seed(0)
-    run_eltwise_logaddexp2_test(input_shape_1, input_shape_2, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
+    run_eltwise_logaddexp2_test(
+        input_shape_1, input_shape_2, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
+    )

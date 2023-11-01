@@ -37,7 +37,7 @@ def run_eltwise_addcdiv_tests(input_shape, dtype, dlayout, in_mem_config, out_me
         dtype=[dtype, dtype, dtype],
         layout=[dlayout, dlayout, dlayout],
         input_mem_config=in_mem_config,
-        output_mem_config=out_mem_config
+        output_mem_config=out_mem_config,
     )
     logger.info("Done")
 
@@ -48,23 +48,27 @@ def run_eltwise_addcdiv_tests(input_shape, dtype, dlayout, in_mem_config, out_me
     assert success
 
 
-test_sweep_args=[
-    ((4, 6, 160, 224),
-     ttl.tensor.DataType.BFLOAT16,
-     ttl.tensor.Layout.TILE,
-     [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)],
-     ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), 0.78125, 3514701),
+test_sweep_args = [
+    (
+        (4, 6, 160, 224),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.TILE,
+        [
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+        ],
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        0.78125,
+        3514701,
+    ),
 ]
 
 
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, scalar, data_seed",
-    (
-        test_sweep_args
-    ),
+    (test_sweep_args),
 )
-def test_eltwise_addcdiv_test(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, scalar, data_seed, device
-):
+def test_eltwise_addcdiv_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, scalar, data_seed, device):
     random.seed(0)
     run_eltwise_addcdiv_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, scalar, data_seed, device)

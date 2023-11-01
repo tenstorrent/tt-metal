@@ -17,7 +17,9 @@ import tests.tt_eager.python_api_testing.sweep_tests.pytorch_ops as pytorch_ops
 import tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops as tt_lib_ops
 
 
-def run_ternary_bert_tests(tt_op, pt_op, input_shapes, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
+def run_ternary_bert_tests(
+    tt_op, pt_op, input_shapes, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
+):
     torch.manual_seed(data_seed)
 
     x = torch.Tensor(size=input_shapes[0]).uniform_(-100, 100)
@@ -37,7 +39,7 @@ def run_ternary_bert_tests(tt_op, pt_op, input_shapes, dtype, dlayout, in_mem_co
         dtype=dtype,
         layout=dlayout,
         input_mem_config=in_mem_config,
-        output_mem_config=out_mem_config
+        output_mem_config=out_mem_config,
     )
     logger.info("Done")
 
@@ -47,61 +49,88 @@ def run_ternary_bert_tests(tt_op, pt_op, input_shapes, dtype, dlayout, in_mem_co
 
     assert success
 
+
 supported_ternary_data_types = [
     [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
     [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
     [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
-    [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)],
-    [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)],
-    [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)],
-    [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)],
+    [
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+    ],
+    [
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+    ],
+    [
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+    ],
+    [
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+    ],
 ]
 
 test_sweep_args_ternary = []
 
 for dtype_0, dtype_1, dtype_2, mem_cfg_0, mem_cfg_1, mem_cfg_2, out_mem_cfg in product(*supported_ternary_data_types):
     test_sweep_args_ternary.append(
-        (tt_lib_ops.bert_large_ff1_matmul,
-         pytorch_ops.bert_large_ff1_matmul,
-         [(9, 1, 384, 1024), (1, 1, 1024, 4096), (1, 1, 1, 4096)],
-         [dtype_0, dtype_1, dtype_2],
-         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-         [mem_cfg_0, mem_cfg_1, mem_cfg_2],
-         out_mem_cfg, random.randint(0, 20000000)))
+        (
+            tt_lib_ops.bert_large_ff1_matmul,
+            pytorch_ops.bert_large_ff1_matmul,
+            [(9, 1, 384, 1024), (1, 1, 1024, 4096), (1, 1, 1, 4096)],
+            [dtype_0, dtype_1, dtype_2],
+            [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+            [mem_cfg_0, mem_cfg_1, mem_cfg_2],
+            out_mem_cfg,
+            random.randint(0, 20000000),
+        )
+    )
 
     test_sweep_args_ternary.append(
-        (tt_lib_ops.bert_large_ff2_matmul,
-         pytorch_ops.bert_large_ff2_matmul,
-         [(9, 1, 384, 4096), (1, 1, 4096, 1024), (1, 1, 1, 1024)],
-         [dtype_0, dtype_1, dtype_2],
-         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-         [mem_cfg_0, mem_cfg_1, mem_cfg_2],
-         out_mem_cfg, random.randint(0, 20000000)))
+        (
+            tt_lib_ops.bert_large_ff2_matmul,
+            pytorch_ops.bert_large_ff2_matmul,
+            [(9, 1, 384, 4096), (1, 1, 4096, 1024), (1, 1, 1, 1024)],
+            [dtype_0, dtype_1, dtype_2],
+            [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+            [mem_cfg_0, mem_cfg_1, mem_cfg_2],
+            out_mem_cfg,
+            random.randint(0, 20000000),
+        )
+    )
 
     test_sweep_args_ternary.append(
-        (tt_lib_ops.bert_large_fused_qkv_matmul,
-         pytorch_ops.bert_large_fused_qkv_matmul,
-         [(9, 1, 384, 1024), (1, 1, 1024, 3072), (1, 1, 1, 3072)],
-         [dtype_0, dtype_1, dtype_2],
-         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-         [mem_cfg_0, mem_cfg_1, mem_cfg_2],
-         out_mem_cfg, random.randint(0, 20000000)))
+        (
+            tt_lib_ops.bert_large_fused_qkv_matmul,
+            pytorch_ops.bert_large_fused_qkv_matmul,
+            [(9, 1, 384, 1024), (1, 1, 1024, 3072), (1, 1, 1, 3072)],
+            [dtype_0, dtype_1, dtype_2],
+            [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+            [mem_cfg_0, mem_cfg_1, mem_cfg_2],
+            out_mem_cfg,
+            random.randint(0, 20000000),
+        )
+    )
 
     test_sweep_args_ternary.append(
-        (tt_lib_ops.bert_large_selfout_matmul,
-         pytorch_ops.bert_large_selfout_matmul,
-         [(9, 1, 384, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)],
-         [dtype_0, dtype_1, dtype_2],
-         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-         [mem_cfg_0, mem_cfg_1, mem_cfg_2],
-         out_mem_cfg, random.randint(0, 20000000)))
+        (
+            tt_lib_ops.bert_large_selfout_matmul,
+            pytorch_ops.bert_large_selfout_matmul,
+            [(9, 1, 384, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)],
+            [dtype_0, dtype_1, dtype_2],
+            [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+            [mem_cfg_0, mem_cfg_1, mem_cfg_2],
+            out_mem_cfg,
+            random.randint(0, 20000000),
+        )
+    )
 
 
 @pytest.mark.parametrize(
     "tt_op, pt_op, input_shapes, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
-    (
-        test_sweep_args_ternary
-    ),
+    (test_sweep_args_ternary),
 )
 def test_ternary_bert_tests(
     tt_op, pt_op, input_shapes, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device

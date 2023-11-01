@@ -29,7 +29,6 @@ def ref_rpow(x, factor):
     return torch.pow(x, factor)
 
 
-
 def run_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
 
@@ -43,7 +42,7 @@ def run_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, d
         for nrepeat in range(0, 100):
             x = torch.Tensor(size=(N, C, H, W)).uniform_(-100, 100)
             x_ref = x
-            factor = random.randint(1,100)
+            factor = random.randint(1, 100)
             if dlayout == ttl.tensor.Layout.TILE:
                 x = tilize_to_list(x)
             else:
@@ -65,11 +64,10 @@ def run_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, d
                     dlayout,
                     dev,
                     in_mem_config,
-                    )
+                )
 
             logger.info("Running rpow test")
             ttz = tensor.rpow(ttx, factor, output_mem_config=out_mem_config)
-
 
             logger.info("Done")
 
@@ -87,7 +85,6 @@ def run_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, d
             # get referent value
             ref_value = ref_rpow(factor, x_ref)
 
-
             # compare tt and golden outputs
             success, pcc_value = comp_pcc(output, ref_value)
             logger.debug(pcc_value)
@@ -95,21 +92,37 @@ def run_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, d
             assert success
 
 
-test_sweep_args=[
-    ((1, 1, 32, 64), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR,  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 19096254),
-    ((1, 1, 128, 192), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR,  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 19096254),
-    ((1, 1, 64, 128), ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR,  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)),  (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)), 19096254),
-
+test_sweep_args = [
+    (
+        (1, 1, 32, 64),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+        (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
+        (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
+        19096254,
+    ),
+    (
+        (1, 1, 128, 192),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+        (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
+        (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
+        19096254,
+    ),
+    (
+        (1, 1, 64, 128),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+        (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)),
+        (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
+        19096254,
+    ),
 ]
+
 
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
-    (
-        test_sweep_args
-    ),
+    (test_sweep_args),
 )
-
-def test_rpow(
-    input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
-):
+def test_rpow(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     run_rpow_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)

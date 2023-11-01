@@ -35,7 +35,7 @@ def run_binary_bert_tests(tt_op, pt_op, input_shapes, dtype, dlayout, in_mem_con
         dtype=dtype,
         layout=dlayout,
         input_mem_config=in_mem_config,
-        output_mem_config=out_mem_config
+        output_mem_config=out_mem_config,
     )
     logger.info("Done")
 
@@ -49,38 +49,53 @@ def run_binary_bert_tests(tt_op, pt_op, input_shapes, dtype, dlayout, in_mem_con
 supported_binary_data_types = [
     [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
     [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
-    [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)],
-    [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)],
-    [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM), ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)],
+    [
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+    ],
+    [
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+    ],
+    [
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
+    ],
 ]
 
 test_sweep_args_binary = []
 
 for dtype_0, dtype_1, mem_cfg_0, mem_cfg_1, out_mem_cfg in product(*supported_binary_data_types):
     test_sweep_args_binary.append(
-        (tt_lib_ops.bert_large_pre_softmax_bmm,
-         pytorch_ops.bert_large_pre_softmax_bmm,
-         [(9, 16, 384, 64), (9, 16, 64, 384)],
-         [dtype_0, dtype_1],
-         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-         [mem_cfg_0, mem_cfg_1],
-         out_mem_cfg, random.randint(0, 20000000)))
+        (
+            tt_lib_ops.bert_large_pre_softmax_bmm,
+            pytorch_ops.bert_large_pre_softmax_bmm,
+            [(9, 16, 384, 64), (9, 16, 64, 384)],
+            [dtype_0, dtype_1],
+            [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+            [mem_cfg_0, mem_cfg_1],
+            out_mem_cfg,
+            random.randint(0, 20000000),
+        )
+    )
 
     test_sweep_args_binary.append(
-        (tt_lib_ops.bert_large_post_softmax_bmm,
-         pytorch_ops.bert_large_post_softmax_bmm,
-         [(9, 16, 384, 384), (9, 16, 384, 64)],
-         [dtype_0, dtype_1],
-         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-         [mem_cfg_0, mem_cfg_1],
-         out_mem_cfg, random.randint(0, 20000000)))
+        (
+            tt_lib_ops.bert_large_post_softmax_bmm,
+            pytorch_ops.bert_large_post_softmax_bmm,
+            [(9, 16, 384, 384), (9, 16, 384, 64)],
+            [dtype_0, dtype_1],
+            [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+            [mem_cfg_0, mem_cfg_1],
+            out_mem_cfg,
+            random.randint(0, 20000000),
+        )
+    )
 
 
 @pytest.mark.parametrize(
     "tt_op, pt_op, input_shapes, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
-    (
-        test_sweep_args_binary
-    ),
+    (test_sweep_args_binary),
 )
 def test_binary_bert_tests(
     tt_op, pt_op, input_shapes, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device
