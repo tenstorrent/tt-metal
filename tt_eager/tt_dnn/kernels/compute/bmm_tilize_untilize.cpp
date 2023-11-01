@@ -96,7 +96,8 @@ inline void tilize_in(
             untilize_block(reblock_cb_id, out_block_w, out_cb_id);
             cb_pop_front(reblock_cb_id, out_block_w);
             cb_push_back(out_cb_id, out_block_w);
-            untilize_uninit(reblock_cb_id);
+            // NOTE: Using the "new" llk untilize_uninit. Does not work with old.
+            untilize_uninit_v2(reblock_cb_id);
 
             within_block_index += out_subblock_w;
         }

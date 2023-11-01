@@ -92,7 +92,13 @@ inline void llk_unpack_untilize_init(std::uint32_t operand = 0) {
     llk_unpack_untilize_mop_config();
 }
 
-inline void llk_unpack_untilize_uninit(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
+inline void llk_unpack_untilize_uninit(uint32_t operand) {
+    wait_for_idle();
+
+    configure_unpack_AB(operand, operand, 16, 16, false, false);
+}
+
+inline void llk_unpack_untilize_uninit_v2(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
     unpacker_addr_counter_init();
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim*FACE_C_DIM-1, 0x0);
     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32,  p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1); // Restore tile x dim per context
