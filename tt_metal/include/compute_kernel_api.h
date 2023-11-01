@@ -298,10 +298,10 @@ ALWI void acos_tile_init() {
 // use activation Silu[x] = x*Sigmoid[x]
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
 ALWI void silu_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_silu<true, SyncHalf>(idst) ));
+    MATH(( llk_math_eltwise_unary_sfpu_silu<APPROX, SyncHalf>(idst) ));
 }
 
 ALWI void silu_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpu_silu_init<true>() ));
+    MATH(( llk_math_eltwise_unary_sfpu_silu_init<APPROX>() ));
 }
 } // namespace ckernel
