@@ -1439,6 +1439,7 @@ std::vector<Tensor> UntilizeWithHalo::create_output_tensors(const std::vector<Te
     auto output_shape = this->compute_output_shapes(input_tensors).at(0);
     uint32_t ncores = input_tensor.shape()[0] * input_tensor.shape()[2] / shard_spec.shard_shape[0];
     shard_spec.shard_shape[0] = output_shape[0] * output_shape[2] / ncores;
+    shard_spec.halo = true;
     // log_debug(LogOp, "derived ncores: {}", ncores);
     return {create_sharded_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), this->output_mem_config, shard_spec)};
 }

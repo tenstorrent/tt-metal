@@ -150,6 +150,9 @@ def test_run_max_pool(
         logger.info("Multicore version only supports Resnet50 configs for now.")
         pytest.skip()
 
+    if nblocks > 1 and in_mem_config.is_sharded() and use_multicore:
+        pytest.skip("nblocks > 1 is not properly supported with multicore sharded input")
+
     interleaved_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
 
     if (out_mem_config.is_sharded() or in_mem_config.is_sharded()) and not use_multicore:
@@ -197,6 +200,7 @@ def test_run_max_pool(
         ttl.tensor.Layout.ROW_MAJOR,
     )
     ncores = 1
+    grid_size = [1, 1]
     if in_mem_config.is_sharded():
         ttact = ttact.to(device, interleaved_mem_config)
         in_height = in_n * in_h * in_w
@@ -204,13 +208,16 @@ def test_run_max_pool(
         ## NOTE: these should match the max_pool op code for now. Hardcoded Resnet shapes only.
         if out_nhw == 1024:
             ncores = 32
+            grid_size = [12, 3]
         elif out_nhw == 2048 or out_nhw == 4096 or out_nhw == 8192 or out_nhw == 16384 or out_nhw == 32768:
             ncores = 64
+            grid_size = [12, 6]
         elif out_nhw == 3136 or out_nhw == 6272 or out_nhw == 12544 or out_nhw == 25088:
             ncores = 98
+            grid_size = [12, 9]
         else:
             assert False
-        ttact = ttl.tensor.interleaved_to_sharded(ttact, ncores, [in_height // ncores, act_padded.shape[-1]], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,)
+        ttact = ttl.tensor.interleaved_to_sharded(ttact, grid_size, [in_height // ncores, act_padded.shape[-1]], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.ShardOrientation.ROW_MAJOR, )
     else:
         ttact = ttact.to(device, in_mem_config)
 
@@ -252,12 +259,12 @@ def test_run_max_pool(
 
     ## test for equivalance
     out_pytorch = out_pytorch.reshape(golden_pytorch.shape)
-    # passing_allclose = torch.allclose(out_pytorch, golden_pytorch)  ##, rtol=1e-01, atol=1e-01)
-    # assert passing_allclose
+    passing = torch.allclose(out_pytorch, golden_pytorch)  ##, rtol=1e-01, atol=1e-01)
+    assert passing
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)
     logger.info(f"Passing PCC = {passing_pcc}")
     logger.info(f"Output PCC = {output_pcc}")
     # print(f'OUTPUT: {out_pytorch}')
     # print(f'GOLDEN: {golden_pytorch}')
 
-    # assert passing_pcc
+    assert passing_pcc

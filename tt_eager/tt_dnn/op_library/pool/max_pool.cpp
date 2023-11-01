@@ -88,7 +88,7 @@ std::vector<Tensor> MaxPool::create_output_tensors(const std::vector<Tensor> &in
         uint32_t out_nhw_per_core = out_nhw / ncores;
         CoreRangeSet shard_grid = num_cores_to_corerange_set(ncores, input.device()->compute_with_storage_grid_size(), true);
         std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.shape()[-1]};
-        auto shard_spec = ShardSpec{.shard_grid=shard_grid, .shard_shape=shard_shape, .shard_orientation=ShardOrientation::ROW_MAJOR};
+        auto shard_spec = ShardSpec{.shard_grid=shard_grid, .shard_shape=shard_shape, .shard_orientation=ShardOrientation::ROW_MAJOR, .halo = false};
         return {create_sharded_device_tensor(output_shape, input.dtype(), input.layout(), input.device(), this->out_mem_config_, shard_spec)};
     } else {
         return operation::generic_create_output_tensors(*this, inputs, input.dtype(), input.layout(), out_mem_config_);
@@ -110,16 +110,30 @@ operation::ProgramWithCallbacks MaxPool::create_program(const std::vector<Tensor
                                         nblocks_)};
     } else {
         if (input.memory_config().is_sharded()) {
-            log_debug(LogOp, "Using sharded with halo");
-            return {max_pool_2d_multi_core_sharded_with_halo(input, output,
-                                        in_n_, in_h_, in_w_,
-                                        out_h_, out_w_,
-                                        kernel_size_h_, kernel_size_w_,
-                                        stride_h_, stride_w_,
-                                        pad_h_, pad_w_,
-                                        dilation_h_, dilation_w_,
-                                        out_mem_config_,
-                                        nblocks_)};
+            auto shard_spec = input.shard_spec().value();
+            if (shard_spec.halo) {
+                log_debug(LogOp, "Using sharded with halo");
+                return {max_pool_2d_multi_core_sharded_with_halo(input, output,
+                                            in_n_, in_h_, in_w_,
+                                            out_h_, out_w_,
+                                            kernel_size_h_, kernel_size_w_,
+                                            stride_h_, stride_w_,
+                                            pad_h_, pad_w_,
+                                            dilation_h_, dilation_w_,
+                                            out_mem_config_,
+                                            nblocks_)};
+            } else {
+                log_debug(LogOp, "Using sharded");
+                return {max_pool_2d_multi_core_generic(input, output,
+                                                        in_h_, in_w_,
+                                                        out_h_, out_w_,
+                                                        kernel_size_h_, kernel_size_w_,
+                                                        stride_h_, stride_w_,
+                                                        pad_h_, pad_w_,
+                                                        dilation_h_, dilation_w_,
+                                                        out_mem_config_,
+                                                        nblocks_)};
+            }
         } else {
             log_debug(LogOp, "Using generic");
             return {max_pool_2d_multi_core_generic(input, output,
