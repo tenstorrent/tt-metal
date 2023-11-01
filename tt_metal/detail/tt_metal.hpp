@@ -71,6 +71,7 @@ namespace tt::tt_metal{
         bool ConfigureDeviceWithProgram(Device *device, Program &program);
 
 
+
         /**
          * Read device side profiler data and dump results into device side CSV log
          *
@@ -296,11 +297,12 @@ namespace tt::tt_metal{
 
             generate_noc_addr_ranges_header(
                 build_options,
+                device->arch(),
                 op_path_suffix,
                 0,
                 (uint64_t)4 * 1024 * 1024 * 1024,
                 0,
-                device->dram_size_per_channel(),
+                soc_d.dram_core_size,
                 soc_d.get_pcie_cores(),
                 soc_d.get_dram_cores(),
                 soc_d.get_physical_ethernet_cores(),
