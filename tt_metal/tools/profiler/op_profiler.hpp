@@ -58,10 +58,7 @@ namespace op_profiler {
 
         static string shape_to_str(const Shape& shape)
         {
-            return to_string(shape[0]) + "_" +\
-                to_string(shape[1]) + "_" +\
-                to_string(shape[2]) + "_" +\
-                to_string(shape[3]);
+            return fmt::format("{}", fmt::join(std::begin(shape), std::end(shape), "_"));
         }
 
         static string tensor_to_str(const Tensor& tensor)

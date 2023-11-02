@@ -71,6 +71,9 @@ infra/machine_setup/inventory/
 # exclude MNIST etc model downloads
 data/
 
+# exclude venv
+venv/
+
 # exclude pytorch binaries
 *.pt
 
@@ -102,3 +105,4 @@ device/
 src/firmware/riscv/targets/erisc/src/api/
 src/firmware/riscv/targets/erisc/src/eth_routing.cpp
 src/firmware/riscv/targets/erisc/src/eth_routing_v2.cpp
+.ipynb_checkpoints/

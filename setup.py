@@ -60,6 +60,7 @@ def get_arch_name():
 
 def get_buda_eager_local_version_scheme(buda_eager_build_config, version):
     from setuptools_scm.version import ScmVersion, guess_next_version
+
     arch_name = buda_eager_build_config.arch_name
 
     if version.dirty:
@@ -70,6 +71,7 @@ def get_buda_eager_local_version_scheme(buda_eager_build_config, version):
 
 def get_buda_eager_main_version_scheme(buda_eager_build_config, version):
     from setuptools_scm.version import ScmVersion, guess_next_version
+
     is_release_version = version.distance is None or version.distance == 0
     is_dirty = version.dirty
     is_clean_prod_build = (not is_dirty) and is_release_version
@@ -87,15 +89,10 @@ def get_buda_eager_main_version_scheme(buda_eager_build_config, version):
         return version.format_with("{tag}.dev{distance}+{arch_name}", arch_name=arch_name)
 
 
-
 def get_version(buda_eager_build_config):
     return {
-        "version_scheme": partial(
-            get_buda_eager_main_version_scheme, buda_eager_build_config
-        ),
-        "local_scheme": partial(
-            get_buda_eager_local_version_scheme, buda_eager_build_config
-        ),
+        "version_scheme": partial(get_buda_eager_main_version_scheme, buda_eager_build_config),
+        "local_scheme": partial(get_buda_eager_local_version_scheme, buda_eager_build_config),
     }
 
 
@@ -154,10 +151,11 @@ class BUDAEagerBuild(build_ext):
     def is_editable_install_(self):
         return not os.path.exists(self.build_lib)
 
+
 # Include tt_metal_C for kernels and src/ and tools
 # And any kernels inside `tt_eager/tt_dnn. We must keep all ops kernels inside
 # tt_dnn
-packages = ["tt_lib", "tt_lib.tt_metal", "tt_lib.models", "tt_lib.scripts", "tt_lib.tt_eager.tt_dnn"]
+packages = ["tt_lib", "tt_lib.tt_metal", "tt_lib.models", "tt_lib.scripts", "tt_lib.tt_eager.tt_dnn", "ttnn"]
 
 # Empty sources in order to force a BUDAEagerBuild execution
 buda_eager_lib_C = Extension("tt_lib._C", sources=[])
@@ -174,6 +172,7 @@ setup(
         "tt_lib.models": "tests/models",
         "tt_lib.scripts": "scripts",
         "tt_lib.tt_eager.tt_dnn": "tt_eager/tt_dnn",
+        "ttnn": "ttnn",
     },
     include_package_data=True,
     long_description_content_type="text/markdown",

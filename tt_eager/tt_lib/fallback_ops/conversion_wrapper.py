@@ -133,7 +133,7 @@ def convert_pt_tensors_to_tt_tensors(args, output_format):
 def convert_tt_tensors_wrapper(func):
     @wraps(func)
     def wrap(*args, **kwargs):
-        ttl_tensor.log_fallback_operation(func, *args, **kwargs)
+        ttl_tensor.log_external_operation(func, *args, **kwargs)
 
         output_format = {"layout": ttl_tensor.Layout.TILE}
 

@@ -40,7 +40,7 @@ void Untilize::validate(const std::vector<Tensor> &input_tensors) const {
         TT_ASSERT(this->use_multicore == true);
         TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         uint32_t ntiles = input_tensor_a.volume() / TILE_HW;
-        uint32_t ntiles_per_block = input_tensor_a.shape()[3] / TILE_WIDTH;
+        uint32_t ntiles_per_block = input_tensor_a.shape()[-1] / TILE_WIDTH;
         uint32_t nblocks = ceil((float) ntiles / ntiles_per_block);
         auto num_cores = untilize_helpers::get_num_cores(input_tensor_a.device()->compute_with_storage_grid_size(), nblocks);
         uint32_t fused_height = input_tensor_a.volume() / input_tensor_a.shape()[-1] / TILE_HEIGHT;

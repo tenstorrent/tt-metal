@@ -6,15 +6,16 @@
 
 #pragma once
 
-#include "tensor/types.hpp"
-#include "tensor/tensor.hpp"
-#include "tensor/tensor_utils.hpp"
 #include "tensor/borrowed_buffer_functions.hpp"
 #include "tensor/owned_buffer_functions.hpp"
+#include "tensor/tensor.hpp"
+#include "tensor/tensor_utils.hpp"
+#include "tensor/types.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_stl/concepts.hpp"
 namespace tt {
 
 namespace tt_metal {
@@ -49,11 +50,6 @@ std::vector<OutputDataType> cast_vec(const BufferType<InputDataType>& data_to_co
     return converted_data;
 }
 
-namespace detail{
-template<class>
-inline constexpr bool always_false_v = false;
-}
-
 // TODO(arakhmati): Should pack_vec_into_uint32_vec be a generator?
 template <typename DataType, template<typename> typename BufferType>
 constexpr inline std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType<DataType>& data_to_pack) {
@@ -77,7 +73,7 @@ constexpr inline std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType
         }
         return uint32_data;
     } else {
-        static_assert(detail::always_false_v<DataType>, "Don't know how to unpack uint32 data generically!");
+        static_assert(always_false_v<DataType>, "Don't know how to unpack uint32 data generically!");
     }
 }
 
@@ -100,7 +96,7 @@ constexpr inline std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t> &
         }
         return float_data;
     } else {
-        static_assert(detail::always_false_v<DataType>, "Don't know how to unpack uint32 data generically!");
+        static_assert(always_false_v<DataType>, "Don't know how to unpack uint32 data generically!");
     }
 }
 
@@ -451,7 +447,7 @@ inline Tensor to_host(const Tensor &tensor) {
     if (tensor.storage_type() != StorageType::DEVICE) {
         return tensor;
     }
-    TT_ASSERT(tensor.is_allocated(), "Need DRAM buffers to be allocated!");
+    TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
     auto device_buffer = tensor.buffer();
     auto device = tensor.device();
     TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");

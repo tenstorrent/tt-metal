@@ -74,6 +74,8 @@ def parse_io_data(ioString, ioType):
         if IO:
             IOList = IO.split("|")
             shapeList = IOList[0].split("_")
+            while len(shapeList) < 4:
+                shapeList = [1] + shapeList
             IODict = {
                 IO_FIELDS[0]: shapeList[0],
                 IO_FIELDS[1]: shapeList[1],
@@ -237,8 +239,8 @@ def parse_ops_logs(opsFolder):
     assert paths, f"{opsFolder} is empty. Use -i option to choose the correct logs dir"
 
     opsDeviceFolder = os.path.normpath(opsFolder)
-    tmpSplit = opsDeviceFolder.rsplit("_",1)
-    if  tmpSplit[-1] != "device":
+    tmpSplit = opsDeviceFolder.rsplit("_", 1)
+    if tmpSplit[-1] != "device":
         opsDeviceFolder = f"{os.path.normpath(opsFolder)}_device"
 
     for opCandidate in paths:

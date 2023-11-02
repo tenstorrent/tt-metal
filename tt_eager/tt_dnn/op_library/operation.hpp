@@ -10,6 +10,7 @@
 #include "tt_metal/impl/program.hpp"
 
 #include <tensor/tensor.hpp>
+#include "tt_stl/concepts.hpp"
 #include "tt_stl/reflection.hpp"
 
 #include <boost/core/demangle.hpp>
@@ -56,9 +57,6 @@ static void set_default_operation_output_memory_config(const MemoryConfig& memor
 
 
 namespace detail {
-
-template <class T>
-constexpr std::false_type always_false{};
 
 // TODO: move 'NotImplemented' to a library file
 class NotImplemented : public std::logic_error
@@ -286,7 +284,7 @@ struct DeviceOperation {
                     return operation.validate(input_tensors, optional_input_tensors);
                 }
                 else {
-                    static_assert(detail::always_false<T>, "Operation doesn't implement validate");
+                    static_assert(always_false_v<T>, "Operation doesn't implement validate");
                 }
             }
         },
@@ -318,7 +316,7 @@ struct DeviceOperation {
                     return operation.create_program(input_tensors, optional_input_tensors, output_tensors);
                 }
                 else {
-                    static_assert(detail::always_false<T>, "Operation doesn't implement create_program");
+                    static_assert(always_false_v<T>, "Operation doesn't implement create_program");
                 }
             }
         },
@@ -367,7 +365,7 @@ struct DeviceOperation {
                     );
                 }
                 else {
-                    static_assert(detail::always_false<T>, "Operation doesn't implement create_program");
+                    static_assert(always_false_v<T>, "Operation doesn't implement create_program");
                 }
             }
         },
@@ -396,9 +394,16 @@ struct DeviceOperation {
 
 };
 
-using Operation = std::variant<HostOperation, DeviceOperation>;
+struct ExternalOperation {
+    std::string function_name_;
+    tt::stl::reflection::Attributes attributes_;
 
+    std::string get_type_name() const { return fmt::format("{}", this->function_name_); }
+    tt::stl::reflection::Attributes attributes() const { return this->attributes_; }
+};
 
-}  // namespace tt_metal
+using Operation = std::variant<HostOperation, DeviceOperation, ExternalOperation>;
 
-}  // namespace tt
+}  // namespace operation
+
+}  // namespace tt::tt_metal

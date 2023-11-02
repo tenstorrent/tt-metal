@@ -1,9 +1,9 @@
-Libraries
-=========
+Dependencies
+============
 
 .. toctree::
 
-   tt_dnn
+   tt_lib
    tensor
    examples
    llk

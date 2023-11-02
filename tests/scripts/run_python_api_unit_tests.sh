@@ -18,6 +18,8 @@ else
   env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_move.py -k input_L1 -vvv
 fi
 
+env pytest $TT_METAL_HOME/tests/ttnn/
+
 # This must run in slow dispatch mode
 # pytest -svv $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/test_sweep_conv_with_address_map.py
 

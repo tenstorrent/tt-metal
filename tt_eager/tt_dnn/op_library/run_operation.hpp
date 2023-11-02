@@ -6,15 +6,14 @@
 
 #pragma once
 
-#include "third_party/magic_enum/magic_enum.hpp"
-
-#include "tt_dnn/op_library/operation.hpp"
-#include "tt_dnn/op_library/operation_history.hpp"
-#include "tt_dnn/op_library/auto_format.hpp"
-
+#include <optional>
 #include <tt_eager/tensor/tensor.hpp>
 
-#include <optional>
+#include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_dnn/op_library/auto_format.hpp"
+#include "tt_dnn/op_library/operation.hpp"
+#include "tt_dnn/op_library/operation_history.hpp"
+#include "tt_stl/concepts.hpp"
 
 namespace tt::tt_metal {
 
@@ -40,7 +39,7 @@ std::vector<Tensor> generic_create_output_tensors(
         const auto operation = DeviceOperation(concrete_op);
         return generic_create_output_tensors(operation, input_tensors, output_dtype, output_layout, output_mem_config);
     } else {
-        static_assert(detail::always_false<ConcreteOperation>, "Unsupported Operation");
+        static_assert(always_false_v<ConcreteOperation>, "Unsupported Operation");
     }
 }
 
@@ -125,38 +124,17 @@ constexpr auto decorate_as_composite(const char* name, FunctionType function) {
 #ifdef DEBUG
 namespace detail {
 
-template<typename OperationType>
-static void print_operation(
-    const OperationType& operation,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
-
-    tt::log_debug(tt::LogOp, "Operation Type: {}", operation.get_type_name());
-
-    if (run_operation_state::is_composite_operation()) {
-        tt::log_debug(tt::LogOp, "Composite Parents: {}", run_operation_state::get_composite_parent_names());
+template <typename OperationType>
+constexpr std::string operation_type_to_string() {
+    if constexpr (std::is_same_v<OperationType, HostOperation>) {
+        return "host";
+    } else if constexpr (std::is_same_v<OperationType, DeviceOperation>) {
+        return "device";
+    } else if constexpr (std::is_same_v<OperationType, ExternalOperation>) {
+        return "external";
+    } else {
+        static_assert(always_false_v<false>, "OperationType is not supported!");
     }
-
-    tt::log_debug(tt::LogOp, "Operation Attributes:");
-    for (auto&& [name, value] : operation.attributes()) {
-        tt::log_debug(tt::LogOp, "\t{} = {}", name, value);
-    }
-
-    tt::log_debug(tt::LogOp, "Input Tensors:");
-    for (auto index = 0; index < input_tensors.size(); index++) {
-        const auto& tensor = input_tensors[index];
-        tt::log_debug(tt::LogOp, "\t{}: {}", index, tensor);
-    }
-
-    if (not optional_input_tensors.empty()) {
-        tt::log_debug(tt::LogOp, "Optional Input Tensors:");
-        for (auto index = 0; index < optional_input_tensors.size(); index++) {
-            const auto& tensor = optional_input_tensors[index];
-            tt::log_debug(tt::LogOp, "\t{}: {}", index, tensor);
-        }
-    }
-
-    tt::log_debug(tt::LogOp, "");
 }
 
 static operation_history::TensorRecord create_tensor_record(const Tensor& tensor) {
@@ -220,13 +198,46 @@ inline void log_operation(
     const OperationType& operation,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}) {
-    detail::print_operation(operation, input_tensors, optional_input_tensors);
+    tt::log_debug(
+        tt::LogOp,
+        "Operation: \"{}\" ({})",
+        operation.get_type_name(),
+        detail::operation_type_to_string<OperationType>());
+
+    if (run_operation_state::is_composite_operation()) {
+        tt::log_debug(tt::LogOp, "Composite Parents: {}", run_operation_state::get_composite_parent_names());
+    }
+
+    if (not operation.attributes().empty()) {
+        tt::log_debug(tt::LogOp, "Attributes:");
+        for (auto&& [name, value] : operation.attributes()) {
+            tt::log_debug(tt::LogOp, "\t{} = {}", name, value);
+        }
+    }
+
+    tt::log_debug(tt::LogOp, "Input Tensors:");
+    for (auto index = 0; index < input_tensors.size(); index++) {
+        const auto& tensor = input_tensors[index];
+        tt::log_debug(tt::LogOp, "\t{}: {}", index, tensor);
+    }
+
+    if (not optional_input_tensors.empty()) {
+        tt::log_debug(tt::LogOp, "Optional Input Tensors:");
+        for (auto index = 0; index < optional_input_tensors.size(); index++) {
+            const auto& tensor = optional_input_tensors[index];
+            tt::log_debug(tt::LogOp, "\t{}: {}", index, tensor);
+        }
+    }
+
+    tt::log_debug(tt::LogOp, "");
+
     if (operation_history::enabled()) {
         detail::append_operation_to_operation_history(operation, input_tensors, optional_input_tensors);
     }
 }
 #else
-template<typename OperationType>
+
+template <typename OperationType>
 inline void log_operation(
     const OperationType& operation,
     const std::vector<Tensor>& input_tensors,
@@ -256,7 +267,7 @@ inline std::vector<Tensor> run(
         const auto operation = DeviceOperation(concrete_op);
         return run(operation, input_tensors, optional_input_tensors);
     } else {
-        static_assert(detail::always_false<ConcreteOperation>, "Unsupported Operation");
+        static_assert(always_false_v<ConcreteOperation>, "Unsupported Operation");
     }
 }
 

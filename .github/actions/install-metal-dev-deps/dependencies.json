@@ -2,6 +2,7 @@
   "ubuntu-20.04": [
     "git",
     "git-lfs",
-    "clang-6.0=1:6.0.1-14"
+    "clang-6.0=1:6.0.1-14",
+    "pandoc"
   ]
 }

@@ -42,8 +42,10 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     int32_t num_tiles = a.volume() / TILE_HW;
-    uint32_t stick_s =  a.layout() == Layout::ROW_MAJOR ? a.shape()[3] : a.shape()[1];
-    uint32_t num_sticks = a.layout() == Layout::ROW_MAJOR ? a.shape()[0] * a.shape()[1] * a.shape()[2] : a.shape()[0] * a.shape()[2] * a.shape()[3];
+
+    auto width = a.shape()[-1];
+    uint32_t stick_s =  width;
+    uint32_t num_sticks = a.volume() / width;
     uint32_t stick_size = stick_s * a.element_size(); // Assuming bfloat16 dataformat
 
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;

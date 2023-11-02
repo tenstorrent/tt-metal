@@ -123,6 +123,7 @@ void Buffer::deallocate() {
     if (this->device_ == nullptr or not this->device_->initialized_) {
         return;
     }
+    this->size_ = 0;
     TT_ASSERT(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
     allocator::deallocate_buffer(*this->device_->allocator_, this->address_, this->buffer_type_);
 }
