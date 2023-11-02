@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include <map>
 #include <optional>
 #include <utility>
@@ -18,24 +19,20 @@
 
 namespace tt {
 
-namespace tt_metal {
+namespace operations {
 
-namespace {
-inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
-inline bool is_dram(const std::optional<const Tensor> input_tensor) {
-    return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
-}
-inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
-}  // namespace
+namespace primary {
 
-operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_(
+using namespace tt_metal;
+
+operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
-    const std::optional<const Tensor> gamma_grad,
-    const std::optional<const Tensor> beta_grad) {
+    std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
+    std::optional<std::reference_wrapper<const Tensor>> beta_grad) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -132,7 +129,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_(
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -178,10 +175,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_(
         "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
         "writer_moreh_layernorm_backward_gamma_beta_grad.cpp";
 
-    const auto reader_kernels_id =
-        tt::operations::primary::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernels_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -203,7 +198,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_(
         "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/kernels/"
         "moreh_layernorm_backward_gamma_beta_grad_kernel.cpp";
 
-    tt::operations::primary::CreateComputeKernel(
+    CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
 
     if (!core_group_2.ranges().empty()) {
@@ -216,7 +211,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_(
             static_cast<uint32_t>(beta_grad_has_value),
             static_cast<uint32_t>(is_lastdim_layernorm)};
 
-        tt::operations::primary::CreateComputeKernel(
+        CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
@@ -231,8 +226,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_(
     const auto mean_addr = mean.buffer()->address();
     const auto rstd_addr = rstd.buffer()->address();
 
-    const auto gamma_grad_addr = gamma_grad_has_value ? gamma_grad.value().buffer()->address() : 0;
-    const auto beta_grad_addr = beta_grad_has_value ? beta_grad.value().buffer()->address() : 0;
+    const auto gamma_grad_addr = gamma_grad_has_value ? gamma_grad->get().buffer()->address() : 0;
+    const auto beta_grad_addr = beta_grad_has_value ? beta_grad->get().buffer()->address() : 0;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -304,6 +299,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_(
     return {std::move(program), override_runtime_args_callback};
 }
 
-}  // namespace tt_metal
+}  // namespace primary
+
+}  // namespace operations
 
 }  // namespace tt
