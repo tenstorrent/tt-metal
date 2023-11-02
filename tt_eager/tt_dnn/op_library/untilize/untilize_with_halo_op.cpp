@@ -335,7 +335,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     };
     KernelID untilize_kernel_id = CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/compute/untilize.cpp",
+        "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
         all_cores,
         ComputeConfig{
             .compile_args = compute_args});
@@ -973,7 +973,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
     };
     KernelID untilize_kernel_id = CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/compute/untilize.cpp",
+        "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
         all_cores,
         ComputeConfig{
             .compile_args = compute_args});
