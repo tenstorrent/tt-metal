@@ -36,9 +36,7 @@ def sanity_checks() -> Optional[str]:
         return f"/proc must be mounted ({proc_mounts} is not a file)."
 
     if not sys_kernel.is_dir():
-        return (
-            f"sysfs must be mounted on /sys ({sys_kernel} is not a directory)."
-        )
+        return f"sysfs must be mounted on /sys ({sys_kernel} is not a directory)."
 
     if not sys_kernel_mm_hugepages.is_dir():
         return f"kernel does not appear to support huge pages ({sys_kernel_mm_hugepages} is not a directory)."
@@ -78,24 +76,17 @@ def read_kernel_hugepage_info() -> Dict[int, Dict[str, Union[int, str]]]:
         results = {}
 
         for page_size_dir in sys_kernel_mm_hugepages.glob("hugepages-*kB"):
-            items = {
-                item.name: maybe_int(item.read_text())
-                for item in page_size_dir.iterdir()
-            }
+            items = {item.name: maybe_int(item.read_text()) for item in page_size_dir.iterdir()}
 
             page_size_bytes = int(page_size_dir.name[10:-2]) * 1024
             results[page_size_bytes] = items
         return results
     except Exception as e:
-        raise RuntimeError(
-            "Reading kernel hugepage config from sysfs failed.", e
-        )
+        raise RuntimeError("Reading kernel hugepage config from sysfs failed.", e)
 
 
 def parse_scaled_value(value: str) -> int:
-    match = re.fullmatch(
-        r"(\d+)([kmgt]?)([b]?)?", value, re.IGNORECASE | re.ASCII
-    )
+    match = re.fullmatch(r"(\d+)([kmgt]?)([b]?)?", value, re.IGNORECASE | re.ASCII)
 
     quantity = int(match[1])
 
@@ -115,9 +106,7 @@ def parse_scaled_value(value: str) -> int:
 
 
 def find_hugepage_mounts() -> Dict[int, Path]:
-    hugetlbfs_mount_re = re.compile(
-        r"^hugetlbfs (?P<mountpoint>/[^ ]+) hugetlbfs (?P<options>[^ ]+) 0 0$"
-    )
+    hugetlbfs_mount_re = re.compile(r"^hugetlbfs (?P<mountpoint>/[^ ]+) hugetlbfs (?P<options>[^ ]+) 0 0$")
     pagesize_re = re.compile(r"(?:^|,)pagesize=(?P<pagesize>\d+[KMGT])(?:,|$)")
 
     results = {}
@@ -128,9 +117,7 @@ def find_hugepage_mounts() -> Dict[int, Path]:
             options = mount_match["options"]
             pagesize_match = pagesize_re.search(options)
             if pagesize_match:
-                mount_page_size = parse_scaled_value(
-                    pagesize_match["pagesize"]
-                )
+                mount_page_size = parse_scaled_value(pagesize_match["pagesize"])
                 results[mount_page_size] = Path(mount_match["mountpoint"])
     return results
 
@@ -165,9 +152,7 @@ Type=hugetlbfs
 Options=pagesize=1G,mode=0777
 """
 
-    etc_systemd_system_dev_hugepages_1G_mount = Path(
-        "/etc/systemd/system/dev-hugepages\\x2d1G.mount"
-    )
+    etc_systemd_system_dev_hugepages_1G_mount = Path("/etc/systemd/system/dev-hugepages\\x2d1G.mount")
 
     if not etc_systemd_system_dev_hugepages_1G_mount.parent.is_dir():
         raise RuntimeError(
@@ -180,9 +165,7 @@ Options=pagesize=1G,mode=0777
         except FileNotFoundError:  # unlink(missing_ok=True) available in 3.8
             pass
 
-        etc_systemd_system_dev_hugepages_1G_mount.write_text(
-            dev_hugepages_1G_mount
-        )
+        etc_systemd_system_dev_hugepages_1G_mount.write_text(dev_hugepages_1G_mount)
     except Exception as e:
         raise RuntimeError(
             f"writing systemd mount unit failed ({etc_systemd_system_dev_hugepages_1G_mount}).",
@@ -210,16 +193,13 @@ def get_kernel_cmdline_options():
         raise RuntimeError(f"Reading {proc_cmdline} failed", e)
 
     for option in re.split(r"\s+", cmdline):
-        kv = re.split(
-            "=", option, maxsplit=1
-        )  # ROOT=UUID=1234 => ROOT, UUID=1234
+        kv = re.split("=", option, maxsplit=1)  # ROOT=UUID=1234 => ROOT, UUID=1234
         key = kv[0]
         value = kv[1] if len(kv) > 1 else ""
         yield (key, value)
 
 
 def patch_etc_default_grub(is_cloud_vm):
-
     if grub_d_curtin_settings.is_file():
         for line in open(grub_d_curtin_settings):
             if "GRUB_CMDLINE_LINUX_DEFAULT" in line and line[0] != "#":
@@ -246,12 +226,8 @@ def patch_etc_default_grub(is_cloud_vm):
 
             # Add hugepages to GRUB_CMDLINE_LINUX_DEFAULT
             num_tt_devices = get_num_tt_devices()
-            GRUB_args.extend(
-                ["hugepagesz=1G", f"hugepages={num_tt_devices}", "iommu=pt"]
-            )
-            line = (
-                line.split("=")[0] + '="' + " ".join(GRUB_args).strip() + '"\n'
-            )
+            GRUB_args.extend(["hugepagesz=1G", f"hugepages={num_tt_devices}", "iommu=pt"])
+            line = line.split("=")[0] + '="' + " ".join(GRUB_args).strip() + '"\n'
         etc_default_grub_txt += line
 
     try:
@@ -262,9 +238,7 @@ def patch_etc_default_grub(is_cloud_vm):
 
         etc_grub_path.write_text(etc_default_grub_txt)
     except Exception as e:
-        raise RuntimeError(
-            f"writing etc default grub failed ({etc_grub_path}).", e
-        )
+        raise RuntimeError(f"writing etc default grub failed ({etc_grub_path}).", e)
 
     try:
         update_grub_cmd = ["update-grub2"] if is_cloud_vm else ["update-grub"]
@@ -275,7 +249,7 @@ def patch_etc_default_grub(is_cloud_vm):
 
 
 # Get the number of TT devices. Number of hugepages will need to match this now.
-def get_num_tt_devices():
+def get_num_tt_devices(assert_devs_exist=True):
     tt_devices = []
     for device_path in sorted(glob.glob("/dev/tenstorrent/*")):
         # Filter out and make sure they are integers only
@@ -284,7 +258,8 @@ def get_num_tt_devices():
             tt_devices.append(int(device_id))
 
     num_tt_devices = len(tt_devices)
-    assert num_tt_devices > 0, "Did not find any tt devices."
+    if assert_devs_exist:
+        assert num_tt_devices > 0, "Did not find any tt devices."
     return num_tt_devices
 
 
@@ -316,12 +291,7 @@ def is_proc_cmdline_set():
             "/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages should be set to at least 1:\n",
             hugepage_info,
         )
-    return (
-        seen_hugepagesz
-        and seen_hugepages
-        and seen_iommu
-        and correct_nr_hugepages
-    )
+    return seen_hugepagesz and seen_hugepages and seen_iommu and correct_nr_hugepages
 
 
 def is_hugepages_set():
@@ -352,9 +322,7 @@ def is_hugepages_mounted():
         return False
 
     if dev_hugepages_1G not in hugepage_mounts.values():
-        print(
-            "/dev/hugepages_1G is not in huge page mount:\n", hugepage_mounts
-        )
+        print("/dev/hugepages_1G is not in huge page mount:\n", hugepage_mounts)
         return False
 
     return True
@@ -382,25 +350,21 @@ def main() -> int:
             return 1
         # Check if /proc/cmdline has hugepagesz=1G hugepages=N iommu=pt
         if not is_proc_cmdline_set():
-            print(
-                "/proc/cmdline not satisfactory, updating GRUB_CMDLINE_LINUX_DEFAULT..."
-            )
+            print("/proc/cmdline not satisfactory, updating GRUB_CMDLINE_LINUX_DEFAULT...")
+
             def get_is_cloud_vm():
                 return etc_default_grub_cloud_vm.is_file()
+
             is_cloud_vm = get_is_cloud_vm()
             patch_etc_default_grub(is_cloud_vm=is_cloud_vm)
             print("=" * 100)
             print(
                 "PLEASE REBOOT AND RESTART THE SCRIPT WITH `sudo -E env PATH=$PATH python3 scripts/hugepagessetup.py enable`"
             )
-            print(
-                "If stuck on this step, something may be overriding GRUB_CMDLINE_LINUX_DEFAULT"
-            )
+            print("If stuck on this step, something may be overriding GRUB_CMDLINE_LINUX_DEFAULT")
             return 0
         else:
-            print(
-                "/proc/cmdline is satisfactory, continuing with installation"
-            )
+            print("/proc/cmdline is satisfactory, continuing with installation")
             add_systemctl_mount()
 
             if not is_hugepages_set():
@@ -412,11 +376,11 @@ def main() -> int:
             return 0
 
     if args.operation == "check":
-        if (
-            not is_proc_cmdline_set()
-            or not is_hugepages_set()
-            or not is_hugepages_mounted()
-        ):
+        if get_num_tt_devices(assert_devs_exist=False) == 0:
+            print("WARNING: No tt devices detected. Cannot run check for huge page being enabled")
+            return 0
+
+        if not is_proc_cmdline_set() or not is_hugepages_set() or not is_hugepages_mounted():
             print("\nCheck failed - huge pages is not enabled")
             return 1
 
