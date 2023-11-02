@@ -18,9 +18,10 @@ namespace primary {
 
 using namespace tt::tt_metal;
 
-inline bool is_dram(const Tensor &input_tensor);
-inline bool is_dram(const std::optional<const Tensor> input_tensor);
-inline bool is_dram(const Buffer *b);
+bool is_dram(const Tensor &input_tensor);
+bool is_dram(const std::optional<const Tensor> input_tensor);
+bool is_dram(const std::optional<std::reference_wrapper<const Tensor>> input_tensor);
+bool is_dram(const Buffer *b);
 
 inline bool is_scalar(const Tensor &tensor) {
     const auto &shape = tensor.shape().without_padding();

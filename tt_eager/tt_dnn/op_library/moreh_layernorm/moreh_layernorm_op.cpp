@@ -4,6 +4,7 @@
 
 #include "tt_eager/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 
+#include <functional>
 #include <map>
 #include <optional>
 #include <utility>
@@ -19,15 +20,13 @@
 
 namespace tt {
 
-namespace tt_metal {
+namespace operations {
+
+namespace primary {
+
+using namespace tt_metal;
 
 namespace {
-inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
-inline bool is_dram(const std::optional<const Tensor> input_tensor) {
-    return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
-}
-inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
-
 inline uint32_t find_divisor_with_max_block_size(uint32_t val, uint32_t max_block_size) {
     uint32_t divisor{1};
     for (uint32_t current_divisor = max_block_size; current_divisor >= 1; current_divisor--) {
@@ -49,15 +48,15 @@ inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
 }
 }  // namespace
 
-operation::ProgramWithCallbacks moreh_layernorm_(
+operation::ProgramWithCallbacks moreh_layernorm_impl(
     const Tensor& input,
     uint32_t normalized_dims,
     float eps,
     Tensor& output,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
-    const std::optional<const Tensor> mean,
-    const std::optional<const Tensor> rstd) {
+    std::optional<std::reference_wrapper<const Tensor>> gamma,
+    std::optional<std::reference_wrapper<const Tensor>> beta,
+    std::optional<std::reference_wrapper<const Tensor>> mean,
+    std::optional<std::reference_wrapper<const Tensor>> rstd) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -187,7 +186,7 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -248,10 +247,9 @@ operation::ProgramWithCallbacks moreh_layernorm_(
                             : "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/reader_moreh_layernorm_small.cpp";
     const auto writer_kernel_file = "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/writer_moreh_layernorm.cpp";
 
-    const auto reader_kernels_id = tt::operations::primary::CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernels_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernels_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -280,7 +278,7 @@ operation::ProgramWithCallbacks moreh_layernorm_(
         use_large_algorithm ? "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_large_kernel.cpp"
                             : "tt_eager/tt_dnn/op_library/moreh_layernorm/kernels/moreh_layernorm_small_kernel.cpp";
 
-    tt::operations::primary::CreateComputeKernel(
+    CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_rows_per_core_group_1, compute_args_group_1}, compute_defines);
 
     if (!core_group_2.ranges().empty()) {
@@ -296,7 +294,7 @@ operation::ProgramWithCallbacks moreh_layernorm_(
             static_cast<uint32_t>(rstd_has_value),
             static_cast<uint32_t>(is_lastdim_layernorm)};
 
-        tt::operations::primary::CreateComputeKernel(
+        CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_rows_per_core_group_2, compute_args_group_2},
@@ -337,10 +335,10 @@ operation::ProgramWithCallbacks moreh_layernorm_(
     const auto input_addr = input.buffer()->address();
     const auto output_addr = output.buffer()->address();
 
-    const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0;
-    const auto beta_addr = beta_has_value ? beta.value().buffer()->address() : 0;
-    const auto mean_addr = mean_has_value ? mean.value().buffer()->address() : 0;
-    const auto rstd_addr = rstd_has_value ? rstd.value().buffer()->address() : 0;
+    const auto gamma_addr = gamma_has_value ? gamma->get().buffer()->address() : 0;
+    const auto beta_addr = beta_has_value ? beta->get().buffer()->address() : 0;
+    const auto mean_addr = mean_has_value ? mean->get().buffer()->address() : 0;
+    const auto rstd_addr = rstd_has_value ? rstd->get().buffer()->address() : 0;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -488,7 +486,7 @@ operation::ProgramWithCallbacks MorehLayerNorm::create_program(
 
     auto& output = output_tensors.at(0);
 
-    return moreh_layernorm_(input, this->normalized_dims, this->eps, output, gamma, beta, mean, rstd);
+    return moreh_layernorm_impl(input, this->normalized_dims, this->eps, output, gamma, beta, mean, rstd);
 }
 
 tt::stl::reflection::Attributes MorehLayerNorm::attributes() const {
@@ -497,6 +495,46 @@ tt::stl::reflection::Attributes MorehLayerNorm::attributes() const {
         {"eps", this->eps},
         {"output_mem_config", this->output_mem_config},
     };
+}
+
+Tensor moreh_layernorm(
+    const Tensor& input,
+    uint32_t normalized_dims,
+    float eps,
+    std::optional<std::reference_wrapper<const Tensor>> gamma,
+    std::optional<std::reference_wrapper<const Tensor>> beta,
+    std::optional<std::reference_wrapper<const Tensor>> mean,
+    std::optional<std::reference_wrapper<const Tensor>> rstd,
+    const MemoryConfig& output_mem_config) {
+    return operation::run(
+               MorehLayerNorm{
+                   .normalized_dims = normalized_dims, .eps = eps, .output_mem_config = std::move(output_mem_config)},
+               {input},
+               {gamma, beta, mean, rstd})
+        .at(0);
+}
+
+}  // namespace primary
+
+}  // namespace operations
+
+namespace tt_metal {
+
+Tensor moreh_layernorm(
+    const Tensor& input,
+    uint32_t normalized_dims,
+    float eps,
+    std::optional<std::reference_wrapper<const Tensor>> gamma,
+    std::optional<std::reference_wrapper<const Tensor>> beta,
+    std::optional<std::reference_wrapper<const Tensor>> mean,
+    std::optional<std::reference_wrapper<const Tensor>> rstd,
+    const MemoryConfig& output_mem_config) {
+    return operation::run_with_autoformat(
+               operations::primary::MorehLayerNorm{
+                   .normalized_dims = normalized_dims, .eps = eps, .output_mem_config = std::move(output_mem_config)},
+               {input},
+               {gamma, beta, mean, rstd})
+        .at(0);
 }
 
 }  // namespace tt_metal
