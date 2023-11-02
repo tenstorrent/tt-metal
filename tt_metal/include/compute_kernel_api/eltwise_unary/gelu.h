@@ -20,8 +20,13 @@
 
 namespace ckernel {
 
-ALWI void gelu_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpu_gelu_init<APPROX>() ));
+
+ALWI void gelu_tile_init(bool fast_and_approx=true) {
+    if (fast_and_approx) {
+        MATH(( llk_math_eltwise_unary_sfpu_gelu_init<true>() ));
+    } else {
+        MATH(( llk_math_eltwise_unary_sfpu_gelu_init<false>() ));
+    }
 }
 
 /**
