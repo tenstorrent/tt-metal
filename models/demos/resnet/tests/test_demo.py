@@ -19,7 +19,7 @@ def test_demo_sample(
     imagenet_label_dict,
     device,
 ):
-    expected_prediction = ['ruffed grouse, partridge, Bonasa umbellus', 'hay', 'lab coat, laboratory coat', 'Tibetan mastiff', 'Border terrier', 'quail', 'brown bear, bruin, Ursus arctos', 'space heater']
+    expected_prediction = ['ruffed grouse, partridge, Bonasa umbellus', 'hay', 'quail', 'Tibetan mastiff', 'Border terrier', 'brown bear, bruin, Ursus arctos', 'soap dispenser', 'military uniform']
     measurements, predictions = run_resnet_inference(
         batch_size,
         input_loc,

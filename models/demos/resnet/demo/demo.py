@@ -23,6 +23,11 @@ from models.demos.resnet.tests.demo_utils import get_data, get_data_loader, get_
 from loguru import logger
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 
+resnet_model_config = {
+    "MATH_FIDELITY": tt_lib.tensor.MathFidelity.HiFi4,
+    "WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+    "ACTIVATIONS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+}
 
 def run_resnet_imagenet_inference(
     batch_size,
@@ -30,6 +35,7 @@ def run_resnet_imagenet_inference(
     imagenet_label_dict,
     model_location_generator,
     device,
+    model_config=resnet_model_config,
     model_version="microsoft/resnet-50",
 ):
     disable_persistent_kernel_cache()
@@ -62,6 +68,7 @@ def run_resnet_imagenet_inference(
         fold_batchnorm=True,
         storage_in_dram=False,
         batch_size=batch_size,
+        model_config=model_config,
         sharded=sharded,
     )
 
@@ -87,6 +94,7 @@ def run_resnet_inference(
     input_loc,
     imagenet_label_dict,
     device,
+    model_config=resnet_model_config,
     model_version="microsoft/resnet-50",
 ):
     disable_persistent_kernel_cache()
@@ -132,6 +140,7 @@ def run_resnet_inference(
         fold_batchnorm=True,
         storage_in_dram=False,
         batch_size=batch_size,
+        model_config=model_config,
         sharded=sharded,
     )
     profiler.end(f"move_weights")

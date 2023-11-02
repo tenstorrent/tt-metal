@@ -72,7 +72,7 @@ def get_data_loader(input_loc, batch_size):
 def get_data(input_loc):
     img_dir = input_loc + "/"
     data_path = os.path.join(img_dir, "*G")
-    files = glob.glob(data_path)
+    files = sorted(glob.glob(data_path))
     examples = []
     for f1 in files:
         examples.append(
