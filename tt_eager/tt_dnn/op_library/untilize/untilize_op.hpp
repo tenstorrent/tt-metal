@@ -60,7 +60,7 @@ struct UntilizeWithHalo {
     const uint32_t in_b;
     const uint32_t in_h;
     const uint32_t in_w;
-    const uint32_t out_shard_size_max_per_core;
+    const uint32_t max_out_nsticks_per_core_;
     const uint32_t stride_;
     const MemoryConfig output_mem_config;
 
