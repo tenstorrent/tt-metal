@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
 
     CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
-    Program programs[] = {tt_metal::Program(), tt_metal::Program(), tt_metal::Program()};
+    Program programs[] = {tt_metal::CreateProgram(), tt_metal::CreateProgram(), tt_metal::CreateProgram()};
 
     auto ops = EltwiseOp::all();
     for (auto eltwise_op : ops) {
@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
             ////////////////////////////////////////////////////////////////////////////
             //                      Application Setup
             ////////////////////////////////////////////////////////////////////////////
-            // tt_metal::Program program = tt_metal::Program();
+            // tt_metal::Program program = tt_metal::CreateProgram();
             tt_metal::Program& program = programs[eltwise_op];
 
             CoreCoord core = {0, 0};

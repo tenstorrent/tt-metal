@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
 
     const auto shape = a.shape();
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
@@ -205,7 +205,7 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
     uint32_t sub_tile_line_bytes = 16 * a.element_size();
 
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
@@ -325,7 +325,7 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
 
 
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 

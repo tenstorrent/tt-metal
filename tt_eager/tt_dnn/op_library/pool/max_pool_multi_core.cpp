@@ -203,7 +203,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                                                 uint32_t dilation_h, uint32_t dilation_w,
                                                                 const MemoryConfig& out_mem_config,
                                                                 uint32_t nblocks) {
-    Program program = Program();
+    Program program = CreateProgram();
 
     // This should allocate a DRAM buffer on the device
     Device *device = input.device();
@@ -681,7 +681,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
                                                        uint32_t dilation_h, uint32_t dilation_w,
                                                        const MemoryConfig& out_mem_config,
                                                        uint32_t nblocks) {
-    Program program = Program();
+    Program program = CreateProgram();
 
     // This should allocate a DRAM buffer on the device
     Device *device = input.device();
@@ -1004,7 +1004,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
                                                                         uint32_t dilation_h, uint32_t dilation_w,
                                                                         const MemoryConfig& out_mem_config,
                                                                         uint32_t nblocks) {
-    Program program = Program();
+    Program program = CreateProgram();
 
     // This should allocate a DRAM buffer on the device
     Device *device = input.device();

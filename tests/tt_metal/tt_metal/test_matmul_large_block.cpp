@@ -208,7 +208,7 @@ bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::Program();
+        tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord core = {0, 0};
         uint32_t M = 8;

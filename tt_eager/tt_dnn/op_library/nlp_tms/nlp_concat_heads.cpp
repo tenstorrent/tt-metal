@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
     uint32_t src0_cb_index = 0;
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;

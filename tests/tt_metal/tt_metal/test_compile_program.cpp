@@ -95,7 +95,7 @@ struct ProgramAttributes {
 Program create_program(Device *device, const ProgramAttributes &program_attributes) {
 
     CoreCoord core = {0, 0};
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t single_tile_size = 2 * 1024;
 

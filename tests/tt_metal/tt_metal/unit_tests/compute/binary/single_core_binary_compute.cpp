@@ -52,7 +52,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
     auto input0_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
     uint32_t input0_dram_byte_address = input0_dram_buffer.address();
     auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();

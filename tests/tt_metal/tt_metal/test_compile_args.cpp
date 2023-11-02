@@ -29,7 +29,7 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, int device_id) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
 

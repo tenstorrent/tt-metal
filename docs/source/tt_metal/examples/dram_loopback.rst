@@ -29,7 +29,7 @@ Program pre-compilation setup
 .. code-block:: cpp
 
    CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
-   Program program = Program();
+   Program program = CreateProgram();
 
 We first obtain the global ``CommandQueue`` in order to use the fast dispatch
 capabilities of the software. This will be used when issuing commands for

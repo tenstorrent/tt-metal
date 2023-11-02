@@ -193,6 +193,10 @@ bool CloseDevice(Device *device) {
     return device->close();
 }
 
+Program CreateProgram(){
+    return Program();
+}
+
 KernelID CreateKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig,ComputeConfig, EthernetConfig> &config) {
     return std::visit( [&](auto&& cfg) -> KernelID
                         {

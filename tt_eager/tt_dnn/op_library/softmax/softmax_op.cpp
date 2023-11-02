@@ -37,7 +37,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
 
-    Program program = Program();
+    Program program = CreateProgram();
 
     uint32_t scalar_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 

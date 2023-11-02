@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                         uint32_t dilation_h, uint32_t dilation_w,
                                                         const MemoryConfig& out_mem_config,
                                                         uint32_t nblocks) {
-    Program program = Program();
+    Program program = CreateProgram();
     CoreRange cores = {.start={0, 0}, .end={0, 0}};
 
     // This should allocate a DRAM buffer on the device

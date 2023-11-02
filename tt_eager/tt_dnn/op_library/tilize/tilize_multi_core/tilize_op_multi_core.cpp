@@ -134,7 +134,7 @@ inline std::tuple<int32_t, int32_t, int32_t, int32_t, CoreRangeSet, CoreRangeSet
 }
 
 operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, Tensor& output) {
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = detail::TileSize(input_cb_data_format);
@@ -498,7 +498,7 @@ operation::ProgramWithCallbacks tilize_multi_core(const Tensor& a, Tensor& outpu
 // This purely supports input width shard -> output width shard for now
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value) {
 
-   tt_metal::Program program = tt_metal::Program();
+   tt_metal::Program program = tt_metal::CreateProgram();
 
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();

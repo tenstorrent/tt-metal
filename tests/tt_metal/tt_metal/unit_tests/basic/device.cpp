@@ -86,7 +86,7 @@ bool dram_ping(
 /// @return
 bool load_all_blank_kernels(tt_metal::Device* device) {
     bool pass = true;
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
     CoreRange all_cores = CoreRange(
         CoreCoord{.x = 0, .y = 0},
@@ -310,7 +310,7 @@ TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
             tt_metal::detail::WriteToDeviceL1(this->devices_.at(id), logical_core, write_address, host_input);
         }
 
-        tt_metal::Program program = tt_metal::Program();
+        tt_metal::Program program = tt_metal::CreateProgram();
         string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
         CoreCoord logical_target_core = CoreCoord({.x = 0, .y = 0});
         uint32_t intermediate_l1_addr = L1_UNRESERVED_BASE;

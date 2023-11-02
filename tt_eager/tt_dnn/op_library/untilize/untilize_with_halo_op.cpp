@@ -105,7 +105,7 @@ void init_neighbor_core_xy_mapping(CoreCoord grid_size, bool is_twod = false) {
 
 // The case of stride = 2
 operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& input, Tensor& output, uint32_t pad_val, uint32_t in_b, uint32_t in_h, uint32_t in_w) {
-    Program program = Program();
+    Program program = CreateProgram();
 
     Device *device = input.device();
     Buffer *src_buffer = input.buffer();
@@ -788,7 +788,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
 }
 
 operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, Tensor& output, uint32_t pad_val, const uint32_t &in_b, const uint32_t &in_h, const uint32_t &in_w, const uint32_t &out_shard_size_max_per_core) {
-    Program program = Program();
+    Program program = CreateProgram();
 
     Device *device = a.device();
     Buffer *src_buffer = a.buffer();

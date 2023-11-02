@@ -148,7 +148,7 @@ int main(int argc, char **argv) {
             tt_metal::CreateDevice(device_id);
 
         BufferKeeper buffers;
-        tt_metal::Program program = tt_metal::Program();
+        tt_metal::Program program = tt_metal::CreateProgram();
 
         // NOTE: diagrams are NOT to scale
         // Running on compute and storage core: (0, 0) and storage core: (1, 9)

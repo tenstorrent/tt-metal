@@ -21,7 +21,7 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, int H, int W) {
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
@@ -117,7 +117,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
 
 operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, int H, int W) {
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     // This should allocate a DRAM buffer on the device

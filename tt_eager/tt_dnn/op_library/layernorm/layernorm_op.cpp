@@ -133,7 +133,7 @@ operation::ProgramWithCallbacks layernorm_(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = Program();
+    Program program = CreateProgram();
 
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args

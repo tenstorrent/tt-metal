@@ -61,7 +61,7 @@ operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor&
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;

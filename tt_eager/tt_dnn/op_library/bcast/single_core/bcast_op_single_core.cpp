@@ -33,7 +33,7 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
     uint32_t num_tensor_tiles = NC*Ht*Wt;
     uint32_t num_btensor_tiles = NC*bH*bW / TILE_HW;
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 

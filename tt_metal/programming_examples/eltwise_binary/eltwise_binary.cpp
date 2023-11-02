@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
         */
         CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
 
-        Program program = Program();
+        Program program = CreateProgram();
 
         constexpr CoreCoord core = {0, 0};
 
@@ -215,7 +215,7 @@ int main(int argc, char **argv) {
         /*
          * Move src data back into DRAM src buffer 0 to do another eltwise calculation
          */
-        Program program_mul = Program();
+        Program program_mul = CreateProgram();
 
         /*
          * Because we're using a new program, we must redeclare all the

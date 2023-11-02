@@ -36,7 +36,7 @@ class CommandQueue;
 class CircularBuffer;
 
 // ==================================================
-//                  HOST API: host and device
+//                  HOST API: Device management
 // ==================================================
 
 /**
@@ -64,6 +64,13 @@ bool CloseDevice(Device *device);
 // ==================================================
 //                  HOST API: program & kernels
 // ==================================================
+
+/**
+ * Creates a Program object which is the main container that bundles kernels, circular buffers, and/or semaphores for execution on device
+ *
+ * Return value: Program
+ */
+Program CreateProgram();
 
 /**
  * Creates a data movement kernel with no compile time arguments and adds it to the program.

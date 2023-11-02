@@ -122,7 +122,7 @@ operation::ProgramWithCallbacks unpad_rm_multi_core(const Tensor &a, Tensor& out
 
     const Shape output_shape = output.shape();
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -346,7 +346,7 @@ operation::ProgramWithCallbacks unpad_tile_multi_core(const Tensor &a, Tensor& o
 
     const Shape output_shape = output.shape();
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();

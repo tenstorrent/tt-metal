@@ -27,7 +27,7 @@ enum class KernelType {
 
 
 Program initialize_program_data_movement(Device *device, const CoreRangeSet &core_range_set) {
-    Program program = tt_metal::Program();
+    Program program = tt_metal::CreateProgram();
 
     auto add_two_ints_kernel = tt_metal::CreateKernel(
         program,
@@ -43,7 +43,7 @@ Program initialize_program_data_movement(Device *device, const CoreRangeSet &cor
 
 
 Program initialize_program_compute(Device *device, const CoreRangeSet &core_range_set) {
-    Program program = tt_metal::Program();
+    Program program = tt_metal::CreateProgram();
 
     std::vector<uint32_t> compute_args = {0};  // dummy
     bool fp32_dest_acc_en = false;

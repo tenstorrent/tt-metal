@@ -20,7 +20,7 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& output) {
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
@@ -179,7 +179,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
 
     const Shape output_shape = output.shape();
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 

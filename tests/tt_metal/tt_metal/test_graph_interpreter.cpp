@@ -140,7 +140,7 @@ bool run_chained_sfpu_test(int chain_length) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::Program();
+        tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord core = {0, 0};
 
@@ -341,7 +341,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::Program();
+        tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord core = {0, 0};
 
@@ -576,7 +576,7 @@ bool run_forked_binary_test() {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::Program();
+        tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord core = {0, 0};
 
