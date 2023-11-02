@@ -45,10 +45,6 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand=0, const std::uin
     wait_for_idle();
     const std::uint32_t block_c_dim = ct_dim * TILE_C_DIM;
 
-    // Save state of unpacker config for quick restore
-    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_TILIZER_STATE_0, THCON_SEC0_REG2_Out_data_format_ADDR32); // Save unpack config[0]
-    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_TILIZER_STATE_1, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32); // Save tile x dim per context
-
     // Override default settings
     std::uint32_t input = get_operand_id(operand);
     unpack_config_u config = {0};
@@ -66,23 +62,17 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand=0, const std::uin
     llk_unpack_tilize_mop_config();
 }
 
-inline void llk_unpack_tilize_uninit() {
-    // Undo tilize if added
-    wait_for_idle();
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
-    unpack_config_u config;
+inline void llk_unpack_tilize_uninit(const std::uint32_t operand=0, const std::uint32_t face_r_dim = FACE_R_DIM /* not used*/) {
+    std::uint32_t input = get_operand_id(operand);
+    unpack_config_u config = {0};
 
-    config.val[0] = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 0];
-    config.f.tileize_mode = 0;
-    config.f.shift_amount = 0;
-    cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 0] = config.val[0];
-    cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32] = 256 | (256 << 16);
+    config.f.out_data_format = (uint)unpack_dst_format[input];
+    config.f.throttle_mode = 2;
+    TT_SETDMAREG(0, LOWER_HALFWORD(config.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG2_Out_data_format_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0); // Load unpack config[0]
+    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_16x16); //GPR preloaded with  16 | (16 << 16)}
 }
-
-// inline void llk_unpack_tilize_uninit(const std::uint32_t face_r_dim = FACE_R_DIM /* not used*/) {
-//     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG2_Out_data_format_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::SR_UNPACK_TILIZER_STATE_0); // Restore unpack config[0]
-//     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32,  p_gpr_unpack::SR_UNPACK_TILIZER_STATE_1); // Restore tile x dim per context
-// }
 
 inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t block_ct_dim) {
     std::uint32_t input = get_operand_id(operand);
