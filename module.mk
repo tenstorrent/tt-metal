@@ -111,9 +111,6 @@ set_up_kernels:
 set_up_kernels/clean:
 	python3 $(TT_METAL_HOME)/scripts/set_up_kernels.py --short clean
 
-hugepage-check:
-	bash -c "python3.8 $(TT_METAL_HOME)/infra/machine_setup/scripts/setup_hugepages.py check" || (echo "$?"; exit 1)
-
 ifeq ($(ENABLE_PROFILER), 1)
 CFLAGS += -DPROFILER
 endif
@@ -123,15 +120,7 @@ CFLAGS += -DTRACY_ENABLE -fno-omit-frame-pointer -fPIC
 LDFLAGS += -rdynamic
 endif
 
-LIBS_TO_BUILD =
-ifdef TT_METAL_ENV_IS_DEV
-LIBS_TO_BUILD += \
-	hugepage-check \
-	python_env/dev \
-	git_hooks
-endif
-
-LIBS_TO_BUILD += \
+LIBS_TO_BUILD = \
 	common \
 	build_kernels_for_riscv \
 	set_up_kernels \
@@ -141,6 +130,12 @@ LIBS_TO_BUILD += \
 	tt_metal \
 	tracy \
 	tt_eager
+
+ifdef TT_METAL_ENV_IS_DEV
+LIBS_TO_BUILD += \
+	python_env/dev \
+	git_hooks
+endif
 
 # These must be in dependency order (enforces no circular deps)
 include $(TT_METAL_HOME)/tt_metal/common/common.mk
