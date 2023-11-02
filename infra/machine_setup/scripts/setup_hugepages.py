@@ -420,7 +420,7 @@ def main() -> int:
             print("\nCheck failed - huge pages is not enabled")
             return 1
 
-        print("Hugepage check passed!")
+        print("Check passed!")
     elif args.operation == "enable":
         return enable_or_first_pass()
     elif args.operation == "first_pass":
