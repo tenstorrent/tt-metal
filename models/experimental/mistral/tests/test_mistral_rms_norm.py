@@ -17,7 +17,7 @@ from models.utility_functions import (
 
 @pytest.mark.parametrize(
     "pcc",
-    ((0.97),),
+    ((0.99),),
 )
 def test_mistral_rms_norm_inference(pcc, model_location_generator, device, reset_seeds):
     mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")

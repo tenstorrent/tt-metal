@@ -16,21 +16,16 @@ from models.utility_functions import (
 
 
 @pytest.mark.parametrize(
-    "fallback_fused_matmul",
-    ((True, False)),
-)
-@pytest.mark.parametrize(
     "pcc",
-    ((0.97),),
+    ((0.99),),
 )
-def test_mistral_feed_forward_inference(pcc, fallback_fused_matmul, model_location_generator, device, reset_seeds):
+def test_mistral_feed_forward_inference(pcc, model_location_generator, device, reset_seeds):
     mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
     state_dict = torch.load(mistral_path / "consolidated.00.pth")
     base_address = f""
     with open(mistral_path / "params.json", "r") as f:
         model_args = TtModelArgs(**json.loads(f.read()))
 
-    model_args.FALLBACK_FUSED_ATTENTION = fallback_fused_matmul
     state_dict = {k[22:]: v for k, v in state_dict.items() if (k.startswith("layers.0.feed_forward"))}
     model_args.max_batch_size = 1
     reference_model = FeedForward(args=model_args)
