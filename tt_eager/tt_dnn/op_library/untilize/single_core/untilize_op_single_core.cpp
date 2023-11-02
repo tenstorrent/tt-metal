@@ -124,7 +124,7 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
 
     auto untilize_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/compute/untilize.cpp",
+        "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_args}
     );
@@ -305,7 +305,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
 
     auto untilize_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/compute/untilize.cpp",
+        "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_args}
     );
