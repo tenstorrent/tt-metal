@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <variant>
 #include <vector>
@@ -13,97 +14,91 @@
 
 namespace tt {
 
-namespace tt_metal {
+namespace operations {
+
+namespace primary {
 
 struct MorehLayerNormBackwardInputGrad {
     uint32_t normalized_dims;
-    MemoryConfig output_mem_config;
+    tt_metal::MemoryConfig output_mem_config;
 
     void validate(
-        const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>> &optional_input_tensors,
-        std::vector<Tensor> &output_tensors) const;
+        const std::vector<tt_metal::Tensor> &input_tensors,
+        const std::vector<std::optional<const tt_metal::Tensor>> &optional_input_tensors) const;
+    std::vector<tt_metal::Shape> compute_output_shapes(const std::vector<tt_metal::Tensor> &input_tensors) const;
+    std::vector<tt_metal::Tensor> create_output_tensors(const std::vector<tt_metal::Tensor> &input_tensors) const;
+    tt_metal::operation::ProgramWithCallbacks create_program(
+        const std::vector<tt_metal::Tensor> &input_tensors,
+        const std::vector<std::optional<const tt_metal::Tensor>> &optional_input_tensors,
+        std::vector<tt_metal::Tensor> &output_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
 struct MorehLayerNormBackwardGammaBetaGrad {
     uint32_t normalized_dims;
-    MemoryConfig output_mem_config;
+    tt_metal::MemoryConfig output_mem_config;
 
     void validate(
-        const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
-    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>> &optional_input_tensors,
-        std::vector<Tensor> &output_tensors) const;
+        const std::vector<tt_metal::Tensor> &input_tensors,
+        const std::vector<std::optional<const tt_metal::Tensor>> &optional_input_tensors) const;
+    std::vector<tt_metal::Shape> compute_output_shapes(const std::vector<tt_metal::Tensor> &input_tensors) const;
+    std::vector<tt_metal::Tensor> create_output_tensors(const std::vector<tt_metal::Tensor> &input_tensors) const;
+    tt_metal::operation::ProgramWithCallbacks create_program(
+        const std::vector<tt_metal::Tensor> &input_tensors,
+        const std::vector<std::optional<const tt_metal::Tensor>> &optional_input_tensors,
+        std::vector<tt_metal::Tensor> &output_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
-operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_(
-    const Tensor &output_grad,
-    const Tensor &input,
-    const Tensor &mean,
-    const Tensor &rstd,
+tt_metal::operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
+    const tt_metal::Tensor &output_grad,
+    const tt_metal::Tensor &input,
+    const tt_metal::Tensor &mean,
+    const tt_metal::Tensor &rstd,
     uint32_t normalized_dims,
-    const std::optional<const Tensor> gamma = std::nullopt,
-    const std::optional<const Tensor> input_grad = std::nullopt);
+    std::optional<std::reference_wrapper<const tt_metal::Tensor>> gamma = std::nullopt,
+    std::optional<std::reference_wrapper<const tt_metal::Tensor>> input_grad = std::nullopt);
 
-operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_(
-    const Tensor &output_grad,
-    const Tensor &input,
-    const Tensor &mean,
-    const Tensor &rstd,
+tt_metal::operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
+    const tt_metal::Tensor &output_grad,
+    const tt_metal::Tensor &input,
+    const tt_metal::Tensor &mean,
+    const tt_metal::Tensor &rstd,
     uint32_t normalized_dims,
-    const std::optional<const Tensor> gamma_grad = std::nullopt,
-    const std::optional<const Tensor> beta_grad = std::nullopt);
+    std::optional<std::reference_wrapper<const tt_metal::Tensor>> gamma_grad = std::nullopt,
+    std::optional<std::reference_wrapper<const tt_metal::Tensor>> beta_grad = std::nullopt);
 
-}  // namespace tt_metal
-
-namespace operations {
-
-using namespace tt_metal;
-
-namespace primary {
-
-[[maybe_unused]] std::variant<Tensor, char *> moreh_layernorm_backward_input_grad(
-    const Tensor &output_grad,
-    const Tensor &input,
-    const Tensor &mean,
-    const Tensor &rstd,
+[[maybe_unused]] std::variant<tt_metal::Tensor, char *> moreh_layernorm_backward_input_grad(
+    const tt_metal::Tensor &output_grad,
+    const tt_metal::Tensor &input,
+    const tt_metal::Tensor &mean,
+    const tt_metal::Tensor &rstd,
     uint32_t normalized_dims,
-    std::optional<const Tensor> gamma = std::nullopt,
-    std::optional<const Tensor> input_grad = std::nullopt,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    std::optional<std::reference_wrapper<const tt_metal::Tensor>> gamma = std::nullopt,
+    std::optional<std::reference_wrapper<const tt_metal::Tensor>> input_grad = std::nullopt,
+    const tt_metal::MemoryConfig &output_mem_config = tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-[[maybe_unused]] std::vector<std::variant<Tensor, char *>> moreh_layernorm_backward_gamma_beta_grad(
-    const Tensor &output_grad,
-    const Tensor &input,
-    const Tensor &mean,
-    const Tensor &rstd,
+[[maybe_unused]] std::vector<std::variant<tt_metal::Tensor, char *>> moreh_layernorm_backward_gamma_beta_grad(
+    const tt_metal::Tensor &output_grad,
+    const tt_metal::Tensor &input,
+    const tt_metal::Tensor &mean,
+    const tt_metal::Tensor &rstd,
     uint32_t normalized_dims,
-    std::optional<const Tensor> gamma_grad = std::nullopt,
-    std::optional<const Tensor> beta_grad = std::nullopt,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    std::optional<std::reference_wrapper<const tt_metal::Tensor>> gamma_grad = std::nullopt,
+    std::optional<std::reference_wrapper<const tt_metal::Tensor>> beta_grad = std::nullopt,
+    const tt_metal::MemoryConfig &output_mem_config = tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-[[maybe_unused]] std::vector<std::variant<Tensor, char *>> moreh_layernorm_backward(
-    const Tensor &output_grad,
-    const Tensor &input,
-    const Tensor &mean,
-    const Tensor &rstd,
+[[maybe_unused]] std::vector<std::variant<tt_metal::Tensor, char *>> moreh_layernorm_backward(
+    const tt_metal::Tensor &output_grad,
+    const tt_metal::Tensor &input,
+    const tt_metal::Tensor &mean,
+    const tt_metal::Tensor &rstd,
     uint32_t normalized_dims,
-    std::optional<const Tensor> gamma = std::nullopt,
-    std::optional<const Tensor> input_grad = std::nullopt,
-    std::optional<const Tensor> gamma_grad = std::nullopt,
-    std::optional<const Tensor> beta_grad = std::nullopt,
-    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    std::optional<std::reference_wrapper<const tt_metal::Tensor>> gamma = std::nullopt,
+    std::optional<std::reference_wrapper<const tt_metal::Tensor>> input_grad = std::nullopt,
+    std::optional<std::reference_wrapper<const tt_metal::Tensor>> gamma_grad = std::nullopt,
+    std::optional<std::reference_wrapper<const tt_metal::Tensor>> beta_grad = std::nullopt,
+    const tt_metal::MemoryConfig &output_mem_config = tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary
 
