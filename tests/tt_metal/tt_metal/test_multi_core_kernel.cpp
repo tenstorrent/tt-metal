@@ -22,7 +22,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> create_pro
     uint32_t single_tile_size,
     const CoreRange &all_cores,
     const std::vector<uint32_t> &eltwise_unary_args) {
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreCoord start_core = all_cores.start;
     CoreCoord end_core = all_cores.end;

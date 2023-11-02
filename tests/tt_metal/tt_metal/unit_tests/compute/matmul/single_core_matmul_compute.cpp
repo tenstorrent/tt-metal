@@ -157,7 +157,7 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t single_tile_size = 2 * 1024;
     tt::log_assert(
@@ -387,7 +387,7 @@ bool single_tile_matmul(tt_metal::Device* device) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
     auto input0_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
     const uint32_t in0_dram_addr = input0_dram_buffer.address();
     auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
@@ -512,7 +512,7 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
     auto input0_dram_buffer = CreateBuffer(device, in0_byte_size, in0_byte_size, tt_metal::BufferType::DRAM);
     const uint32_t in0_dram_addr = input0_dram_buffer.address();
     auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();
@@ -652,7 +652,7 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
     auto input0_dram_buffer = CreateBuffer(device, in0_byte_size, in0_byte_size, tt_metal::BufferType::DRAM);
     const uint32_t in0_dram_addr = input0_dram_buffer.address();
     auto input0_dram_noc_xy = input0_dram_buffer.noc_coordinates();

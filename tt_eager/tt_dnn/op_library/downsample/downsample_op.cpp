@@ -359,7 +359,7 @@ DownsampleReadPatternParams generate_downsample_read_pattern(ImgTrackingVars & v
 
 operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::array<uint32_t, 5> downsample_params, Tensor& output) {
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);

@@ -37,7 +37,7 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 
 	uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     tt_metal::Device *device = a.device();
 

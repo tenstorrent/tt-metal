@@ -613,7 +613,7 @@ void send_dispatch_kernel_to_device(Device* device) {
     // Ideally, this should be some separate API easily accessible in
     // TT-metal, don't like the fact that I'm writing this from scratch
 
-    Program dispatch_program = Program();
+    Program dispatch_program = CreateProgram();
     auto dispatch_cores = device->dispatch_cores().begin();
     CoreCoord producer_logical_core = *dispatch_cores++;
     CoreCoord consumer_logical_core = *dispatch_cores;

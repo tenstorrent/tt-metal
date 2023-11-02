@@ -79,7 +79,7 @@ operation::ProgramWithCallbacks multi_core_split_fused_qkv_and_split_heads(const
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;

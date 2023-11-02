@@ -219,7 +219,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     // sanity check
     assert(num_blocks_output_w == num_blocks_weight_w);
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
@@ -1072,7 +1072,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     detail::WriteToDeviceDRAMChannel(device, dram_bank_id, act_address_map_dram_addr, act_address_map);
     detail::WriteToDeviceDRAMChannel(device, dram_bank_id, weight_address_map_dram_addr, weight_address_map);
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 

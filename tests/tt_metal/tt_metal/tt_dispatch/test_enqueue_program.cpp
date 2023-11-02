@@ -15,7 +15,7 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
     // TODO(agrebenisan): This is directly copy and pasted from test_eltwise_binary.
     // We need to think of a better way to generate test data, so this section needs to be heavily refactored.
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
 

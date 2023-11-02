@@ -91,7 +91,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> create_pro
     int tensor_num_tiles,
     int block_num_tiles) {
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     int num_cores = num_cores_r * num_cores_c;
 

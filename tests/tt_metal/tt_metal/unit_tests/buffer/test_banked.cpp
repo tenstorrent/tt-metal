@@ -40,7 +40,7 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = Program();
+    Program program = CreateProgram();
 
     string reader_kernel_name = "";
     string writer_kernel_name = "";
@@ -149,7 +149,7 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = Program();
+    Program program = CreateProgram();
     auto input_buffer = CreateBuffer(device, cfg.size_bytes, cfg.page_size_bytes, cfg.input_buffer_type);
     auto output_buffer = CreateBuffer(device, cfg.size_bytes, cfg.page_size_bytes, cfg.output_buffer_type);
 

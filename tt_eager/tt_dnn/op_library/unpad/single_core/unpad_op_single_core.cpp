@@ -75,7 +75,7 @@ operation::ProgramWithCallbacks unpad_rm_single_core(const Tensor &a, Tensor& ou
 
     const Shape output_shape = output.shape();
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
@@ -243,7 +243,7 @@ operation::ProgramWithCallbacks unpad_tile_single_core(const Tensor &a, Tensor& 
 
     const Shape output_shape = output.shape();
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 

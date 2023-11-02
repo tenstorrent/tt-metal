@@ -66,7 +66,7 @@ bool run_sfpu_test(string sfpu_name) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::Program();
+        tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord core = {0, 0};
 

@@ -22,7 +22,7 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& output) {
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
@@ -188,7 +188,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
 
     auto output_shape = output.shape();
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 

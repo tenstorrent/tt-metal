@@ -16,7 +16,7 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output) {
 
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 

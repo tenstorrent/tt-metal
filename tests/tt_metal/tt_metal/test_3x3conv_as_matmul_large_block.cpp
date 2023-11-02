@@ -135,7 +135,7 @@ int main(int argc, char **argv) {
         uint32_t src0_num_bytes_per_block = src0_num_tiles_per_block * single_tile_size;
         uint32_t src1_num_bytes_per_block = src1_num_tiles_per_block * single_tile_size;
 
-        tt_metal::Program program = tt_metal::Program();
+        tt_metal::Program program = tt_metal::CreateProgram();
         CoreCoord core = {0, 0};
         uint32_t dram_buffer_src0_size = tensor_p.get_volume() * sizeof(bfloat16);
         uint32_t dram_buffer_src1_size = weights_tilized.size() * sizeof(bfloat16);

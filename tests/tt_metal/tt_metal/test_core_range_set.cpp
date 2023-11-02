@@ -205,7 +205,7 @@ int main(int argc, char **argv) {
 
 
 
-        tt_metal::Program program = tt_metal::Program();
+        tt_metal::Program program = tt_metal::CreateProgram();
         CoreRange core_range_one = {.start={0, 0}, .end={1, 1}};
         CoreRange core_range_two = {.start={2, 2}, .end={3, 3}};
         CoreRangeSet core_ranges = CoreRangeSet({core_range_one, core_range_two});
