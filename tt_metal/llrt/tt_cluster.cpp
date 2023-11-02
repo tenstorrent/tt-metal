@@ -404,15 +404,15 @@ void Cluster::read_dram_vec(
 }
 
 void Cluster::write_dram_vec(
-    const std::uint32_t *mem_ptr, uint32_t len, tt_cxy_pair dram_core, uint64_t addr, bool small_access) const {
+    const void *mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair dram_core, uint64_t addr, bool small_access) const {
     int chip_id = dram_core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         tt::llrt::watcher_sanitize_host_noc_write(
-            soc_desc, {dram_core.x, dram_core.y}, addr, len * sizeof(uint32_t));
+            soc_desc, {dram_core.x, dram_core.y}, addr, sz_in_bytes);
     }
     tt_cxy_pair virtual_dram_core = soc_desc.convert_to_umd_coordinates(dram_core);
-    this->device_->write_to_device(mem_ptr, len, virtual_dram_core, addr, "LARGE_WRITE_TLB");
+    this->device_->write_to_device(mem_ptr, sz_in_bytes, virtual_dram_core, addr, "LARGE_WRITE_TLB");
     if (this->device_->get_target_remote_device_ids().find(virtual_dram_core.chip) !=
         this->device_->get_target_remote_device_ids().end()) {
             this->device_->wait_for_non_mmio_flush();
@@ -420,11 +420,11 @@ void Cluster::write_dram_vec(
 }
 
 void Cluster::write_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uint64_t addr, bool small_access) const {
-    write_dram_vec(&vec[0], vec.size(), dram_core, addr, small_access);
+    write_dram_vec(&vec[0], vec.size() * sizeof(uint32_t), dram_core, addr, small_access);
 }
 
 void Cluster::read_dram_vec(
-    std::uint32_t *mem_ptr, tt_cxy_pair dram_core, uint64_t addr, uint32_t size_in_bytes, bool small_access) const {
+    void *mem_ptr, tt_cxy_pair dram_core, uint64_t addr, uint32_t size_in_bytes, bool small_access) const {
     int chip_id = dram_core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
@@ -438,8 +438,7 @@ void Cluster::read_dram_vec(
 }
 
 void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const {
-    const unsigned int len = 1;
-    const unsigned int size_in_bytes = len * sizeof(uint32_t);
+    const unsigned int size_in_bytes = sizeof(uint32_t);
     int chip_id = target.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
@@ -447,7 +446,7 @@ void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64
         tt::llrt::watcher_sanitize_host_noc_write(soc_desc, {target.x, target.y}, addr, size_in_bytes);
     }
     tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);
-    this->device_->write_to_device(mem_ptr, len, virtual_target, addr, "REG_TLB");
+    this->device_->write_to_device(mem_ptr, size_in_bytes, virtual_target, addr, "REG_TLB");
     if (this->device_->get_target_remote_device_ids().find(virtual_target.chip) !=
         this->device_->get_target_remote_device_ids().end()) {
         this->device_->wait_for_non_mmio_flush();
@@ -455,8 +454,7 @@ void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64
 }
 
 void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const {
-    const unsigned int len = 1;
-    const unsigned int size_in_bytes = len * sizeof(uint32_t);
+    const unsigned int size_in_bytes = sizeof(uint32_t);
     int chip_id = target.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 

@@ -265,7 +265,7 @@ bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, co
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
         uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
 
-        tt::Cluster::instance().write_dram_vec(&*mem_ptr, len_words, tt_cxy_pair(chip_id, core), relo_addr);
+        tt::Cluster::instance().write_dram_vec(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
     });
 
     log_debug(tt::LogLLRuntime, "wrote hex to core {}", core.str().c_str());

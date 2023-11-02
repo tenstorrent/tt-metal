@@ -69,11 +69,11 @@ class Cluster {
     // Accepts physical noc coordinates
     void write_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uint64_t addr, bool small_access = false) const;
     void write_dram_vec(
-        const uint32_t *mem_ptr, uint32_t len, tt_cxy_pair dram_core, uint64_t addr, bool small_access = false) const;
+        const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair dram_core, uint64_t addr, bool small_access = false) const;
     void read_dram_vec(
         vector<uint32_t> &vec, tt_cxy_pair dram_core, uint64_t addr, uint32_t size, bool small_access = false) const;
     void read_dram_vec(
-        uint32_t *mem_ptr, tt_cxy_pair dram_core, uint64_t addr, uint32_t size, bool small_access = false) const;
+        void *mem_ptr, tt_cxy_pair dram_core, uint64_t addr, uint32_t size, bool small_access = false) const;
 
     void write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
     void read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
