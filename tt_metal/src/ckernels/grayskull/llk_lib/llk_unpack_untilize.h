@@ -61,11 +61,6 @@ inline void llk_unpack_untilize_init(const std::uint32_t operand) {
 
     TT_SETADCXX(p_setadc::UNP0, face_r_dim*FACE_C_DIM-1, 0x0);
 
-    // Save state of unpacker config for quick restore
-    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32); // Save unpack stride config
-    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, THCON_SEC0_REG0_TileDescriptor_ADDR32+0); // Save descriptor 0
-    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, THCON_SEC0_REG0_TileDescriptor_ADDR32+1); // Save descriptor 1
-
     unpack_tile_descriptor_u tile_descriptor;
     tile_descriptor.val[0] = 0;
     tile_descriptor.val[1] = 0;
@@ -113,20 +108,52 @@ inline void llk_unpack_untilize_init(const std::uint32_t operand) {
 }
 
 inline void llk_unpack_untilize_uninit(uint32_t operand) {
+    std::uint32_t operand_id = get_operand_id(operand);
+    // Check that unpacker is done (all contexts freed up) before starting hw configuration
     wait_for_idle();
 
-    configure_unpack_AB(operand, operand, 16, 16, false, true);
-}
-
-inline void llk_unpack_untilize_uninit_v2(const std::uint32_t operand, const std::uint32_t face_r_dim = FACE_R_DIM) {
+    // Reset address counters
     unpacker_addr_counter_init();
-    TT_SETADCXX(p_setadc::UNP0, face_r_dim*FACE_C_DIM-1, 0x0);
-    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG0_TileDescriptor_ADDR32+0-THCON_CFGREG_BASE_ADDR32,  p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1); // Restore descriptor 0
-    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG0_TileDescriptor_ADDR32+1-THCON_CFGREG_BASE_ADDR32,  p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2); // Restore descriptor 1
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
-    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32);
+
+    // Get pointer to registers for current state ID
+    volatile uint *cfg = get_cfg_pointer();
+
+    TT_SETADCXX(p_setadc::UNP0, FACE_R_DIM*FACE_C_DIM-1, 0x0);
+
+    unpack_tile_descriptor_u tile_descriptor;
+    tile_descriptor.val[0] = 0;
+    tile_descriptor.val[1] = 0;
+
+    // Set descriptor 0
+    tile_descriptor.f.in_data_format = (uint)unpack_src_format[operand_id];
+    tile_descriptor.f.uncompressed = 1;
+    tile_descriptor.f.x_dim = 256;
+
+    // Set descriptor 1
+    tile_descriptor.f.y_dim = 1;
+    tile_descriptor.f.z_dim = 4;
+
+    TT_SETDMAREG(0, LOWER_HALFWORD(tile_descriptor.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(tile_descriptor.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG0_TileDescriptor_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
+
+    TT_SETDMAREG(0, LOWER_HALFWORD(tile_descriptor.val[1]), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(tile_descriptor.val[1]), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG0_TileDescriptor_ADDR32+1-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
+
+    uint unpA_ch1_x_stride = (uint)(unpack_dst_format[operand_id] & 0x3) == (uint)DataFormat::Float32   ? 4
+                             : (uint)(unpack_dst_format[operand_id] & 0x3) == (uint)DataFormat::Float16 ? 2
+                                                                                                          : 1;
+    uint unpA_ch1_y_stride = 16*16*unpA_ch1_x_stride;
+    uint reg_val = (unpA_ch1_y_stride << UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT) |
+                   (            0 << UNP0_ADDR_CTRL_XY_REG_0_Xstride_SHAMT);
+    TT_SETDMAREG(0, LOWER_HALFWORD(reg_val), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(reg_val), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
+
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, UNP0_ADDR_BASE_REG_0_Base_ADDR32); // Clear base address register
     TTI_NOP; TTI_NOP;
+
 }
 
 template <bool first_pass = true>

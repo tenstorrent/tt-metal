@@ -78,9 +78,4 @@ ALWI void untilize_uninit(uint32_t icb) {
     UNPACK(( llk_unpack_untilize_uninit(icb) ));
 }
 
-ALWI void untilize_uninit_v2(uint32_t icb) {
-    UNPACK(( llk_unpack_untilize_uninit_v2(icb) ));
-}
-
-
 }

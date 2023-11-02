@@ -265,6 +265,7 @@ namespace ckernel::unpacker
 
       // Store config used by tilizer
       regfile[p_gpr_unpack::FACE_DIM_1x16] = (Tile_x_dim/16) | ((Tile_x_dim/16)<<16);
+      regfile[p_gpr_unpack::FACE_DIM_16x16] = Tile_x_dim | (Tile_x_dim << 16);;
       sync_regfile_write(p_gpr_unpack::FACE_DIM_1x16);
 
       if (!skip_alu_format_set) {
