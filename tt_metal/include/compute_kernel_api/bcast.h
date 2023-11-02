@@ -206,6 +206,16 @@ ALWI void add_bcast_rows_init_short()
 
 ALWI void add_bcast_rows_init_short_post_matmul()
 {
+    // math
+    #ifdef ARCH_GRAYSKULL
+    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>() ));
+    MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW>() ));
+    MATH(( llk_math_pack_sync_init<SYNC>()  ));
+    #else
+    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>(0, 1)  ));
+    MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW, MATH_FIDELITY>() ));
+    MATH(( llk_math_pack_sync_init<SYNC>()  ));
+    #endif
     // unpacker
     #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_A_init_cm<BroadcastType::NONE, false, 0>(0, 255) ));
@@ -214,18 +224,12 @@ ALWI void add_bcast_rows_init_short_post_matmul()
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
     UNPACK(( llk_unpack_AB_init<BroadcastType::ROW>(0, 1) ));
     #endif
-    // math
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>() ));
-    #else
-    MATH(( llk_math_matmul_init<MATH_FIDELITY>(0, 1) ));
-    #endif
-    MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW>() ));
-    MATH(( llk_math_pack_sync_init<SYNC>()  ));
     // packer
+    // #ifdef ARCH_GRAYSKULL
     PACK(( llk_pack_init<false, false, DstTileFaceLayout::RowMajor>()  ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>()  ));
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>()  ));
+    // #endif
 }
 
 /**
