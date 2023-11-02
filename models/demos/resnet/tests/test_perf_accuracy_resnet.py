@@ -21,6 +21,12 @@ from models.utility_functions import (
 from models.demos.resnet.tests.demo_utils import get_data
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 
+model_config = {
+    "MATH_FIDELITY": tt_lib.tensor.MathFidelity.LoFi,
+    "WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
+    "ACTIVATIONS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
+}
+
 
 def run_perf_resnet(
     model_location_generator,
@@ -59,6 +65,7 @@ def run_perf_resnet(
         fold_batchnorm=True,
         storage_in_dram=False,
         batch_size=batch_size,
+        model_config=model_config,
         sharded=sharded,
     )
 
@@ -167,7 +174,7 @@ def test_perf_bare_metal(
 
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
-    "expected_inference_time, expected_compile_time,iterations",
+    "expected_inference_time, expected_compile_time, iterations",
     ((0.3, 36, 50),),
 )
 def test_perf_virtual_machine(
