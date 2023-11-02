@@ -482,8 +482,11 @@ namespace ckernel::packer
       const uint face_r_dim = get_face_r_dim(pack_output_id);
       const uint face_dim = face_r_dim * FACE_C_DIM;
       const bool narrow_tile = get_narrow_tile(pack_output_id);
-      const uint pack_x_dim = untilize ? (narrow_tile ? face_dim : 16) : face_dim; // Number of datums to pack per row
-                                                                                   // To untilize narrow tile (32x16) we just pack 2 faces back to back
+
+      // To untilize narrow tile (32x16) we just pack 2 faces back to back
+      // Number of datums to pack per row
+      const uint pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM; 
+                                                                                   
       TT_SETADCXX(p_setadc::PAC, pack_x_dim-1, 0x0); 
    }
 

@@ -43,17 +43,16 @@ inline void llk_pack_mop_config(const uint32_t output_id) {
         .y_src = { .incr = 0, .clr = 0, .cr = 0  },
         .y_dst = { .incr = 0, .clr = 0, .cr = 0  },
     }.set(ADDR_MOD_2);
-
-    const uint PACKCNT = partial_face ? 1 : num_faces;
+    
     const uint MEGAROW = 1;
     constexpr uint ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
-
-
+    const uint PACKCNT = partial_face ? 1 : num_faces;
+    
     // Write header to l1
     if constexpr (!untilize) {
         const uint MOP_INNER_LOOP = 1;
         const uint MOP_OUTER_LOOP = 1;
-
+        
         ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
 
         if (partial_face) {
@@ -68,24 +67,19 @@ inline void llk_pack_mop_config(const uint32_t output_id) {
         tmp.program(instrn_buffer);
     } else {
         const bool narrow_tile = get_narrow_tile(output_id);
-        const uint MOP_UNTILIZE_INNER_LOOP = narrow_tile ? 1 : (FaceLayout == DstTileFaceLayout::ColMajor ? 8 : 4);
-        const uint MOP_UNTILIZE_OUTER_LOOP = ((face_r_dim == 1) || narrow_tile) ? 1 : face_r_dim / 2;
+        const uint MOP_UNTILIZE_INNER_LOOP = ((face_r_dim == 1) || narrow_tile) ? 1 : (FaceLayout == DstTileFaceLayout::ColMajor ? 8 : 4);
+        const uint MOP_UNTILIZE_OUTER_LOOP = ((face_r_dim == 1) || narrow_tile) ? 1 : (face_r_dim >> 1);
 
-        ckernel::ckernel_template tmp(MOP_UNTILIZE_OUTER_LOOP, MOP_UNTILIZE_INNER_LOOP, TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
-        if (narrow_tile) {
-            tmp.set_last_inner_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1)); // Close the tile and clear the counters
+        if ((face_r_dim == 1) || narrow_tile) {
+            ckernel::ckernel_template tmp(MOP_UNTILIZE_OUTER_LOOP, MOP_UNTILIZE_INNER_LOOP, TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
+            tmp.program(instrn_buffer);
         } else {
+            ckernel::ckernel_template tmp(MOP_UNTILIZE_OUTER_LOOP, MOP_UNTILIZE_INNER_LOOP, TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
             tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
-            if (face_r_dim>1) {
-                tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0)); // If it's narrow tile (32x16) pack rows back to back otherwise jump between faces
-                tmp.set_end_op(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
-            }    
-            tmp.set_last_inner_loop_instr(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
-            tmp.set_last_outer_loop_instr(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
+            tmp.set_end_op(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0)); 
+            tmp.program(instrn_buffer);
         }
-        tmp.program(instrn_buffer);
     }
-
 }
 
 template <bool untilize = false, bool is_fp32_dest_acc_en = false>
@@ -247,5 +241,4 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
         TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Y, 0);
         TTI_INCADCZW(p_setadc::PAC, 0, 0, 1, 0);
     }
-
 }
