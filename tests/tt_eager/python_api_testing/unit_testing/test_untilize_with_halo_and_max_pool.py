@@ -133,10 +133,10 @@ def test_run_max_pool(
     ## NOTE: these should match the max_pool op code for now. Hardcoded Resnet shapes only.
     if out_nhw == 1024:
         ncores = 32
-        grid_size = (8, 4)
+        grid_size = (12, 3)
     elif out_nhw == 2048 or out_nhw == 4096 or out_nhw == 8192 or out_nhw == 16384 or out_nhw == 32768:
         ncores = 64
-        grid_size = (8, 8)
+        grid_size = (12, 6)
     elif out_nhw == 3136 or out_nhw == 6272 or out_nhw == 12544 or out_nhw == 25088:
         if is_wormhole_b0():
             pytest.skip("Unsupported grid size for WH")
@@ -219,12 +219,17 @@ def test_run_max_pool(
     # print(f'GOLDEN: {golden_pytorch}')
     # torch.save(out_pytorch, 'output.pt')
     # torch.save(golden_pytorch, 'golden.pt')
-    allclose = torch.allclose(out_pytorch, golden_pytorch)
-    isclose = torch.all(torch.isclose(out_pytorch, golden_pytorch))
+
+    atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
+    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+        atol = 0.35
+
+    allclose = torch.allclose(out_pytorch, golden_pytorch, atol=atol)
+    isclose = torch.all(torch.isclose(out_pytorch, golden_pytorch, atol=atol))
     isequal = torch.equal(out_pytorch, golden_pytorch)
 
     assert passing_pcc
+    assert allclose
+    assert isclose
     if dtype == ttl.tensor.DataType.BFLOAT16:
-        assert allclose
-        assert isclose
         assert isequal
