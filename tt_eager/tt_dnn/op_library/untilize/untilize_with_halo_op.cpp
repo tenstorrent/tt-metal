@@ -160,9 +160,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         .dilation_h = dilation_h
     };
 
-
-    if (0)
-    {
+    if (1) {
         log_debug(LogOp, "ntiles: {}", ntiles);
         log_debug(LogOp, "ntiles_per_block: {}", ntiles_per_block);
         log_debug(LogOp, "nblocks: {}", nblocks);
@@ -199,8 +197,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     uint32_t in_nsticks_per_batch = in_hw;
     uint32_t in_nsticks_per_core = in_nhw / ncores;
 
-    if (0)
-    {
+    int32_t halo_in_nsticks = (in_w + (window_w / 2)) * (window_h / 2);     // input sticks to the writer
+    int32_t halo_out_nsticks = (in_w + 2 * pad_w) * pad_h + window_w / 2;   // output sticks from the writer
+
+    if (1) {
         log_debug(LogOp, "shard_shape: {},{}", input.shard_spec().value().shard_shape[0], input.shard_spec().value().shard_shape[1]);
         log_debug(LogOp, "ncores: {}", ncores);
         log_debug(LogOp, "ncores_x: {}", ncores_x);
@@ -211,13 +211,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         log_debug(LogOp, "in_stick_nbytes: {}", in_stick_nbytes);
         log_debug(LogOp, "in_nsticks_per_batch: {}", in_nsticks_per_batch);
         log_debug(LogOp, "in_nsticks_per_core: {}", in_nsticks_per_core);
+        log_debug(LogOp, "halo_in_nsticks: {}", halo_in_nsticks);
+        log_debug(LogOp, "halo_out_nsticks: {}", halo_out_nsticks);
     }
-
-    int32_t halo_in_nsticks = (in_w + (window_w / 2)) * (window_h / 2);     // input sticks to the writer
-    int32_t halo_out_nsticks = (in_w + 2 * pad_w) * pad_h + window_w / 2;   // output sticks from the writer
-
-    log_debug(LogOp, "halo_in_nsticks: {}", halo_in_nsticks);
-    log_debug(LogOp, "halo_out_nsticks: {}", halo_out_nsticks);
 
     // For each core, calculate the desired resharding with halo and pad inserted in order to
     // to obtain resulting **output after the pooling/downsampling op to be equally distributed across all cores**.
@@ -284,13 +280,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
                             .set_page_size(pad_cb_id, pad_cb_pagesize);
     auto pad_cb = CreateCircularBuffer(program, all_cores, pad_cb_config);
 
-    if (0)
-    {
+    if (0) {
         log_debug(LogOp, "src cb: id = {}, pagesize = {}, npages = {}", src_cb_id, in_tile_size, num_input_tiles);
         log_debug(LogOp, "untilize cb: id = {}, pagesize = {}, npages = {}", untilize_out_cb_id, out_tile_size, num_output_tiles);
         log_debug(LogOp, "out cb: id = {}, pagesize = {}, npages = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
     }
-
 
     /** reader
      */
@@ -787,7 +781,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, Tensor& output, uint32_t pad_val, const uint32_t &in_b, const uint32_t &in_h, const uint32_t &in_w, const uint32_t &out_shard_size_max_per_core) {
+// The case with stride = 1
+operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a, Tensor& output, uint32_t pad_val, const uint32_t &in_b, const uint32_t &in_h, const uint32_t &in_w, const uint32_t &max_out_nsticks_per_core) {
     Program program = CreateProgram();
 
     Device *device = a.device();
@@ -840,12 +835,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
         TT_ASSERT(a.shard_spec().value().shard_shape[1] == input_shape[3], "Input shape in W should be same as shard width!");
     }
 
-    {
-        log_debug(LogOp, "ntiles: {}", ntiles);
-        log_debug(LogOp, "ntiles_per_block: {}", ntiles_per_block);
-        log_debug(LogOp, "nblocks: {}", nblocks);
-    }
-
     // TODO: hard coded for now. need to pass these args in.
     uint32_t nbatch = in_b;
     uint32_t in_c = shard_shape[1]; // input_shape[3];  // this is per core row
@@ -854,21 +843,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
     uint32_t window_h = 3;
     uint32_t window_w = 3;
 
-    {
-        log_debug(LogOp, "nbatch: {}", nbatch);
-        log_debug(LogOp, "in_h: {}", in_h);
-        log_debug(LogOp, "in_w: {}", in_w);
-        log_debug(LogOp, "in_c: {}", in_c);
-        log_debug(LogOp, "pad_h: {}", pad_h);
-        log_debug(LogOp, "pad_w: {}", pad_w);
-        log_debug(LogOp, "window_h: {}", window_h);
-        log_debug(LogOp, "window_w: {}", window_w);
-    }
-
-
     uint32_t nblocks_per_core = shard_shape[0] / TILE_HEIGHT;
     uint32_t nblocks_per_core_cliff = 0;
-
 
     uint32_t in_hw = in_h * in_w;
     uint32_t in_nhw = nbatch * in_hw;
@@ -880,7 +856,18 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
     uint32_t in_nsticks_per_batch = in_hw;
     uint32_t in_nsticks_per_core = in_nsticks / ncores;
 
-    {
+    if (1) {
+        log_debug(LogOp, "ntiles: {}", ntiles);
+        log_debug(LogOp, "ntiles_per_block: {}", ntiles_per_block);
+        log_debug(LogOp, "nblocks: {}", nblocks);
+        log_debug(LogOp, "nbatch: {}", nbatch);
+        log_debug(LogOp, "in_h: {}", in_h);
+        log_debug(LogOp, "in_w: {}", in_w);
+        log_debug(LogOp, "in_c: {}", in_c);
+        log_debug(LogOp, "pad_h: {}", pad_h);
+        log_debug(LogOp, "pad_w: {}", pad_w);
+        log_debug(LogOp, "window_h: {}", window_h);
+        log_debug(LogOp, "window_w: {}", window_w);
         log_debug(LogOp, "shard_shape: {},{}", a.shard_spec().value().shard_shape[0], a.shard_spec().value().shard_shape[1]);
         log_debug(LogOp, "ncores: {}", ncores);
         log_debug(LogOp, "ncores_col: {}", ncores_col);
@@ -912,12 +899,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
     // output after concatenating halo and padding goes into this CB, as input to next op.
     uint32_t out_cb_id = CB::c_out1;
     uint32_t out_cb_pagesize = out_nbytes * in_c;
-    uint32_t out_nsticks_per_core = out_shard_size_max_per_core;
-    {
-        log_debug(LogOp, "out_cb_pagesize: {}", out_cb_pagesize);
-        log_debug(LogOp, "out_nsticks_per_core: {}", out_nsticks_per_core);
-    }
-    auto out_cb_config = CircularBufferConfig(out_shard_size_max_per_core * out_cb_pagesize, {{out_cb_id, out_df}})
+    uint32_t out_nsticks_per_core = max_out_nsticks_per_core;
+    auto out_cb_config = CircularBufferConfig(max_out_nsticks_per_core * out_cb_pagesize, {{out_cb_id, out_df}})
                             .set_page_size(out_cb_id, out_cb_pagesize)
                             .set_globally_allocated_address(*output.buffer());
     auto out_cb = CreateCircularBuffer(program, all_cores, out_cb_config);
@@ -929,6 +912,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
     auto pad_cb_config = CircularBufferConfig(pad_cb_pagesize * pad_cb_npages, {{pad_cb_id, out_df}})
                             .set_page_size(pad_cb_id, pad_cb_pagesize);
     auto pad_cb = CreateCircularBuffer(program, all_cores, pad_cb_config);
+
+    if (0) {
+        log_debug(LogOp, "out_cb_pagesize: {}", out_cb_pagesize);
+        log_debug(LogOp, "out_nsticks_per_core: {}", out_nsticks_per_core);
+    }
 
     /** reader
      */
@@ -1047,8 +1035,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
     int32_t halo_in_nsticks = (in_w + (window_w / 2)) * (window_h / 2);
     int32_t halo_out_nsticks = (in_w + 2 * pad_w) * pad_h + window_w / 2;
 
-    log_debug(LogOp, "halo_in_nsticks: {}", halo_in_nsticks);
-    log_debug(LogOp, "halo_out_nsticks: {}", halo_out_nsticks);
+    if (0) {
+        log_debug(LogOp, "halo_in_nsticks: {}", halo_in_nsticks);
+        log_debug(LogOp, "halo_out_nsticks: {}", halo_out_nsticks);
+    }
 
     // NOTE: Irrespective of batch boundary, always ass the left/right halo to the output shards.
     // IE: output shards ALWAYS have halo region on left and right as long as they are not the start/end of the input
@@ -1117,9 +1107,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
             ++ stick_id;
         }
 
-        // uint32_t my_batch = in_stick_start / in_nsticks_per_batch;
-        // uint32_t my_core = i;
-
         ShardingConfig sc = get_specs_for_sharding_partition(in_stick_start, in_stick_start + in_nsticks_per_core, in_h, in_w, window_w, pad_h, pad_w);
         uint32_t partial_first_row_nsticks = sc.first_partial_right_aligned_row_width;
         uint32_t partial_top_image_nrows = sc.first_partial_image_num_rows;
@@ -1147,7 +1134,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
         uint32_t out_nsticks_per_core = local_nsticks + 2 * halo_nsticks;
 
         my_right_halo_offset[i] = my_left_halo_offset[i] + (((initial_pad_nsticks > 0) ? initial_pad_nsticks : halo_nsticks) + local_nsticks) * in_stick_nbytes;
-                                    // (in_nsticks_per_core /* local sticks */ + (in_nsticks_per_core / in_w) * 2 /* 2 padding sticks per row */) * in_stick_nbytes;
         if ((in_stick_start + in_nsticks_per_core) / in_w == (in_stick_start + in_nsticks_per_core + my_right_halo[i]) / in_w) {
             my_right_right_halo_offset[i] = my_right_halo_offset[i] + my_right_halo[i] * in_stick_nbytes;
         } else {
@@ -1155,8 +1141,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
         }
         my_right_halo_pad_i_offset[i] = in_w - ((in_stick_start + in_nsticks_per_core) % in_w);
 
-        if (0)
-        {
+        if (0) {
             log_debug(LogOp, "==== Core {}", i);
             log_debug(LogOp, "local_nsticks: {}", local_nsticks);
             log_debug(LogOp, "halo_nsticks: {}", halo_nsticks);
@@ -1274,14 +1259,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
             // writer rt args
             SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
         }
-        if (0)
-        {
+        if (0) {
             log_debug(LogOp, "++++ Core: {}", i);
             log_debug(LogOp, "out_stick_start: {}", out_stick_start);
             log_debug(LogOp, "halo::has_left: {}", writer_rt_args[19]);
-            // log_debug(LogOp, "halo::has_left_left: {}", writer_rt_args[25]);
             log_debug(LogOp, "halo::has_right: {}", writer_rt_args[22]);
-            // log_debug(LogOp, "halo::has_right_right: {}", writer_rt_args[28]);
             log_debug(LogOp, "local_in_stick_start: {}", writer_rt_args[15]);
             log_debug(LogOp, "partial_first_row_nsticks: {}", writer_rt_args[2]);
             log_debug(LogOp, "partial_top_image_nrows: {}", writer_rt_args[5]);
@@ -1291,20 +1273,12 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
             log_debug(LogOp, "skip_after_partial_right_aligned_row: {}", sc.skip_after_partial_right_aligned_row);
             log_debug(LogOp, "skip_after_first_partial_image_row: {}", sc.skip_after_first_partial_image_row);
             log_debug(LogOp, "skip_after_full_image: {}", sc.skip_after_full_image);
-            // log_debug(LogOp, "halo_for_left_left_nsticks: {}", writer_rt_args[11]);
             log_debug(LogOp, "halo_for_left_nsticks: {}", writer_rt_args[12]);
             log_debug(LogOp, "halo_for_right_nsticks: {}", writer_rt_args[13]);
-            // log_debug(LogOp, "halo_for_right_right_nsticks: {}", writer_rt_args[14]);
-            // log_debug(LogOp, "left_left_core_nsticks: {}", writer_rt_args[32]);
             log_debug(LogOp, "left_core_nsticks: {}", writer_rt_args[33]);
             log_debug(LogOp, "right_core_nsticks: {}", writer_rt_args[34]);
-            // log_debug(LogOp, "right_right_core_nsticks: {}", writer_rt_args[35]);
-            // log_debug(LogOp, "left_left_core_halo_offset: {}", writer_rt_args[36]);
             log_debug(LogOp, "left_core_halo_offset: {}", writer_rt_args[37]);
             log_debug(LogOp, "right_core_halo_offset: {}", writer_rt_args[38]);
-            // log_debug(LogOp, "right_right_core_halo_offset: {}", writer_rt_args[39]);
-            // log_debug(LogOp, "left_going_halo_pad_i_offset: {}", writer_rt_args[40]);
-            // log_debug(LogOp, "right_going_halo_pad_i_offset: {}", writer_rt_args[41]);
         }
 
         in_stick_start += in_nsticks_per_core;
@@ -1392,14 +1366,16 @@ std::vector<Shape> UntilizeWithHalo::compute_output_shapes(const std::vector<Ten
     // output_shape[2] changes
     // output_shape[3] remains same
     if (stride_ == 1) {
-        output_shape[2] = this->out_shard_size_max_per_core * ncores;
+        output_shape[2] = this->max_out_nsticks_per_core_ * ncores;
     } else {
         output_shape[2] = (uint32_t) ceil((float) total_nsticks / output_shape[0]);
     }
 
-    log_debug(LogOp, "output_shape: {} {} {} {}", output_shape[0], output_shape[1], output_shape[2], output_shape[3]);
-    log_debug(LogOp, "out_shard_size_max_per_core: {}", out_shard_size_max_per_core);
-    log_debug(LogOp, "derived ncores: {}", ncores);
+    if (1) {
+        log_debug(LogOp, "output_shape: {} {} {} {}", output_shape[0], output_shape[1], output_shape[2], output_shape[3]);
+        log_debug(LogOp, "max_out_nsticks_per_core: {}", max_out_nsticks_per_core_);
+        log_debug(LogOp, "derived ncores: {}", ncores);
+    }
 
     return {output_shape};
 }
@@ -1425,7 +1401,8 @@ operation::ProgramWithCallbacks UntilizeWithHalo::create_program(const std::vect
     auto& output_tensor = output_tensors.at(0);
     switch (stride_) {
         case 1:
-            return { untilize_with_halo_multi_core(input_tensor_a, output_tensor, pad_val_, this->in_b, this->in_h, this->in_w, this->out_shard_size_max_per_core) };
+            log_debug(LogOp, "Using stride 1 kernel");
+            return { untilize_with_halo_multi_core_s1(input_tensor_a, output_tensor, pad_val_, this->in_b, this->in_h, this->in_w, this->max_out_nsticks_per_core_) };
         case 2:
             log_debug(LogOp, "Using stride 2 kernel");
             return { untilize_with_halo_multi_core_s2(input_tensor_a, output_tensor, pad_val_, in_b, in_h, in_w) };
@@ -1457,7 +1434,7 @@ Tensor untilize_with_halo(const Tensor &input_tensor_a, const uint32_t pad_val, 
         in_nsticks_per_core = input_tensor_a.shard_spec().value().shard_shape[0];
     }
 
-    uint32_t out_nsticks_max_per_core = 0;
+    uint32_t max_out_nsticks_per_core = 0;
     for (int32_t i = 0; i < ncores; ++ i) {
         uint32_t in_stick_start = in_nsticks_per_core * i;
         ShardingConfig sc = get_specs_for_sharding_partition(in_stick_start, in_stick_start + in_nsticks_per_core, in_h, in_w, window_w, pad_h, pad_w);
@@ -1478,9 +1455,9 @@ Tensor untilize_with_halo(const Tensor &input_tensor_a, const uint32_t pad_val, 
                                     + partial_last_row_nsticks;
 
         uint32_t out_nsticks = local_nsticks + 2 * halo_nsticks;
-        out_nsticks_max_per_core = std::max(out_nsticks_max_per_core, out_nsticks);
+        max_out_nsticks_per_core = std::max(max_out_nsticks_per_core, out_nsticks);
     }
-    return operation::run_without_autoformat(UntilizeWithHalo{pad_val, in_b, in_h, in_w, out_nsticks_max_per_core, stride, mem_config}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(UntilizeWithHalo{pad_val, in_b, in_h, in_w, max_out_nsticks_per_core, stride, mem_config}, {input_tensor_a}).at(0);
 }
 
 }  // namespace tt_metal

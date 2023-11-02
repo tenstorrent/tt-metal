@@ -72,7 +72,7 @@ struct UntilizeWithHalo {
     const uint32_t in_b;
     const uint32_t in_h;
     const uint32_t in_w;
-    const uint32_t out_shard_size_max_per_core;
+    const uint32_t max_out_nsticks_per_core_;
     const uint32_t stride_;
     const MemoryConfig output_mem_config;
 
@@ -89,7 +89,7 @@ struct UntilizeWithHalo {
             std::cref(this->in_b),
             std::cref(this->in_h),
             std::cref(this->in_w),
-            std::cref(this->out_shard_size_max_per_core),
+            std::cref(this->max_out_nsticks_per_core_),
             std::cref(this->stride_),
             std::cref(this->output_mem_config));
     }
