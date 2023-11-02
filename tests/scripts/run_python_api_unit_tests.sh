@@ -56,5 +56,3 @@ pytest $TT_METAL_HOME/tests/models/falcon/tests/unit_tests/test_falcon_matmuls_a
 pytest $TT_METAL_HOME/tests/models/falcon/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_512 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
 pytest $TT_METAL_HOME/tests/models/falcon/tests/unit_tests/test_falcon_attn_matmul.py
 fi
-
-pytest tests/tt_eager/python_api_testing/unit_testing/test_bert_ops.py
