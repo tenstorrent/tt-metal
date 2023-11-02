@@ -34,8 +34,7 @@ env pytest models/experimental/deit/tests/test_deit_for_image_classification_wit
 
 env pytest models/experimental/vit/tests/test_vit_image_classification.py -k test_vit_image_classification
 
-env pytest models/demos/metal_BERT_large_15/tests/test_bert_batch_dram.py::test_bert_batch_dram
-env pytest models/demos/metal_BERT_large_15/tests/test_bert_batch_dram.py::test_bert_batch_dram_with_program_cache
+env pytest models/demos/metal_BERT_large_15/tests/test_bert_batch_dram.py
 env pytest models/demos/metal_BERT_large_15/tests/test_demo.py::test_demo
 env pytest models/demos/metal_BERT_large_15/tests/test_demo.py::test_demo_squadv2
 
