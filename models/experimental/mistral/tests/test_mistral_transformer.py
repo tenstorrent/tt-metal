@@ -19,7 +19,7 @@ from models.utility_functions import (
 
 @pytest.mark.parametrize(
     "pcc",
-    ((0.56),),
+    ((0.99),),
 )
 def test_mistral_transformer_inference(pcc, model_location_generator, device, reset_seeds):
     prompts = [

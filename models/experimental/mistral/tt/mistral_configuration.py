@@ -18,6 +18,5 @@ class TtModelArgs:
 
     max_batch_size: int = 0
     FALLBACK_SOFTMAX: bool = False
-    FALLBACK_ROTARY_EMBEDDING: bool = False
+    FALLBACK_ROTARY_EMBEDDING: bool = True
     FALLBACK_EMPTY: bool = False
-    FALLBACK_FUSED_ATTENTION: bool = False
