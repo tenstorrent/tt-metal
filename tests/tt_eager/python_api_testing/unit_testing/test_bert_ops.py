@@ -202,14 +202,7 @@ def test_bert_linear(device, fidelity, in0_sharded, out_sharded, in1_in_dram, ha
 
 @pytest.mark.skipif(is_grayskull(), reason="not tested for GS")
 @pytest.mark.parametrize("fidelity", [ttl.tensor.MathFidelity.LoFi, ttl.tensor.MathFidelity.HiFi2], ids=["LoFi", "HiFi2"])
-@pytest.mark.parametrize("has_bias", [
-                                        True,
-                                        # False
-                                      ],
-                         ids=[
-                             "bias",
-                            #   "no_bias"
-                              ])
+@pytest.mark.parametrize("has_bias", [True, False], ids=["bias", "no_bias"])
 @pytest.mark.parametrize(
     "in1_in_dram, out_sharded, in0_sharded, M, K, N, activation",
     [
