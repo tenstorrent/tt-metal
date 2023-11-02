@@ -2,15 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import sys
 import pytest
 import math
 
-from pathlib import Path
 from loguru import logger
-
-f = f"{Path(__file__).parent}"
-sys.path.append(f"{f}/../..")
 
 import torch
 
@@ -18,6 +13,7 @@ import tt_lib as ttl
 
 from tt_lib.utils import _nearest_32
 from models.utility_functions import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0
 
 
 def volume(shape):
@@ -154,6 +150,8 @@ def test_run_max_pool(
         ncores = 64
         grid_size = (8, 8)
     elif out_nhw == 3136 or out_nhw == 6272 or out_nhw == 12544 or out_nhw == 25088:
+        if is_wormhole_b0():
+            pytest.skip("Unsupported grid size for WH")
         ncores = 98
         grid_size = (12, 9)
     else:
