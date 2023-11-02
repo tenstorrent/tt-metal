@@ -31,7 +31,7 @@ test-list:
         num-shapes: 3
         num-samples: 64
         args-sampling-strategy: "all"
-        method: rmasnorm
+        method: rmsnorm
       datagen:
         function: gen_rand
         args:
