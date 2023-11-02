@@ -206,6 +206,14 @@ ALWI void add_bcast_rows_init_short()
 
 ALWI void add_bcast_rows_init_short_post_matmul()
 {
+    // math
+    #ifdef ARCH_GRAYSKULL
+    MATH(( llk_math_matmul_init<MATH_FIDELITY, DstTileFaceLayout::RowMajor>() ));
+    MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW>() ));
+    MATH(( llk_math_pack_sync_init<SYNC>()  ));
+    #else
+    MATH(( llk_math_eltwise_binary_init<ELWADD, BroadcastType::ROW>() ));
+    #endif
     // unpacker
     #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_A_init_cm<BroadcastType::NONE, false, 0>(0, 255) ));
