@@ -39,7 +39,7 @@ def dictionize(fp: str):
 
 
 def extract_id(id):
-    ids = re.findall(r'_\d+', id)
+    ids = re.findall(r"_\d+", id)
     if len(ids) == 1:
         return ids[0]
     if len(ids) == 0:
@@ -81,8 +81,30 @@ def parse_chunk(key, value):
     output2_layout = outputs2.split("|")[1]
     output2_device = outputs2.split("|")[3]
 
-    keys = ["op", "input_size", "input_layout", "input_device", "output1_size", "output1_layout", "output1_device", "output2_size", "output2_layout", "output2_device"]
-    vals = ["fallback_chunk", input_size, input_layout, input_device, output1_size, output1_layout, output1_device, output2_size, output2_layout, output2_device]
+    keys = [
+        "op",
+        "input_size",
+        "input_layout",
+        "input_device",
+        "output1_size",
+        "output1_layout",
+        "output1_device",
+        "output2_size",
+        "output2_layout",
+        "output2_device",
+    ]
+    vals = [
+        "fallback_chunk",
+        input_size,
+        input_layout,
+        input_device,
+        output1_size,
+        output1_layout,
+        output1_device,
+        output2_size,
+        output2_layout,
+        output2_device,
+    ]
 
     row = make_row(keys, vals)
     return row
@@ -103,8 +125,30 @@ def parse_concat(key, value):
     output_layout = value[0]["OUTPUTS"].split("|")[1]
     output_device = value[0]["OUTPUTS"].split("|")[3]
 
-    keys = ["op", "input1_size", "input1_layout", "input1_device", "input2_size", "input2_layout", "input2_device",  "output_size", "output_layout", "output_device"]
-    vals = ["fallback_concat", input1_size, input1_layout, input1_device, input2_size, input2_layout, input2_device, output_size, output_layout, output_device]
+    keys = [
+        "op",
+        "input1_size",
+        "input1_layout",
+        "input1_device",
+        "input2_size",
+        "input2_layout",
+        "input2_device",
+        "output_size",
+        "output_layout",
+        "output_device",
+    ]
+    vals = [
+        "fallback_concat",
+        input1_size,
+        input1_layout,
+        input1_device,
+        input2_size,
+        input2_layout,
+        input2_device,
+        output_size,
+        output_layout,
+        output_device,
+    ]
 
     row = make_row(keys, vals)
     return row
@@ -119,11 +163,12 @@ def parse_silu(key, value):
     output_layout = value[0]["OUTPUTS"].split("|")[1]
     output_device = value[0]["OUTPUTS"].split("|")[3]
 
-    keys = ["op", "input_size", "input_layout", "input_device",  "output_size", "output_layout", "output_device"]
+    keys = ["op", "input_size", "input_layout", "input_device", "output_size", "output_layout", "output_device"]
     vals = ["fallback_silu", input_size, input_layout, input_device, output_size, output_layout, output_device]
 
     row = make_row(keys, vals)
     return row
+
 
 def parse_reshape(key, value):
     input_size = value[0]["INPUTS"].split("|")[0].replace("_", ",")
@@ -134,11 +179,12 @@ def parse_reshape(key, value):
     output_layout = value[0]["OUTPUTS"].split("|")[1]
     output_device = value[0]["OUTPUTS"].split("|")[3]
 
-    keys = ["op", "input_size", "input_layout", "input_device",  "output_size", "output_layout", "output_device"]
+    keys = ["op", "input_size", "input_layout", "input_device", "output_size", "output_layout", "output_device"]
     vals = ["fallback_reshape", input_size, input_layout, input_device, output_size, output_layout, output_device]
 
     row = make_row(keys, vals)
     return row
+
 
 def parse_full(key, value):
     output_size = value[0]["OUTPUTS"].split("|")[0].replace("_", ",")
@@ -153,6 +199,7 @@ def parse_full(key, value):
     row = make_row(keys, vals)
     return row
 
+
 def parse_repeat_interleave(key, value):
     input_size = value[0]["INPUTS"].split("|")[0].replace("_", ",")
     input_layout = value[0]["INPUTS"].split("|")[1]
@@ -164,11 +211,12 @@ def parse_repeat_interleave(key, value):
 
     args = value[0]["META DATA"].split("-")[1].split("(")[1].replace(")", "").replace("|", ",")
 
-    keys = ["op", "input_size", "input_layout", "input_device",  "output_size", "output_layout", "output_device", "args"]
+    keys = ["op", "input_size", "input_layout", "input_device", "output_size", "output_layout", "output_device", "args"]
     vals = ["fallback_repeat", input_size, input_layout, input_device, output_size, output_layout, output_device, args]
 
     row = make_row(keys, vals)
     return row
+
 
 def parse_layernorm(key, values):
     args = values[0]["META DATA"]
@@ -182,8 +230,17 @@ def parse_layernorm(key, values):
     output_layout = forward_res["OUTPUTS"].split("|")[1]
     output_device = forward_res["OUTPUTS"].split("|")[3]
 
-    keys = ["op", "input_size", "input_layout", "input_device",  "output_size", "output_layout", "output_device", "args"]
-    vals = ["fallback_layernorm", input_size, input_layout, input_device, output_size, output_layout, output_device, args]
+    keys = ["op", "input_size", "input_layout", "input_device", "output_size", "output_layout", "output_device", "args"]
+    vals = [
+        "fallback_layernorm",
+        input_size,
+        input_layout,
+        input_device,
+        output_size,
+        output_layout,
+        output_device,
+        args,
+    ]
 
     row = make_row(keys, vals)
     return row
@@ -201,11 +258,21 @@ def parse_groupnorm(key, values):
     output_layout = forward_res["OUTPUTS"].split("|")[1]
     output_device = forward_res["OUTPUTS"].split("|")[3]
 
-    keys = ["op", "input_size", "input_layout", "input_device",  "output_size", "output_layout", "output_device", "args"]
-    vals = ["fallback_groupnorm", input_size, input_layout, input_device, output_size, output_layout, output_device, args]
+    keys = ["op", "input_size", "input_layout", "input_device", "output_size", "output_layout", "output_device", "args"]
+    vals = [
+        "fallback_groupnorm",
+        input_size,
+        input_layout,
+        input_device,
+        output_size,
+        output_layout,
+        output_device,
+        args,
+    ]
 
     row = make_row(keys, vals)
     return row
+
 
 def parse_conv(key, values):
     args = values[0]["META DATA"]
@@ -219,7 +286,7 @@ def parse_conv(key, values):
     output_layout = forward_res["OUTPUTS"].split("|")[1]
     output_device = forward_res["OUTPUTS"].split("|")[3]
 
-    keys = ["op", "input_size", "input_layout", "input_device",  "output_size", "output_layout", "output_device", "args"]
+    keys = ["op", "input_size", "input_layout", "input_device", "output_size", "output_layout", "output_device", "args"]
     vals = ["fallback_conv", input_size, input_layout, input_device, output_size, output_layout, output_device, args]
 
     row = make_row(keys, vals)
@@ -230,60 +297,72 @@ def eq(x: Dict, y: Dict):
     shared_items = {k: x[k] for k in x if k in y and x[k] == y[k]}
     return len(shared_items) == len(x.keys())
 
+
 def add_to_list(new_op, op_list):
     for _ in op_list:
         if eq(new_op, _):
             return
     op_list.append(new_op)
 
+
 def clean_ops(ops):
-    cleaned_ops = {'chunk': [], 'concat': [], 'silu': [], 'reshape': [], 'full': [], 'repeat': [], 'conv2d': [], 'layernorm': [], 'groupnorm': []}
+    cleaned_ops = {
+        "chunk": [],
+        "concat": [],
+        "silu": [],
+        "reshape": [],
+        "full": [],
+        "repeat": [],
+        "conv2d": [],
+        "layernorm": [],
+        "groupnorm": [],
+    }
 
     for key, val in ops.items():
         if "chunk" in key:
             row = parse_chunk(key, val)
-            add_to_list(row, cleaned_ops['chunk'])
+            add_to_list(row, cleaned_ops["chunk"])
             # cleaned_ops['chunk'].append(row)
         elif "concat" in key:
             row = parse_concat(key, val)
-            add_to_list(row, cleaned_ops['concat'])
+            add_to_list(row, cleaned_ops["concat"])
             # cleaned_ops['concat'].append(row)
         elif "silu" in key:
             row = parse_silu(key, val)
-            add_to_list(row, cleaned_ops['silu'])
+            add_to_list(row, cleaned_ops["silu"])
             # cleaned_ops['silu'].append(row)
         elif "reshape" in key:
             row = parse_reshape(key, val)
-            add_to_list(row, cleaned_ops['reshape'])
-            cleaned_ops['reshape'].append(row)
+            add_to_list(row, cleaned_ops["reshape"])
+            cleaned_ops["reshape"].append(row)
         elif "full" in key:
             row = parse_full(key, val)
-            add_to_list(row, cleaned_ops['full'])
+            add_to_list(row, cleaned_ops["full"])
             # cleaned_ops['full'].append(row)
         elif "repeat" in key:
             row = parse_repeat_interleave(key, val)
-            add_to_list(row, cleaned_ops['repeat'])
+            add_to_list(row, cleaned_ops["repeat"])
             # cleaned_ops['repeat'].append(row)
         else:
             if "Conv2d" in val[0]["NAME"]:
                 row = parse_conv(key, val)
                 # cleaned_ops['conv2d'].append(row)
-                add_to_list(row, cleaned_ops['conv2d'])
+                add_to_list(row, cleaned_ops["conv2d"])
             elif "LayerNorm" in val[0]["NAME"]:
                 row = parse_layernorm(key, val)
-                add_to_list(row, cleaned_ops['layernorm'])
+                add_to_list(row, cleaned_ops["layernorm"])
                 # cleaned_ops['layernorm'].append(row)
             elif "GroupNorm" in val[0]["NAME"]:
                 row = parse_groupnorm(key, val)
-                add_to_list(row, cleaned_ops['groupnorm'])
+                add_to_list(row, cleaned_ops["groupnorm"])
                 # cleaned_ops['groupnorm'].append(row)
     return cleaned_ops
 
 
-def write(cleaned_ops, path='cleaned_ops.csv'):
+def write(cleaned_ops, path="cleaned_ops.csv"):
     output_path = path
 
-    with open(output_path, 'w', newline='') as csvfile:
+    with open(output_path, "w", newline="") as csvfile:
         fieldnames = cleaned_ops[0].keys()
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
@@ -292,9 +371,8 @@ def write(cleaned_ops, path='cleaned_ops.csv'):
             writer.writerow(dc)
 
 
-
 def run():
-    fp = open(file_address, 'r')
+    fp = open(file_address, "r")
     ops = dictionize(fp)
 
     ops = merge_similar_ids(ops)

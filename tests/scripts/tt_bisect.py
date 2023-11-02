@@ -33,9 +33,7 @@ def get_environment() -> dict:
             {
                 "TT_METAL_ENV": "dev",
                 "TT_METAL_HOME": os.environ["TT_METAL_HOME"],
-                "PYTHONPATH": os.environ["TT_METAL_HOME"]
-                + ":"
-                + os.environ.get("PYTHONPATH", ""),
+                "PYTHONPATH": os.environ["TT_METAL_HOME"] + ":" + os.environ.get("PYTHONPATH", ""),
                 # "ARCH_NAME": "",
             }
         )

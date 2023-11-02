@@ -47,46 +47,34 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
     ),
     TestEntry("tt_metal/tests/test_datacopy", "test_datacopy"),
     TestEntry("tt_metal/tests/test_datacopy", "test_datacopy_bfp8b"),
-    TestEntry(
-        "tt_metal/tests/test_datacopy_output_in_l1", "test_datacopy_output_in_l1"
-    ),
+    TestEntry("tt_metal/tests/test_datacopy_output_in_l1", "test_datacopy_output_in_l1"),
     TestEntry("tt_metal/tests/test_dataflow_cb", "test_dataflow_cb"),
     # TestEntry("tt_metal/tests/test_datacopy_multi_core_multi_dram", "test_datacopy_multi_core_multi_dram"),  TODO: pls fix
     TestEntry("tt_metal/tests/test_bcast", "test_bcast"),
     TestEntry("tt_metal/tests/test_matmul_single_tile", "test_matmul_single_tile"),
-    TestEntry(
-        "tt_metal/tests/test_matmul_single_tile_bfp8b", "test_matmul_single_tile_bfp8b"
-    ),
+    TestEntry("tt_metal/tests/test_matmul_single_tile_bfp8b", "test_matmul_single_tile_bfp8b"),
     TestEntry(
         "tt_metal/tests/test_matmul_single_tile_output_in_l1",
         "test_matmul_single_tile_output_in_l1",
     ),
     TestEntry("tt_metal/tests/test_matmul_multi_tile", "test_matmul_multi_tile"),
-
     TestEntry("tt_metal/tests/test_matmul_large_block", "test_matmul_large_block"),
-
     TestEntry("tt_metal/tests/test_matmul_single_core", "test_matmul_single_core"),
-    TestEntry(
-        "tt_metal/tests/test_matmul_single_core_small", "test_matmul_single_core_small"
-    ),
+    TestEntry("tt_metal/tests/test_matmul_single_core_small", "test_matmul_single_core_small"),
     void_for_whb0(
         TestEntry(
             "tt_metal/tests/test_matmul_multi_core_single_dram",
             "test_matmul_multi_core_single_dram",
         )
     ),
-
     TestEntry(
         "tt_metal/tests/test_matmul_multi_core_multi_dram_in0_mcast",
         "test_matmul_multi_core_multi_dram_in0_mcast",
     ),
-
-
     TestEntry(
         "tt_metal/tests/test_matmul_multi_core_multi_dram_in1_mcast",
         "test_matmul_multi_core_multi_dram_in1_mcast",
     ),
-
     TestEntry(
         "tt_metal/tests/test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast",
         "test_matmul_multi_core_multi_dram_in0_mcast_in1_mcast",
@@ -108,9 +96,7 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/test_unpack_tilize", "test_unpack_tilize"),
     TestEntry("tt_metal/tests/test_unpack_untilize", "test_unpack_untilize"),
     TestEntry("tt_metal/tests/test_interleaved_layouts", "test_interleaved_layouts"),
-    TestEntry(
-        "tt_metal/tests/test_interleaved_l1_buffer", "test_interleaved_l1_buffer"
-    ),
+    TestEntry("tt_metal/tests/test_interleaved_l1_buffer", "test_interleaved_l1_buffer"),
     TestEntry(
         "tt_metal/tests/test_dram_copy_sticks_multi_core",
         "test_dram_copy_sticks_multi_core",
@@ -169,12 +155,8 @@ TT_METAL_COMMON_TEST_ENTRIES = (
 
 PROGRAMMING_EXAMPLE_ENTRIES = (
     TestEntry("programming_examples/loopback", "programming_examples/loopback"),
-    TestEntry(
-        "programming_examples/eltwise_binary", "programming_examples/eltwise_binary"
-    ),
-    TestEntry(
-        "programming_examples/eltwise_sfpu", "programming_examples/eltwise_sfpu"
-    ),
+    TestEntry("programming_examples/eltwise_binary", "programming_examples/eltwise_binary"),
+    TestEntry("programming_examples/eltwise_sfpu", "programming_examples/eltwise_sfpu"),
 )
 
 
@@ -205,16 +187,12 @@ def run_tt_cpp_tests(test_entries, timeout, run_single_test):
 
 @filter_empty
 def get_tt_metal_fast_dispatch_test_entries():
-    return list(TT_METAL_COMMON_TEST_ENTRIES) + list(
-        TT_METAL_FAST_DISPATCH_TEST_ENTRIES
-    )
+    return list(TT_METAL_COMMON_TEST_ENTRIES) + list(TT_METAL_FAST_DISPATCH_TEST_ENTRIES)
 
 
 @filter_empty
 def get_tt_metal_slow_dispatch_test_entries():
-    return list(TT_METAL_COMMON_TEST_ENTRIES) + list(
-        TT_METAL_SLOW_DISPATCH_TEST_ENTRIES
-    )
+    return list(TT_METAL_COMMON_TEST_ENTRIES) + list(TT_METAL_SLOW_DISPATCH_TEST_ENTRIES)
 
 
 @filter_empty
@@ -259,9 +237,7 @@ def build_programming_example_executable_path(namespace, executable_name, extra_
 if __name__ == "__main__":
     cmdline_args = get_cmdline_args(TestSuiteType.TT_METAL)
 
-    timeout, tt_arch, dispatch_mode = get_tt_metal_arguments_from_cmdline_args(
-        cmdline_args
-    )
+    timeout, tt_arch, dispatch_mode = get_tt_metal_arguments_from_cmdline_args(cmdline_args)
 
     logger.warning("We are not yet parameterizing tt_metal tests on tt_arch")
 
@@ -276,9 +252,7 @@ if __name__ == "__main__":
         logger.info("Running fast-dispatch mode tests")
         tt_metal_test_entries = get_tt_metal_fast_dispatch_test_entries()
 
-    llb_test_report = run_tt_cpp_tests(
-        tt_metal_test_entries, timeout, run_single_tt_metal_test
-    )
+    llb_test_report = run_tt_cpp_tests(tt_metal_test_entries, timeout, run_single_tt_metal_test)
 
     test_report = {**llb_test_report, **pe_test_report}
 
