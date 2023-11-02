@@ -15,7 +15,6 @@
 using namespace tt::constants;
 
 namespace tt {
-
 namespace tt_metal {
 
 namespace untilize_helpers {
@@ -321,7 +320,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     if (core_range.ranges().size() > 0) {
         auto untilize_kernel_id = CreateKernel(
             program,
-            "tt_eager/tt_dnn/kernels/compute/untilize.cpp",
+            "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
             core_range,
             ComputeConfig{
                 .compile_args = compute_args});
@@ -329,7 +328,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     if (core_range_cliff.ranges().size() > 0) {
         auto untilize_cliff_kernel_id = CreateKernel(
             program,
-            "tt_eager/tt_dnn/kernels/compute/untilize.cpp",
+            "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
             core_range_cliff,
             ComputeConfig{
                 .compile_args = compute_args_cliff});
@@ -727,7 +726,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
 
     auto untilize_kernel_id = CreateKernel(
         program,
-        "tt_eager/tt_dnn/kernels/compute/untilize.cpp",
+        "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
         all_cores,
         ComputeConfig{
             .compile_args = compute_args});
