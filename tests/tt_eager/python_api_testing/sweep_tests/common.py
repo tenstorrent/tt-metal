@@ -377,6 +377,17 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
             for shapes, datagen_funcs, test_args in _gen_shapes_and_args(start_shape, end_shape, interval, _gen_embeddings_shapes):
                 yield shapes, datagen_funcs, test_args
 
+        elif method == "rmsnorm":
+            assert (len(start_shape) == 4)
+            assert (len(end_shape) == 4)
+
+            def _gen_layernorm_shapes(shape):
+                normalized_shape = [1, 1, 1, shape[3]]
+                return [shape, normalized_shape, normalized_shape]
+
+            for shapes, datagen_funcs, test_args in _gen_shapes_and_args(start_shape, end_shape, interval, _gen_layernorm_shapes):
+                yield shapes, datagen_funcs, test_args
+
         elif method == "bert_qkv":
             assert num_shapes == 3
 

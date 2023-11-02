@@ -202,7 +202,7 @@ def test_group_norm_fallback(
 def test_GroupNorm_fallback(
     input_shape,
     weight_shape,
-    bias_shape,
+    biasx_shape,
     num_groups,
     num_channels,
     eps,

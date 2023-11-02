@@ -1041,3 +1041,15 @@ def embeddings(x, y, *args, **kwargs):
         y.reshape((num_embeddings, embedding_dim)),
     ).reshape((batch_size, 1, num_rows, embedding_dim))
     return z
+
+
+def rmsnorm_noweights(x, *args, **kwargs):
+    eps = 1e-5
+    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+
+def rmsnorm(x, y, z, *args, **kwargs):
+    eps = 1e-5
+    y = y.flatten()
+    z = z.flatten()
+
+    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * y + z

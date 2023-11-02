@@ -2129,3 +2129,28 @@ def embeddings(x, y, *args, device, dtype, layout, input_mem_config, output_mem_
     tt_got_back = torch.Tensor(tt_data).reshape((batch_size, 1, num_rows, embedding_dim))
 
     return tt_got_back
+
+
+@setup_host_and_device
+def rmsnorm_noweights(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = ttl.tensor.rmsnorm(t0, 1e-5, None, None, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t1)
+
+@setup_host_and_device
+def rmsnorm(x, y, z, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+
+    if layout[1] == ttl.tensor.Layout.TILE:
+        y = torch.nn.functional.pad(y, (0, 0, 0, 32 - y.shape[2]))
+
+    if layout[2] == ttl.tensor.Layout.TILE:
+        z = torch.nn.functional.pad(z, (0, 0, 0, 32 - z.shape[2]))
+
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t2 = setup_tt_tensor(z, device, layout[2], input_mem_config[2], dtype[2])
+
+    t1 = ttl.tensor.rmsnorm(t0, 1e-5, t1, t2, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t1)
