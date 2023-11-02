@@ -30,8 +30,9 @@ void Tilize::validate(const std::vector<Tensor> &input_tensors) const {
 
     TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
 
-    uint32_t stick_s =  input_tensor_a.layout() == Layout::ROW_MAJOR ? input_tensor_a.shape()[3] : input_tensor_a.shape()[1];
-    uint32_t num_sticks = input_tensor_a.layout() == Layout::ROW_MAJOR ? input_tensor_a.volume() / input_tensor_a.shape()[3] : input_tensor_a.volume() / input_tensor_a.shape()[1];
+    auto width = input_tensor_a.shape()[-1];
+    uint32_t stick_s =  width;
+    uint32_t num_sticks = input_tensor_a.volume() / width;
     TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
 
     uint32_t stick_size = stick_s * input_tensor_a.element_size(); // Assuming bfloat16 dataformat

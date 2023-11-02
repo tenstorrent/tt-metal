@@ -1,31 +1,27 @@
-.. _TT-DNN:
+.. _TT-LIB:
 
-TT-DNN
+TT-LIB
 ******
 
 Overview
 ========
 
-TT-DNN is a simplified Python interface to the compute engine of the TT-Metal.
-
-This will be the future plan. For now, the ``tt_lib`` Python module is a
-unified Python interface that provides both TT-DNN and the Tensor library.
-
-TT-DNN library supports 4 dimensional tensors with shape ``[W, Z, Y, X]``, in ROW_MAJOR layout, and with BFLOAT16 data type.
+The ``tt_lib`` Python module is a
+unified Python interface to the Tensor library located within ``tt_eager``. This library currently only supports 4 dimensional tensors with shape ``[W, Z, Y, X]``, in ROW_MAJOR layout, and with BFLOAT16 data type.
 
 Some OPs in this library might change layout of input tensors and pad them to better match expectations of execution kernels on TT Accelerator device.
 These OPs will unpad the result tensor before it is returned to caller.
 
 There is a limitation that tensor in ROW_MAJOR layout on TT Accelerator device must have the size of last dimension ``X`` be divisible by 2.
 You can't create these type of tensors on TT Accelerator device or send them to TT Accelerator device with ```tt_lib.tensor.Tensor.to()``.
-However, you can supply these type of tensors to OPs from TT-DNN library as they can automatically pad the last dimension before moving the tensor
+However, you can supply these type of tensors to OPs from TT-LIB library as they can automatically pad the last dimension before moving the tensor
 to TT Accelerator device. To use this functionality, you must call `tt_lib.device.SetDefaultDevice(tt_device)` to set your TT Accelerator device
 as the default device that will be used to execute operations on tensors that are on host machine.
 
 Operation Infrastructure
 ----------------------------
 
-TT-DNN has operation infrastructure which is used to launch, profile and cache operations generically.
+TT-LIB has operation infrastructure which is used to launch, profile and cache operations generically.
 
 To add a new operation that can plug in to the infrastructure, all that's needed is a struct that implements methods needed by operation interface.
 Below, is an example of how to declare a new on-device operation with all of the methods required by the interface.
@@ -174,7 +170,7 @@ The logs will print currently running op and information related to program cach
 If `OPERATION_HISTORY_CSV=<csv_file_path>` environment variable is set, then the history of all executed operations will be dumped into `<csv_file_path>`
 
 
-tt-DNN API through ``tt_lib``
+TT-LIB API through ``tt_lib``
 =============================
 
 Primary Operations

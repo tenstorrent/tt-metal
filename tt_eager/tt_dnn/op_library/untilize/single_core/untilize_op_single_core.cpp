@@ -33,10 +33,10 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
 
     int32_t num_tiles = a.volume() / TILE_HW;
 
-    uint32_t num_sticks = a.shape()[0] * a.shape()[1] * a.shape()[2];
-    uint32_t stick_size = a.shape()[3] * output.element_size();
+    uint32_t num_sticks = a.volume() / a.shape()[-1];
+    uint32_t stick_size = a.shape()[-1] * output.element_size();
 
-    uint32_t stick_s = a.shape()[3];
+    uint32_t stick_s = a.shape()[-1];
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
     // Ensure we don't intrude into storage space
     uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;

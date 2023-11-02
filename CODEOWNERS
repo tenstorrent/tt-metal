@@ -89,6 +89,10 @@ tt_eager/tt_dnn/op_library/complex/ @muthutt
 **/tt_lib/csrc/tt_lib_bindings* @TT-BrianLiu @tt-aho @arakhmati @mywoodstock
 **/tt_lib/fallback_ops @tt-aho @arakhmati
 
+# TTNN
+ttnn/ @eyonland @arakhmati
+tests/ttnn/ @eyonland @arakhmati
+
 # models
 models/ @boris-drazic @ashayestehmanesh @farbabi
 tests/python_api_testing/models/conv_on_device_utils*.py @tt-nshanker @ashayestehmanesh

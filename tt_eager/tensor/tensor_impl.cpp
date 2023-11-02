@@ -23,7 +23,7 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
 }
 
 uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const Shape& shape) {
-    uint32_t W = shape[3];
+    uint32_t W = shape[-1];
     uint32_t page_size = 0;
     switch (layout) {
         case Layout::ROW_MAJOR: {

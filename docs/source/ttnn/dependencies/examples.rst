@@ -1,12 +1,12 @@
 .. _Example:
 
-Examples of Tensor and TT-DNN Use
+Examples of Tensor and TT-LIB Use
 *********************************
 
-Run one OP from `TT-DDN` on TT Accelerator device
+Run one OP from `TT-LIB` on TT Accelerator device
 =================================================
 
-In this code example we use TT Accelerator device to execute ``relu`` op from `TT-DNN` library.
+In this code example we use TT Accelerator device to execute ``relu`` op from `TT-LIB` library.
 These are the steps:
 
 * create and initialize TT Accelerator device and get handle for host machine
@@ -48,16 +48,16 @@ These are the steps:
         tt_lib.device.CloseDevice(tt_device)
 
 
-Run `TT-DNN` and PyTorch OPs
+Run `TT-LIB` and PyTorch OPs
 ============================
 
 In this code example we build on previous example and after ``relu`` also execute ``pow``, ``silu``, and ``exp``.
 
-Since ``pow`` is not supported in `TT-DNN` library, we need to move TT Tensor produced by ``relu`` to host machine,
+Since ``pow`` is not supported in `TT-LIB` library, we need to move TT Tensor produced by ``relu`` to host machine,
 convert it to PyTorch tensor, execute ``pow`` from PyTorch, and then convert the outpout of ``pow`` back to TT Tensor for ``silu`` to be executed on device.
 
 After ``pow`` is executed as a fallback op; this means that the operation will actully execute as a PyTorch operation
-on host machine. But since ``silu`` is supported as on-device operation in `TT-DNN` library we can
+on host machine. But since ``silu`` is supported as on-device operation in `TT-LIB` library we can
 supply it with TT Tensor as input.
 
 Lastly, we run ``exp`` on TT Accelerator device (suppling it with output from ``silu`` without any conversion).
@@ -125,9 +125,9 @@ Tensors with odd size of last dim
 =================================
 
 We can't create or move to TT Accelerator device a TT Tensor that is in ROW_MAJOR layout and has odd size of last dimension.
-This type of TT Tensor can be created on host machine and can be passed to `TT-DNN` operations.
+This type of TT Tensor can be created on host machine and can be passed to `TT-LIB` operations.
 
-A `TT-DNN` operation will automatically pad the tensor so that the size of last dimension is even, move it to TT Accelerator device,
+A `TT-LIB` operation will automatically pad the tensor so that the size of last dimension is even, move it to TT Accelerator device,
 execute the operation, move output tensor back to host, and finally unpad the output tensor.
 
 To use this functionality, you must call `tt_lib.device.SetDefaultDevice(tt_device)` to set your TT Accelerator device

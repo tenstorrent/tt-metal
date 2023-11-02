@@ -42,7 +42,7 @@ class Tensor {
 
         ~Tensor();
 
-        void deallocate();
+        void deallocate(bool force=false);
 
         Tensor to(Device *target_device, const MemoryConfig &mem_config={.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
 
