@@ -885,4 +885,12 @@ op_map = {
         "tt_lib_op": tt_lib_ops.embeddings,
         "pytorch_op": pytorch_ops.embeddings,
     },
+    "rmsnorm-noweights": {
+        "tt_lib_op": tt_lib_ops.rmsnorm_noweights,
+        "pytorch_op": pytorch_ops.rmsnorm_noweights,
+    },
+    "rmsnorm": {
+        "tt_lib_op": tt_lib_ops.rmsnorm,
+        "pytorch_op": pytorch_ops.rmsnorm,
+    },
 }
