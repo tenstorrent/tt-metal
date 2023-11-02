@@ -31,7 +31,7 @@ def volume(shape):
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
-        (   ## Only resnet shapes supported for now in untilize with halo + maxpool
+        (  ## Only resnet shapes supported for now in untilize with halo + maxpool
             [1, 64, 112, 112],
             [4, 64, 112, 112],
             [8, 64, 112, 112],
@@ -43,28 +43,20 @@ def volume(shape):
 )
 @pytest.mark.parametrize(
     "kernel_size",
-    (
-        (3, 3),
-    ),
+    ((3, 3),),
 )
 @pytest.mark.parametrize(
     "padding",
-    (
-        (1, 1),
-    ),
+    ((1, 1),),
 )
 @pytest.mark.parametrize(
     "stride",
-    (
-        (2, 2),
-    ),
+    ((2, 2),),
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
 @pytest.mark.parametrize(
     "nblocks",
-    (
-        1,
-    ),
+    (1,),
 )
 @pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_run_max_pool(
@@ -92,12 +84,8 @@ def test_run_max_pool(
         logger.info("Invalid case")
         pytest.skip()
 
-    out_h = (
-        math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-    )
-    out_w = (
-        math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
-    )
+    out_h = math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
+    out_w = math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
     if out_w % nblocks != 0:
         logger.info(f"Unsupported case when out_w ({out_w}) % nblocks ({nblocks}) != 0")
         pytest.skip()
@@ -106,13 +94,13 @@ def test_run_max_pool(
         logger.info("Current maxpool writer needs nchannels to be 64!")
         pytest.skip()
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
-
-    assert(out_mem_config.is_sharded() and in_mem_config.is_sharded())
-
-    torch.set_printoptions(
-        precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
     )
+
+    assert out_mem_config.is_sharded() and in_mem_config.is_sharded()
+
+    torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     torch.manual_seed(0)
 
@@ -135,7 +123,7 @@ def test_run_max_pool(
 
     act_shape_padded = (in_n, 1, in_h * in_w, _nearest_32(in_c))
     act_padding = (0, act_shape_padded[3] - act_shape[3])
-    act_padded = torch.nn.functional.pad(act_reshaped, act_padding, value=0xF7fF)
+    act_padded = torch.nn.functional.pad(act_reshaped, act_padding, value=0xF7FF)
     assert act_shape_padded == act_padded.shape
 
     ncores = 1
@@ -145,10 +133,10 @@ def test_run_max_pool(
     ## NOTE: these should match the max_pool op code for now. Hardcoded Resnet shapes only.
     if out_nhw == 1024:
         ncores = 32
-        grid_size = (8, 4)
+        grid_size = (12, 3)
     elif out_nhw == 2048 or out_nhw == 4096 or out_nhw == 8192 or out_nhw == 16384 or out_nhw == 32768:
         ncores = 64
-        grid_size = (8, 8)
+        grid_size = (12, 6)
     elif out_nhw == 3136 or out_nhw == 6272 or out_nhw == 12544 or out_nhw == 25088:
         if is_wormhole_b0():
             pytest.skip("Unsupported grid size for WH")
@@ -159,19 +147,29 @@ def test_run_max_pool(
 
     # ttl.device.EnableMemoryReports()
 
-    ttact_tilize = ttl.tensor.Tensor(
-        act_padded.flatten().tolist(),
-        act_shape_padded,
-        dtype,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE).to(device, interleaved_mem_config)
+    ttact_tilize = (
+        ttl.tensor.Tensor(
+            act_padded.flatten().tolist(),
+            act_shape_padded,
+            dtype,
+            ttl.tensor.Layout.ROW_MAJOR,
+        )
+        .to(ttl.tensor.Layout.TILE)
+        .to(device, interleaved_mem_config)
+    )
 
-    ttact_sharded = ttl.tensor.interleaved_to_sharded(ttact_tilize, grid_size, [in_height // ncores, act_padded.shape[-1]], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.ShardOrientation.ROW_MAJOR,)
+    ttact_sharded = ttl.tensor.interleaved_to_sharded(
+        ttact_tilize,
+        grid_size,
+        [in_height // ncores, act_padded.shape[-1]],
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttl.tensor.ShardOrientation.ROW_MAJOR,
+    )
     # ttact_tilize.deallocate()
     in_h = int(math.sqrt(act_shape_padded[-2]))
     in_w = in_h
-    assert(in_h * in_w == act_shape_padded[-2])
-    out_untilize = ttl.tensor.untilize_with_halo(ttact_sharded, 0xf7ff, in_n, in_h, in_w, 2, out_mem_config)
+    assert in_h * in_w == act_shape_padded[-2]
+    out_untilize = ttl.tensor.untilize_with_halo(ttact_sharded, 0xF7FF, in_n, in_h, in_w, 2, out_mem_config)
     # ttl.device.DumpDeviceMemoryState(device)
     ttact_sharded.deallocate()
 
@@ -191,7 +189,7 @@ def test_run_max_pool(
         dilation_w,
         out_mem_config,
         nblocks,
-        True
+        True,
     )
     out_padded = ttl.tensor.sharded_to_interleaved(out_padded, interleaved_mem_config)
     out_padded = out_padded.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
@@ -221,12 +219,17 @@ def test_run_max_pool(
     # print(f'GOLDEN: {golden_pytorch}')
     # torch.save(out_pytorch, 'output.pt')
     # torch.save(golden_pytorch, 'golden.pt')
-    allclose = torch.allclose(out_pytorch, golden_pytorch)
-    isclose = torch.all(torch.isclose(out_pytorch, golden_pytorch))
+
+    atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
+    if dtype == ttl.tensor.DataType.BFLOAT8_B:
+        atol = 0.35
+
+    allclose = torch.allclose(out_pytorch, golden_pytorch, atol=atol)
+    isclose = torch.all(torch.isclose(out_pytorch, golden_pytorch, atol=atol))
     isequal = torch.equal(out_pytorch, golden_pytorch)
 
     assert passing_pcc
+    assert allclose
+    assert isclose
     if dtype == ttl.tensor.DataType.BFLOAT16:
-        assert allclose
-        assert isclose
         assert isequal
