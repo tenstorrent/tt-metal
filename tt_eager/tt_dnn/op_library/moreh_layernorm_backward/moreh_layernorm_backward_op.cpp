@@ -4,6 +4,7 @@
 
 #include "tt_eager/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
 
+#include <functional>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -11,10 +12,13 @@
 
 namespace tt {
 
-namespace tt_metal {
+namespace operations {
+
+namespace primary {
+
+using namespace tt_metal;
 
 namespace {
-
 inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
     TT_ASSERT(tensor.layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
     TT_ASSERT(tensor.dtype() == DataType::BFLOAT16, fmt::format("{} only supports bfloat16.", op_name));
@@ -23,7 +27,6 @@ inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
     TT_ASSERT(
         tensor.buffer() != nullptr, fmt::format("Operands to {} need to be allocated in buffers on device!", op_name));
 }
-
 }  // namespace
 
 // input_grad
@@ -90,7 +93,7 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardInputGrad::create_program(
     const auto& gamma = optional_input_tensors.at(0);
     auto& input_grad = optional_input_tensors.at(1);
 
-    return moreh_layernorm_backward_input_grad_(
+    return moreh_layernorm_backward_input_grad_impl(
         output_grad, input, mean, rstd, this->normalized_dims, gamma, input_grad);
 }
 
@@ -158,17 +161,9 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
     auto& gamma_grad = optional_input_tensors.at(0);
     auto& beta_grad = optional_input_tensors.at(1);
 
-    return moreh_layernorm_backward_gamma_beta_grad_(
+    return moreh_layernorm_backward_gamma_beta_grad_impl(
         output_grad, input, mean, rstd, this->normalized_dims, gamma_grad, beta_grad);
 }
-
-}  // namespace tt_metal
-
-namespace operations {
-
-using namespace tt_metal;
-
-namespace primary {
 
 // input_grad
 [[maybe_unused]] std::variant<Tensor, char*> moreh_layernorm_backward_input_grad(
@@ -177,8 +172,8 @@ namespace primary {
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
-    std::optional<const Tensor> gamma,
-    std::optional<const Tensor> input_grad,
+    std::optional<std::reference_wrapper<const Tensor>> gamma,
+    std::optional<std::reference_wrapper<const Tensor>> input_grad,
     const MemoryConfig& output_mem_config) {
     if (!input_grad.has_value()) {
         return nullptr;
@@ -201,8 +196,8 @@ namespace primary {
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
-    std::optional<const Tensor> gamma_grad,
-    std::optional<const Tensor> beta_grad,
+    std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
+    std::optional<std::reference_wrapper<const Tensor>> beta_grad,
     const MemoryConfig& output_mem_config) {
     std::vector<std::variant<Tensor, char*>> outputs{nullptr, nullptr};
     if (!gamma_grad.has_value() && !beta_grad.has_value()) {
@@ -233,20 +228,20 @@ namespace primary {
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
-    std::optional<const Tensor> gamma,
-    std::optional<const Tensor> input_grad,
-    std::optional<const Tensor> gamma_grad,
-    std::optional<const Tensor> beta_grad,
+    std::optional<std::reference_wrapper<const Tensor>> gamma,
+    std::optional<std::reference_wrapper<const Tensor>> input_grad,
+    std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
+    std::optional<std::reference_wrapper<const Tensor>> beta_grad,
     const MemoryConfig& output_mem_config) {
     std::vector<std::variant<Tensor, char*>> outputs;
     outputs.reserve(3);
 
     // input_grad
-    outputs.push_back(tt::operations::primary::moreh_layernorm_backward_input_grad(
+    outputs.push_back(moreh_layernorm_backward_input_grad(
         output_grad, input, mean, rstd, normalized_dims, gamma, input_grad, output_mem_config));
 
     // gamma_grad and beta_grad
-    const auto& gamma_beta_grad = tt::operations::primary::moreh_layernorm_backward_gamma_beta_grad(
+    const auto& gamma_beta_grad = moreh_layernorm_backward_gamma_beta_grad(
         output_grad, input, mean, rstd, normalized_dims, gamma_grad, beta_grad, output_mem_config);
     outputs.push_back(gamma_beta_grad[0]);
     outputs.push_back(gamma_beta_grad[1]);
