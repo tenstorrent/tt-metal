@@ -901,11 +901,16 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
             uint32_t last_partial_left_aligned_row_width = sharding_config.last_partial_left_aligned_row_width;
 
             if (weight_width_sliced) {
-                TT_ASSERT(reader_noc == NOC::NOC_1);
                 auto shard_shape = a.shard_spec().value().shard_shape;
                 uint32_t shard_size_bytes = shard_shape[0] * shard_shape[1] * a.element_size();
                 CoreCoord bottom_core = {(std::size_t) core_x_i, (std::size_t) num_cores_y - 1};
                 auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+
+                bool reader_is_noc_0 = reader_noc == NOC::NOC_0;
+                uint32_t act_mcast_dest_noc_start_x = bottom_core_physical.x;
+                uint32_t act_mcast_dest_noc_start_y = reader_is_noc_0 ? top_left_core_physical.y : bottom_core_physical.y;
+                uint32_t act_mcast_dest_noc_end_x = bottom_core_physical.x;
+                uint32_t act_mcast_dest_noc_end_y = reader_is_noc_0 ? bottom_core_physical.y : top_left_core_physical.y;
                 reader_rt_args = {
                     // arguments for act
                     act_dram_addr,
@@ -966,10 +971,10 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
                     (uint32_t) noop_core,
 
                     // mcast args
-                    (uint32_t) bottom_core_physical.x,
-                    (uint32_t) bottom_core_physical.y,
-                    (uint32_t) bottom_core_physical.x,
-                    (uint32_t) top_left_core_physical.y,
+                    act_mcast_dest_noc_start_x,
+                    act_mcast_dest_noc_start_y,
+                    act_mcast_dest_noc_end_x,
+                    act_mcast_dest_noc_end_y,
                     num_cores_y - 1,
                     num_cores_y - 1,
                     act_mcast_sender_semaphore,
