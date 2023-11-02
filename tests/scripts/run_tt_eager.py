@@ -28,18 +28,12 @@ from tests.scripts.cmdline_args import (
 )
 
 TT_EAGER_COMMON_TEST_ENTRIES = (
-    TestEntry(
-        "tt_eager/tests/ops/test_eltwise_binary_op", "ops/test_eltwise_binary_op"
-    ),
+    TestEntry("tt_eager/tests/ops/test_eltwise_binary_op", "ops/test_eltwise_binary_op"),
     TestEntry("tt_eager/tests/ops/test_bcast_op", "ops/test_bcast_op"),
     TestEntry("tt_eager/tests/ops/test_reduce_op", "ops/test_reduce_op"),
     TestEntry("tt_eager/tests/ops/test_transpose_op", "ops/test_transpose_op"),
     TestEntry("tt_eager/tests/ops/test_bmm_op", "ops/test_bmm_op"),
-    void_for_whb0(
-        TestEntry(
-            "tt_eager/tests/ops/test_eltwise_unary_op", "ops/test_eltwise_unary_op"
-        )
-    ),
+    void_for_whb0(TestEntry("tt_eager/tests/ops/test_eltwise_unary_op", "ops/test_eltwise_unary_op")),
     void_for_whb0(
         TestEntry(
             "tt_eager/tests/ops/test_transpose_wh_single_core",
@@ -78,22 +72,14 @@ TT_EAGER_COMMON_TEST_ENTRIES = (
         "tt_eager/tests/tensors/test_host_device_loopback",
         "tensors/test_host_device_loopback",
     ),
-    TestEntry(
-        "tt_eager/tests/tensors/test_copy_and_move", "tensors/test_copy_and_move"
-    ),
+    TestEntry("tt_eager/tests/tensors/test_copy_and_move", "tensors/test_copy_and_move"),
     # DTX Tests
     TestEntry("tt_eager/tests/dtx/tensor", "dtx/tensor"),
     TestEntry("tt_eager/tests/dtx/unit_tests/", "dtx/unit_tests"),
     TestEntry("tt_eager/tests/dtx/overlap", "dtx/overlap"),
-    TestEntry(
-        "tt_eager/tests/dtx/collapse_transformations", "dtx/collapse_transformations"
-    ),
+    TestEntry("tt_eager/tests/dtx/collapse_transformations", "dtx/collapse_transformations"),
     # Integration tests
-    void_for_whb0(
-        TestEntry(
-            "tt_eager/tests/integration_tests/test_bert", "integration_tests/test_bert"
-        )
-    ),
+    void_for_whb0(TestEntry("tt_eager/tests/integration_tests/test_bert", "integration_tests/test_bert")),
 )
 
 TT_EAGER_SLOW_DISPATCH_TEST_ENTRIES = (
@@ -139,26 +125,20 @@ def get_tt_eager_fast_dispatch_test_entries():
 
 @filter_empty
 def get_tt_eager_slow_dispatch_test_entries():
-    return list(TT_EAGER_COMMON_TEST_ENTRIES) + list(
-        TT_EAGER_SLOW_DISPATCH_TEST_ENTRIES
-    )
+    return list(TT_EAGER_COMMON_TEST_ENTRIES) + list(TT_EAGER_SLOW_DISPATCH_TEST_ENTRIES)
 
 
 if __name__ == "__main__":
     cmdline_args = get_cmdline_args(TestSuiteType.TT_EAGER)
 
-    timeout, tt_arch, dispatch_mode = get_tt_metal_arguments_from_cmdline_args(
-        cmdline_args
-    )
+    timeout, tt_arch, dispatch_mode = get_tt_metal_arguments_from_cmdline_args(cmdline_args)
 
     if dispatch_mode == "slow":
         tt_eager_test_entries = get_tt_eager_slow_dispatch_test_entries()
     else:
         tt_eager_test_entries = get_tt_eager_fast_dispatch_test_entries()
 
-    eager_test_report = run_tt_cpp_tests(
-        tt_eager_test_entries, timeout, run_single_tt_eager_test
-    )
+    eager_test_report = run_tt_cpp_tests(tt_eager_test_entries, timeout, run_single_tt_eager_test)
 
     test_report = {**eager_test_report}
 

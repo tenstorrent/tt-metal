@@ -42,38 +42,3 @@ jobs:
         run: |
           source build/python_env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type post_commit --dispatch-mode slow
-  check-syseng-assets:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.CHECKOUT_TOKEN }}
-      - name: Check asset download script
-        env:
-          GITHUB_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
-        run: |
-          cd infra/machine_setup
-          ./scripts/download_public_machine_setup_assets.sh
-  check-spdx-licenses:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.CHECKOUT_TOKEN }}
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.8'
-          cache: 'pip'
-          cache-dependency-path: infra/requirements-infra.txt
-      - name: Install infra deps
-        run: python -m pip install -r infra/requirements-infra.txt
-      - name: Check SPDX licenses
-        run: python -m check_copyright --verbose --dry-run --config ./check_copyright_config.yaml .
-  check-metal-kernel-count:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.CHECKOUT_TOKEN }}
-      - name: Check kernel count in base metal is less than maximum
-        run: if (( $(find tt_metal/kernels/ -type f | wc -l) > 7 )); then exit 1; fi

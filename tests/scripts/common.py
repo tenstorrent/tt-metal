@@ -26,9 +26,7 @@ class TestSuiteType(Enum):
     UNKNOWN = auto()
 
 
-TestEntry = namedtuple(
-    "TestEntry", ["test_name", "executable_name", "extra_params"], defaults=[""]
-)
+TestEntry = namedtuple("TestEntry", ["test_name", "executable_name", "extra_params"], defaults=[""])
 
 
 def void_for_whb0(x):
@@ -53,9 +51,7 @@ def namespace_to_test_suite_type(namespace: str) -> TestSuiteType:
 
     namespace_as_test_suite_str = namespace.upper()
 
-    assert (
-        namespace_as_test_suite_str in test_suite_types_str_list
-    ), f"{namespace} is not a recognized test type"
+    assert namespace_as_test_suite_str in test_suite_types_str_list, f"{namespace} is not a recognized test type"
 
     return TestSuiteType[namespace_as_test_suite_str]
 
@@ -93,14 +89,10 @@ def get_env_dict_for_fw_tests(tt_arch):
 
 
 def default_build_full_path_to_test(namespace, executable_name, extra_params):
-    return pathlib.Path(
-        f"{get_git_home_dir_str()}/build/test/{namespace}/{executable_name}"
-    )
+    return pathlib.Path(f"{get_git_home_dir_str()}/build/test/{namespace}/{executable_name}")
 
 
-def build_executable_command_for_test(
-    namespace: str, test_entry: TestEntry, timeout, tt_arch, build_full_path_to_test
-):
+def build_executable_command_for_test(namespace: str, test_entry: TestEntry, timeout, tt_arch, build_full_path_to_test):
     assert namespace in (
         "build_kernels_for_riscv",
         "llrt",
@@ -113,9 +105,7 @@ def build_executable_command_for_test(
     executable_name = test_entry.executable_name
     extra_params = test_entry.extra_params
 
-    full_path_to_test = build_full_path_to_test(
-        namespace, executable_name, extra_params
-    )
+    full_path_to_test = build_full_path_to_test(namespace, executable_name, extra_params)
 
     assert (
         full_path_to_test.exists()
@@ -123,9 +113,7 @@ def build_executable_command_for_test(
     assert not full_path_to_test.is_dir()
 
     if namespace in ("build_kernels_for_riscv"):
-        logger.warning(
-            f"tt-arch should be injected as a cmdline param for build_kernels_for_riscv eventually"
-        )
+        logger.warning(f"tt-arch should be injected as a cmdline param for build_kernels_for_riscv eventually")
         return f"timeout {timeout} {full_path_to_test} {extra_params}"
     elif namespace in ("llrt",):
         return f"timeout {timeout} {full_path_to_test} --arch {tt_arch} {extra_params}"
@@ -144,13 +132,9 @@ def completed_process_failed(completed_process: sp.CompletedProcess):
 
     does_not_match_return_code_of_process = partial(ne, completed_process.returncode)
 
-    raw_specific_return_codes = map(
-        lambda specific_code: specific_code.value, SpecificReturnCodes
-    )
+    raw_specific_return_codes = map(lambda specific_code: specific_code.value, SpecificReturnCodes)
 
-    does_not_match_any_specific_code = all(
-        map(does_not_match_return_code_of_process, raw_specific_return_codes)
-    )
+    does_not_match_any_specific_code = all(map(does_not_match_return_code_of_process, raw_specific_return_codes))
 
     return does_not_match_any_specific_code
 
@@ -212,9 +196,7 @@ def run_single_test(
 
     env_for_fw_test = get_env_dict_for_fw_tests(tt_arch)
 
-    completed_process = run_process_and_get_result(
-        command, capture_output=capture_output, extra_env=env_for_fw_test
-    )
+    completed_process = run_process_and_get_result(command, capture_output=capture_output, extra_env=env_for_fw_test)
 
     test_suite_type = namespace_to_test_suite_type(namespace)
 
@@ -230,9 +212,7 @@ def run_single_test(
             run_process_and_get_result("tt-smi -wr all wait")
         else:
             raise Exception(f"Unrecognized arch for tensix-reset: {tt_arch}")
-        logger.warning(
-            "Silicon reset complete - returning status of FAILURE for this test"
-        )
+        logger.warning("Silicon reset complete - returning status of FAILURE for this test")
 
     return completed_process
 
