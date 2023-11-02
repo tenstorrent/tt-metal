@@ -11,11 +11,14 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-inline bool is_dram(const Tensor &input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
-inline bool is_dram(const std::optional<const Tensor> input_tensor) {
+bool is_dram(const Tensor &input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
+bool is_dram(const std::optional<const Tensor> input_tensor) {
     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
-inline bool is_dram(const Buffer *b) { return b->buffer_type() == BufferType::DRAM; }
+bool is_dram(const std::optional<std::reference_wrapper<const Tensor>> input_tensor) {
+    return input_tensor.has_value() ? is_dram(input_tensor->get()) : true;
+}
+bool is_dram(const Buffer *b) { return b->buffer_type() == BufferType::DRAM; }
 
 inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
     CoreRangeSet all_cores,

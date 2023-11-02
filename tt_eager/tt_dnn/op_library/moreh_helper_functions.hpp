@@ -17,9 +17,10 @@ namespace primary {
 
 using namespace tt::tt_metal;
 
-inline bool is_dram(const Tensor &input_tensor);
-inline bool is_dram(const std::optional<const Tensor> input_tensor);
-inline bool is_dram(const Buffer *b);
+bool is_dram(const Tensor &input_tensor);
+bool is_dram(const std::optional<const Tensor> input_tensor);
+bool is_dram(const std::optional<std::reference_wrapper<const Tensor>> input_tensor);
+bool is_dram(const Buffer *b);
 
 inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
     CoreRangeSet all_cores, CoreRangeSet core_group_1, CoreRangeSet core_group_2, uint32_t offset_x, uint32_t offset_y);
