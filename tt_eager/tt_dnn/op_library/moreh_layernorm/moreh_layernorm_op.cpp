@@ -24,8 +24,6 @@ namespace operations {
 
 namespace primary {
 
-using namespace tt_metal;
-
 namespace {
 inline uint32_t find_divisor_with_max_block_size(uint32_t val, uint32_t max_block_size) {
     uint32_t divisor{1};
