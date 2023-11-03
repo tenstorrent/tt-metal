@@ -11,8 +11,6 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-using namespace tt_metal;
-
 inline void moreh_bmm_validate(const Tensor& input, const Tensor& mat2) {
     const auto& a_shape = input.shape();
     const auto& b_shape = mat2.shape();

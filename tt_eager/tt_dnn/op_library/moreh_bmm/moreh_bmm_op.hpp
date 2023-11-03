@@ -13,10 +13,12 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-tt_metal::Tensor moreh_bmm(
-    const tt_metal::Tensor& input,
-    const tt_metal::Tensor& mat2,
-    const tt_metal::MemoryConfig& output_mem_config = tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+using namespace tt_metal;
+
+Tensor moreh_bmm(
+    const Tensor& input,
+    const Tensor& mat2,
+    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary
 
