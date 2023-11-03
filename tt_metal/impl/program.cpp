@@ -405,6 +405,7 @@ void Program::invalidate_circular_buffer_allocation() {
 }
 
 void Program::allocate_circular_buffers() {
+    ZoneScoped;
     if (not this->circular_buffer_allocation_needed_) {
         return;
     }
