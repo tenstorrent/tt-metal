@@ -18,10 +18,14 @@ namespace primary {
 
 using namespace tt::tt_metal;
 
-bool is_dram(const Tensor &input_tensor);
-bool is_dram(const std::optional<const Tensor> input_tensor);
-bool is_dram(const std::optional<std::reference_wrapper<const Tensor>> input_tensor);
-bool is_dram(const Buffer *b);
+inline bool is_dram(const Tensor &tensor) { return tensor.memory_config().buffer_type == BufferType::DRAM; }
+inline bool is_dram(const std::optional<const Tensor> tensor) {
+    return tensor.has_value() ? is_dram(tensor.value()) : true;
+}
+inline bool is_dram(const std::optional<std::reference_wrapper<const Tensor>> tensor) {
+    return tensor.has_value() ? is_dram(tensor->get()) : true;
+}
+inline bool is_dram(const Buffer *buffer) { return buffer->buffer_type() == BufferType::DRAM; }
 
 inline bool is_scalar(const Tensor &tensor) {
     const auto &shape = tensor.shape().without_padding();
@@ -45,7 +49,7 @@ inline bool is_same_batch_shape(const Tensor &tensor_a, const Tensor &tensor_b) 
     return (tensor_a_shape[0] == tensor_b_shape[0] && tensor_a_shape[1] == tensor_b_shape[1]);
 }
 
-inline std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
+std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
     CoreRangeSet all_cores, CoreRangeSet core_group_1, CoreRangeSet core_group_2, uint32_t offset_x, uint32_t offset_y);
 
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
