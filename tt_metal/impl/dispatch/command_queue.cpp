@@ -880,12 +880,19 @@ void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& src,
 }
 
 void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
+    ZoneScoped;
     detail::DispatchStateCheck(true);
 
     detail::CompileProgram(cq.device, program);
 
-    program.allocate_circular_buffers();
-    detail::ValidateCircularBufferRegion(program, cq.device);
+    {
+        ZoneScopedN("Allocation CB");
+        program.allocate_circular_buffers();
+    }
+    {
+        ZoneScopedN("Validate CB");
+        detail::ValidateCircularBufferRegion(program, cq.device);
+    }
     cq.enqueue_program(program, blocking);
 }
 

@@ -127,6 +127,7 @@ std::vector<Tensor> run_with_program_cache(
 
     auto& program = program_with_callbacks.program;
     if (cache_hit) {
+        ZoneScopedN ("Cache_hit_set_runtime_args");
         if (program_with_callbacks.override_addresses_callback.has_value()) {
             auto override_addresses_callback = program_with_callbacks.override_addresses_callback.value();
             override_addresses(
@@ -141,10 +142,17 @@ std::vector<Tensor> run_with_program_cache(
         }
     }
 
-    auto do_profile = op_profiler::get_profiler_flag();
-    if (do_profile) { detail::setup_profiler(operation, input_tensors, program); }
+    {
+        ZoneScopedN ("Profiler Check");
+        auto do_profile = op_profiler::get_profiler_flag();
+        if (do_profile) { detail::setup_profiler(operation, input_tensors, program); }
+    }
 
-    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    const char *TT_METAL_SLOW_DISPATCH_MODE = nullptr;
+    {
+        ZoneScopedN ("Get Env Var");
+        TT_METAL_SLOW_DISPATCH_MODE =  std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    }
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
         // Only need to dump device data when in dispatch mode

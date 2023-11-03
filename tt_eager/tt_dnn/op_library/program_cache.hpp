@@ -11,6 +11,7 @@
 #include "tt_dnn/op_library/operation.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 namespace tt::tt_metal {
 
 namespace program_cache {
@@ -67,6 +68,7 @@ inline ProgramCache PROGRAM_CACHE{};
 
 template <typename... Args>
 inline std::tuple<operation::ProgramWithCallbacks&, bool> get_or_create(Args&&... args) {
+    ZoneScoped;
     return detail::PROGRAM_CACHE.get_or_create(std::forward<Args>(args)...);
 }
 
