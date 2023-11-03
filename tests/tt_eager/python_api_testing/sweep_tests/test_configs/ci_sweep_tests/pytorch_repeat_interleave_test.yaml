@@ -11,12 +11,12 @@ test-list:
       env:
         TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
       datagen:
-        function: comp_equal
+        function: gen_rand
         args:
           low: -100
           high: 100
       comparison:
-        function: comp_pcc
+        function: comp_equal
       args-gen: gen_repeat_interleave_args
       output-file: repeat_interleave_sweep.csv
       args:
