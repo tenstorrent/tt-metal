@@ -22,9 +22,9 @@ void kernel_main() {
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
 
-    DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << " KtNt=" << KtNt << ENDL();
-    DPRINT << "src0=" << src0_addr << " src1=" << src1_addr << ENDL();
-    DPRINT << "batch=" << batch << ENDL();
+    //DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
+    //DPRINT << "src0=" << src0_addr << " src1=" << src1_addr << ENDL();
+    //DPRINT << "batch=" << batch << ENDL();
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -61,11 +61,6 @@ void kernel_main() {
                         uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
                         noc_async_read_tile(itileA, s0, l1_write_addr_in0);
                         noc_async_read_barrier();
-                        uint32_t debug_cb_id = 0;
-                        for (int32_t r = 0; r < 32; ++ r) {
-                            SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-                            DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(debug_cb_id, itileA, sr, true, false) << ENDL();
-                        }
                         cb_push_back(cb_id_in0, onetile);
                     }
 
@@ -74,15 +69,9 @@ void kernel_main() {
                         uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
                         noc_async_read_tile(itileB, s1, l1_write_addr_in1);
                         noc_async_read_barrier();
-                        uint32_t debug_cb_id = 1;
-                        for (int32_t r = 0; r < 32; ++ r) {
-                            SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-                            DPRINT << (uint)r << " --READ--cin1-- " << TileSlice(debug_cb_id, itileB, sr, true, false) << ENDL();
-                        }
                         cb_push_back(cb_id_in1, onetile);
                     }
-                    DPRINT << "Pushed itileA=" << itileA << " itileB=" << itileB << ENDL();
-
+                    //DPRINT << "Pushed itileA=" << itileA << " itileB=" << itileB << ENDL();
 
                     itileA += 1; // A is MK
                     itileB += Nt; // B is KN, so to get k++ we stride by Nt

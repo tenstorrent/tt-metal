@@ -14,6 +14,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
+#include "tt_metal/common/bfloat16.hpp"
 
 #include "third_party/umd/device/tt_xy_pair.h"
 #include "third_party/magic_enum/magic_enum.hpp"
@@ -70,6 +71,63 @@ uint32_t _get_maximum_block_dim(int32_t block_dim, int32_t in0_block_w) {
     if (other_dim > 0)
         return other_dim;
     return 0;
+}
+
+inline const std::vector<float> unpack_uint32_vec_into_float_vec(
+    const std::vector<std::uint32_t>& data,
+    std::function<bfloat16(const bfloat16 &)> transform = bfloat16_identity_transform
+) {
+    std::vector<float> result;
+    for(auto i = 0 ; i < data.size(); i++) {
+        auto unpacked = unpack_two_bfloat16_from_uint32(data[i]);
+        auto d1 = static_cast<double>(transform(unpacked.first).to_float());
+        auto d2 = static_cast<double>(transform(unpacked.second).to_float());
+        result.push_back(d1);
+        result.push_back(d2);
+    }
+    return result;
+}
+
+inline float packed_uint32_t_vector_pcc_v2(const vector<uint32_t> &vec_a, const vector<uint32_t> &vec_b)
+{
+    vector<float> x_values_ = unpack_uint32_vec_into_float_vec(vec_a);
+    vector<float> y_values_ = unpack_uint32_vec_into_float_vec(vec_b);
+
+    // Calculate the mean of x and y values
+    float x_mean = 0.0f;
+    float y_mean = 0.0f;
+
+    for (size_t i = 0; i < x_values_.size(); i++)
+    {
+        x_mean += x_values_[i];
+        y_mean += y_values_[i];
+    }
+
+    x_mean /= x_values_.size();
+    y_mean /= y_values_.size();
+
+    // Calculate the covariance and standard deviation of x and y values
+    float covariance = 0.0f;
+    float x_stddev = 0.0f;
+    float y_stddev = 0.0f;
+
+    for (size_t i = 0; i < x_values_.size(); i++)
+    {
+        float x_diff = x_values_[i] - x_mean;
+        float y_diff = y_values_[i] - y_mean;
+
+        covariance += x_diff * y_diff;
+        x_stddev += x_diff * x_diff;
+        y_stddev += y_diff * y_diff;
+    }
+
+    covariance /= x_values_.size();
+    x_stddev /= x_values_.size();
+    y_stddev /= y_values_.size();
+
+    // Calculate the correlation coefficient
+    float correlation_coefficient_ = covariance / (sqrt(x_stddev) * sqrt(y_stddev));
+    return correlation_coefficient_;
 }
 
 namespace bmm_op_utils {
