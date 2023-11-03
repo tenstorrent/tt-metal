@@ -238,7 +238,7 @@ void DataMovementKernel::read_binaries(chip_id_t device_id) {
 
     ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, device_id, false);
     this->binary_size16_ = llrt::get_binary_code_size16(binary_mem, riscv_id);
-    log_debug("RISC {} kernel binary size: {} in bytes", riscv_id, this->binary_size16_ * 16);
+    log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", riscv_id, this->binary_size16_ * 16);
 
     binaries.push_back(binary_mem);
     this->set_binaries(device_id, std::move(binaries));

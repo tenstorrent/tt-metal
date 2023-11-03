@@ -167,7 +167,7 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) 
         if (riscv_id == 1) {
             launch_msg->ncrisc_kernel_size16 = kernel_size16;
         }
-        log_debug("RISC {} fw binary size: {} in bytes", riscv_id, kernel_size16 * 16);
+        log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, kernel_size16 * 16);
         llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
     }
 
