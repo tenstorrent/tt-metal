@@ -2,15 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_dnn/op_library/moreh_bmm/moreh_bmm_op.hpp"
+#include "tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
+
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_metal/host_api.hpp"
 
 namespace tt {
 namespace operations {
 namespace primary {
-
-using namespace tt_metal;
 
 inline void moreh_bmm_backward_validate(
     const Tensor &output_grad,
