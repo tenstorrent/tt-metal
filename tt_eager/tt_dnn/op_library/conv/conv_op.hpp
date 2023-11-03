@@ -94,3 +94,13 @@ operation::ProgramWithCallbacks conv_with_address_map_single_core(const Tensor& 
 }  // namespace tt_metal
 
 }  // namespace tt
+
+// TODO: Merge with optimized_conv_op_utils?
+namespace conv_op_utils {
+using namespace tt;
+using namespace tt::tt_metal;
+
+pair<uint32_t, uint32_t> compute_conv_output_face_shape(uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w);
+pair<vector<uint32_t>, vector<uint32_t>> compute_conv_activation_as_mm_shape(Shape conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, bool use_fast_reader);
+
+}

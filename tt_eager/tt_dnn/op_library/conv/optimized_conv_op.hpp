@@ -67,6 +67,9 @@ struct OptimizedConvBlockConfig {
     }
 };
 
+operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output);
+operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output);
+
 struct OptimizedConv {
     OptimizedConvParallelizationConfig parallelization_config;
     OptimizedConvBlockConfig block_config;
@@ -139,3 +142,14 @@ Tensor optimized_conv(const Tensor& a, const Tensor &b, std::optional<const Tens
 }  // namespace tt_metal
 
 }  // namespace tt
+
+
+namespace optimized_conv_op_utils {
+using namespace tt;
+using namespace tt::tt_metal;
+
+pair<uint32_t, uint32_t> compute_opt_conv_output_face_shape(uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w, uint32_t padding_for_32B_alignment=0);
+
+pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(Shape conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t padding_for_32B_alignment);
+
+} // optimized_conv_op_utils
