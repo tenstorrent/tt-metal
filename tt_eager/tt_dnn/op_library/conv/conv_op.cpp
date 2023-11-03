@@ -13,18 +13,10 @@
 
 #include "tt_dnn/op_library/auto_format.hpp"
 using namespace tt::constants;
-namespace tt {
 
-namespace tt_metal {
-
-const uint32_t act_cb                                 = CB::c_in0;
-const uint32_t weight_cb                              = CB::c_in1;
-const uint32_t bias_cb                                = CB::c_in2;
-const uint32_t matmul_partials_cb                     = CB::c_intermed0;
-const uint32_t tilize_mode_tilized_act_cb             = CB::c_intermed1;
-const uint32_t untilize_mode_final_matmul_partials_cb = CB::c_intermed2;
-const uint32_t untilize_mode_reblock_cb               = CB::c_intermed3;
-const uint32_t out0_cb                                = CB::c_out0;
+namespace conv_op_utils {
+using namespace tt;
+using namespace tt::tt_metal;
 
 pair<uint32_t, uint32_t> compute_conv_output_face_shape(uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w) {
     uint32_t conv_output_h = ((conv_activation_h - filter_h + (2 * pad_h)) / stride_h) + 1;
@@ -52,6 +44,21 @@ pair<vector<uint32_t>, vector<uint32_t>> compute_conv_activation_as_mm_shape(Sha
     }
     return {{1, num_rows_padded, num_cols_padded}, {1, num_rows, num_cols}};
 }
+
+}
+
+namespace tt {
+
+namespace tt_metal {
+
+const uint32_t act_cb                                 = CB::c_in0;
+const uint32_t weight_cb                              = CB::c_in1;
+const uint32_t bias_cb                                = CB::c_in2;
+const uint32_t matmul_partials_cb                     = CB::c_intermed0;
+const uint32_t tilize_mode_tilized_act_cb             = CB::c_intermed1;
+const uint32_t untilize_mode_final_matmul_partials_cb = CB::c_intermed2;
+const uint32_t untilize_mode_reblock_cb               = CB::c_intermed3;
+const uint32_t out0_cb                                = CB::c_out0;
 
 
 void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
@@ -137,7 +144,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
     TT_ASSERT(output_channels <= b.shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t num_bytes_of_df = 2; // 2 bytes for bfloat16
     // Compute the 2d matrix shape
-    auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_conv_activation_as_mm_shape(a.shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles, use_fast_reader);
+    auto [act_matrix_shape, act_matrix_shape_unpadded] = conv_op_utils::compute_conv_activation_as_mm_shape(a.shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles, use_fast_reader);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t) act_matrix_shape[1];
@@ -925,7 +932,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 
     uint32_t num_bytes_of_df = 2; // 2 bytes for bfloat16
     // Compute the 2d matrix shape
-    auto [matrix_shape, matrix_shape_unpadded] = compute_conv_activation_as_mm_shape(a.shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles, false);
+    auto [matrix_shape, matrix_shape_unpadded] = conv_op_utils::compute_conv_activation_as_mm_shape(a.shape(), conv_params, act_block_h_ntiles, act_block_w_ntiles, false);
     assert(matrix_shape.size() == 3);
     assert(matrix_shape[0] == 1);
     uint32_t num_rows = (uint32_t) matrix_shape[1];
@@ -1399,7 +1406,7 @@ std::vector<Shape> Conv::compute_output_shapes(const std::vector<Tensor>& input_
     uint32_t stride_w = (uint32_t) conv_params[3];
     uint32_t pad_h = (uint32_t) conv_params[4];
     uint32_t pad_w = (uint32_t) conv_params[5];
-    auto [conv_output_h, conv_output_w] = compute_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
+    auto [conv_output_h, conv_output_w] = conv_op_utils::compute_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w);
 
     if (untilize_out) {
         // TODO: Update batch size below
