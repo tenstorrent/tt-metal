@@ -18,42 +18,44 @@ namespace operations {
 
 namespace primary {
 
+using namespace tt_metal;
+
 struct MorehLayerNorm {
     uint32_t normalized_dims;
     float eps;
-    tt_metal::MemoryConfig output_mem_config;
+    MemoryConfig output_mem_config;
 
     void validate(
-        const std::vector<tt_metal::Tensor> &input_tensors,
-        const std::vector<std::optional<const tt_metal::Tensor>> &optional_input_tensors) const;
-    std::vector<tt_metal::Shape> compute_output_shapes(const std::vector<tt_metal::Tensor> &input_tensors) const;
-    std::vector<tt_metal::Tensor> create_output_tensors(const std::vector<tt_metal::Tensor> &input_tensors) const;
-    tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<tt_metal::Tensor> &input_tensors,
-        const std::vector<std::optional<const tt_metal::Tensor>> &optional_input_tensors,
-        std::vector<tt_metal::Tensor> &output_tensors) const;
+        const std::vector<Tensor> &input_tensors,
+        const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
+    std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor> &input_tensors,
+        const std::vector<std::optional<const Tensor>> &optional_input_tensors,
+        std::vector<Tensor> &output_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
 };
 
-tt_metal::operation::ProgramWithCallbacks moreh_layernorm_impl(
-    const tt_metal::Tensor &input,
+operation::ProgramWithCallbacks moreh_layernorm_impl(
+    const Tensor &input,
     uint32_t normalized_dims,
     float eps,
-    tt_metal::Tensor &output,
-    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> gamma,
-    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> beta,
-    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> mean,
-    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> rstd);
+    Tensor &output,
+    const std::optional<std::reference_wrapper<const Tensor>> gamma,
+    const std::optional<std::reference_wrapper<const Tensor>> beta,
+    const std::optional<std::reference_wrapper<const Tensor>> mean,
+    const std::optional<std::reference_wrapper<const Tensor>> rstd);
 
-tt_metal::Tensor moreh_layernorm(
-    const tt_metal::Tensor &input,
+Tensor moreh_layernorm(
+    const Tensor &input,
     uint32_t normalized_dims,
     float eps,
-    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> gamma = std::nullopt,
-    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> beta = std::nullopt,
-    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> mean = std::nullopt,
-    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> rstd = std::nullopt,
-    const tt_metal::MemoryConfig &output_mem_config = tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    const std::optional<std::reference_wrapper<const Tensor>> gamma = std::nullopt,
+    const std::optional<std::reference_wrapper<const Tensor>> beta = std::nullopt,
+    const std::optional<std::reference_wrapper<const Tensor>> mean = std::nullopt,
+    const std::optional<std::reference_wrapper<const Tensor>> rstd = std::nullopt,
+    const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary
 
@@ -65,10 +67,10 @@ Tensor moreh_layernorm(
     const Tensor &input,
     uint32_t normalized_dims,
     float eps,
-    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> gamma = std::nullopt,
-    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> beta = std::nullopt,
-    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> mean = std::nullopt,
-    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> rstd = std::nullopt,
+    const std::optional<std::reference_wrapper<const Tensor>> gamma = std::nullopt,
+    const std::optional<std::reference_wrapper<const Tensor>> beta = std::nullopt,
+    const std::optional<std::reference_wrapper<const Tensor>> mean = std::nullopt,
+    const std::optional<std::reference_wrapper<const Tensor>> rstd = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
