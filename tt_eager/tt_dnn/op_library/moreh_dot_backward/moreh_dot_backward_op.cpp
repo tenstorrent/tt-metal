@@ -14,7 +14,6 @@
 namespace tt {
 
 using namespace constants;
-using namespace tt_metal;
 
 namespace operations {
 namespace primary {
@@ -40,8 +39,7 @@ void MorehDotBackward::validate(
     TT_ASSERT(is_1d_tensor(other));
     TT_ASSERT(is_same_shape(input, other));
 
-    TT_ASSERT(
-        input.dtype() == tt::DataType::BFLOAT16 || input.dtype() == tt::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_ASSERT(input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B, "Unsupported data format");
     TT_ASSERT(
         output_grad.storage_type() == StorageType::DEVICE and input.storage_type() == StorageType::DEVICE and
             other.storage_type() == StorageType::DEVICE,
