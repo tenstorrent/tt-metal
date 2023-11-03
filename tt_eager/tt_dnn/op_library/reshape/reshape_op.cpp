@@ -8,6 +8,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
+#include <tt_eager/tt_numpy/functions.hpp>
+#include <tt_eager/tensor/tensor_impl.hpp>
 
 #include "tensor/tensor_utils.hpp"
 
@@ -326,6 +328,11 @@ tt::stl::reflection::Attributes Reshape::attributes() const {
 }
 
 Tensor reshape (const Tensor &input_tensor_a, int N, int C, int H, int W, const MemoryConfig& output_mem_config) {
+    if (input_tensor_a.layout() == Layout::ROW_MAJOR && (H % TILE_HEIGHT != 0 || W % TILE_WIDTH != 0 || input_tensor_a.shape()[-1] % TILE_WIDTH != 0 || (input_tensor_a.volume() / input_tensor_a.shape()[-1]) % TILE_HEIGHT != 0)) {
+        TT_ASSERT(input_tensor_a.dtype()==DataType::BFLOAT16);
+        auto output_shape_a = infer_dims_for_reshape_RM(N, C, H, W, input_tensor_a.volume());
+        return tt::numpy::manual_insertion<bfloat16>(input_tensor_a, output_shape_a, DataType::BFLOAT16, Layout::ROW_MAJOR, input_tensor_a.device(), output_mem_config);
+    }
     // No-op (Will do a tensor copy)
     auto output_shape = infer_dims_for_reshape(N, C, H, W, input_tensor_a.volume());
     if (

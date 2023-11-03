@@ -21,6 +21,8 @@ namespace tt_metal {
 
     const Shape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume);
 
+    const Shape infer_dims_for_reshape_RM(int N, int C, int H, int W, uint32_t old_volume);
+
     template<typename T>
     static std::size_t compute_volume(const T& shape) {
         return std::accumulate(std::begin(shape), std::end(shape), 1, std::multiplies<uint32_t>());

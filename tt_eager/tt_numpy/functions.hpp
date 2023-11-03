@@ -10,6 +10,8 @@
 #include <tensor/owned_buffer_functions.hpp>
 #include <tensor/types.hpp>
 #include <common/math.hpp>
+#include <tt_eager/tensor/tensor_impl.hpp>
+
 
 #include <optional>
 #include <random>
@@ -159,6 +161,23 @@ static Tensor index_trilu(const Shape& shape, const int32_t diag, DataType data_
 	        } // dim Y
 	    } // dim Z
     } // dim W
+    auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR).to(layout);
+    if (device != nullptr) {
+        output = output.to(device, output_mem_config);
+    }
+    return output;
+}
+
+template<typename T>
+static Tensor manual_insertion(const Tensor& input_tensor, const Shape& shape, DataType data_type,
+			  const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr,
+			  const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR);
+    TT_ASSERT(shape[0] * shape[1] * shape[2] * shape[3] == input_tensor.volume(), "Required shape volume must match old shape volume");
+    auto device_buffer = input_tensor.buffer();
+    uint32_t size_in_bytes = device_buffer->size();
+    auto data_vec = tt::tt_metal::tensor_impl::read_data_from_device<T>(input_tensor, size_in_bytes);
+    auto owned_buffer = owned_buffer::create<T>(std::move(data_vec));
     auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR).to(layout);
     if (device != nullptr) {
         output = output.to(device, output_mem_config);
