@@ -695,7 +695,7 @@ CommandQueue::CommandQueue(Device* device) {
     vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
     pointers[0] = CQ_START >> 4;
 
-    tt::Cluster::instance().write_sysmem_vec(pointers, 0, 0);
+    tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), 0, 0);
 
     send_dispatch_kernel_to_device(device);
     this->device = device;
@@ -739,7 +739,7 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<uint32_t>& dst, bo
     uint32_t padded_page_size = align(buffer.page_size(), 32);
     uint32_t data_size_in_bytes = padded_page_size * num_pages;
 
-    tt::Cluster::instance().read_sysmem_vec(dst, command.read_buffer_addr, data_size_in_bytes, 0);
+    tt::Cluster::instance().read_sysmem(dst.data(), data_size_in_bytes, command.read_buffer_addr, 0);
 
     // This vector is potentially padded due to alignment constraints, so need to now remove the padding
     if ((buffer.page_size() % 32) != 0) {
@@ -851,14 +851,14 @@ void CommandQueue::finish() {
     this->enqueue_command(command, false);
 
     // We then poll to check that we're done.
-    vector<uint32_t> finish_vec;
+    uint32_t finish;
     do {
-        tt::Cluster::instance().read_sysmem_vec(finish_vec, HOST_CQ_FINISH_PTR, 4, 0);
-    } while (finish_vec[0] != 1);
+        tt::Cluster::instance().read_sysmem(&finish, 4, HOST_CQ_FINISH_PTR, 0);
+    } while (finish != 1);
 
     // Reset this value to 0 before moving on
-    finish_vec[0] = 0;
-    tt::Cluster::instance().write_sysmem_vec(finish_vec, HOST_CQ_FINISH_PTR, 0);
+    finish = 0;
+    tt::Cluster::instance().write_sysmem(&finish, 4, HOST_CQ_FINISH_PTR, 0);
 }
 
 void CommandQueue::wrap() {

@@ -78,9 +78,8 @@ class Cluster {
     void write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
     void read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
 
-    void write_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, chip_id_t src_device_id) const;
-    void write_sysmem_vec(const uint32_t* vec, uint32_t size, uint64_t addr, chip_id_t src_device_id) const;
-    void read_sysmem_vec(vector<uint32_t> &vec, uint64_t addr, uint32_t size, chip_id_t src_device_id) const;
+    void write_sysmem(const void* vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const;
+    void read_sysmem(void *vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const;
 
     int get_device_aiclk(const chip_id_t &chip_id) const;
 

@@ -32,15 +32,14 @@ class SystemMemoryWriter {
 
     void cq_reserve_back(Device* device, uint32_t cmd_size_B) const;
 
-    // Ideally, data should be an array or pointer, but vector for time-being
-    void cq_write(Device* device, const uint32_t* data, uint32_t size, uint32_t write_ptr) const {
+    void cq_write(Device* device, const void* data, uint32_t size_in_bytes, uint32_t write_ptr) const {
 
         // There is a 50% overhead if hugepage_start is not made static.
         // Eventually when we want to have multiple hugepages, we may need to template
         // the sysmem writer to get this optimization.
         static char* hugepage_start = this->hugepage_start;
         void* user_scratchspace = hugepage_start + write_ptr;
-        memcpy(user_scratchspace, data, size);
+        memcpy(user_scratchspace, data, size_in_bytes);
     }
 
     void send_write_ptr(Device* device) const;

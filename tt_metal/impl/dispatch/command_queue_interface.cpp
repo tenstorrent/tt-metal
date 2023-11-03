@@ -5,9 +5,9 @@
 #include "command_queue_interface.hpp"
 
 uint32_t get_cq_rd_ptr(chip_id_t chip_id) {
-    vector<uint32_t> recv;
-    tt::Cluster::instance().read_sysmem_vec(recv, HOST_CQ_READ_PTR, 4, chip_id);
-    return recv[0];
+    uint32_t recv;
+    tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_READ_PTR, chip_id);
+    return recv;
 }
 
 SystemMemoryWriter::SystemMemoryWriter() {
