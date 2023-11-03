@@ -90,6 +90,7 @@ std::vector<Tensor> run_without_program_cache(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
     ZoneScoped;
+    ZoneText( operation.get_type_name().c_str(), operation.get_type_name().length() );
 
     auto device = detail::get_device(input_tensors, optional_input_tensors);
     auto output_tensors = operation.create_output_tensors(input_tensors);
@@ -118,6 +119,7 @@ std::vector<Tensor> run_with_program_cache(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
     ZoneScoped;
+    ZoneText( operation.get_type_name().c_str(), operation.get_type_name().length() );
 
     auto device = detail::get_device(input_tensors, optional_input_tensors);
     auto output_tensors = operation.create_output_tensors(input_tensors);

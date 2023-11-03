@@ -885,14 +885,9 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
 
     detail::CompileProgram(cq.device, program);
 
-    {
-        ZoneScopedN("Allocation CB");
-        program.allocate_circular_buffers();
-    }
-    {
-        ZoneScopedN("Validate CB");
-        detail::ValidateCircularBufferRegion(program, cq.device);
-    }
+    program.allocate_circular_buffers();
+    detail::ValidateCircularBufferRegion(program, cq.device);
+
     cq.enqueue_program(program, blocking);
 }
 
