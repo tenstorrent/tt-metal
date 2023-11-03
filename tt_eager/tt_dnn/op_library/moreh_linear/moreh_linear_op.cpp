@@ -14,8 +14,6 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-using namespace tt_metal;
-
 inline bool is_shape_out_features(const Shape& bias, const Shape& weight) {
     return (bias[0] == 1 && bias[1] == 1 && bias[2] == 1 && bias[3] == weight[2]);
 }
