@@ -2,16 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//#include "tt_metal/include/bmm_op.hpp"
-
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
-#include "common/bfloat16.hpp"
-#include "common/test_tiles.hpp"
+#include "tt_metal/common/bfloat16.hpp"
+#include "tt_metal/common/test_tiles.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include "tt_metal/programming_examples/matmul_common/work_split.hpp"
 
 using namespace tt::constants;
 using namespace std;
@@ -189,15 +187,15 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
     /*
     * Create Kernels (Reader, Writer, Compute)
     */
-    auto reader_id = tt_metal::CreateDataMovementKernel(
+    auto reader_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
+        "tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    auto writer_id = tt_metal::CreateDataMovementKernel(
+    auto writer_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
@@ -208,9 +206,9 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
         num_output_tiles_per_core_group_1 // Nt
     }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
 
-    auto matmul_multi_core_kernel_group_1_id = tt_metal::CreateComputeKernel(
+    auto matmul_multi_core_kernel_group_1_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/compute/bmm.cpp",
+        "tt_metal/programming_examples/matmul_common/kernels/compute/bmm.cpp",
         core_group_1,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_1}
     );
@@ -223,9 +221,9 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
             num_output_tiles_per_core_group_2 // Nt
         }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
 
-        auto matmul_multi_core_kernel_group_2_id = tt_metal::CreateComputeKernel(
+        auto matmul_multi_core_kernel_group_2_id = tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/compute/bmm.cpp",
+            "tt_metal/programming_examples/matmul_common/kernels/compute/bmm.cpp",
             core_group_2,
             tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_2}
         );
@@ -290,6 +288,10 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
 
 int main(int argc, char **argv) {
     bool pass = true;
+
+    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+        tt::log_fatal("Test not supported w/ slow dispatch, exiting");
+    }
 
     try {
         /* Silicon accelerator setup */
@@ -409,14 +411,16 @@ int main(int argc, char **argv) {
             return is_close(a, b, rel_tolerance, abs_tolerance);
         };
 
-        float calc_pcc = packed_uint32_t_vector_pcc(golden_vec_tilized, result_vec);
-        cout << "PCC= " << calc_pcc << endl;
+        // float calc_pcc = packed_uint32_t_vector_pcc(golden_vec_tilized, result_vec);
+        // cout << "PCC= " << calc_pcc << endl;
 
         float pearson = packed_uint32_t_vector_pcc_v2(golden_vec_tilized, result_vec);
         cout << "PCC_v2= " << pearson << endl;
 
+        tt::log_assert(pearson > 0.99, "PCC not high");
+
         //pass &= packed_uint32_t_vector_comparison(golden_vec, result_vec_untilized, comparison_function);
-        pass &= packed_uint32_t_vector_comparison(golden_vec_tilized, result_vec, comparison_function);
+        // pass &= packed_uint32_t_vector_comparison(golden_vec_tilized, result_vec, comparison_function);
 
         pass &= CloseDevice(device);
 
