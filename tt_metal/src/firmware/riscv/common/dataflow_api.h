@@ -1310,12 +1310,14 @@ inline void noc_fast_write_inc_num_dests(uint32_t num_issued) {
 FORCE_INLINE
 void cq_wait_front() {
     DEBUG_STATUS('N', 'Q', 'W');
-    while (cq_read_interface.fifo_rd_ptr == get_cq_write_ptr()[0] and
-           cq_read_interface.fifo_rd_toggle == get_cq_write_toggle()[0]) {
-    }
-
-    // DPRINT << "RD PTR IN WAIT FRONT: " << cq_read_interface.fifo_rd_ptr << ENDL();
-    // DPRINT << "WR PTR IN WAIT FRONT: " << get_cq_write_ptr()[0] <<  ENDL();
+    uint32_t write_ptr_and_toggle;
+    uint32_t write_ptr;
+    uint32_t write_toggle;
+    do {
+        write_ptr_and_toggle = *get_cq_write_ptr();
+        write_ptr = write_ptr_and_toggle & 0x7fffffff;
+        write_toggle = write_ptr_and_toggle >> 31;
+    } while (cq_read_interface.fifo_rd_ptr == write_ptr and cq_read_interface.fifo_rd_toggle == write_toggle);
     DEBUG_STATUS('N', 'Q', 'D');
 }
 
@@ -1323,22 +1325,10 @@ FORCE_INLINE
 void notify_host_of_cq_read_pointer() {
     // These are the PCIE core coordinates
     constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | HOST_CQ_READ_PTR;  // For now, we are writing to host hugepages at offset
-    uint32_t rd_ptr = cq_read_interface.fifo_rd_ptr;
+    uint32_t rd_ptr_and_toggle = cq_read_interface.fifo_rd_ptr | (cq_read_interface.fifo_rd_toggle << 31);;
     volatile tt_l1_ptr uint32_t* rd_ptr_addr = get_cq_read_ptr();
-    rd_ptr_addr[0] = rd_ptr;
+    rd_ptr_addr[0] = rd_ptr_and_toggle;
     noc_async_write(CQ_READ_PTR, pcie_address, 4);
-    noc_async_write_barrier();
-}
-
-FORCE_INLINE
-void notify_host_of_cq_read_toggle() {
-    constexpr static uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
-    uint64_t pcie_address = pcie_core_noc_encoding | HOST_CQ_READ_TOGGLE_PTR;
-    cq_read_interface.fifo_rd_toggle = not cq_read_interface.fifo_rd_toggle;
-    volatile tt_l1_ptr uint32_t* rd_toggle_ptr = get_cq_read_toggle();
-    rd_toggle_ptr[0] = cq_read_interface.fifo_rd_toggle;
-
-    noc_async_write(CQ_READ_TOGGLE, pcie_address, 4);
     noc_async_write_barrier();
 }
 
@@ -1351,8 +1341,6 @@ void cq_pop_front(uint32_t cmd_size_B) {
     cq_read_interface.fifo_rd_ptr += cmd_size_16B;
 
     notify_host_of_cq_read_pointer();
-
-    // DPRINT << "NEW RD PTR " << (cq_read_interface.fifo_rd_ptr << 4) << ENDL();
 }
 
 enum class BufferType: uint8_t {

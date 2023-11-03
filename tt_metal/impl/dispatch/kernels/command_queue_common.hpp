@@ -53,7 +53,7 @@ uint32_t get_db_cb_rd_ptr_addr(bool db_buf_switch) {
 
 FORCE_INLINE
 uint32_t get_db_cb_wr_ptr_addr(bool db_buf_switch) {
-    return CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset + 96);
+    return CQ_CONSUMER_CB_BASE + (db_buf_switch * l1_db_cb_addr_offset + CQ_START);
 }
 
 

@@ -17,9 +17,6 @@
 #include <algorithm> // for copy() and assign()
 #include <iterator> // for back_inserter
 
-
-static constexpr uint32_t HUGE_PAGE_SIZE = 1024 * 1024 * 1024;
-
 namespace tt::tt_metal {
 
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
@@ -596,7 +593,7 @@ const DeviceCommand EnqueueWrapCommand::assemble_device_command(uint32_t) {
 
 void EnqueueWrapCommand::process() {
     uint32_t write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
-    uint32_t space_left = HUGE_PAGE_SIZE - write_ptr;
+    uint32_t space_left = DeviceCommand::HUGE_PAGE_SIZE - write_ptr;
 
     // Since all of the values will be 0, this will be equivalent to
     // a bunch of NOPs
@@ -665,11 +662,6 @@ void send_dispatch_kernel_to_device(Device* device) {
     tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_READ_PTR, fifo_addr_vector);
     tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_WRITE_PTR, fifo_addr_vector);
 
-    // Initialize wr toggle
-    vector<uint32_t> toggle_start_vector = {0};
-    tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_READ_TOGGLE, toggle_start_vector);
-    tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_WRITE_TOGGLE, toggle_start_vector);
-
     launch_msg_t msg = dispatch_program.kernels_on_core(producer_logical_core)->launch_msg;
 
     // TODO(pkeller): Should use LaunchProgram once we have a mechanism to avoid running all RISCs
@@ -680,7 +672,7 @@ void send_dispatch_kernel_to_device(Device* device) {
 // CommandQueue section
 CommandQueue::CommandQueue(Device* device) {
     vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
-    pointers[0] = CQ_START >> 4;  // rd ptr (96 >> 4 = 6)
+    pointers[0] = CQ_START >> 4;  // rd ptr (CQ_START >> 4 = 6)
 
     tt::Cluster::instance().write_sysmem_vec(pointers, 0, 0);
 
@@ -704,8 +696,8 @@ void CommandQueue::enqueue_command(Command& command, bool blocking) {
 void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<uint32_t>& dst, bool blocking) {
     ZoneScopedN("CommandQueue_read_buffer");
     uint32_t read_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + buffer.size();
-    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + read_buffer_command_size >= HUGE_PAGE_SIZE) {
-        tt::log_assert(read_buffer_command_size <= HUGE_PAGE_SIZE - 96, "EnqueueReadBuffer command is too large");
+    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + read_buffer_command_size >= DeviceCommand::HUGE_PAGE_SIZE) {
+        tt::log_assert(read_buffer_command_size <= DeviceCommand::HUGE_PAGE_SIZE - CQ_START, "EnqueueReadBuffer command is too large");
         this->wrap();
     }
     tt::log_debug(tt::LogDispatch, "EnqueueReadBuffer");
@@ -755,9 +747,9 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<uint32_t>& src, b
         "Buffer pages must fit within the command queue data section");
 
     uint32_t write_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + buffer.size();
-    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + write_buffer_command_size >= HUGE_PAGE_SIZE) {
+    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + write_buffer_command_size >= DeviceCommand::HUGE_PAGE_SIZE) {
         tt::log_assert(
-            write_buffer_command_size <= HUGE_PAGE_SIZE - 96,
+            write_buffer_command_size <= DeviceCommand::HUGE_PAGE_SIZE - CQ_START,
             "EnqueueWriteBuffer command is too large: {}",
             write_buffer_command_size);
         this->wrap();
@@ -833,9 +825,9 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
         DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + (host_data.size() * sizeof(uint32_t));
 
     if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + host_data_and_device_command_size >=
-        HUGE_PAGE_SIZE) {
+        DeviceCommand::HUGE_PAGE_SIZE) {
         tt::log_assert(
-            host_data_and_device_command_size <= HUGE_PAGE_SIZE - 96, "EnqueueProgram command size too large");
+            host_data_and_device_command_size <= DeviceCommand::HUGE_PAGE_SIZE - CQ_START, "EnqueueProgram command size too large");
         this->wrap();
     }
 
@@ -846,16 +838,13 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
         host_data,
         stall);
 
-    command.process();
-    if (blocking) {
-        this->finish();
-    }
+    this->enqueue_command(command, blocking);
 }
 
 void CommandQueue::finish() {
     ZoneScopedN("CommandQueue_finish");
     if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND >=
-        HUGE_PAGE_SIZE) {
+        DeviceCommand::HUGE_PAGE_SIZE) {
         this->wrap();
     }
     tt::log_debug(tt::LogDispatch, "Finish");
