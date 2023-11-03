@@ -715,10 +715,6 @@ CommandQueue::CommandQueue(Device* device) {
         if (device_state->num_initializations == 1) {
             tt::Cluster::instance().write_sysmem_vec(pointers, 0, 0);
             send_dispatch_kernel_to_device(device);
-            chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device_id(device->id());
-            // Remove dangling synchronization primitives from previous processes and ensures the cq_write_interface is reset
-            // Currently there is one CommandQueue object per process controlling shared hugepage so this is safe to do here
-            tt::concurrent::remove_cq_write_interface(mmio_device_id);
         }
     }
 

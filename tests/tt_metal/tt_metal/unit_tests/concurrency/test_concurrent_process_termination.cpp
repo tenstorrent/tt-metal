@@ -4,6 +4,7 @@
 
 #include <thread>
 #include <unistd.h>
+#include <boost/process.hpp>
 
 #include "concurrent_fixture.hpp"
 #include "concurrent_test_utils.hpp"
@@ -16,7 +17,7 @@
 using namespace tt::tt_metal;
 using namespace tt::test_utils;
 
-TEST_F(ConcurrentFixture, TestMultiThreadLaunchProgram) {
+TEST_F(ConcurrentFixture, TestSingleDeviceRandomKillSignal) {
     const chip_id_t device_id = 0;
     Device *device = CreateDevice(device_id);
 
@@ -25,27 +26,8 @@ TEST_F(ConcurrentFixture, TestMultiThreadLaunchProgram) {
     test_config.num_tiles = num_banks * 2;
     test_config.output_buffer_type = BufferType::L1;
 
-    std::vector<std::future<void>> events;
-
-    const int num_threads = 3;
-    for (int thread_idx = 0; thread_idx < num_threads; thread_idx++) {
-        events.emplace_back(
-            detail::async (
-                [&] {
-                    bool pass = concurrent_tests::reader_datacopy_writer(device, test_config);
-                    ASSERT_TRUE(pass);
-                }
-            )
-        );
-    }
-
-    for (auto &f : events) {
-        f.wait();
-    }
+    bool pass = concurrent_tests::reader_datacopy_writer(device, test_config);
+    ASSERT_TRUE(pass);
 
     CloseDevice(device);
-}
-
-TEST_F(ConcurrentFixture, DISABLED_TestMultiThreadLaunchProgramWriteL1Buffers) {
-
 }

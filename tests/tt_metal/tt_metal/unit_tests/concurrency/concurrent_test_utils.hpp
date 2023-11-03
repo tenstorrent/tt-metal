@@ -29,7 +29,7 @@ struct DatacopyProgramConfig {
     bool fast_dispatch = false;
 };
 
-bool reader_datacopy_writer(Device* device, const DatacopyProgramConfig& cfg) {
+inline bool reader_datacopy_writer(Device* device, const DatacopyProgramConfig& cfg) {
     bool pass = true;
 
     const uint32_t input0_cb_index = 0;

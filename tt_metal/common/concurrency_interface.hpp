@@ -12,11 +12,14 @@
 #include <boost/interprocess/allocators/allocator.hpp>
 #include <boost/interprocess/containers/vector.hpp>
 #include <boost/interprocess/managed_shared_memory.hpp>
+#include <boost/interprocess/managed_mapped_file.hpp>
 #include <boost/interprocess/offset_ptr.hpp>
+#include <boost/interprocess/sync/file_lock.hpp>
 #include <boost/interprocess/sync/named_mutex.hpp>
 #include <boost/interprocess/sync/named_sharable_mutex.hpp>
 #include <boost/interprocess/sync/scoped_lock.hpp>
 #include <boost/interprocess/sync/sharable_lock.hpp>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -34,15 +37,14 @@ namespace tt::concurrent {
 // Alias an STL compatible allocator of pid_ts that allocates pid_t from the managed shared memory segment
 // This allocator will allow to place containers holding pids in managed shared memory segments to allow tracking of
 // zombie processes
-typedef boost::interprocess::allocator<pid_t, boost::interprocess::managed_shared_memory::segment_manager>
-    pid_allocator_t;
+typedef boost::interprocess::allocator<pid_t, boost::interprocess::managed_mapped_file::segment_manager> pid_allocator_t;
 typedef boost::interprocess::vector<pid_t, pid_allocator_t> pid_vector_t;
 
 // This allows multiple processes/threads to safely initialize, interface with, and close the UMD
 // Host reads and writes do not need to be protected because UMD used named mutexes for synchronization
 // There are num MMIO devices device_driver_t structs in shared memory
 struct device_driver_t {
-    device_driver_t();
+    device_driver_t(const pid_allocator_t &alloc_inst);
 
     // Counts the number of times the device driver for a particular MMIO device has been initialized, count decrements
     // on closing device driver
@@ -107,7 +109,18 @@ struct sys_mem_cq_write_interface_t {
     bool fifo_wr_toggle;
 };
 
-typedef std::pair<device_driver_t *, boost::interprocess::named_mutex &> driver_control_and_lock_pair_t;
+// Use file_lock for controlling access to device driver because it gets automatically unlocked if lock owning process dies
+// file_lock only synchronizes processes so we need std::mutex for thread safety
+typedef std::tuple<device_driver_t *, boost::interprocess::file_lock &, std::mutex &> driver_control_and_locks_t;
+
+// No need to use file_lock for remaining mutexes because mutexes can be removed in critical section of file_lock
+// Remaining mutexes are implemented using `named_mutex` over `interprocess_mutex` to ensure we can recover after ungraceful
+// termination where mutexes may not get unlocked. This is because `named_mutex` allows a thread/process that did not
+// lock the mutex to remove it, whereas `interprocess_mutex` throws if the non-locking thread/mutex tries to remove it
+// `named_mutex` cannot be allocated in shared memory
+// Note: limitation on `interprocess_mutex` is addressed in Boost 1.78 release which switches to using robust mutex:
+//  https://www.boost.org/doc/libs/1_83_0/doc/html/interprocess/acknowledgements_notes.html#interprocess.acknowledgements_notes.release_notes.release_notes_boost_1_78_00
+//      - see https://github.com/boostorg/interprocess/issues/65 and https://github.com/boostorg/interprocess/pull/67
 typedef std::pair<device_state_t *, boost::interprocess::named_mutex &> device_state_and_lock_pair_t;
 typedef std::pair<allocator_t *, boost::interprocess::named_mutex &> allocator_and_lock_pair_t;
 typedef std::pair<sys_mem_cq_write_interface_t *, boost::interprocess::named_sharable_mutex &>
@@ -115,26 +128,21 @@ typedef std::pair<sys_mem_cq_write_interface_t *, boost::interprocess::named_sha
 
 template <typename ShmT>
 std::string get_shared_mem_object_name(chip_id_t device_id) {
-    return boost::core::demangle(typeid(ShmT).name()) + "_" + std::to_string(device_id);
+    // full_name includes namespace
+    std::string full_name = boost::core::demangle(typeid(ShmT).name()) + "_" + std::to_string(device_id);
+    // remove namespace
+    return full_name.substr(full_name.rfind("::") + 2);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //                    Mutexes that protect shared memory structures and other critical sections
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// All mutexes are implemented using `named_mutex` over  `interprocess_mutex` to ensure we can recover after ungraceful
-// termination where mutexes may not get unlocked. This is because `named_mutex` allows a thread/process that did not
-// lock the mutex to remove it, whereas `interprocess_mutex` throws if the non-locking thread/mutex tries to remove it
-// `named_mutex` cannot be allocated in shared memory
-// Note: limitation on `interprocess_mutex` is addressed in Boost 1.78 release which switches to using robust mutex:
-//  https://www.boost.org/doc/libs/1_83_0/doc/html/interprocess/acknowledgements_notes.html#interprocess.acknowledgements_notes.release_notes.release_notes_boost_1_78_00
-//      - see https://github.com/boostorg/interprocess/issues/65 and https://github.com/boostorg/interprocess/pull/67
-
 boost::interprocess::managed_shared_memory &get_shared_mem_segment();
 
 // Get `device_driver_t` for associated MMIO device and named mutex that protected modifications to device_driver_t
 // control variables
-driver_control_and_lock_pair_t get_device_driver_controller(chip_id_t mmio_device_id);
+driver_control_and_locks_t get_device_driver_controller(chip_id_t mmio_device_id);
 
 // This protects concurrent writes/reads from system memory. System memory can only be accessed by MMIO device
 boost::interprocess::named_mutex &get_device_driver_sysmem_mutex(chip_id_t mmio_device_id);

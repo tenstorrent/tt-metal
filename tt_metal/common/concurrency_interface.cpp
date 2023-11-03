@@ -4,8 +4,8 @@
 
 #include "tt_metal/common/concurrency_interface.hpp"
 
+#include <filesystem>
 #include <fmt/ranges.h>
-
 #include <iostream>
 
 #include "tt_metal/common/logger.hpp"
@@ -13,6 +13,8 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 
 namespace tt::concurrent {
+
+namespace fs = std::filesystem;
 
 size_t shared_memory_size() {
     size_t num_devices = tt::Cluster::instance().number_of_devices();
@@ -24,11 +26,10 @@ size_t shared_memory_size() {
                                           ((one_gb_dram / MIN_ALLOCATABLE_DRAM_SIZE_BYTES) * sizeof(block_t)) +
                                           (2 * sizeof(allocator_t));
 
-    // Overhead to account for variable length pid_vector_t and managed shared memory helper objects (name-object index,
-    // internal synchronization objects, internal variables, etc)
+    // managed shared memory helper objects (name-object index, internal synchronization objects, internal variables, etc)
     uint32_t overhead = 65536;  // "magic" overhead number taken from boost interprocess docs examples
 
-    return (num_mmio_devices * sizeof(device_driver_t)) + (num_devices * sizeof(device_state_t)) +
+    return (num_devices * sizeof(device_state_t)) +
            (num_devices * per_dev_mem_allocator_size) + (num_mmio_devices * sizeof(sys_mem_cq_write_interface_t)) +
            overhead;
 }
@@ -55,17 +56,34 @@ std::string get_shared_mem_object_lock_name(const std::string &shm_object_name) 
     return fmt::format("{}_MUTEX", shm_object_name);
 }
 
-device_driver_t::device_driver_t() :
-    num_drivers_initialized(0), processes_using_driver(get_shared_mem_segment().get_segment_manager()) {}
+device_driver_t::device_driver_t(const pid_allocator_t &alloc_inst) :
+    num_drivers_initialized(0), processes_using_driver(alloc_inst) {}
 
-driver_control_and_lock_pair_t get_device_driver_controller(chip_id_t mmio_device_id) {
-    std::string device_controller_name = get_shared_mem_object_name<device_driver_t>(mmio_device_id);
-    device_driver_t *device_controller =
-        get_shared_mem_segment().find_or_construct<device_driver_t>(device_controller_name.c_str())();
-    std::string driver_controller_mutex_name = get_shared_mem_object_lock_name(device_controller_name);
-    static boost::interprocess::named_mutex driver_controller_mutex(
-        boost::interprocess::open_or_create, driver_controller_mutex_name.c_str());
-    return {device_controller, driver_controller_mutex};
+std::string get_dir_for_shared_files() {
+    static bool created_shm_dir = false;
+    fs::path shm_file_path = ".shm";
+    if (not created_shm_dir) {
+        fs::create_directory(shm_file_path);
+        created_shm_dir = true;
+    }
+    return shm_file_path.string() + "/";
+}
+
+driver_control_and_locks_t get_device_driver_controller(chip_id_t mmio_device_id) {
+    std::string shm_dir = get_dir_for_shared_files();
+    std::string device_controller_name = get_dir_for_shared_files() + get_shared_mem_object_name<device_driver_t>(mmio_device_id);
+    size_t driver_controller_file_size = sizeof(device_driver_t) + (sizeof(pid_t) * 2048);
+    static boost::interprocess::managed_mapped_file driver_controller_file(
+        boost::interprocess::open_or_create, device_controller_name.c_str(), driver_controller_file_size);
+    if (driver_controller_file.get_size() < driver_controller_file_size) {
+        size_t additional_bytes_required = driver_controller_file_size - driver_controller_file.get_size();
+        boost::interprocess::managed_mapped_file::grow(device_controller_name.c_str(), additional_bytes_required);
+    }
+    // driver_controller does not need a unique name because it is allocated within unique file
+    device_driver_t *driver_controller = driver_controller_file.find_or_construct<device_driver_t>("Controller")(driver_controller_file.get_segment_manager());
+    static boost::interprocess::file_lock driver_process_lock(device_controller_name.c_str());
+    static std::mutex driver_thread_lock;
+    return {driver_controller, driver_process_lock, driver_thread_lock};
 }
 
 boost::interprocess::named_mutex &get_device_driver_sysmem_mutex(chip_id_t mmio_device_id) {
@@ -139,15 +157,22 @@ device_state_and_lock_pair_t get_device_state_controller(chip_id_t device_id) {
     return {device_state, device_state_mutex};
 }
 
+std::string get_device_lock_name(chip_id_t device_id) {
+    return get_shared_mem_object_name<device_state_t>(device_id) + "_DeviceLockMUTEX";
+}
+
 boost::interprocess::named_mutex &get_device_lock(chip_id_t device_id) {
-    std::string device_lock_name = get_shared_mem_object_name<device_state_t>(device_id) + "_DeviceLockMUTEX";
+    std::string device_lock_name = get_device_lock_name(device_id);
     static boost::interprocess::named_mutex device_lock(boost::interprocess::open_or_create, device_lock_name.c_str());
     return device_lock;
 }
 
+std::string get_launch_program_mutex_name(chip_id_t device_id) {
+    return get_shared_mem_object_name<device_state_t>(device_id) + "_LaunchProgramMUTEX";
+}
+
 boost::interprocess::named_sharable_mutex &get_launch_program_mutex(chip_id_t device_id) {
-    std::string launch_program_mutex_name =
-        get_shared_mem_object_name<device_state_t>(device_id) + "_LaunchProgramMUTEX";
+    std::string launch_program_mutex_name = get_launch_program_mutex_name(device_id);
     static boost::interprocess::named_sharable_mutex program_launch_mutex(
         boost::interprocess::open_or_create, launch_program_mutex_name.c_str());
     return program_launch_mutex;
@@ -174,9 +199,9 @@ void remove_device_state_and_allocators(chip_id_t device_id) {
     get_shared_mem_segment().destroy<device_state_t>(device_state_name.c_str());
     std::string state_mutex_name = get_shared_mem_object_lock_name(device_state_name);
     boost::interprocess::named_mutex::remove(state_mutex_name.c_str());
-    std::string device_lock_name = device_state_name + "_DeviceLockMUTEX";
+    std::string device_lock_name = get_device_lock_name(device_id);
     boost::interprocess::named_mutex::remove(device_lock_name.c_str());
-    std::string launch_program_mutex_name = device_state_name + "_LaunchProgramMUTEX";
+    std::string launch_program_mutex_name = get_launch_program_mutex_name(device_id);
     boost::interprocess::named_sharable_mutex::remove(launch_program_mutex_name.c_str());
 
     std::string dram_blocks_name = dram_mem_blocks_name(device_id);
@@ -205,9 +230,12 @@ cq_write_interface_and_lock_pair_t get_cq_write_interface(chip_id_t mmio_device_
     return {cq_write_interface, cq_write_interface_mutex};
 }
 
+std::string get_finish_command_mutex_name(chip_id_t mmio_device_id) {
+    return get_shared_mem_object_name<sys_mem_cq_write_interface_t>(mmio_device_id) + "_FinishCommandMUTEX";
+}
+
 boost::interprocess::named_mutex &get_finish_command_mutex(chip_id_t mmio_device_id) {
-    std::string finish_cmd_mutex_name =
-        get_shared_mem_object_name<sys_mem_cq_write_interface_t>(mmio_device_id) + "_FinishCommandMUTEX";
+    std::string finish_cmd_mutex_name = get_finish_command_mutex_name(mmio_device_id);
     static boost::interprocess::named_mutex finish_cmd_mutex(
         boost::interprocess::open_or_create, finish_cmd_mutex_name.c_str());
     return finish_cmd_mutex;
@@ -218,7 +246,7 @@ void remove_cq_write_interface(chip_id_t mmio_device_id) {
     get_shared_mem_segment().destroy<sys_mem_cq_write_interface_t>(cq_interface_str.c_str());
     std::string cq_wr_mutex_name = get_shared_mem_object_lock_name(cq_interface_str);
     boost::interprocess::named_sharable_mutex::remove(cq_wr_mutex_name.c_str());
-    std::string finish_cmd_mutex_name = cq_interface_str + "_FinishCommandMUTEX";
+    std::string finish_cmd_mutex_name = get_finish_command_mutex_name(mmio_device_id);
     boost::interprocess::named_mutex::remove(finish_cmd_mutex_name.c_str());
 }
 
@@ -239,6 +267,7 @@ void remove_shared_memory() {
     }
 
     boost::interprocess::shared_memory_object::remove(shared_memory_name().c_str());
+    fs::remove_all(get_dir_for_shared_files());
 }
 
 }  // namespace tt::concurrent
