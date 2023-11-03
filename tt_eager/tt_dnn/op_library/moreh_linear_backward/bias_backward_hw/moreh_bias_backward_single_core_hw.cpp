@@ -10,7 +10,6 @@
 
 namespace tt {
 using namespace constants;
-using namespace tt_metal;
 namespace operations {
 
 namespace primary {
