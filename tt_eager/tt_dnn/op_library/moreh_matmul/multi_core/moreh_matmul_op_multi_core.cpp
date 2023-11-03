@@ -16,8 +16,6 @@ namespace operations {
 
 namespace primary {
 
-using namespace tt_metal;
-
 std::tuple<bool, bool> get_bcast_batch(const Shape &input0_shape, const Shape &input1_shape) {
     return {(input0_shape[1] < input1_shape[1]), (input0_shape[1] > input1_shape[1])};
 }
