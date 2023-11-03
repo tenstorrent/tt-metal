@@ -31,8 +31,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
-    std::optional<std::reference_wrapper<const Tensor>> gamma,
-    std::optional<std::reference_wrapper<const Tensor>> input_grad) {
+    const std::optional<std::reference_wrapper<const Tensor>> gamma,
+    const std::optional<std::reference_wrapper<const Tensor>> input_grad) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////

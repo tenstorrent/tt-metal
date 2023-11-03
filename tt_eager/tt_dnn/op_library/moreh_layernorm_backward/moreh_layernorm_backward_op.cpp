@@ -172,8 +172,8 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
-    std::optional<std::reference_wrapper<const Tensor>> gamma,
-    std::optional<std::reference_wrapper<const Tensor>> input_grad,
+    const std::optional<std::reference_wrapper<const Tensor>> gamma,
+    const std::optional<std::reference_wrapper<const Tensor>> input_grad,
     const MemoryConfig& output_mem_config) {
     if (!input_grad.has_value()) {
         return nullptr;
@@ -196,8 +196,8 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
-    std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
-    std::optional<std::reference_wrapper<const Tensor>> beta_grad,
+    const std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
+    const std::optional<std::reference_wrapper<const Tensor>> beta_grad,
     const MemoryConfig& output_mem_config) {
     std::vector<std::variant<Tensor, char*>> outputs{nullptr, nullptr};
     if (!gamma_grad.has_value() && !beta_grad.has_value()) {
@@ -228,10 +228,10 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
-    std::optional<std::reference_wrapper<const Tensor>> gamma,
-    std::optional<std::reference_wrapper<const Tensor>> input_grad,
-    std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
-    std::optional<std::reference_wrapper<const Tensor>> beta_grad,
+    const std::optional<std::reference_wrapper<const Tensor>> gamma,
+    const std::optional<std::reference_wrapper<const Tensor>> input_grad,
+    const std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
+    const std::optional<std::reference_wrapper<const Tensor>> beta_grad,
     const MemoryConfig& output_mem_config) {
     std::vector<std::variant<Tensor, char*>> outputs;
     outputs.reserve(3);
