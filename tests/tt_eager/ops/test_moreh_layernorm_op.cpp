@@ -31,7 +31,7 @@ int main(int argc, char **argv) {
 
     for (const auto &input_shape : input_shapes) {
         for (const auto normalized_dims : normalized_dims_vec) {
-            for (const auto run_type : run_types) {
+            for (const auto &run_type : run_types) {
                 for (const auto output_buffer_type : output_buffer_types) {
                     try {
                         ////////////////////////////////////////////////////////////////////////////
