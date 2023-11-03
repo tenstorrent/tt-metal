@@ -16,7 +16,7 @@ test-list:
           low: -100
           high: 100
       comparison:
-        function: comp_equal
+        function: comp_pcc
       args-gen: gen_repeat_interleave_args
       output-file: repeat_interleave_sweep.csv
       args:
@@ -40,7 +40,7 @@ test-list:
           low: -100
           high: 100
       comparison:
-        function: comp_equal
+        function: comp_pcc
       args-gen: gen_repeat_interleave_args
       output-file: repeat_interleave_sweep.csv
       args:
