@@ -31,8 +31,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_gamma_beta_grad_impl(
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
-    std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
-    std::optional<std::reference_wrapper<const Tensor>> beta_grad) {
+    const std::optional<std::reference_wrapper<const Tensor>> gamma_grad,
+    const std::optional<std::reference_wrapper<const Tensor>> beta_grad) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
