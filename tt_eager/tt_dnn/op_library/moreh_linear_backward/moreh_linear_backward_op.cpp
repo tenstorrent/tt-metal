@@ -16,8 +16,6 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-using namespace tt_metal;
-
 // TODO: Move bias backward code
 ////////////////////////////////////////////////////////////////////////////
 //                         MorehBiasBackward
