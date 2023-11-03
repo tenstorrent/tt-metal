@@ -1,30 +1,34 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
-#include "tt_metal/common/bmm_op.hpp"
-#include "tt_metal/common/work_split.hpp"
-//#include "tt_metal/tools/profiler/op_profiler.hpp"
-
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-
-#include "third_party/magic_enum/magic_enum.hpp"
+#pragma once
+#include <optional>
+#include <array>
 
 #include <optional>
 #include <algorithm>
 #include <array>
 
+#include "tt_metal/host_api.hpp"
+#include "tt_metal/common/constants.hpp"
+
 #include "third_party/umd/device/tt_xy_pair.h"
+#include "third_party/magic_enum/magic_enum.hpp"
+
+#include "tt_metal/programming_examples/matmul_common/work_split.hpp"
+
 using std::pair;
 using CoreCoord = tt_xy_pair;
 
 using namespace tt::constants;
 
-vector<uint32_t> _get_prime_factors(uint32_t n) {
+std::vector<uint32_t> _get_prime_factors(uint32_t n) {
     uint32_t i = 2;
 
-    vector<uint32_t> prime_factors;
+    std::vector<uint32_t> prime_factors;
     while (i * i <= n) {
         if (n % i != 0) i++;
         else {
@@ -37,12 +41,12 @@ vector<uint32_t> _get_prime_factors(uint32_t n) {
     return prime_factors;
 }
 
-vector<uint32_t> _get_possible_products(vector<uint32_t> factors) {
+std::vector<uint32_t> _get_possible_products(std::vector<uint32_t> factors) {
     if (factors.size() == 0) return {1};
 
-    vector<uint32_t> products;
+    std::vector<uint32_t> products;
     for (uint32_t& fac : factors) {
-        vector<uint32_t> new_products;
+        std::vector<uint32_t> new_products;
         if (not std::count(products.begin(), products.end(), fac))
             new_products.push_back(fac);
         for (uint32_t& prod : products) {
@@ -69,9 +73,17 @@ uint32_t _get_maximum_block_dim(int32_t block_dim, int32_t in0_block_w) {
 }
 
 namespace bmm_op_utils {
-using namespace tt;
-using namespace tt::tt_metal;
 
+constexpr std::array<tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
+    {4, 2}, {2, 4}, {8, 1}, {1, 8},
+    {7, 1}, {1, 7},
+    {3, 2}, {2, 3}, {6, 1}, {1, 6},
+    {5, 1}, {1, 5},
+    {2, 2}, {4, 1}, {1, 4},
+    {3, 1}, {1, 3},
+    {2, 1}, {1, 2},
+    {1, 1},
+}};
 
 tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(uint32_t Mt, uint32_t Nt, uint32_t num_cores_y, uint32_t num_cores_x, uint32_t in0_block_w) {
     auto Nt_fac = _get_prime_factors(Nt);
@@ -169,7 +181,6 @@ tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(uint32_t M
     return {0, 0, 0, 0};
 }
 
-
 CoreCoord get_core_range(uint32_t num_blocks_rows, uint32_t num_blocks_cols, uint32_t max_num_rows, uint32_t max_num_cols) {
     CoreCoord core_range(0, 0);
     if (!(num_blocks_rows == 1 && num_blocks_cols == 1) && num_blocks_rows <= max_num_rows && num_blocks_cols <= max_num_cols) {
@@ -179,4 +190,4 @@ CoreCoord get_core_range(uint32_t num_blocks_rows, uint32_t num_blocks_cols, uin
     return core_range;
 }
 
-}
+}  // namespace bmm_op_utils

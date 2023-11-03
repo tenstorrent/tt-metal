@@ -157,6 +157,9 @@ PROGRAMMING_EXAMPLE_ENTRIES = (
     TestEntry("programming_examples/loopback", "programming_examples/loopback"),
     TestEntry("programming_examples/eltwise_binary", "programming_examples/eltwise_binary"),
     TestEntry("programming_examples/eltwise_sfpu", "programming_examples/eltwise_sfpu"),
+    TestEntry("programming_examples/matmul_single_core", "programming_examples/matmul_single_core"),
+    TestEntry("programming_examples/matmul_multi_core", "programming_examples/matmul_multi_core"),
+    TestEntry("programming_examples/matmul_multicore_reuse", "programming_examples/matmul_multicore_reuse"),
 )
 
 
