@@ -1283,7 +1283,6 @@ static string generate_noc_addr_ranges_string(
     } else if (arch != tt::ARCH::GRAYSKULL) {
         TT_ASSERT(0, "Invalid arch");
     }
-    expected_x_flag = 8;
 
     ss << "#define NOC_PCIE_XY_P(x, y)";
     ss << generate_noc_core_xy_range_define(pcie_cores, expected_x_flag);
