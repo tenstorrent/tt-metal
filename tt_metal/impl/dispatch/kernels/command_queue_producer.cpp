@@ -56,18 +56,19 @@ void program_consumer_cb(bool db_buf_switch, uint64_t consumer_noc_encoding, uin
 
 // Only the read interface is set up on the device... the write interface
 // belongs to host
-void setup_cq_read_write_interface() {
+void setup_cq_read_interface() {
     uint fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;  // The fifo starts after the pointer addresses
-    uint fifo_size = ((1024 * 1024 * 1024) >> 4) - fifo_addr;
+    uint fifo_size = ((DeviceCommand::HUGE_PAGE_SIZE) >> 4) - fifo_addr;
 
     cq_read_interface.fifo_limit = fifo_addr + fifo_size;
     cq_read_interface.fifo_rd_ptr = fifo_addr;
     cq_read_interface.fifo_size = fifo_size;
+    cq_read_interface.fifo_rd_toggle = 0;
 }
 
 void kernel_main() {
 
-    setup_cq_read_write_interface();
+    setup_cq_read_interface();
 
     // Initialize the producer/consumer DB semaphore
     // This represents how many buffers the producer can write to.
@@ -106,7 +107,7 @@ void kernel_main() {
         if (wrap) {
             // Basically popfront without the extra conditional
             cq_read_interface.fifo_rd_ptr = CQ_START >> 4;  // Head to beginning of command queue
-            notify_host_of_cq_read_toggle();
+            cq_read_interface.fifo_rd_toggle = not cq_read_interface.fifo_rd_toggle;
             notify_host_of_cq_read_pointer();
             continue;
         }
