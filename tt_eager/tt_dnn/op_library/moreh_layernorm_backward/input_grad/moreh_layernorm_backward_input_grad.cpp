@@ -31,8 +31,8 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
-    const std::optional<std::reference_wrapper<const Tensor>> gamma,
-    const std::optional<std::reference_wrapper<const Tensor>> input_grad) {
+    const tt_metal::Tensor& input_grad,
+    const std::optional<std::reference_wrapper<const Tensor>> gamma) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -103,7 +103,6 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     const bool gamma_has_value = gamma.has_value();
-    TT_ASSERT(input_grad.has_value());
 
     const uint32_t in0_t = 1;                                 // output_grad(==dy)
     const uint32_t in1_t = 1;                                 // input(==x)
@@ -269,7 +268,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
 
     const auto gamma_addr = gamma_has_value ? gamma->get().buffer()->address() : 0;
 
-    const auto input_grad_addr = input_grad->get().buffer()->address();
+    const auto input_grad_addr = input_grad.buffer()->address();
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -338,7 +337,6 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
 
             {
                 auto runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
-                TT_ASSERT(input_grad_buffer != nullptr);
                 runtime_args[0] = input_grad_buffer->address();
                 SetRuntimeArgs(program, writer_kernels_id, core, runtime_args);
             }

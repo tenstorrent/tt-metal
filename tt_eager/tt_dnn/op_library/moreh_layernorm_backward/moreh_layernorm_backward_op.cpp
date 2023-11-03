@@ -34,31 +34,28 @@ void MorehLayerNormBackwardInputGrad::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_ASSERT(
-        input_tensors.size() == 4 and optional_input_tensors.size() <= 2,
-        "moreh_layernorm_backward_input_grad must have between 4 to 6 input tensors");
+        input_tensors.size() == 5 and optional_input_tensors.size() <= 1,
+        "moreh_layernorm_backward_input_grad must have between 5 to 6 input tensors");
 
     const auto& output_grad = input_tensors.at(0);
     const auto& input = input_tensors.at(1);
     const auto& mean = input_tensors.at(2);
     const auto& rstd = input_tensors.at(3);
+    const auto& input_grad = input_tensors.at(4);
 
     const auto& gamma = optional_input_tensors.at(0);
-    const auto& input_grad = optional_input_tensors.at(1);
 
     check_tensor(output_grad, "moreh_layernorm_backward_input_grad");
     check_tensor(input, "moreh_layernorm_backward_input_grad");
     check_tensor(mean, "moreh_layernorm_backward_input_grad");
     check_tensor(rstd, "moreh_layernorm_backward_input_grad");
+    check_tensor(input_grad, "moreh_layernorm_backward_input_grad");
 
     TT_ASSERT(this->normalized_dims > 0);
     TT_ASSERT(this->normalized_dims <= output_grad.shape().rank());
 
     if (gamma.has_value()) {
         check_tensor(gamma.value(), "moreh_layernorm_backward_input_grad");
-    }
-
-    if (input_grad.has_value()) {
-        check_tensor(input_grad.value(), "moreh_layernorm_backward_input_grad");
     }
 }
 
@@ -89,12 +86,12 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardInputGrad::create_program(
     const auto& input = input_tensors.at(1);
     const auto& mean = input_tensors.at(2);
     const auto& rstd = input_tensors.at(3);
+    const auto& input_grad = input_tensors.at(4);
 
     const auto& gamma = optional_input_tensors.at(0);
-    auto& input_grad = optional_input_tensors.at(1);
 
     return moreh_layernorm_backward_input_grad_impl(
-        output_grad, input, mean, rstd, this->normalized_dims, gamma, input_grad);
+        output_grad, input, mean, rstd, this->normalized_dims, input_grad, gamma);
 }
 
 // gamma_grad and beta_grad
@@ -166,27 +163,23 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
 }
 
 // input_grad
-[[maybe_unused]] std::variant<Tensor, char*> moreh_layernorm_backward_input_grad(
+[[maybe_unused]] Tensor moreh_layernorm_backward_input_grad(
     const Tensor& output_grad,
     const Tensor& input,
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t normalized_dims,
+    const tt_metal::Tensor& input_grad,
     const std::optional<std::reference_wrapper<const Tensor>> gamma,
-    const std::optional<std::reference_wrapper<const Tensor>> input_grad,
     const MemoryConfig& output_mem_config) {
-    if (!input_grad.has_value()) {
-        return nullptr;
-    }
-
     // Inplace
     operation::run(
         MorehLayerNormBackwardInputGrad{
             .normalized_dims = normalized_dims, .output_mem_config = std::move(output_mem_config)},
-        {output_grad, input, mean, rstd},
-        {gamma, input_grad});
+        {output_grad, input, mean, rstd, input_grad},
+        {gamma});
 
-    return input_grad.value();
+    return input_grad;
 }
 
 // gamma_grad and beta_grad
@@ -237,8 +230,12 @@ operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_prog
     outputs.reserve(3);
 
     // input_grad
-    outputs.push_back(moreh_layernorm_backward_input_grad(
-        output_grad, input, mean, rstd, normalized_dims, gamma, input_grad, output_mem_config));
+    if (input_grad.has_value()) {
+        outputs.push_back(moreh_layernorm_backward_input_grad(
+            output_grad, input, mean, rstd, normalized_dims, input_grad->get(), gamma, output_mem_config));
+    } else {
+        outputs.push_back(nullptr);
+    }
 
     // gamma_grad and beta_grad
     const auto& gamma_beta_grad = moreh_layernorm_backward_gamma_beta_grad(
