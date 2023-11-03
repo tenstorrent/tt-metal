@@ -5,10 +5,11 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
-#include "common/bfloat16.hpp"
-#include "common/test_tiles.hpp"
+#include "tt_metal/common/bfloat16.hpp"
+#include "tt_metal/common/test_tiles.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/programming_examples/matmul_common/bmm_op.hpp"
 
 using namespace tt::constants;
 using namespace std;

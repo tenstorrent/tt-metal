@@ -156,65 +156,6 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16_0_2(uint32_t 
     return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed); // 0.0f..2.0f
 }
 
-
-inline std::vector<std::uint32_t> create_random_vector2d_of_bfloat16(uint32_t vec_size_x, uint32_t vec_size_y, int rand_max_float, int seed, float offset = 0.0f) {
-    auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
-
-    std::vector<std::uint32_t> vec(vec_size_x * vec_size_y, 0);
-    std::uint32_t idx;
-
-    for (int i = 0; i < vec_size_x; i++) {
-        for (int j = 0; j < vec_size_y; j++) {
-
-            float num_1_float = rand_float() + offset;
-            float num_2_float = rand_float() + offset;
-
-            bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
-            bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
-
-            //std::cout << "num_1_float: " << num_1_float << ", num_1_bfloat16 : " << num_1_bfloat16.to_float() << ", \t\t";
-            //std::cout << "num_2_float: " << num_2_float << ", num_2_bfloat16 : " << num_2_bfloat16.to_float() << std::endl;
-
-            // pack 2 uint16 into uint32
-            idx = j+ (i * vec_size_y);
-            vec.at(idx) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
-        }
-    }
-
-    log_info(tt::LogVerif, "Created a random vector of size {}", vec.size());
-
-    return vec;
-}
-
-/*
-inline std::vector<std::vector<std::uint32_t>> create_random_vector2d_of_bfloat16(uint32_t num_bytes_x, uint32_t num_bytes_y, int rand_max_float, int seed, float offset = 0.0f) {
-    auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
-
-    std::vector<std::vector<std::uint32_t>> vec(num_bytes_x/sizeof(std::uint32_t), vector<std::uint32_t> (num_bytes_y/sizeof(std::uint32_t), 0));
-    for (int i = 0; i < vec.size(); i++) {
-        for (int j = 0; i < vec[0].size(); i++) {
-
-            float num_1_float = rand_float() + offset;
-            float num_2_float = rand_float() + offset;
-
-            bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
-            bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
-
-            //std::cout << "num_1_float: " << num_1_float << ", num_1_bfloat16 : " << num_1_bfloat16.to_float() << ", \t\t";
-            //std::cout << "num_2_float: " << num_2_float << ", num_2_bfloat16 : " << num_2_bfloat16.to_float() << std::endl;
-
-            // pack 2 uint16 into uint32
-            vec.at(i).at(j) = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
-        }
-    }
-
-    log_info(tt::LogVerif, "Created a random vector of size {}", vec.size());
-
-    return vec;
-}
-*/
-
-
 /*
  * rk: Still won't handle the case where the number of elements is odd, except
  * if it's 1. Whatever, for now.
@@ -363,21 +304,6 @@ inline std::vector<bfloat16> unpack_uint32_vec_into_bfloat16_vec(
     return result;
 }
 
-inline const std::vector<float> unpack_uint32_vec_into_float_vec(
-    const std::vector<std::uint32_t>& data,
-    std::function<bfloat16(const bfloat16 &)> transform = bfloat16_identity_transform
-) {
-    std::vector<float> result;
-    for(auto i = 0 ; i < data.size(); i++) {
-        auto unpacked = unpack_two_bfloat16_from_uint32(data[i]);
-        auto d1 = static_cast<double>(transform(unpacked.first).to_float());
-        auto d2 = static_cast<double>(transform(unpacked.second).to_float());
-        result.push_back(d1);
-        result.push_back(d2);
-    }
-    return result;
-}
-
 // Equality functions
 inline bool equal_within_n_sig_figs(float a, float b, int n) {
     string str_a = std::to_string(a);
@@ -451,8 +377,6 @@ inline bool packed_uint32_t_vector_comparison(
         float a2 = as.second.to_float();
         float b2 = bs.second.to_float();
 
-        //cout << "COMPARE " << i << " == " << a1 << "--" << b1 << " ------" << a2 << " --" << b2  << endl;
-
         if (not (comparison_function(a1, b1) and comparison_function(a2, b2)))  {
             if (argfail)
                 *argfail = i;
@@ -461,88 +385,4 @@ inline bool packed_uint32_t_vector_comparison(
     }
 
     return true;
-}
-
-
-inline float packed_uint32_t_vector_pcc(const vector<uint32_t> &vec_a, const vector<uint32_t> &vec_b)
-{
-    if (vec_a.size() != vec_b.size()) {
-        std::cout << "Sizes don't match, returning false" << std::endl;
-        return false;
-    }
-
-    float sum_X = 0, sum_Y = 0, sum_XY = 0;
-    float squareSum_X = 0, squareSum_Y = 0;
-
-    for (int i = 0; i < vec_a.size(); i++) {
-        std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(vec_a.at(i));
-        std::pair<bfloat16, bfloat16> bs = unpack_two_bfloat16_from_uint32(vec_b.at(i));
-
-        float a1 = as.first.to_float();
-        float b1 = bs.first.to_float();
-
-        float a2 = as.second.to_float();
-        float b2 = bs.second.to_float();
-
-        sum_X = sum_X + a1 + a2;
-        sum_Y = sum_Y + b1 + b2;
-        sum_XY = sum_XY + (a1 * b1) + (a2 * b2);
-        squareSum_X = squareSum_X + (a1 * a1) + (a2 * a2);
-        squareSum_Y = squareSum_Y + (b1 * b1) + (b2 * b2);
-        //std::cout <<  "CORR -  " << sum_XY << " -  " << sum_X << " - " << sum_Y << " - " <<  squareSum_X << " - " << squareSum_Y << endl;
-    }
-
-    int n = vec_a.size() * 2;
-    // use formula for calculating correlation coefficient.
-
-    std::cout << "CORR - sum_XY - sum_X - sum_Y - squareSum_X - squareSum_Y" << endl;
-    std::cout <<  "CORR -  " << sum_XY << " -  " << sum_X << " - " << sum_Y << " - " <<  squareSum_X << " - " << squareSum_Y << endl;
-    float corr = (float)(n * sum_XY - sum_X * sum_Y)
-                  / sqrt((n * squareSum_X - sum_X * sum_X)
-                      * (n * squareSum_Y - sum_Y * sum_Y));
-
-    return corr;
-}
-
-
-inline float packed_uint32_t_vector_pcc_v2(const vector<uint32_t> &vec_a, const vector<uint32_t> &vec_b)
-{
-    vector<float> x_values_ = unpack_uint32_vec_into_float_vec(vec_a);
-    vector<float> y_values_ = unpack_uint32_vec_into_float_vec(vec_b);
-
-    // Calculate the mean of x and y values
-    float x_mean = 0.0f;
-    float y_mean = 0.0f;
-
-    for (size_t i = 0; i < x_values_.size(); i++)
-    {
-        x_mean += x_values_[i];
-        y_mean += y_values_[i];
-    }
-
-    x_mean /= x_values_.size();
-    y_mean /= y_values_.size();
-
-    // Calculate the covariance and standard deviation of x and y values
-    float covariance = 0.0f;
-    float x_stddev = 0.0f;
-    float y_stddev = 0.0f;
-
-    for (size_t i = 0; i < x_values_.size(); i++)
-    {
-        float x_diff = x_values_[i] - x_mean;
-        float y_diff = y_values_[i] - y_mean;
-
-        covariance += x_diff * y_diff;
-        x_stddev += x_diff * x_diff;
-        y_stddev += y_diff * y_diff;
-    }
-
-    covariance /= x_values_.size();
-    x_stddev /= x_values_.size();
-    y_stddev /= y_values_.size();
-
-    // Calculate the correlation coefficient
-    float correlation_coefficient_ = covariance / (sqrt(x_stddev) * sqrt(y_stddev));
-    return correlation_coefficient_;
 }
