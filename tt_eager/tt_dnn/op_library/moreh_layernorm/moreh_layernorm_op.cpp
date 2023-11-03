@@ -53,10 +53,10 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
     uint32_t normalized_dims,
     float eps,
     Tensor& output,
-    std::optional<std::reference_wrapper<const Tensor>> gamma,
-    std::optional<std::reference_wrapper<const Tensor>> beta,
-    std::optional<std::reference_wrapper<const Tensor>> mean,
-    std::optional<std::reference_wrapper<const Tensor>> rstd) {
+    const std::optional<std::reference_wrapper<const Tensor>> gamma,
+    const std::optional<std::reference_wrapper<const Tensor>> beta,
+    const std::optional<std::reference_wrapper<const Tensor>> mean,
+    const std::optional<std::reference_wrapper<const Tensor>> rstd) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -501,10 +501,10 @@ Tensor moreh_layernorm(
     const Tensor& input,
     uint32_t normalized_dims,
     float eps,
-    std::optional<std::reference_wrapper<const Tensor>> gamma,
-    std::optional<std::reference_wrapper<const Tensor>> beta,
-    std::optional<std::reference_wrapper<const Tensor>> mean,
-    std::optional<std::reference_wrapper<const Tensor>> rstd,
+    const std::optional<std::reference_wrapper<const Tensor>> gamma,
+    const std::optional<std::reference_wrapper<const Tensor>> beta,
+    const std::optional<std::reference_wrapper<const Tensor>> mean,
+    const std::optional<std::reference_wrapper<const Tensor>> rstd,
     const MemoryConfig& output_mem_config) {
     return operation::run(
                MorehLayerNorm{
@@ -524,10 +524,10 @@ Tensor moreh_layernorm(
     const Tensor& input,
     uint32_t normalized_dims,
     float eps,
-    std::optional<std::reference_wrapper<const Tensor>> gamma,
-    std::optional<std::reference_wrapper<const Tensor>> beta,
-    std::optional<std::reference_wrapper<const Tensor>> mean,
-    std::optional<std::reference_wrapper<const Tensor>> rstd,
+    const std::optional<std::reference_wrapper<const Tensor>> gamma,
+    const std::optional<std::reference_wrapper<const Tensor>> beta,
+    const std::optional<std::reference_wrapper<const Tensor>> mean,
+    const std::optional<std::reference_wrapper<const Tensor>> rstd,
     const MemoryConfig& output_mem_config) {
     return operation::run_with_autoformat(
                operations::primary::MorehLayerNorm{

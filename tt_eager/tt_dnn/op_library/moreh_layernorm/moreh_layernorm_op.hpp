@@ -40,19 +40,19 @@ tt_metal::operation::ProgramWithCallbacks moreh_layernorm_impl(
     uint32_t normalized_dims,
     float eps,
     tt_metal::Tensor &output,
-    std::optional<std::reference_wrapper<const tt_metal::Tensor>> gamma,
-    std::optional<std::reference_wrapper<const tt_metal::Tensor>> beta,
-    std::optional<std::reference_wrapper<const tt_metal::Tensor>> mean,
-    std::optional<std::reference_wrapper<const tt_metal::Tensor>> rstd);
+    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> gamma,
+    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> beta,
+    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> mean,
+    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> rstd);
 
 tt_metal::Tensor moreh_layernorm(
     const tt_metal::Tensor &input,
     uint32_t normalized_dims,
     float eps,
-    std::optional<std::reference_wrapper<const tt_metal::Tensor>> gamma = std::nullopt,
-    std::optional<std::reference_wrapper<const tt_metal::Tensor>> beta = std::nullopt,
-    std::optional<std::reference_wrapper<const tt_metal::Tensor>> mean = std::nullopt,
-    std::optional<std::reference_wrapper<const tt_metal::Tensor>> rstd = std::nullopt,
+    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> gamma = std::nullopt,
+    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> beta = std::nullopt,
+    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> mean = std::nullopt,
+    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> rstd = std::nullopt,
     const tt_metal::MemoryConfig &output_mem_config = tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace primary
@@ -65,10 +65,10 @@ Tensor moreh_layernorm(
     const Tensor &input,
     uint32_t normalized_dims,
     float eps,
-    std::optional<std::reference_wrapper<const Tensor>> gamma = std::nullopt,
-    std::optional<std::reference_wrapper<const Tensor>> beta = std::nullopt,
-    std::optional<std::reference_wrapper<const Tensor>> mean = std::nullopt,
-    std::optional<std::reference_wrapper<const Tensor>> rstd = std::nullopt,
+    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> gamma = std::nullopt,
+    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> beta = std::nullopt,
+    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> mean = std::nullopt,
+    const std::optional<std::reference_wrapper<const tt_metal::Tensor>> rstd = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 }  // namespace tt_metal
