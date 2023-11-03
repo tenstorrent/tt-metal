@@ -8,6 +8,7 @@
 
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
+#include "tt_dnn/op_library/sharding_utilities.hpp"
 
 namespace tt {
 
@@ -72,8 +73,9 @@ struct UntilizeWithHalo {
     const uint32_t in_b;
     const uint32_t in_h;
     const uint32_t in_w;
-    const uint32_t max_out_nsticks_per_core_;
+    const int32_t max_out_nsticks_per_core_;
     const uint32_t stride_;
+    const PoolConfig pc_;
     const MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;

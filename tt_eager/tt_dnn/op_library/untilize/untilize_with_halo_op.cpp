@@ -104,7 +104,7 @@ void init_neighbor_core_xy_mapping(CoreCoord grid_size, bool is_twod = false) {
 } // namespace untilize_with_halo_helpers
 
 // The case of stride = 2
-operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& input, Tensor& output, uint32_t pad_val, uint32_t in_b, uint32_t in_h, uint32_t in_w) {
+operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& input, Tensor& output, uint32_t pad_val, uint32_t in_b, uint32_t in_h, uint32_t in_w, uint32_t max_out_nsticks_per_core, const PoolConfig& pc) {
     Program program = CreateProgram();
 
     Device *device = input.device();
@@ -129,51 +129,23 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
 
     // TODO: hard coded for testing only. need to pass these args in.
     // These are the input values before inserting and padding or halo
-    uint32_t nbatch = in_b;
     TT_ASSERT(in_h * in_w == input_shape[2] || in_b * in_h * in_w == input_shape[2]);
     uint32_t in_c = input_shape[3];
-    uint32_t pad_h = 1;
-    uint32_t pad_w = 1;
-    uint32_t window_h = 3;
-    uint32_t window_w = 3;
-    uint32_t stride_h = 2;
-    uint32_t stride_w = 2;
-    uint32_t dilation_h = 1;
-    uint32_t dilation_w = 1;
-
-    // resuting output shape of subsequent pooling op
-    uint32_t out_h = ((in_h + 2 * pad_h - (dilation_h * window_h - 1) - 1) / stride_h) + 1;
-    uint32_t out_w = ((in_w + 2 * pad_w - (dilation_w * window_w - 1) - 1) / stride_w) + 1;
-
-    PoolConfig pc {
-        .in_w = in_w,
-        .in_h = in_h,
-        .out_w = out_w,
-        .out_h = out_h,
-        .stride_w = stride_w,
-        .stride_h = stride_h,
-        .pad_w = pad_w,
-        .pad_h = pad_h,
-        .window_w = window_w,
-        .window_h = window_h,
-        .dilation_w = dilation_w,
-        .dilation_h = dilation_h
-    };
 
     if (1) {
         log_debug(LogOp, "ntiles: {}", ntiles);
         log_debug(LogOp, "ntiles_per_block: {}", ntiles_per_block);
         log_debug(LogOp, "nblocks: {}", nblocks);
-        log_debug(LogOp, "nbatch: {}", nbatch);
-        log_debug(LogOp, "in_h: {}", in_h);
-        log_debug(LogOp, "in_w: {}", in_w);
+        log_debug(LogOp, "in_b: {}", in_b);
+        log_debug(LogOp, "in_h: {}", pc.in_h);
+        log_debug(LogOp, "in_w: {}", pc.in_w);
         log_debug(LogOp, "in_c: {}", in_c);
-        log_debug(LogOp, "pad_h: {}", pad_h);
-        log_debug(LogOp, "pad_w: {}", pad_w);
-        log_debug(LogOp, "window_h: {}", window_h);
-        log_debug(LogOp, "window_w: {}", window_w);
-        log_debug(LogOp, "stride_h: {}", stride_h);
-        log_debug(LogOp, "stride_w: {}", stride_w);
+        log_debug(LogOp, "pad_h: {}", pc.pad_h);
+        log_debug(LogOp, "pad_w: {}", pc.pad_w);
+        log_debug(LogOp, "window_h: {}", pc.window_h);
+        log_debug(LogOp, "window_w: {}", pc.window_w);
+        log_debug(LogOp, "stride_h: {}", pc.stride_h);
+        log_debug(LogOp, "stride_w: {}", pc.stride_w);
     }
 
     auto grid_size = device->compute_with_storage_grid_size();
@@ -190,15 +162,15 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     uint32_t nblocks_per_core = input.shard_spec().value().shard_shape[0] / TILE_HEIGHT;
     uint32_t nblocks_per_core_cliff = 0;
 
-    uint32_t in_hw = in_h * in_w;
-    uint32_t in_nhw = nbatch * in_hw;
+    uint32_t in_hw = pc.in_h * pc.in_w;
+    uint32_t in_nhw = in_b * in_hw;
     uint32_t in_stick_nbytes = in_c * out_nbytes;
     uint32_t in_nsticks = in_nhw;
     uint32_t in_nsticks_per_batch = in_hw;
     uint32_t in_nsticks_per_core = in_nhw / ncores;
 
-    int32_t halo_in_nsticks = (in_w + (window_w / 2)) * (window_h / 2);     // input sticks to the writer
-    int32_t halo_out_nsticks = (in_w + 2 * pad_w) * pad_h + window_w / 2;   // output sticks from the writer
+    int32_t halo_in_nsticks = (pc.in_w + (pc.window_w / 2)) * (pc.window_h / 2);     // input sticks to the writer
+    int32_t halo_out_nsticks = (pc.in_w + 2 * pc.pad_w) * pc.pad_h + pc.window_w / 2;   // output sticks from the writer
 
     if (1) {
         log_debug(LogOp, "shard_shape: {},{}", input.shard_spec().value().shard_shape[0], input.shard_spec().value().shard_shape[1]);
@@ -213,6 +185,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         log_debug(LogOp, "in_nsticks_per_core: {}", in_nsticks_per_core);
         log_debug(LogOp, "halo_in_nsticks: {}", halo_in_nsticks);
         log_debug(LogOp, "halo_out_nsticks: {}", halo_out_nsticks);
+        log_debug(LogOp, "max nsticks across all cores = {}", max_out_nsticks_per_core);
     }
 
     // For each core, calculate the desired resharding with halo and pad inserted in order to
@@ -225,8 +198,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     // calculate this core's [left halo, local owned, right halo]. These halo data could be "anywhere".
     std::map<uint32_t, std::array<range_t, 3>> my_shard;
     int32_t out_stick_start = 0;   // global "output" stick (after downsample/pool)
-    int32_t pool_out_nsticks_per_core = nbatch * pc.out_h * pc.out_w / ncores;
-    uint32_t max_nsticks = 0;
+    int32_t pool_out_nsticks_per_core = in_b * pc.out_h * pc.out_w / ncores;
     for (uint32_t core = 0; core < ncores; ++ core) {
         range_t out_range = {out_stick_start, out_stick_start + pool_out_nsticks_per_core};
         range_t in_range = untilize_with_halo_helpers::calculate_in_range(out_range, pc);  // this represents the "window" center input sticks
@@ -240,12 +212,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
             { in_range[0], in_range[1] },                   // local
             { in_range[1], r_halo_end }  // r_halo
         }};
-
-        max_nsticks = max_nsticks < (r_halo_end - l_halo_start) ? (r_halo_end - l_halo_start) : max_nsticks;
-
         out_stick_start += pool_out_nsticks_per_core;
     }
-    log_debug("max nsticks across all cores = {}", max_nsticks);
 
     // CBs
 
@@ -266,7 +234,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     // output after concatenating halo and padding goes into this CB, as input to next op.
     uint32_t out_cb_id = CB::c_out1;
     uint32_t out_cb_pagesize = out_nbytes * in_c;
-    uint32_t out_cb_npages = max_nsticks;
+    uint32_t out_cb_npages = max_out_nsticks_per_core;
     auto out_cb_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
                             .set_page_size(out_cb_id, out_cb_pagesize)
                             .set_globally_allocated_address(*output.buffer());
@@ -351,11 +319,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         ntiles_per_block * nblocks_per_core,  // in_nsticks,                     // 0
         in_nsticks_per_core,  // UNUSED
         0,  // partial_first_row_nsticks,
-        pad_w,
-        in_w,
+        pc.pad_w,
+        pc.in_w,
         0,  // partial_top_image_nrows,        // 5
-        pad_h,
-        in_h,
+        pc.pad_h,
+        pc.in_h,
         0,  // full_nimages,
         0,  // partial_bottom_image_nrows,
         0,  // partial_last_row_nsticks,       // 10
@@ -426,7 +394,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
 
     uint32_t writer_noc = 0;
 
-    TT_ASSERT(window_h == 3 && window_w == 3);
+    TT_ASSERT(pc.window_h == 3 && pc.window_w == 3);
 
     // Calculate data shuffle config for each core using its shard size:
     // Given equally distributed input across all cores,
@@ -1353,21 +1321,16 @@ std::vector<Shape> UntilizeWithHalo::compute_output_shapes(const std::vector<Ten
         ncores = core_range.end.x - core_range.start.x + 1;
     }
 
-    uint32_t total_nsticks = 1300 * 98; // TODO: use the max val after a full scan
-    switch (nbatch) {
-        case 1:
-            total_nsticks = 480 * 98;
-        case 8:
-            total_nsticks = 1300 * 98;
-    }
+    uint32_t total_nsticks = ncores * max_out_nsticks_per_core_;
 
     // output_shape[0] remains same
     // output_shape[1] remains same
     // output_shape[2] changes
     // output_shape[3] remains same
     if (stride_ == 1) {
-        output_shape[2] = this->max_out_nsticks_per_core_ * ncores;
+        output_shape[2] = total_nsticks;
     } else {
+        total_nsticks = ncores * (max_out_nsticks_per_core_ + 2);   // TODO [AS]: Need to debug why using exact number (without + 2) makes it fail.
         output_shape[2] = (uint32_t) ceil((float) total_nsticks / output_shape[0]);
     }
 
@@ -1405,7 +1368,7 @@ operation::ProgramWithCallbacks UntilizeWithHalo::create_program(const std::vect
             return { untilize_with_halo_multi_core_s1(input_tensor_a, output_tensor, pad_val_, this->in_b, this->in_h, this->in_w, this->max_out_nsticks_per_core_) };
         case 2:
             log_debug(LogOp, "Using stride 2 kernel");
-            return { untilize_with_halo_multi_core_s2(input_tensor_a, output_tensor, pad_val_, in_b, in_h, in_w) };
+            return { untilize_with_halo_multi_core_s2(input_tensor_a, output_tensor, pad_val_, in_b, in_h, in_w, max_out_nsticks_per_core_, pc_) };
         default:
             TT_ASSERT(false, "Unsupported stride value");
     };
@@ -1415,16 +1378,21 @@ operation::ProgramWithCallbacks UntilizeWithHalo::create_program(const std::vect
 Tensor untilize_with_halo(const Tensor &input_tensor_a, const uint32_t pad_val, const uint32_t &in_b, const uint32_t &in_h, const uint32_t &in_w, const uint32_t stride, const MemoryConfig& mem_config) {
     TT_ASSERT(input_tensor_a.memory_config().is_sharded()); // TODO: Remove from validate?
 
+    // TODO: Pass these attributes in instead of hardcoding
     uint32_t pad_h = 1;
     uint32_t pad_w = 1;
+    uint32_t window_h = 3;
     uint32_t window_w = 3;
+    uint32_t dilation_h = 1;
+    uint32_t dilation_w = 1;
+
     CoreRangeSet all_cores = input_tensor_a.shard_spec().value().shard_grid;
     uint32_t ncores = all_cores.num_cores();
 
     // TODO: Uplift to support different num of sticks per core
     uint32_t in_nsticks_per_core = (in_b * in_h * in_w) / ncores;
     // NOTE: This is always the same for all cores
-    uint32_t halo_nsticks = (in_w + window_w / 2 + 2 * pad_w);  // left or right halo
+    uint32_t halo_out_nsticks = (in_w + window_w / 2 + 2 * pad_w);  // left or right halo
 
     if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         TT_ASSERT(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::COL_MAJOR);
@@ -1434,30 +1402,86 @@ Tensor untilize_with_halo(const Tensor &input_tensor_a, const uint32_t pad_val, 
         in_nsticks_per_core = input_tensor_a.shard_spec().value().shard_shape[0];
     }
 
-    uint32_t max_out_nsticks_per_core = 0;
-    for (int32_t i = 0; i < ncores; ++ i) {
-        uint32_t in_stick_start = in_nsticks_per_core * i;
-        ShardingConfig sc = get_specs_for_sharding_partition(in_stick_start, in_stick_start + in_nsticks_per_core, in_h, in_w, window_w, pad_h, pad_w);
-        uint32_t partial_first_row_nsticks = sc.first_partial_right_aligned_row_width;
-        uint32_t partial_top_image_nrows = sc.first_partial_image_num_rows;
-        uint32_t full_nimages = sc.num_full_images;
-        uint32_t partial_bottom_image_nrows = sc.last_partial_image_num_rows;
-        uint32_t partial_last_row_nsticks = sc.last_partial_left_aligned_row_width;
-        uint32_t partial_first_row_skip = sc.skip_after_partial_right_aligned_row;
-        uint32_t partial_top_image_skip = sc.skip_after_first_partial_image_row;
-        uint32_t full_image_skip = sc.skip_after_full_image;
+    auto input_shape = input_tensor_a.shape();
+    uint32_t in_hw = in_h * in_w;
+    uint32_t in_nhw = in_b * in_hw;
 
-        uint32_t local_nsticks = partial_first_row_nsticks + partial_first_row_skip
-                                    + partial_top_image_nrows * (in_w + 2 * pad_w) + partial_top_image_skip
-                                    + full_nimages * (in_w + 2 * pad_w) * in_h
-                                    + full_image_skip
-                                    + partial_bottom_image_nrows * (in_w + 2 * pad_w)
-                                    + partial_last_row_nsticks;
+    PoolConfig pc {
+        .in_w = in_w,
+        .in_h = in_h,
+        .out_w = 0,         // set later in the following
+        .out_h = 0,         // set later in the following
+        .stride_w = stride, // assumes same stride in both dims
+        .stride_h = stride,
+        .pad_w = pad_w,
+        .pad_h = pad_h,
+        .window_w = window_w,
+        .window_h = window_h,
+        .dilation_w = dilation_w,
+        .dilation_h = dilation_h
+    };
 
-        uint32_t out_nsticks = local_nsticks + 2 * halo_nsticks;
-        max_out_nsticks_per_core = std::max(max_out_nsticks_per_core, out_nsticks);
+    // Calculate the max output nsticks across all cores
+    int32_t max_out_nsticks_per_core = 0;
+    int32_t halo_in_nsticks = 0;
+    int32_t out_stick_start = 0;
+    int32_t pool_out_nsticks_per_core = 0;
+    switch (stride) {
+        case 1:
+            for (int32_t i = 0; i < ncores; ++ i) {
+                uint32_t in_stick_start = in_nsticks_per_core * i;
+                ShardingConfig sc = get_specs_for_sharding_partition(in_stick_start, in_stick_start + in_nsticks_per_core, in_h, in_w, window_w, pad_h, pad_w);
+                uint32_t partial_first_row_nsticks = sc.first_partial_right_aligned_row_width;
+                uint32_t partial_top_image_nrows = sc.first_partial_image_num_rows;
+                uint32_t full_nimages = sc.num_full_images;
+                uint32_t partial_bottom_image_nrows = sc.last_partial_image_num_rows;
+                uint32_t partial_last_row_nsticks = sc.last_partial_left_aligned_row_width;
+                uint32_t partial_first_row_skip = sc.skip_after_partial_right_aligned_row;
+                uint32_t partial_top_image_skip = sc.skip_after_first_partial_image_row;
+                uint32_t full_image_skip = sc.skip_after_full_image;
+
+                uint32_t local_nsticks = partial_first_row_nsticks + partial_first_row_skip
+                                            + partial_top_image_nrows * (in_w + 2 * pad_w) + partial_top_image_skip
+                                            + full_nimages * (in_w + 2 * pad_w) * in_h
+                                            + full_image_skip
+                                            + partial_bottom_image_nrows * (in_w + 2 * pad_w)
+                                            + partial_last_row_nsticks;
+
+                int32_t out_nsticks = local_nsticks + 2 * halo_out_nsticks;
+                max_out_nsticks_per_core = std::max(max_out_nsticks_per_core, out_nsticks);
+            }
+            break;
+
+        case 2:
+
+            TT_ASSERT(pc.in_h * pc.in_w == input_shape[2] || in_b * pc.in_h * pc.in_w == input_shape[2]);
+
+            // resuting output shape of subsequent pooling op
+            pc.out_h = ((pc.in_h + 2 * pc.pad_h - (pc.dilation_h * pc.window_h - 1) - 1) / pc.stride_h) + 1;
+            pc.out_w = ((pc.in_w + 2 * pc.pad_w - (pc.dilation_w * pc.window_w - 1) - 1) / pc.stride_w) + 1;
+            halo_in_nsticks = (pc.in_w + (pc.window_w / 2)) * (pc.window_h / 2);     // input sticks to the writer
+            pool_out_nsticks_per_core = in_b * pc.out_h * pc.out_w / ncores;
+
+            out_stick_start = 0;   // global "output" stick (after downsample/pool)
+            for (uint32_t core = 0; core < ncores; ++ core) {
+                range_t out_range = {out_stick_start, out_stick_start + pool_out_nsticks_per_core};
+                range_t in_range = untilize_with_halo_helpers::calculate_in_range(out_range, pc);  // this represents the "window" center input sticks
+                int32_t l_halo_start = in_range[0] - halo_in_nsticks;
+                int32_t batch_start = (in_range[0] / (pc.in_h * pc.in_w)) * (pc.in_h * pc.in_w);
+                l_halo_start = l_halo_start < batch_start ? batch_start : l_halo_start;
+                int32_t r_halo_end = in_range[1] + halo_in_nsticks;
+                r_halo_end = r_halo_end >= in_nhw ? in_nhw : r_halo_end;
+                max_out_nsticks_per_core = std::max(max_out_nsticks_per_core, (r_halo_end - l_halo_start));
+                out_stick_start += pool_out_nsticks_per_core;
+            }
+            break;
+
+        default:
+            TT_ASSERT(false, "Invalid stride value!");
     }
-    return operation::run_without_autoformat(UntilizeWithHalo{pad_val, in_b, in_h, in_w, max_out_nsticks_per_core, stride, mem_config}, {input_tensor_a}).at(0);
+    log_debug("max nsticks across all cores = {}", max_out_nsticks_per_core);
+
+    return operation::run_without_autoformat(UntilizeWithHalo{pad_val, in_b, in_h, in_w, max_out_nsticks_per_core, stride, pc, mem_config}, {input_tensor_a}).at(0);
 }
 
 }  // namespace tt_metal
