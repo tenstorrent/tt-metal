@@ -23,8 +23,6 @@ namespace operations {
 
 namespace primary {
 
-using namespace tt_metal;
-
 operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
     const Tensor& output_grad,
     const Tensor& input,

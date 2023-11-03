@@ -16,8 +16,6 @@ namespace operations {
 
 namespace primary {
 
-using namespace tt_metal;
-
 namespace {
 inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
     TT_ASSERT(tensor.layout() == Layout::TILE, fmt::format("{} only supports tiled layout.", op_name));
