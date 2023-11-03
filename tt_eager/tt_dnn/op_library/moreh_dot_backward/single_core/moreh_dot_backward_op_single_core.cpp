@@ -9,26 +9,25 @@
 
 namespace tt {
 using namespace constants;
-using namespace tt_metal;
 namespace operations {
 
 namespace primary {
 
 operation::ProgramWithCallbacks moreh_dot_backward_single_core(
-    const tt_metal::Tensor &output_grad,
-    const tt_metal::Tensor &input,
-    const tt_metal::Tensor &other,
-    const std::optional<const tt_metal::Tensor> &input_grad,
-    const std::optional<const tt_metal::Tensor> &other_grad) {
+    const Tensor &output_grad,
+    const Tensor &input,
+    const Tensor &other,
+    const std::optional<const Tensor> &input_grad,
+    const std::optional<const Tensor> &other_grad) {
     Program program{};
     CoreRange core = {.start = {0, 0}, .end = {0, 0}};
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
+    uint32_t single_tile_size = detail::TileSize(cb_data_format);
 
-    tt_metal::Buffer *src0_buffer = output_grad.buffer();
-    tt_metal::Buffer *src1_buffer = input.buffer();
-    tt_metal::Buffer *src2_buffer = other.buffer();
+    Buffer *src0_buffer = output_grad.buffer();
+    Buffer *src1_buffer = input.buffer();
+    Buffer *src2_buffer = other.buffer();
 
     uint32_t num_tiles = input.volume() / TILE_HW;
     float scaler = 1.0f;
@@ -39,46 +38,46 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
     uint32_t mask_w = (pad_w == 0) ? (TILE_WIDTH) : (pad_w);
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = input.device();
+    Device *device = input.device();
 
     uint32_t src0_cb_index = CB::c_in0;
     uint32_t num_input_tiles = 2;
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
+    CircularBufferConfig cb_src0_config =
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    auto cb_src0 = CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t src1_cb_index = CB::c_in1;
-    tt_metal::CircularBufferConfig cb_src1_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
+    CircularBufferConfig cb_src1_config =
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    auto cb_src1 = CreateCircularBuffer(program, core, cb_src1_config);
 
     uint32_t src2_cb_index = CB::c_in2;
-    tt_metal::CircularBufferConfig cb_src2_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src2_cb_index, cb_data_format}})
+    CircularBufferConfig cb_src2_config =
+        CircularBufferConfig(num_input_tiles * single_tile_size, {{src2_cb_index, cb_data_format}})
             .set_page_size(src2_cb_index, single_tile_size);
-    auto cb_src2 = tt_metal::CreateCircularBuffer(program, core, cb_src2_config);
+    auto cb_src2 = CreateCircularBuffer(program, core, cb_src2_config);
 
     uint32_t output0_cb_index = CB::c_out0;
     uint32_t num_output_tiles = 2;
-    tt_metal::CircularBufferConfig cb_output0_config =
-        tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output0_cb_index, cb_data_format}})
+    CircularBufferConfig cb_output0_config =
+        CircularBufferConfig(num_output_tiles * single_tile_size, {{output0_cb_index, cb_data_format}})
             .set_page_size(output0_cb_index, single_tile_size);
-    auto cb_output0 = tt_metal::CreateCircularBuffer(program, core, cb_output0_config);
+    auto cb_output0 = CreateCircularBuffer(program, core, cb_output0_config);
 
     uint32_t output1_cb_index = CB::c_out1;
-    tt_metal::CircularBufferConfig cb_output1_config =
-        tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output1_cb_index, cb_data_format}})
+    CircularBufferConfig cb_output1_config =
+        CircularBufferConfig(num_output_tiles * single_tile_size, {{output1_cb_index, cb_data_format}})
             .set_page_size(output1_cb_index, single_tile_size);
-    auto cb_output1 = tt_metal::CreateCircularBuffer(program, core, cb_output1_config);
+    auto cb_output1 = CreateCircularBuffer(program, core, cb_output1_config);
 
     bool has_input_grad = input_grad.has_value();
     bool has_other_grad = other_grad.has_value();
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool src2_is_dram = src2_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool src1_is_dram = src1_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool src2_is_dram = src2_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_is_dram, (std::uint32_t)src1_is_dram, (std::uint32_t)src2_is_dram};
@@ -90,17 +89,17 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
 
     if (has_input_grad) {
         const auto &input_grad_tensor = input_grad.value();
-        tt_metal::Buffer *dst0_buffer = input_grad_tensor.buffer();
+        Buffer *dst0_buffer = input_grad_tensor.buffer();
         TT_ASSERT(dst0_buffer != nullptr, "input_grad buffer should be allocated on device!");
-        dst0_is_dram = dst0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+        dst0_is_dram = dst0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
         dst0_address = dst0_buffer->address();
     }
 
     if (has_other_grad) {
         const auto &other_grad_tensor = other_grad.value();
-        tt_metal::Buffer *dst1_buffer = other_grad_tensor.buffer();
+        Buffer *dst1_buffer = other_grad_tensor.buffer();
         TT_ASSERT(dst1_buffer != nullptr, "other_grad buffer should be allocated on device!");
-        dst1_is_dram = dst1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+        dst1_is_dram = dst1_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
         dst1_address = dst1_buffer->address();
     }
 
@@ -111,34 +110,34 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
         (std::uint32_t)dst1_is_dram,
     };
 
-    KernelID binary_reader_kernel_id = tt_metal::CreateKernel(
+    KernelID binary_reader_kernel_id = CreateDataMovementKernel(
         program,
         "tt_eager/tt_dnn/op_library/moreh_dot_backward/kernels/reader_moreh_dot_backward.cpp",
         core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args});
 
-    KernelID binary_writer_kernel_id = tt_metal::CreateKernel(
+    KernelID binary_writer_kernel_id = CreateDataMovementKernel(
         program,
         "tt_eager/tt_dnn/op_library/moreh_dot_backward/kernels/writer_moreh_dot_backward.cpp",
         core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
             .compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_kernel_args = {};
     std::map<string, string> defines;
 
-    auto dot_backward_kernel = tt_metal::CreateKernel(
+    auto dot_backward_kernel = CreateComputeKernel(
         program,
         "tt_eager/tt_dnn/op_library/moreh_dot_backward/kernels/moreh_dot_backward.cpp",
         core,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines});
+        ComputeConfig{.compile_args = compute_kernel_args, .defines = defines});
 
-    tt_metal::SetRuntimeArgs(
+    SetRuntimeArgs(
         program,
         binary_reader_kernel_id,
         core,
@@ -150,10 +149,10 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
          num_tiles,
          0});
 
-    tt_metal::SetRuntimeArgs(
+    SetRuntimeArgs(
         program, dot_backward_kernel, core, {(std::uint32_t)has_input_grad, (std::uint32_t)has_other_grad, num_tiles});
 
-    tt_metal::SetRuntimeArgs(
+    SetRuntimeArgs(
         program,
         binary_writer_kernel_id,
         core,
@@ -184,13 +183,13 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
 
             if (has_input_grad) {
                 const auto &input_grad_tensor = input_grad.value();
-                tt_metal::Buffer *dst0_buffer = input_grad_tensor.buffer();
+                Buffer *dst0_buffer = input_grad_tensor.buffer();
                 dst0_address = dst0_buffer->address();
             }
 
             if (has_other_grad) {
                 const auto &other_grad_tensor = other_grad.value();
-                tt_metal::Buffer *dst1_buffer = other_grad_tensor.buffer();
+                Buffer *dst1_buffer = other_grad_tensor.buffer();
                 dst1_address = dst1_buffer->address();
             }
 
