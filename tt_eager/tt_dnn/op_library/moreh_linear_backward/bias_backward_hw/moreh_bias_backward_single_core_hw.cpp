@@ -14,17 +14,17 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(
-    const tt_metal::Tensor &output_grad, const tt_metal::Tensor &bias_grad) {
+operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(const Tensor &output_grad, const Tensor &bias_grad) {
     Program program{};
     CoreCoord core = {0, 0};
+    const uint32_t core_num = 1;
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
+    uint32_t single_tile_size = detail::TileSize(cb_data_format);
 
-    tt_metal::Buffer *src_buffer = output_grad.buffer();
+    Buffer *src_buffer = output_grad.buffer();
     const auto &bias_grad_shape = bias_grad.shape().without_padding();
-    tt_metal::Buffer *dst_buffer = bias_grad.buffer();
+    Buffer *dst_buffer = bias_grad.buffer();
     uint32_t num_tiles = output_grad.volume() / TILE_HW;
     const auto &output_grad_shape_wo_padding = output_grad.shape().without_padding();
     const bool do_mask_h = (output_grad_shape_wo_padding[2] % TILE_HEIGHT) != 0;
@@ -47,12 +47,12 @@ operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(
     const uint32_t im1_t = 1;
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = output_grad.device();
+    Device *device = output_grad.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         std::set<CoreRange>{CoreRange{.start = core, .end = core}},
         cb_data_format,
@@ -68,10 +68,8 @@ operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(output_grad.memory_config().buffer_type == BufferType::DRAM)};
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(bias_grad.memory_config().buffer_type == BufferType::DRAM)};
+    const std::vector<uint32_t> reader_compile_time_args{static_cast<uint32_t>(is_dram(output_grad))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(bias_grad))};
 
     const auto reader_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_linear_backward/kernels/reader_moreh_bias_backward_hw.cpp";
@@ -79,33 +77,28 @@ operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(
     const auto writer_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_linear_backward/kernels/writer_moreh_bias_backward.cpp";
 
-    const auto reader_kernel_id =
-        tt::operations::primary::CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
-    const auto writer_kernel_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     vector<uint32_t> compute_kernel_args = {};
-    std::map<string, string> defines;
-    defines["REDUCE_OP"] = "PoolType::SUM";
-    defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
+    std::map<string, string> compute_defines;
+    compute_defines["REDUCE_OP"] = "PoolType::SUM";
+    compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
     const auto compute_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_linear_backward/kernels/moreh_bias_backward_single_core_hw.cpp";
-    const auto compute_kernel_id = tt_metal::CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        core,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines});
+    const auto compute_kernel_id =
+        CreateComputeKernel(program, compute_kernel_file, {core, core_num, compute_kernel_args}, compute_defines);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::SetRuntimeArgs(
+    SetRuntimeArgs(
         program, reader_kernel_id, core, {src_buffer->address(), num_tiles, 0, mask_h, mask_w, do_mask_h, do_mask_w});
-    tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, {dst_buffer->address(), 1, 0});
-    tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, {B1, B2, Ht, Wt, do_mask_h, do_mask_w});
+    SetRuntimeArgs(program, writer_kernel_id, core, {dst_buffer->address(), 1, 0});
+    SetRuntimeArgs(program, compute_kernel_id, core, {B1, B2, Ht, Wt, do_mask_h, do_mask_w});
 
     auto override_runtime_arguments_callback = [reader_kernel_id, writer_kernel_id](
                                                    const void *operation,
