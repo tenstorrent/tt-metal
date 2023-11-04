@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks MorehBiasBackward::create_program(
                                 : (moreh_bias_backward_multi_core_h(output_grad, bias_grad));
 }
 
-tt::stl::reflection::Attributes MorehBiasBackward::attributes() const { return {}; }
+stl::reflection::Attributes MorehBiasBackward::attributes() const { return {}; }
 
 inline void moreh_linear_backward_validate(
     const Tensor& output_grad,
@@ -86,16 +86,14 @@ inline void moreh_linear_backward_validate(
 
     moreh_linear_backward_validate(output_grad, input, weight, input_grad, weight_grad, bias_grad);
     if (input_grad) {
-        outputs.push_back(tt::operations::primary::moreh_matmul(
-            output_grad, weight, input_grad->get(), false, false, output_mem_config));
+        outputs.push_back(moreh_matmul(output_grad, weight, input_grad->get(), false, false, output_mem_config));
     } else {
         outputs.push_back(nullptr);
     }
 
     if (weight_grad) {
         // TODO: Add output transpose and remove transpose wh
-        const auto& temp_weight_grad =
-            tt::operations::primary::moreh_matmul(input, output_grad, std::nullopt, true, false, output_mem_config);
+        const auto& temp_weight_grad = moreh_matmul(input, output_grad, std::nullopt, true, false, output_mem_config);
         const auto& transposed_weight_grad = transpose_wh(temp_weight_grad);
         operation::run(MorehSum{}, {transposed_weight_grad, weight_grad->get()});
         outputs.push_back(weight_grad->get());

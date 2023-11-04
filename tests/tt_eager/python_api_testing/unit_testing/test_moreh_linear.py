@@ -127,7 +127,7 @@ def test_moreh_linear(shapes, has_bias, device):
 ))
 @pytest.mark.parametrize("requires_bias_grad", [True, False])
 def test_moreh_linear_backward(shapes, requires_grads, requires_bias_grad,
-                                   device):
+                               device):
     input_shape, weight_shape, bias_shape, output_shape = shapes
     requires_input_grad, requires_weight_grad = requires_grads
     if not requires_input_grad and not requires_weight_grad and not requires_bias_grad:
@@ -137,14 +137,13 @@ def test_moreh_linear_backward(shapes, requires_grads, requires_bias_grad,
         input_shape, weight_shape, output_shape, requires_input_grad,
         requires_weight_grad, False, device)
 
-    _, torch_bias, tt_bias_grad = get_bias_tensors(
-        bias_shape, requires_bias_grad, device)
+    _, torch_bias, tt_bias_grad = get_bias_tensors(bias_shape,
+                                                   requires_bias_grad, device)
 
     ## tt linear backward
     ttl.operations.primary.moreh_linear_backward(tt_output_grad, tt_input,
-                                                 tt_weight,
-                                                 tt_input_grad, tt_weight_grad,
-                                                 tt_bias_grad)
+                                                 tt_weight, tt_input_grad,
+                                                 tt_weight_grad, tt_bias_grad)
     ## reference
     torch_weight = torch_weight.reshape(-1, torch_weight.shape[3])
     torch_output = torch.nn.functional.linear(
@@ -159,33 +158,33 @@ def test_moreh_linear_backward(shapes, requires_grads, requires_bias_grad,
     if requires_input_grad:
         ttcpu_input_grad = tt_input_grad.cpu().to(cpu_layout).unpad_from_tile(
             input_shape).to_torch()
-        passing_pcc, output_pcc = comp_allclose_and_pcc(torch_input.grad,
-                                                        ttcpu_input_grad,
-                                                        pcc=0.999,
-                                                        rtol=rtol,
-                                                        atol=atol)
-        logger.info(f"input_grad passing={passing_pcc} pcc={output_pcc}")
-        assert passing_pcc
+        passing, output_pcc = comp_allclose_and_pcc(torch_input.grad,
+                                                    ttcpu_input_grad,
+                                                    pcc=0.999,
+                                                    rtol=rtol,
+                                                    atol=atol)
+        logger.info(f"input_grad passing={passing} pcc={output_pcc}")
+        assert passing
 
     if requires_weight_grad:
         ttcpu_weight_grad = tt_weight_grad.cpu().to(
             cpu_layout).unpad_from_tile(weight_shape).to_torch()[0][0]
-        passing_pcc, output_pcc = comp_allclose_and_pcc(torch_weight.grad,
-                                                        ttcpu_weight_grad,
-                                                        pcc=0.999,
-                                                        rtol=rtol,
-                                                        atol=atol)
-        logger.info(f"weight_grad passing={passing_pcc} pcc={output_pcc}")
-        assert passing_pcc
+        passing, output_pcc = comp_allclose_and_pcc(torch_weight.grad,
+                                                    ttcpu_weight_grad,
+                                                    pcc=0.999,
+                                                    rtol=rtol,
+                                                    atol=atol)
+        logger.info(f"weight_grad passing={passing} pcc={output_pcc}")
+        assert passing
 
     if requires_bias_grad:
         ttcpu_bias_grad = tt_bias_grad.cpu().to(cpu_layout).unpad_from_tile(
             bias_shape).to_torch()
 
-        passing_pcc, output_pcc = comp_allclose_and_pcc(torch_bias.grad,
-                                                        ttcpu_bias_grad,
-                                                        pcc=0.999,
-                                                        rtol=rtol,
-                                                        atol=atol)
-        logger.info(f"bias_grad passing={passing_pcc} pcc={output_pcc}")
-        assert passing_pcc
+        passing, output_pcc = comp_allclose_and_pcc(torch_bias.grad,
+                                                    ttcpu_bias_grad,
+                                                    pcc=0.999,
+                                                    rtol=rtol,
+                                                    atol=atol)
+        logger.info(f"bias_grad passing={passing} pcc={output_pcc}")
+        assert passing
