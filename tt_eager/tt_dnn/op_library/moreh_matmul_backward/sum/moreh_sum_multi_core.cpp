@@ -18,11 +18,11 @@ namespace primary {
 operation::ProgramWithCallbacks moreh_sum_multi_core(const Tensor &src, const Tensor &dst) {
     Program program{};
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(dst.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(dst.dtype());
+    uint32_t single_tile_size = detail::TileSize(cb_data_format);
 
-    tt_metal::Buffer *src_buffer = src.buffer();
-    tt_metal::Buffer *dst_buffer = dst.buffer();
+    Buffer *src_buffer = src.buffer();
+    Buffer *dst_buffer = dst.buffer();
 
     // src shape
     const auto &src_shape = src.shape();
@@ -51,8 +51,8 @@ operation::ProgramWithCallbacks moreh_sum_multi_core(const Tensor &src, const Te
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Device *device = dst.device();
-    tt_metal::CoreGridDesc core_grid(device);
+    Device *device = dst.device();
+    CoreGridDesc core_grid(device);
     const auto num_cores_y = core_grid.y_;
     CoreCoord core_grid_coord = {.x = core_grid.x_, .y = num_cores_y};
 
@@ -71,7 +71,7 @@ operation::ProgramWithCallbacks moreh_sum_multi_core(const Tensor &src, const Te
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -94,10 +94,8 @@ operation::ProgramWithCallbacks moreh_sum_multi_core(const Tensor &src, const Te
 
     const auto writer_kernel_file = "tt_eager/tt_dnn/op_library/moreh_matmul_backward/kernels/writer_moreh_sum.cpp";
 
-    const auto reader_kernel_id =
-        tt::operations::primary::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -107,13 +105,13 @@ operation::ProgramWithCallbacks moreh_sum_multi_core(const Tensor &src, const Te
     std::map<string, string> compute_defines;
     const auto compute_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_matmul_backward/kernels/moreh_sum_multi_core.cpp";
-    const auto compute_kernel_1_id = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_1_id = CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
 
-    tt::tt_metal::KernelID compute_kernel_2_id = -1;
+    KernelID compute_kernel_2_id = -1;
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2};
-        compute_kernel_2_id = tt::operations::primary::CreateComputeKernel(
+        compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
@@ -135,7 +133,7 @@ operation::ProgramWithCallbacks moreh_sum_multi_core(const Tensor &src, const Te
             TT_ASSERT(false, "Core not in specified core ranges.");
         }
 
-        tt_metal::SetRuntimeArgs(
+        SetRuntimeArgs(
             program,
             reader_kernel_id,
             core,
@@ -148,13 +146,12 @@ operation::ProgramWithCallbacks moreh_sum_multi_core(const Tensor &src, const Te
              HtWt,
              src_B2HtWt});
 
-        tt_metal::SetRuntimeArgs(
-            program, writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, tile_offset});
+        SetRuntimeArgs(program, writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, tile_offset});
 
         if (core_group_1.core_coord_in_core_ranges(core)) {
-            tt_metal::SetRuntimeArgs(program, compute_kernel_1_id, core, {num_read_tiles_per_core, num_tiles_per_core});
+            SetRuntimeArgs(program, compute_kernel_1_id, core, {num_read_tiles_per_core, num_tiles_per_core});
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
-            tt_metal::SetRuntimeArgs(program, compute_kernel_2_id, core, {num_read_tiles_per_core, num_tiles_per_core});
+            SetRuntimeArgs(program, compute_kernel_2_id, core, {num_read_tiles_per_core, num_tiles_per_core});
         } else {
             TT_ASSERT(false, "Core not in specified core ranges.");
         }
