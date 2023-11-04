@@ -53,7 +53,7 @@ operation::ProgramWithCallbacks MorehSum::create_program(
     return moreh_sum_multi_core(src, dst);
 }
 
-tt::stl::reflection::Attributes MorehSum::attributes() const { return {}; }
+stl::reflection::Attributes MorehSum::attributes() const { return {}; }
 
 ////////////////////////////////////////////////////////////////////////////
 //                         moreh_matmul_backward
@@ -73,12 +73,11 @@ tt::stl::reflection::Attributes MorehSum::attributes() const { return {}; }
         if (is_same_batch_shape(output_grad, input_grad_tensor)) {
             const auto& input_grad_shape = input_grad_tensor.shape().without_padding();
             const auto& output_grad_shape = output_grad.shape().without_padding();
-            tt::operations::primary::moreh_matmul(
-                output_grad, other, input_grad_tensor, false, true, output_mem_config);
+            moreh_matmul(output_grad, other, input_grad_tensor, false, true, output_mem_config);
         } else {
             const auto& input_shape = input.shape().without_padding();
             const auto& temp_input_grad =
-                tt::operations::primary::moreh_matmul(output_grad, other, std::nullopt, false, true, output_mem_config);
+                moreh_matmul(output_grad, other, std::nullopt, false, true, output_mem_config);
             operation::run(MorehSum{}, {temp_input_grad, input_grad_tensor});
         }
         outputs.push_back(input_grad_tensor);
@@ -89,11 +88,10 @@ tt::stl::reflection::Attributes MorehSum::attributes() const { return {}; }
     if (other_grad) {
         const auto& other_grad_tensor = other_grad->get();
         if (is_same_batch_shape(output_grad, other_grad_tensor)) {
-            tt::operations::primary::moreh_matmul(
-                input, output_grad, other_grad_tensor, true, false, output_mem_config);
+            moreh_matmul(input, output_grad, other_grad_tensor, true, false, output_mem_config);
         } else {
             const auto& temp_other_grad =
-                tt::operations::primary::moreh_matmul(input, output_grad, std::nullopt, true, false, output_mem_config);
+                moreh_matmul(input, output_grad, std::nullopt, true, false, output_mem_config);
             operation::run(MorehSum{}, {temp_other_grad, other_grad_tensor});
         }
         outputs.push_back(other_grad_tensor);
