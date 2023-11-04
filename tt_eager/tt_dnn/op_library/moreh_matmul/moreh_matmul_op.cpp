@@ -14,7 +14,7 @@ namespace tt {
 namespace tt_metal {
 
 Tensor moreh_matmul(const Tensor& input_tensor, const Tensor& other_tensor, const MemoryConfig& mem_config) {
-    return tt::operations::primary::moreh_matmul(input_tensor, other_tensor, std::nullopt, false, false, mem_config);
+    return operations::primary::moreh_matmul(input_tensor, other_tensor, std::nullopt, false, false, mem_config);
 }
 
 }  // namespace tt_metal
@@ -37,8 +37,7 @@ void MorehMatmul::validate(const std::vector<Tensor>& input_tensors) const {
         "Inputs to matmul must be tilized");
 
     TT_ASSERT(
-        input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
-            input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B,
         "Unsupported data format");
     TT_ASSERT(
         input_tensor.storage_type() == StorageType::DEVICE and other_tensor.storage_type() == StorageType::DEVICE,
@@ -77,7 +76,7 @@ operation::ProgramWithCallbacks MorehMatmul::create_program(
         this->output_start_tile_id);
 }
 
-tt::stl::reflection::Attributes MorehMatmul::attributes() const {
+stl::reflection::Attributes MorehMatmul::attributes() const {
     return {
         {"transpose_input", this->transpose_input},
         {"transpose_other", this->transpose_other},
