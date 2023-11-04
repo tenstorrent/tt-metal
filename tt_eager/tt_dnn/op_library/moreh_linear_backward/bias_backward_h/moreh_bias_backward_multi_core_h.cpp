@@ -15,15 +15,14 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(
-    const tt_metal::Tensor &output_grad, const tt_metal::Tensor &bias_grad) {
+operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(const Tensor &output_grad, const Tensor &bias_grad) {
     Program program{};
 
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
+    uint32_t single_tile_size = detail::TileSize(cb_data_format);
 
-    tt_metal::Buffer *src_buffer = output_grad.buffer();
-    tt_metal::Buffer *dst_buffer = bias_grad.buffer();
+    Buffer *src_buffer = output_grad.buffer();
+    Buffer *dst_buffer = bias_grad.buffer();
     uint32_t num_tiles = output_grad.volume() / TILE_HW;
     const auto &output_grad_shape_wo_padding = output_grad.shape().without_padding();
     const bool do_mask_h = (output_grad_shape_wo_padding[2] % TILE_HEIGHT) != 0;
@@ -38,20 +37,12 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(
     uint32_t Wt = output_grad_shape[3] / TILE_WIDTH;
     uint32_t B1B2Ht = B1 * B2 * Ht;
 
-    const uint32_t in0_t = 2;
-    const uint32_t in1_t = 1;
-    const uint32_t in2_t = (do_mask_h || do_mask_w) ? 2 : 0;  // mask_h_w
-
-    const uint32_t out0_t = 1;
-    const uint32_t im0_t = 1;
-    const uint32_t im1_t = 1;
-
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = output_grad.device();
-    tt_metal::CoreGridDesc core_grid(device);
+    Device *device = output_grad.device();
+    CoreGridDesc core_grid(device);
     const auto num_cores_y = core_grid.y_;
     CoreCoord core_grid_coord = {.x = core_grid.x_, .y = num_cores_y};
 
@@ -66,7 +57,15 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::operations::primary::CreateCircularBuffer(
+    const uint32_t in0_t = 2;
+    const uint32_t in1_t = 1;
+    const uint32_t in2_t = (do_mask_h || do_mask_w) ? 2 : 0;  // mask_h_w
+
+    const uint32_t out0_t = 1;
+    const uint32_t im0_t = 1;
+    const uint32_t im1_t = 1;
+
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -82,10 +81,8 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(output_grad.memory_config().buffer_type == BufferType::DRAM)};
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(bias_grad.memory_config().buffer_type == BufferType::DRAM)};
+    const std::vector<uint32_t> reader_compile_time_args{static_cast<uint32_t>(is_dram(output_grad))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(bias_grad))};
 
     const auto reader_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_linear_backward/kernels/reader_moreh_bias_backward_h.cpp";
@@ -93,28 +90,25 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(
     const auto writer_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_linear_backward/kernels/writer_moreh_bias_backward.cpp";
 
-    const auto reader_kernel_id =
-        tt::operations::primary::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
     std::map<string, string> compute_defines;
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";
     const auto compute_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_linear_backward/kernels/moreh_bias_backward_multi_core_h.cpp";
-    const auto compute_kernel_1_id = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_1_id = CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
 
-    tt::tt_metal::KernelID compute_kernel_2_id = -1;
+    KernelID compute_kernel_2_id = -1;
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2};
-        compute_kernel_2_id = tt::operations::primary::CreateComputeKernel(
+        compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
@@ -137,7 +131,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(
         }
 
         bool core_has_last_wt = (tile_offset + num_cols_per_core == Wt) ? (true) : (false);
-        tt_metal::SetRuntimeArgs(
+        SetRuntimeArgs(
             program,
             reader_kernel_id,
             core,
@@ -151,11 +145,10 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(
              static_cast<uint32_t>(do_mask_h),
              static_cast<uint32_t>(do_mask_w && core_has_last_wt)});
 
-        tt_metal::SetRuntimeArgs(
-            program, writer_kernel_id, core, {dst_buffer->address(), num_cols_per_core, tile_offset});
+        SetRuntimeArgs(program, writer_kernel_id, core, {dst_buffer->address(), num_cols_per_core, tile_offset});
 
         if (core_group_1.core_coord_in_core_ranges(core)) {
-            tt_metal::SetRuntimeArgs(
+            SetRuntimeArgs(
                 program,
                 compute_kernel_1_id,
                 core,
@@ -166,7 +159,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_multi_core_h(
                  static_cast<uint32_t>(do_mask_h),
                  static_cast<uint32_t>(do_mask_w && core_has_last_wt)});
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
-            tt_metal::SetRuntimeArgs(
+            SetRuntimeArgs(
                 program,
                 compute_kernel_2_id,
                 core,
