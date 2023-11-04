@@ -41,8 +41,7 @@ Tensor moreh_linear_(
     std::optional<std::reference_wrapper<const Tensor>> bias,
     const MemoryConfig& output_mem_config) {
     moreh_linear_validate(input, weight, bias);
-    Tensor mm_output =
-        tt::operations::primary::moreh_matmul(input, weight, std::nullopt, false, true, output_mem_config);
+    Tensor mm_output = moreh_matmul(input, weight, std::nullopt, false, true, output_mem_config);
     if (bias) {
         const auto& bias_tensor = bias->get();
         const auto& bias_shape = bias_tensor.shape().without_padding();
