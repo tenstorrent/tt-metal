@@ -11,9 +11,9 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 
-using namespace tt::constants;
-
 namespace tt {
+
+using namespace constants;
 namespace operations {
 namespace primary {
 
@@ -35,8 +35,7 @@ void MorehDot::validate(const std::vector<Tensor>& input_tensors) const {
     TT_ASSERT(a_shape_wo_padding[3] == b_shape_wo_padding[3]);
 
     TT_ASSERT(
-        input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
-            input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        input_tensor_a.dtype() == DataType::BFLOAT16 || input_tensor_a.dtype() == DataType::BFLOAT8_B,
         "Unsupported data format");
     TT_ASSERT(
         input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE,
@@ -70,7 +69,7 @@ operation::ProgramWithCallbacks MorehDot::create_program(
     return moreh_dot_single_core(input_tensor_a, input_tensor_b, output_tensor);
 }
 
-tt::stl::reflection::Attributes MorehDot::attributes() const {
+stl::reflection::Attributes MorehDot::attributes() const {
     return {
         {"output_mem_config", this->output_mem_config},
         {"output_dtype", this->output_dtype},
