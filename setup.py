@@ -169,7 +169,7 @@ setup(
     package_dir={
         "": "tt_eager",
         "tt_lib.tt_metal": "tt_metal",
-        "tt_lib.models": "tests/models",
+        "tt_lib.models": "models",
         "tt_lib.scripts": "scripts",
         "tt_lib.tt_eager.tt_dnn": "tt_eager/tt_dnn",
         "ttnn": "ttnn",
