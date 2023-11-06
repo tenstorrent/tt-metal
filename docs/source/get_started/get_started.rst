@@ -10,12 +10,12 @@ To be added to the repo, please contact Jasmina or Davor at:
 jvasiljevic@tenstorrent.com, dcapalija@tenstorrent.com.
 
 Installation and environment setup instructions are in the GitHub repository
-front-page README.
+front-page README: https://github.com/tenstorrent-metal/tt-metal#installing
 
-Running your first BUDA-M program
----------------------------------
+Running your first TT-Metal program
+-----------------------------------
 
-To run any of these programming examples, ensure that you have cloned and
+To run this program, ensure that you have cloned and
 installed this project from source and activated and setup the necessary
 environment. If you just came from the repo README after reading the source
 installation and environment setup instructions, please continue.

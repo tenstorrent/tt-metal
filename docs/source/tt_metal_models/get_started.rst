@@ -25,7 +25,11 @@ Set ``PYTHONPATH`` to the root for running models. This is a common practice.
 Running an example model
 ------------------------
 
-We developed our models to be run with ``pytest``.
+We develop models in ``models`` folder, splitting them to ``demo`` and ``experimental`` sub-folders.
+In ``models/demo`` folder you will find models with prepared demos and a ``README.md`` file giving instructions how to run the model demo(s).
+
+Many models will have a ``tests`` sub-folder containing tests for parts of the model or the entire model.
+You can run these tests using ``pytest``.
 
 ::
 
