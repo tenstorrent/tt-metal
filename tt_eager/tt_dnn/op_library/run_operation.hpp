@@ -39,7 +39,7 @@ std::vector<Tensor> generic_create_output_tensors(
         const auto operation = DeviceOperation(concrete_op);
         return generic_create_output_tensors(operation, input_tensors, output_dtype, output_layout, output_mem_config);
     } else {
-        static_assert(always_false_v<ConcreteOperation>, "Unsupported Operation");
+        static_assert(tt::stl::concepts::always_false_v<ConcreteOperation>, "Unsupported Operation");
     }
 }
 
@@ -133,7 +133,7 @@ constexpr std::string operation_type_to_string() {
     } else if constexpr (std::is_same_v<OperationType, ExternalOperation>) {
         return "external";
     } else {
-        static_assert(always_false_v<false>, "OperationType is not supported!");
+        static_assert(tt::stl::concepts::always_false_v<false>, "OperationType is not supported!");
     }
 }
 
@@ -267,7 +267,7 @@ inline std::vector<Tensor> run(
         const auto operation = DeviceOperation(concrete_op);
         return run(operation, input_tensors, optional_input_tensors);
     } else {
-        static_assert(always_false_v<ConcreteOperation>, "Unsupported Operation");
+        static_assert(tt::stl::concepts::always_false_v<ConcreteOperation>, "Unsupported Operation");
     }
 }
 

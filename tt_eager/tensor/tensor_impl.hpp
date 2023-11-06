@@ -73,7 +73,7 @@ constexpr inline std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType
         }
         return uint32_data;
     } else {
-        static_assert(always_false_v<DataType>, "Don't know how to unpack uint32 data generically!");
+        static_assert(tt::stl::concepts::always_false_v<DataType>, "Don't know how to unpack uint32 data generically!");
     }
 }
 
@@ -96,7 +96,7 @@ constexpr inline std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t> &
         }
         return float_data;
     } else {
-        static_assert(always_false_v<DataType>, "Don't know how to unpack uint32 data generically!");
+        static_assert(tt::stl::concepts::always_false_v<DataType>, "Don't know how to unpack uint32 data generically!");
     }
 }
 

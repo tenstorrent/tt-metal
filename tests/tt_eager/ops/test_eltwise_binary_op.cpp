@@ -113,7 +113,9 @@ int main() {
 
     run_binary_ops();
 
-    TT_ASSERT(tt::tt_metal::program_cache::num_entries() == 4);
+    TT_ASSERT(tt::tt_metal::program_cache::num_entries() == 4,
+        "There are {} entries",
+        tt::tt_metal::program_cache::num_entries());
 
     tt::tt_metal::program_cache::disable_and_clear();
 

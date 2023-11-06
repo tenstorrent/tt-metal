@@ -79,9 +79,8 @@ void test_operation_infrastructure() {
 
     auto program_hash = op.compute_program_hash({input_tensor}, {});
     TT_ASSERT(
-        program_hash == "tt::tt_metal::EltwiseUnary(op_chain={tt::tt_metal::UnaryWithParam(op_type=UnaryOpType::SQRT, param=std::nullopt)}, output_mem_config=tt::tt_metal::MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED, buffer_type=BufferType::DRAM))_tt::tt_metal::Tensor(storage=tt::tt_metal::OwnedStorage(), shape=tt::tt_metal::Shape(dimensions={1, 1, 32, 32}), dtype=DataType::BFLOAT16, layout=Layout::TILE, shard_spec=std::nullopt)",
-        fmt::format("Actual value is {}", program_hash)
-    );
+        program_hash == 8760077129436357413ULL,
+        fmt::format("Actual value is {}", program_hash));
 
     auto profiler_info = op.create_profiler_info({input_tensor});
     TT_ASSERT(
@@ -241,6 +240,7 @@ void test_program_cache() {
         run_test<host_function<::detail::gelu>>(
             gelu_fast, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 1.0f, 10.0f, 1e-1f, 1e-3f);
 
+        // Program Cache Miss
         run_test<host_function<::detail::gelu>>(
             gelu_slow, device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 1.0f, 10.0f, 1e-1f, 1e-3f);
 
@@ -258,7 +258,10 @@ void test_program_cache() {
 
     TT_ASSERT(tt::tt_metal::CloseDevice(device));
 
-    TT_ASSERT(tt::tt_metal::program_cache::num_entries() == 5);
+    TT_ASSERT(
+        tt::tt_metal::program_cache::num_entries() == 5,
+        "There are {} entries",
+        tt::tt_metal::program_cache::num_entries());
 
     tt::tt_metal::program_cache::disable_and_clear();
 

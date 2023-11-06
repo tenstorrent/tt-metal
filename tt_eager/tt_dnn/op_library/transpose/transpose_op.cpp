@@ -120,14 +120,8 @@ const operation::Hash Transpose::compute_program_hash(
     auto input_mem_config = input_tensor.memory_config();
     auto output_mem_config = this->output_mem_config;
     auto dtype = input_tensor.dtype();
-    return fmt::format(
-        "Transpose(input_mem_config={}_output_mem_config={}_dtype={}_transpose_dim={}_parallelization_strategy={})",
-        input_mem_config,
-        output_mem_config,
-        dtype,
-        this->dim,
-        get_parallelization_strategy(input_tensors)
-    );
+    return operation::hash_operation<Transpose>(
+        input_mem_config, output_mem_config, dtype, this->dim, get_parallelization_strategy(input_tensors));
 }
 
 inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const MemoryConfig& output_mem_config) {
@@ -190,14 +184,16 @@ Tensor transpose_cn(const Tensor &a, const MemoryConfig& output_mem_config) { re
 
 Tensor transpose_nh(const Tensor &a, const MemoryConfig& output_mem_config) { return permute(a, {2, 1, 0, 3}, output_mem_config); }
 Tensor transpose_nw(const Tensor &a, const MemoryConfig& output_mem_config) { return permute(a, {3, 1, 2, 0}, output_mem_config); }
-Tensor transpose_cw(const Tensor &a, const MemoryConfig& output_mem_config) { return permute(a, {0, 3, 2, 1}, output_mem_config); }
+Tensor transpose_cw(const Tensor& a, const MemoryConfig& output_mem_config) {
+    return permute(a, {0, 3, 2, 1}, output_mem_config);
+}
 
 Tensor transpose(const Tensor &a, std::int64_t dim1, std::int64_t dim2, const MemoryConfig& output_mem_config) {
     uint32_t normalized_dim1 = a.shape().get_normalized_index(dim1);
     uint32_t normalized_dim2 = a.shape().get_normalized_index(dim2);
 
     TT_ASSERT( normalized_dim1 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
-    TT_ASSERT( normalized_dim2 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
+    TT_ASSERT(normalized_dim2 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
 
     if ( normalized_dim1 == normalized_dim2 ) {
         return a;

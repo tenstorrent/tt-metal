@@ -153,15 +153,13 @@ tt::stl::reflection::Attributes EltwiseBinaryBroadcast::attributes() const {
 const operation::Hash EltwiseBinaryBroadcast::compute_program_hash(
     const std::vector<Tensor> &input_tensors) const {
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
-    return fmt::format(
-        "{}_{}_{}_{}_{}_{}",
+    return operation::hash_operation<EltwiseBinaryBroadcast>(
         *this,
         parallelization_strategy,
         input_tensors.at(0).memory_config(),
         input_tensors.at(0).dtype(),
         input_tensors.at(1).memory_config(),
-        input_tensors.at(1).dtype()
-    );
+        input_tensors.at(1).dtype());
 }
 
 BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {

@@ -73,6 +73,8 @@ struct EltwiseUnary {
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     UnaryOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     tt::stl::reflection::Attributes attributes() const;
+
+    const operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
 Tensor eltwise_unary(const EltwiseUnary& op, const Tensor &input_tensor);

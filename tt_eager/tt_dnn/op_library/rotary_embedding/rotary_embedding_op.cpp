@@ -98,12 +98,7 @@ tt::stl::reflection::Attributes RotaryEmbedding::attributes() const {
 
 const operation::Hash RotaryEmbedding::compute_program_hash(
     const std::vector<Tensor> &input_tensors) const {
-    return fmt::format(
-        "RotaryEmbedding(seq_len={}, output_mem_config={})_{}",
-        this->seq_len,
-        this->output_mem_config,
-        fmt::join(std::begin(input_tensors), std::end(input_tensors), "_")
-    );
+    return operation::hash_operation<RotaryEmbedding>(this->seq_len, this->output_mem_config, input_tensors);
 }
 
 }  // namespace tt_metal
