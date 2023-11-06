@@ -412,12 +412,12 @@ CoreCoord Device::logical_core_from_bank_id(uint32_t bank_id) const {
     return allocator::logical_core_from_bank_id(*this->allocator_, bank_id);
 }
 
-std::vector<uint32_t> Device::bank_ids_from_dram_channel(uint32_t dram_channel) const {
+const std::vector<uint32_t> &Device::bank_ids_from_dram_channel(uint32_t dram_channel) const {
     this->check_allocator_is_initialized();
     return allocator::bank_ids_from_dram_channel(*this->allocator_, dram_channel);
 }
 
-std::vector<uint32_t> Device::bank_ids_from_logical_core(const CoreCoord &logical_core) const {
+const std::vector<uint32_t> &Device::bank_ids_from_logical_core(const CoreCoord &logical_core) const {
     this->check_allocator_is_initialized();
     return allocator::bank_ids_from_logical_core(*this->allocator_, logical_core);
 }

@@ -26,7 +26,7 @@ namespace tt_metal {
 
 // Fwd declares
 namespace detail{
-    void ValidateCircularBufferRegion(const Program &program, const Device *device, std::optional<CoreCoord> logical_core);
+    void ValidateCircularBufferRegion(const Program &program, const Device *device);
     void AddKernel ( Program & program, Kernel * kernel);
     Kernel *GetKernel(const Program &program, KernelID kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CircularBufferID id);
@@ -122,6 +122,8 @@ class Program {
         //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
         void mark_address(uint64_t address, uint64_t size);
 
+        uint64_t get_cb_region_end() const;
+
         // Reset when circular buffer allocation is invalidated
         void reset_available_addresses() { this->l1_regions = {{L1_UNRESERVED_BASE, L1_UNRESERVED_BASE}}; }
     };
@@ -148,7 +150,7 @@ class Program {
 
     friend CircularBufferID CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CircularBufferID id);
-    friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device, std::optional<CoreCoord> logical_core);
+    friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
     friend void detail::AddKernel(Program &program, Kernel *kernel);
     friend Kernel *detail::GetKernel(const Program &program, KernelID kernel_id);
@@ -162,7 +164,8 @@ class Program {
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
 
-    void validate_circular_buffer_region(const Device *device, std::optional<CoreCoord> logical_core) const;
+    // Ensures that statically allocated circular buffers do not grow into L1 buffer space
+    void validate_circular_buffer_region(const Device *device) const;
 
     void set_cb_data_fmt( Device *device, Kernel *kernel, build_kernel_for_riscv_options_t &build_options) const;
 

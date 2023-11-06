@@ -239,10 +239,11 @@ namespace detail {
         detail::DispatchStateCheck( false );
         detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ConfigureDeviceWithProgram");
 
-        program.allocate_circular_buffers();
-
         std::unordered_set<CoreCoord> worker_cores;
         auto device_id = device->id();
+
+        program.allocate_circular_buffers();
+        detail::ValidateCircularBufferRegion(program, device);
 
         std::vector<CoreCoord> logical_cores_used_in_program = program.logical_cores();
         for (const auto &logical_core : logical_cores_used_in_program) {
@@ -250,9 +251,6 @@ namespace detail {
             auto worker_core = device->worker_core_from_logical_core(logical_core);
             worker_cores.insert(worker_core);
 
-            if (program.circular_buffers_on_core(logical_core).size()) {
-                detail::ValidateCircularBufferRegion(program, device, logical_core);
-            }
             // CircularBufferConfigVec -- common across all kernels, so written once to the core
             llrt::CircularBufferConfigVec circular_buffer_config_vec = llrt::create_circular_buffer_config_vector();
 

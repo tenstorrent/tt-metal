@@ -329,12 +329,19 @@ uint64_t Program::CircularBufferAllocator::get_address_candidate() const {
 
 void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t size) {
     auto &last_region = this->l1_regions.back();
-    log_assert(address >= last_region.second, "Local buffer address {} has to append to last L1 region [{}, {}) or be at a higher address", address, last_region.first, last_region.second);
+    if (address < last_region.second) {
+        log_fatal(tt::LogMetal, "Local buffer address {} has to append to last L1 region [{}, {}) or be at a higher address", address, last_region.first, last_region.second);
+    }
     if (address == last_region.second) {
         last_region.second += size;
     } else {
         this->l1_regions.push_back({address, address + size});
     }
+}
+
+uint64_t Program::CircularBufferAllocator::get_cb_region_end() const {
+    ZoneScopedN("Get CB Region End");
+    return this->l1_regions.back().second;
 }
 
 CircularBufferID Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
@@ -440,75 +447,28 @@ void Program::allocate_circular_buffers() {
     this->circular_buffer_allocation_needed_ = false;
 }
 
-void Program::validate_circular_buffer_region(const Device *device, std::optional<CoreCoord> logical_core) const {
-    auto highest_cb_l1_region = [&](const CoreCoord &core) {
-        if (this->per_core_cb_allocator_.find(core) == this->per_core_cb_allocator_.end()) {
-            return std::make_pair((uint64_t)L1_UNRESERVED_BASE, (uint64_t)L1_UNRESERVED_BASE);
-        }
-        return this->per_core_cb_allocator_.at(core).l1_regions.back();
-    };
+void Program::validate_circular_buffer_region(const Device *device) const {
+    ZoneScoped;
 
-    auto validate_cb_space_and_l1_buffer_space_disjoint = [&](const CoreCoord &core, const std::pair<uint64_t, uint64_t> &cb_space) {
-        if (cb_space.second > device->l1_size_per_core()) {
-            log_fatal(tt::LogMetal, "Local buffers on core {} grow to {} B which is beyond max L1 size of {} B", core.str(), cb_space.second, device->l1_size_per_core());
-        }
+    // Banks are in lockstep so we only need to get lowest L1 address of one compute and storage core
+    // Only compute with storage cores can have CBs and all compute with storage cores will have the same bank offset
+    CoreCoord logical_compute_core({.x=0, .y=0}); // update this
+    const std::vector<uint32_t> &bank_ids = device->bank_ids_from_logical_core(logical_compute_core);
+    // if (bank_ids.size() != 1) {
+    //     log_fatal(tt::LogMetal, "Expected one bank on core that holds local and L1 buffers but logical core {} has {} banks", core.str(), bank_ids.size());
+    // }
+    uint64_t lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
+    uint32_t max_l1_size = device->l1_size_per_core();
 
-        auto bank_ids = device->bank_ids_from_logical_core(core);
-        if (bank_ids.size() != 1) {
-            log_fatal(tt::LogMetal, "Expected one bank on core that holds local and L1 buffers but logical core {} has {} banks", core.str(), bank_ids.size());
-        }
+    std::vector<std::future<void>> events;
 
-        auto lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids.at(0));
-        if (lowest_address.has_value()) {
-            if (lowest_address.value() < cb_space.second) {
-                log_fatal(tt::LogMetal, "Circular buffers in program {} clash with L1 buffers on core {}. L1 buffer allocated at {} and local buffers end at {}", this->id, core.str(), lowest_address.value(), cb_space.second);
-            }
+    for (const auto &[core, cb_config] : this->per_core_cb_allocator_) {
+        uint64_t cb_region_end = cb_config.get_cb_region_end();
+        if (cb_region_end > max_l1_size) {
+            log_fatal(tt::LogMetal, "Local buffers on core {} grow to {} B which is beyond max L1 size of {} B", core.str(), cb_region_end, max_l1_size);
         }
-    };
-
-    auto validate_globally_allocated_cb_space_in_l1_buffer_space = [&](const CoreCoord &core, const std::pair<uint64_t, uint64_t> &cb_space) {
-        if (cb_space.second > device->l1_size_per_core()) {
-            log_fatal(tt::LogMetal, "Globally allocated circular buffer on core {} grow to {} B which is beyond max L1 size of {} B", core.str(), cb_space.second, device->l1_size_per_core());
-        }
-
-        auto bank_ids = device->bank_ids_from_logical_core(core);
-        if (bank_ids.size() != 1) {
-            log_fatal(tt::LogMetal, "Expected one bank on core that holds local and L1 buffers but logical core {} has {} banks", core.str(), bank_ids.size());
-        }
-
-        auto lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids.at(0));
-        if (lowest_address.has_value()) {
-            if (cb_space.first < lowest_address.value()) {
-                log_fatal(tt::LogMetal, "Globally allocated circular buffer in program {} is outside L1 buffer space on core {}. L1 buffer space starts at {} and specified global address is at {}", this->id, core.str(), lowest_address.value(), cb_space.first);
-            }
-        } else {
-            log_fatal(tt::LogMetal, "Globally allocated circular buffer in program {} is outside L1 buffer space on core {}. No L1 buffer space allocated and specified global address is at {}", this->id, core.str(), cb_space.first);
-        }
-    };
-
-    if (logical_core.has_value()) {
-        const auto &cb_space = highest_cb_l1_region(logical_core.value());
-        validate_cb_space_and_l1_buffer_space_disjoint(logical_core.value(), cb_space);
-        for (const auto& cb : this->circular_buffers_on_core(logical_core.value())) {
-            if (cb->globally_allocated()) {
-                auto global_address = cb->address();
-                auto cb_size = cb->size();
-                validate_globally_allocated_cb_space_in_l1_buffer_space(logical_core.value(), {global_address, global_address + cb_size});
-            }
-        }
-    } else {
-        for (const auto &[core, cb_config] : this->per_core_cb_allocator_) {
-            const auto &cb_space = highest_cb_l1_region(core);
-            validate_cb_space_and_l1_buffer_space_disjoint(core, cb_space);
-        }
-        for (const auto& cb : this->circular_buffers()) {
-            // Memory allocation is lock step across cores, so we only need to check one core to validate global addresses
-            auto core = this->per_core_cb_allocator_.begin()->first;
-            if (cb->globally_allocated()) {
-                auto global_address = cb->address();
-                auto cb_size = cb->size();
-                validate_globally_allocated_cb_space_in_l1_buffer_space(core, {global_address, global_address + cb_size});
-            }
+        if (lowest_address < cb_region_end) {
+            log_fatal(tt::LogMetal, "Circular buffers in program {} clash with L1 buffers on core {}. L1 buffer allocated at {} and local buffers end at {}", this->id, core.str(), lowest_address, cb_region_end);
         }
     }
 }
