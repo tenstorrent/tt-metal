@@ -5,7 +5,6 @@
 from loguru import logger
 
 
-
 import numpy as np
 
 import tt_lib as ttl
@@ -20,7 +19,7 @@ def run_bert_large_fused_qkv_matmul_test(
     device, dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
-    if (compute_grid_size.x < 12):
+    if compute_grid_size.x < 12:
         pytest.skip(f"Grid size {compute_grid_size} is not supported")
 
     torch.manual_seed(1234)
@@ -144,12 +143,8 @@ def test_bert_large_fused_qkv_matmul_test(
     out_mem_config,
     request,
 ):
-    ttl.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/BERT_large_fused_qkv_matmul_{request.node.callspec.id}"
-    )
-    run_bert_large_fused_qkv_matmul_test(
-        device, dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config
-    )
+    ttl.profiler.set_profiler_location(f"BERT_large_fused_qkv_matmul_{request.node.callspec.id}")
+    run_bert_large_fused_qkv_matmul_test(device, dtype, in0_mem_config, in1_mem_config, bias_mem_config, out_mem_config)
 
 
 def test_bert_large_fused_qkv_matmul_with_program_cache(device, use_program_cache):

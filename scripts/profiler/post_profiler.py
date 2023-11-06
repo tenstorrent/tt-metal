@@ -8,10 +8,12 @@ import csv
 import os
 import argparse
 
+from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
+
 
 def make_parser():
-
-    description = f"""
+    description = (
+        f"""
 Steps to dump profiler result in profile_data.csv:
 
 Run the test_eltwise_unary.cpp file with required op enabled with required configuration.
@@ -19,17 +21,19 @@ Run the test_eltwise_unary.cpp file with required op enabled with required confi
     $ make tests
 
 run the compiled file using ./build/test/tt_metal/test_eltwise_unary
-Once test is completed successfully. It will dump a tt-metal/tt_metal/tools/profiler/logs/profile_log_device.csv file.
+Once test is completed successfully. It will dump a {TT_METAL_HOME}/generated/profiler/.logs/profile_log_device.csv file.
 Run the command,
 
-    $ python """+ __file__ + """ --path {{path to csv}}
+    $ python """
+        + __file__
+        + """ --path {{path to csv}}
 
 It will dump profiler data into a new tt-metal/profile_data.csv file.
 
 """
-    parser = argparse.ArgumentParser(description=description,formatter_class=argparse.RawTextHelpFormatter)
-    HOME = os.environ["TT_METAL_HOME"]
-    ogpath = HOME + "/tt_metal/tools/profiler/logs/profile_log_device.csv"
+    )
+    parser = argparse.ArgumentParser(description=description, formatter_class=argparse.RawTextHelpFormatter)
+    ogpath = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
     parser.add_argument("--path", help="path containing the profile dumps", default=ogpath, type=str)
     return parser
 

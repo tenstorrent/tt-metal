@@ -6,8 +6,9 @@ import json
 import pytest
 from loguru import logger
 
+from tt_metal.tools.profiler.common import clear_profiler_runtime_artifacts
+
 from tt_metal.tools.profiler.process_model_log import (
-    clear_logs,
     post_process_ops_log,
     run_device_profiler,
     get_samples_per_s,
@@ -30,7 +31,7 @@ def test_perf_device_virtual_machine(batch_size, test, expected_perf):
     command = f"pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference[{test}]"
     cols = ["DEVICE FW DURATION [ns]", "DEVICE KERNEL DURATION [ns]", "DEVICE BRISC KERNEL DURATION [ns]"]
 
-    clear_logs(subdir)
+    clear_profiler_runtime_artifacts()
 
     results = {}
     for col in cols:

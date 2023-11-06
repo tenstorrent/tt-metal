@@ -19,14 +19,16 @@ import click
 from loguru import logger
 from dash import Dash, dcc, html, Input, Output
 
-from process_device_log import import_log_run_stats, generate_plots
-from process_host_log import import_host_log_run_stats
-import plot_setup
+from tt_metal.tools.profiler.process_device_log import import_log_run_stats, generate_plots
+from tt_metal.tools.profiler.process_host_log import import_host_log_run_stats
+import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+from tt_metal.tools.profiler.common import (
+    PROFILER_OPS_LOGS_DIR,
+    PROFILER_DEVICE_SIDE_LOG,
+    PROFILER_HOST_SIDE_LOG,
+    PROFILER_OUTPUT_DIR,
+)
 
-OPS_LOGS_DIR = os.path.abspath("logs/ops")
-DEVICE_SIDE_LOG = "profile_log_device.csv"
-HOST_SIDE_LOG = "profile_log_host.csv"
-OUT_FOLDER = "output"
 OUT_NAME = "ops_perf_results"
 
 OPS_CSV_HEADER = [
@@ -91,7 +93,7 @@ def parse_io_data(ioString, ioType):
 
 
 def append_detail_host_time_data(opCandidatePath, call_count, timeDataDict):
-    hostLogPath = os.path.join(opCandidatePath, f"{call_count}", HOST_SIDE_LOG)
+    hostLogPath = os.path.join(opCandidatePath, f"{call_count}", PROFILER_HOST_SIDE_LOG)
     if os.path.isfile(hostLogPath):
         hostData = import_host_log_run_stats(hostLogPath)
         for functionName, calls in hostData.items():
@@ -104,9 +106,9 @@ def append_detail_host_time_data(opCandidatePath, call_count, timeDataDict):
 
 def append_device_time_data(opCandidatePath, call_count, timeDataDict, deviceLogPath=None):
     if not deviceLogPath:
-        deviceLogPath = os.path.join(opCandidatePath, f"{call_count}", DEVICE_SIDE_LOG)
+        deviceLogPath = os.path.join(opCandidatePath, f"{call_count}", PROFILER_DEVICE_SIDE_LOG)
     if os.path.isfile(deviceLogPath):
-        setup = plot_setup.default_setup()
+        setup = device_post_proc_config.default_setup()
         setup.deviceInputLog = deviceLogPath
         setup.timerAnalysis = {
             "FW_START->FW_END": {
@@ -249,7 +251,7 @@ def parse_ops_logs(opsFolder):
         if os.path.isdir(opCandidatePath):
             if "unknown" in str(opCandidate).lower():
                 continue
-            opLogPath = os.path.join(opCandidatePath, HOST_SIDE_LOG)
+            opLogPath = os.path.join(opCandidatePath, PROFILER_HOST_SIDE_LOG)
             if not os.path.isfile(opLogPath):
                 logger.warning(f"Skipped: {opLogPath} dir, no host side log found.")
                 continue
@@ -417,9 +419,9 @@ def run_dashbaord_webapp(ops, opsFolder, port=None):
                     op = hoverData["points"][0]["customdata"][0]
                     opFolder = op_to_folder[op]
                     callCount = hoverData["points"][0]["customdata"][1]
-                    filePath = f"{opsFolder}/{opFolder}/{callCount}/{DEVICE_SIDE_LOG}"
+                    filePath = f"{opsFolder}/{opFolder}/{callCount}/{PROFILER_DEVICE_SIDE_LOG}"
                     if os.path.isfile(filePath):
-                        setup = plot_setup.default_setup()
+                        setup = device_post_proc_config.default_setup()
                         setup.deviceInputLog = filePath
                         setup.timerAnalysis = {}
 
@@ -438,7 +440,7 @@ def run_dashbaord_webapp(ops, opsFolder, port=None):
 
 def print_ops_csv(ops, opsFolder, outputFolder, date, nameAppend):
     logger.info(f"OPs' perf analysis is finished! Generating csv ...")
-    outFolder = OUT_FOLDER
+    outFolder = PROFILER_OUTPUT_DIR
     if outputFolder:
         outFolder = outputFolder
 
@@ -543,7 +545,7 @@ def print_ops_csv(ops, opsFolder, outputFolder, date, nameAppend):
 @click.option("--webapp", default=False, is_flag=True, help="Run dashboard webapp")
 @click.option("--date", default=False, is_flag=True, help="Append date to output files")
 def main(ops_folder, output_folder, name_append, port, webapp, date):
-    opsFolder = OPS_LOGS_DIR
+    opsFolder = PROFILER_OPS_LOGS_DIR
     if ops_folder:
         opsFolder = os.path.abspath(ops_folder)
 

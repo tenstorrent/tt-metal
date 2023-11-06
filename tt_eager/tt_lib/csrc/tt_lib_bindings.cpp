@@ -148,8 +148,9 @@ void ProfilerModule(py::module &m_profiler) {
         +------------------+------------------------------------------------+-----------------------+-------------+----------+
         | Argument         | Description                                    | Data type             | Valid range | Required |
         +==================+================================================+=======================+=============+==========+
-        | profilerLocation | Profiling out folder                           | string                | Valid dir   | Yes      |
-        |                  | Default : tt_metal/tools/profiler/logs/ops/    |                       |             |          |
+        | profilerLocation | Profiling output folder under the              | string                | Valid dir   | Yes      |
+        |                  | parent folder generated/profiler/.logs         |                       |             |          |
+        |                  | Default : generated/profiler/.logs/ops/        |                       |             |          |
         +------------------+------------------------------------------------+-----------------------+-------------+----------+
     )doc");
 

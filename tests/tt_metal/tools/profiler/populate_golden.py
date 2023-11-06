@@ -12,14 +12,13 @@ import click
 from loguru import logger
 
 from device_log_run import beautify_tt_js_blob, filter_device_analysis_data
-import common
 
-REPO_PATH = common.get_repo_path()
-TT_METAL_PATH = f"{REPO_PATH}/tt_metal"
-GOLDEN_OUTPUTS_DIR = f"{TT_METAL_PATH}/third_party/lfs/profiler/tests/golden/device/outputs"
-GOLDEN_LOGS_DIR = f"{TT_METAL_PATH}/third_party/lfs/profiler/tests/golden/device/logs"
-TEST_DEVICE_LOGS_PATH = f"{REPO_PATH}/tests/tt_metal/tools/profiler/test_device_logs.py"
-PROFILER_DIR = f"{TT_METAL_PATH}/tools/profiler/"
+from tt_metal.tools.profiler.common import TT_METAL_HOME, PROFILER_SCRIPTS_ROOT, PROFILER_ARTIFACTS_DIR, rm
+
+TT_METAL_PATH = TT_METAL_HOME / "tt_metal"
+GOLDEN_OUTPUTS_DIR = TT_METAL_PATH / "third_party/lfs/profiler/tests/golden/device/outputs"
+GOLDEN_LOGS_DIR = TT_METAL_PATH / "third_party/lfs/profiler/tests/golden/device/logs"
+TEST_DEVICE_LOGS_PATH = TT_METAL_HOME / "tests/tt_metal/tools/profiler/test_device_logs.py"
 
 TEST_FILE_IMPORTS = """# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
@@ -42,7 +41,7 @@ def test_{}():
 @click.option("-w", "--wipe", default=False, is_flag=True, help="Wipe the golden outputs folder")
 def main(wipe):
     if wipe:
-        os.system(f"rm -rf {GOLDEN_OUTPUTS_DIR}")
+        rm(GOLDEN_OUTPUTS_DIR)
         os.mkdir(f"{GOLDEN_OUTPUTS_DIR}")
 
     testNames = []
@@ -64,11 +63,11 @@ def main(wipe):
                 os.system(f"cp {GOLDEN_LOGS_DIR}/{logPath} {GOLDEN_OUTPUTS_DIR}/test_{testName}/profile_log_device.csv")
 
                 ret = os.system(
-                    f"cd {PROFILER_DIR} && ./process_device_log.py -d {GOLDEN_OUTPUTS_DIR}/test_{testName}/profile_log_device.csv --no-artifacts --no-print-stats --no-webapp"
+                    f"cd {PROFILER_SCRIPTS_ROOT} && ./process_device_log.py -d {GOLDEN_OUTPUTS_DIR}/test_{testName}/profile_log_device.csv --no-artifacts --no-print-stats --no-webapp"
                 )
                 assert ret == 0, f"Log process script crashed with exit code {ret}"
 
-                os.system(f"cp {PROFILER_DIR}/output/device/*.* {GOLDEN_OUTPUTS_DIR}/test_{testName}/")
+                os.system(f"cp {PROFILER_ARTIFACTS_DIR}/output/device/*.* {GOLDEN_OUTPUTS_DIR}/test_{testName}/")
                 beautify_tt_js_blob(f"{GOLDEN_OUTPUTS_DIR}/test_{testName}/")
                 filter_device_analysis_data(f"{GOLDEN_OUTPUTS_DIR}/test_{testName}/")
 

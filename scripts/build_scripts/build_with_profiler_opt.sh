@@ -1,16 +1,8 @@
 #! /usr/bin/env bash
 
+source scripts/tools_setup_common.sh
+
 set -eo pipefail
-
-remove_default_log_locations(){
-    rm -rf $TT_METAL_HOME/tt_metal/tools/profiler/logs/ops
-    rm -rf $TT_METAL_HOME/tt_metal/tools/profiler/logs/ops_device
-}
-
-if [[ -z "$TT_METAL_HOME" ]]; then
-  echo "Must provide TT_METAL_HOME in environment" 1>&2
-  exit 1
-fi
 
 cd $TT_METAL_HOME
 

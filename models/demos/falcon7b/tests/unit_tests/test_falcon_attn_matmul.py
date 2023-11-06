@@ -37,11 +37,7 @@ def run_falcon_attn_matmul_test(
         expected_output_shape = [1, q_heads, batch, seq_len]
 
         B = torch.randn(b_shape) - 0.95
-        b_t = (
-            ttl.tensor.Tensor(B, in1_dtype)
-            .to(ttl.tensor.Layout.TILE)
-            .to(device, in1_mem_config)
-        )
+        b_t = ttl.tensor.Tensor(B, in1_dtype).to(ttl.tensor.Layout.TILE).to(device, in1_mem_config)
 
     elif falcon_op == ttl.operations.primary.transformers.attn_matmul_from_cache:
         q_len = 1
@@ -64,22 +60,14 @@ def run_falcon_attn_matmul_test(
             B = kv_cache[:, :, :seq_len, :]
             expected_output_shape = [1, q_heads, batch, K]
 
-        b_t = (
-            ttl.tensor.Tensor(kv_cache, in1_dtype)
-            .to(ttl.tensor.Layout.TILE)
-            .to(device, in1_mem_config)
-        )
+        b_t = ttl.tensor.Tensor(kv_cache, in1_dtype).to(ttl.tensor.Layout.TILE).to(device, in1_mem_config)
 
     else:
         raise NotImplementedError(f"falcon matmul op is undefined!")
 
     A = torch.randn(a_shape)
 
-    a_t = (
-        ttl.tensor.Tensor(A, in0_dtype)
-        .to(ttl.tensor.Layout.TILE)
-        .to(device, in0_mem_config)
-    )
+    a_t = ttl.tensor.Tensor(A, in0_dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
 
     compute_grid_size = device.compute_with_storage_grid_size()
 
@@ -110,15 +98,9 @@ def run_falcon_attn_matmul_test(
     assert b_t.dtype() == in1_dtype
     assert out.memory_config().buffer_type == out_mem_config.buffer_type
     assert out.dtype() == out_dtype
-    logger.debug(
-        f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.dtype()}"
-    )
-    logger.debug(
-        f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.dtype()}"
-    )
-    logger.debug(
-        f"out ({expected_output_shape}): {out.memory_config().buffer_type} and {out.dtype()}"
-    )
+    logger.debug(f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.dtype()}")
+    logger.debug(f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.dtype()}")
+    logger.debug(f"out ({expected_output_shape}): {out.memory_config().buffer_type} and {out.dtype()}")
 
     assert out.shape() == expected_output_shape
     pyt_got_back_rm = tt2torch_tensor(out)
@@ -187,9 +169,7 @@ def test_falcon_matmul(
     request,
     device,
 ):
-    ttl.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/falcon_{request.node.callspec.id}"
-    )
+    ttl.profiler.set_profiler_location(f"falcon_{request.node.callspec.id}")
     run_falcon_attn_matmul_test(
         falcon_op,
         transpose_hw,

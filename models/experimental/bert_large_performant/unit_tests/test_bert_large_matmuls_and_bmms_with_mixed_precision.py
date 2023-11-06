@@ -6,7 +6,6 @@
 from loguru import logger
 
 
-
 import numpy as np
 
 import tt_lib as ttl
@@ -128,19 +127,11 @@ def run_bert_large_matmul_test(
         assert bias_t.dtype() == bias_dtype
     assert t2.memory_config().buffer_type == out_mem_config.buffer_type
     assert t2.dtype() == out_dtype
-    logger.debug(
-        f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.dtype()}"
-    )
-    logger.debug(
-        f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.dtype()}"
-    )
+    logger.debug(f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.dtype()}")
+    logger.debug(f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.dtype()}")
     if bias_mem_config is not None:
-        logger.debug(
-            f"bias ({bias_shape}): {bias_t.memory_config().buffer_type} and {bias_t.dtype()}"
-        )
-    logger.debug(
-        f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.dtype()}"
-    )
+        logger.debug(f"bias ({bias_shape}): {bias_t.memory_config().buffer_type} and {bias_t.dtype()}")
+    logger.debug(f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.dtype()}")
 
     assert t2.shape() == expected_output_shape
     tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
@@ -228,15 +219,9 @@ def run_bert_large_bmm_test(
     assert b_t.dtype() == in1_dtype
     assert t2.memory_config().buffer_type == out_mem_config.buffer_type
     assert t2.dtype() == out_dtype
-    logger.debug(
-        f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.dtype()}"
-    )
-    logger.debug(
-        f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.dtype()}"
-    )
-    logger.debug(
-        f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.dtype()}"
-    )
+    logger.debug(f"in0 ({a_shape}): {a_t.memory_config().buffer_type} and {a_t.dtype()}")
+    logger.debug(f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.dtype()}")
+    logger.debug(f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.dtype()}")
 
     assert t2.shape() == expected_output_shape
     tt_host_rm = t2.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
@@ -328,12 +313,10 @@ def test_bert_large_matmul(
     device,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
-    if (compute_grid_size.x < 12):
+    if compute_grid_size.x < 12:
         pytest.skip(f"Grid size {compute_grid_size} is not supported")
 
-    ttl.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/BERT_large_{request.node.callspec.id}"
-    )
+    ttl.profiler.set_profiler_location(f"BERT_large_{request.node.callspec.id}")
     run_bert_large_matmul_test(
         bert_large_op,
         batch,
@@ -408,12 +391,10 @@ def test_bert_large_bmm(
     device,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
-    if (compute_grid_size.x < 12):
+    if compute_grid_size.x < 12:
         pytest.skip(f"Grid size {compute_grid_size} is not supported")
 
-    ttl.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/BERT_large_{request.node.callspec.id}"
-    )
+    ttl.profiler.set_profiler_location(f"BERT_large_{request.node.callspec.id}")
     run_bert_large_bmm_test(
         bert_large_op,
         batch,

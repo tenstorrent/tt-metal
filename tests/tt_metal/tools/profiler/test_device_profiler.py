@@ -8,28 +8,27 @@ import re
 import inspect
 import pytest
 
+from tt_metal.tools.profiler.common import (
+    TT_METAL_HOME,
+    PROFILER_SCRIPTS_ROOT,
+    PROFILER_ARTIFACTS_DIR,
+    PROFILER_LOGS_DIR,
+    clear_profiler_runtime_artifacts,
+)
 
-import tests.tt_metal.tools.profiler.common as common
-
-REPO_PATH = common.get_repo_path()
-TT_METAL_PATH = f"{REPO_PATH}/tt_metal"
-PROFILER_DIR = f"{TT_METAL_PATH}/tools/profiler/"
-PROFILER_LOG_DIR = f"{PROFILER_DIR}/logs/"
-PROFILER_OUT_DIR = f"{PROFILER_DIR}/output/device"
 GS_PROG_EXMP_DIR = "programming_examples/profiler"
 
 
 def run_device_profiler_test(doubleRun=False, setup=False):
     name = inspect.stack()[1].function
-    profilerRun = os.system(
-        f"cd {REPO_PATH} && " f"rm -rf {PROFILER_LOG_DIR}/profile_log_device.csv && " f"build/{GS_PROG_EXMP_DIR}/{name}"
-    )
+    clear_profiler_runtime_artifacts()
+    profilerRun = os.system(f"cd {TT_METAL_HOME} && " f"build/{GS_PROG_EXMP_DIR}/{name}")
     assert profilerRun == 0
 
     if doubleRun:
         # Run test under twice to make sure icache is populated
         # with instructions for test
-        profilerRun = os.system(f"cd {REPO_PATH} && " f"build/{GS_PROG_EXMP_DIR}/{name}")
+        profilerRun = os.system(f"cd {TT_METAL_HOME} && " f"build/{GS_PROG_EXMP_DIR}/{name}")
         assert profilerRun == 0
 
     setupStr = ""
@@ -37,13 +36,14 @@ def run_device_profiler_test(doubleRun=False, setup=False):
         setupStr = f"-s {name}"
 
     postProcessRun = os.system(
-        f"cd {PROFILER_DIR} && " f"./process_device_log.py {setupStr} --no-artifacts --no-print-stats --no-webapp"
+        f"cd {PROFILER_SCRIPTS_ROOT} && "
+        f"./process_device_log.py {setupStr} --no-artifacts --no-print-stats --no-webapp"
     )
 
     assert postProcessRun == 0, f"Log process script crashed with exit code {postProcessRun}"
 
     devicesData = {}
-    with open(f"{PROFILER_OUT_DIR}/device_analysis_data.json", "r") as devicesDataJson:
+    with open(f"{PROFILER_ARTIFACTS_DIR}/output/device/device_analysis_data.json", "r") as devicesDataJson:
         devicesData = json.load(devicesDataJson)
 
     return devicesData
@@ -71,15 +71,15 @@ def test_custom_cycle_count():
         match = re.search(r"^.* kernel start -> .* kernel end$", key)
         if match:
             riscCount += 1
-            assert stats[key]["stats"]["Range"] < REF_CYCLE_COUNT_MAX  , "Wrong cycle count, too high"
-            assert stats[key]["stats"]["Range"] > REF_CYCLE_COUNT_MIN  , "Wrong cycle count, too low"
+            assert stats[key]["stats"]["Range"] < REF_CYCLE_COUNT_MAX, "Wrong cycle count, too high"
+            assert stats[key]["stats"]["Range"] > REF_CYCLE_COUNT_MIN, "Wrong cycle count, too low"
     assert riscCount == REF_RISC_COUNT, "Wrong RISC count"
 
 
 def test_full_buffer():
     REF_COUNT_DICT = {
-        "grayskull" : [3240, 2640],  # [108, 88](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
-        "wormhole_b0" : [2160, 1920, 1680]  # [72,64,56](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
+        "grayskull": [3240, 2640],  # [108, 88](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
+        "wormhole_b0": [2160, 1920, 1680],  # [72,64,56](compute cores) x 5(riscs) x 6(buffer size in marker pairs)
     }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")

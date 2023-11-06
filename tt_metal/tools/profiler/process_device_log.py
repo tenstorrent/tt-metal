@@ -18,8 +18,9 @@ import numpy as np
 import seaborn as sns
 import click
 
-import plot_setup
-import dummy_refresh
+from tt_metal.tools.profiler.common import PROFILER_ARTIFACTS_DIR
+import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+import tt_metal.tools.profiler.dummy_refresh as dummy_refresh
 
 
 def coreCompare(core):
@@ -98,7 +99,7 @@ class TupleEncoder(json.JSONEncoder):
             return str(obj)
         elif isinstance(obj, np.int64):
             return int(obj)
-        elif isinstance(obj, plot_setup.default_setup):
+        elif isinstance(obj, device_post_proc_config.default_setup):
             objDict = {}
             for attr in dir(obj):
                 if "__" not in attr:
@@ -115,7 +116,7 @@ class TupleEncoder(json.JSONEncoder):
             return str(obj)
         elif isinstance(obj, np.int64):
             return int(obj)
-        elif isinstance(obj, plot_setup.default_setup):
+        elif isinstance(obj, device_post_proc_config.default_setup):
             objDict = {}
             for attr in dir(obj):
                 if "__" not in attr:
@@ -154,12 +155,12 @@ def print_chrome_tracing_json(devicesData, setup):
                 {"name": "thread_name", "ph": "M", "pid": traceID, "tid": traceID, "args": {"name": f"{core}"}}
             )
 
-    with open(f"{setup.outputFolder}/{setup.deviceChromeTracing}", "w") as devicesDataJson:
+    with open(f"{PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}/{setup.deviceChromeTracing}", "w") as devicesDataJson:
         json.dump(chromeTraces, devicesDataJson, indent=2, cls=TupleEncoder, sort_keys=True)
 
 
 def print_json(devicesData, setup):
-    with open(f"{setup.outputFolder}/{setup.deviceAnalysisData}", "w") as devicesDataJson:
+    with open(f"{PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}/{setup.deviceAnalysisData}", "w") as devicesDataJson:
         json.dump({"data": devicesData, "setup": setup}, devicesDataJson, indent=2, cls=TupleEncoder, sort_keys=True)
 
 
@@ -167,7 +168,7 @@ def print_rearranged_csv(devicesData, setup, freqText=None):
     timerIDLabels = setup.timerIDLabels[1:5]
     if not freqText:
         freqText = devicesData["deviceInfo"]["freq"]
-    with open(f"{setup.outputFolder}/{setup.deviceRearranged}", "w") as timersCSV:
+    with open(f"{PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}/{setup.deviceRearranged}", "w") as timersCSV:
         for chipID, deviceData in devicesData["devices"].items():
             timeWriter = csv.writer(timersCSV, delimiter=",")
 
@@ -202,7 +203,7 @@ def is_print_supported(devicesData):
 def print_stats_outfile(devicesData, setup):
     if is_print_supported(devicesData):
         original_stdout = sys.stdout
-        with open(f"{setup.outputFolder}/{setup.deviceStatsTXT}", "w") as statsFile:
+        with open(f"{PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}/{setup.deviceStatsTXT}", "w") as statsFile:
             sys.stdout = statsFile
             print_stats(devicesData, setup)
             sys.stdout = original_stdout
@@ -795,15 +796,15 @@ def generate_device_level_summary(devicesData):
 
 def validate_setup(ctx, param, setup):
     setups = []
-    for name, obj in inspect.getmembers(plot_setup):
+    for name, obj in inspect.getmembers(device_post_proc_config):
         if inspect.isclass(obj):
             setups.append(name)
     if setup not in setups:
         raise click.BadParameter(f"Setup {setup} not available")
-    return getattr(plot_setup, setup)()
+    return getattr(device_post_proc_config, setup)()
 
 
-def import_log_run_stats(setup=plot_setup.default_setup()):
+def import_log_run_stats(setup=device_post_proc_config.default_setup()):
     devicesData = import_device_profile_log(setup.deviceInputLog)
     risc_to_core_timeseries(devicesData)
     core_to_device_timeseries(devicesData)
@@ -883,7 +884,7 @@ def generate_plots(devicesData, setup, saveFigure=True):
         # timelineFigs[key] = timeline_plot(['DEVICE'], xValsDict, setup)
 
         figHtmls = {
-            f"{setup.outputFolder}/{fig.replace(' ','_')}_{setup.devicePerfHTML}": fig
+            f"{PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}/{fig.replace(' ','_')}_{setup.devicePerfHTML}": fig
             for fig in sorted(timelineFigs.keys())
         }
 
@@ -980,9 +981,11 @@ def run_dashbaord_webapp(devicesData, timelineFigs, setup):
     )
     def download_callback(n_clicks):
         newTarballName = f"{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}_{setup.deviceTarball}"
-        ret = os.system(f"cd {setup.outputFolder}; mv {setup.deviceTarball} {newTarballName} > /dev/null 2>&1")
+        ret = os.system(
+            f"cd {PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}; mv {setup.deviceTarball} {newTarballName} > /dev/null 2>&1"
+        )
         if ret == 0:
-            return "", dcc.send_file(f"{setup.outputFolder}/{newTarballName}")
+            return "", dcc.send_file(f"{PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}/{newTarballName}")
         return "No artifact tarball found, make sure webapp is started without the --no-artifact flag", None
 
     app.run_server(host="0.0.0.0", port=setup.webappPort, debug=True)
@@ -990,12 +993,14 @@ def run_dashbaord_webapp(devicesData, timelineFigs, setup):
 
 def prepare_output_folder(setup):
     os.system(
-        f"rm -rf {setup.outputFolder}; mkdir -p {setup.outputFolder}; cp {setup.deviceInputLog} {setup.outputFolder}"
+        f"rm -rf {PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}; mkdir -p {PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}; cp {setup.deviceInputLog} {PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}"
     )
 
 
 def generate_artifact_tarball(setup):
-    os.system(f"cd {setup.outputFolder}; tar -czf ../{setup.deviceTarball} .; mv ../{setup.deviceTarball} .")
+    os.system(
+        f"cd {PROFILER_ARTIFACTS_DIR}/{setup.outputFolder}; tar -czf ../{setup.deviceTarball} .; mv ../{setup.deviceTarball} ."
+    )
 
 
 @click.command()

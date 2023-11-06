@@ -72,12 +72,8 @@ def run_test_FalconCausalLM_inference(
     use_cache = True
     kv_cache_len = seq_len  # This will increment by one after each decode
 
-    model_prefill_input = torch.arange(seq_len * 1).reshape(
-        1, seq_len
-    )  # Only generate input for one user
-    model_decode_input = (
-        torch.ones(batch, 1, dtype=torch.int) * 11
-    )  # Batch 32 of start token
+    model_prefill_input = torch.arange(seq_len * 1).reshape(1, seq_len)  # Only generate input for one user
+    model_decode_input = torch.ones(batch, 1, dtype=torch.int) * 11  # Batch 32 of start token
 
     # SETUP
     logger.info("Setting up KV-cache")
@@ -95,9 +91,7 @@ def run_test_FalconCausalLM_inference(
 
     # CPU REFERENCE ------------------------------------------------------------------------
     logger.info("Setting up CPU model")
-    pytorch_FalconCausalLM = PytorchFalconCausalLM(
-        hugging_face_reference_model, num_layers
-    )
+    pytorch_FalconCausalLM = PytorchFalconCausalLM(hugging_face_reference_model, num_layers)
     logger.info("Running CPU prefill")
     _, pytorch_layer_present = pytorch_FalconCausalLM(
         input_ids=model_prefill_input, past_key_values=None, use_cache=use_cache
@@ -143,9 +137,7 @@ def run_test_FalconCausalLM_inference(
     (
         tt_decode_embeddings,
         tt_decode_attention_mask,
-    ) = tt_FalconCausalLM.model_preprocessing(
-        "decode", model_decode_input, kv_cache_len, num_input_tokens=seq_len + 1
-    )
+    ) = tt_FalconCausalLM.model_preprocessing("decode", model_decode_input, kv_cache_len, num_input_tokens=seq_len + 1)
 
     # PREFILL
     logger.info(f"Falcon prefill for seq_len {seq_len} and one user only")
@@ -186,16 +178,12 @@ def run_test_FalconCausalLM_inference(
             tt_layer_pres[1][:, :, : kv_cache_len + 1, :],
         )
 
-        does_pass2, output_pcc = comp_pcc(
-            pytorch_layer_pres[0][0], tt_layer_pres[0][0], pcc
-        )
+        does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[0][0], tt_layer_pres[0][0], pcc)
         logger.info(f"K Cache Layer {i}: {output_pcc}")
 
         does_pass = does_pass and does_pass2
 
-        does_pass2, output_pcc = comp_pcc(
-            pytorch_layer_pres[1][0], tt_layer_pres[1][0], pcc
-        )
+        does_pass2, output_pcc = comp_pcc(pytorch_layer_pres[1][0], tt_layer_pres[1][0], pcc)
         logger.info(f"V Cache Layer {i}: {output_pcc}")
 
         does_pass = does_pass and does_pass2
@@ -223,9 +211,7 @@ def test_FalconCausalLM_inference(
     model_config = get_model_config(model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
 
-    tt_lib.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/falcon-7b_{request.node.callspec.id}"
-    )
+    tt_lib.profiler.set_profiler_location(f"falcon-7b_{request.node.callspec.id}")
 
     batch = 32
     seq_len = 128

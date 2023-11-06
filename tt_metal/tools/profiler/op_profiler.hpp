@@ -34,7 +34,7 @@ namespace op_profiler {
     };
 
     namespace detail {
-        static const std::filesystem::path logLocationsRecord = "tt_metal/tools/profiler/logs/.locations.log";
+        static const std::filesystem::path logLocationsRecord = string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME) + "/.locations.log";
 
         static string replace_comma(const string& s)
         {
@@ -245,7 +245,7 @@ namespace op_profiler {
                 {
 #if defined(PROFILER)
                     delete_logs_location_record();
-                    set_profiler_location("tt_metal/tools/profiler/logs/ops/");
+                    set_profiler_location("ops");
 #endif
                 }
 
@@ -331,8 +331,9 @@ namespace op_profiler {
                 void set_profiler_location(const string& folder)
                 {
 #if defined(PROFILER)
-                    int noSlashEnd = folder.find_last_not_of(" /");
-                    auto logFolder = (noSlashEnd == std::string::npos) ? "" : folder.substr(0, noSlashEnd + 1);
+                    string constructedFolder = string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME) + "/" + folder;
+                    int noSlashEnd = constructedFolder.find_last_not_of(" /");
+                    auto logFolder = (noSlashEnd == std::string::npos) ? "" : constructedFolder.substr(0, noSlashEnd + 1);
                     auto logFolderDevice = fmt::format("{}_device", logFolder);
                     if ((profileFolder == logFolder) || (profileFolder == logFolderDevice))
                     {

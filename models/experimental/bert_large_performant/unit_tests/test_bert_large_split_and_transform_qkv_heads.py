@@ -6,7 +6,6 @@
 from loguru import logger
 
 
-
 import numpy as np
 
 import tt_lib as ttl
@@ -16,11 +15,9 @@ from models.utility_functions import (
 import torch
 
 
-def run_split_fused_qkv_and_split_heads_test(
-    device, batch, dtype, in0_mem_config, out_mem_config
-):
+def run_split_fused_qkv_and_split_heads_test(device, batch, dtype, in0_mem_config, out_mem_config):
     compute_grid_size = device.compute_with_storage_grid_size()
-    if (compute_grid_size.x < 12):
+    if compute_grid_size.x < 12:
         pytest.skip(f"Grid size {compute_grid_size} is not supported")
 
     torch.manual_seed(1234)
@@ -118,29 +115,19 @@ import pytest
         "batch_7",
     ],
 )
-def test_split_fused_qkv_and_split_heads_test(
-    device, batch, dtype, in0_mem_config, out_mem_config, request
-):
-    ttl.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/BERT_large_create_qvk_heads_tm_{request.node.callspec.id}"
-    )
-    run_split_fused_qkv_and_split_heads_test(
-        device, batch, dtype, in0_mem_config, out_mem_config
-    )
+def test_split_fused_qkv_and_split_heads_test(device, batch, dtype, in0_mem_config, out_mem_config, request):
+    ttl.profiler.set_profiler_location(f"BERT_large_create_qvk_heads_tm_{request.node.callspec.id}")
+    run_split_fused_qkv_and_split_heads_test(device, batch, dtype, in0_mem_config, out_mem_config)
 
 
 def test_split_fused_qkv_and_split_heads_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
-        run_split_fused_qkv_and_split_heads_test(
-            device, 9, dtype, dram_mem_config, dram_mem_config
-        )
+        run_split_fused_qkv_and_split_heads_test(device, 9, dtype, dram_mem_config, dram_mem_config)
 
     dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     for _ in range(2):
-        run_split_fused_qkv_and_split_heads_test(
-            device, 9, dtype, dram_mem_config, dram_mem_config
-        )
+        run_split_fused_qkv_and_split_heads_test(device, 9, dtype, dram_mem_config, dram_mem_config)
 
     assert ttl.program_cache.num_entries() == 2

@@ -14,23 +14,21 @@ from transformers import AutoTokenizer
 from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 
 from models.demos.falcon7b.reference.hf_modeling_falcon import FalconConfig
-from models.demos.falcon7b.tt.model_config import (
-    get_model_config,
-    get_tt_cache_path,
-    model_config_entries
-)
+from models.demos.falcon7b.tt.model_config import get_model_config, get_tt_cache_path, model_config_entries
 from models.utility_functions import (
     disable_compilation_reports,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     profiler,
     torch2tt_tensor,
-    tt2torch_tensor)
+    tt2torch_tensor,
+)
 
 import time
 
 END_OF_TEXT = 11
 SPACE = 204
+
 
 # load from jason, return as a list
 def load_inputs(input_path, batch):
@@ -42,11 +40,13 @@ def load_inputs(input_path, batch):
             in_prompt.append(input_data[i]["question"])
         return in_prompt
 
+
 def post_process(logits, index):
     next_token_logits = logits[:, index, :]
     next_tokens = torch.argmax(next_token_logits, dim=-1)
     ids = next_tokens[:, None]
     return ids
+
 
 def preprocess_and_validate_inputs(input_prompts, tokenizer, max_seq_len):
     tokenizer.pad_token = tokenizer.eos_token
@@ -68,6 +68,7 @@ def preprocess_and_validate_inputs(input_prompts, tokenizer, max_seq_len):
 
     return prefill_ids, num_users, num_input_tokens
 
+
 def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, device):
     head_dim = configuration.hidden_size // configuration.num_attention_heads
     kv_cache = ()
@@ -79,6 +80,7 @@ def initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, devi
         kv_cache += ((tt_k_cache, tt_v_cache),)
     return kv_cache
 
+
 def print_output_prompts(generated_ids, tokenizer, num_users_to_display=None):
     output_prompts = tokenizer.batch_decode(generated_ids.tolist())
     for user_id, output_prompt in enumerate(output_prompts[:num_users_to_display]):
@@ -86,14 +88,7 @@ def print_output_prompts(generated_ids, tokenizer, num_users_to_display=None):
 
 
 def run_falcon_demo_kv(
-    input_path,
-    model_version,
-    batch_size,
-    num_layers,
-    max_seq_len,
-    model_config,
-    model_location_generator,
-    device
+    input_path, model_version, batch_size, num_layers, max_seq_len, model_config, model_location_generator, device
 ):
     torch.manual_seed(0)
 
@@ -153,7 +148,9 @@ def run_falcon_demo_kv(
         (
             tt_prefill_embeddings,
             tt_prefill_attention_mask,
-        ) = tt_FalconCausalLM.model_preprocessing("prefill", prefill_ids[user_id:user_id+1], 0, num_input_tokens=num_input_tokens)
+        ) = tt_FalconCausalLM.model_preprocessing(
+            "prefill", prefill_ids[user_id : user_id + 1], 0, num_input_tokens=num_input_tokens
+        )
         assert tt_prefill_attention_mask is not None
 
         tt_logits, kv_cache = tt_FalconCausalLM(
@@ -173,7 +170,7 @@ def run_falcon_demo_kv(
         logits = tt2torch_tensor(tt_logits).squeeze(1)
         tt_logits.deallocate()
 
-        user_output_ids = post_processor(logits=logits, index=num_input_tokens-1)
+        user_output_ids = post_processor(logits=logits, index=num_input_tokens - 1)
         output_ids[user_id] = user_output_ids
 
         prefill_wc_end = time.time()
@@ -199,9 +196,7 @@ def run_falcon_demo_kv(
         (
             tt_decode_embeddings,
             tt_decode_attention_mask,
-        ) = tt_FalconCausalLM.model_preprocessing(
-            "decode", decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1
-        )
+        ) = tt_FalconCausalLM.model_preprocessing("decode", decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1)
         assert tt_decode_attention_mask is not None
 
         tt_logits, kv_cache = tt_FalconCausalLM(
@@ -250,7 +245,7 @@ def run_falcon_demo_kv(
     del user_decode_id
     del tt_decode_embeddings
 
-   ### Second prefill run without compile ###
+    ### Second prefill run without compile ###
     profiler.enable()
     enable_persistent_kernel_cache()
 
@@ -266,7 +261,9 @@ def run_falcon_demo_kv(
         (
             tt_prefill_embeddings,
             tt_prefill_attention_mask,
-        ) = tt_FalconCausalLM.model_preprocessing("prefill", prefill_ids[user_id:user_id+1], 0, num_input_tokens=num_input_tokens)
+        ) = tt_FalconCausalLM.model_preprocessing(
+            "prefill", prefill_ids[user_id : user_id + 1], 0, num_input_tokens=num_input_tokens
+        )
         assert tt_prefill_attention_mask is not None
 
         tt_logits, kv_cache = tt_FalconCausalLM(
@@ -286,7 +283,7 @@ def run_falcon_demo_kv(
         logits = tt2torch_tensor(tt_logits).squeeze(1)
         tt_logits.deallocate()
 
-        user_output_ids = post_processor(logits=logits, index=num_input_tokens-1)
+        user_output_ids = post_processor(logits=logits, index=num_input_tokens - 1)
         output_ids[user_id] = user_output_ids
 
         prefill_end = time.time()
@@ -297,11 +294,9 @@ def run_falcon_demo_kv(
     profiler.end(f"second_run_prefill_stage", force_enable=True)
     profiler.disable()
 
-
-
     ### Inference run decode ###
     logger.info("Running inference decode stage...")
-    profiler.start(f"second_run_decode_stage", force_enable = True)
+    profiler.start(f"second_run_decode_stage", force_enable=True)
     decode_ids = torch.zeros(batch_size, 1, dtype=torch.int64)
     for user_id, output_id in enumerate(output_ids):
         decode_ids[user_id] = output_id
@@ -314,9 +309,7 @@ def run_falcon_demo_kv(
         (
             tt_decode_embeddings,
             tt_decode_attention_mask,
-        ) = tt_FalconCausalLM.model_preprocessing(
-            "decode", decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1
-        )
+        ) = tt_FalconCausalLM.model_preprocessing("decode", decode_ids, kv_cache_len, num_input_tokens=kv_cache_len + 1)
         assert tt_decode_attention_mask is not None
 
         tt_logits, kv_cache = tt_FalconCausalLM(
@@ -360,15 +353,19 @@ def run_falcon_demo_kv(
     generated_text = tokenizer.batch_decode(generated_ids.tolist())
 
     measurements = {
-        "preprocessing": profiler.get('tokenizing_inputs') ,
-        "initializing_KV_cache": profiler.get('initializing_KV_cache'),
-        "compile_prefill": profiler.get('first_run_prefill_stage_compile') - profiler.get('second_run_prefill_stage'),
-        "compile_decode": profiler.get('first_run_decode_stage_compile') - profiler.get('second_run_decode_stage'),
-        "compile_total": profiler.get('first_run_prefill_stage_compile') - profiler.get('second_run_prefill_stage') + profiler.get('first_run_decode_stage_compile') - profiler.get('second_run_decode_stage'),
-        "inference_prefill": profiler.get('second_run_prefill_stage'),
-        "inference_decode": profiler.get('second_run_decode_stage'),
-        "inference_total": profiler.get('second_run_prefill_stage') + profiler.get('second_run_decode_stage'),
-        "inference_throughput": output_token_index / (profiler.get('second_run_prefill_stage') + profiler.get('second_run_decode_stage')),
+        "preprocessing": profiler.get("tokenizing_inputs"),
+        "initializing_KV_cache": profiler.get("initializing_KV_cache"),
+        "compile_prefill": profiler.get("first_run_prefill_stage_compile") - profiler.get("second_run_prefill_stage"),
+        "compile_decode": profiler.get("first_run_decode_stage_compile") - profiler.get("second_run_decode_stage"),
+        "compile_total": profiler.get("first_run_prefill_stage_compile")
+        - profiler.get("second_run_prefill_stage")
+        + profiler.get("first_run_decode_stage_compile")
+        - profiler.get("second_run_decode_stage"),
+        "inference_prefill": profiler.get("second_run_prefill_stage"),
+        "inference_decode": profiler.get("second_run_decode_stage"),
+        "inference_total": profiler.get("second_run_prefill_stage") + profiler.get("second_run_decode_stage"),
+        "inference_throughput": output_token_index
+        / (profiler.get("second_run_prefill_stage") + profiler.get("second_run_decode_stage")),
     }
 
     logger.info(f"pre processing duration: {measurements['preprocessing']} s")
@@ -383,6 +380,7 @@ def run_falcon_demo_kv(
 
     return generated_text, measurements
 
+
 def test_demo(
     input_path,
     model_location_generator,
@@ -391,17 +389,15 @@ def test_demo(
 ):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
-    tt_lib.profiler.set_profiler_location(
-         f"tt_metal/tools/profiler/logs/falcon7b"
-     )
+    tt_lib.profiler.set_profiler_location(f"falcon7b")
 
     return run_falcon_demo_kv(
-        input_path  = input_path,
-        model_version = "tiiuae/falcon-7b-instruct",
-        batch_size = 32,
-        num_layers = 32,
-        max_seq_len = 256,
-        model_config = get_model_config("BFLOAT16-DRAM"),
-        model_location_generator = model_location_generator,
-        device = device
-     )
+        input_path=input_path,
+        model_version="tiiuae/falcon-7b-instruct",
+        batch_size=32,
+        num_layers=32,
+        max_seq_len=256,
+        model_config=get_model_config("BFLOAT16-DRAM"),
+        model_location_generator=model_location_generator,
+        device=device,
+    )

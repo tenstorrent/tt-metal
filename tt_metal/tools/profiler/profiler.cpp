@@ -164,7 +164,7 @@ Profiler::Profiler()
 #if defined(PROFILER)
     host_new_log = true;
     device_new_log = true;
-    output_dir = std::filesystem::path("tt_metal/tools/profiler/logs");
+    output_dir = std::filesystem::path(string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME));
     std::filesystem::create_directories(output_dir);
 #endif
 }
