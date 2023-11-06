@@ -1,13 +1,13 @@
 <!-- toc -->
 
    * [Installing](#installing)
+      * [Installing system-level dependencies](#installing-system-level-dependencies)
+         * [Installing dependencies on Ubuntu](#installing-dependencies-on-ubuntu)
+         * [Installing developer-level dependencies on Ubuntu](#installing-developer-level-dependencies-on-ubuntu)
       * [Installing accelerator-level dependencies](#installing-accelerator-level-dependencies)
          * [Installing TTKMD (kernel-mode driver)](#installing-ttkmd-kernel-mode-driver)
          * [Installing tt-smi](#installing-tt-smi)
          * [Installing tt-flash firmware](#installing-tt-flash-firmware)
-      * [Installing system-level dependencies](#installing-system-level-dependencies)
-         * [Installing dependencies on Ubuntu](#installing-dependencies-on-ubuntu)
-         * [Installing developer-level dependencies on Ubuntu](#installing-developer-level-dependencies-on-ubuntu)
       * [From source](#from-source)
       * [From a release wheel (UNSTABLE)](#from-a-release-wheel-unstable)
    * [Getting started](#getting-started)
@@ -43,6 +43,70 @@ These are the ways of installing this software:
 However, you must have the appropriate accelerator-level and related
 system-level dependencies. Otherwise, you may skip to your preferred
 installation method in the above list.
+
+### Installing system-level dependencies
+
+System-level dependencies include the third-party libraries, hugepages settings, and Weka mount needed for this project.
+
+#### Installing dependencies on Ubuntu
+
+1. Install the host system-level dependencies through `apt`.
+
+First, perform an update:
+
+```
+sudo apt update
+```
+
+Then, install the dependencies:
+
+```
+sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.8 libgoogle-glog-dev=0.4.0-1build1 libyaml-cpp-dev=0.6.2-4ubuntu1 libboost-all-dev=1.71.0.0ubuntu2 libsndfile1=1.0.28-7ubuntu0.2 libhwloc-dev
+```
+
+Additionally, you will need developer-level dependencies if you plan to install things from source or run tests from the repository.
+
+2. Download the raw latest version of the `setup_hugepages.py` script. It should be located [in the repository](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py).
+
+3. Invoke the first pass of the hugepages script.
+
+```
+sudo -E python3 setup_hugepages.py first_pass
+```
+
+4. Reboot the system.
+
+```
+sudo reboot now
+```
+
+5. Invoke the second pass of the hugepages script.
+
+```
+sudo -E python3 setup_hugepages.py enable
+```
+
+6. Check that hugepages is now enabled.
+
+```
+sudo -E python3 setup_hugepages.py check
+```
+
+7. You must now also install and mount WekaFS. Note that this is only available on Tenstorrent cloud machines. The instructions are on this [page](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM), which are only available to those who have access to the Tenstorrent cloud.
+
+**NOTE**: You may have to repeat the hugepages steps upon every reboot, depending on your system and other services that use hugepages.
+
+#### Installing developer-level dependencies on Ubuntu
+
+1. Install host system-level dependencies for development through `apt`.
+
+```
+sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc
+```
+
+2. Download and install [Doxygen](https://www.doxygen.nl/download.html).
+
+3. Download and install [gtest](https://github.com/google/googletest) from source.
 
 ### Installing accelerator-level dependencies
 
@@ -163,70 +227,6 @@ If you have a Wormhole card, you may use warm reset via `tt-smi`:
 ```
 tt-smi -wr all wait
 ```
-
-### Installing system-level dependencies
-
-System-level dependencies include the third-party libraries, hugepages settings, and Weka mount needed for this project.
-
-#### Installing dependencies on Ubuntu
-
-1. Install the host system-level dependencies through `apt`.
-
-First, perform an update:
-
-```
-sudo apt update
-```
-
-Then, install the dependencies:
-
-```
-sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.8 libgoogle-glog-dev=0.4.0-1build1 libyaml-cpp-dev=0.6.2-4ubuntu1 libboost-all-dev=1.71.0.0ubuntu2 libsndfile1=1.0.28-7ubuntu0.2 libhwloc-dev
-```
-
-Additionally, you will need developer-level dependencies if you plan to install things from source or run tests from the repository.
-
-2. Download the raw latest version of the `setup_hugepages.py` script. It should be located [in the repository](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py).
-
-3. Invoke the first pass of the hugepages script.
-
-```
-sudo -E python3 setup_hugepages.py first_pass
-```
-
-4. Reboot the system.
-
-```
-sudo reboot now
-```
-
-5. Invoke the second pass of the hugepages script.
-
-```
-sudo -E python3 setup_hugepages.py enable
-```
-
-6. Check that hugepages is now enabled.
-
-```
-sudo -E python3 setup_hugepages.py check
-```
-
-7. You must now also install and mount WekaFS. Note that this is only available on Tenstorrent cloud machines. The instructions are on this [page](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM), which are only available to those who have access to the Tenstorrent cloud.
-
-**NOTE**: You may have to repeat the hugepages steps upon every reboot, depending on your system and other services that use hugepages.
-
-#### Installing developer-level dependencies on Ubuntu
-
-1. Install host system-level dependencies for development through `apt`.
-
-```
-sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc
-```
-
-2. Download and install [Doxygen](https://www.doxygen.nl/download.html).
-
-3. Download and install [gtest](https://github.com/google/googletest) from source.
 
 ### From source
 
