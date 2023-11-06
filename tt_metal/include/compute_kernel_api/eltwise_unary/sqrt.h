@@ -18,6 +18,9 @@
 
 namespace ckernel {
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void sqrt_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_sqrt_init<APPROX>() ));
 }

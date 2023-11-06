@@ -35,6 +35,9 @@ ALWI void elu_tile(uint32_t idst, uint32_t param0) {
     MATH(( llk_math_eltwise_unary_sfpu_elu<APPROX, SyncHalf>(idst, param0) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void elu_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_elu_init<APPROX>() ));
 }

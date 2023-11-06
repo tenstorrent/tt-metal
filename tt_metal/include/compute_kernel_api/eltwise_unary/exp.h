@@ -18,7 +18,9 @@
 
 namespace ckernel {
 
-
+/**
+ * Please refer to documentation for any_init.
+ */
  ALWI void exp_tile_init(bool fast_and_approx=false) {
     if ( fast_and_approx )
         MATH(( llk_math_eltwise_unary_sfpu_exponential_init<true>() ));

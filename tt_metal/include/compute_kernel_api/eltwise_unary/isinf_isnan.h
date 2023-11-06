@@ -30,6 +30,9 @@ ALWI void isinf_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_isinf<APPROX, SyncHalf>(idst)));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void isinf_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_isinf_init<APPROX>() ));
 }
@@ -50,6 +53,9 @@ ALWI void isposinf_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_isposinf<APPROX, SyncHalf>(idst) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void isposinf_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_isposinf_init<APPROX>() ));
 }
@@ -70,6 +76,9 @@ ALWI void isneginf_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_isneginf<APPROX, SyncHalf>(idst) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void isneginf_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_isneginf_init<APPROX>() ));
 }
@@ -90,6 +99,9 @@ ALWI void isnan_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_isnan<APPROX, SyncHalf>(idst) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void isnan_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_isnan_init<APPROX>() ));
 }
@@ -110,6 +122,9 @@ ALWI void isfinite_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_isfinite<APPROX, SyncHalf>(idst) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void isfinite_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_isfinite_init<APPROX>() ));
 }
