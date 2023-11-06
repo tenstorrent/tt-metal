@@ -108,7 +108,7 @@ operation::ProgramWithCallbacks moreh_sum_multi_core(const Tensor &src, const Te
     const auto compute_kernel_1_id = CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
 
-    KernelID compute_kernel_2_id = -1;
+    std::optional<KernelID> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2};
         compute_kernel_2_id = CreateComputeKernel(
@@ -151,7 +151,8 @@ operation::ProgramWithCallbacks moreh_sum_multi_core(const Tensor &src, const Te
         if (core_group_1.core_coord_in_core_ranges(core)) {
             SetRuntimeArgs(program, compute_kernel_1_id, core, {num_read_tiles_per_core, num_tiles_per_core});
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
-            SetRuntimeArgs(program, compute_kernel_2_id, core, {num_read_tiles_per_core, num_tiles_per_core});
+            TT_ASSERT(compute_kernel_2_id.has_value());
+            SetRuntimeArgs(program, compute_kernel_2_id.value(), core, {num_read_tiles_per_core, num_tiles_per_core});
         } else {
             TT_ASSERT(false, "Core not in specified core ranges.");
         }
