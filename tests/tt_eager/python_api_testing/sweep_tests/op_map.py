@@ -901,4 +901,32 @@ op_map = {
         "tt_lib_op": tt_lib_ops.groupnorm,
         "pytorch_op": pytorch_ops.groupnorm,
     },
+    "complex-real": {
+        "tt_lib_op": tt_lib_ops.complex_real,
+        "pytorch_op": pytorch_ops.complex_real,
+    },
+    "complex-recip": {
+        "tt_lib_op": tt_lib_ops.complex_recip,
+        "pytorch_op": pytorch_ops.complex_recip,
+    },
+    "complex-div": {
+        "tt_lib_op": tt_lib_ops.complex_div,
+        "pytorch_op": pytorch_ops.complex_div,
+    },
+    "complex-mul": {
+        "tt_lib_op": tt_lib_ops.complex_mul,
+        "pytorch_op": pytorch_ops.complex_mul,
+    },
+    "complex-conj": {
+        "tt_lib_op": tt_lib_ops.complex_conj,
+        "pytorch_op": pytorch_ops.complex_conj,
+    },
+    "complex-abs": {
+        "tt_lib_op": tt_lib_ops.complex_abs,
+        "pytorch_op": pytorch_ops.complex_abs,
+    },
+    "complex-imag": {
+        "tt_lib_op": tt_lib_ops.complex_imag,
+        "pytorch_op": pytorch_ops.complex_imag,
+    },
 }

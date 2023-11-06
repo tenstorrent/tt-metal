@@ -6,7 +6,7 @@ import torch
 import tt_lib as ttl
 from functools import partial
 from models.helper_funcs import Linear as tt_Linear
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, ttl_complex_2_torch_complex
 
 
 def setup_tt_tensor(x, device, layout, input_mem_config, dtype):
@@ -2174,3 +2174,85 @@ def groupnorm(x, y, z, *args, device, dtype, layout, input_mem_config, output_me
     t1 = ttl.tensor.groupnorm(t0, 1, 1e-5, t1, t2, output_mem_config=output_mem_config)
 
     return tt2torch_tensor(t1)
+
+
+def complex_real(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    temp = torch.cat([x.real, x.imag], -1)
+    t0 = setup_tt_tensor(temp, device, layout[0], input_mem_config[0], dtype[0])
+
+    tt_result = ttl.tensor.real(t0, output_mem_config=output_mem_config)
+    tt_result = tt2torch_tensor(tt_result)
+
+    return tt_result
+
+
+@setup_host_and_device
+def complex_recip(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    temp = torch.cat([x.real, x.imag], -1)
+    t0 = setup_tt_tensor(temp, device, layout[0], input_mem_config[0], dtype[0])
+
+    tt_result = ttl.tensor.complex_recip(t0, output_mem_config=output_mem_config)
+    result = ttl_complex_2_torch_complex(tt_result)
+
+    return result
+
+
+@setup_host_and_device
+def complex_div(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    tempx = torch.cat([x.real, x.imag], -1)
+    t0 = setup_tt_tensor(tempx, device, layout[0], input_mem_config[0], dtype[0])
+
+    tempy = torch.cat([y.real, y.imag], -1)
+    t1 = setup_tt_tensor(tempy, device, layout[1], input_mem_config[1], dtype[1])
+
+    tt_result = ttl.tensor.complex_div(t0, t1, output_mem_config=output_mem_config)
+    result = ttl_complex_2_torch_complex(tt_result)
+
+    return result
+
+
+@setup_host_and_device
+def complex_mul(x, y, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    tempx = torch.cat([x.real, x.imag], -1)
+    t0 = setup_tt_tensor(tempx, device, layout[0], input_mem_config[0], dtype[0])
+
+    tempy = torch.cat([y.real, y.imag], -1)
+    t1 = setup_tt_tensor(tempy, device, layout[1], input_mem_config[1], dtype[1])
+
+    tt_result = ttl.tensor.complex_mul(t0, t1, output_mem_config=output_mem_config)
+    result = ttl_complex_2_torch_complex(tt_result)
+
+    return result
+
+
+@setup_host_and_device
+def complex_conj(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    temp = torch.cat([x.real, x.imag], -1)
+    t0 = setup_tt_tensor(temp, device, layout[0], input_mem_config[0], dtype[0])
+
+    tt_result = ttl.tensor.conj(t0, output_mem_config=output_mem_config)
+    result = ttl_complex_2_torch_complex(tt_result)
+
+    return result
+
+
+@setup_host_and_device
+def complex_abs(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    temp = torch.cat([x.real, x.imag], -1)
+    t0 = setup_tt_tensor(temp, device, layout[0], input_mem_config[0], dtype[0])
+
+    tt_result = ttl.tensor.complex_abs(t0, output_mem_config=output_mem_config)
+    tt_result = tt2torch_tensor(tt_result)
+
+    return tt_result
+
+
+@setup_host_and_device
+def complex_imag(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    temp = torch.cat([x.real, x.imag], -1)
+    t0 = setup_tt_tensor(temp, device, layout[0], input_mem_config[0], dtype[0])
+
+    tt_result = ttl.tensor.imag(t0, output_mem_config=output_mem_config)
+    tt_result = tt2torch_tensor(tt_result)
+
+    return tt_result
