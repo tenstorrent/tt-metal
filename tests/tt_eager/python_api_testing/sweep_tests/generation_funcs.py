@@ -1183,7 +1183,6 @@ def gen_elu_args(
 
 
 def gen_fast_and_approx_args(input_shapes, dtypes, layouts, mem_configs):
-
     input_info = gen_dtype_layout_device(
         input_shapes,
         dtypes,
@@ -1572,3 +1571,19 @@ def gen_repeat_interleave_args(
         dims = np.random.choice([0, 2])
         input_info.update({"repeat": repeats, "dim": dims})
         yield input_info
+
+
+def gen_rmsnorm_args(
+    input_shapes,
+    dtypes=[supported_tt_dtypes],
+    layouts=[supported_tt_layouts],
+    mem_configs=[supported_mem_configs],
+):
+    return gen_dtype_layout_device_layernorm(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        runtime_tile_padding_layernorm=True,
+        runtime_tile_padding_add_layernorm=False,
+    )
