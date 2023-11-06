@@ -97,7 +97,14 @@ std::string Kernel::compute_hash() const {
     );
 }
 
-std::vector<uint32_t> const &Kernel::runtime_args(const CoreCoord &logical_core) {
+void Kernel::update_runtime_arg( const CoreCoord &logical_core, size_t idx, uint32_t value){
+    TT_ASSERT( this->core_to_runtime_args_.find(logical_core) != this->core_to_runtime_args_.end(), "Runtime args for core {} not found", logical_core.str());
+    auto & v = this->core_to_runtime_args_[logical_core];
+    TT_ASSERT( idx < v.size(), "Runtime arg offset {} for Core {} out of bounds", idx, logical_core.str());
+    v[idx] = value;
+}
+
+std::vector<uint32_t> const& Kernel::runtime_args(const CoreCoord &logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
     // TT_ASSERT(this->is_on_logical_core(logical_core), "Cannot get runtime args for kernel {} that is not placed on core {}", this->name(), logical_core.str());
     return this->core_to_runtime_args_[logical_core];

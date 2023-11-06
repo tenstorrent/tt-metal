@@ -51,7 +51,9 @@ class Kernel {
 
     std::unordered_map<CoreCoord, std::vector<uint32_t>> const &runtime_args() const { return core_to_runtime_args_; }
 
-    std::vector<uint32_t> const &runtime_args(const CoreCoord &logical_core);
+    void update_runtime_arg( const CoreCoord &logical_core, size_t idx, uint32_t value);
+
+    std::vector<uint32_t> const & runtime_args(const CoreCoord &logical_core);
 
     std::map<std::string, std::string> defines() const { return defines_; }
 
