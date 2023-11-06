@@ -82,6 +82,19 @@ inline void SetRuntimeArgs(const Program &program, KernelID kernel_id, const Cor
     }
 }
 
+inline void UpdateRuntimeArg(const Program &program, KernelID kernel_id, const CoreCoord &c, size_t offset, uint32_t value)
+{
+    detail::GetKernel(program, kernel_id)->update_runtime_arg(c, offset, value);
+}
+
+inline void UpdateRuntimeArg(const Program &program, KernelID kernel_id, const CoreRange &core_range, size_t offset, uint32_t value)
+{
+    for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
+        for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
+            UpdateRuntimeArg(program, kernel_id, CoreCoord(x,y), offset, value);
+        }
+    }
+}
 
 }  // namespace
 
@@ -447,7 +460,26 @@ void SetRuntimeArgs(const Program &program, KernelID kernel_id, const std::varia
 
 }
 
-std::vector<uint32_t> GetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreCoord &logical_core) {
+void UpdateRuntimeArg(const Program &program, KernelID kernel_id, const std::variant<CoreCoord,CoreRange,CoreRangeSet> &core_spec, size_t offset, uint32_t value) {
+    ZoneScoped;
+    std::visit(
+        [&](auto&& core_spec)
+        {
+            using T = std::decay_t<decltype(core_spec)>;
+            if constexpr (std::is_same_v<T, CoreRange> || std::is_same_v<T, CoreCoord> ) {
+                UpdateRuntimeArg(program, kernel_id, core_spec, offset, value);
+            }
+            else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+                for (const auto& core_range : core_spec.ranges()) {
+                    UpdateRuntimeArg(program, kernel_id, core_range, offset, value);
+                }
+            }
+        },
+        core_spec
+    );
+}
+
+const std::vector<uint32_t> & GetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreCoord &logical_core) {
     return detail::GetKernel(program, kernel_id)->runtime_args(logical_core);
 }
 
