@@ -100,10 +100,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
         reader_compile_time_args.push_back(mask_is_dram);
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        // interleaved accessor args
-        out0_is_dram
-    };
+    std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
+                                                      out0_is_dram};
     std::map<string, string> softmax_defines;
     if (mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
@@ -388,14 +386,14 @@ tt::stl::reflection::Attributes Softmax::attributes() const {
 const operation::Hash Softmax::compute_program_hash(
     const std::vector<Tensor> &input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    return fmt::format(
-        "Softmax_{}_{}_{}_{}_{}",
+    return operation::hash_operation<Softmax>(
         input_tensors.at(0).memory_config(),
         input_tensors.at(0).dtype(),
-        optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().memory_config()} : std::nullopt,
-        optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().dtype()} : std::nullopt,
-        this->output_mem_config
-    );
+        optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().memory_config()}
+                                                 : std::nullopt,
+        optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().dtype()}
+                                                 : std::nullopt,
+        this->output_mem_config);
 }
 
 Tensor softmax_in_place(Tensor& input_tensor) {

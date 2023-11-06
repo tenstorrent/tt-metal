@@ -286,6 +286,25 @@ tt::stl::reflection::Attributes EltwiseUnary::attributes() const {
     };
 }
 
+const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& input_shape = input_tensor.shape();
+
+    operation::Hash hash = tt::stl::hash::hash_objects(
+        0,
+        typeid(*this).hash_code(),
+        compute_volume(input_shape),
+        input_tensor.dtype()
+    );
+    for (const auto& unary_with_param_op : this->op_chain) {
+        hash = tt::stl::hash::hash_objects(hash, unary_with_param_op.op_type);
+        if (unary_with_param_op.param.has_value()) {
+            hash = tt::stl::hash::hash_objects(hash, unary_with_param_op.param.value());
+        }
+    }
+    return hash;
+}
+
 //unary op version tie
 template<BcastOpMath OP>
 Tensor tie_binop_to_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {

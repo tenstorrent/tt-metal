@@ -12,6 +12,7 @@
 #include "common/bfloat16.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 
+#include "tt_stl/concepts.hpp"
 #include "tt_stl/reflection.hpp"
 
 #include <memory>
@@ -95,8 +96,7 @@ class Shape {
     std::array<uint32_t, MAX_NUM_DIMENSIONS> dimensions_;
     Padding padding_;
 
-  public:
-
+   public:
     Shape(const std::initializer_list<uint32_t>);
     Shape(const std::array<uint32_t, 4>&);
     Shape(const std::vector<uint32_t>&);
@@ -209,14 +209,9 @@ using Storage = std::variant<
     BorrowedStorage
 >;
 
-namespace detail {
-template<typename>
-inline constexpr bool unsupported_storage = false;
-}
-
 template<typename T>
 constexpr void raise_unsupported_storage() {
-    static_assert(detail::unsupported_storage<T>, "Unsupported Storage");
+    static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported Storage");
 }
 
 struct ShardSpec {

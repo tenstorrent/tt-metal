@@ -223,17 +223,31 @@ tt::stl::reflection::Attributes EltwiseBinary::attributes() const {
 const operation::Hash EltwiseBinary::compute_program_hash(
     const std::vector<Tensor> &input_tensors) const {
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
-    return fmt::format(
-        "{}_{}_{}_{}_{}_{}_{}",
-        *this,
+
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+
+    operation::Hash hash = tt::stl::hash::hash_objects(
+        0,
+        typeid(*this).hash_code(),
+        this->op_type,
         parallelization_strategy,
-        input_tensors.at(0).memory_config(),
-        input_tensors.at(0).dtype(),
-        input_tensors.at(1).memory_config(),
-        input_tensors.at(1).dtype(),
-        this->output_mem_config,
-        this->output_dtype
-    );
+        input_tensor_a.dtype(),
+        input_tensor_a.memory_config().memory_layout,
+        input_tensor_b.dtype(),
+        input_tensor_b.memory_config().memory_layout,
+        this->output_dtype,
+        this->output_mem_config.memory_layout);
+
+    if (this->fused_activations.has_value()) {
+        for (const auto& unary_with_param_op : this->fused_activations.value()) {
+            hash = tt::stl::hash::hash_objects(hash, static_cast<uint16_t>(unary_with_param_op.op_type));
+            if (unary_with_param_op.param.has_value()) {
+                hash = tt::stl::hash::hash_objects(hash, static_cast<uint16_t>(unary_with_param_op.param.value()));
+            }
+        }
+    }
+    return hash;
 }
 
 }  // namespace tt_metal

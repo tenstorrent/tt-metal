@@ -184,16 +184,14 @@ tt::stl::reflection::Attributes AttnMatmul::attributes() const {
 
 
 const operation::Hash AttnMatmul::compute_program_hash(const std::vector<Tensor> &input_tensors) const {
-    return fmt::format(
-        "AttnMatmul_{}_{}_{}_{}_{}_{}_{}",
+    return operation::hash_operation<AttnMatmul>(
         this->transpose_hw,
         this->output_mem_config,
         this->output_dtype,
         input_tensors.at(0).memory_config(),
         input_tensors.at(0).dtype(),
         input_tensors.at(1).memory_config(),
-        input_tensors.at(1).dtype()
-    );
+        input_tensors.at(1).dtype());
 }
 
 }  // namespace transformers

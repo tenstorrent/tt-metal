@@ -6,33 +6,38 @@
 
 #pragma once
 
+#include <any>
+#include <boost/core/demangle.hpp>
+#include <experimental/type_traits>
+#include <tensor/tensor.hpp>
+
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/program.hpp"
-
-#include <tensor/tensor.hpp>
 #include "tt_stl/concepts.hpp"
 #include "tt_stl/reflection.hpp"
 
-#include <boost/core/demangle.hpp>
+namespace tt {
 
-#include <experimental/type_traits>
-#include <any>
-
-namespace tt::tt_metal {
-
+namespace tt_metal {
 namespace operation {
 
-using Hash = std::string; // TODO(arakhmati): switch to an integral type?
+using Hash = tt::stl::hash::hash_t;
 
-using OverrideAddressesCallback = std::function<void(const Program&, const std::vector<Buffer*>&, const std::vector<Buffer*>&)>;
+template <typename OperationType, typename... Types>
+static Hash hash_operation(const Types&... objects) {
+    auto operation_type_hash = typeid(OperationType).hash_code();
+    return stl::hash::hash_objects(0, operation_type_hash, objects...);
+}
+
+using OverrideAddressesCallback =
+    std::function<void(const Program&, const std::vector<Buffer*>&, const std::vector<Buffer*>&)>;
 
 using OverrideRuntimeArgumentsCallback = std::function<void(
     const void* operation,
     Program&,
     const std::vector<Tensor>&,
     const std::vector<std::optional<const Tensor>>&,
-    const std::vector<Tensor>&
-)>;
+    const std::vector<Tensor>&)>;
 
 struct ProgramWithCallbacks {
     Program program{};
@@ -49,133 +54,111 @@ struct ProfilerInfo {
     std::optional<std::string> parallelization_strategy;
 };
 
-inline auto DEFAULT_OUTPUT_MEMORY_CONFIG = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type=BufferType::DRAM};
+inline auto DEFAULT_OUTPUT_MEMORY_CONFIG =
+    MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
 
 static void set_default_operation_output_memory_config(const MemoryConfig& memory_config) {
     DEFAULT_OUTPUT_MEMORY_CONFIG = memory_config;
 }
 
-
 namespace detail {
 
 // TODO: move 'NotImplemented' to a library file
-class NotImplemented : public std::logic_error
-{
-public:
-    NotImplemented(const std::string& message) : std::logic_error(message) { };
+class NotImplemented : public std::logic_error {
+   public:
+    NotImplemented(const std::string& message) : std::logic_error(message){};
 };
 
-template<class T, class... Args>
+template <class T, class... Args>
 using has_get_type_name_t = decltype(std::declval<T>().get_type_name(std::declval<Args>()...));
 
-template<class T>
+template <class T>
 constexpr bool implements_get_type_name() {
-    return std::experimental::is_detected<
-        has_get_type_name_t,
-        T
-    >{};
+    return std::experimental::is_detected_v<has_get_type_name_t, T>;
 }
-template<class T, class... Args>
+template <class T, class... Args>
 using has_validate_t = decltype(std::declval<T>().validate(std::declval<Args>()...));
 
-template<class T>
+template <class T>
 constexpr bool implements_validate() {
-    return std::experimental::is_detected<
-        has_validate_t,
-        T,
-        const std::vector<Tensor>&
-    >{};
+    return std::experimental::is_detected_v<has_validate_t, T, const std::vector<Tensor>&>;
 }
 
-template<class T, class... Args>
+template <class T, class... Args>
 using has_validate_with_optional_input_tensors_t = decltype(std::declval<T>().validate(std::declval<Args>()...));
 
-template<class T>
+template <class T>
 constexpr bool implements_validate_with_optional_input_tensors() {
-    return std::experimental::is_detected<
+    return std::experimental::is_detected_v<
         has_validate_with_optional_input_tensors_t,
         T,
         const std::vector<Tensor>&,
-        const std::vector<std::optional<const Tensor>>&
-    >{};
+        const std::vector<std::optional<const Tensor>>&>;
 }
 
-template<class T, class... Args>
+template <class T, class... Args>
 using has_create_program_t = decltype(std::declval<T>().create_program(std::declval<Args>()...));
 
-template<class T>
+template <class T>
 constexpr bool implements_create_program() {
-    return std::experimental::is_detected<
-        has_create_program_t,
-        T,
-        const std::vector<Tensor>&,
-        std::vector<Tensor>&
-    >{};
+    return std::experimental::is_detected_v<has_create_program_t, T, const std::vector<Tensor>&, std::vector<Tensor>&>;
 }
 
-template<class T, class... Args>
-using has_create_program_with_optional_input_tensors_t = decltype(std::declval<T>().create_program(std::declval<Args>()...));
+template <class T, class... Args>
+using has_create_program_with_optional_input_tensors_t =
+    decltype(std::declval<T>().create_program(std::declval<Args>()...));
 
-template<class T>
+template <class T>
 constexpr bool implements_create_program_with_optional_input_tensors() {
-    return std::experimental::is_detected<
+    return std::experimental::is_detected_v<
         has_create_program_with_optional_input_tensors_t,
         T,
         const std::vector<Tensor>&,
         const std::vector<std::optional<const Tensor>>&,
-        std::vector<Tensor>&
-    >{};
+        std::vector<Tensor>&>;
 }
 
-template<class T, class... Args>
+template <class T, class... Args>
 using has_compute_program_hash_t = decltype(std::declval<T>().compute_program_hash(std::declval<Args>()...));
 
-template<class T>
+template <class T>
 constexpr bool implements_compute_program_hash() {
-    return std::experimental::is_detected<
-        has_compute_program_hash_t,
-        T,
-        const std::vector<Tensor>&
-    >{};
+    return std::experimental::is_detected_v<has_compute_program_hash_t, T, const std::vector<Tensor>&>;
 }
 
-template<class T, class... Args>
-using has_compute_program_hash_with_optional_input_tensors_t = decltype(std::declval<T>().compute_program_hash(std::declval<Args>()...));
+template <class T, class... Args>
+using has_compute_program_hash_with_optional_input_tensors_t =
+    decltype(std::declval<T>().compute_program_hash(std::declval<Args>()...));
 
-template<class T>
+template <class T>
 constexpr bool implements_compute_program_hash_with_optional_input_tensors() {
-    return std::experimental::is_detected<
+    return std::experimental::is_detected_v<
         has_compute_program_hash_with_optional_input_tensors_t,
         T,
         const std::vector<Tensor>&,
-        const std::vector<std::optional<const Tensor>>&
-    >{};
+        const std::vector<std::optional<const Tensor>>&>;
 }
 
-template<class T>
+template <class T>
 constexpr bool is_device_operation() {
     return implements_create_program<T>() or implements_create_program_with_optional_input_tensors<T>();
 }
 
-template<class T>
+template <class T>
 constexpr bool is_host_operation() {
     return not is_device_operation<T>();
 }
 
-template<class T, class... Args>
-using has_get_parallelization_strategy_t = decltype(std::declval<T>().get_parallelization_strategy(std::declval<Args>()...));
+template <class T, class... Args>
+using has_get_parallelization_strategy_t =
+    decltype(std::declval<T>().get_parallelization_strategy(std::declval<Args>()...));
 
-template<class T>
+template <class T>
 constexpr bool implements_get_parallelization_strategy() {
-    return std::experimental::is_detected<
-        has_get_parallelization_strategy_t,
-        T,
-        const std::vector<Tensor>&
-    >{};
+    return std::experimental::is_detected_v<has_get_parallelization_strategy_t, T, const std::vector<Tensor>&>;
 }
 
-}
-
+}  // namespace detail
 
 struct HostOperation {
 
@@ -195,47 +178,28 @@ struct HostOperation {
         type_erased_operation(operation),
 
         // Initialize methods
-        get_type_name{
-            [] () -> const std::string {
-                return boost::core::demangle(typeid(T).name());
-            }
-        },
-        validate{
-            [this] (const std::vector<Tensor>& input_tensors) {
-                auto operation = std::any_cast<const T&>(this->type_erased_operation);
-                operation.validate(input_tensors);
-            }
-        },
-        compute_output_shapes{
-            [this] (const std::vector<Tensor>& input_tensors) {
-                auto operation = std::any_cast<const T&>(this->type_erased_operation);
-                return operation.compute_output_shapes(input_tensors);
-            }
-        },
-        compute_output_tensors{
-            [this] (const std::vector<Tensor>& input_tensors) {
-                auto operation = std::any_cast<const T&>(this->type_erased_operation);
-                return operation.compute_output_tensors(input_tensors);
-            }
-        },
-        create_profiler_info{
-            [this] (const std::vector<Tensor>& input_tensors) -> ProfilerInfo {
-                std::optional<std::string> preferred_name = this->get_type_name();
-                std::optional<std::string> parallelization_strategy = std::nullopt;
-                return {
-                    .preferred_name = preferred_name,
-                    .parallelization_strategy = parallelization_strategy
-                };
-            }
-        },
-        attributes{
-            [this] {
-                auto operation = std::any_cast<const T&>(this->type_erased_operation);
-                return operation.attributes();
-            }
-        }
-        {}
-
+        get_type_name{[]() -> const std::string { return boost::core::demangle(typeid(T).name()); }},
+        validate{[this](const std::vector<Tensor>& input_tensors) {
+            auto operation = std::any_cast<const T&>(this->type_erased_operation);
+            operation.validate(input_tensors);
+        }},
+        compute_output_shapes{[this](const std::vector<Tensor>& input_tensors) {
+            auto operation = std::any_cast<const T&>(this->type_erased_operation);
+            return operation.compute_output_shapes(input_tensors);
+        }},
+        compute_output_tensors{[this](const std::vector<Tensor>& input_tensors) {
+            auto operation = std::any_cast<const T&>(this->type_erased_operation);
+            return operation.compute_output_tensors(input_tensors);
+        }},
+        create_profiler_info{[this](const std::vector<Tensor>& input_tensors) -> ProfilerInfo {
+            std::optional<std::string> preferred_name = this->get_type_name();
+            std::optional<std::string> parallelization_strategy = std::nullopt;
+            return {.preferred_name = preferred_name, .parallelization_strategy = parallelization_strategy};
+        }},
+        attributes{[this] {
+            auto operation = std::any_cast<const T&>(this->type_erased_operation);
+            return operation.attributes();
+        }} {}
 };
 
 struct DeviceOperation {
@@ -284,7 +248,7 @@ struct DeviceOperation {
                     return operation.validate(input_tensors, optional_input_tensors);
                 }
                 else {
-                    static_assert(always_false_v<T>, "Operation doesn't implement validate");
+                    static_assert(tt::stl::concepts::always_false_v<T>, "Operation doesn't implement validate");
                 }
             }
         },
@@ -316,7 +280,7 @@ struct DeviceOperation {
                     return operation.create_program(input_tensors, optional_input_tensors, output_tensors);
                 }
                 else {
-                    static_assert(always_false_v<T>, "Operation doesn't implement create_program");
+                    static_assert(tt::stl::concepts::always_false_v<T>, "Operation doesn't implement create_program");
                 }
             }
         },
@@ -348,24 +312,14 @@ struct DeviceOperation {
                 }
                 else if constexpr (detail::implements_create_program<T>()) {
                     TT_ASSERT(optional_input_tensors.empty());
-                    return fmt::format(
-                        "{}_{}",
-                        operation,
-                        fmt::join(std::begin(input_tensors), std::end(input_tensors), "_")
-                    );
-
+                    return hash_operation<T>(operation, input_tensors);
                 }
                 else if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
                     TT_ASSERT(not optional_input_tensors.empty());
-                    return fmt::format(
-                        "{}_{}_{}",
-                        operation,
-                        fmt::join(std::begin(input_tensors), std::end(input_tensors), "_"),
-                        fmt::join(std::begin(optional_input_tensors), std::end(optional_input_tensors), "_")
-                    );
+                    return hash_operation<T>(operation, input_tensors, optional_input_tensors);
                 }
                 else {
-                    static_assert(always_false_v<T>, "Operation doesn't implement create_program");
+                    static_assert(tt::stl::concepts::always_false_v<T>, "Operation doesn't implement create_program");
                 }
             }
         },
@@ -405,5 +359,5 @@ struct ExternalOperation {
 using Operation = std::variant<HostOperation, DeviceOperation, ExternalOperation>;
 
 }  // namespace operation
-
-}  // namespace tt::tt_metal
+}  // namespace tt_metal
+}  // namespace tt

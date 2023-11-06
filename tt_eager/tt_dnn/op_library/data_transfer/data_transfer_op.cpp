@@ -30,9 +30,7 @@ std::vector<Tensor> DataTransferToHost::compute_output_tensors(const std::vector
 }
 
 tt::stl::reflection::Attributes DataTransferToHost::attributes() const {
-    return {
-        {"host", "Host"},
-    };
+    return {};
 }
 
 Tensor data_transfer_to_host(const Tensor &input_tensor) {

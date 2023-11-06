@@ -128,8 +128,7 @@ const operation::Hash Unpad::compute_program_hash (
         rm_width = fmt::format("{}", input_tensor.shape()[3]);
     }
 
-    auto str = fmt::format(
-        "Unpad(input_rank={}_input_layout={}_input_mem_config={}_output_mem_config={}_dtype={}_parallelization_strategy={}_rm_width={})",
+    auto str = operation::hash_operation<Unpad>(
         num_dims,
         input_tensor.layout(),
         input_mem_config,
