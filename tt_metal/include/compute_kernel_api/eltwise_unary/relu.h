@@ -35,6 +35,9 @@ ALWI void relu_max_tile(uint32_t idst,uint32_t param0) {
   MATH(( llk_math_eltwise_unary_sfpu_relu_max<APPROX, SyncHalf>(idst,param0) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void relu_max_tile_init() {
   MATH(( llk_math_eltwise_unary_sfpu_relu_max_init<APPROX>() ));
 }
@@ -56,6 +59,9 @@ ALWI void relu_min_tile(uint32_t idst,uint32_t param0) {
   MATH(( llk_math_eltwise_unary_sfpu_relu_min<APPROX, SyncHalf>(idst,param0) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void relu_min_tile_init() {
   MATH(( llk_math_eltwise_unary_sfpu_relu_min_init<APPROX>() ));
 }
@@ -76,6 +82,9 @@ ALWI void relu_tile(uint32_t idst) {
   MATH(( llk_math_eltwise_unary_sfpu_relu<APPROX, SyncHalf>(idst) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void relu_tile_init() {
   MATH(( llk_math_eltwise_unary_sfpu_relu_init<APPROX>() ));
 }
@@ -97,6 +106,9 @@ ALWI void leaky_relu_tile(uint32_t idst,uint32_t param0) {
   MATH(( llk_math_eltwise_unary_sfpu_lrelu<APPROX, SyncHalf>(idst,param0) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void leaky_relu_tile_init() {
   MATH(( llk_math_eltwise_unary_sfpu_lrelu_init<APPROX>() ));
 }

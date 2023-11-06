@@ -30,6 +30,9 @@ ALWI void erfinv_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_erfinv_op<APPROX, SyncHalf>(idst)));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void erfinv_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_erfinv_init<APPROX>() ));
 }

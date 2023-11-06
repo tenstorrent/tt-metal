@@ -25,6 +25,9 @@ Compute APIs
   expm1_tile
   relu_tile
   elu_tile
+  erf_tile
+  erfc_tile
+  erfinv_tile
   gelu_tile
   heaviside_tile
   isinf_tile
@@ -39,6 +42,7 @@ Compute APIs
   log_tile
   log_with_base_tile
   power_tile
+  rsub_tile
   signbit_tile
   square_tile
   reduce_tile

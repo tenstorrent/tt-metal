@@ -15,7 +15,9 @@
 
 namespace ckernel {
 
-//sine
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void sin_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_sine_init<APPROX>()));
 }
@@ -37,7 +39,9 @@ ALWI void sin_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_sine_op<APPROX, SyncHalf>(idst)));
 }
 
-//cosine
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void cos_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_cosine_init<APPROX>()));
 }
@@ -59,7 +63,9 @@ ALWI void cos_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_cosine_op<APPROX, SyncHalf>(idst)));
 }
 
-//tan
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void tan_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_tan_init<APPROX>()));
 }
