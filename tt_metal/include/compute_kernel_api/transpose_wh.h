@@ -15,6 +15,15 @@
 
 namespace ckernel {
 
+
+/**
+ * Paired Init function for transpose_wh. For general information on init functions refer to any_init.
+ *
+ *
+ * | Argument       | Description                                                 | Type     | Valid Range                                    | Required |
+ * |----------------|-------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | icb            | The identifier of the circular buffer (CB) containing input | uint32_t | 0 to 31                                        | True     |
+ */
 ALWI void transpose_wh_init(uint32_t icb)
 {
     #ifdef ARCH_GRAYSKULL
