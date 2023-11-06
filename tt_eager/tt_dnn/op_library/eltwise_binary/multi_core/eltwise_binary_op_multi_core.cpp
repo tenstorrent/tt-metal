@@ -18,7 +18,7 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const Tensor &b, Tensor& output, BinaryOpType op_type, const std::optional<std::vector<UnaryWithParam>> fused_activations) {
+operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const Tensor &b, const Tensor& output, BinaryOpType op_type, const std::optional<std::vector<UnaryWithParam>> fused_activations) {
 
     Program program{};
 
@@ -298,8 +298,9 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
 
         auto src_buffer_a = input_tensors.at(0).buffer();
         auto src_buffer_b = input_tensors.at(1).buffer();
+        const auto& output_tensor = output_tensors.size() == 1 ? output_tensors.at(0) : input_tensors.at(0);
 
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto dst_buffer = output_tensor.buffer();
 
         uint32_t num_tiles = input_tensors.at(0).volume() / TILE_HW;
 
@@ -310,7 +311,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
         std::optional<ShardSpec> shard_spec = std::nullopt;
         bool src0_sharded = input_tensors.at(0).memory_config().is_sharded();
         bool src1_sharded = input_tensors.at(1).memory_config().is_sharded();
-        bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
+        bool out_sharded = output_tensor.memory_config().is_sharded();
 
         bool block_sharded = false;
         if (src0_sharded) {
@@ -320,8 +321,8 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
             shard_spec = input_tensors.at(1).shard_spec().value();
             block_sharded = input_tensors.at(1).memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
         } if (out_sharded) {
-            shard_spec = output_tensors.at(0).shard_spec().value();
-            block_sharded = output_tensors.at(0).memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
+            shard_spec = output_tensor.shard_spec().value();
+            block_sharded = output_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
         }
 
         uint32_t block_size_per_core_group_1 = 1, block_size_per_core_group_2 = 1, max_block_size = 1;
@@ -349,8 +350,8 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
                 block_width = shard_spec.value().shard_shape[1] / TILE_WIDTH;
                 block_size = block_width * block_height;
                 end_core = (*shard_spec.value().shard_grid.ranges().begin()).end;
-                output_width = output_tensors.at(0).shape()[-1] / TILE_WIDTH;
-                uint32_t output_height = output_tensors.at(0).volume() / output_tensors.at(0).shape()[-1] / TILE_HEIGHT;
+                output_width = output_tensor.shape()[-1] / TILE_WIDTH;
+                uint32_t output_height = output_tensor.volume() / output_tensor.shape()[-1] / TILE_HEIGHT;
                 last_unpadded_block_height = block_height -  (round_up(output_height, block_height) - output_height);
                 last_unpadded_block_width = block_width -  (round_up(output_width, block_width) - output_width);
             }
