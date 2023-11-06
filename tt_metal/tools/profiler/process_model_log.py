@@ -4,32 +4,16 @@
 
 import os
 import subprocess
-import shutil
 from pathlib import Path
 import pandas as pd
 
-root_dir = Path(os.environ["TT_METAL_HOME"])
-
-
-def rm(path):
-    if not os.path.exists(path):
-        return
-    if os.path.isfile(path) or os.path.islink(path):
-        os.remove(path)
-    else:
-        shutil.rmtree(path)
-
-
-def clear_logs(output_logs_subdir):
-    rm(root_dir / "tt_metal/tools/profiler/logs/")
-    rm(root_dir / "tt_metal/tools/profiler/output/")
-    rm(root_dir / ".profiler/" / output_logs_subdir)
+from tt_metal.tools.profiler.common import PROFILER_OUTPUT_DIR, PROFILER_SCRIPTS_ROOT
 
 
 def post_process_ops_log(output_logs_subdir, columns):
-    runDate = sorted(os.listdir(root_dir / ".profiler" / output_logs_subdir / "ops_device/"))[-1]
+    runDate = sorted(os.listdir(PROFILER_OUTPUT_DIR / output_logs_subdir / "ops_device/"))[-1]
     df = pd.read_csv(
-        root_dir / ".profiler" / output_logs_subdir / "ops_device" / runDate / f"ops_perf_results_{runDate}.csv"
+        PROFILER_OUTPUT_DIR / output_logs_subdir / "ops_device" / runDate / f"ops_perf_results_{runDate}.csv"
     )
     results = {}
     for col in columns:
@@ -38,8 +22,8 @@ def post_process_ops_log(output_logs_subdir, columns):
 
 
 def run_device_profiler(command, output_logs_subdir):
-    output_logs_dir = root_dir / ".profiler" / output_logs_subdir
-    profiler_cmd = root_dir / f'tt_metal/tools/profiler/profile_this.py -d -o {output_logs_dir} -c "{command}"'
+    output_logs_dir = PROFILER_OUTPUT_DIR / output_logs_subdir
+    profiler_cmd = PROFILER_SCRIPTS_ROOT / f'profile_this.py -d -o {output_logs_dir} -c "{command}"'
     subprocess.run([profiler_cmd], shell=True, check=True)
 
 

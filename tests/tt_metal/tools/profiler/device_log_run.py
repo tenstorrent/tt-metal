@@ -12,12 +12,10 @@ import fileinput
 import jsbeautifier
 from loguru import logger
 
-import tests.tt_metal.tools.profiler.common as common
+from tt_metal.tools.profiler.common import TT_METAL_HOME, PROFILER_SCRIPTS_ROOT, PROFILER_ARTIFACTS_DIR
 
-REPO_PATH = common.get_repo_path()
-TT_METAL_PATH = f"{REPO_PATH}/tt_metal"
-GOLDEN_OUTPUTS_DIR = f"{TT_METAL_PATH}/third_party/lfs/profiler/tests/golden/device/outputs"
-PROFILER_DIR = f"{TT_METAL_PATH}/tools/profiler/"
+TT_METAL_PATH = TT_METAL_HOME / "tt_metal"
+GOLDEN_OUTPUTS_DIR = TT_METAL_PATH / "third_party/lfs/profiler/tests/golden/device/outputs"
 
 RE_RANDOM_ID_STRINGS = [r'if \(document.getElementById\("{0}"\)\) {{', r'    Plotly.newPlot\("{0}", \[{{']
 DIFF_LINE_COUNT_LIMIT = 40
@@ -69,11 +67,11 @@ def beautify_tt_js_blob(testOutputFolder):
 
 
 def run_device_log_compare_golden(test):
-    goldenPath = f"{GOLDEN_OUTPUTS_DIR}/{test}"
-    underTestPath = f"{PROFILER_DIR}/output/device"
+    goldenPath = GOLDEN_OUTPUTS_DIR / test
+    underTestPath = PROFILER_ARTIFACTS_DIR / "output/device"
 
     ret = os.system(
-        f"cd {PROFILER_DIR} && ./process_device_log.py -d {goldenPath}/profile_log_device.csv --no-print-stats --no-artifacts --no-webapp"
+        f"cd {PROFILER_SCRIPTS_ROOT} && ./process_device_log.py -d {goldenPath}/profile_log_device.csv --no-print-stats --no-artifacts --no-webapp"
     )
     assert ret == 0, f"Log process script crashed with exit code {ret}"
 
@@ -95,7 +93,9 @@ def run_device_log_compare_golden(test):
                     diffStr += line
                     lineCount += 1
                 if lineCount > DIFF_LINE_COUNT_LIMIT:
-                    diffStr += "[NOTE: limited lines on log output, run locally without line count limits for more info]"
+                    diffStr += (
+                        "[NOTE: limited lines on log output, run locally without line count limits for more info]"
+                    )
                     break
         logger.error(diffStr)
 

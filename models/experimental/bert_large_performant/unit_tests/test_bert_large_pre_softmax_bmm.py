@@ -15,11 +15,9 @@ from models.utility_functions import (
 import torch
 
 
-def run_bert_large_pre_softmax_bmm_test(
-    device, dtype, in0_mem_config, in1_mem_config, out_mem_config
-):
+def run_bert_large_pre_softmax_bmm_test(device, dtype, in0_mem_config, in1_mem_config, out_mem_config):
     compute_grid_size = device.compute_with_storage_grid_size()
-    if (compute_grid_size.x < 12):
+    if compute_grid_size.x < 12:
         pytest.skip(f"Grid size {compute_grid_size} is not supported")
 
     torch.manual_seed(1234)
@@ -104,29 +102,19 @@ import pytest
     (ttl.tensor.DataType.BFLOAT8_B, ttl.tensor.DataType.BFLOAT16),
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
-def test_bert_large_pre_softmax_bmm_test(
-    device, dtype, in0_mem_config, in1_mem_config, out_mem_config, request
-):
-    ttl.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/BERT_large_pre_softmax_bmm_{request.node.callspec.id}"
-    )
-    run_bert_large_pre_softmax_bmm_test(
-        device, dtype, in0_mem_config, in1_mem_config, out_mem_config
-    )
+def test_bert_large_pre_softmax_bmm_test(device, dtype, in0_mem_config, in1_mem_config, out_mem_config, request):
+    ttl.profiler.set_profiler_location(f"BERT_large_pre_softmax_bmm_{request.node.callspec.id}")
+    run_bert_large_pre_softmax_bmm_test(device, dtype, in0_mem_config, in1_mem_config, out_mem_config)
 
 
 def test_bert_large_pre_softmax_bmm_with_program_cache(device, use_program_cache):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
-        run_bert_large_pre_softmax_bmm_test(
-            device, dtype, dram_mem_config, dram_mem_config, dram_mem_config
-        )
+        run_bert_large_pre_softmax_bmm_test(device, dtype, dram_mem_config, dram_mem_config, dram_mem_config)
 
     dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     for _ in range(2):
-        run_bert_large_pre_softmax_bmm_test(
-            device, dtype, dram_mem_config, dram_mem_config, dram_mem_config
-        )
+        run_bert_large_pre_softmax_bmm_test(device, dtype, dram_mem_config, dram_mem_config, dram_mem_config)
 
     assert ttl.program_cache.num_entries() == 2

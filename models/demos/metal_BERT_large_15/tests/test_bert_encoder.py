@@ -125,9 +125,7 @@ def test_bert_encoder_inference(
     model_config = get_model_config(model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
 
-    tt_lib.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/BERT_large_1_encoder_{request.node.callspec.id}"
-    )
+    tt_lib.profiler.set_profiler_location(f"BERT_large_1_encoder_{request.node.callspec.id}")
 
     tt_lib.profiler.start_profiling("entire_run")
     run_bert_encoder_inference(

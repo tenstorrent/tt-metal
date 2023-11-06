@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from merge_meta_class import MergeMetaclass
+from tt_metal.tools.profiler.merge_meta_class import MergeMetaclass
+from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
 
 class default_setup(metaclass=MergeMetaclass):
@@ -102,8 +103,8 @@ class default_setup(metaclass=MergeMetaclass):
 
     webappPort = 8050
 
-    outputFolder = "output/device"
-    deviceInputLog = "logs/profile_log_device.csv"
+    outputFolder = f"output/device"
+    deviceInputLog = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
     deviceRearranged = "device_rearranged_timestamps.csv"
     deviceAnalysisData = "device_analysis_data.json"
     deviceChromeTracing = "device_chrome_tracing.json"

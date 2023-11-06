@@ -14,6 +14,7 @@
 
 #include "llrt/llrt.hpp"
 #include "tools/profiler/profiler_state.hpp"
+#include "tools/profiler/common.hpp"
 
 using std::chrono::steady_clock;
 using std::chrono::duration;

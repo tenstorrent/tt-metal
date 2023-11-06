@@ -76,9 +76,7 @@ def run_test_FalconCausalLM_inference(
         model_input = torch.arange(seq_len * batch).reshape(batch, seq_len)
     else:
         # batch identical sequences for debugging
-        model_input = torch.stack([torch.arange(seq_len)] * batch).reshape(
-            batch, seq_len
-        )
+        model_input = torch.stack([torch.arange(seq_len)] * batch).reshape(batch, seq_len)
 
     # Generate dummy kv_cache --------------------------------------------------------------
     if llm_mode == "prefill":
@@ -116,14 +114,10 @@ def run_test_FalconCausalLM_inference(
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
     else:
-        raise NotImplementedError(
-            f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode."
-        )
+        raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
 
     # Prepare output -----------------------------------------------------------------------
-    pytorch_FalconCausalLM = PytorchFalconCausalLM(
-        hugging_face_reference_model, num_layers
-    )
+    pytorch_FalconCausalLM = PytorchFalconCausalLM(hugging_face_reference_model, num_layers)
     pytorch_out, pytorch_layer_present = pytorch_FalconCausalLM(
         input_ids=model_input, past_key_values=past_key_values, use_cache=use_cache
     )
@@ -257,9 +251,7 @@ def test_FalconCausalLM_inference(
     model_config = get_model_config(model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
 
-    tt_lib.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/falcon-7b_{request.node.callspec.id}"
-    )
+    tt_lib.profiler.set_profiler_location(f"falcon-7b_{request.node.callspec.id}")
 
     run_test_FalconCausalLM_inference(
         device,

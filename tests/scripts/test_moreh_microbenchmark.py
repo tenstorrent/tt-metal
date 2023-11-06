@@ -19,13 +19,12 @@ import pytest
 import numpy as np
 import sys
 
-tt_home = os.environ.get("TT_METAL_HOME")
-profiler_path = os.path.join(tt_home, "tt_metal/tools/profiler")
-profiler_log_path = os.path.join(profiler_path, "logs/profile_log_device.csv")
-sys.path.append(profiler_path)
+from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
-from process_device_log import import_log_run_stats
-import plot_setup
+profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
+
+from tt_metal.tools.profiler.process_device_log import import_log_run_stats
+import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 
 from tests.scripts.common import (
     run_single_test,
@@ -64,7 +63,7 @@ def generate_csv(file_name, header, data):
 
 
 def profile_results():
-    setup = plot_setup.default_setup()
+    setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = profiler_log_path
     devices_data = import_log_run_stats(setup)
     deviceID = list(devices_data["devices"].keys())[0]
@@ -75,7 +74,7 @@ def profile_results():
 
 
 def profile_noc_results():
-    setup = plot_setup.test_noc()
+    setup = device_post_proc_config.test_noc()
     setup.deviceInputLog = profiler_log_path
     devices_data = import_log_run_stats(setup)
     deviceID = list(devices_data["devices"].keys())[0]
@@ -316,9 +315,7 @@ def test_matmul_local(r=9, c=12, mt=72, nt=96, kt=24):
     [(2, np.array([8192, 32768, 131072, 524288, 2097152, 8388608]), np.array([33554432, 134217728, 536870912]))],
 )
 def test_pcie_h2d_dram(iteration, test_vector_small, test_vector_large):
-    home_path = os.environ.get("TT_METAL_HOME")
-    log_path = os.path.join(home_path, "tt_metal/tools/profiler")
-    file_name = os.path.join(log_path, "logs/H2D_DRAM_Bandwidth.csv")
+    file_name = PROFILER_LOGS_DIR / "H2D_DRAM_Bandwidth.csv"
     header = ["Transfer Size", "WriteToDeviceDRAMChannel", "WriteToBuffer", "EnqueueWriteBuffer"]
     data = []
     for test_point in test_vector_small:
@@ -342,9 +339,7 @@ def test_pcie_h2d_dram(iteration, test_vector_small, test_vector_large):
     [(2, np.array([8192, 32768, 131072, 524288, 2097152, 8388608]), np.array([33554432, 134217728, 536870912]))],
 )
 def test_pcie_d2h_dram(iteration, test_vector_small, test_vector_large):
-    home_path = os.environ.get("TT_METAL_HOME")
-    log_path = os.path.join(home_path, "tt_metal/tools/profiler")
-    file_name = os.path.join(log_path, "logs/D2H_DRAM_Bandwidth.csv")
+    file_name = PROFILER_LOGS_DIR / "D2H_DRAM_Bandwidth.csv"
     header = ["Transfer Size", "ReadFromDeviceDRAMChannel", "ReadFromBuffer", "EnqueueReadBuffer"]
     data = []
     for test_point in test_vector_small:
@@ -371,9 +366,7 @@ def test_pcie_d2h_dram(iteration, test_vector_small, test_vector_large):
     ],
 )
 def test_pcie_h2d_l1(arch, iteration, L1_size, test_vector):
-    home_path = os.environ.get("TT_METAL_HOME")
-    log_path = os.path.join(home_path, "tt_metal/tools/profiler")
-    file_name = os.path.join(log_path, "logs/H2D_L1_Bandwidth.csv")
+    file_name = PROFILER_LOGS_DIR / "H2D_L1_Bandwidth.csv"
     header = ["Transfer Size", "WriteToDeviceL1", "WriteToBuffer", "EnqueueWriteBuffer"]
     data = []
     for test_point in test_vector:
@@ -397,9 +390,7 @@ def test_pcie_h2d_l1(arch, iteration, L1_size, test_vector):
     ],
 )
 def test_pcie_d2h_l1(arch, iteration, L1_size, test_vector):
-    home_path = os.environ.get("TT_METAL_HOME")
-    log_path = os.path.join(home_path, "tt_metal/tools/profiler")
-    file_name = os.path.join(log_path, "logs/D2H_L1_Bandwidth.csv")
+    file_name = PROFILER_LOGS_DIR / "D2H_L1_Bandwidth.csv"
     header = ["Transfer Size", "ReadFromDeviceL1", "ReadFromBuffer", "EnqueueReadBuffer"]
     data = []
     for test_point in test_vector:
@@ -423,9 +414,7 @@ def test_pcie_d2h_l1(arch, iteration, L1_size, test_vector):
     ],
 )
 def test_noc(arch, r, c, nt, test_vector):
-    home_path = os.environ.get("TT_METAL_HOME")
-    log_path = os.path.join(home_path, "tt_metal/tools/profiler")
-    file_name = os.path.join(log_path, "logs/NoC_Read_Performance.csv")
+    file_name = PROFILER_LOGS_DIR / "NoC_Read_Performance.csv"
     header = [
         "Requests",
         "Local L1 (min)",
@@ -462,9 +451,7 @@ def test_noc(arch, r, c, nt, test_vector):
     ],
 )
 def test_matmul_dram(arch, freq, r, c, test_vector):
-    home_path = os.environ.get("TT_METAL_HOME")
-    log_path = os.path.join(home_path, "tt_metal/tools/profiler")
-    file_name = os.path.join(log_path, "logs/Matmul_DRAM.csv")
+    file_name = PROFILER_LOGS_DIR / "Matmul_DRAM.csv"
     header = ["M", "N", "K", "Cycles", "Time (ms)", "TFLOPS"]
     data = []
     for vec in test_vector:
@@ -491,9 +478,7 @@ def test_matmul_dram(arch, freq, r, c, test_vector):
     ],
 )
 def test_matmul_l1(arch, freq, r, c, test_vector_global, test_vector_local):
-    home_path = os.environ.get("TT_METAL_HOME")
-    log_path = os.path.join(home_path, "tt_metal/tools/profiler")
-    file_name = os.path.join(log_path, "logs/Matmul_SRAM.csv")
+    file_name = PROFILER_LOGS_DIR / "Matmul_SRAM.csv"
     header = ["M", "N", "K", "Cycles", "Time (ms)", "TFLOPS"]
     data = []
     for vec in test_vector_global:

@@ -26,7 +26,7 @@ def run_bert_large_ff1_matmul_test(
     fused_activation,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
-    if (compute_grid_size.x < 12):
+    if compute_grid_size.x < 12:
         pytest.skip(f"Grid size {compute_grid_size} is not supported")
 
     if (
@@ -186,9 +186,7 @@ def test_bert_large_ff1_matmul_test(
     activation,
     request,
 ):
-    ttl.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/BERT_large_ff1_matmul_{request.node.callspec.id}"
-    )
+    ttl.profiler.set_profiler_location(f"BERT_large_ff1_matmul_{request.node.callspec.id}")
     run_bert_large_ff1_matmul_test(
         device,
         dtype,

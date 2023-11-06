@@ -10,20 +10,14 @@ from models.utility_functions import tt2torch_tensor, comp_pcc
 import torch
 
 
-def run_nlp_create_qkv_heads_test(
-    batch, seq_len, dtype, in0_mem_config, out_mem_config, device
-):
+def run_nlp_create_qkv_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, device):
     torch.manual_seed(1234)
 
     in0_shape = [batch, 1, seq_len, 4672]
 
     A = torch.randn(in0_shape)
 
-    in0_t = (
-        ttl.tensor.Tensor(A, dtype)
-        .to(ttl.tensor.Layout.TILE)
-        .to(device, in0_mem_config)
-    )
+    in0_t = ttl.tensor.Tensor(A, dtype).to(ttl.tensor.Layout.TILE).to(device, in0_mem_config)
 
     q, k, v = ttl.tensor.nlp_create_qkv_heads(in0_t, out_mem_config)
 
@@ -98,29 +92,19 @@ def run_nlp_create_qkv_heads_test(
         "batch1_seq128",
     ],
 )
-def test_nlp_create_qkv_heads_test(
-    batch, seq_len, dtype, in0_mem_config, out_mem_config, request, device
-):
-    ttl.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/nlp_create_qkv_heads_tm_{request.node.callspec.id}"
-    )
-    run_nlp_create_qkv_heads_test(
-        batch, seq_len, dtype, in0_mem_config, out_mem_config, device
-    )
+def test_nlp_create_qkv_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, request, device):
+    ttl.profiler.set_profiler_location(f"nlp_create_qkv_heads_tm_{request.node.callspec.id}")
+    run_nlp_create_qkv_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, device)
 
 
 def test_nlp_create_qkv_heads_with_program_cache(use_program_cache, device):
     dtype = ttl.tensor.DataType.BFLOAT8_B
     dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     for _ in range(2):
-        run_nlp_create_qkv_heads_test(
-            1, 32, dtype, dram_mem_config, dram_mem_config, device
-        )
+        run_nlp_create_qkv_heads_test(1, 32, dtype, dram_mem_config, dram_mem_config, device)
 
     dram_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     for _ in range(2):
-        run_nlp_create_qkv_heads_test(
-            1, 32, dtype, dram_mem_config, dram_mem_config, device
-        )
+        run_nlp_create_qkv_heads_test(1, 32, dtype, dram_mem_config, dram_mem_config, device)
 
     assert ttl.program_cache.num_entries() == 2

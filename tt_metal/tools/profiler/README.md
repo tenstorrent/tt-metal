@@ -1,38 +1,6 @@
 # tt_metal profiler
 
-## Usage
-
-For installation and usage please refer to the `pofiler` section under `performance_measurement_tools` of tt_metall docs.
-
-## Internal to TT dev docs
-
-### llrt
-
-1. Under `tests/tt_metal/build_kernels_for_riscv`, for whichever test that you want to profile, enable kernel profiling
-through `generate_binaries_all_riscs`
-
-e.g.
-```
-    constexpr bool profiler_kernel = true;
-    generate_binaries_all_riscs(&build_kernel_for_riscv_options, out_dir_path, tt::ARCH::GRAYSKULL, params, profiler_kernel);
-```
-
-2. Under `tests/tt_metal/llrt/`, for whichever test that you want to profile, instantiate a local `Profiler` object,
-and call `dumpDeviceResults` after you have finished running your kernels on the same cluster and cores.
-
-e.g.
-```
-    #include "tools/profiler/profiler.hpp"
-    static Profiler data_copy_profiler = Profiler();
-    .
-    .
-    .
-    .
-    pass &= run_data_copy_multi_tile(cluster, chip_id, core, 2048);
-
-    data_copy_profiler.dumpDeviceResults(cluster, chip_id, cores);
-
-```
+## Tests
 
 ### Automation tests for the profiler module
 
