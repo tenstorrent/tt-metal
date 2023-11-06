@@ -37,6 +37,7 @@ Kernel::Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &cor
             }
         }
     }
+    core_to_runtime_args_.reserve ( logical_cores_.size() );
 }
 
 std::string Kernel::name() const {
