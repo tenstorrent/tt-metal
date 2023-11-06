@@ -140,6 +140,14 @@ void TensorModule(py::module &m_tensor) {
         .def_readonly("y", &CoreCoord::y);
     py::implicitly_convertible<std::tuple<std::size_t, std::size_t>, CoreCoord>();
 
+    auto py_shape = py::class_<Shape>(m_tensor, "Shape", R"doc(
+        Class defining tensor shape
+    )doc");
+
+    py_shape
+        .def(py::init<std::array<uint32_t, 4> >());
+    py::implicitly_convertible<std::vector<uint32_t>, Shape>();
+
     auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
         Class defining memory configuration for storing tensor data on TT Accelerator device.
         There are eight DRAM memory banks on TT Accelerator device, indexed as 0, 1, 2, ..., 7.
@@ -461,20 +469,14 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     m_tensor.def(
-        "format_input_tensor",
-        [] (const Tensor &input, Device * device, const std::array<uint32_t, 4>& padded_shape, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt) {
-            return AutoFormat::format_input_tensor(input, device, padded_shape, pad_value, target_layout, target_mem_config);
-        },
+        "format_input_tensor", &AutoFormat::format_input_tensor,
         py::arg("input").noconvert(), py::arg("device").noconvert(), py::arg("padded_shape"), py::arg("pad_value"), py::arg("target_layout").noconvert(), py::arg("target_mem_config").noconvert() = std::nullopt,
         R"doc(
             Formats tensor to target layout and pads to padded shape
         )doc"
     );
     m_tensor.def(
-        "format_output_tensor",
-        [] (const Tensor &output, const std::array<uint32_t, 4>& shape, Device* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt) {
-            return AutoFormat::format_output_tensor(output, shape, device, target_layout, target_mem_config);
-        },
+        "format_output_tensor", &AutoFormat::format_output_tensor,
         py::arg("output").noconvert(), py::arg("shape"), py::arg("device").noconvert(), py::arg("target_layout").noconvert(), py::arg("target_mem_config").noconvert() = std::nullopt,
         R"doc(
             Formats tensor to target layout and unpads to shape

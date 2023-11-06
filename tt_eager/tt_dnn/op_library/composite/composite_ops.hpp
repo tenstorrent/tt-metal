@@ -192,18 +192,18 @@ Tensor ones_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_
 Tensor full_like(const Tensor& reference_tensor, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation 0s with shape
-Tensor empty(const Shape shape, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor empty(const Shape shape, DataType data_type = DataType::BFLOAT16, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation 0s with shape
-Tensor zeros(const Shape shape, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor zeros(const Shape shape, DataType data_type = DataType::BFLOAT16, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation 1s with shape
-Tensor ones(const Shape shape, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor ones(const Shape shape, DataType data_type = DataType::BFLOAT16, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 Tensor arange(int32_t start, int32_t end, int32_t step = 1, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation with shape and filled with value
-Tensor full(const Shape shape, float value, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor full(const Shape shape, float value, DataType data_type = DataType::BFLOAT16, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //rpow: y = k**(a)
 Tensor rpow(const Tensor& a,float k, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);

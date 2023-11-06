@@ -155,11 +155,8 @@ namespace tt::tt_metal::detail{
                 "output_dtype", "Output tensor data type", "DataType", "Default is None (Use input dtype)", "No"
         )doc");
 
-        m_tensor.def("tilize_with_val_padding",
-            [] (const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype) {
-                return tilize_with_val_padding(tensor, output_tensor_shape, input_tensor_start, pad_value, output_mem_config, output_dtype);
-            },
-            py::arg("input").noconvert(), py::arg("output_tensor_shape").noconvert(), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
+        m_tensor.def("tilize_with_val_padding", &tilize_with_val_padding,
+            py::arg("input").noconvert(), py::arg("output_tensor_shape"), py::arg("input_tensor_start"), py::arg("pad_value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
             Tilizes a given tensor across memory on device. Pads to specified shape before tilizing.
 
             .. csv-table::
@@ -203,11 +200,8 @@ namespace tt::tt_metal::detail{
                 Untilizes input tiled data to row major format.
             )doc");
 
-        m_tensor.def("untilize_with_unpadding",
-            [] (const Tensor &tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, const MemoryConfig& output_mem_config) {
-                return untilize_with_unpadding(tensor, output_tensor_shape, input_tensor_start, output_mem_config);
-            },
-            py::arg("input").noconvert(), py::arg("output_tensor_start").noconvert(), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("untilize_with_unpadding", &untilize_with_unpadding,
+            py::arg("input").noconvert(), py::arg("output_tensor_start"), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
 
             Input tensor must be on TT accelerator device, in TILE, and have BFLOAT16 data type.
@@ -224,12 +218,9 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("pad",
-            [] (const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value, const MemoryConfig& output_mem_config, bool use_multicore) {
-                return pad(input_tensor, output_tensor_shape, input_tensor_start, pad_value, output_mem_config, use_multicore);
-            },
+        m_tensor.def("pad", &pad,
             py::arg("input").noconvert(),
-            py::arg("output_tensor_shape").noconvert(),
+            py::arg("output_tensor_shape"),
             py::arg("input_tensor_start"),
             py::arg("pad_value"),
             py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
@@ -251,11 +242,8 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("unpad",
-            [] (const Tensor &input_tensor, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end, const MemoryConfig& output_mem_config) {
-                return unpad(input_tensor, output_tensor_start, output_tensor_end, output_mem_config);
-            },
-            py::arg("input").noconvert(), py::arg("output_tensor_start").noconvert(), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("unpad", &unpad,
+            py::arg("input").noconvert(), py::arg("output_tensor_start"), py::arg("output_tensor_end"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Unpad TT Tensor.
 
             Returns an output tensor from output tensor start indices ``arg1`` to output tensor end indices ``arg2`` (inclusive) of the input tensor.

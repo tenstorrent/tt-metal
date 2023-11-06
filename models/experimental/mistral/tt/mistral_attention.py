@@ -78,16 +78,20 @@ class TtAttention(nn.Module):
         else:
             cache_k = tt_lib.tensor.empty(
                 [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],
-                tt_lib.tensor.Layout.ROW_MAJOR,
-                self.device,
-                tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
+                layout=tt_lib.tensor.Layout.ROW_MAJOR,
+                device=self.device,
+                output_mem_config=tt_lib.tensor.MemoryConfig(
+                    tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+                ),
             )
             self.cache_k = tt_to_torch_tensor(cache_k).to(torch.float32)
             cache_v = tt_lib.tensor.empty(
                 [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],
-                tt_lib.tensor.Layout.ROW_MAJOR,
-                self.device,
-                tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
+                layout=tt_lib.tensor.Layout.ROW_MAJOR,
+                device=self.device,
+                output_mem_config=tt_lib.tensor.MemoryConfig(
+                    tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+                ),
             )
             self.cache_v = tt_to_torch_tensor(cache_v).to(torch.float32)
 

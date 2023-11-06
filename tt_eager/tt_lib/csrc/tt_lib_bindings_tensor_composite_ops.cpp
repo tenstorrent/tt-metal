@@ -9,10 +9,8 @@
 
 namespace tt::tt_metal::detail{
     void TensorModuleCompositeOPs( py::module & m_tensor){
-        m_tensor.def("sfpu_eps",
-                    [] (const std::array<uint32_t, 4> shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
-                        return tt::tt_metal::sfpu_eps(shape, layout, device, output_mem_config);
-                    },
+
+        m_tensor.def("sfpu_eps", &tt::tt_metal::sfpu_eps,
                 py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
                     Returns a new tensor filled with the machine epsilon value in shape specified by input ``shape``.
 
@@ -436,11 +434,8 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("zeros",
-            [] (const std::array<uint32_t, 4> shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
-                return zeros(shape, layout, device, output_mem_config);
-            },
-            py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("zeros", &zeros,
+            py::arg("shape"), py::arg("data_type").noconvert() = DataType::BFLOAT16, py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns a new tensor filled with zeros in shape specified by input ``shape``.
 
             Input shape is specified as a list of 4 integer elements
@@ -451,16 +446,14 @@ namespace tt::tt_metal::detail{
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "shape", "Shape vector", "Vector<int>", "[W, Z, Y, X]", "Yes"
+                "data_type", "Tensor data type", "DataType", "default is BFLOAT16", "No"
                 "layout", "Tensor layout", "Layout", "default is ROW_MAJOR", "No"
                 "device", "Device tensor is placed on", "Device", "default is None (on host)", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("empty",
-            [] (const std::array<uint32_t, 4> shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
-                return empty(shape, layout, device, output_mem_config);
-            },
-            py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("empty", &empty,
+            py::arg("shape"), py::arg("data_type").noconvert() = DataType::BFLOAT16, py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns a new empty tensor (on device) in shape specified by input ``shape``.
 
             Input shape is specified as a list of 4 integer elements
@@ -471,16 +464,14 @@ namespace tt::tt_metal::detail{
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "shape", "Shape vector", "Vector<int>", "[W, Z, Y, X]", "Yes"
+                "data_type", "Tensor data type", "DataType", "default is BFLOAT16", "No"
                 "layout", "Tensor layout", "Layout", "default is ROW_MAJOR", "No"
                 "device", "Device tensor is placed on", "Device", "default is None (on host)", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("ones",
-            [] (const std::array<uint32_t, 4> shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
-                return ones(shape, layout, device, output_mem_config);
-            },
-            py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("ones", &ones,
+            py::arg("shape"), py::arg("data_type").noconvert() = DataType::BFLOAT16, py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns a new tensor filled with ones in shape specified by input ``shape``.
 
             Input shape is specified as a list of 4 integer elements
@@ -491,16 +482,14 @@ namespace tt::tt_metal::detail{
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "shape", "Shape vector", "Vector<int>", "[W, Z, Y, X]", "Yes"
+                "data_type", "Tensor data type", "DataType", "default is BFLOAT16", "No"
                 "layout", "Tensor layout", "Layout", "default is ROW_MAJOR", "No"
                 "device", "Device tensor is placed on", "Device", "default is None (on host)", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("full",
-            [] (const std::array<uint32_t, 4> shape, float value, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
-                return full(shape, value, layout, device, output_mem_config);
-            },
-            py::arg("shape"), py::arg("fill_value"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        m_tensor.def("full", &full,
+            py::arg("shape"), py::arg("fill_value"), py::arg("data_type").noconvert() = DataType::BFLOAT16, py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns a new tensor filled with the scalar value in shape specified by input ``shape``.
 
             Input shape is specified as a list of 4 integer elements
@@ -512,6 +501,7 @@ namespace tt::tt_metal::detail{
 
                 "shape", "Shape vector", "Vector<int>", "[W, Z, Y, X]", "Yes"
                 "fill_value", "Fill value ", "float", "", "Yes"
+                "data_type", "Tensor data type", "DataType", "default is BFLOAT16", "No"
                 "layout", "Tensor layout", "Layout", "default is ROW_MAJOR", "No"
                 "device", "Device tensor is placed on", "Device", "default is None (on host)", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
