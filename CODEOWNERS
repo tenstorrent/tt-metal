@@ -64,7 +64,7 @@ tt-metal/tt_metal/programming_examples/profiler @mo-tenstorrent
 
 # test scripts
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tt-rkim
-tests/scripts/run_performance.sh @ashayestehmanesh
+tests/scripts/run_performance.sh @farbabi
 
 # eager - dtx
 **/dtx/ @tt-nshanker
@@ -94,11 +94,11 @@ ttnn/ @eyonland @arakhmati
 tests/ttnn/ @eyonland @arakhmati
 
 # models
-models/ @boris-drazic @ashayestehmanesh @farbabi
-tests/python_api_testing/models/conv_on_device_utils*.py @tt-nshanker @ashayestehmanesh
+models/ @boris-drazic @farbabi
+tests/python_api_testing/models/conv_on_device_utils*.py @tt-nshanker
 tests/python_api_testing/models/bert_large_performant @tt-aho @TT-BrianLiu
 tests/python_api_testing/models/metal_BERT_large_15 @tt-aho @TT-BrianLiu
-models/conv_on_device_utils*.py @tt-nshanker @ashayestehmanesh
+models/conv_on_device_utils*.py @tt-nshanker
 models/bert_large_performant @tt-aho @TT-BrianLiu
 models/metal_BERT_large_15 @tt-aho @TT-BrianLiu
 
@@ -110,7 +110,7 @@ models/metal_BERT_large_15 @tt-aho @TT-BrianLiu
 
 # misc
 tests/**/dtx/ @tt-nshanker
-tests/**/*test*conv*.py @tt-nshanker @ashayestehmanesh
+tests/**/*test*conv*.py @tt-nshanker
 # tests/**/module.mk @tenstorrent-metal/developers
 tests/python_api_testing/conv/ @tt-nshanker
 tests/python_api_testing/unit_testing/fallback_ops @tt-aho @arakhmati
