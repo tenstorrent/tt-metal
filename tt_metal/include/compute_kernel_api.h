@@ -54,6 +54,9 @@
 
 namespace ckernel {
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void rsqrt_tile_init(bool fast_and_approx=true) {
     if (fast_and_approx) {
         MATH(( llk_math_eltwise_unary_sfpu_rsqrt_init<true>() ));
@@ -63,7 +66,17 @@ ALWI void rsqrt_tile_init(bool fast_and_approx=true) {
 }
 
 /**
- *  Please refer to documentation for exp_tile.
+ * Performs element-wise computation of reciprocal sqrt on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | fast_and_approx | Computation to be done faster and approximate                              | bool     |                                                       | False    |
  */
 ALWI void rsqrt_tile(uint32_t idst, bool fast_and_approx=true) {
   if (fast_and_approx) {
@@ -73,145 +86,371 @@ ALWI void rsqrt_tile(uint32_t idst, bool fast_and_approx=true) {
   }
 }
 
+
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void sigmoid_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_sigmoid_init<APPROX>() )); // TODO(AP): move out init
 }
 
 /**
- *  Please refer to documentation for exp_tile.
+ * Performs element-wise computation of sigmoid on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void sigmoid_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_sigmoid<APPROX, SyncHalf>(idst) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void log_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_log_init<APPROX>() )); // TODO(AP): move out init
 }
 
 /**
- *  Please refer to documentation for log_tile.
+ * Performs element-wise computation of logarithm on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void log_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_log<APPROX, SyncHalf>(idst) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void log_with_base_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_log_with_base_init<APPROX>()));  // TODO(AP): move out init
 }
 
 /**
- *  Please refer to documentation for log_with_base_tile.
+ * Performs element-wise computation of logarithm with a specified base on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | base_scale      | The log base                                                               | uint32_t |  Postive integers                                     | True     |
  */
 ALWI void log_with_base_tile(uint32_t idst,uint32_t base_scale) {
     MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX, SyncHalf>(idst, base_scale)));
 }
 
+//TODO: Move to trigonometry.h
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void tanh_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_tanh_init<APPROX>() )); // TODO(AP): move out init
 }
 
-ALWI void signbit_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpu_signbit_init<APPROX>() ));
-}
-
-ALWI void signbit_tile(uint32_t idst) {
-    MATH(( llk_math_eltwise_unary_sfpu_signbit<APPROX, SyncHalf>(idst) ));
-}
-
+//TODO: Move to trigonometry.h
 /**
- *  Please refer to documentation for exp_tile.
+ * Performs element-wise computation of tanh on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void tanh_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_tanh<APPROX, SyncHalf>(idst) ));
 }
 
-//abs
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void signbit_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_signbit_init<APPROX>() ));
+}
+
+/**
+ * Sets the sign bit of each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to modify the sign bit of     | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+ALWI void signbit_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_signbit<APPROX, SyncHalf>(idst) ));
+}
+
+
+
+/**
+ * Performs element-wise computation of absolute value on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
 ALWI void abs_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_abs<APPROX, SyncHalf>(idst) ));
 }
 
+
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void abs_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_abs_init<APPROX>() ));
 }
 
-//sign
+/**
+ * Will store in the output of the compute core the signum of the tile.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
 ALWI void sign_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_sign<APPROX, SyncHalf>(idst) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void sign_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_sign_init<APPROX>() ));
 }
 
-//square
+/**
+ * Performs element-wise computation of square value on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
 ALWI void square_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_square<APPROX, SyncHalf>(idst) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void square_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_square_init<APPROX>() ));
 }
 
 //compare to zero operators
 
+
+
+
+/**
+ * Will store in the output of the compute core True if each element of a tile is less than zero.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+
 ALWI void ltz_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_ltz<APPROX, SyncHalf>(idst) ));
 }
 
+
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void ltz_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_ltz_init<APPROX>() ));
 }
 
 
+/**
+ * Will store in the output of the compute core True if each element of a equal to zero.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+
 ALWI void eqz_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_eqz<APPROX,SyncHalf>(idst) ));
 }
 
+
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void eqz_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_eqz_init<APPROX>() ));
 }
+
+/**
+ * Will store in the output of the compute core True if each element is less than or equal to zero.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
 
 ALWI void lez_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_lez<APPROX, SyncHalf>(idst) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void lez_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_lez_init<APPROX>() ));
 }
+
+/**
+ * Will store in the output of the compute core True if each element is greater than zero.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
 
 ALWI void gtz_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_gtz<APPROX, SyncHalf>(idst) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void gtz_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_gtz_init<APPROX>() ));
 }
 
+/**
+ * Will store in the output of the compute core True if each element is not equal to zero.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
 ALWI void nez_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_nez<APPROX, SyncHalf>(idst) ));
 }
 
+
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void nez_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_nez_init<APPROX>() ));
 }
 
+/**
+ * Will store in the output of the compute core True if each element is greater than or equal to zero.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
 ALWI void gez_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_gez<APPROX, SyncHalf>(idst) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void gez_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_gez_init<APPROX>() ));
 }
 
 
-//relu, relu-min, relu-max operators are implemented in
-//compute_kernel_api/eltwise_unary/relu.h
 
 //POWER : y = x^(const param0)
+/**
+ * Performs element-wise computation of power operation (x ^(const param0)) value on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The value of the exponent in the power operation                           | uint32_t |                                                       | True     |
+ */
 ALWI void power_tile(uint32_t idst,uint32_t param0) {
     MATH(( llk_math_eltwise_unary_sfpu_power<APPROX, SyncHalf>(idst,param0) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void power_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_power_init<APPROX>() ));
 }
@@ -223,6 +462,9 @@ ALWI void get_next_op_info(tt::op_info_t& op_info)
     UNPACK(( llk_get_next_op_info(op_info) ));
 }
 
+/**
+ * Deprecated
+ */
 ALWI void graph_interpreter_init() // TODO(AP): probably duplicated, remove
 {
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
@@ -234,59 +476,151 @@ ALWI void graph_interpreter_init() // TODO(AP): probably duplicated, remove
     UNPACK(( llk_unpack_AB_hw_configure_disaggregated(0,0) ));
 }
 
-//leaky_relu implemented in compute_kernel_api/eltwise_unary/relu.h
-//elu implemented in same header as @leaky_relu
 
 //exp2 : y = 2 ^ x  ==> [y = exp(x * log(2))]
+/**
+ * Performs element-wise computation of 2^x value where x is each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
 ALWI void exp2_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_exp2<true, SyncHalf>(idst) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void exp2_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_exp2_init<true>() ));
 }
 
 //heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
+/**
+ * Performs element-wise computation of:  y = 0 if x < 0 , 1 if x > 0 , y= value  where x is each element of a tile
+ * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The value the output is if the input is greater than 0                     | uint32_t |                                                       | True     |
+ */
 ALWI void heaviside_tile(uint32_t idst,uint32_t param0) {
     MATH(( llk_math_eltwise_unary_sfpu_heaviside<APPROX, SyncHalf>(idst,param0) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void heaviside_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_heaviside_init<APPROX>() ));
 }
 
 //expm1 : (exp(x) - 1)
+/**
+ * Performs element-wise computation of exp(x) - 1, v where x is each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
 ALWI void expm1_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_expm1<true, SyncHalf>(idst) ));
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void expm1_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_expm1_init<true>() ));
 }
 
-//arcsine
+//TODO: move to trigonometry.h
+/**
+ * Performs element-wise computation of arcsine on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
 ALWI void asin_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_asin<true, SyncHalf>(idst) ));
 }
 
+//TODO: move to trigonometry.h
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void asin_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_asin_init<true>() ));
 }
 
-//arctan
+//TODO: move to trigonometry.h
+/**
+ * Performs element-wise computation of arctan on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
 ALWI void atan_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_atan<true, SyncHalf>(idst) ));
 }
 
+//TODO: move to trigonometry.h
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void atan_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_atan_init<true>() ));
 }
 
-//arccosine
+//TODO: move to trigonometry.h
+/**
+ * Performs element-wise computation of arccossine on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
 ALWI void acos_tile(uint32_t idst) {
     MATH(( llk_math_eltwise_unary_sfpu_acos<true, SyncHalf>(idst) ));
 }
 
+//TODO: move to trigonometry.h
+/**
+ * Please refer to documentation for any_init.
+ */
 ALWI void acos_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_acos_init<true>() ));
 }
