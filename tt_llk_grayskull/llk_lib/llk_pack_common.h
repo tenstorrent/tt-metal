@@ -161,9 +161,9 @@ inline void llk_pack_debug_dump_seek(std::uint8_t offset) {
     debug_dump_seek(offset);
 }
 
-template<bool is_fp32_dest_acc_en = false /* unused */>
+template<bool is_fp32_dest_acc_en = false /* unused */, bool is_tile_dim_reconfig_en = false /* unused */, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor /* unused */>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_operand) {
-    TT_LLK_DUMP("llk_pack_reconfig_data_format<{}>({})", is_fp32_dest_acc_en, new_operand);
+    TT_LLK_DUMP("llk_pack_reconfig_data_format<{}, {}, {}>({})", is_fp32_dest_acc_en, is_tile_dim_reconfig_en, FaceLayout, new_operand);
     std::uint32_t new_operand_id = get_output_id(new_operand);
 
     if(pack_dst_format[new_operand_id] != (uint)DataFormat::Invalid) {
@@ -171,9 +171,9 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_operand) {
     }
 }
 
-template<bool is_fp32_dest_acc_en = false /* unused*/ >
+template<bool is_fp32_dest_acc_en = false /* unused */, bool is_tile_dim_reconfig_en = false /* unused */, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor /* unused */>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_operand, const std::uint32_t new_operand) {
-    TT_LLK_DUMP("llk_pack_reconfig_data_format<{}>({}, {})", is_fp32_dest_acc_en, old_operand, new_operand);
+    TT_LLK_DUMP("llk_pack_reconfig_data_format<{}, {}, {}>({}, {})", is_fp32_dest_acc_en, is_tile_dim_reconfig_en, FaceLayout, old_operand, new_operand);
     std::uint32_t old_operand_id = get_output_id(old_operand);
     std::uint32_t new_operand_id = get_output_id(new_operand);
 

@@ -11,10 +11,8 @@
 using namespace ckernel;
 using namespace ckernel::packer;
 
-template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
-inline void llk_pack_mop_config() {
-
-
+template <bool untilize = false>
+inline void llk_pack_configure_addrmod() {
     addr_mod_pack_t{
         .y_src = {.incr = untilize ? 0 : 1},
         .y_dst = {.incr = 1},
@@ -36,13 +34,17 @@ inline void llk_pack_mop_config() {
            .y_dst = { .incr = 1, .clr = 0, .cr = 0  },
        }.set(ADDR_MOD_2);
     }
+}
 
-    const uint MOP_INNER_LOOP = 16;
-    const uint MOP_UNTILIZE_INNER_LOOP = FaceLayout == DstTileFaceLayout::ColMajor ? 8 : 4;
-    const uint MOP_OUTER_LOOP = 1;
-    const uint MOP_UNTILIZE_OUTER_LOOP = 8;
-    const uint PACKCNT = 4;
-    const uint MEGAROW = 1;
+template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
+inline void llk_pack_mop_config() {
+
+    constexpr uint MOP_INNER_LOOP = 16;
+    constexpr uint MOP_UNTILIZE_INNER_LOOP = FaceLayout == DstTileFaceLayout::ColMajor ? 8 : 4;
+    constexpr uint MOP_OUTER_LOOP = 1;
+    constexpr uint MOP_UNTILIZE_OUTER_LOOP = 8;
+    constexpr uint PACKCNT = 4;
+    constexpr uint MEGAROW = 1;
     constexpr uint ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
 
     ckernel::ckernel_template tmp(
@@ -129,6 +131,7 @@ template <bool untilize = false, bool zero_output = false, DstTileFaceLayout Fac
 inline void llk_pack_init(const uint32_t pack_output) {
     TT_LLK_DUMP("llk_pack_init<{}, {}, {}>({})", untilize, zero_output, FaceLayout, pack_output);
     // Figure out tile dims based on pack_output
+    llk_pack_configure_addrmod<untilize>();
     llk_pack_mop_config<untilize, zero_output, FaceLayout>();
 }
 

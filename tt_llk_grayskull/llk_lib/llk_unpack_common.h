@@ -89,8 +89,9 @@ inline void llk_unpack_reconfig_data_format_srca_impl(const std::uint32_t srca_o
         UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
 }
 
+template <bool is_tile_dim_reconfig_en = false/* unused */>
 inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
-    TT_LLK_DUMP("llk_unpack_reconfig_data_format_srca({}, {})", srca_old_operand, srca_new_operand);
+    TT_LLK_DUMP("llk_unpack_reconfig_data_format_srca<{}>({}, {})", is_tile_dim_reconfig_en, srca_old_operand, srca_new_operand);
     std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
 
@@ -99,8 +100,9 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_old_op
     }
 }
 
+template <bool is_tile_dim_reconfig_en = false/* unused */>
 inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
-    TT_LLK_DUMP("llk_unpack_reconfig_data_format_srca({})", srca_new_operand);
+    TT_LLK_DUMP("llk_unpack_reconfig_data_format_srca<{}>({})", is_tile_dim_reconfig_en, srca_new_operand);
     llk_unpack_reconfig_data_format_srca_impl(get_operand_id(srca_new_operand));
 }
 
@@ -123,8 +125,9 @@ inline void llk_unpack_reconfig_data_format_srcb_impl(std::uint32_t srcb_operand
         UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
 }
 
+template <bool is_tile_dim_reconfig_en = false/* unused */>
 inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
-    TT_LLK_DUMP("llk_unpack_reconfig_data_format_srcb({}, {})", srcb_old_operand, srcb_new_operand);
+    TT_LLK_DUMP("llk_unpack_reconfig_data_format_srcb<{}>({}, {})", is_tile_dim_reconfig_en, srcb_old_operand, srcb_new_operand);
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
 
@@ -133,8 +136,9 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_old_op
     }
 }
 
+template <bool is_tile_dim_reconfig_en = false/* unused */>
 inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
-    TT_LLK_DUMP("llk_unpack_reconfig_data_format_srcb({})", srcb_new_operand);
+    TT_LLK_DUMP("llk_unpack_reconfig_data_format_srcb<{}>({})", is_tile_dim_reconfig_en, srcb_new_operand);
     llk_unpack_reconfig_data_format_srcb_impl(get_operand_id(srcb_new_operand));
 }
 
@@ -161,12 +165,13 @@ inline void llk_unpack_reconfig_data_format_impl(std::uint32_t srca_operand_id, 
         UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
 }
 
+template <bool is_tile_dim_reconfig_en = false/* unused */>
 inline void llk_unpack_reconfig_data_format(
     const std::uint32_t srca_old_operand,
     const std::uint32_t srca_new_operand,
     const std::uint32_t srcb_old_operand,
     const std::uint32_t srcb_new_operand) {
-    TT_LLK_DUMP("llk_unpack_reconfig_data_format({}, {}, {}, {})", srca_old_operand, srca_new_operand, srcb_old_operand, srcb_new_operand);
+    TT_LLK_DUMP("llk_unpack_reconfig_data_format<{}>({}, {}, {}, {})", is_tile_dim_reconfig_en, srca_old_operand, srca_new_operand, srcb_old_operand, srcb_new_operand);
     std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
@@ -182,8 +187,9 @@ inline void llk_unpack_reconfig_data_format(
     }
 }
 
+template <bool is_tile_dim_reconfig_en = false/* unused */>
 inline void llk_unpack_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
-    TT_LLK_DUMP("llk_unpack_reconfig_data_format({}, {})", srca_new_operand, srcb_new_operand);
+    TT_LLK_DUMP("llk_unpack_reconfig_data_format<{}>({}, {})", is_tile_dim_reconfig_en, srca_new_operand, srcb_new_operand);
     llk_unpack_reconfig_data_format_impl(get_operand_id(srca_new_operand), get_operand_id(srcb_new_operand));
 }
 
