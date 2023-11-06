@@ -81,22 +81,12 @@ import pytest
         ),
     ),
 )
-def test_group_norm_fallback(
-    input_shape, weight_shape, bias_shape, num_groups, eps, on_device, device
-):
+def test_group_norm_fallback(input_shape, weight_shape, bias_shape, num_groups, eps, on_device, device):
     torch.manual_seed(1234)
 
     x = torch.randn(input_shape).bfloat16().float()
-    w = (
-        torch.randn(weight_shape).bfloat16().float()
-        if weight_shape is not None
-        else weight_shape
-    )
-    b = (
-        torch.randn(bias_shape).bfloat16().float()
-        if bias_shape is not None
-        else bias_shape
-    )
+    w = torch.randn(weight_shape).bfloat16().float() if weight_shape is not None else weight_shape
+    b = torch.randn(bias_shape).bfloat16().float() if bias_shape is not None else bias_shape
     pt_out = torch.nn.functional.group_norm(
         x,
         num_groups,
@@ -202,7 +192,7 @@ def test_group_norm_fallback(
 def test_GroupNorm_fallback(
     input_shape,
     weight_shape,
-    biasx_shape,
+    bias_shape,
     num_groups,
     num_channels,
     eps,
@@ -256,9 +246,7 @@ def test_GroupNorm_fallback(
     if on_device:
         b0 = b0.to(device)
 
-    tt_nn = ttl.fallback_ops.GroupNorm(
-        w0, b0, num_groups, num_channels, eps, elementwise_affine
-    )
+    tt_nn = ttl.fallback_ops.GroupNorm(w0, b0, num_groups, num_channels, eps, elementwise_affine)
     t1 = tt_nn(t0)
 
     output = t1.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
