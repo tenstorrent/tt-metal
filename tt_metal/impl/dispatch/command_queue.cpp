@@ -662,6 +662,8 @@ void send_dispatch_kernel_to_device(Device* device) {
     tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_READ_PTR, fifo_addr_vector);
     tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_WRITE_PTR, fifo_addr_vector);
 
+    tt::Cluster::instance().l1_barrier(device->id());
+
     launch_msg_t msg = dispatch_program.kernels_on_core(producer_logical_core)->launch_msg;
 
     // TODO(pkeller): Should use LaunchProgram once we have a mechanism to avoid running all RISCs
