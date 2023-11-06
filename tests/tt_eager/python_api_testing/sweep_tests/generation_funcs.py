@@ -15,6 +15,8 @@ supported_dtypes = {
     "float32": torch.float32,
     "bfloat16": torch.bfloat16,
     "int32": torch.int32,
+    "cfloat": torch.cfloat,
+    "chalf": torch.chalf,
 }
 
 supported_tt_dtypes = [ttl.tensor.DataType.BFLOAT16]
@@ -54,6 +56,15 @@ def gen_constant(size, constant=1.0):
 
 def gen_rand(size, low=0, high=100):
     return torch.Tensor(size=size).uniform_(low, high)
+
+
+def gen_rand_complex(size, low=0, high=100):
+    real = torch.Tensor(size=size).uniform_(low, high).to(torch.bfloat16).to(torch.float)
+    imag = torch.Tensor(size=size).uniform_(low, high).to(torch.bfloat16).to(torch.float)
+
+    torch_x = torch.complex(real, imag)
+
+    return torch_x
 
 
 def gen_bin(size, probabilityones=0.5):

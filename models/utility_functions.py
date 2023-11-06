@@ -992,3 +992,15 @@ def skip_for_wormhole_b0():
 
 def skip_for_grayskull():
     return pytest.mark.skipif(is_grayskull(), reason="not working for Grayskull")
+
+
+def ttl_complex_2_torch_complex(tt_tensor):
+    torch_tensor = tt2torch_tensor(tt_tensor)
+
+    # extract real and imag parts of the complex tensor
+    real = torch_tensor[:, :, :, : torch_tensor.shape[-1] // 2].to(torch.bfloat16).to(torch.float)
+    imag = torch_tensor[:, :, :, torch_tensor.shape[-1] // 2 :].to(torch.bfloat16).to(torch.float)
+
+    # create torch complex tensor
+    result = torch.complex(real, imag)
+    return result

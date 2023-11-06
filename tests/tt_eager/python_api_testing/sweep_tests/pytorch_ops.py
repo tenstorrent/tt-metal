@@ -1071,3 +1071,34 @@ def groupnorm(x, y, z, *args, **kwargs):
 
     res = torch.nn.functional.group_norm(input=x, num_groups=1, weight=weight, bias=bias, eps=1e-05)
     return res
+
+
+def complex_real(x, *args, **kwargs):
+    return torch.real(x)
+
+
+def complex_recip(x, *args, **kwargs):
+    result = torch.reciprocal(x)
+    return result
+
+
+def complex_div(x, y, *args, **kwargs):
+    result = torch.div(x, y)
+    return result
+
+
+def complex_mul(x, y, *args, **kwargs):
+    result = x * y
+    return result
+
+
+def complex_conj(x, *args, **kwargs):
+    return torch.conj(x)
+
+
+def complex_abs(x, *args, **kwargs):
+    return torch.abs(x)
+
+
+def complex_imag(x, *args, **kwargs):
+    return torch.imag(x)
