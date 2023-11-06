@@ -16,7 +16,7 @@ test-list:
           high: 10
       comparison:
         function: comp_pcc
-      args-gen: gen_layernorm_args
+      args-gen: gen_rmsnorm_args
       output-file: rmsnorm_sweep.csv
       args:
         data-layout: ["TILE"]
@@ -39,7 +39,7 @@ test-list:
           high: 10
       comparison:
         function: comp_pcc
-      args-gen: gen_layernorm_args
+      args-gen: gen_rmsnorm_args
       output-file: rmsnorm_sweep.csv
       args:
         data-layout: ["ROW_MAJOR"]
