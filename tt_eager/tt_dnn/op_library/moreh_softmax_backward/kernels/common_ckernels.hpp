@@ -397,7 +397,11 @@ ALWI void sub_tiles_bcast_rows_to_cb(
     // sub_bcast_rows_init_short();
     {
         MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::ROW, MATH_FIDELITY>()));
+#ifdef ARCH_GRAYSKULL
         UNPACK((llk_unpack_AB_init<BroadcastType::ROW>()));
+#else
+        UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(0, 1)));
+#endif
     }
     sub_tiles_bcast<BroadcastType::ROW>(icb0, icb1, itile0, itile1, dst0);
 
