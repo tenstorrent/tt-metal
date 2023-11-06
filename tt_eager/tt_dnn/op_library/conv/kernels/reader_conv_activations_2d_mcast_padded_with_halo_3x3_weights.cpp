@@ -11,44 +11,14 @@ auto s1 = SliceRange{ .h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1 };
 
 void kernel_main() {
     uint32_t i = 0;
-    uint32_t act_addr_dram_base  = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_dram_noc_x = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_dram_noc_y = get_arg_val<uint32_t>(i); i+=1;
-
     uint32_t conv_act_size_w_ = get_arg_val<uint32_t>(i); i+=1;
     uint32_t conv_act_size_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t conv_act_size_c_ = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_size_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_size_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t stride_h_ = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t stride_w_ = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t pad_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t pad_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t conv_output_size_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t conv_output_size_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t num_blocks_act_h = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t num_blocks_act_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t num_blocks_weight_w = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t num_groups = get_arg_val<uint32_t>(i); i+=1;
 
-    uint32_t act_matrix_height_unpadded = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_matrix_width_unpadded = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_matrix_height = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_matrix_width = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_matrix_height_ntiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_matrix_width_ntiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_block_h_datums = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_block_w_datums = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_block_h_ntiles = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t act_block_w_ntiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_w_num_outer = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t src_dram_act_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t dst_l1_act_buffer_size_bytes = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t n_start = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_h_start = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t out_w_start = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t total_h_start = get_arg_val<uint32_t>(i); i+=1;
 
     uint32_t first_partial_right_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
     uint32_t skip_after_partial_right_aligned_row  = get_arg_val<uint32_t>(i); i+=1;
@@ -100,7 +70,7 @@ void kernel_main() {
     // assert(num_blocks_act_w == weight_size_h)
     // assert(act_block_w_datums % C == 0)
     // assert(act_block_w_datums % 32 == 0)
-    // assert(act_block_h_datums % 32 == 0)
+    // assert( % 32 == 0)
     // assert(act_block_h_ntiles == act_block_h_datums/32)
     // assert(act_block_w_ntiles == act_block_w_datums/32)
     // assert(act_block_num_tiles == (act_block_h_datums * act_block_w_datums)/1024)
