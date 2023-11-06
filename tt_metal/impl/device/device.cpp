@@ -110,6 +110,7 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
     }
     for (const auto& core : soc_desc.compute_with_storage_cores) {
         const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
+        this->compute_cores.insert(logical_coord);
         const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
     }

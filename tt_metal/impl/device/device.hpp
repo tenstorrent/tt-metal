@@ -168,6 +168,7 @@ class Device {
     std::unique_ptr<Allocator> allocator_ = nullptr;
     bool initialized_ = false;
 
+    std::set<CoreCoord> compute_cores;
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> dispatch_cores_;
     std::set<CoreCoord> ethernet_cores_;

@@ -340,7 +340,6 @@ void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t s
 }
 
 uint64_t Program::CircularBufferAllocator::get_cb_region_end() const {
-    ZoneScopedN("Get CB Region End");
     return this->l1_regions.back().second;
 }
 
@@ -452,15 +451,9 @@ void Program::validate_circular_buffer_region(const Device *device) const {
 
     // Banks are in lockstep so we only need to get lowest L1 address of one compute and storage core
     // Only compute with storage cores can have CBs and all compute with storage cores will have the same bank offset
-    CoreCoord logical_compute_core({.x=0, .y=0}); // update this
-    const std::vector<uint32_t> &bank_ids = device->bank_ids_from_logical_core(logical_compute_core);
-    // if (bank_ids.size() != 1) {
-    //     log_fatal(tt::LogMetal, "Expected one bank on core that holds local and L1 buffers but logical core {} has {} banks", core.str(), bank_ids.size());
-    // }
+    const std::vector<uint32_t> &bank_ids = device->bank_ids_from_logical_core(*device->compute_cores.begin());
     uint64_t lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
     uint32_t max_l1_size = device->l1_size_per_core();
-
-    std::vector<std::future<void>> events;
 
     for (const auto &[core, cb_config] : this->per_core_cb_allocator_) {
         uint64_t cb_region_end = cb_config.get_cb_region_end();
