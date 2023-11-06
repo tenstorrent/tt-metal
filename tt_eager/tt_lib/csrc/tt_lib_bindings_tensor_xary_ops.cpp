@@ -31,7 +31,8 @@ namespace tt::tt_metal::detail {
         detail::bind_binary_op(m_tensor, "logaddexp2", logaddexp2, R"doc(Perform an eltwise-binary logaddexp2 (``log2(2^({0}) + 2^({1}))``) on two tensors for input range [-64,64].)doc");
         detail::bind_binary_op(m_tensor, "logical_or", logical_or, R"doc(Perform an eltwise-binary logical OR (``{0} || {1}``) on two tensors.)doc");
 
-        detail::bind_binary_op(m_tensor, "add_without_autoformat", add_without_autoformat,
+        // TODO @tt-aho: Add default args back
+        m_tensor.def("add_without_autoformat", &add_without_autoformat,
             R"doc(Perform an eltwise-binary add (``{0} + {1}``) on two tensors.
 
             Auto formatting is disabled. Both input tensors must have TILE layout. Output tensor will have TILE layout.)doc"

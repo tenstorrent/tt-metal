@@ -14,7 +14,7 @@ using namespace tt::constants;
 namespace tt {
 
 namespace tt_metal {
-operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, const Tensor &b, Tensor& output, BinaryOpType op_type, const std::optional<std::vector<UnaryWithParam>> fused_activations) {
+operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, const Tensor &b, const Tensor& output, BinaryOpType op_type, const std::optional<std::vector<UnaryWithParam>> fused_activations) {
 
     Program program{};
     CoreRange core = {.start={0, 0}, .end={0, 0}};
@@ -149,7 +149,7 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
         auto src_buffer_a = input_tensors.at(0).buffer();
         auto src_buffer_b = input_tensors.at(1).buffer();
 
-        auto dst_buffer = output_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.size() == 1 ? output_tensors.at(0).buffer() : src_buffer_a;
 
         CoreCoord core = {0, 0};
 

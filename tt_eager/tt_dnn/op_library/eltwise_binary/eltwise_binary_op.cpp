@@ -164,6 +164,9 @@ std::vector<Tensor> EltwiseBinary::create_output_tensors(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
+    if (this->in_place) {
+        return {};
+    }
     if (this->output_mem_config.is_sharded()) {
         ShardSpec shard_spec{.shard_grid=CoreRangeSet({}), .shard_shape={0, 0}};
         if (input_tensor_a.memory_config().is_sharded()) {
@@ -187,7 +190,7 @@ std::vector<Tensor> EltwiseBinary::create_output_tensors(
 operation::ProgramWithCallbacks EltwiseBinary::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    auto& output_tensor = output_tensors.at(0);
+    const auto& output_tensor = this->in_place ? input_tensor_a : output_tensors.at(0);
 
     switch (this->get_parallelization_strategy(input_tensors)) {
         case BinaryOpParallelizationStrategy::MULTI_CORE:
@@ -217,6 +220,7 @@ tt::stl::reflection::Attributes EltwiseBinary::attributes() const {
         {"fused_activations", this->fused_activations},
         {"output_mem_config", this->output_mem_config},
         {"output_dtype", this->output_dtype},
+        {"in_place", this->in_place},
     };
 }
 
@@ -232,7 +236,8 @@ const operation::Hash EltwiseBinary::compute_program_hash(
         input_tensors.at(1).memory_config(),
         input_tensors.at(1).dtype(),
         this->output_mem_config,
-        this->output_dtype
+        this->output_dtype,
+        this->in_place
     );
 }
 
