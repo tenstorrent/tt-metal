@@ -206,16 +206,23 @@ def apply_rotary_emb(
     xq_shape = list(copy.deepcopy(t_xq.shape))
     xq_shape[-1] = xq_shape[-1] // 2
     freqs_cis = _reshape_for_broadcast(freqs_cis, xq_shape, 4)
-    freqs_cis = torch_to_tt_tensor_rm(freqs_cis, device)
 
-    reshape_out_1 = tt_lib.tensor.reshape(freqs_cis, 1, 1, freqs_cis.shape()[1], freqs_cis.shape()[3])
-    freqs_concat = tt_lib.tensor.concat([reshape_out_1, reshape_out_1], 1)
-    permute_out = tt_lib.tensor.permute(freqs_concat, (0, 2, 3, 1))
+    freq_real = freqs_cis.real
+    freq_img = freqs_cis.imag
+    freq_cis_combined = torch.cat((freq_real, freq_img), dim=-1)
+    freqs_cis = torch_to_tt_tensor_rm(freq_cis_combined, device)
 
-    # Added the fallback, since reshape is not supported from [1, 11, 64, 2] to 1, 11, 1, 128
-    freqs_cis = fallback_ops.reshape(permute_out, 1, freqs_concat.shape()[2], 1, freqs_concat.shape()[3] * 2)
-    xq = torch_to_tt_tensor_rm(t_xq, device)
-    xk = torch_to_tt_tensor_rm(t_xk, device)
+    xq_real = t_xq[..., :, :, ::2]
+    xq_img = t_xq[..., :, :, 1::2]
+    xq_data = torch.cat((xq_real, xq_img), dim=-1)
+
+    xk_real = t_xk[..., :, :, ::2]
+    xk_img = t_xk[..., :, :, 1::2]
+    xk_data = torch.cat((xk_real, xk_img), dim=-1)
+
+    xq = torch_to_tt_tensor_rm(xq_data, device)
+    xk = torch_to_tt_tensor_rm(xk_data, device)
+
     BCH = tt_lib.tensor.BcastOpDim.H
     BCMUL = tt_lib.tensor.BcastOpMath.MUL
     t_one = tt_lib.tensor.ones_like(xq)
