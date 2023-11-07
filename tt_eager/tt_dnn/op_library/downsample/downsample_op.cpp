@@ -269,7 +269,12 @@ DownsampleReadPatternParams generate_downsample_read_pattern(ImgTrackingVars & v
         v.img_h += 1;
         if (v.next_img_h < v.img_h) {
             v.next_img_h += img_stride_h;
-            TT_ASSERT(v.next_img_h < img_height); // odd heights and odd size sharding with stride > 1 not supported
+            TT_ASSERT(v.next_img_h <= img_height); // odd heights and odd size sharding with stride > 1 not supported
+            if (v.next_img_h == img_height && v.img_h == img_height) {
+                v.next_img_h = 0;
+                v.img_h = 0;
+                break;
+            }
         }
         num_rows_bottom_partial_image += 1;
     }
