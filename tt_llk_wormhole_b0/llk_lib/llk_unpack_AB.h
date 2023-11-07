@@ -12,7 +12,7 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_AB_mop_config(const bool transpose_of_faces=false, const std::uint32_t operand_id=0) {
+inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces=false, const std::uint32_t num_faces=4, const bool narrow_tile=false) {
 #if SKIP_UNP == 1
     static constexpr uint unpack_srca = TT_OP_NOP;
     static constexpr uint unpack_srcb = TT_OP_NOP;
@@ -22,9 +22,6 @@ inline void llk_unpack_AB_mop_config(const bool transpose_of_faces=false, const 
     static constexpr uint unpack_srcb =
         TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 #endif
-    const uint32_t num_faces = get_num_faces(operand_id); 
-    const bool narrow_tile = get_narrow_tile(operand_id); // if narrow tile read face 0 twice for row broadcast
-                                                          // or read face 0 and 1 for col broadcast
 
     if constexpr (BType == BroadcastType::COL) {
         static constexpr uint unpack_srcb_set_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 2, 0b0001);
@@ -107,34 +104,19 @@ inline void llk_unpack_AB_hw_configure_disaggregated(
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_AB_init(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose=0, const std::uint32_t acc_to_dest=0) {
-    TT_LLK_DUMP("llk_unpack_AB_init<{}>({}, {}, {}, {})", BType, unpA_operand, unpB_operand, transpose, acc_to_dest);
+inline void _llk_unpack_AB_init_(const std::uint32_t face_r_dim=FACE_R_DIM, const std::uint32_t num_faces=4, const bool narrow_tile=false, const std::uint32_t transpose=0, const std::uint32_t acc_to_dest=0) {
 
-    const uint32_t unpA_operand_id = get_operand_id(unpA_operand);
-
-    //Need to be able to configure tranpose srca for fused ops
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose); // transpose within the face
-
-    const uint32_t face_r_dim = get_face_r_dim(unpA_operand_id); // face r dim in unpA and unpB are the same
 
     constexpr std::uint32_t UNP_SEL = p_setadc::UNP_AB;
     config_face_dim<false, UNP_SEL>(face_r_dim);
 
-    llk_unpack_AB_mop_config<BType>(transpose>0, unpA_operand_id); // transpose of faces 0,2,1,3
+    _llk_unpack_AB_mop_config_<BType>(transpose>0, num_faces, narrow_tile); // transpose of faces 0,2,1,3
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_AB(
-    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t tile_index_a, const std::uint32_t tile_index_b, const bool transpose_of_faces = 0 /*not used*/) {
-    TT_LLK_DUMP("llk_unpack_AB<{}>({}, {}, {}, {}, {}, {})", BType, operandA, operandB, tile_index_a, tile_index_b, transpose_of_faces);
-    std::uint32_t inputA = get_operand_id(operandA);
-    std::uint32_t inputB = get_operand_id(operandB);
-    std::uint32_t base_address_a = operands[inputA].f.fifo_rd_ptr;
-    std::uint32_t offset_address_a = operands[inputA].f.tile_size_words * tile_index_a;
-    std::uint32_t address_a = base_address_a + offset_address_a;
-    std::uint32_t base_address_b = operands[inputB].f.fifo_rd_ptr;
-    std::uint32_t offset_address_b = operands[inputB].f.tile_size_words * tile_index_b;
-    std::uint32_t address_b = base_address_b + offset_address_b;
+inline void _llk_unpack_AB_(
+    const std::uint32_t address_a, const std::uint32_t address_b, const bool transpose_of_faces = 0 /*not used*/) {
 
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
 
