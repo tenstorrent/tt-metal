@@ -85,9 +85,9 @@ int32_t l1_bank_offset_from_bank_id(const Allocator &allocator, uint32_t bank_id
 
 int32_t dram_bank_offset_from_bank_id(const Allocator &allocator, uint32_t bank_id);
 
-std::vector<uint32_t> bank_ids_from_dram_channel(const Allocator &allocator, uint32_t dram_channel);
+const std::vector<uint32_t> &bank_ids_from_dram_channel(const Allocator &allocator, uint32_t dram_channel);
 
-std::vector<uint32_t> bank_ids_from_logical_core(const Allocator &allocator, const CoreCoord &logical_core);
+const std::vector<uint32_t> &bank_ids_from_logical_core(const Allocator &allocator, const CoreCoord &logical_core);
 
 Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_type);
 
