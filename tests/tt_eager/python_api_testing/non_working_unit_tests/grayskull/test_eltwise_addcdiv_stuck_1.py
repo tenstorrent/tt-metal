@@ -97,6 +97,5 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, buffer_type, output_mem_config, data_seed, scalar",
     (test_sweep_args),
 )
-@skip_for_wormhole_b0
 def test_addcdiv_test(input_shape, dtype, dlayout, buffer_type, output_mem_config, data_seed, scalar):
     run_addcdiv(input_shape, dtype, dlayout, buffer_type, output_mem_config, data_seed, scalar)
