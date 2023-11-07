@@ -668,7 +668,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
     }
 
     writer_compile_time_args = {
-        (uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
+        (uint32_t) (dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         out0_cb,
         weight_cb,
         bias_cb,

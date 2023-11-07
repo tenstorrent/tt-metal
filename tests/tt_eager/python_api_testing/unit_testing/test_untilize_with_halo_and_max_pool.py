@@ -12,7 +12,7 @@ import torch
 import tt_lib as ttl
 
 from tt_lib.utils import _nearest_32
-from models.utility_functions import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from models.utility_functions import is_wormhole_b0
 
 
@@ -35,6 +35,7 @@ def volume(shape):
             [1, 64, 112, 112],
             [4, 64, 112, 112],
             [8, 64, 112, 112],
+            [16, 64, 112, 112],
             # [2, 64, 64, 64],
             # [8, 64, 64, 64],
             # [8, 64, 128, 128],
@@ -70,6 +71,8 @@ def test_run_max_pool(
     dtype,
 ):
     # ttl.device.EnableMemoryReports()
+    if act_shape[0] >= 16 and dtype == ttl.tensor.DataType.BFLOAT16:
+        pytest.skip("Configuration does not fit in L1")
 
     in_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
     out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
@@ -95,7 +98,8 @@ def test_run_max_pool(
         pytest.skip()
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
-        ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+        ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        ttl.tensor.BufferType.DRAM if act_shape[0] > 8 else ttl.tensor.BufferType.L1,
     )
 
     assert out_mem_config.is_sharded() and in_mem_config.is_sharded()
@@ -136,8 +140,8 @@ def test_run_max_pool(
         grid_size = (12, 3)
     elif out_nhw == 2048 or out_nhw == 4096 or out_nhw == 8192 or out_nhw == 16384 or out_nhw == 32768:
         ncores = 64
-        grid_size = (12, 6)
-    elif out_nhw == 3136 or out_nhw == 6272 or out_nhw == 12544 or out_nhw == 25088:
+        grid_size = (8, 8)
+    elif out_nhw == 3136 or out_nhw == 6272 or out_nhw == 12544 or out_nhw == 25088 or out_nhw == 50176:
         if is_wormhole_b0():
             pytest.skip("Unsupported grid size for WH")
         ncores = 98
@@ -146,6 +150,7 @@ def test_run_max_pool(
         assert False
 
     # ttl.device.EnableMemoryReports()
+    print(act_shape_padded)
 
     ttact_tilize = (
         ttl.tensor.Tensor(
@@ -157,6 +162,7 @@ def test_run_max_pool(
         .to(ttl.tensor.Layout.TILE)
         .to(device, interleaved_mem_config)
     )
+    # ttact_tilize = ttl.tensor.reshape(ttact_tilize, 1, 1, in_height, in_c)
 
     ttact_sharded = ttl.tensor.interleaved_to_sharded(
         ttact_tilize,

@@ -13,7 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 from models.utility_functions import is_wormhole_b0
 from loguru import logger
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 
 
 @pytest.mark.parametrize(
@@ -273,12 +273,12 @@ def test_sharded_tilize(H, num_cores, output_dtype, device, function_level_defau
 
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
-@pytest.mark.parametrize("M, num_cores", [[25088, 98]])
-@pytest.mark.parametrize("N", [64, 256])
+@pytest.mark.parametrize("M, num_cores", [[25088, 98], [50176, 98]])
+@pytest.mark.parametrize("K, N", [[64, 64], [64, 256], [256, 64], [256, 128]])
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_sharded_matmul_1d_in1(
-    device, in0_sharded, out_sharded, M, N, num_cores, activations_dtype, weights_dtype, function_level_defaults
+    device, in0_sharded, out_sharded, M, K, N, num_cores, activations_dtype, weights_dtype, function_level_defaults
 ):
     grid_size = device.compute_with_storage_grid_size()
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -286,14 +286,13 @@ def test_sharded_matmul_1d_in1(
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
     if activations_dtype != weights_dtype and is_wormhole_b0():
         pytest.skip("WH does not work with mixed precision")
-    K = 64
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, 1, N]
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
-        buffer_type=ttl.tensor.BufferType.L1,
+        buffer_type=ttl.tensor.BufferType.DRAM,
     )
     sharded_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -319,19 +318,17 @@ def test_sharded_matmul_1d_in1(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
-    program_config = ttl.operations.primary.get_mcast_1d_config(in0_t, in1_t, True, None, False, out_sharded)
-    if N == 256:
-        program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(12, 9),
-            in0_block_w=2,
-            out_subblock_h=1,
-            out_subblock_w=8,
-            per_core_M=8,
-            per_core_N=8,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=False,
-        )
+    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(12, 9),
+        in0_block_w=K // 32,
+        out_subblock_h=8 // (N // 32),
+        out_subblock_w=N // 32,
+        per_core_M=M // 32 // num_cores,
+        per_core_N=N // 32,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+    )
     output_t = ttl.operations.primary.matmul_1d(
         in0_t,
         in1_t,
@@ -1011,12 +1008,24 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, d
 
 @pytest.mark.parametrize("in_sharded", [True], ids=["in0_sharded"])
 @pytest.mark.parametrize(
-    "shape, out_sharded",
-    [[(8, 1, 32, 2048), True], [(1, 1, 32, 1024), False]],
-    ids=["batched_shape_out_sharded", "unbatched_shape_out_interleaved"],
+    "shape, output_H, out_sharded",
+    [
+        [(8, 1, 32, 2048), 1, True],
+        [(1, 1, 32, 1024), 8, False],
+        [(16, 1, 32, 2048), 1, True],
+        [(1, 1, 32, 1024), 16, False],
+    ],
+    ids=[
+        "batched_8_shape_out_sharded",
+        "unbatched_8_shape_out_interleaved",
+        "batched_16_shape_out_sharded",
+        "unbatched_16_shape_out_interleaved",
+    ],
 )
 @pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
-def test_width_sharded_untilize_with_unpadding(shape, in_sharded, out_sharded, dtype, device, function_level_defaults):
+def test_width_sharded_untilize_with_unpadding(
+    shape, output_H, in_sharded, out_sharded, dtype, device, function_level_defaults
+):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
@@ -1062,7 +1071,7 @@ def test_width_sharded_untilize_with_unpadding(shape, in_sharded, out_sharded, d
     yt = ttl.tensor.untilize_with_unpadding(
         xt,
         [0, 0, 0, 0],
-        [N - 1, C - 1, 0, W - 1],
+        [N - 1, C - 1, output_H - 1, W - 1],
         output_mem_config=out_mem_config,
     )
 
@@ -1074,7 +1083,7 @@ def test_width_sharded_untilize_with_unpadding(shape, in_sharded, out_sharded, d
 
     tt_got_back = yt.cpu().to_torch()
 
-    y = x[..., :1, :]
+    y = x[..., :output_H, :]
     if dtype == ttl.tensor.DataType.BFLOAT16:
         passing, output = comp_equal(y, tt_got_back)
     else:
@@ -1084,18 +1093,18 @@ def test_width_sharded_untilize_with_unpadding(shape, in_sharded, out_sharded, d
     assert passing
 
 
+@pytest.mark.parametrize("input_shape", [[8, 1, 49, 2048], [1, 1, 8, 2048], [16, 1, 49, 2048], [1, 1, 16, 2048]])
 @pytest.mark.parametrize("in_sharded", [True], ids=["in0_sharded"])
 @pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
 @pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
-def test_sharded_tilize_with_val_padding(in_sharded, out_sharded, output_dtype, device, function_level_defaults):
+def test_sharded_tilize_with_val_padding(
+    input_shape, in_sharded, out_sharded, output_dtype, device, function_level_defaults
+):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
         pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
-    N = 8
-    C = 1
-    H = 49
-    W = 2048
+    N, C, H, W = input_shape
 
     interleaved_mem_config = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
@@ -1130,7 +1139,7 @@ def test_sharded_tilize_with_val_padding(in_sharded, out_sharded, output_dtype, 
         )
 
     yt = ttl.tensor.tilize_with_val_padding(
-        xt, [8, 1, 64, 2048], [0, 0, 0, 0], 1.0, output_mem_config=out_mem_config, output_dtype=output_dtype
+        xt, [N, C, roundup32(H), W], [0, 0, 0, 0], 1.0, output_mem_config=out_mem_config, output_dtype=output_dtype
     )
 
     if out_sharded:
@@ -1141,7 +1150,7 @@ def test_sharded_tilize_with_val_padding(in_sharded, out_sharded, output_dtype, 
 
     tt_got_back = yt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
-    y = torch.nn.functional.pad(x, [0, 0, 0, 15], "constant", 1.0)
+    y = torch.nn.functional.pad(x, [0, 0, 0, roundup32(H) - H], "constant", 1.0)
 
     if output_dtype == ttl.tensor.DataType.BFLOAT16:
         passing, output = comp_equal(y, tt_got_back)
@@ -1152,15 +1161,15 @@ def test_sharded_tilize_with_val_padding(in_sharded, out_sharded, output_dtype, 
     assert passing
 
 
+@pytest.mark.parametrize("N", [8, 16])
 @pytest.mark.parametrize("in_sharded", [True], ids=["in0_sharded"])
 @pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
 @pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
-def test_sharded_reduce_h(in_sharded, out_sharded, dtype, device, function_level_defaults):
+def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_level_defaults):
     grid_size = (8, 4)
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
         pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
-    N = 8
     C = 1
     H = 64
     W = 2048
