@@ -491,7 +491,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
 
 // TODO: Get rid of no-op reshapes when we generalize
 // matmul_multi_core_reuse_optimized_bert_large not used
-operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& a, const Tensor& b, const Shape& ashape, const Shape& bshape, Tensor& output, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
+operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& a, const Tensor& b, const Shape& ashape, const Shape& bshape, Tensor& output, bool bcast_batch, CoreCoord compute_with_storage_grid_size, tt::tt_metal::DataType output_dtype, MathFidelity math_fidelity, uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w, uint32_t per_core_M, uint32_t per_core_N, bool fuse_batch) {
     /*
      * For pre-softmax and post-softmax bmm, do an additional no-op reshape by changing cshape and ashape
      * - pre-softmax: [9, 16, 384, 64] x [9, 16, 64, 384] = ([9, 16, 384, 384] -> [9, 1, 6144, 384])
@@ -499,7 +499,7 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& a, 
      * NOTE: Only need to pass in the right cshape and ashape for these no-op reshapes.
      * The actual bmm op works on [9, 16, 384, 64] x [9, 16, 64, 384] and [9, 16, 384, 384] x [9, 16, 384, 64].
     */
-    return matmul_multi_core_reuse_optimized_(a, b, ashape, bshape, output, false, compute_with_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
+    return matmul_multi_core_reuse_optimized_(a, b, ashape, bshape, output, bcast_batch, compute_with_storage_grid_size, output_dtype, math_fidelity, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, fuse_batch);
 }
 
 }  // namespace tt_metal

@@ -46,11 +46,9 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/bmm/single_core/bmm_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core/bmm_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse/bmm_op_multi_core_reuse.cpp \
-	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_mcast/bmm_op_multi_core_reuse_mcast.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_generalized/bmm_op_multi_core_reuse_generalized.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_mcast_generalized/bmm_op_multi_core_reuse_mcast_generalized.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_padding/bmm_op_multi_core_reuse_padding.cpp \
-	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_mcast_padding/bmm_op_multi_core_reuse_mcast_padding.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_mcast_1d_optimized/bmm_op_multi_core_reuse_mcast_1d_optimized.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_mcast_2d_optimized/bmm_op_multi_core_reuse_mcast_2d_optimized.cpp \
 	tt_eager/tt_dnn/op_library/bmm/multi_core_reuse_optimized/bmm_op_multi_core_reuse_optimized.cpp \
