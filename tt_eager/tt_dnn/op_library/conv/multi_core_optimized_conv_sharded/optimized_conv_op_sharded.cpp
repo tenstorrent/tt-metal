@@ -636,6 +636,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
     std::vector<uint32_t> writer_rt_args;
     std::vector<uint32_t> writer_compile_time_args;
 
+    uint32_t window_outer = 1; // window_outer = 1 becasue all of filter window is processed in the inner loop
+    uint32_t window_inner = 3; // window_inner = 9 / 3, ie. read 3 width coalesced
+
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
     // For new reader_with_indices, this is used to calculate offset so use actual read_bytes along c
     // For old readers, this is used for bank page size for interleaved; offset is from conv_act_c_read_bytes
@@ -647,8 +650,15 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
         (uint32_t) conv_act_size_w,
         (uint32_t) conv_output_size_w,
         (uint32_t) conv_act_c_read_bytes,
-        (uint32_t) log_base_2_of_conv_act_size_c_bytes, extra_padding_for_32B_alignment,
-        (uint32_t) (conv_act_size_c/act_block_w_datums), act_block_w_datums * a.element_size()};
+        (uint32_t) log_base_2_of_conv_act_size_c_bytes,
+
+        // unused, TODO: delete
+        (uint32_t) extra_padding_for_32B_alignment,
+        (uint32_t) (conv_act_size_c/act_block_w_datums),
+        (uint32_t) act_block_w_datums * a.element_size(),
+
+        (uint32_t) window_outer,
+        (uint32_t) window_inner};
 
     // define for bias
     std::map<string, string> writer_defines;
@@ -886,8 +896,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
                     last_partial_left_aligned_row_width,
 
                     // Specs for reader offsets
-                    1, // window_outer
-                    3, // window_inner = 9 / 3, ie. read 3 width coalesced
+                    window_outer, // window_outer
+                    window_inner, // window_inner = 9 / 3, ie. read 3 width coalesced
 
                     (uint32_t) noop_core,
 

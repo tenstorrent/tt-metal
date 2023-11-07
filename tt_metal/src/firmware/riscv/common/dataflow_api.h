@@ -902,6 +902,62 @@ void noc_async_read_one_packet(std::uint64_t src_noc_addr, std::uint32_t dst_loc
     DEBUG_STATUS('N', 'A', 'R', 'D');
 }
 
+// TODO: write docs
+// this issues only a single packet with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
+FORCE_INLINE
+void noc_async_read_one_packet_set_state(std::uint64_t src_noc_addr, std::uint32_t size) {
+    /*
+        Read requests - use static VC
+        Read responses - assigned VCs dynamically
+    */
+
+    DEBUG_STATUS('R', 'P', 'W');
+    while (!ncrisc_noc_fast_read_ok(noc_index, NCRISC_RD_CMD_BUF));
+    DEBUG_STATUS('R', 'P', 'D');
+
+    DEBUG_STATUS('N', 'A', 'R', 'W');
+    DEBUG_SANITIZE_NOC_ADDR(src_noc_addr, size);
+
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, src_noc_addr >> 32);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, size);
+
+    DEBUG_STATUS('N', 'A', 'R', 'D');
+}
+
+// TODO: write docs
+// this issues only a single packet with size <= NOC_MAX_BURST_SIZE (ie maximum packet size)
+template <bool inc_num_issued = true>
+FORCE_INLINE
+void noc_async_read_one_packet_with_state(std::uint32_t src_noc_addr, std::uint32_t dst_local_l1_addr) {
+    /*
+        Read requests - use static VC
+        Read responses - assigned VCs dynamically
+    */
+
+    DEBUG_STATUS('R', 'P', 'W');
+    while (!ncrisc_noc_fast_read_ok(noc_index, NCRISC_RD_CMD_BUF));
+    DEBUG_STATUS('R', 'P', 'D');
+
+    DEBUG_STATUS('N', 'A', 'R', 'W');
+//    DEBUG_SANITIZE_NOC_ADDR(src_noc_addr, size); // TODO: how to sanitize if we don't provide x/y here (it's state)
+    DEBUG_SANITIZE_WORKER_ADDR(dst_local_l1_addr, size);
+
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dst_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_noc_addr);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+    if constexpr (inc_num_issued) {
+        noc_reads_num_issued[noc_index] += 1;
+    }
+
+    DEBUG_STATUS('N', 'A', 'R', 'D');
+}
+
+FORCE_INLINE
+void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc) {
+    noc_reads_num_issued[noc_index] += num_issued_reads_inc;
+}
+
 template <bool DRAM>
 FORCE_INLINE void noc_async_read_tile(
     const uint32_t id, const InterleavedAddrGenFast<DRAM>& s, std::uint32_t dst_local_l1_addr, uint32_t offset = 0) {
