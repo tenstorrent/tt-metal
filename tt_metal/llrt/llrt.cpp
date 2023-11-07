@@ -149,14 +149,14 @@ void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, std::vector<ui
 
 std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t size) {
     vector<std::uint32_t> read_hex_vec;
-    tt::Cluster::instance().read_dram_vec(read_hex_vec, tt_cxy_pair(chip, core), addr, size);
+    tt::Cluster::instance().read_dram_vec(read_hex_vec, size, tt_cxy_pair(chip, core), addr);
     return read_hex_vec;
 }
 
 void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg) {
     msg->mode = DISPATCH_MODE_HOST;
     TT_ASSERT(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
-    tt::Cluster::instance().write_dram_vec((uint32_t *)msg, sizeof(launch_msg_t) / sizeof(uint32_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
+    tt::Cluster::instance().write_dram_vec((void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
 }
 
 void print_worker_cores(chip_id_t chip_id) {
@@ -217,7 +217,7 @@ ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const l
     ll_api::memory read_mem;
     read_mem.fill_from_mem_template(mem, [&](std::vector<uint32_t>::iterator mem_ptr, uint64_t addr, uint32_t len) {
         uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
-        tt::Cluster::instance().read_dram_vec(&*mem_ptr, tt_cxy_pair(chip, core), relo_addr, len * sizeof(uint32_t));
+        tt::Cluster::instance().read_dram_vec(&*mem_ptr, len * sizeof(uint32_t), tt_cxy_pair(chip, core), relo_addr);
     });
     return read_mem;
 }

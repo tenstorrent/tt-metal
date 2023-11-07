@@ -194,7 +194,7 @@ namespace tt::tt_metal{
         {
             bool pass = true;
             tt::Cluster::instance().dram_barrier(device->id());
-            tt::Cluster::instance().read_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address, size);
+            tt::Cluster::instance().read_dram_vec(host_buffer, size, tt_target_dram{device->id(), dram_channel, 0}, address);
             return pass;
         }
 

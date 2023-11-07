@@ -291,12 +291,11 @@ void Cluster::clean_system_resources() const {
 void Cluster::verify_eth_fw() const {
     const std::unordered_set<chip_id_t> &all_chips = this->device_->get_all_chips_in_cluster();
     for (const chip_id_t &chip : all_chips) {
-        std::vector<uint32_t> mem_vector;
         std::vector<uint32_t> fw_versions;
-
         for (const CoreCoord &eth_core : get_soc_desc(chip).ethernet_cores) {
-            read_dram_vec(mem_vector, tt_cxy_pair(chip, eth_core), eth_l1_mem::address_map::FW_VERSION_ADDR, 4);
-            fw_versions.push_back(mem_vector.at(0));
+            uint32_t val;
+            read_dram_vec(&val, sizeof(uint32_t), tt_cxy_pair(chip, eth_core), eth_l1_mem::address_map::FW_VERSION_ADDR);
+            fw_versions.push_back(val);
         }
         verify_sw_fw_versions(chip, SW_VERSION, fw_versions);
     }
@@ -386,7 +385,7 @@ void Cluster::write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_
 }
 
 void Cluster::read_dram_vec(
-    vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, uint32_t size, bool small_access) const {
+    vector<uint32_t> &vec, uint32_t sz_in_bytes, tt_target_dram dram, uint64_t addr,  bool small_access) const {
     int chip_id, d_chan, d_subchannel;
     std::tie(chip_id, d_chan, d_subchannel) = dram;
     const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
@@ -400,7 +399,7 @@ void Cluster::read_dram_vec(
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
     tt_cxy_pair dram_core = tt_cxy_pair(chip_id, desc_to_use.get_core_for_dram_channel(d_chan, d_subchannel));
     size_t offset = desc_to_use.get_address_offset(d_chan);
-    read_dram_vec(vec, dram_core, addr + offset, size, small_access);
+    read_dram_vec(vec, sz_in_bytes, dram_core, addr + offset, small_access);
 }
 
 void Cluster::write_dram_vec(
@@ -424,7 +423,7 @@ void Cluster::write_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uint6
 }
 
 void Cluster::read_dram_vec(
-    void *mem_ptr, tt_cxy_pair dram_core, uint64_t addr, uint32_t size_in_bytes, bool small_access) const {
+    void *mem_ptr, uint32_t size_in_bytes, tt_cxy_pair dram_core, uint64_t addr, bool small_access) const {
     int chip_id = dram_core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
@@ -466,9 +465,9 @@ void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr
 }
 
 void Cluster::read_dram_vec(
-    vector<uint32_t> &vec, tt_cxy_pair dram_core, uint64_t addr, uint32_t size_in_bytes, bool small_access) const {
+    vector<uint32_t> &vec, uint32_t size_in_bytes, tt_cxy_pair dram_core, uint64_t addr, bool small_access) const {
     vec.resize(size_in_bytes / sizeof(uint32_t));
-    read_dram_vec(&vec[0], dram_core, addr, size_in_bytes, small_access);
+    read_dram_vec(&vec[0], size_in_bytes, dram_core, addr, small_access);
 }
 
 void Cluster::write_sysmem(const void* vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const {
