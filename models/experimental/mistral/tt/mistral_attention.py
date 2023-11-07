@@ -216,12 +216,23 @@ def apply_rotary_emb(
     freqs_cis = fallback_ops.reshape(permute_out, 1, freqs_concat.shape()[2], 1, freqs_concat.shape()[3] * 2)
     xq = torch_to_tt_tensor_rm(t_xq, device)
     xk = torch_to_tt_tensor_rm(t_xk, device)
-
     BCH = tt_lib.tensor.BcastOpDim.H
     BCMUL = tt_lib.tensor.BcastOpMath.MUL
-    xq_out = tt_lib.tensor.bcast(xq, freqs_cis, BCMUL, BCH)
-    xk_out = tt_lib.tensor.bcast(xk, freqs_cis, BCMUL, BCH)
+    t_one = tt_lib.tensor.ones_like(xq)
+    bcast_freq = tt_lib.tensor.bcast(t_one, freqs_cis, BCMUL, BCH)
+    xq_out = tt_lib.tensor.complex_mul(
+        xq,
+        bcast_freq,
+        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
+    )
+
+    t_one = tt_lib.tensor.ones_like(xk)
+    bcast_freq = tt_lib.tensor.bcast(t_one, freqs_cis, BCMUL, BCH)
+    xk_out = tt_lib.tensor.complex_mul(
+        xk,
+        bcast_freq,
+        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
+    )
 
     xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
-
     return xq, xk
