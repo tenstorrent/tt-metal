@@ -27,12 +27,8 @@ def run_rmsnorm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config
     print(in_mem_config)
 
     x = torch.Tensor(size=input_shape[0]).uniform_(-10, 10)
-    # y = torch.Tensor(size=input_shape[1]).uniform_(-10, 10)
-    # z = torch.Tensor(size=input_shape[2]).uniform_(-10, 10)
 
     x_ref = x.detach().clone()
-    # y_ref = y.detach().clone()
-    # z_ref = z.detach().clone()
 
     # compute ref value --------------------------
     ref_value = pytorch_ops.rmsnorm_noweights(x_ref)
