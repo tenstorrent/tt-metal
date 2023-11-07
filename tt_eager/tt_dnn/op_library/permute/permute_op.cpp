@@ -46,9 +46,9 @@ Tensor permute_(const Tensor &a, std::vector<uint32_t> dims, const MemoryConfig&
         formatted_input_tensor = AutoFormat::format_input_tensor(a, device, a_pad_shape, 0.0, Layout::TILE);
     }
     auto output = formatted_input_tensor;
-    auto transpose_wh = std::bind(tt::tt_metal::transpose_wh, _1, output_mem_config);
-    auto transpose_hc = std::bind(tt::tt_metal::transpose_hc, _1, output_mem_config);
-    auto transpose_cn = std::bind(tt::tt_metal::transpose_cn, _1, output_mem_config);
+    static auto transpose_wh = std::bind(tt::tt_metal::transpose, _1, -2, -1, output_mem_config);
+    static auto transpose_hc = std::bind(tt::tt_metal::transpose, _1, 1, -2, output_mem_config);
+    static auto transpose_cn = std::bind(tt::tt_metal::transpose, _1, 0, 1, output_mem_config);
     if (N == 0 && C == 1 && H == 2 && W == 3) {
         output = formatted_input_tensor;
     } else if (N == 0 && C == 1 && H == 3 && W == 2) {

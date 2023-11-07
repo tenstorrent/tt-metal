@@ -14,7 +14,6 @@ import torch
 import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import layernorm as tt_layernorm
 
 
@@ -114,7 +113,6 @@ test_sweep_args = [
 ]
 
 
-# @skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
     (test_sweep_args),

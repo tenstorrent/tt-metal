@@ -8,7 +8,16 @@ import tt_lib as ttl
 from loguru import logger
 import tt_lib
 
-def Linear(in_features: int, out_features: int, weight: tensor.Tensor, bias: Optional[tensor.Tensor] = None, output_mem_config=tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM)):
+
+def Linear(
+    in_features: int,
+    out_features: int,
+    weight: tensor.Tensor,
+    bias: Optional[tensor.Tensor] = None,
+    output_mem_config=tt_lib.tensor.MemoryConfig(
+        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    ),
+):
     """
     Returns a function that performs a Linear operation with optional bias.
 
@@ -21,14 +30,16 @@ def Linear(in_features: int, out_features: int, weight: tensor.Tensor, bias: Opt
 
     weight = weight
     bias = bias
-    weight_T = tensor.transpose(weight)
+    weight_T = tensor.transpose(weight, -2, -1)
 
     def linear_(activation):
         assert activation.shape()[-1] == in_features, "activation tensor do not have the expected shape"
         output = tensor.matmul(activation, weight_T, output_mem_config)
 
         if bias is not None:
-            output_plus_bias = tensor.bcast(output, bias, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H, output_mem_config)
+            output_plus_bias = tensor.bcast(
+                output, bias, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H, output_mem_config
+            )
             return output_plus_bias
 
         return output

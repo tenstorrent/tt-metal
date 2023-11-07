@@ -9,7 +9,6 @@ fi
 
 run_perf_models() {
     local pipeline_type=$1
-    echo $pipeline_type
 
     env pytest models/demos/falcon7b/tests -m $pipeline_type
 
@@ -41,7 +40,6 @@ run_perf_models() {
 
 run_device_perf_models() {
     local pipeline_type=$1
-    echo $pipeline_type
 
     env pytest models/demos/resnet/tests -m $pipeline_type
 }

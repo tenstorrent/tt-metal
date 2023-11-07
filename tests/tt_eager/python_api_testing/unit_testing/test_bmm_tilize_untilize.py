@@ -20,7 +20,7 @@ from models.utility_functions import (
     untilize,
     comp_pcc,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0
 
 TILE_HEIGHT = TILE_WIDTH = 32
 
@@ -38,6 +38,7 @@ out_subblock_height_ntiles = [4]  ## == a_block_height_ntiles, <= 8
 out_subblock_width_ntiles = [2]  ## == b_block_width_ntiles, <= 8
 tilize_a = [True, False]
 untilize_out = [True, False]
+
 
 @pytest.mark.parametrize(
     "a_height_nblocks, a_width_nblocks, b_width_nblocks,\
@@ -74,7 +75,10 @@ untilize_out = [True, False]
 )
 @pytest.mark.parametrize(
     "has_bias",
-    (False, True,)
+    (
+        False,
+        True,
+    ),
 )
 def test_run_bmm_single_core_tilize_untilize(
     a_height_nblocks,
@@ -94,14 +98,15 @@ def test_run_bmm_single_core_tilize_untilize(
     device,
 ):
     if is_wormhole_b0():
-        if ( ttl.tensor.DataType.BFLOAT16 in [a_dtype,b_dtype,out_dtype] ):
-            pytest.skip('Not working for BFLOAT8 combination')
+        if ttl.tensor.DataType.BFLOAT16 in [a_dtype, b_dtype, out_dtype]:
+            pytest.skip("Not working for BFLOAT8 combination")
 
         if a_width_nblocks == 7:
-            pytest.skip('Skip this dimension for WH B0')
+            pytest.skip("Skip this dimension for WH B0")
 
-    if (tilize_a and a_dtype != ttl.tensor.DataType.BFLOAT16) or    \
-        (untilize_out and out_dtype != ttl.tensor.DataType.BFLOAT16):
+    if (tilize_a and a_dtype != ttl.tensor.DataType.BFLOAT16) or (
+        untilize_out and out_dtype != ttl.tensor.DataType.BFLOAT16
+    ):
         print(f"invalid case, skipping.")
         pytest.skip()
 
@@ -114,7 +119,11 @@ def test_run_bmm_single_core_tilize_untilize(
         pytest.skip()
 
     ## TODO (AS): Support multi-precision with as well. Currently bias only works for BFLOAT16
-    if has_bias and (a_dtype != ttl.tensor.DataType.BFLOAT16 or b_dtype != ttl.tensor.DataType.BFLOAT16 or out_dtype != ttl.tensor.DataType.BFLOAT16):
+    if has_bias and (
+        a_dtype != ttl.tensor.DataType.BFLOAT16
+        or b_dtype != ttl.tensor.DataType.BFLOAT16
+        or out_dtype != ttl.tensor.DataType.BFLOAT16
+    ):
         print(f"TODO: Support multi-precision with bias. Skipping for now.")
         pytest.skip()
 
@@ -138,8 +147,7 @@ def test_run_bmm_single_core_tilize_untilize(
     if tilize_a:
         ## a in row-major
         assert (
-            not (a_dtype == ttl.tensor.DataType.BFLOAT8_B)
-            and "Row-major format does not support BFLOAT8_B datatype!"
+            not (a_dtype == ttl.tensor.DataType.BFLOAT8_B) and "Row-major format does not support BFLOAT8_B datatype!"
         )
         a_layout = ttl.tensor.Layout.ROW_MAJOR
         a_list = a.flatten().tolist()
@@ -147,13 +155,11 @@ def test_run_bmm_single_core_tilize_untilize(
         ## a in tile
         a_layout = ttl.tensor.Layout.TILE
         a_list = tilize_to_list(a)
-    tta = ttl.tensor.Tensor(a_list, a_shape, a_dtype, a_layout) #, device)
+    tta = ttl.tensor.Tensor(a_list, a_shape, a_dtype, a_layout)  # , device)
     tta = tta.to(device)
 
     ## tensor b, in tile format
-    ttb = ttl.tensor.Tensor(
-        tilize_to_list(b), b_shape, b_dtype, ttl.tensor.Layout.TILE, device
-    )
+    ttb = ttl.tensor.Tensor(tilize_to_list(b), b_shape, b_dtype, ttl.tensor.Layout.TILE, device)
 
     bias, ttbias = None, None
     if has_bias:
@@ -161,7 +167,9 @@ def test_run_bmm_single_core_tilize_untilize(
         bias = torch.randn(bias_shape, dtype=torch.bfloat16).float()
         # bias = torch.zeros(bias_shape, dtype=torch.bfloat16).float()
         # bias = torch.ones(bias_shape, dtype=torch.bfloat16).float()
-        ttbias = ttl.tensor.Tensor(torch.flatten(bias).tolist(), bias_shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR)
+        ttbias = ttl.tensor.Tensor(
+            torch.flatten(bias).tolist(), bias_shape, ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR
+        )
         ttbias = ttbias.pad_to_tile(0).to(ttl.tensor.Layout.TILE).to(device)
     else:
         ttbias = ttl.tensor.Tensor(torch.zeros(0))
@@ -170,16 +178,13 @@ def test_run_bmm_single_core_tilize_untilize(
     if untilize_out:
         ## out in row-major
         assert (
-            not (out_dtype == ttl.tensor.DataType.BFLOAT8_B)
-            and "Row-major format does not support BFLOAT8_B datatype!"
+            not (out_dtype == ttl.tensor.DataType.BFLOAT8_B) and "Row-major format does not support BFLOAT8_B datatype!"
         )
     else:
         ## out in tile
         pass
 
-    torch.set_printoptions(
-        precision=2, threshold=10000, sci_mode=False, edgeitems=80, linewidth=400
-    )
+    torch.set_printoptions(precision=2, threshold=10000, sci_mode=False, edgeitems=80, linewidth=400)
 
     # tta_pytorch = untilize(tta.to_torch())
     # print(f'a slice: {tta_pytorch[0, 0, 0:32*a_block_height_ntiles*a_height_nblocks:32*a_block_height_ntiles, 0:32*a_width_nblocks*a_block_width_ntiles:1]}')

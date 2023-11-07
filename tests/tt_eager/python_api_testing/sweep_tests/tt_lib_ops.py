@@ -4,6 +4,7 @@
 
 import torch
 import tt_lib as ttl
+from functools import partial
 from models.helper_funcs import Linear as tt_Linear
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
@@ -1440,30 +1441,6 @@ def reduce_min_hw(x, *args, device, dtype, layout, input_mem_config, output_mem_
 
 
 @setup_host_and_device
-def transpose_nh(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.transpose(t0, 0, 2, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def transpose_nw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.transpose(t0, 0, 3, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
-def transpose_cw(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttl.tensor.transpose(t0, 1, 3, output_mem_config=output_mem_config)
-
-    return tt2torch_tensor(t1)
-
-
-@setup_host_and_device
 def sum(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     assert dim >= 0 and dim <= 3
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
@@ -1866,9 +1843,12 @@ zeros_like = make_unary_op(ttl.tensor.zeros_like)
 ones_like = make_unary_op(ttl.tensor.ones_like)
 # eltwise_logical_not = make_unary_op(ttl.tensor.logical_not)
 normalize_hw = make_unary_op(ttl.tensor.normalize_hw)
-transpose_wh = make_unary_op(ttl.tensor.transpose)
-transpose_hc = make_unary_op(ttl.tensor.transpose_hc)
-transpose_cn = make_unary_op(ttl.tensor.transpose_cn)
+transpose_wh = make_unary_op(partial(ttl.tensor.transpose, dim0=-2, dim1=-1))
+transpose_hc = make_unary_op(partial(ttl.tensor.transpose, dim0=1, dim1=-2))
+transpose_cn = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=1))
+transpose_nh = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=-2))
+transpose_nw = make_unary_op(partial(ttl.tensor.transpose, dim0=0, dim1=-1))
+transpose_cw = make_unary_op(partial(ttl.tensor.transpose, dim0=1, dim1=-1))
 
 
 def make_binary_op(ttl_tensor_binop):

@@ -93,7 +93,8 @@ class TtBertEncoder(torch.nn.Module):
 
             # Weights pre-transposed on host​. No on-the fly transpose of W.
             # self.attention_output_weight = tt_lib.tensor.transpose(
-            #     self.attention_output_weight
+            #     self.attention_output_weight,
+            #     -2, -1,
             # )
 
             # MHA layernorm

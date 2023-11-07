@@ -20,9 +20,7 @@ def linear(x, weight, bias, device):
     x = torch_to_tt_tensor_rm(x, device, put_on_device=False)
 
     if bias is not None:
-        x = tt_lib.tensor.bcast(
-            x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H
-        )
+        x = tt_lib.tensor.bcast(x, bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
     return x
 
 
@@ -51,11 +49,7 @@ def _merge_criteria_processor_list(
     for default in default_list:
         for custom in custom_list:
             if type(custom) is type(default):
-                object_type = (
-                    "stopping criteria"
-                    if isinstance(custom, StoppingCriteria)
-                    else "logits processor"
-                )
+                object_type = "stopping criteria" if isinstance(custom, StoppingCriteria) else "logits processor"
                 raise ValueError(
                     f"A custom {object_type} of type {type(custom)} with values {custom} has been passed to"
                     f" `generate`, but it has already been created with the values {default}. {default} has been"
@@ -83,10 +77,7 @@ def _get_logits_processor(
 
     # the following idea is largely copied from this PR: https://github.com/huggingface/transformers/pull/5420/files
     # all samplers can be found in `generation_utils_samplers.py`
-    if (
-        generation_config.diversity_penalty is not None
-        and generation_config.diversity_penalty > 0.0
-    ):
+    if generation_config.diversity_penalty is not None and generation_config.diversity_penalty > 0.0:
         processors.append(
             HammingDiversityLogitsProcessor(
                 diversity_penalty=generation_config.diversity_penalty,
@@ -94,62 +85,35 @@ def _get_logits_processor(
                 num_beam_groups=generation_config.num_beam_groups,
             )
         )
-    if (
-        generation_config.encoder_repetition_penalty is not None
-        and generation_config.encoder_repetition_penalty != 1.0
-    ):
+    if generation_config.encoder_repetition_penalty is not None and generation_config.encoder_repetition_penalty != 1.0:
         processors.append(
             EncoderRepetitionPenaltyLogitsProcessor(
                 penalty=generation_config.encoder_repetition_penalty,
                 encoder_input_ids=encoder_input_ids,
             )
         )
-    if (
-        generation_config.repetition_penalty is not None
-        and generation_config.repetition_penalty != 1.0
-    ):
-        processors.append(
-            RepetitionPenaltyLogitsProcessor(
-                penalty=generation_config.repetition_penalty
-            )
-        )
-    if (
-        generation_config.no_repeat_ngram_size is not None
-        and generation_config.no_repeat_ngram_size > 0
-    ):
-        processors.append(
-            NoRepeatNGramLogitsProcessor(generation_config.no_repeat_ngram_size)
-        )
+    if generation_config.repetition_penalty is not None and generation_config.repetition_penalty != 1.0:
+        processors.append(RepetitionPenaltyLogitsProcessor(penalty=generation_config.repetition_penalty))
+    if generation_config.no_repeat_ngram_size is not None and generation_config.no_repeat_ngram_size > 0:
+        processors.append(NoRepeatNGramLogitsProcessor(generation_config.no_repeat_ngram_size))
     if (
         generation_config.encoder_no_repeat_ngram_size is not None
         and generation_config.encoder_no_repeat_ngram_size > 0
     ):
         if self.config.is_encoder_decoder:
             processors.append(
-                EncoderNoRepeatNGramLogitsProcessor(
-                    generation_config.encoder_no_repeat_ngram_size, encoder_input_ids
-                )
+                EncoderNoRepeatNGramLogitsProcessor(generation_config.encoder_no_repeat_ngram_size, encoder_input_ids)
             )
         else:
-            raise ValueError(
-                "It's impossible to use `encoder_no_repeat_ngram_size` with decoder-only architecture"
-            )
+            raise ValueError("It's impossible to use `encoder_no_repeat_ngram_size` with decoder-only architecture")
     if generation_config.bad_words_ids is not None:
-        processors.append(
-            NoBadWordsLogitsProcessor(
-                generation_config.bad_words_ids, generation_config.eos_token_id
-            )
-        )
+        processors.append(NoBadWordsLogitsProcessor(generation_config.bad_words_ids, generation_config.eos_token_id))
     if (
         generation_config.min_length is not None
         and generation_config.eos_token_id is not None
         and generation_config.min_length > 0
     ):
-        processors.append(
-            MinLengthLogitsProcessor(
-                generation_config.min_length, generation_config.eos_token_id
-            )
-        )
+        processors.append(MinLengthLogitsProcessor(generation_config.min_length, generation_config.eos_token_id))
     if (
         generation_config.min_new_tokens is not None
         and generation_config.eos_token_id is not None
@@ -170,14 +134,10 @@ def _get_logits_processor(
             )
         )
     if generation_config.forced_bos_token_id is not None:
-        processors.append(
-            ForcedBOSTokenLogitsProcessor(generation_config.forced_bos_token_id)
-        )
+        processors.append(ForcedBOSTokenLogitsProcessor(generation_config.forced_bos_token_id))
     if generation_config.forced_eos_token_id is not None:
         processors.append(
-            ForcedEOSTokenLogitsProcessor(
-                generation_config.max_length, generation_config.forced_eos_token_id
-            )
+            ForcedEOSTokenLogitsProcessor(generation_config.max_length, generation_config.forced_eos_token_id)
         )
     if generation_config.remove_invalid_values is True:
         processors.append(InfNanRemoveLogitsProcessor())
@@ -190,31 +150,20 @@ def _get_logits_processor(
             )
         )
     if generation_config.suppress_tokens is not None:
-        processors.append(
-            SuppressTokensLogitsProcessor(generation_config.suppress_tokens)
-        )
+        processors.append(SuppressTokensLogitsProcessor(generation_config.suppress_tokens))
     if generation_config.begin_suppress_tokens is not None:
         begin_index = input_ids_seq_length
         begin_index = (
             begin_index
-            if (
-                input_ids_seq_length > 1
-                or generation_config.forced_bos_token_id is None
-            )
+            if (input_ids_seq_length > 1 or generation_config.forced_bos_token_id is None)
             else begin_index + 1
         )
         if generation_config.forced_decoder_ids is not None:
             # generation starts after the last token that is forced
             begin_index += generation_config.forced_decoder_ids[-1][0]
-        processors.append(
-            SuppressTokensAtBeginLogitsProcessor(
-                generation_config.begin_suppress_tokens, begin_index
-            )
-        )
+        processors.append(SuppressTokensAtBeginLogitsProcessor(generation_config.begin_suppress_tokens, begin_index))
     if generation_config.forced_decoder_ids is not None:
-        processors.append(
-            ForceTokensLogitsProcessor(generation_config.forced_decoder_ids)
-        )
+        processors.append(ForceTokensLogitsProcessor(generation_config.forced_decoder_ids))
     processors = _merge_criteria_processor_list(processors, logits_processor)
     # `LogitNormalization` should always be the last logit processor, when present
     if generation_config.renormalize_logits is True:
@@ -268,9 +217,7 @@ def prepare_llama_input(prompt, tokenizer, configuration, is_padded=False):
     return input_ids, attention_mask, position_ids
 
 
-def get_next_llama_output_token(
-    logits_processor, input_ids, out_tensor, order, model="Pytorch"
-):
+def get_next_llama_output_token(logits_processor, input_ids, out_tensor, order, model="Pytorch"):
     next_token_logits = out_tensor[:, -1, :]
     # pre-process distribution
     next_tokens_scores = logits_processor(input_ids, next_token_logits)
@@ -305,16 +252,12 @@ def _make_causal_mask(
     if past_key_values_length > 0:
         mask = torch.cat(
             [
-                torch.zeros(
-                    tgt_len, past_key_values_length, dtype=dtype, device=device
-                ),
+                torch.zeros(tgt_len, past_key_values_length, dtype=dtype, device=device),
                 mask,
             ],
             dim=-1,
         )
-    return mask[None, None, :, :].expand(
-        bsz, 1, tgt_len, tgt_len + past_key_values_length
-    )
+    return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
 
 
 # Copied from transformers.models.bart.modeling_bart._expand_mask
@@ -329,13 +272,11 @@ def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] 
 
     inverted_mask = 1.0 - expanded_mask
 
-    return inverted_mask.masked_fill(
-        inverted_mask.to(torch.bool), torch.finfo(dtype).min
-    )
+    return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
 
 
 def shape_tt(states, batch_size, seq_len, n_heads, head_dim):
     tt_out = tt_lib.tensor.reshape(states, batch_size, seq_len, n_heads, head_dim)
-    tt_out = tt_lib.tensor.transpose_hc(tt_out)
+    tt_out = tt_lib.tensor.transpose(tt_out, 1, -2)
 
     return tt_out

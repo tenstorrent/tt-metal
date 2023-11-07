@@ -24,10 +24,8 @@ def t5_shape_tt(states, batch_size, n_heads, key_value_proj_dim, device):
         states = states.transpose(1, 2)
         tt_out = torch2tt_tensor(states, device)
     else:
-        tt_out = tt_lib.tensor.reshape(
-            states, batch_size, -1, n_heads, key_value_proj_dim
-        )
-        tt_out = tt_lib.tensor.transpose_hc(tt_out)
+        tt_out = tt_lib.tensor.reshape(states, batch_size, -1, n_heads, key_value_proj_dim)
+        tt_out = tt_lib.tensor.transpose(tt_out, 1, -2)
 
     return tt_out
 
@@ -56,7 +54,7 @@ def t5_unshape_tt(states, batch_size, inner_dim, device):
         states = t5_unshape_pt(states, batch_size, inner_dim)
         tt_out = torch2tt_tensor(states, device)
     else:
-        states = tt_lib.tensor.transpose_hc(states)
+        states = tt_lib.tensor.transpose(states, 1, -2)
         tt_out = tt_lib.tensor.reshape(states, 1, batch_size, -1, inner_dim)
 
     return tt_out
@@ -317,22 +315,22 @@ class TtT5Attention(nn.Module):
         self.dropout = config["dropout_rate"]
         self.inner_dim = self.n_heads * self.key_value_proj_dim
         self.device = device
-        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.mem_config = tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        )
 
         self.q_weights = torch2tt_tensor(state_dict[f"{base_address}.q.weight"], device)
         self.k_weights = torch2tt_tensor(state_dict[f"{base_address}.k.weight"], device)
         self.v_weights = torch2tt_tensor(state_dict[f"{base_address}.v.weight"], device)
         self.o_weights = torch2tt_tensor(state_dict[f"{base_address}.o.weight"], device)
 
-        self.q_weights = tt_lib.tensor.transpose(self.q_weights)
-        self.k_weights = tt_lib.tensor.transpose(self.k_weights)
-        self.v_weights = tt_lib.tensor.transpose(self.v_weights)
-        self.o_weights = tt_lib.tensor.transpose(self.o_weights)
+        self.q_weights = tt_lib.tensor.transpose(self.q_weights, -2, -1)
+        self.k_weights = tt_lib.tensor.transpose(self.k_weights, -2, -1)
+        self.v_weights = tt_lib.tensor.transpose(self.v_weights, -2, -1)
+        self.o_weights = tt_lib.tensor.transpose(self.o_weights, -2, -1)
 
         if self.has_relative_attention_bias:
-            self.relative_attention_bias = nn.Embedding(
-                self.relative_attention_num_buckets, self.n_heads
-            )
+            self.relative_attention_bias = nn.Embedding(self.relative_attention_num_buckets, self.n_heads)
             self.relative_attention_bias.weight = nn.Parameter(
                 state_dict[f"{base_address}.relative_attention_bias.weight"]
             )
@@ -345,9 +343,7 @@ class TtT5Attention(nn.Module):
         self.gradient_checkpointing = False
 
     @staticmethod
-    def _relative_position_bucket(
-        relative_position, bidirectional=True, num_buckets=32, max_distance=128
-    ):
+    def _relative_position_bucket(relative_position, bidirectional=True, num_buckets=32, max_distance=128):
         """
         Adapted from Mesh Tensorflow:
         https://github.com/tensorflow/mesh/blob/0cb87fe07da627bf0b7e60475d59f95ed6b5be3d/mesh_tensorflow/transformer/transformer_layers.py#L593
@@ -371,9 +367,7 @@ class TtT5Attention(nn.Module):
             relative_buckets += (relative_position > 0).to(torch.long) * num_buckets
             relative_position = torch.abs(relative_position)
         else:
-            relative_position = -torch.min(
-                relative_position, torch.zeros_like(relative_position)
-            )
+            relative_position = -torch.min(relative_position, torch.zeros_like(relative_position))
         # now relative_position is in the range [0, inf)
 
         # half of the buckets are for exact increments in positions
@@ -391,30 +385,22 @@ class TtT5Attention(nn.Module):
             torch.full_like(relative_position_if_large, num_buckets - 1),
         )
 
-        relative_buckets += torch.where(
-            is_small, relative_position, relative_position_if_large
-        )
+        relative_buckets += torch.where(is_small, relative_position, relative_position_if_large)
         return relative_buckets
 
     def compute_bias_const(self, query_length, key_length):
         """Compute binned relative position bias"""
         context_position = torch.arange(query_length, dtype=torch.long)[:, None]
         memory_position = torch.arange(key_length, dtype=torch.long)[None, :]
-        relative_position = (
-            memory_position - context_position
-        )  # shape (query_length, key_length)
+        relative_position = memory_position - context_position  # shape (query_length, key_length)
         relative_position_bucket = self._relative_position_bucket(
             relative_position,  # shape (query_length, key_length)
             bidirectional=(not self.is_decoder),
             num_buckets=self.relative_attention_num_buckets,
             max_distance=self.relative_attention_max_distance,
         )
-        values = self.relative_attention_bias(
-            relative_position_bucket
-        )  # shape (query_length, key_length, num_heads)
-        values = values.permute([2, 0, 1]).unsqueeze(
-            0
-        )  # shape (1, num_heads, query_length, key_length)
+        values = self.relative_attention_bias(relative_position_bucket)  # shape (query_length, key_length, num_heads)
+        values = values.permute([2, 0, 1]).unsqueeze(0)  # shape (1, num_heads, query_length, key_length)
         return values
 
     def forward(
@@ -445,20 +431,14 @@ class TtT5Attention(nn.Module):
             assert (
                 len(past_key_value) == 2
             ), f"past_key_value should have 2 past states: keys and values. Got { len(past_key_value)} past states"
-            real_seq_length += (
-                past_key_value[0].shape[2] if query_length is None else query_length
-            )
+            real_seq_length += past_key_value[0].shape[2] if query_length is None else query_length
 
-        key_length = (
-            real_seq_length if key_value_states is None else key_value_states.shape()[2]
-        )
+        key_length = real_seq_length if key_value_states is None else key_value_states.shape()[2]
 
         def shape(states):
             """projection"""
             # return states.view(batch_size, -1, self.n_heads, self.key_value_proj_dim).transpose(1, 2)
-            return t5_shape_tt(
-                states, batch_size, self.n_heads, self.key_value_proj_dim, self.device
-            )
+            return t5_shape_tt(states, batch_size, self.n_heads, self.key_value_proj_dim, self.device)
 
         def unshape(states):
             """reshape"""
@@ -474,9 +454,7 @@ class TtT5Attention(nn.Module):
             elif past_key_value is None:
                 # cross-attn
                 # (batch_size, n_heads, seq_length, dim_per_head)
-                hidden_states = shape(
-                    tt_lib.tensor.matmul(key_value_states, proj_weights, self.mem_config)
-                )
+                hidden_states = shape(tt_lib.tensor.matmul(key_value_states, proj_weights, self.mem_config))
 
             if past_key_value is not None:
                 if key_value_states is None:
@@ -490,9 +468,7 @@ class TtT5Attention(nn.Module):
                     # the provided `key_value_states` to support prefix tuning
                     # cross-attn
                     # (batch_size, n_heads, seq_length, dim_per_head)
-                    hidden_states = shape(
-                        tt_lib.tensor.matmul(key_value_states, proj_weights, self.mem_config)
-                    )
+                    hidden_states = shape(tt_lib.tensor.matmul(key_value_states, proj_weights, self.mem_config))
                 else:
                     # cross-attn
                     hidden_states = past_key_value
@@ -521,7 +497,7 @@ class TtT5Attention(nn.Module):
         # compute scores
         # scores = torch.matmul(query_states, key_states.transpose(3, 2))
         # equivalent of torch.einsum("bnqd,bnkd->bnqk", query_states, key_states), compatible with onnx op>9
-        transposed_key_states = tt_lib.tensor.transpose(key_states)
+        transposed_key_states = tt_lib.tensor.transpose(key_states, -2, -1)
         scores = tt_lib.tensor.bmm(query_states, transposed_key_states, self.mem_config)
 
         if (
@@ -550,9 +526,7 @@ class TtT5Attention(nn.Module):
             position_bias = position_bias.repeat(batch_size, 1, 1, 1)
 
             if mask is not None:
-                position_bias = (
-                    position_bias + mask
-                )  # (batch_size, n_heads, seq_length, key_length)
+                position_bias = position_bias + mask  # (batch_size, n_heads, seq_length, key_length)
 
             # Prunned heads!
             if self.pruned_heads:
@@ -569,7 +543,7 @@ class TtT5Attention(nn.Module):
             self.cached_key_length = key_length
 
         # scores += position_bias_masked
-        scores = tt_lib.tensor.add(scores, position_bias, output_mem_config = self.mem_config)
+        scores = tt_lib.tensor.add(scores, position_bias, output_mem_config=self.mem_config)
 
         # attn_weights = nn.functional.softmax(scores.float(), dim=-1).type_as(scores)
         attn_weights = tt_lib.operations.primary.softmax_in_place(scores)
@@ -585,9 +559,7 @@ class TtT5Attention(nn.Module):
         attn_output = unshape(attn_output)  # (batch_size, seq_length, dim)
         attn_output = tt_lib.tensor.matmul(attn_output, self.o_weights, self.mem_config)
 
-        present_key_value_state = (
-            (key_states, value_states) if (self.is_decoder and use_cache) else None
-        )
+        present_key_value_state = (key_states, value_states) if (self.is_decoder and use_cache) else None
         outputs = (attn_output,) + (present_key_value_state,) + (position_bias,)
 
         if output_attentions:

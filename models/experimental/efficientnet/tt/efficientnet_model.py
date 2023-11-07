@@ -57,9 +57,7 @@ class TtEfficientNet(torch.nn.Module):
             isinstance(inverted_residual_setting, Sequence)
             and all([isinstance(s, _MBConvConfig) for s in inverted_residual_setting])
         ):
-            raise TypeError(
-                "The inverted_residual_setting should be List[MBConvConfig]"
-            )
+            raise TypeError("The inverted_residual_setting should be List[MBConvConfig]")
 
         layers: List[torch.nn.Module] = []
 
@@ -100,9 +98,7 @@ class TtEfficientNet(torch.nn.Module):
                     block_cnf.stride = 1
 
                 # adjust stochastic depth probability based on the depth of the stage block
-                sd_prob = (
-                    stochastic_depth_prob * float(stage_block_id) / total_stage_blocks
-                )
+                sd_prob = stochastic_depth_prob * float(stage_block_id) / total_stage_blocks
 
                 stage.append(
                     block_cnf.block(
@@ -129,11 +125,7 @@ class TtEfficientNet(torch.nn.Module):
         if is_lite:
             lastconv_output_channels = 1280
         else:
-            lastconv_output_channels = (
-                last_channel
-                if last_channel is not None
-                else 4 * lastconv_input_channels
-            )
+            lastconv_output_channels = last_channel if last_channel is not None else 4 * lastconv_input_channels
 
         layers.append(
             TtEfficientnetConv2dNormActivation(
@@ -171,7 +163,7 @@ class TtEfficientNet(torch.nn.Module):
         else:
             self.classifier_bias = None
 
-        self.classifier_weight = tt_lib.tensor.transpose(self.classifier_weight)
+        self.classifier_weight = tt_lib.tensor.transpose(self.classifier_weight, -2, -1)
 
     def forward(self, x):
         x = self.features(x)
@@ -292,9 +284,7 @@ def efficientnet_b0(device) -> TtEfficientNet:
     reference_model = torchvision.models.efficientnet_b0(pretrained=True)
     reference_model.eval()
 
-    inverted_residual_setting, last_channel = _efficientnet_conf(
-        "efficientnet_b0", width_mult=1.0, depth_mult=1.0
-    )
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_b0", width_mult=1.0, depth_mult=1.0)
 
     return _efficientnet(
         state_dict=reference_model.state_dict(),
@@ -313,9 +303,7 @@ def efficientnet_b1(device) -> TtEfficientNet:
     reference_model = torchvision.models.efficientnet_b1(pretrained=True)
     reference_model.eval()
 
-    inverted_residual_setting, last_channel = _efficientnet_conf(
-        "efficientnet_b1", width_mult=1.0, depth_mult=1.1
-    )
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_b1", width_mult=1.0, depth_mult=1.1)
 
     return _efficientnet(
         state_dict=reference_model.state_dict(),
@@ -334,9 +322,7 @@ def efficientnet_b2(device) -> TtEfficientNet:
     reference_model = torchvision.models.efficientnet_b2(pretrained=True)
     reference_model.eval()
 
-    inverted_residual_setting, last_channel = _efficientnet_conf(
-        "efficientnet_b2", width_mult=1.1, depth_mult=1.2
-    )
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_b2", width_mult=1.1, depth_mult=1.2)
 
     return _efficientnet(
         state_dict=reference_model.state_dict(),
@@ -355,9 +341,7 @@ def efficientnet_b3(device) -> TtEfficientNet:
     reference_model = torchvision.models.efficientnet_b3(pretrained=True)
     reference_model.eval()
 
-    inverted_residual_setting, last_channel = _efficientnet_conf(
-        "efficientnet_b3", width_mult=1.2, depth_mult=1.4
-    )
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_b3", width_mult=1.2, depth_mult=1.4)
 
     return _efficientnet(
         state_dict=reference_model.state_dict(),
@@ -376,9 +360,7 @@ def efficientnet_b4(device) -> TtEfficientNet:
     reference_model = torchvision.models.efficientnet_b4(pretrained=True)
     reference_model.eval()
 
-    inverted_residual_setting, last_channel = _efficientnet_conf(
-        "efficientnet_b4", width_mult=1.4, depth_mult=1.8
-    )
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_b4", width_mult=1.4, depth_mult=1.8)
 
     return _efficientnet(
         state_dict=reference_model.state_dict(),
@@ -397,9 +379,7 @@ def efficientnet_b5(device) -> TtEfficientNet:
     reference_model = torchvision.models.efficientnet_b5(pretrained=True)
     reference_model.eval()
 
-    inverted_residual_setting, last_channel = _efficientnet_conf(
-        "efficientnet_b5", width_mult=1.6, depth_mult=2.2
-    )
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_b5", width_mult=1.6, depth_mult=2.2)
 
     return _efficientnet(
         state_dict=reference_model.state_dict(),
@@ -420,9 +400,7 @@ def efficientnet_b6(device) -> TtEfficientNet:
     reference_model = torchvision.models.efficientnet_b6(pretrained=True)
     reference_model.eval()
 
-    inverted_residual_setting, last_channel = _efficientnet_conf(
-        "efficientnet_b6", width_mult=1.8, depth_mult=2.6
-    )
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_b6", width_mult=1.8, depth_mult=2.6)
 
     return _efficientnet(
         state_dict=reference_model.state_dict(),
@@ -443,9 +421,7 @@ def efficientnet_b7(device) -> TtEfficientNet:
     reference_model = torchvision.models.efficientnet_b7(pretrained=True)
     reference_model.eval()
 
-    inverted_residual_setting, last_channel = _efficientnet_conf(
-        "efficientnet_b7", width_mult=2.0, depth_mult=3.1
-    )
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_b7", width_mult=2.0, depth_mult=3.1)
 
     return _efficientnet(
         state_dict=reference_model.state_dict(),
@@ -619,9 +595,7 @@ def efficientnet_lite0(device) -> TtEfficientNet:
     """
 
     reference_model = reference_efficientnet_lite0()
-    inverted_residual_setting, last_channel = _efficientnet_conf(
-        "efficientnet_lite0", width_mult=1.0, depth_mult=1.0
-    )
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_lite0", width_mult=1.0, depth_mult=1.0)
 
     return _efficientnet(
         state_dict=reference_model.state_dict(),
@@ -645,9 +619,7 @@ def efficientnet_lite1(device) -> TtEfficientNet:
     """
 
     reference_model = reference_efficientnet_lite1()
-    inverted_residual_setting, last_channel = _efficientnet_conf(
-        "efficientnet_lite1", width_mult=1.0, depth_mult=1.1
-    )
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_lite1", width_mult=1.0, depth_mult=1.1)
 
     return _efficientnet(
         state_dict=reference_model.state_dict(),
@@ -671,9 +643,7 @@ def efficientnet_lite2(device) -> TtEfficientNet:
     """
 
     reference_model = reference_efficientnet_lite2()
-    inverted_residual_setting, last_channel = _efficientnet_conf(
-        "efficientnet_lite2", width_mult=1.1, depth_mult=1.2
-    )
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_lite2", width_mult=1.1, depth_mult=1.2)
 
     return _efficientnet(
         state_dict=reference_model.state_dict(),
@@ -697,9 +667,7 @@ def efficientnet_lite3(device) -> TtEfficientNet:
     """
 
     reference_model = reference_efficientnet_lite3()
-    inverted_residual_setting, last_channel = _efficientnet_conf(
-        "efficientnet_lite3", width_mult=1.2, depth_mult=1.4
-    )
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_lite3", width_mult=1.2, depth_mult=1.4)
 
     return _efficientnet(
         state_dict=reference_model.state_dict(),
@@ -723,9 +691,7 @@ def efficientnet_lite4(device) -> TtEfficientNet:
     """
 
     reference_model = reference_efficientnet_lite4()
-    inverted_residual_setting, last_channel = _efficientnet_conf(
-        "efficientnet_lite4", width_mult=1.4, depth_mult=1.8
-    )
+    inverted_residual_setting, last_channel = _efficientnet_conf("efficientnet_lite4", width_mult=1.4, depth_mult=1.8)
 
     return _efficientnet(
         state_dict=reference_model.state_dict(),

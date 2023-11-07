@@ -14,10 +14,7 @@ import tt_lib as ttl
 
 from tt_lib.utils import _nearest_32
 from models.utility_functions import comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.common import (
-    is_wormhole_b0,
-    skip_for_wormhole_b0,
-)
+from models.utility_functions import skip_for_wormhole_b0
 
 
 def volume(shape):
@@ -32,7 +29,7 @@ def volume(shape):
 ## stride_h, stride_w
 ## pad_h, pad_w
 ## dilation_h, dilation_w
-@skip_for_wormhole_b0
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
@@ -153,7 +150,9 @@ def test_run_max_pool(
     if nblocks > 1 and in_mem_config.is_sharded() and use_multicore:
         pytest.skip("nblocks > 1 is not properly supported with multicore sharded input")
 
-    interleaved_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+    )
 
     if (out_mem_config.is_sharded() or in_mem_config.is_sharded()) and not use_multicore:
         pytest.skip("Unsupported sharding in single core")
@@ -164,8 +163,10 @@ def test_run_max_pool(
     is_resnet_shape = out_nhw in (3136, 6272, 12544, 25088)
     ncores_for_resnet_shape = 98
 
-    if (is_resnet_shape and (compute_grid_size.x * compute_grid_size.y < ncores_for_resnet_shape)):
-        pytest.skip(f"Skipping over Resnet specific config where parallelization does not fit on core grid {compute_grid_size}")
+    if is_resnet_shape and (compute_grid_size.x * compute_grid_size.y < ncores_for_resnet_shape):
+        pytest.skip(
+            f"Skipping over Resnet specific config where parallelization does not fit on core grid {compute_grid_size}"
+        )
 
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
@@ -217,7 +218,13 @@ def test_run_max_pool(
             grid_size = [12, 9]
         else:
             assert False
-        ttact = ttl.tensor.interleaved_to_sharded(ttact, grid_size, [in_height // ncores, act_padded.shape[-1]], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.ShardOrientation.ROW_MAJOR, )
+        ttact = ttl.tensor.interleaved_to_sharded(
+            ttact,
+            grid_size,
+            [in_height // ncores, act_padded.shape[-1]],
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.ShardOrientation.ROW_MAJOR,
+        )
     else:
         ttact = ttact.to(device, in_mem_config)
 

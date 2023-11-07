@@ -6,7 +6,7 @@ import torch
 import pytest
 
 import tt_lib as ttl
-from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0
 
 
 def rotate_half(x):
@@ -15,7 +15,7 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
-@skip_for_wormhole_b0
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("shape", [[1, 1, 128, 64], [1, 71, 128, 64]])
 def test_rotate_half(shape, device):
     x = torch.randn(shape).bfloat16().float()

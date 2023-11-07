@@ -58,12 +58,8 @@ class TtSwinModel(nn.Module):
             self.device,
         )
 
-        gamma = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}" + "layernorm.weight"], self.device
-        )
-        beta = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}" + "layernorm.bias"], self.device
-        )
+        gamma = torch_to_tt_tensor_rm(state_dict[f"{base_address}" + "layernorm.weight"], self.device)
+        beta = torch_to_tt_tensor_rm(state_dict[f"{base_address}" + "layernorm.bias"], self.device)
         self.layernorm = fallback_ops.LayerNorm(
             gamma, beta, normalized_shape=self.num_features, eps=config.layer_norm_eps
         )
@@ -80,13 +76,9 @@ class TtSwinModel(nn.Module):
             head_mask = head_mask.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
             head_mask = head_mask.expand(num_hidden_layers, -1, -1, -1, -1)
         elif head_mask.dim() == 2:
-            head_mask = (
-                head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)
-            )  # We can specify head_mask for each layer
+            head_mask = head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)  # We can specify head_mask for each layer
         assert head_mask.dim() == 5, f"head_mask.dim != 5, instead {head_mask.dim()}"
-        head_mask = head_mask.to(
-            dtype=self.dtype
-        )  # switch to float if need + fp16 compatibility
+        head_mask = head_mask.to(dtype=self.dtype)  # switch to float if need + fp16 compatibility
         return head_mask
 
     def get_head_mask(
@@ -101,9 +93,7 @@ class TtSwinModel(nn.Module):
             torch_head_mask = None
 
         if torch_head_mask is not None:
-            torch_head_mask = self._convert_head_mask_to_5d(
-                torch_head_mask, num_hidden_layers
-            )
+            torch_head_mask = self._convert_head_mask_to_5d(torch_head_mask, num_hidden_layers)
             if is_attention_chunked is True:
                 torch_head_mask = torch_head_mask.unsqueeze(-1)
 
@@ -124,19 +114,11 @@ class TtSwinModel(nn.Module):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, TtSwinModelOutput]:
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if pixel_values is None:
             raise ValueError("You have to specify pixel_values")
@@ -148,9 +130,7 @@ class TtSwinModel(nn.Module):
         # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
         head_mask = self.get_head_mask(head_mask, len(self.config.depths))
 
-        embedding_output, input_dimensions = self.embeddings(
-            pixel_values, bool_masked_pos=bool_masked_pos
-        )
+        embedding_output, input_dimensions = self.embeddings(pixel_values, bool_masked_pos=bool_masked_pos)
 
         encoder_outputs = self.encoder(
             embedding_output,
@@ -166,10 +146,8 @@ class TtSwinModel(nn.Module):
 
         pooled_output = None
         if self.pooler is not None:
-            sequence_output_transpose = tt_lib.tensor.transpose(sequence_output)
-            sequence_output_transpose = tt_to_torch_tensor(
-                sequence_output_transpose
-            ).squeeze(0)
+            sequence_output_transpose = tt_lib.tensor.transpose(sequence_output, -2, -1)
+            sequence_output_transpose = tt_to_torch_tensor(sequence_output_transpose).squeeze(0)
             pooled_output = self.pooler(sequence_output_transpose)
             pooled_output = torch.flatten(pooled_output, 1)
             pooled_output = torch_to_tt_tensor_rm(pooled_output, self.device)

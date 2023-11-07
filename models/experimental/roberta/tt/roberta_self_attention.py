@@ -20,59 +20,38 @@ from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 
 class TtRobertaSelfAttention(nn.Module):
-    def __init__(
-        self, config, state_dict, base_address, device, position_embedding_type=None
-    ):
+    def __init__(self, config, state_dict, base_address, device, position_embedding_type=None):
         super().__init__()
-        if config.hidden_size % config.num_attention_heads != 0 and not hasattr(
-            config, "embedding_size"
-        ):
+        if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
             raise ValueError(
                 f"The hidden size ({config.hidden_size}) is not a multiple of the number of attention "
                 f"heads ({config.num_attention_heads})"
             )
         self.device = device
-        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.mem_config = tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        )
 
         self.num_attention_heads = config.num_attention_heads
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        self.query_weight = pad_by_zero(
-            state_dict[f"{base_address}.query.weight"], self.device
-        )[0]
-        self.query_bias = pad_by_zero(
-            state_dict[f"{base_address}.query.bias"], self.device
-        )[0]
+        self.query_weight = pad_by_zero(state_dict[f"{base_address}.query.weight"], self.device)[0]
+        self.query_bias = pad_by_zero(state_dict[f"{base_address}.query.bias"], self.device)[0]
 
-        self.key_weight = pad_by_zero(
-            state_dict[f"{base_address}.key.weight"], self.device
-        )[0]
-        self.key_bias = pad_by_zero(
-            state_dict[f"{base_address}.key.bias"], self.device
-        )[0]
+        self.key_weight = pad_by_zero(state_dict[f"{base_address}.key.weight"], self.device)[0]
+        self.key_bias = pad_by_zero(state_dict[f"{base_address}.key.bias"], self.device)[0]
 
-        self.value_weight = pad_by_zero(
-            state_dict[f"{base_address}.value.weight"], self.device
-        )[0]
-        self.value_bias = pad_by_zero(
-            state_dict[f"{base_address}.value.bias"], self.device
-        )[0]
+        self.value_weight = pad_by_zero(state_dict[f"{base_address}.value.weight"], self.device)[0]
+        self.value_bias = pad_by_zero(state_dict[f"{base_address}.value.bias"], self.device)[0]
 
         # TODO: Add dropout when supported
         # self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
 
-        self.position_embedding_type = position_embedding_type or getattr(
-            config, "position_embedding_type", "absolute"
-        )
-        if (
-            self.position_embedding_type == "relative_key"
-            or self.position_embedding_type == "relative_key_query"
-        ):
+        self.position_embedding_type = position_embedding_type or getattr(config, "position_embedding_type", "absolute")
+        if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
             self.max_position_embeddings = config.max_position_embeddings
-            self.distance_embedding = nn.Embedding(
-                2 * config.max_position_embeddings - 1, self.attention_head_size
-            )
+            self.distance_embedding = nn.Embedding(2 * config.max_position_embeddings - 1, self.attention_head_size)
 
         self.is_decoder = config.is_decoder
 
@@ -108,7 +87,7 @@ class TtRobertaSelfAttention(nn.Module):
         return x
 
     def linear(self, x, weight, bias):
-        weight = tt_lib.tensor.transpose(weight)
+        weight = tt_lib.tensor.transpose(weight, -2, -1)
         x = tt_lib.tensor.matmul(x, weight, output_mem_config=self.mem_config)
         x = tt_lib.tensor.bcast(
             x,
@@ -142,12 +121,8 @@ class TtRobertaSelfAttention(nn.Module):
             value_layer = past_key_value[1]
             attention_mask = encoder_attention_mask
         elif is_cross_attention:
-            key_layer = self.transpose_for_scores(
-                self.key_linear(encoder_hidden_states)
-            )
-            value_layer = self.transpose_for_scores(
-                self.value_linear(encoder_hidden_states)
-            )
+            key_layer = self.transpose_for_scores(self.key_linear(encoder_hidden_states))
+            value_layer = self.transpose_for_scores(self.value_linear(encoder_hidden_states))
             attention_mask = encoder_attention_mask
         elif past_key_value is not None:
             key_layer = self.transpose_for_scores(self.key_linear(hidden_states))
@@ -172,16 +147,11 @@ class TtRobertaSelfAttention(nn.Module):
             past_key_value = (key_layer, value_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        key_layer_transposed = tt_lib.tensor.transpose(key_layer)
+        key_layer_transposed = tt_lib.tensor.transpose(key_layer, -2, -1)
 
-        attention_scores = tt_lib.tensor.bmm(
-            query_layer, key_layer_transposed, output_mem_config=self.mem_config
-        )
+        attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_transposed, output_mem_config=self.mem_config)
 
-        if (
-            self.position_embedding_type == "relative_key"
-            or self.position_embedding_type == "relative_key_query"
-        ):
+        if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
             """
             TODO: This block is in pytorch and currently not used ,
             bc model config self.position_embedding_type = absolute
@@ -193,42 +163,22 @@ class TtRobertaSelfAttention(nn.Module):
             torch_key_layer = tt2torch_tensor(key_layer)
 
             if use_cache:
-                position_ids_l = torch.tensor(
-                    key_length - 1, dtype=torch.long, device=hidden_states.device
-                ).view(-1, 1)
+                position_ids_l = torch.tensor(key_length - 1, dtype=torch.long, device=hidden_states.device).view(-1, 1)
             else:
-                position_ids_l = torch.arange(
-                    query_length, dtype=torch.long, device=hidden_states.device
-                ).view(-1, 1)
-            position_ids_r = torch.arange(
-                key_length, dtype=torch.long, device=hidden_states.device
-            ).view(1, -1)
+                position_ids_l = torch.arange(query_length, dtype=torch.long, device=hidden_states.device).view(-1, 1)
+            position_ids_r = torch.arange(key_length, dtype=torch.long, device=hidden_states.device).view(1, -1)
             distance = position_ids_l - position_ids_r
 
-            positional_embedding = self.distance_embedding(
-                distance + self.max_position_embeddings - 1
-            )
-            positional_embedding = positional_embedding.to(
-                dtype=torch_query_layer.dtype
-            )  # fp16 compatibility
+            positional_embedding = self.distance_embedding(distance + self.max_position_embeddings - 1)
+            positional_embedding = positional_embedding.to(dtype=torch_query_layer.dtype)  # fp16 compatibility
 
             if self.position_embedding_type == "relative_key":
-                relative_position_scores = torch.einsum(
-                    "bhld,lrd->bhlr", torch_query_layer, positional_embedding
-                )
+                relative_position_scores = torch.einsum("bhld,lrd->bhlr", torch_query_layer, positional_embedding)
                 attention_scores = attention_scores + relative_position_scores
             elif self.position_embedding_type == "relative_key_query":
-                relative_position_scores_query = torch.einsum(
-                    "bhld,lrd->bhlr", torch_query_layer, positional_embedding
-                )
-                relative_position_scores_key = torch.einsum(
-                    "bhrd,lrd->bhlr", torch_key_layer, positional_embedding
-                )
-                attention_scores = (
-                    attention_scores
-                    + relative_position_scores_query
-                    + relative_position_scores_key
-                )
+                relative_position_scores_query = torch.einsum("bhld,lrd->bhlr", torch_query_layer, positional_embedding)
+                relative_position_scores_key = torch.einsum("bhrd,lrd->bhlr", torch_key_layer, positional_embedding)
+                attention_scores = attention_scores + relative_position_scores_query + relative_position_scores_key
             # back to tt
             attention_scores = torch2tt_tensor(attention_scores, self.device)
 
@@ -236,9 +186,7 @@ class TtRobertaSelfAttention(nn.Module):
             attention_scores.shape(),
             1.0 / math.sqrt(self.attention_head_size),
         )
-        attention_scores = tt_lib.tensor.mul(
-            attention_scores, div_const, output_mem_config=self.mem_config
-        )
+        attention_scores = tt_lib.tensor.mul(attention_scores, div_const, output_mem_config=self.mem_config)
 
         if attention_mask is not None:
             # Apply the attention mask is (precomputed for all layers in RobertaModel forward() function)
@@ -270,9 +218,7 @@ class TtRobertaSelfAttention(nn.Module):
 
         # Mask heads if we want to
         if head_mask is not None:
-            attention_probs = tt_lib.tensor.mul(
-                attention_probs, head_mask, output_mem_config=self.mem_config
-            )
+            attention_probs = tt_lib.tensor.mul(attention_probs, head_mask, output_mem_config=self.mem_config)
 
         context_layer = tt_lib.tensor.bmm(attention_probs, value_layer, self.mem_config)
         context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))
@@ -291,9 +237,7 @@ class TtRobertaSelfAttention(nn.Module):
         )
         context_layer = fallback_ops.reshape(context_layer, *new_context_layer_shape)
 
-        outputs = (
-            (context_layer, attention_probs) if output_attentions else (context_layer,)
-        )
+        outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 
         if self.is_decoder:
             outputs = outputs + (past_key_value,)

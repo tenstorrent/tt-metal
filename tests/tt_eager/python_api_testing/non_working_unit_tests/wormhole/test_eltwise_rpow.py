@@ -22,7 +22,6 @@ from tt_lib.utils import (
     is_close,
 )
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
 
 
 def ref_rpow(x, factor):

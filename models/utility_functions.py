@@ -7,12 +7,12 @@ import tt_lib
 import torch
 import numpy as np
 from loguru import logger
-from os import environ
+import os
 import math
 import struct
+import pytest
 
 from tt_lib.fused_ops.conv import conv as TtConv
-from tt_lib.fallback_ops import fallback_ops
 from tt_lib.device import Arch
 
 
@@ -187,9 +187,7 @@ def torch_to_tt_tensor_rm(py_tensor, device, shape=None, put_on_device=True):
         while len(shape) < 4:
             shape.insert(0, 1)
 
-    tt_tensor = tt_lib.tensor.Tensor(
-        py_tensor.reshape(shape), tt_lib.tensor.DataType.BFLOAT16
-    )
+    tt_tensor = tt_lib.tensor.Tensor(py_tensor.reshape(shape), tt_lib.tensor.DataType.BFLOAT16)
     if put_on_device:
         tt_tensor = tt_tensor.to(device)
     return tt_tensor
@@ -205,9 +203,7 @@ def torch_to_tt_tensor(py_tensor, device):
         .to(
             tt_lib.tensor.Layout.TILE
         )  # change memory layout of TT Tensor to TILE (as operation that will use it expects TILE layout)
-        .to(
-            device
-        )  # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
+        .to(device)  # move TT Tensor from host to TT accelerator device (device is of type tt_lib.device.Device)
     )
 
     return tt_tensor
@@ -242,9 +238,7 @@ def pad_by_zero(
             x = x.to(device, tt_memory_config)
 
     else:
-        x = torch2tt_tensor(
-            x, device, tt_memory_config=tt_memory_config, tt_dtype=tt_dtype
-        )
+        x = torch2tt_tensor(x, device, tt_memory_config=tt_memory_config, tt_dtype=tt_dtype)
     return x, initial_shape
 
 
@@ -283,12 +277,8 @@ def pad_activation(x):
     """
     nearest_32 = _nearest_32
 
-    assert isinstance(
-        x, torch.Tensor
-    ), "Input to this function must be an instance of torch.Tensor"
-    assert (
-        len(x.shape) >= 1 and len(x.shape) <= 4
-    ), "Only tensors with dimension 1-4 supported"
+    assert isinstance(x, torch.Tensor), "Input to this function must be an instance of torch.Tensor"
+    assert len(x.shape) >= 1 and len(x.shape) <= 4, "Only tensors with dimension 1-4 supported"
     if len(x.shape) == 1:  # (num_features,)
         padded_tensor = torch.zeros(1, 1, 32, nearest_32(x.shape[0]))
         padded_tensor[:, 0, 0, : x.shape[0]] = x
@@ -296,14 +286,10 @@ def pad_activation(x):
         padded_tensor = torch.zeros(x.shape[0], 1, 32, nearest_32(x.shape[1]))
         padded_tensor[:, 0, 0, : x.shape[1]] = x
     elif len(x.shape) == 3:  # (batch, num features y, num features x)
-        padded_tensor = torch.zeros(
-            x.shape[0], 1, nearest_32(x.shape[-2]), nearest_32(x.shape[-1])
-        )
+        padded_tensor = torch.zeros(x.shape[0], 1, nearest_32(x.shape[-2]), nearest_32(x.shape[-1]))
         padded_tensor[..., 0, : x.shape[-2], : x.shape[-1]] = x
     else:  # (batch, num channels, num features y, num features x)
-        padded_tensor = torch.zeros(
-            *x.shape[:-2], nearest_32(x.shape[-2]), nearest_32(x.shape[-1])
-        )
+        padded_tensor = torch.zeros(*x.shape[:-2], nearest_32(x.shape[-2]), nearest_32(x.shape[-1]))
         padded_tensor[..., : x.shape[-2], : x.shape[-1]] = x
     return padded_tensor
 
@@ -324,25 +310,17 @@ def pad_weight(x):
     """
     nearest_32 = _nearest_32
 
-    assert isinstance(
-        x, torch.Tensor
-    ), "Input to this function must be an instance of torch.Tensor"
-    assert (
-        len(x.shape) >= 1 and len(x.shape) <= 4
-    ), "Only tensors with dimension 1-4 supported"
+    assert isinstance(x, torch.Tensor), "Input to this function must be an instance of torch.Tensor"
+    assert len(x.shape) >= 1 and len(x.shape) <= 4, "Only tensors with dimension 1-4 supported"
 
     if len(x.shape) == 1:  # (num_features,)
         padded_tensor = torch.zeros(1, 1, 32, nearest_32(x.shape[0]))
         padded_tensor[:, 0, 0, : x.shape[0]] = x
     elif len(x.shape) == 2:  # (r_features, c_features)
-        padded_tensor = torch.zeros(
-            1, 1, nearest_32(x.shape[0]), nearest_32(x.shape[1])
-        )
+        padded_tensor = torch.zeros(1, 1, nearest_32(x.shape[0]), nearest_32(x.shape[1]))
         padded_tensor[:, 0, : x.shape[0], : x.shape[1]] = x
     else:
-        padded_tensor = torch.zeros(
-            *x.shape[:-2], nearest_32(x.shape[-2]), nearest_32(x.shape[-1])
-        )
+        padded_tensor = torch.zeros(*x.shape[:-2], nearest_32(x.shape[-2]), nearest_32(x.shape[-1]))
         padded_tensor[..., : x.shape[-2], : x.shape[-1]] = x
 
     return padded_tensor
@@ -369,9 +347,7 @@ def convert_weights_2d_matrix(weights, w_shape):
     return ret.reshape(ret_shape).transpose(2, 3)
 
 
-def convert_act_2d_matrix(
-    activation, kernel_y, kernel_x, stride_y, stride_x, pad_y, pad_x
-):
+def convert_act_2d_matrix(activation, kernel_y, kernel_x, stride_y, stride_x, pad_y, pad_x):
     """
     :param activation: Input PyTorch Tensor
     :type activation: class:`torch.Tensor`
@@ -478,9 +454,7 @@ def untilize(x):
     """
     nearest_32 = _nearest_32
 
-    assert isinstance(
-        x, (torch.Tensor, np.ndarray)
-    ), "Input to this function must be an instance of torch.Tensor"
+    assert isinstance(x, (torch.Tensor, np.ndarray)), "Input to this function must be an instance of torch.Tensor"
     assert len(x.shape) == 4, "Only 4D tensors suppported"
     assert (x.shape[-2] % 32) == 0 and (
         x.shape[-1] % 32
@@ -554,9 +528,7 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
         calculated = calculated.type(golden.dtype)
 
     atol_delta = torch.max(torch.abs(golden - calculated)).item()
-    rtol_delta = torch.max(
-        torch.abs(golden - calculated) / torch.abs(calculated)
-    ).item()
+    rtol_delta = torch.max(torch.abs(golden - calculated) / torch.abs(calculated)).item()
     return (
         torch.allclose(golden, calculated, rtol, atol, True),
         f"Max ATOL Delta: {atol_delta}, Max RTOL Delta: {rtol_delta}",
@@ -740,14 +712,8 @@ def prep_report(
 
     compile_time = inference_and_compile_time - inference_time
     gs_throughput = "{:.4f}".format(batch_size * (1 / inference_time))
-    cpu_throughput = (
-        batch_size * (1 / inference_time_cpu) if inference_time_cpu else "unknown"
-    )
-    cpu_throughput = (
-        "{:.4f}".format(cpu_throughput)
-        if not isinstance(cpu_throughput, str)
-        else cpu_throughput
-    )
+    cpu_throughput = batch_size * (1 / inference_time_cpu) if inference_time_cpu else "unknown"
+    cpu_throughput = "{:.4f}".format(cpu_throughput) if not isinstance(cpu_throughput, str) else cpu_throughput
     dict_res = {
         "Model": model_name,
         "Setting": comments,
@@ -856,15 +822,11 @@ def blocked_mm_with_conv_act(
     for block_act_h in range(num_blocks_act_h):
         # Reset weight (weight) to the starting tile in this column
         for block_weight_w in range(num_blocks_weight_w):
-            output_block = torch.zeros(
-                mm_output_block_shape, dtype=torch.bfloat16
-            ).float()
+            output_block = torch.zeros(mm_output_block_shape, dtype=torch.bfloat16).float()
             for block_act_w in range(num_blocks_act_w):
                 address_map_this_block_size = act_address_map[act_address_map_index]
                 act_address_map_index += 1
-                weight_address_map_this_block_size = weight_address_map[
-                    weight_address_map_index
-                ]
+                weight_address_map_this_block_size = weight_address_map[weight_address_map_index]
                 weight_address_map_index += 1
                 (mm_act_block, act_address_map_index) = read_conv_act_into_mm_act_block(
                     conv_act,
@@ -934,9 +896,7 @@ def is_conv_supported_on_device(conv_params):
     return True
 
 
-def run_conv_on_device_wrapper(
-    conv_weight, conv_params, device, conv_bias=None, channel_transpose=False
-):
+def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None, channel_transpose=False):
     K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
     conv_on_device = TtConv(conv_weight, conv_params, device, conv_bias)
 
@@ -961,8 +921,8 @@ def run_conv_on_device_wrapper(
         [N, C, H, W] = x.shape()
         if channel_transpose:
             # n c h w -> n h w c
-            x = tt_lib.tensor.transpose_hc(x)
-            x = tt_lib.tensor.transpose(x)  # wh
+            x = tt_lib.tensor.transpose(x, 1, -2)
+            x = tt_lib.tensor.transpose(x, -2, -1)  # wh
 
         logger.info("Running Conv with following parameters on device -")
         logger.info(
@@ -993,7 +953,7 @@ def run_conv_on_device_wrapper(
         )
 
         logger.info("Going to run conv on tt device")
-        if (x.layout() != tt_lib.tensor.Layout.ROW_MAJOR):
+        if x.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
             x = tt_lib.tensor.untilize(x)
         else:
             x_padded_shape = x.shape()
@@ -1001,8 +961,8 @@ def run_conv_on_device_wrapper(
             x = tt_lib.tensor.pad(x, x_padded_shape, [0, 0, 0, 0], 0)
         x = conv_on_device(x)
         if channel_transpose:
-            x = tt_lib.tensor.transpose(x)
-            x = tt_lib.tensor.transpose_hc(x)
+            x = tt_lib.tensor.transpose(x, -2, -1)
+            x = tt_lib.tensor.transpose(x, 1, -2)
 
         logger.info("conv on tt device done")
         return x
@@ -1014,3 +974,21 @@ def run_conv_on_device_wrapper(
 def is_e75(device):
     compute_grid_size = device.compute_with_storage_grid_size()
     return (device.arch() == Arch.GRAYSKULL) and (compute_grid_size.x * compute_grid_size.y == 88)
+
+
+def is_wormhole_b0():
+    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    return "wormhole_b0" in ARCH_NAME
+
+
+def is_grayskull():
+    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    return "grayskull" in ARCH_NAME
+
+
+def skip_for_wormhole_b0():
+    return pytest.mark.skipif(is_wormhole_b0(), reason="not working for Wormhole B0")
+
+
+def skip_for_grayskull():
+    return pytest.mark.skipif(is_grayskull(), reason="not working for Grayskull")

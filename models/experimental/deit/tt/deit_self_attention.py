@@ -12,14 +12,11 @@ from models.utility_functions import torch_to_tt_tensor_rm
 from models.helper_funcs import Linear as TtLinear
 from models.experimental.deit.tt.deit_config import DeiTConfig
 
+
 class TtDeiTSelfAttention(nn.Module):
-    def __init__(
-        self, config: DeiTConfig(), device, state_dict=None, base_address=""
-    ) -> None:
+    def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:
         super().__init__()
-        if config.hidden_size % config.num_attention_heads != 0 and not hasattr(
-            config, "embedding_size"
-        ):
+        if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
             raise ValueError(
                 f"The hidden size {config.hidden_size,} is not a multiple of the number of attention "
                 f"heads {config.num_attention_heads}."
@@ -28,36 +25,18 @@ class TtDeiTSelfAttention(nn.Module):
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        self.query_weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.query.weight"], device
-        )
-        self.query_bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.query.bias"], device
-        )
+        self.query_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.query.weight"], device)
+        self.query_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.query.bias"], device)
 
-        self.key_weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.key.weight"], device
-        )
-        self.key_bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.key.bias"], device
-        )
+        self.key_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.key.weight"], device)
+        self.key_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.key.bias"], device)
 
-        self.value_weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.value.weight"], device
-        )
-        self.value_bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.value.bias"], device
-        )
+        self.value_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.value.weight"], device)
+        self.value_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.value.bias"], device)
 
-        self.query = TtLinear(
-            config.hidden_size, self.all_head_size, self.query_weight, self.query_bias
-        )
-        self.key = TtLinear(
-            config.hidden_size, self.all_head_size, self.key_weight, self.key_bias
-        )
-        self.value = TtLinear(
-            config.hidden_size, self.all_head_size, self.value_weight, self.value_bias
-        )
+        self.query = TtLinear(config.hidden_size, self.all_head_size, self.query_weight, self.query_bias)
+        self.key = TtLinear(config.hidden_size, self.all_head_size, self.key_weight, self.key_bias)
+        self.value = TtLinear(config.hidden_size, self.all_head_size, self.value_weight, self.value_bias)
 
     def transpose_for_scores(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         new_x_shape = list(x.shape()[1:-1]) + [
@@ -83,13 +62,11 @@ class TtDeiTSelfAttention(nn.Module):
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        key_layer_transposed = tt_lib.tensor.transpose(key_layer)
+        key_layer_transposed = tt_lib.tensor.transpose(key_layer, -2, -1)
 
         attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_transposed)
 
-        attention_head_size_tt = tt_lib.tensor.full(
-            attention_scores.shape(), self.attention_head_size
-        )
+        attention_head_size_tt = tt_lib.tensor.full(attention_scores.shape(), self.attention_head_size)
         attention_head_size_tt = tt_lib.tensor.sqrt(attention_head_size_tt)
         attention_head_size_tt = tt_lib.tensor.recip(attention_head_size_tt)
 
@@ -104,13 +81,9 @@ class TtDeiTSelfAttention(nn.Module):
 
         context_layer = tt_lib.tensor.bmm(attention_probs, value_layer)
         context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))
-        new_context_layer_shape = (
-            (1,) + tuple(context_layer.shape()[:-2]) + (self.all_head_size,)
-        )
+        new_context_layer_shape = (1,) + tuple(context_layer.shape()[:-2]) + (self.all_head_size,)
         context_layer = fallback_ops.reshape(context_layer, *new_context_layer_shape)
 
-        outputs = (
-            (context_layer, attention_probs) if output_attentions else (context_layer,)
-        )
+        outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 
         return outputs

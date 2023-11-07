@@ -8,7 +8,6 @@
 
 #include "tensor/tensor.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
-#include<string>
 
 namespace tt {
 
@@ -19,7 +18,7 @@ enum class TransposeOpDim {
 };
 
 enum class TransposeOpParallelizationStrategy {
-    MULTI_CORE_WH = 0, MULTI_CORE_HC = 1, SINGLE_CORE = 2
+    MULTI_CORE_WH = 0, MULTI_CORE_HC = 1, MULTI_CORE_CN = 2, SINGLE_CORE = 3
 };
 
 struct Transpose {
@@ -37,19 +36,7 @@ struct Transpose {
 };
 
 // TODO: Accept parallelization
-Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim=TransposeOpDim::WH, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-// TODO: Don't bind transpose as transpose_wh, should explicitly bind like the others
-// Alternatively, bind only 1 transpose function and take 2 dims to transpose
-Tensor transpose(const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-// 4 choose 2 = 6 transposes on NCHW rank-4 tensors without order.
-// Unique transposes : ('n', 'c'), ('n', 'h'), ('n', 'w'), ('c', 'h'), ('c', 'w'), ('h', 'w')
-Tensor transpose_wh(const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-Tensor transpose_hc(const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-Tensor transpose_cn(const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-Tensor transpose_nh(const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-Tensor transpose_nw(const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-Tensor transpose_cw(const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const MemoryConfig& output_mem_config);
 
 // transpose with tensor and dimensions
 Tensor transpose(const Tensor &a, std::int64_t dim1, std::int64_t dim2, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
@@ -57,6 +44,7 @@ Tensor transpose(const Tensor &a, std::int64_t dim1, std::int64_t dim2, const Me
 operation::ProgramWithCallbacks transpose_single_core(const Tensor &a, Tensor &output, TransposeOpDim transpose_dim);
 operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor &output);
 operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor &output);
+operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor &a, Tensor &output);
 
 }  // namespace tt_metal
 

@@ -39,9 +39,7 @@ class TtSwinSelfAttention(nn.Module):
         self.attention_head_size = int(dim / num_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
         self.window_size = (
-            window_size
-            if isinstance(window_size, collections.abc.Iterable)
-            else (window_size, window_size)
+            window_size if isinstance(window_size, collections.abc.Iterable) else (window_size, window_size)
         )
 
         self.relative_position_bias_table = torch.zeros(
@@ -61,26 +59,14 @@ class TtSwinSelfAttention(nn.Module):
         relative_position_index = relative_coords.sum(-1)
 
         self.register_buffer("relative_position_index", relative_position_index)
-        self.query_weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.query.weight"], self.device
-        )
-        self.query_bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.query.bias"], self.device
-        )
+        self.query_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.query.weight"], self.device)
+        self.query_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.query.bias"], self.device)
 
-        self.key_weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.key.weight"], self.device
-        )
-        self.key_bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.key.bias"], self.device
-        )
+        self.key_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.key.weight"], self.device)
+        self.key_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.key.bias"], self.device)
 
-        self.value_weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.value.weight"], self.device
-        )
-        self.value_bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.value.bias"], self.device
-        )
+        self.value_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.value.weight"], self.device)
+        self.value_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.value.bias"], self.device)
 
     def const_tensor(self, shape, value):
         return tt_lib.tensor.full(shape, value)
@@ -107,22 +93,16 @@ class TtSwinSelfAttention(nn.Module):
         _, batch_size, dim, num_channels = hidden_states.shape()
         mixed_query_layer = TtLinear(hidden_states, self.query_weight, self.query_bias)
 
-        key_layer = self.transpose_for_scores(
-            TtLinear(hidden_states, self.key_weight, self.key_bias)
-        )
-        value_layer = self.transpose_for_scores(
-            TtLinear(hidden_states, self.value_weight, self.value_bias)
-        )
+        key_layer = self.transpose_for_scores(TtLinear(hidden_states, self.key_weight, self.key_bias))
+        value_layer = self.transpose_for_scores(TtLinear(hidden_states, self.value_weight, self.value_bias))
         query_layer = self.transpose_for_scores(mixed_query_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        key_layer_transposed = tt_lib.tensor.transpose(key_layer)
+        key_layer_transposed = tt_lib.tensor.transpose(key_layer, -2, -1)
 
         attention_scores = tt_lib.tensor.bmm(query_layer, key_layer_transposed)
 
-        attention_head_size_tt = self.const_tensor(
-            attention_scores.shape(), self.attention_head_size
-        )
+        attention_head_size_tt = self.const_tensor(attention_scores.shape(), self.attention_head_size)
         attention_head_size_tt = tt_lib.tensor.sqrt(attention_head_size_tt)
         attention_head_size_tt = tt_lib.tensor.recip(attention_head_size_tt)
 
@@ -130,12 +110,8 @@ class TtSwinSelfAttention(nn.Module):
         """
         The index value must be long or byte or bool, hence using pytorch tensor
         """
-        relative_position_bias = self.relative_position_bias_table[
-            self.relative_position_index.view(-1)
-        ]
-        relative_position_bias = torch_to_tt_tensor_rm(
-            relative_position_bias, self.device, put_on_device=False
-        )
+        relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)]
+        relative_position_bias = torch_to_tt_tensor_rm(relative_position_bias, self.device, put_on_device=False)
         relative_position_bias = fallback_ops.reshape(
             relative_position_bias,
             self.window_size[0] * self.window_size[1],
@@ -143,9 +119,7 @@ class TtSwinSelfAttention(nn.Module):
             -1,
             1,
         )
-        relative_position_bias = tt_lib.tensor.permute(
-            relative_position_bias, (2, 0, 1, 3)
-        )
+        relative_position_bias = tt_lib.tensor.permute(relative_position_bias, (2, 0, 1, 3))
 
         attention_scores = tt_lib.tensor.permute(attention_scores, (1, 2, 3, 0))
         attention_scores = tt_lib.tensor.bcast(
@@ -172,15 +146,12 @@ class TtSwinSelfAttention(nn.Module):
                 dim,
                 dim,
             )
-            attention_scores = attention_scores + tt_to_torch_tensor(
-                attention_mask
-            ).unsqueeze(2)
+            attention_scores = attention_scores + tt_to_torch_tensor(attention_mask).unsqueeze(2)
             """
             attention score is 5 D tensor
             """
             attention_scores = torch_to_tt_tensor_rm(
-                attention_scores.view(-1, self.num_attention_heads, dim, dim),
-                self.device, put_on_device=False
+                attention_scores.view(-1, self.num_attention_heads, dim, dim), self.device, put_on_device=False
             )
 
         # Normalize the attention scores to probabilities.
@@ -192,9 +163,7 @@ class TtSwinSelfAttention(nn.Module):
         context_layer = tt_lib.tensor.bmm(attention_probs, value_layer)
         context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))
 
-        new_context_layer_shape = tuple(context_layer.shape()[:-2]) + (
-            self.all_head_size,
-        )
+        new_context_layer_shape = tuple(context_layer.shape()[:-2]) + (self.all_head_size,)
         context_layer = fallback_ops.reshape(
             context_layer,
             1,
@@ -202,8 +171,6 @@ class TtSwinSelfAttention(nn.Module):
             new_context_layer_shape[1],
             new_context_layer_shape[2],
         )
-        outputs = (
-            (context_layer, attention_probs) if output_attentions else (context_layer,)
-        )
+        outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 
         return outputs

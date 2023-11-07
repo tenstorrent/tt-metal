@@ -25,7 +25,6 @@ from models.utility_functions import (
 )
 
 
-
 def run_test_t5_shape(device):
     batch_size = 32
     n_heads = 8
@@ -65,9 +64,7 @@ def run_test_t5_unshape(device):
     inner_dim = 512
 
     pt_out = t5_unshape_pt(test_input, batch_size, inner_dim)
-    tt_out = t5_unshape_tt(
-        torch2tt_tensor(test_input, device), batch_size, inner_dim, device
-    )
+    tt_out = t5_unshape_tt(torch2tt_tensor(test_input, device), batch_size, inner_dim, device)
     tt_out = tt2torch_tensor(tt_out)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
@@ -86,7 +83,7 @@ def run_test_transpose(device):
     test_input = (torch.rand(1, 1, 2048, 512) * 2) - 1
 
     pt_out = test_input.transpose(3, 2)
-    tt_out = tt_lib.tensor.transpose(torch2tt_tensor(test_input, device))
+    tt_out = tt_lib.tensor.transpose(torch2tt_tensor(test_input, device), -2, -1)
     tt_out = tt2torch_tensor(tt_out)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
@@ -106,9 +103,7 @@ def run_test_matmul(device):
     test_input2 = (torch.rand(32, 8, 64, 128) * 2) - 1
 
     pt_out = torch.matmul(test_input1, test_input2)
-    tt_out = tt_lib.tensor.bmm(
-        torch2tt_tensor(test_input1, device), torch2tt_tensor(test_input2, device)
-    )
+    tt_out = tt_lib.tensor.bmm(torch2tt_tensor(test_input1, device), torch2tt_tensor(test_input2, device))
     tt_out = tt2torch_tensor(tt_out)
 
     does_pass, pcc_message = comp_pcc(pt_out, tt_out, 0.99)
@@ -142,12 +137,8 @@ def run_test_softmax(device):
         logger.warning("Test softmax Failed!")
 
 
-def run_test_T5Attention_inference(
-    device, block, use_mask, model_name, input_h, input_w
-):
-    hugging_face_reference_model = T5Model.from_pretrained(
-        model_name
-    )  # , torch_dtype=torch.float16)
+def run_test_T5Attention_inference(device, block, use_mask, model_name, input_h, input_w):
+    hugging_face_reference_model = T5Model.from_pretrained(model_name)  # , torch_dtype=torch.float16)
     hugging_face_reference_model.eval()
 
     # Input is (batch_size, seq_length, dim)
@@ -165,14 +156,10 @@ def run_test_T5Attention_inference(
 
     # Module to test
     if config["is_decoder"]:
-        hf_reference_module = (
-            hugging_face_reference_model.decoder.block[block].layer[0].SelfAttention
-        )
+        hf_reference_module = hugging_face_reference_model.decoder.block[block].layer[0].SelfAttention
         base_address = f"decoder.block.{block}.layer.0.SelfAttention"
     else:
-        hf_reference_module = (
-            hugging_face_reference_model.encoder.block[block].layer[0].SelfAttention
-        )
+        hf_reference_module = hugging_face_reference_model.encoder.block[block].layer[0].SelfAttention
         base_address = f"encoder.block.{block}.layer.0.SelfAttention"
 
     pytorch_model = hf_reference_module
@@ -224,21 +211,15 @@ def test_t5_unshape(device):
 
 
 def test_T5Attention_block_0_no_mask_t5_small(device):
-    run_test_T5Attention_inference(
-        device, block=0, use_mask=False, model_name="t5-small", input_h=32, input_w=512
-    )
+    run_test_T5Attention_inference(device, block=0, use_mask=False, model_name="t5-small", input_h=32, input_w=512)
 
 
 def test_T5Attention_block_2_no_mask_t5_small(device):
-    run_test_T5Attention_inference(
-        device, block=2, use_mask=False, model_name="t5-small", input_h=32, input_w=512
-    )
+    run_test_T5Attention_inference(device, block=2, use_mask=False, model_name="t5-small", input_h=32, input_w=512)
 
 
 def test_T5Attention_block_0_with_mask_t5_small(device):
-    run_test_T5Attention_inference(
-        device, block=0, use_mask=True, model_name="t5-small", input_h=32, input_w=512
-    )
+    run_test_T5Attention_inference(device, block=0, use_mask=True, model_name="t5-small", input_h=32, input_w=512)
 
 
 def test_T5Attention_block_0_no_mask_flan_t5_small(device):
@@ -253,6 +234,4 @@ def test_T5Attention_block_0_no_mask_flan_t5_small(device):
 
 
 def test_T5Attention_block_0_no_mask_t5_base(device):
-    run_test_T5Attention_inference(
-        device, block=0, use_mask=False, model_name="t5-base", input_h=32, input_w=768
-    )
+    run_test_T5Attention_inference(device, block=0, use_mask=False, model_name="t5-base", input_h=32, input_w=768)

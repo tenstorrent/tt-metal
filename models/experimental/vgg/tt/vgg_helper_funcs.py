@@ -9,7 +9,7 @@ def tt_linear(weight: tt_lib.tensor, bias: tt_lib.tensor, device):
     """Perform a linear operation on the input tensor using transposed weight and bias."""
 
     def linear_(activation):
-        weight_T = tt_lib.tensor.transpose(weight)
+        weight_T = tt_lib.tensor.transpose(weight, -2, -1)
         output = tt_lib.tensor.matmul(activation, weight_T)
 
         if bias is not None:

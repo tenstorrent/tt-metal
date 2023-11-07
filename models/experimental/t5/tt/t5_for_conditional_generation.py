@@ -80,9 +80,7 @@ class TtT5ForConditionalGeneration(nn.Module):
         self.device = device
         self.model_dim = config["d_model"]
         self.config_use_cache = config["use_cache"] if "use_cache" in config else False
-        self.config_use_return_dict = (
-            config["use_return_dict"] if "use_return_dict" in config else False
-        )
+        self.config_use_return_dict = config["use_return_dict"] if "use_return_dict" in config else False
         self.main_input_name = "input_ids"
 
         # Re-use embedding layer from reference_module
@@ -93,9 +91,7 @@ class TtT5ForConditionalGeneration(nn.Module):
         encoder_config["is_decoder"] = False
         encoder_config["use_cache"] = False
         encoder_config["is_encoder_decoder"] = False
-        self.encoder = TtT5Stack(
-            encoder_config, state_dict, "encoder", device, self.shared
-        )
+        self.encoder = TtT5Stack(encoder_config, state_dict, "encoder", device, self.shared)
 
         if "num_decoder_layers" not in config:
             config["num_decoder_layers"] = config["num_layers"]
@@ -104,13 +100,11 @@ class TtT5ForConditionalGeneration(nn.Module):
         decoder_config["is_decoder"] = True
         decoder_config["is_encoder_decoder"] = False
         decoder_config["num_layers"] = config["num_decoder_layers"]
-        self.decoder = TtT5Stack(
-            decoder_config, state_dict, "decoder", device, self.shared
-        )
+        self.decoder = TtT5Stack(decoder_config, state_dict, "decoder", device, self.shared)
 
         self.lm_head_weights = torch2tt_tensor(state_dict[f"lm_head.weight"], device)
 
-        self.lm_head_weights = tt_lib.tensor.transpose(self.lm_head_weights)
+        self.lm_head_weights = tt_lib.tensor.transpose(self.lm_head_weights, -2, -1)
 
         # Model parallel
         self.model_parallel = False
@@ -148,20 +142,14 @@ class TtT5ForConditionalGeneration(nn.Module):
         # shift inputs to the right
         if is_torch_fx_proxy(input_ids):
             # Item assignment is not supported natively for proxies.
-            shifted_input_ids = torch.full(
-                input_ids.shape[:-1] + (1,), decoder_start_token_id
-            )
-            shifted_input_ids = torch.cat(
-                [shifted_input_ids, input_ids[..., :-1]], dim=-1
-            )
+            shifted_input_ids = torch.full(input_ids.shape[:-1] + (1,), decoder_start_token_id)
+            shifted_input_ids = torch.cat([shifted_input_ids, input_ids[..., :-1]], dim=-1)
         else:
             shifted_input_ids = input_ids.new_zeros(input_ids.shape)
             shifted_input_ids[..., 1:] = input_ids[..., :-1].clone()
             shifted_input_ids[..., 0] = decoder_start_token_id
 
-        assert (
-            pad_token_id is not None
-        ), "self.model.config.pad_token_id has to be defined."
+        assert pad_token_id is not None, "self.model.config.pad_token_id has to be defined."
         # replace possible -100 values in labels by `pad_token_id`
         shifted_input_ids.masked_fill_(shifted_input_ids == -100, pad_token_id)
 
@@ -187,9 +175,7 @@ class TtT5ForConditionalGeneration(nn.Module):
         return_dict=None,
     ):  # Optional[bool]
         use_cache = use_cache if use_cache is not None else self.config_use_cache
-        return_dict = (
-            return_dict if return_dict is not None else self.config_use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config_use_return_dict
 
         # FutureWarning: head_mask was separated into two input args - head_mask, decoder_head_mask
         if head_mask is not None and decoder_head_mask is None:
@@ -224,11 +210,7 @@ class TtT5ForConditionalGeneration(nn.Module):
         # if self.model_parallel:
         #     torch.cuda.set_device(self.decoder.first_device)
 
-        if (
-            labels is not None
-            and decoder_input_ids is None
-            and decoder_inputs_embeds is None
-        ):
+        if labels is not None and decoder_input_ids is None and decoder_inputs_embeds is None:
             # get decoder inputs from shifting lm labels to the right
             logger.debug(f"_shift_right(labels)")
             decoder_input_ids = self._shift_right(labels)
@@ -307,12 +289,8 @@ class TtT5ForConditionalGeneration(nn.Module):
         )
 
 
-def _t5_for_conditional_generation(
-    config, state_dict, device
-) -> TtT5ForConditionalGeneration:
-    return TtT5ForConditionalGeneration(
-        config=config, state_dict=state_dict, device=device
-    )
+def _t5_for_conditional_generation(config, state_dict, device) -> TtT5ForConditionalGeneration:
+    return TtT5ForConditionalGeneration(config=config, state_dict=state_dict, device=device)
 
 
 def t5_small_for_conditional_generation(device) -> TtT5ForConditionalGeneration:
@@ -344,9 +322,7 @@ def t5_base_for_conditional_generation(device) -> TtT5ForConditionalGeneration:
 
 
 def flan_t5_small_for_conditional_generation(device) -> TtT5ForConditionalGeneration:
-    hf_reference_model = T5ForConditionalGeneration.from_pretrained(
-        "google/flan-t5-small"
-    )
+    hf_reference_model = T5ForConditionalGeneration.from_pretrained("google/flan-t5-small")
     hf_reference_model.eval()
 
     generation_config = hf_reference_model.generation_config

@@ -10,7 +10,7 @@ import tt_lib as ttl
 from tt_lib.utils import (
     is_close,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0
 
 from models.utility_functions import comp_pcc, pad_by_zero
 
@@ -18,16 +18,12 @@ shapes = [[1, 1, 32, 32], [1, 1, 32, 128]]
 
 
 # still have to skip b/c of very low PCC in WH B0
-@skip_for_wormhole_b0
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("shape", shapes)
 def test_softmax(shape, device):
     torch.manual_seed(1234)
     x = torch.randn(shape).bfloat16().float()
-    xt = (
-        ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16)
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    xt = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
     xtt = ttl.operations.primary.softmax_in_place(xt)
 
     tt_got_back = xtt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
@@ -46,11 +42,7 @@ def test_layernorm(shape, device):
     gamma = torch.randn([shape[-1]]).bfloat16().float()
     beta = torch.randn([shape[-1]]).bfloat16().float()
 
-    xt = (
-        ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16)
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    xt = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
     gammat = pad_by_zero(gamma, device)[0]
     betat = pad_by_zero(beta, device)[0]
 

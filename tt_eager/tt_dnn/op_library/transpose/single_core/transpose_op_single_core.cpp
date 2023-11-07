@@ -8,7 +8,6 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 
-using uint32_t = std::uint32_t;
 using namespace tt::constants;
 
 namespace tt {
@@ -197,10 +196,6 @@ std::pair< std::vector<uint32_t>, std::vector<uint32_t> > get_runtime_args_hc(co
 }
 
 operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor &output) {
-    std::cout << "Transopose HC single core " << std::endl;
-
-
-
     // 16 is size of face row
     uint32_t sub_tile_line_bytes = 16 * a.element_size();
 
@@ -311,7 +306,7 @@ std::pair< std::vector<uint32_t>, std::vector<uint32_t> > get_runtime_args_cn(co
     uint32_t NCHtWt = num_tensor_tiles;
 
     std::vector<uint32_t> reader_runtime_args =  {input_tensor.buffer()->address(),
-                                                N, C, Ht, Wt, HtWt, CHtWt, NCHtWt};
+                                                N, C, HtWt, CHtWt - HtWt, NCHtWt - HtWt};
 
     std::vector<uint32_t> writer_runtime_args = {output_tensor.buffer()->address(),
             num_tensor_tiles, 0};

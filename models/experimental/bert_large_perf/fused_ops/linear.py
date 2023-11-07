@@ -40,13 +40,11 @@ def Linear(
         # )
 
     def linear_(activation):
-        weight_T = tensor.transpose(weight)
+        weight_T = tensor.transpose(weight, -2, -1)
         output = tensor.matmul(activation, weight_T)
 
         if bias is not None:
-            output_plus_bias = tensor.bcast(
-                output, bias, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H
-            )
+            output_plus_bias = tensor.bcast(output, bias, tensor.BcastOpMath.ADD, tensor.BcastOpDim.H)
             return output_plus_bias
 
         return output

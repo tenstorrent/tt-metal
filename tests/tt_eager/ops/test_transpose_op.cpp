@@ -38,7 +38,7 @@ int main(int argc, char **argv) {
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = tt::numpy::random::random(shape).to(Layout::TILE).to(device);;
 
-        tt_metal::Tensor c = tt_metal::transpose(a);
+        tt_metal::Tensor c = tt_metal::transpose(a, -2, -1);
 
         tt_metal::Tensor d = c.cpu();
 

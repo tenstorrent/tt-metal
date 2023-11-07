@@ -9,11 +9,9 @@ void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
     uint32_t N = get_arg_val<uint32_t>(1);
     uint32_t C = get_arg_val<uint32_t>(2);
-    uint32_t Ht = get_arg_val<uint32_t>(3);
-    uint32_t Wt = get_arg_val<uint32_t>(4);
-    uint32_t HtWt = get_arg_val<uint32_t>(5);
-    uint32_t CHtWt = get_arg_val<uint32_t>(6);
-    uint32_t NCHtWt = get_arg_val<uint32_t>(7);
+    uint32_t HtWt = get_arg_val<uint32_t>(3);
+    uint32_t batch_step = get_arg_val<uint32_t>(4); // CHtWt - HtWt
+    uint32_t channel_step = get_arg_val<uint32_t>(5); // NCHtWt - HtWt
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
 
@@ -34,20 +32,16 @@ void kernel_main() {
     uint32_t i = 0;
     for (uint32_t c = 0; c < C; c++) {
         for (uint32_t n = 0; n < N; n++) {
-            for (uint32_t h = 0; h < Ht; h++) {
-                for (uint32_t w = 0; w < Wt; w++) {
-                    cb_reserve_back(cb_id_in0, onetile);
-                    uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-                    noc_async_read_tile(i, s, l1_write_addr);
-                    noc_async_read_barrier();
-                    cb_push_back(cb_id_in0, onetile);
-                    i++;
-                }
+            for (uint32_t hw = 0; hw < HtWt; hw++) {
+                cb_reserve_back(cb_id_in0, onetile);
+                uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+                noc_async_read_tile(i, s, l1_write_addr);
+                noc_async_read_barrier();
+                cb_push_back(cb_id_in0, onetile);
+                i++;
             }
-            i -= HtWt;
-            i += CHtWt;
+            i += batch_step;
         }
-        i -= NCHtWt;
-        i+= HtWt;
+        i -= channel_step;
     }
 }

@@ -142,11 +142,11 @@ class TtAttention(nn.Module):
             )
 
         xq = torch_to_tt_tensor_rm(xq, self.device)
-        query = tt_lib.tensor.transpose_hc(xq)
-        key = tt_lib.tensor.transpose_hc(key)
-        value = tt_lib.tensor.transpose_hc(value)
+        query = tt_lib.tensor.transpose(xq, 1, -2)
+        key = tt_lib.tensor.transpose(key, 1, -2)
+        value = tt_lib.tensor.transpose(value, 1, -2)
 
-        key = tt_lib.tensor.transpose(key)
+        key = tt_lib.tensor.transpose(key, -2, -1)
         scores = tt_lib.tensor.bmm(query, key)
         scores = tt_lib.tensor.mul_unary(scores, self.scale)
 
@@ -166,7 +166,7 @@ class TtAttention(nn.Module):
 
         output = tt_lib.tensor.bmm(scores, value)  # (bs, n_local_heads, slen, head_dim)
 
-        output = tt_lib.tensor.transpose_hc(output)
+        output = tt_lib.tensor.transpose(output, 1, -2)
 
         output = fallback_ops.reshape(output, 1, bsz, seqlen, -1)
         return self.wo(output)

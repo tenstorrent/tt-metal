@@ -16,7 +16,7 @@ import tt_lib as ttl
 
 from tt_lib.utils import _nearest_32
 from models.utility_functions import comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0, skip_for_wormhole_b0
+from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
 
 TILE_HEIGHT = TILE_WIDTH = 32
 
@@ -24,7 +24,8 @@ TILE_HEIGHT = TILE_WIDTH = 32
 def shape_padded(shape):
     return [shape[0], shape[1], _nearest_32(shape[2]), _nearest_32(shape[3])]
 
-@skip_for_wormhole_b0
+
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "shapes",
     (
@@ -48,9 +49,7 @@ def test_run_fully_connected(shapes, dtype, has_bias, device):
     act = torch.randn(act_shape, dtype=torch.bfloat16).float()
     weights = torch.randn(weight_shape, dtype=torch.bfloat16).float()
 
-    ttact = ttl.tensor.Tensor(
-        torch.flatten(act).tolist(), act_shape, dtype, ttl.tensor.Layout.ROW_MAJOR
-    )
+    ttact = ttl.tensor.Tensor(torch.flatten(act).tolist(), act_shape, dtype, ttl.tensor.Layout.ROW_MAJOR)
     ttweight = ttl.tensor.Tensor(
         torch.flatten(weights).tolist(),
         weight_shape,
@@ -74,9 +73,9 @@ def test_run_fully_connected(shapes, dtype, has_bias, device):
         ## with bias
         ## NOTE: bias is always unpadded, 1d row major
         bias = torch.randn(bias_shape, dtype=torch.bfloat16).float()
-        ttbias = ttl.tensor.Tensor(
-            torch.flatten(bias).tolist(), bias_shape, dtype, ttl.tensor.Layout.ROW_MAJOR
-        ).to(device)
+        ttbias = ttl.tensor.Tensor(torch.flatten(bias).tolist(), bias_shape, dtype, ttl.tensor.Layout.ROW_MAJOR).to(
+            device
+        )
         out = ttl.tensor.fully_connected(ttact, ttweight, ttbias)
     else:
         ## without bias
@@ -89,9 +88,7 @@ def test_run_fully_connected(shapes, dtype, has_bias, device):
     out_pytorch = out.to_torch()
 
     ## reference
-    golden_pytorch = torch.nn.functional.linear(
-        act, torch.transpose(weights, 2, 3)[0][0], bias
-    )
+    golden_pytorch = torch.nn.functional.linear(act, torch.transpose(weights, 2, 3)[0][0], bias)
 
     ## test for equivalance
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)

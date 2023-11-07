@@ -19,9 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_allclose_and_pcc,
     comp_pcc,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.common import (
-    is_wormhole_b0,
-)
+from models.utility_functions import is_wormhole_b0
 from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_act_tensor,
     create_conv_act_tensor_special,
@@ -58,7 +56,9 @@ def test_resnet50_first_conv(
     compute_grid_size = device.compute_with_storage_grid_size()
     is_e75_grid_size = (compute_grid_size.x * compute_grid_size.y) == 88
     if N == 8 and is_e75_grid_size:
-        pytest.skip(f"Skipping batch 8 on E75 because expected grid size is 12x9 but E75 grid size is {compute_grid_size}")
+        pytest.skip(
+            f"Skipping batch 8 on E75 because expected grid size is 12x9 but E75 grid size is {compute_grid_size}"
+        )
     if N != 8:
         pytest.skip("Skipping non-batch 8 tests due to potential non-determinism")
     if N == 8 and is_wormhole_b0():

@@ -19,9 +19,7 @@ class TtLeNet5(nn.Module):
 
         conv1_weight = state_dict["layer1.0.weight"]
         conv1_bias = state_dict["layer1.0.bias"]
-        self.conv1 = fallback_ops.Conv2d(
-            conv1_weight, conv1_bias, 1, 6, kernel_size=5, stride=1, padding=0
-        )
+        self.conv1 = fallback_ops.Conv2d(conv1_weight, conv1_bias, 1, 6, kernel_size=5, stride=1, padding=0)
 
         batch_norm1_weight = state_dict["layer1.1.weight"]
         batch_norm1_bias = state_dict["layer1.1.bias"]
@@ -47,9 +45,7 @@ class TtLeNet5(nn.Module):
 
         conv2_weight = state_dict["layer2.0.weight"]
         conv2_bias = state_dict["layer2.0.bias"]
-        self.conv2 = fallback_ops.Conv2d(
-            conv2_weight, conv2_bias, 6, 16, kernel_size=5, stride=1, padding=0
-        )
+        self.conv2 = fallback_ops.Conv2d(conv2_weight, conv2_bias, 6, 16, kernel_size=5, stride=1, padding=0)
 
         batch_norm2_weight = state_dict["layer2.1.weight"]
         batch_norm2_bias = state_dict["layer2.1.bias"]
@@ -136,7 +132,7 @@ class TtLeNet5(nn.Module):
         )  # HOST (fallback)
 
         # fc
-        weight_T = tt_lib.tensor.transpose(self.fc_weights)
+        weight_T = tt_lib.tensor.transpose(self.fc_weights, -2, -1)
         output = tt_lib.tensor.matmul(out, weight_T)
         out = tt_lib.tensor.bcast(
             output,
@@ -148,7 +144,7 @@ class TtLeNet5(nn.Module):
         out = self.relu2(out)
 
         # fc1
-        weight_T = tt_lib.tensor.transpose(self.fc1_weights)
+        weight_T = tt_lib.tensor.transpose(self.fc1_weights, -2, -1)
         output = tt_lib.tensor.matmul(out, weight_T)
         out = tt_lib.tensor.bcast(
             output,
@@ -161,7 +157,7 @@ class TtLeNet5(nn.Module):
         out = self.relu2(out)
 
         # fc2
-        weight_T = tt_lib.tensor.transpose(self.fc2_weights)
+        weight_T = tt_lib.tensor.transpose(self.fc2_weights, -2, -1)
         output = tt_lib.tensor.matmul(out, weight_T)
         out = tt_lib.tensor.bcast(
             output,

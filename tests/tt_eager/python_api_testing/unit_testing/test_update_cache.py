@@ -7,7 +7,7 @@ import pytest
 
 import tt_lib as ttl
 from models.utility_functions import nearest_32
-from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0
 
 
 @pytest.mark.parametrize("head_dim", [64])
@@ -31,7 +31,7 @@ class TestUpdateCache:
         eq = torch.equal(tt_got_back, cache)
         assert eq
 
-    @skip_for_wormhole_b0
+    @skip_for_wormhole_b0()
     @pytest.mark.parametrize("cache_idx", [0, 1, 127, 128, 1024, 1057])
     def test_update_cache_decode(self, head_dim, max_seq_len, num_users, cache_idx, device):
         input_shape = [num_users, 1, 1, head_dim]
@@ -51,7 +51,7 @@ class TestUpdateCache:
         eq = torch.equal(tt_got_back, cache)
         assert eq
 
-    @skip_for_wormhole_b0
+    @skip_for_wormhole_b0()
     @pytest.mark.parametrize("cache_idx", [0, 1, 127, 128, 1024, 1057])
     def test_update_cache_and_slice_decode(self, head_dim, max_seq_len, num_users, cache_idx, device):
         input_shape = [num_users, 1, 1, head_dim]
@@ -70,7 +70,7 @@ class TestUpdateCache:
             [0, 0, 0, 0],
             [num_users - 1, 0, nearest_32(cache_idx + 1) - 1, head_dim - 1],
         )
-        cachett_t = ttl.tensor.transpose(cachett)
+        cachett_t = ttl.tensor.transpose(cachett, -2, -1)
         cache = cache[:, :, : nearest_32(cache_idx + 1), :]
         cache_t = torch.transpose(cache, -2, -1)
 

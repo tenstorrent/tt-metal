@@ -426,8 +426,6 @@ but in general retaining the data.
 
 .. autofunction:: tt_lib.tensor.transpose
 
-.. autofunction:: tt_lib.tensor.transpose_hc
-
 .. autofunction:: tt_lib.tensor.permute
 
 .. autofunction:: tt_lib.tensor.tilize

@@ -23,16 +23,10 @@ class TtMultiHeadSelfAttention(nn.Module):
         self.device = device
 
         if self.dim % self.n_heads != 0:
-            raise ValueError(
-                f"self.n_heads: {self.n_heads} must divide self.dim: {self.dim} evenly"
-            )
+            raise ValueError(f"self.n_heads: {self.n_heads} must divide self.dim: {self.dim} evenly")
 
-        self.query_weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.attention.q_lin.weight"], self.device
-        )
-        self.query_bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.attention.q_lin.bias"], self.device
-        )
+        self.query_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.q_lin.weight"], self.device)
+        self.query_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.q_lin.bias"], self.device)
         self.query_linear = TtLinear(
             self.query_weight.shape()[-1],
             self.query_weight.shape()[-2],
@@ -40,12 +34,8 @@ class TtMultiHeadSelfAttention(nn.Module):
             self.query_bias,
         )
 
-        self.key_weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.attention.k_lin.weight"], self.device
-        )
-        self.key_bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.attention.k_lin.bias"], self.device
-        )
+        self.key_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.k_lin.weight"], self.device)
+        self.key_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.k_lin.bias"], self.device)
         self.key_linear = TtLinear(
             self.key_weight.shape()[-1],
             self.key_weight.shape()[-2],
@@ -53,12 +43,8 @@ class TtMultiHeadSelfAttention(nn.Module):
             self.key_bias,
         )
 
-        self.value_weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.attention.v_lin.weight"], self.device
-        )
-        self.value_bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.attention.v_lin.bias"], self.device
-        )
+        self.value_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.v_lin.weight"], self.device)
+        self.value_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.v_lin.bias"], self.device)
         self.value_linear = TtLinear(
             self.value_weight.shape()[-1],
             self.value_weight.shape()[-2],
@@ -66,12 +52,8 @@ class TtMultiHeadSelfAttention(nn.Module):
             self.value_bias,
         )
 
-        self.out_weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.attention.out_lin.weight"], self.device
-        )
-        self.out_bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.attention.out_lin.bias"], self.device
-        )
+        self.out_weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.out_lin.weight"], self.device)
+        self.out_bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.attention.out_lin.bias"], self.device)
         self.out_linear = TtLinear(
             self.out_weight.shape()[-1],
             self.out_weight.shape()[-2],
@@ -106,10 +88,10 @@ class TtMultiHeadSelfAttention(nn.Module):
 
         def shape(x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
             x = fallback_ops.reshape(x, bs, -1, self.n_heads, dim_per_head)
-            return tt_lib.tensor.transpose_hc(x)
+            return tt_lib.tensor.transpose(x, 1, -2)
 
         def unshape(x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
-            x = tt_lib.tensor.transpose_hc(x)
+            x = tt_lib.tensor.transpose(x, 1, -2)
             x = fallback_ops.reshape(x, 1, bs, -1, self.n_heads * dim_per_head)
             return x
 
@@ -122,7 +104,7 @@ class TtMultiHeadSelfAttention(nn.Module):
         dim_per_head_tensor = tt_lib.tensor.recip(dim_per_head_tensor)
 
         q = tt_lib.tensor.mul(q, dim_per_head_tensor)
-        scores = tt_lib.tensor.bmm(q, tt_lib.tensor.transpose(k))
+        scores = tt_lib.tensor.bmm(q, tt_lib.tensor.transpose(k, -2, -1))
         score_value = self.get_min(scores)
         scores = tt_to_torch_tensor(scores)
         mask = tt_to_torch_tensor(mask)

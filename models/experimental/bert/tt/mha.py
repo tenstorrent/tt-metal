@@ -57,7 +57,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             )
 
             # N, 128, 2, 64
-            transposed = ttl.tensor.transpose_hc(reshaped_unt)
+            transposed = ttl.tensor.transpose(reshaped_unt, 1, -2)
             # N, 2, 128, 64
             retilized = ttl.tensor.tilize(transposed)
             return retilized
@@ -74,11 +74,9 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 
             outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
             """
-            ctx = ttl.tensor.transpose_hc(x)
+            ctx = ttl.tensor.transpose(x, 1, -2)
             ushape = ctx.shape()
-            reshaped = ttl.tensor.reshape(
-                ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3]
-            )
+            reshaped = ttl.tensor.reshape(ctx, ushape[0], 1, ushape[1], ushape[2] * ushape[3])
             retval = ttl.tensor.tilize(reshaped)
             return retval
 
@@ -98,7 +96,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
         Q_heads = make_attention_heads(Q)
         K_heads = make_attention_heads(K)
         V_heads = make_attention_heads(V)
-        K_T_heads = ttl.tensor.transpose(K_heads)
+        K_T_heads = ttl.tensor.transpose(K_heads, -2, -1)
 
         qkt = ttl.tensor.bmm(Q_heads, K_T_heads)
 
@@ -108,9 +106,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
             C,
             H,
             W,
-        ) = (
-            qkt.shape()
-        )  # Need to reshape right now since multi-C not supported for broadcast yet
+        ) = qkt.shape()  # Need to reshape right now since multi-C not supported for broadcast yet
         new_shape = [N, 1, C * H, W]
         ttl.tensor.reshape(qkt, *new_shape)
         attention_score_input = multiply_by_sqrt_hidden_dim(qkt)
@@ -122,9 +118,7 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
                 ttl.tensor.BcastOpDim.H,
             )
         attention_scores = softmax(attention_score_input)
-        ttl.tensor.reshape(
-            attention_scores, N, C, H, W
-        )  # Reshape back to original shape
+        ttl.tensor.reshape(attention_scores, N, C, H, W)  # Reshape back to original shape
 
         # Apply attention to value matrix
         weighted_activation = ttl.tensor.bmm(attention_scores, V_heads)
@@ -138,24 +132,12 @@ def mha(qw, qb, kw, kb, vw, vb, hidden_dim, num_heads, device):
 class TtMultiHeadAttentionModel(torch.nn.Module):
     def __init__(self, config, encoder_idx, state_dict, device):
         super().__init__()
-        qw = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.weight"]
-        )
-        qb = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.bias"]
-        )
-        kw = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.key.weight"]
-        )
-        kb = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.key.bias"]
-        )
-        vw = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.value.weight"]
-        )
-        vb = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.value.bias"]
-        )
+        qw = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.weight"])
+        qb = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.query.bias"])
+        kw = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.key.weight"])
+        kb = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.key.bias"])
+        vw = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.value.weight"])
+        vb = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.attention.self.value.bias"])
 
         # Hidden dim
         hidden_dim = qw.shape[-1]
@@ -232,14 +214,10 @@ class PytorchMultiHeadAttentionModel(torch.nn.Module):
         return result
 
 
-def run_mha_inference(
-    device, model_version, batch, seq_len, pcc, model_location_generator
-):
+def run_mha_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
-        model_name, torchscript=False
-    )
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
     tt_mha_model = TtMultiHeadAttentionModel(
         hugging_face_reference_model.config,
         0,
@@ -250,10 +228,7 @@ def run_mha_inference(
 
     # Prepare input
     torch.manual_seed(0)
-    mha_input = (
-        torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size)
-        * 2
-    ) - 1
+    mha_input = (torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size) * 2) - 1
 
     pytorch_out = pytorch_mha_model(mha_input.squeeze(1)).unsqueeze(1)
 
@@ -290,11 +265,7 @@ def run_mha_inference(
         ("phiyodr/bert-large-finetuned-squad2", 1, 384, 0.99),
     ),
 )
-def test_mha_inference(
-    device, model_version, batch, seq_len, pcc, model_location_generator
-):
+def test_mha_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
     # enable_persistent_kernel_cache()
 
-    run_mha_inference(
-        device, model_version, batch, seq_len, pcc, model_location_generator
-    )
+    run_mha_inference(device, model_version, batch, seq_len, pcc, model_location_generator)

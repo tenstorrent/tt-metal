@@ -56,9 +56,7 @@ class TtTrOCRAttention(nn.Module):
         self.k_proj_bias = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.k_proj.bias"], self.device, put_on_device=False
         )
-        self.k_proj = Linear(
-            self.kdim, self.embed_dim, self.k_proj_weight, self.k_proj_bias
-        )
+        self.k_proj = Linear(self.kdim, self.embed_dim, self.k_proj_weight, self.k_proj_bias)
 
         self.v_proj_weight = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.v_proj.weight"],
@@ -68,9 +66,7 @@ class TtTrOCRAttention(nn.Module):
         self.v_proj_bias = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.v_proj.bias"], self.device, put_on_device=False
         )
-        self.v_proj = Linear(
-            self.vdim, self.embed_dim, self.v_proj_weight, self.v_proj_bias
-        )
+        self.v_proj = Linear(self.vdim, self.embed_dim, self.v_proj_weight, self.v_proj_bias)
 
         self.q_proj_weight = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.q_proj.weight"],
@@ -80,9 +76,7 @@ class TtTrOCRAttention(nn.Module):
         self.q_proj_bias = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.q_proj.bias"], self.device, put_on_device=False
         )
-        self.q_proj = Linear(
-            self.embed_dim, self.embed_dim, self.q_proj_weight, self.q_proj_bias
-        )
+        self.q_proj = Linear(self.embed_dim, self.embed_dim, self.q_proj_weight, self.q_proj_bias)
 
         self.out_proj_weight = torch_to_tt_tensor_rm(
             state_dict[f"{base_address}.out_proj.weight"],
@@ -94,15 +88,11 @@ class TtTrOCRAttention(nn.Module):
             self.device,
             put_on_device=False,
         )
-        self.out_proj = Linear(
-            embed_dim, embed_dim, self.out_proj_weight, self.out_proj_bias
-        )
+        self.out_proj = Linear(embed_dim, embed_dim, self.out_proj_weight, self.out_proj_bias)
 
     def _shape(self, tensor: tt_lib.tensor.Tensor, seq_len: int, bsz: int):
-        tensor = fallback_ops.reshape(
-            tensor, bsz, seq_len, self.num_heads, self.head_dim
-        )
-        tensor = tt_lib.tensor.transpose_hc(tensor)
+        tensor = fallback_ops.reshape(tensor, bsz, seq_len, self.num_heads, self.head_dim)
+        tensor = tt_lib.tensor.transpose(tensor, 1, -2)
         return tensor
 
     def forward(
@@ -113,19 +103,13 @@ class TtTrOCRAttention(nn.Module):
         attention_mask: Optional[tt_lib.tensor.Tensor] = None,
         layer_head_mask: Optional[tt_lib.tensor.Tensor] = None,
         output_attentions: bool = False,
-    ) -> Tuple[
-        tt_lib.tensor.Tensor,
-        Optional[tt_lib.tensor.Tensor],
-        Optional[Tuple[tt_lib.tensor.Tensor]],
-    ]:
+    ) -> Tuple[tt_lib.tensor.Tensor, Optional[tt_lib.tensor.Tensor], Optional[Tuple[tt_lib.tensor.Tensor]],]:
         """Input shape: Batch x Time x Channel"""
 
         # if key_value_states are provided this layer is used as a cross-attention layer
         # for the decoder
         if attention_mask != None:
-            attention_mask = torch_to_tt_tensor_rm(
-                attention_mask, self.device, put_on_device=False
-            )
+            attention_mask = torch_to_tt_tensor_rm(attention_mask, self.device, put_on_device=False)
 
         is_cross_attention = key_value_states is not None
         bsz, tgt_len, embed_dim = hidden_states.shape()[1:]
@@ -171,7 +155,7 @@ class TtTrOCRAttention(nn.Module):
         value_states = fallback_ops.reshape(value_states, *proj_shape)
 
         src_len = key_states.shape()[2]
-        key_states = tt_lib.tensor.transpose(key_states)
+        key_states = tt_lib.tensor.transpose(key_states, -2, -1)
         attn_weights = tt_lib.tensor.bmm(query_states, key_states)
 
         if attn_weights.shape() != [1, bsz * self.num_heads, tgt_len, src_len]:
@@ -186,16 +170,12 @@ class TtTrOCRAttention(nn.Module):
                     f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {attention_mask.shape()}"
                 )
 
-            attn_weights = fallback_ops.reshape(
-                attn_weights, bsz, self.num_heads, tgt_len, src_len
-            )
+            attn_weights = fallback_ops.reshape(attn_weights, bsz, self.num_heads, tgt_len, src_len)
 
             if attention_mask == None:
                 attn_weights = tt_lib.tensor.add(attn_weights, attention_mask)
 
-            attn_weights = fallback_ops.reshape(
-                attn_weights, 1, bsz * self.num_heads, tgt_len, src_len
-            )
+            attn_weights = fallback_ops.reshape(attn_weights, 1, bsz * self.num_heads, tgt_len, src_len)
 
         attn_weights = fallback_ops.softmax(attn_weights, dim=-1)
 
@@ -205,26 +185,18 @@ class TtTrOCRAttention(nn.Module):
                     f"Head mask for a single layer should be of size {(self.num_heads,)}, but is"
                     f" {layer_head_mask.size()}"
                 )
-            attn_weights = fallback_ops.reshape(
-                layer_head_mask, 1, -1, 1, 1
-            ) * fallback_ops.reshape(
+            attn_weights = fallback_ops.reshape(layer_head_mask, 1, -1, 1, 1) * fallback_ops.reshape(
                 attn_weights, bsz, self.num_heads, tgt_len, src_len
             )
-            attn_weights = fallback_ops.reshape(
-                attn_weights, bsz * self.num_heads, tgt_len, src_len
-            )
+            attn_weights = fallback_ops.reshape(attn_weights, bsz * self.num_heads, tgt_len, src_len)
 
         if output_attentions:
             # this operation is a bit awkward, but it's required to
             # make sure that attn_weights keeps its gradient.
             # In order to do so, attn_weights have to be reshaped
             # twice and have to be reused in the following
-            attn_weights_reshaped = fallback_ops.reshape(
-                attn_weights, bsz, self.num_heads, tgt_len, src_len
-            )
-            attn_weights = fallback_ops.reshape(
-                attn_weights_reshaped, bsz * self.num_heads, tgt_len, src_len
-            )
+            attn_weights_reshaped = fallback_ops.reshape(attn_weights, bsz, self.num_heads, tgt_len, src_len)
+            attn_weights = fallback_ops.reshape(attn_weights_reshaped, bsz * self.num_heads, tgt_len, src_len)
         else:
             attn_weights_reshaped = None
 
@@ -236,10 +208,8 @@ class TtTrOCRAttention(nn.Module):
                 f" {attn_output.shape()}"
             )
 
-        attn_output = fallback_ops.reshape(
-            attn_output, bsz, self.num_heads, tgt_len, self.head_dim
-        )
-        attn_output = tt_lib.tensor.transpose_hc(attn_output)
+        attn_output = fallback_ops.reshape(attn_output, bsz, self.num_heads, tgt_len, self.head_dim)
+        attn_output = tt_lib.tensor.transpose(attn_output, 1, -2)
         attn_output = fallback_ops.reshape(attn_output, 1, bsz, tgt_len, embed_dim)
 
         attn_output = self.out_proj(attn_output)
