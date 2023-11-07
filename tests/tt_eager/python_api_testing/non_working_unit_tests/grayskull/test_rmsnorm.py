@@ -97,7 +97,7 @@ test_sweep_args = [
         4157231,
     ),
     (
-        [[1, 7, 224, 192], (1, 1, 1, 192), (1, 1, 1, 192)],
+        [(1, 7, 224, 192), (1, 1, 1, 192), (1, 1, 1, 192)],
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B],
         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
         [

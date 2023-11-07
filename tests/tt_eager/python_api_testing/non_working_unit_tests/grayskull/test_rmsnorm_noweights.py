@@ -51,7 +51,7 @@ def run_rmsnorm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config
 
 test_sweep_args = [
     (
-        [[1, 6, 256, 160]],
+        [(1, 6, 256, 160)],
         [ttl.tensor.DataType.BFLOAT8_B],
         [ttl.tensor.Layout.TILE],
         [
@@ -61,17 +61,17 @@ test_sweep_args = [
         9767382,
     ),
     (
-        [[3, 10, 192, 64]],
+        [(3, 10, 192, 64)],
         [ttl.tensor.DataType.BFLOAT8_B],
         [ttl.tensor.Layout.TILE],
         [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         17493725,
     ),
     (
-        [[5, 11, 96, 128]],
+        [(5, 11, 96, 128)],
         [ttl.tensor.DataType.BFLOAT8_B],
         [ttl.tensor.Layout.TILE],
         [
@@ -81,7 +81,7 @@ test_sweep_args = [
         5018076,
     ),
     (
-        [[5, 11, 96, 128]],
+        [(5, 11, 96, 128)],
         [ttl.tensor.DataType.BFLOAT8_B],
         [ttl.tensor.Layout.TILE],
         [
