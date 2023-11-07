@@ -316,14 +316,8 @@ namespace op_profiler {
                 {
 #if defined(PROFILER)
                     TT_ASSERT (opStack.size() > 0, "Something is wrong, cannot append meta data, op stack is empty");
-                    string noDashMetaData = "";
-                    for (auto &ch : metaData)
-                    {
-                        TT_ASSERT (opStack.size() > 0, "Something is wrong, cannot append meta data, op stack is empty");
-                        string noDashMetaData = replace_comma(metaData);
-                        std::replace( noDashMetaData.begin(), noDashMetaData.end(), '-', '_');
-                        get_op_data().metaDataVector.push_back(noDashMetaData);
-                    }
+                    string noDashMetaData = replace_comma(metaData);
+                    std::replace( noDashMetaData.begin(), noDashMetaData.end(), '-', '_');
                     get_op_data().metaDataVector.push_back(noDashMetaData);
 #endif
                 }

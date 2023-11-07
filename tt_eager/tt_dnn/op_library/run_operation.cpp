@@ -91,6 +91,7 @@ void setup_profiler(const HostOperation& operation, const std::vector<Tensor>& i
     if (profiler_info.preferred_name.has_value()) {
         op_profiler::set_preferred_name(profiler_info.preferred_name.value());
     }
+    op_profiler::append_meta_data(fmt::format("{}", operation.attributes()));
 }
 
 void setup_profiler(const DeviceOperation& operation, const std::vector<Tensor>& input_tensors, const Program& program) {
@@ -103,6 +104,7 @@ void setup_profiler(const DeviceOperation& operation, const std::vector<Tensor>&
     }
 
     op_profiler::append_math_fidelities(program);
+    op_profiler::append_meta_data(fmt::format("{}", operation.attributes()));
 }
 
 std::vector<Tensor> run_without_program_cache(
