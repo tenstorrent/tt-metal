@@ -7,7 +7,7 @@ from loguru import logger
 import torch
 import pytest
 import tt_lib
-from models.utility_functions import comp_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from models.demos.resnet.tt.metalResnetBlock50 import (
     compute_conv_output_shape,
     resnet50_1x1_conv_as_matmul,
@@ -386,10 +386,16 @@ hardcoded_conv_blocking_and_parallelization_config = {
         (1568, 256): [256, 160, 8, 32, 160, 32, 160, (10, 8), 160, 32],
         (416, 512): [512, 64, 8, 64, 64, 64, 64, (7, 8), 64, 64],
     },
+    16: {
+        (50176, 64): [64 * 3, 512, 1, 64, 128, 64, 512, (12, 9), 512, 64],
+        (12544, 128): [128, 128, 1, 128, 64, 128, 128, (12, 9), 128, 128],
+        (3136, 256): [256, 320, 8, 32, 160, 32, 320, (10, 8), 320, 32],
+        (800, 512): [512, 128, 8, 64, 128, 64, 128, (7, 8), 128, 64],
+    },
 }
 
 
-@pytest.mark.parametrize("N", (8,))
+@pytest.mark.parametrize("N", (8, 16), ids=["batch_8", "batch_16"])
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
@@ -681,7 +687,8 @@ def test_resnet50_conv(
         if activations_dtype == tt_lib.tensor.DataType.BFLOAT8_B and (K == 256 or K == 512):
             pytest.xfail("PCC of output baseline is slightly lower than with new conv. DEBUG!")
         else:
-            assert torch.equal(out_result_baseline, out_result), "Output should be identical to old conv!"
+            eq = torch.equal(out_result_baseline, out_result)
+            assert eq, "Output should be identical to old conv!"
             assert passing_pcc
             assert passing_pcc == passing_pcc_baseline, "Output pcc should be identical to old conv pcc!"
             logger.info(f"Output pcc passes and matches old conv pcc")

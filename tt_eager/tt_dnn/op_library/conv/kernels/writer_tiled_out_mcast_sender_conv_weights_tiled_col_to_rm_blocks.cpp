@@ -290,9 +290,7 @@ void kernel_main() {
                                 l1_read_addr += tile_nbytes;
                             } else {
                                 //DPRINT << "out_tile_id - " << out_tile_id << ENDL();
-                                uint64_t out_tile_noc_addr = get_noc_addr(out_tile_id, s);
-                                //DPRINT << "out_tile_id=" << out_tile_id << ENDL();
-                                noc_async_write(l1_read_addr, out_tile_noc_addr, tile_nbytes);
+                                s.noc_async_write_tile(out_tile_id, l1_read_addr);
                                 l1_read_addr += tile_nbytes;
                                 out_tile_id += out_next_tile_stride_w;
                             }
