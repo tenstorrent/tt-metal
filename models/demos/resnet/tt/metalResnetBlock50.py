@@ -604,91 +604,91 @@ hardcoded_matmul_config_conv = {
             mcast_in0=False,
         ),
         (12544, 512, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(10, 8),
+            compute_with_storage_grid_size=(11, 8),
             in0_block_w=2,
-            out_subblock_h=8,
+            out_subblock_h=4,
             out_subblock_w=1,
-            per_core_M=40,
+            per_core_M=36,
             per_core_N=1,
             transpose_mcast=True,
             fused_activation=None,
         ),
         (3136, 256, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(10, 8),
+            compute_with_storage_grid_size=(11, 8),
             in0_block_w=1,
-            out_subblock_h=2,
+            out_subblock_h=1,
             out_subblock_w=4,
-            per_core_M=10,
+            per_core_M=9,
             per_core_N=4,
             transpose_mcast=True,
             fused_activation=None,
         ),
         (3136, 1024, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(10, 8),
+            compute_with_storage_grid_size=(11, 8),
             in0_block_w=4,
-            out_subblock_h=5,
+            out_subblock_h=3,
             out_subblock_w=1,
-            per_core_M=10,
+            per_core_M=9,
             per_core_N=1,
             transpose_mcast=True,
             fused_activation=None,
         ),
         (3136, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(10, 8),
+            compute_with_storage_grid_size=(11, 8),
             in0_block_w=4,
-            out_subblock_h=2,
+            out_subblock_h=3,
             out_subblock_w=2,
-            per_core_M=10,
+            per_core_M=9,
             per_core_N=2,
             transpose_mcast=True,
             fused_activation=None,
         ),
         (3136, 512, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(10, 8),
+            compute_with_storage_grid_size=(11, 8),
             in0_block_w=2,
-            out_subblock_h=2,
+            out_subblock_h=1,
             out_subblock_w=4,
-            per_core_M=10,
+            per_core_M=9,
             per_core_N=4,
             transpose_mcast=True,
             fused_activation=None,
         ),
         (3136, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(7, 8),
+            compute_with_storage_grid_size=(9, 8),
             in0_block_w=4,
-            out_subblock_h=2,
+            out_subblock_h=1,
             out_subblock_w=2,
-            per_core_M=14,
+            per_core_M=11,
             per_core_N=2,
             transpose_mcast=True,
             fused_activation=None,
         ),
         (800, 512, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(7, 8),
+            compute_with_storage_grid_size=(9, 8),
             in0_block_w=2,
             out_subblock_h=1,
             out_subblock_w=8,
-            per_core_M=4,
+            per_core_M=3,
             per_core_N=8,
             transpose_mcast=True,
             fused_activation=None,
         ),
         (800, 1024, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(7, 8),
+            compute_with_storage_grid_size=(9, 8),
             in0_block_w=4,
             out_subblock_h=1,
             out_subblock_w=8,
-            per_core_M=4,
+            per_core_M=3,
             per_core_N=8,
             transpose_mcast=True,
             fused_activation=None,
         ),
         (800, 2048, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(7, 8),
+            compute_with_storage_grid_size=(9, 8),
             in0_block_w=8,
-            out_subblock_h=4,
+            out_subblock_h=3,
             out_subblock_w=2,
-            per_core_M=4,
+            per_core_M=3,
             per_core_N=2,
             transpose_mcast=True,
             fused_activation=None,
@@ -728,8 +728,8 @@ hardcoded_conv_blocking_and_parallelization_config = {
     16: {
         (50176, 64): [64 * 3, 512, 64, 128, 64, 512, (12, 9), 512, 64],
         (12544, 128): [128, 128, 128, 64, 128, 128, (12, 9), 128, 128],
-        (3136, 256): [256, 320, 32, 160, 32, 320, (10, 8), 320, 32],
-        (800, 512): [512, 128, 64, 128, 64, 128, (7, 8), 128, 64],
+        (3136, 256): [256, 288, 32, 96, 32, 288, (11, 8), 288, 32],
+        (800, 512): [512, 96, 64, 96, 64, 96, (9, 8), 96, 64],
     },
 }
 
@@ -1128,6 +1128,8 @@ class ResNet(nn.Module):
             act_block_h_datums = 1024
             grid_size = (12, 9)
             per_core_act_h_ntiles = 32
+            self.layer_3_grid_size = (10, 8)
+            self.layer_4_grid_size = (7, 8)
         elif batch_size == 16:
             # 7,7 multi core config triggers non-deterministic output
             # grid_size = (7,7)
@@ -1138,6 +1140,8 @@ class ResNet(nn.Module):
             act_block_h_datums = 2048
             grid_size = (12, 9)
             per_core_act_h_ntiles = 64
+            self.layer_3_grid_size = (11, 8)
+            self.layer_4_grid_size = (9, 8)
 
         self.conv1 = resnet50_first_conv(
             conv1_weight.reshape(-1).tolist(),
@@ -1602,8 +1606,11 @@ class ResNet(nn.Module):
             grid_size = (10, 8)
             x = tt_lib.tensor.interleaved_to_sharded(
                 x,
-                grid_size,
-                [math.ceil((x.shape()[-2] // 32) / grid_size[0]) * 32, x.shape()[-1] // grid_size[1]],
+                self.layer_3_grid_size,
+                [
+                    math.ceil((x.shape()[-2] // 32) / self.layer_3_grid_size[0]) * 32,
+                    x.shape()[-1] // self.layer_3_grid_size[1],
+                ],
                 tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 tt_lib.tensor.ShardOrientation.COL_MAJOR,
             )
@@ -1614,11 +1621,13 @@ class ResNet(nn.Module):
         x = self.layer3_module5(x)
         x = self.layer3_module6(x)
         if self.sharded:
-            grid_size = (7, 8)
             x = tt_lib.tensor.interleaved_to_sharded(
                 x,
-                grid_size,
-                [math.ceil((x.shape()[-2] // 32) / grid_size[0]) * 32, x.shape()[-1] // grid_size[1]],
+                self.layer_4_grid_size,
+                [
+                    math.ceil((x.shape()[-2] // 32) / self.layer_4_grid_size[0]) * 32,
+                    x.shape()[-1] // self.layer_4_grid_size[1],
+                ],
                 tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 tt_lib.tensor.ShardOrientation.COL_MAJOR,
             )
