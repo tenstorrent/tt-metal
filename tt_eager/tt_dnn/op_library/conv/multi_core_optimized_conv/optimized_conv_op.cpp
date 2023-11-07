@@ -638,6 +638,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
                     assert(act_block_w_datums == conv_act_size_c);
                     assert(num_blocks_act_w == weight_size_w * weight_size_h);
                     reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_fast_for_col_major_conv_out_blocks.cpp";
+                    std::cout << reader_kernel << std::endl;
                 }
             }
         }

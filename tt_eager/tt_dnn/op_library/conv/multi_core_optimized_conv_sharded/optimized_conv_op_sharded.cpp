@@ -592,7 +592,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
     } else {
         compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
         // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
-        if (weight_size_h == 3 && weight_size_w == 3 && stride_h == 1) {
+        if (weight_size_h == 3 && weight_size_w == 3 && (stride_h == 1 || stride_h == 2)) {
             reader_with_indices = true;
             // 2D conv
             if (weight_width_sliced) {
@@ -770,6 +770,31 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
         noop_cores, ComputeConfig{});
     }
 
+    PoolConfig pc {
+        .in_w = conv_act_size_w,
+        .in_h = conv_act_size_h,
+        .out_w = conv_output_size_w,
+        .out_h = conv_output_size_h,
+        .stride_w = stride_w,
+        .stride_h = stride_h,
+        .pad_w = pad_w,
+        .pad_h = pad_h,
+        .window_w = weight_size_w,
+        .window_h = weight_size_h,
+        .dilation_w = 1,
+        .dilation_h = 1
+    };
+    std::cout << "in_w: " << conv_act_size_w << std::endl;
+    std::cout << "in_h: " << conv_act_size_h << std::endl;
+    std::cout << "out_w: " << conv_output_size_w << std::endl;
+    std::cout << "out_h: " << conv_output_size_h << std::endl;
+    std::cout << "stride_w: " << stride_w << std::endl;
+    std::cout << "stride_h: " << stride_h << std::endl;
+    std::cout << "pad_w: " << pad_w << std::endl;
+    std::cout << "pad_h:" << pad_h << std::endl;
+    std::cout << "window_w: " << weight_size_w << std::endl;
+    std::cout << "window_h: " << weight_size_h << std::endl;
+
     vector<KernelID> reader_ids;
     vector<KernelID> writer_ids;
     //tt_start_debug_print_server();
@@ -844,15 +869,19 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
             uint32_t start_stick = weight_width_sliced ? core_x_i * act_block_h_datums : core_i * act_block_h_datums;
             uint32_t end_stick = start_stick + act_block_h_datums;
 
-            ShardingConfig sharding_config = get_specs_for_sharding_partition(start_stick, end_stick, conv_act_size_h, conv_act_size_w, weight_size_w, pad_h, pad_w);
-            uint32_t first_partial_right_aligned_row_width = sharding_config.first_partial_right_aligned_row_width;
-            uint32_t skip_after_partial_right_aligned_row = sharding_config.skip_after_partial_right_aligned_row;
-            uint32_t first_partial_image_num_rows = sharding_config.first_partial_image_num_rows;
-            uint32_t skip_after_first_partial_image_row = sharding_config.skip_after_first_partial_image_row;
-            uint32_t num_full_images = sharding_config.num_full_images;
-            uint32_t skip_after_full_image = sharding_config.skip_after_full_image;
-            uint32_t last_partial_image_num_rows = sharding_config.last_partial_image_num_rows;
-            uint32_t last_partial_left_aligned_row_width = sharding_config.last_partial_left_aligned_row_width;
+            //ShardingConfig input_sharding_config = get_specs_for_sharding_partition(start_stick, end_stick, conv_act_size_h, conv_act_size_w, weight_size_w, pad_h, pad_w);
+            auto [input_sharding_config, output_sharding_config] = get_inout_shard_specs(start_stick, end_stick, pc);
+            uint32_t first_partial_right_aligned_row_width = output_sharding_config.first_partial_right_aligned_row_width;
+            uint32_t first_partial_image_num_rows          = output_sharding_config.first_partial_image_num_rows;
+            uint32_t num_full_images                       = output_sharding_config.num_full_images;
+            uint32_t last_partial_image_num_rows           = output_sharding_config.last_partial_image_num_rows;
+            uint32_t last_partial_left_aligned_row_width   = output_sharding_config.last_partial_left_aligned_row_width;
+            uint32_t initial_skip                          = input_sharding_config.initial_skip;
+            uint32_t skip_after_partial_right_aligned_row  = input_sharding_config.skip_after_partial_right_aligned_row;
+            uint32_t skip_after_first_partial_image_row    = input_sharding_config.skip_after_first_partial_image_row;
+            uint32_t skip_after_full_image                 = input_sharding_config.skip_after_full_image;
+            uint32_t skip_after_each_full_row              = input_sharding_config.skip_after_each_full_row;
+            uint32_t skip_after_each_stick                 = input_sharding_config.skip_after_each_stick;
 
             if (weight_width_sliced) {
                 auto shard_shape = a.shard_spec().value().shard_shape;
@@ -877,13 +906,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
 
                     // Specs for reader indices
                     first_partial_right_aligned_row_width,
-                    skip_after_partial_right_aligned_row,
                     first_partial_image_num_rows,
-                    skip_after_first_partial_image_row,
                     num_full_images,
-                    skip_after_full_image,
                     last_partial_image_num_rows,
                     last_partial_left_aligned_row_width,
+                    initial_skip,
+                    skip_after_partial_right_aligned_row,
+                    skip_after_first_partial_image_row,
+                    skip_after_full_image,
+                    skip_after_each_full_row,
+                    skip_after_each_stick,
 
                     // Specs for reader offsets
                     1, // window_outer
@@ -917,13 +949,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
 
                     // Specs for reader indices
                     first_partial_right_aligned_row_width,
-                    skip_after_partial_right_aligned_row,
                     first_partial_image_num_rows,
-                    skip_after_first_partial_image_row,
                     num_full_images,
-                    skip_after_full_image,
                     last_partial_image_num_rows,
                     last_partial_left_aligned_row_width,
+                    initial_skip,
+                    skip_after_partial_right_aligned_row,
+                    skip_after_first_partial_image_row,
+                    skip_after_full_image,
+                    skip_after_each_full_row,
+                    skip_after_each_stick,
 
                     // Specs for reader offsets
                     num_blocks_act_w, // window_outer

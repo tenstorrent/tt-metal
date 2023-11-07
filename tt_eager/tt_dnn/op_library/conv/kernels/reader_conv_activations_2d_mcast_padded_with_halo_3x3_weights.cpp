@@ -21,13 +21,17 @@ void kernel_main() {
     uint32_t act_w_num_outer = get_arg_val<uint32_t>(i); i+=1;
 
     uint32_t first_partial_right_aligned_row_width = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t skip_after_partial_right_aligned_row  = get_arg_val<uint32_t>(i); i+=1;
     uint32_t first_partial_image_num_rows          = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t skip_after_first_partial_image_row    = get_arg_val<uint32_t>(i); i+=1;
     uint32_t num_full_images                       = get_arg_val<uint32_t>(i); i+=1;
-    uint32_t skip_after_full_image                 = get_arg_val<uint32_t>(i); i+=1;
     uint32_t last_partial_image_num_rows           = get_arg_val<uint32_t>(i); i+=1;
     uint32_t last_partial_left_aligned_row_width   = get_arg_val<uint32_t>(i); i+=1;
+
+    uint32_t initial_skip                          = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t skip_after_partial_right_aligned_row  = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t skip_after_first_partial_image_row    = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t skip_after_full_image                 = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t skip_after_each_full_row              = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t skip_after_each_stick                 = get_arg_val<uint32_t>(i); i+=1;
 
     uint32_t window_outer                          = get_arg_val<uint32_t>(i); i+=1;
     uint32_t window_inner                          = get_arg_val<uint32_t>(i); i+=1;

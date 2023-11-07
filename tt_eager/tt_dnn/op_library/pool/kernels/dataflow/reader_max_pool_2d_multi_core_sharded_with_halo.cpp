@@ -180,15 +180,23 @@ void kernel_main() {
 
     // int32_t my_core = get_arg_val<int32_t>(64);
 
-    int32_t initial_skip = get_arg_val<int32_t>(65);
     int32_t partial_first_row_nsticks = get_arg_val<int32_t>(66);
-    int32_t partial_first_row_skip = get_arg_val<int32_t>(67);
     int32_t partial_top_image_nrows = get_arg_val<int32_t>(68);
-    int32_t partial_top_image_skip = get_arg_val<int32_t>(69);
     int32_t full_nimages = get_arg_val<int32_t>(70);
-    int32_t full_images_skip = get_arg_val<int32_t>(71);
     int32_t partial_bottom_image_nrows = get_arg_val<int32_t>(72);
     int32_t partial_last_row_nsticks = get_arg_val<int32_t>(73);
+
+    int32_t in_initial_skip = get_arg_val<int32_t>(81);
+    int32_t in_skip_after_partial_right_aligned_row = get_arg_val<int32_t>(83);
+    int32_t in_skip_after_first_partial_image_row = get_arg_val<int32_t>(84);
+    int32_t in_skip_after_full_image = get_arg_val<int32_t>(85);
+    int32_t in_skip_after_each_full_row = get_arg_val<int32_t>(86);
+    int32_t in_skip_after_each_stick = get_arg_val<int32_t>(87);
+
+    int32_t initial_skip = get_arg_val<int32_t>(65);
+    int32_t partial_first_row_skip = get_arg_val<int32_t>(67);
+    int32_t partial_top_image_skip = get_arg_val<int32_t>(69);
+    int32_t full_images_skip = get_arg_val<int32_t>(71);
     int32_t start_stick = get_arg_val<int32_t>(74);
 
     int32_t in_start_stick = get_arg_val<int32_t>(75);
@@ -197,13 +205,7 @@ void kernel_main() {
     int32_t in_num_full_images = get_arg_val<int32_t>(78);
     int32_t in_last_partial_image_num_rows = get_arg_val<int32_t>(79);
     int32_t in_last_partial_left_aligned_row_width = get_arg_val<int32_t>(80);
-    int32_t in_initial_skip = get_arg_val<int32_t>(81);
     int32_t in_skip_after_stick = get_arg_val<int32_t>(82);
-    int32_t in_skip_after_partial_right_aligned_row = get_arg_val<int32_t>(83);
-    int32_t in_skip_after_first_partial_image_row = get_arg_val<int32_t>(84);
-    int32_t in_skip_after_full_image = get_arg_val<int32_t>(85);
-    int32_t in_skip_after_each_full_row = get_arg_val<int32_t>(86);
-    int32_t in_skip_after_each_stick = get_arg_val<int32_t>(87);
     // int32_t in_skip_after_each_stick = stride_w;
 
     uint32_t in_l1_read_base_addr = get_read_ptr(in_shard_cb_id);
