@@ -35,14 +35,17 @@ architectures.
 If you want to run this software on a Tenstorrent cloud machine, you can provision your own machine on the Tenstorrent cloud using documentation
 [here](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM).
 
-These are the ways of installing this software:
+These are the official ways of installing this software:
 
 - [From source](#from-source)
-- [From a release wheel (Python)](#from-a-release-wheel-unstable)
 
 However, you must have the appropriate accelerator-level and related
 system-level dependencies. Otherwise, you may skip to your preferred
 installation method in the above list.
+
+Note that the following installation methods are not officially supported and are under development:
+
+- [From a release wheel (Python, unstable)](#from-a-release-wheel-unstable)
 
 ### Installing system-level dependencies
 
@@ -52,15 +55,10 @@ System-level dependencies include the third-party libraries, hugepages settings,
 
 1. Install the host system-level dependencies through `apt`.
 
-First, perform an update:
+First, perform an update and install the dependencies:
 
 ```
 sudo apt update
-```
-
-Then, install the dependencies:
-
-```
 sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.8 libgoogle-glog-dev=0.4.0-1build1 libyaml-cpp-dev=0.6.2-4ubuntu1 libboost-all-dev=1.71.0.0ubuntu2 libsndfile1=1.0.28-7ubuntu0.2 libhwloc-dev
 ```
 
@@ -68,31 +66,19 @@ Additionally, you will need developer-level dependencies if you plan to install 
 
 2. Download the raw latest version of the `setup_hugepages.py` script. It should be located [in the repository](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py).
 
-3. Invoke the first pass of the hugepages script.
+3. Invoke the first pass of the hugepages script and then reboot.
 
 ```
-sudo -E python3 setup_hugepages.py first_pass
+sudo -E python3 setup_hugepages.py first_pass && sudo reboot now
 ```
 
-4. Reboot the system.
+4. Invoke the second pass of the hugepages script and then check that hugepages is correctly set.
 
 ```
-sudo reboot now
+sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check
 ```
 
-5. Invoke the second pass of the hugepages script.
-
-```
-sudo -E python3 setup_hugepages.py enable
-```
-
-6. Check that hugepages is now enabled.
-
-```
-sudo -E python3 setup_hugepages.py check
-```
-
-7. You must now also install and mount WekaFS. Note that this is only available on Tenstorrent cloud machines. The instructions are on this [page](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM), which are only available to those who have access to the Tenstorrent cloud.
+5. You must now also install and mount WekaFS. Note that this is only available on Tenstorrent cloud machines. The instructions are on this [page](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM), which are only available to those who have access to the Tenstorrent cloud.
 
 **NOTE**: You may have to repeat the hugepages steps upon every reboot, depending on your system and other services that use hugepages.
 
@@ -142,23 +128,25 @@ you are installing.
    you connect to via SSH, you will require something like SCP or rsync,
    outside of the scope of this document.
 
-3. Modify permissions to execute the bash file.
+3. Modify permissions to execute the bash file, execute it, then reboot.
 
 ```
-sudo chmod u+x ~/install_ttkmd_<VERSION>.bash
+sudo chmod u+x ~/install_ttkmd_<VERSION>.bash && sudo ~/install_ttkmd_<VERSION>.bash && sudo reboot now
 ```
 
-4. Execute the driver installer.
+4. Upon completion of reboot, check that the KMD is installed by grepping for it.
 
 ```
-sudo ~/install_ttkmd_<VERSION>.bash
+dkms status | grep tenstorrent
 ```
 
-5. Reboot.
+You should see output like:
 
 ```
-sudo reboot now
+tenstorrent, <VERSION>, 5.4.0-162-generic, x86_64: installed
 ```
+
+where `<VERSION>` is replaced by the version of the KMD that you installed.
 
 #### Installing `tt-smi`
 
@@ -196,16 +184,10 @@ tt-smi
 
 2. Transfer the `tt-flash` installer to your machine. If it's a remote machine that you connect to via SSH, you will require something like SCP or rsync, outside of the scope of this document.
 
-3. Modify permissions to execute the flash installer. Note that flash installers may have arbitrary file names from release, so we will be using `<FLASH_FILE>` as a placeholder for the sake of these instructions.
+3. Modify permissions to execute the flash installer and then install it. Note that flash installers may have arbitrary file names from release, so we will be using `<FLASH_FILE>` as a placeholder for the sake of these instructions.
 
 ```
-sudo chmod u+x ~/<FLASH_FILE>
-```
-
-4. Execute the flash installer.
-
-```
-sudo ~/<FLASH_FILE>
+sudo chmod u+x ~/<FLASH_FILE> && sudo ~/<FLASH_FILE>
 ```
 
 If the installer detects a newer firmware but you would like to install a specific older one, you may try the `--force` option:
@@ -214,7 +196,7 @@ If the installer detects a newer firmware but you would like to install a specif
 sudo ~/<FLASH_FILE> --force
 ```
 
-5. Reset the card to recognize the new firmware.
+4. Reset the card to recognize the new firmware.
 
 If you have a Grayskull card, you must reboot to reset:
 
@@ -238,10 +220,17 @@ You must also ensure that you have all accelerator-level, system-level, and deve
 1. Clone the repo. If you're using a release, please use ``--branch
    <VERSION_NUMBER>``.
 
-``<VERSION_NUMBER>`` is the version you will be using. Otherwise, you can use ``main``.
+``<VERSION_NUMBER>`` is the release version you will be using. Otherwise, you can use ``main`` to get the latest development source.
 
 ```
 git clone git@github.com:tenstorrent-metal/tt-metal.git --recurse-submodules --branch <VERSION_NUMBER>
+cd tt-metal
+```
+
+For example, if you are trying to use version `v0.35.0`, you can execute:
+
+```
+git clone git@github.com:tenstorrent-metal/tt-metal.git --recurse-submodules --branch v0.35.0
 cd tt-metal
 ```
 
@@ -262,16 +251,10 @@ export PYTHONPATH=<this repo dir>
 export TT_METAL_ENV=dev
 ```
 
-3. Build the project.
+3. Build the project and activate the environment.
 
 ```
-make build
-```
-
-4. Activate the built Python environment.
-
-```
-source build/python_env/bin/activate
+make build && source build/python_env/bin/activate
 ```
 
 You should look ahead to [Getting started](#getting-started) to further use
@@ -279,11 +262,9 @@ this project.
 
 ### From a release wheel (UNSTABLE)
 
-**NOTE**: The wheel is not a fully-tested software artifact and most features
-do not work right now through the wheel. As of this moment, we encourage users
-to try metal through source. Therefore, this section is under construction.
+**NOTE**: The wheel is not a fully-tested software artifact and most features do not work right now through the wheel. Furthermore, we do not plan to release the wheel as an official artifact until it is supported. As of this moment, we encourage users to try metal through source. Therefore, this section is under construction.
 
-Wheel files are available through the
+Wheel files will eventually be available through the
 [releases](https://github.com/tenstorrent-metal/tt-metal/releases) page.
 
 You must also ensure that you have all accelerator-level, system-level, and developer system-level dependencies as outlined in the instructions above.
