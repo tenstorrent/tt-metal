@@ -223,9 +223,15 @@ MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Ten
             out_subblock_h == 4 and
             out_subblock_w == 2
         ) {
-            if (core_range.y > 0)
-                return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST;
-            return MatmulParallelizationStrategy::MULTI_CORE_REUSE;
+            if (core_range.y == 1) {
+                return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED;
+            } else if (core_range.x == 1) {
+                return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED;
+            } else if (core_range.y > 0) {
+                return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED;
+            } else {
+                return MatmulParallelizationStrategy::MULTI_CORE_REUSE;
+            }
         }
         else if (core_range.y > 0)
             return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED;
@@ -233,15 +239,19 @@ MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Ten
     }
     else if (num_blocks_x * num_blocks_y <= num_cores_x * num_cores_y and Kt % in0_block_w == 0) {
         CoreCoord core_range = get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
-        // If we don't need padding, use the default multi_core reuse/reuse_mcast
-        if (Mt % per_core_M == 0 and Nt % per_core_N == 0) {
-            if (core_range.y > 0)
-                return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST;
-            return MatmulParallelizationStrategy::MULTI_CORE_REUSE;
+        if (core_range.y == 1) {
+            return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED;
+        } else if (core_range.x == 1) {
+            return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED;
+        } else if (core_range.y > 0) {
+            return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED;
         }
-        else if (core_range.y > 0)
-            return MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING;
-        return MatmulParallelizationStrategy::MULTI_CORE;
+        // If we don't need padding, use the default multi_core reuse/reuse_mcast
+        else if (Mt % per_core_M == 0 and Nt % per_core_N == 0) {
+            return MatmulParallelizationStrategy::MULTI_CORE_REUSE;
+        } else {
+            return MatmulParallelizationStrategy::MULTI_CORE;
+        }
     }
     else if (num_output_tiles > 1) {
         return MatmulParallelizationStrategy::MULTI_CORE;
@@ -255,6 +265,7 @@ tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_
     auto device = input_tensor_a.device();
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t M = fuse_batch ? input_tensor_a.volume() / input_tensor_a.shape()[-1] : input_tensor_a.shape()[-2];
+    uint32_t K = input_tensor_a.shape()[-1];
     uint32_t N = input_tensor_b.shape()[-1];
     uint32_t per_core_M, per_core_N;
     if (mcast_in0) {
@@ -264,6 +275,7 @@ tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_
         per_core_M = div_up(div_up(M, grid_size.x * grid_size.y), TILE_HEIGHT);
         per_core_N = N / TILE_WIDTH;
     }
+    uint32_t in0_block_w = K / TILE_WIDTH % 2 == 0 ? 2 : 1;
     uint32_t out_subblock_h, out_subblock_w;
     bool params_found = false;
     for (auto &subblock_hw : bmm_op_utils::SUBBLOCK_HW_CHOICES) {
@@ -289,7 +301,7 @@ tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_
 
     return tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig{
         .compute_with_storage_grid_size = grid_size,
-        .in0_block_w = 2,
+        .in0_block_w = in0_block_w,
         .out_subblock_h = out_subblock_h,
         .out_subblock_w = out_subblock_w,
         .per_core_M = per_core_M,
@@ -305,7 +317,7 @@ tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_
 namespace tt {
 namespace tt_metal {
 
-void Matmul::validate(const std::vector<Tensor>& input_tensors) const {
+void Matmul::validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     TT_ASSERT((input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE), "Inputs to matmul must be tilized");
@@ -337,28 +349,53 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
     return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
 }
 
-operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
 
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
-
+    tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig config;
     switch (parallelization_strategy){
         case MatmulParallelizationStrategy::MULTI_CORE:
             return matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
         case MatmulParallelizationStrategy::MULTI_CORE_REUSE:
             return matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
-        case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST:
-            return matmul_multi_core_reuse_mcast(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
+        case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED:
+            return matmul_multi_core_reuse_mcast_2d_optimized(
+                input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
+                this->bcast_batch,
+                input_tensor_a.device()->compute_with_storage_grid_size(),
+                MathFidelity::HiFi4,
+                2, 4, 2,
+                16, 16, false, false, std::nullopt
+            );
+        case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED:
+            config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, false, std::nullopt, true, false);
+            return matmul_multi_core_reuse_mcast_1d_optimized(
+                input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
+                this->bcast_batch,
+                input_tensor_a.device()->compute_with_storage_grid_size(),
+                MathFidelity::HiFi4,
+                config.in0_block_w, config.out_subblock_h, config.out_subblock_w,
+                config.per_core_M, config.per_core_N, false, std::nullopt, true
+            );
+        case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED:
+            config = bmm_op_utils::get_mcast_1d_config(input_tensor_a, input_tensor_b, false, std::nullopt, false, false);
+            return matmul_multi_core_reuse_mcast_1d_optimized(
+                input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
+                this->bcast_batch,
+                input_tensor_a.device()->compute_with_storage_grid_size(),
+                MathFidelity::HiFi4,
+                config.in0_block_w, config.out_subblock_h, config.out_subblock_w,
+                config.per_core_M, config.per_core_N, false, std::nullopt, false
+            );
         case MatmulParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED:
             return matmul_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
         case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED:
             return matmul_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
         case MatmulParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
             return matmul_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
-        case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING:
-            return matmul_multi_core_reuse_mcast_padding(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
         case MatmulParallelizationStrategy::SINGLE_CORE:
         default:
             return matmul_single_core(input_tensor_a, input_tensor_b, output_tensor, this->bcast_batch);
@@ -833,29 +870,51 @@ operation::ProgramWithCallbacks Matmul::create_program(
     tt::tt_metal::DataType output_dtype = this->output_dtype;
     MathFidelity math_fidelity = this->math_fidelity;
     bool fuse_batch = true;
+    bool broadcast_batch = input_tensor_b.shape()[0] * input_tensor_b.shape()[1] == 1;
 
     return std::visit(
         [&](const auto& program_config) -> operation::ProgramWithCallbacks {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, MatmulDefaultProgramConfig>) {
                 auto parallelization_strategy = bmm_op_utils::get_parallelization_strategy(input_tensors);
-
-                auto broadcast_batch = input_tensor_b.shape()[0] * input_tensor_b.shape()[1] == 1;
                 switch (parallelization_strategy){
                     case MatmulParallelizationStrategy::MULTI_CORE:
                         return matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE:
                         return matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
-                    case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST:
-                        return matmul_multi_core_reuse_mcast(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
+                    case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_2D_OPTIMIZED:
+                        return matmul_multi_core_reuse_mcast_2d_optimized(
+                            input_tensor_a, input_tensor_b, bias, output_tensor,
+                            broadcast_batch,
+                            input_tensor_a.device()->compute_with_storage_grid_size(),
+                            MathFidelity::HiFi4,
+                            2, 4, 2,
+                            16, 16, false, false, std::nullopt
+                        );
+                    case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN0_OPTIMIZED:
+                        return matmul_multi_core_reuse_mcast_1d_optimized(
+                            input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
+                            broadcast_batch,
+                            input_tensor_a.device()->compute_with_storage_grid_size(),
+                            MathFidelity::HiFi4,
+                            2, 4, 2,
+                            16, 16, false, std::nullopt, true
+                        );
+                    case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_1D_IN1_OPTIMIZED:
+                        return matmul_multi_core_reuse_mcast_1d_optimized(
+                            input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
+                            broadcast_batch,
+                            input_tensor_a.device()->compute_with_storage_grid_size(),
+                            MathFidelity::HiFi4,
+                            2, 4, 2,
+                            16, 16, false, std::nullopt, false
+                        );
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_GENERALIZED:
                         return matmul_multi_core_reuse_generalized(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_GENERALIZED:
                         return matmul_multi_core_reuse_mcast_generalized(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
                     case MatmulParallelizationStrategy::MULTI_CORE_REUSE_PADDING:
                         return matmul_multi_core_reuse_padding(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
-                    case MatmulParallelizationStrategy::MULTI_CORE_REUSE_MCAST_PADDING:
-                        return matmul_multi_core_reuse_mcast_padding(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
                     case MatmulParallelizationStrategy::SINGLE_CORE:
                     default:
                         return matmul_single_core(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
@@ -864,6 +923,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
                 return bmm_multi_core_reuse_optimized(
                     input_tensor_a, input_tensor_b, input_tensor_a.shape(), input_tensor_b.shape(), output_tensor,
+                    broadcast_batch,
                     program_config.compute_with_storage_grid_size,
                     output_dtype, math_fidelity,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
@@ -873,8 +933,9 @@ operation::ProgramWithCallbacks Matmul::create_program(
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
                 return matmul_multi_core_reuse_mcast_2d_optimized(
                     input_tensor_a, input_tensor_b, bias, output_tensor,
+                    broadcast_batch,
                     program_config.compute_with_storage_grid_size,
-                    output_dtype, math_fidelity,
+                    math_fidelity,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
                     program_config.per_core_M, program_config.per_core_N, fuse_batch, program_config.transpose_mcast, program_config.fused_activation
                 );
@@ -882,8 +943,9 @@ operation::ProgramWithCallbacks Matmul::create_program(
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
                 return matmul_multi_core_reuse_mcast_1d_optimized(
                     input_tensor_a, input_tensor_b, bias, output_tensor,
+                    broadcast_batch,
                     program_config.compute_with_storage_grid_size,
-                    output_dtype, math_fidelity,
+                    math_fidelity,
                     program_config.in0_block_w, program_config.out_subblock_h, program_config.out_subblock_w,
                     program_config.per_core_M, program_config.per_core_N, program_config.fuse_batch, program_config.fused_activation,
                     program_config.mcast_in0
