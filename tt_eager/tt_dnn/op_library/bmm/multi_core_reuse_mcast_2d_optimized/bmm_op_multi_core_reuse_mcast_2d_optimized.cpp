@@ -33,7 +33,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     std::optional<UnaryWithParam> fused_activation,
     tt_metal::Buffer* in0_buffer, tt_metal::Buffer* in1_buffer, tt_metal::Buffer* bias_buffer, tt_metal::Buffer* out_buffer,
     tt::DataFormat in0_data_format, tt::DataFormat in1_data_format, tt::DataFormat bias_data_format, tt::DataFormat output_data_format,
-    std::optional<uint32_t> in0_address, std::optional<uint32_t> output_address
+    bool in0_is_sharded, bool output_is_sharded
 ) {
 
     tt_metal::Program program{};
@@ -125,14 +125,14 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         // std::swap(in0_noc, in1_noc);
         // std::swap(in0_split_noc, in1_split_noc);
     }
-    if (in0_address.has_value()) {
+    if (in0_is_sharded) {
         in0_sender = all_cores;
     }
 
     // Not exactly half-half; this seems to get slightly better perf for fused qkv and selfout
     // TODO: Experiment with different splits?
 
-    bool split_half = num_cores_c > 2 && !in0_address.has_value();
+    bool split_half = num_cores_c > 2 && !in0_is_sharded;
     uint32_t half_core = split_half ? (num_cores_c) / 2 : num_cores_c - 1;
 
     CoreRange in0_receiver_in1_receiver_left_half{
@@ -168,7 +168,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     std::vector<uint32_t> in0_sender_compile_time_args;
 
-    if (in0_address.has_value()) {
+    if (in0_is_sharded) {
         uint32_t num_x, num_y;
         if (transpose_mcast) {
             num_x = 1;
@@ -321,10 +321,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             mm_kernel_defines.merge(eltwise_unary_op_utils::get_defines(fused_activation.value().op_type, fused_activation.value().param, "ACTIVATION", "i"));
         }
     }
-    // if (in0_address.has_value()) {
+    // if (in0_is_sharded) {
     //     mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
     // }
-    if (output_address.has_value()) {
+    if (output_is_sharded) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["OUT_SHARDED"] = "1";
@@ -332,7 +332,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
-        in0_address.has_value() ? "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp" : "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+        in0_is_sharded ? "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp" : "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         in0_sender,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc, .compile_args = in0_sender_compile_time_args});
 
@@ -350,7 +350,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc, .compile_args = in1_receiver_writer_compile_time_args, .defines = mm_kernel_in1_receiver_writer_defines});
 
     KernelID mm_kernel_in0_receiver_id = 0;
-    if (!in0_address.has_value()) {
+    if (!in0_is_sharded) {
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
@@ -428,9 +428,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     uint32_t src2_cb_index = 2;
     CircularBufferID cb_src2 = 0;
-    if (in0_address.has_value()) {
+    if (in0_is_sharded) {
         tt_metal::CircularBufferConfig src2_cb_config = tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
-            .set_page_size(src2_cb_index, in0_single_tile_size).set_globally_allocated_address(in0_address.value());
+            .set_page_size(src2_cb_index, in0_single_tile_size).set_globally_allocated_address(*in0_buffer);
         cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
     }
 
@@ -443,8 +443,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
 		.set_page_size(output_cb_index, output_single_tile_size)
         .set_page_size(interm0_cb_index, output_single_tile_size);
-    if (output_address.has_value()) {
-        output_cb_config = output_cb_config.set_globally_allocated_address(output_address.value());
+    if (output_is_sharded) {
+        output_cb_config = output_cb_config.set_globally_allocated_address(*out_buffer);
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), output_cb_config);
 
@@ -474,7 +474,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t diff_end_coord;
     std::vector<uint32_t> in0_mcast_noc_x;
     std::vector<uint32_t> in0_mcast_noc_y;
-    if (in0_address.has_value()) {
+    if (in0_is_sharded) {
         if (transpose_mcast) {
             diff_start_coord = device->worker_core_from_logical_core({0, start_core_y}).y;
             diff_end_coord = device->worker_core_from_logical_core({0, start_core_y + num_cores_r - 1}).y;
@@ -527,7 +527,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             }
 
             // in0 sender
-            if (in0_address.has_value()) {
+            if (in0_is_sharded) {
                 uint32_t worker_shard_same_coord;
                 std::vector<uint32_t> mm_in0_sender_args;
                 if (transpose_mcast) {
@@ -785,12 +785,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
         if (src0_sharded) {
             auto& src2_cb_config = GetCircularBufferConfig(program, cb_src2);
-            src2_cb_config.set_globally_allocated_address(src_buffer_a->address());
+            src2_cb_config.set_globally_allocated_address(*src_buffer_a);
         }
 
         if (out_sharded) {
             auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
-            output_cb_config.set_globally_allocated_address(dst_buffer->address());
+            output_cb_config.set_globally_allocated_address(*dst_buffer);
         }
     };
 
@@ -887,15 +887,6 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    std::optional<uint32_t> a_addr = std::nullopt;
-    std::optional<uint32_t> out_addr = std::nullopt;
-    if (a.memory_config().is_sharded()) {
-        a_addr = a.buffer()->address();
-    }
-    if (output.memory_config().is_sharded()) {
-        out_addr = output.buffer()->address();
-    }
-
     if (core_range.x > 1 && core_range.y > 1) {
         return reuse_mcast_optimized_helpers::create_program_mcast_in0_in1(
             device,
@@ -910,7 +901,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
             fused_activation,
             in0_buffer, in1_buffer, bias_buffer, out_buffer,
             in0_data_format, in1_data_format, bias_data_format, output_data_format,
-            a_addr, out_addr
+            a.memory_config().is_sharded(), output.memory_config().is_sharded()
         );
     } else if (core_range.x > 1) {
         // Refer to bmm_op_multi_core_reuse_mcast_padding_generalized.cpp

@@ -452,7 +452,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     uint32_t num_input_tiles = num_input_tiles_in_row * num_rows_of_input_tiles;
     tt_metal::CircularBufferConfig input_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * input_single_tile_size, {{input_cb_index, input_cb_data_format}})
 		.set_page_size(input_cb_index, input_single_tile_size);
-    input_cb_config = input_cb_config.set_globally_allocated_address(a.buffer()->address());
+    input_cb_config = input_cb_config.set_globally_allocated_address(*a.buffer());
     auto input_cb = tt_metal::CreateCircularBuffer(program, core_range, input_cb_config);
     log_debug(LogOp, "CB {}: PS = {} NP = {}", input_cb_index, input_single_tile_size, num_input_tiles);
 
@@ -497,7 +497,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     uint32_t num_tiles_final_tilize_output_cb = num_output_tiles; // final output cb size == output size per core
     tt_metal::CircularBufferConfig final_tilize_output_cb_config = tt_metal::CircularBufferConfig(num_tiles_final_tilize_output_cb * output_single_tile_size, {{final_tilize_output_cb_index, output_cb_data_format}})
 		.set_page_size(final_tilize_output_cb_index, output_single_tile_size);
-    final_tilize_output_cb_config = final_tilize_output_cb_config.set_globally_allocated_address(output.buffer()->address());
+    final_tilize_output_cb_config = final_tilize_output_cb_config.set_globally_allocated_address(*output.buffer());
     auto final_tilize_output_cb = tt_metal::CreateCircularBuffer(program, core_range, final_tilize_output_cb_config);
 
     uint32_t log_base_2_of_conv_act_size_c_bytes = (uint32_t) std::log2((float) input_shard_width_bytes);
@@ -797,9 +797,9 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
         auto dst_buffer = output_tensors.at(0).buffer();
 
         auto& input_cb_config = GetCircularBufferConfig(program, input_cb);
-        input_cb_config.set_globally_allocated_address(src_buffer->address());
+        input_cb_config.set_globally_allocated_address(*src_buffer);
         auto& final_tilize_output_cb_config = GetCircularBufferConfig(program, final_tilize_output_cb);
-        final_tilize_output_cb_config.set_globally_allocated_address(dst_buffer->address());
+        final_tilize_output_cb_config.set_globally_allocated_address(*dst_buffer);
         for (uint32_t i = 0; i < num_cores; i++) {
             CoreCoord core = {i % num_cores_x, i / num_cores_x};
             auto runtime_args = GetRuntimeArgs(program, downsample_writer_kernel_id, core);

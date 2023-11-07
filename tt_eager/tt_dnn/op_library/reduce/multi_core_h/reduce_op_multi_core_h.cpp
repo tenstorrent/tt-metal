@@ -71,7 +71,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
         tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(num_shard_tiles * src0_single_tile_size, {{src1_cb_index, src0_cb_data_format}})
-            .set_page_size(src1_cb_index, src0_single_tile_size).set_globally_allocated_address(a.buffer()->address());
+            .set_page_size(src1_cb_index, src0_single_tile_size).set_globally_allocated_address(*a.buffer());
         cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
     } else {
         uint32_t num_input_tiles = 2;
@@ -90,7 +90,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     if (out_sharded) {
         uint32_t num_output_tiles = output.shard_spec().value().numel() / TILE_HW;
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
-            .set_page_size(output_cb_index, dst_single_tile_size).set_globally_allocated_address(output.buffer()->address());;
+            .set_page_size(output_cb_index, dst_single_tile_size).set_globally_allocated_address(*output.buffer());;
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
     } else {
         uint32_t num_output_tiles = 2;
@@ -277,9 +277,9 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
 
         if (src_sharded && out_sharded) {
             auto& src1_cb_config = GetCircularBufferConfig(program, cb_src1);
-            src1_cb_config.set_globally_allocated_address(src_buffer->address());
+            src1_cb_config.set_globally_allocated_address(*src_buffer);
             auto& out_cb_config = GetCircularBufferConfig(program, cb_output);
-            out_cb_config.set_globally_allocated_address(dst_buffer->address());
+            out_cb_config.set_globally_allocated_address(*dst_buffer);
         } else {
             for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++){
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};

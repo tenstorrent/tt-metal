@@ -214,7 +214,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
         .set_page_size(src0_cb_index, input_single_tile_size);
     if (src_sharded) {
-        src0_cb_config = src0_cb_config.set_globally_allocated_address(a.buffer()->address());
+        src0_cb_config = src0_cb_config.set_globally_allocated_address(*a.buffer());
     }
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
@@ -223,7 +223,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
         .set_page_size(output_cb_index, output_single_tile_size);
     if (out_sharded) {
-        output_cb_config = output_cb_config.set_globally_allocated_address(output.buffer()->address());
+        output_cb_config = output_cb_config.set_globally_allocated_address(*output.buffer());
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
@@ -566,7 +566,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 
         if (src_sharded) {
             auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
-            src0_cb_config.set_globally_allocated_address(src_buffer->address());
+            src0_cb_config.set_globally_allocated_address(*src_buffer);
         } else {
             auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
             for (uint32_t i = 0; i < cores.size(); i++){
@@ -582,7 +582,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 
         if (out_sharded) {
             auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
-            output_cb_config.set_globally_allocated_address(dst_buffer->address());
+            output_cb_config.set_globally_allocated_address(*dst_buffer);
         } else {
             auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
             for (uint32_t i = 0; i < cores.size(); i++){
@@ -652,7 +652,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
     tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
         .set_page_size(src0_cb_index, input_single_tile_size);
     if (src_sharded) {
-        src0_cb_config = src0_cb_config.set_globally_allocated_address(a.buffer()->address());
+        src0_cb_config = src0_cb_config.set_globally_allocated_address(*a.buffer());
     }
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
@@ -666,7 +666,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
     uint32_t sharded_output_cb_index = CB::c_out1;
     if (out_sharded) {
         tt_metal::CircularBufferConfig sharded_output_cb_config = tt_metal::CircularBufferConfig(num_output_rows_unpadded * block_row_size, {{sharded_output_cb_index, output_cb_data_format}})
-            .set_page_size(sharded_output_cb_index, block_row_size).set_globally_allocated_address(output.buffer()->address());
+            .set_page_size(sharded_output_cb_index, block_row_size).set_globally_allocated_address(*output.buffer());
         cb_sharded_output = tt_metal::CreateCircularBuffer(program, all_cores, sharded_output_cb_config);
     }
 
@@ -854,11 +854,11 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
         bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
         auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
-        src0_cb_config.set_globally_allocated_address(src_buffer->address());
+        src0_cb_config.set_globally_allocated_address(*src_buffer);
 
         if (out_sharded) {
             auto& sharded_output_cb_config = GetCircularBufferConfig(program, cb_sharded_output);
-            sharded_output_cb_config.set_globally_allocated_address(dst_buffer->address());
+            sharded_output_cb_config.set_globally_allocated_address(*dst_buffer);
         } else {
             auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
             for (uint32_t i = 0; i < cores.size(); i++){

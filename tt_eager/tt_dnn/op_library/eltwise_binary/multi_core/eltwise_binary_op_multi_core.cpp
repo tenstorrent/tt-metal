@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
 		.set_page_size(src0_cb_index, src0_single_tile_size);
     if (src0_sharded) {
-        cb_src0_config = cb_src0_config.set_globally_allocated_address(a.buffer()->address());
+        cb_src0_config = cb_src0_config.set_globally_allocated_address(*a.buffer());
     }
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src0_config);
 
@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
     tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})
 		.set_page_size(src1_cb_index, src1_single_tile_size);
     if (src1_sharded) {
-        cb_src1_config = cb_src1_config.set_globally_allocated_address(b.buffer()->address());
+        cb_src1_config = cb_src1_config.set_globally_allocated_address(*b.buffer());
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
@@ -129,7 +129,7 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
         .set_page_size(output_cb_index, dst_single_tile_size);
     if (out_sharded) {
-        cb_output_config = cb_output_config.set_globally_allocated_address(output.buffer()->address());
+        cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
 
@@ -437,17 +437,17 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
         }
         if (src0_sharded) {
             auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
-            src0_cb_config.set_globally_allocated_address(src_buffer_a->address());
+            src0_cb_config.set_globally_allocated_address(*src_buffer_a);
             src0_cb_config.set_total_size(num_tiles_per_core_group_1 * src0_single_tile_size);
         }
         if (src1_sharded) {
             auto& src1_cb_config = GetCircularBufferConfig(program, cb_src1);
-            src1_cb_config.set_globally_allocated_address(src_buffer_b->address());
+            src1_cb_config.set_globally_allocated_address(*src_buffer_b);
             src1_cb_config.set_total_size(num_tiles_per_core_group_1 * src1_single_tile_size);
         }
         if (out_sharded) {
             auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
-            output_cb_config.set_globally_allocated_address(dst_buffer->address());
+            output_cb_config.set_globally_allocated_address(*dst_buffer);
             output_cb_config.set_total_size(num_tiles_per_core_group_1 * dst_single_tile_size);
         }
     };

@@ -257,7 +257,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     uint32_t num_input_tiles = ntiles_per_block * nblocks_per_core;
     auto src_cb_config = CircularBufferConfig(num_input_tiles * in_tile_size, {{src_cb_id, in_df}})
                             .set_page_size(src_cb_id, in_tile_size)
-                            .set_globally_allocated_address(input.buffer()->address());
+                            .set_globally_allocated_address(*input.buffer());
     auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
 
     // output of untilize from compute kernel goes into this CB
@@ -273,7 +273,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     uint32_t out_cb_npages = max_nsticks;
     auto out_cb_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
                             .set_page_size(out_cb_id, out_cb_pagesize)
-                            .set_globally_allocated_address(output.buffer()->address());
+                            .set_globally_allocated_address(*output.buffer());
     auto out_cb = CreateCircularBuffer(program, all_cores, out_cb_config);
 
     // CB for pad val buffer (stick sized)
@@ -778,10 +778,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         auto dst_buffer = output_tensors.at(0).buffer();
 
         auto& src_cb_config = GetCircularBufferConfig(program, src_cb);
-        src_cb_config.set_globally_allocated_address(src_buffer->address());
+        src_cb_config.set_globally_allocated_address(*src_buffer);
 
         auto& output_cb_config = GetCircularBufferConfig(program, out_cb);
-        output_cb_config.set_globally_allocated_address(dst_buffer->address());
+        output_cb_config.set_globally_allocated_address(*dst_buffer);
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
@@ -899,7 +899,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
     uint32_t num_input_tiles = ntiles_per_block * nblocks_per_core;
     auto src_cb_config = CircularBufferConfig(num_input_tiles * in_tile_size, {{src_cb_id, in_df}})
                             .set_page_size(src_cb_id, in_tile_size)
-                            .set_globally_allocated_address(a.buffer()->address());
+                            .set_globally_allocated_address(*a.buffer());
     auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
 
     // output of untilize from compute kernel goes into this CB
@@ -919,7 +919,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
     }
     auto out_cb_config = CircularBufferConfig(out_shard_size_max_per_core * out_cb_pagesize, {{out_cb_id, out_df}})
                             .set_page_size(out_cb_id, out_cb_pagesize)
-                            .set_globally_allocated_address(output.buffer()->address());
+                            .set_globally_allocated_address(*output.buffer());
     auto out_cb = CreateCircularBuffer(program, all_cores, out_cb_config);
 
     // CB for pad val buffer (stick sized)
@@ -1325,10 +1325,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
         auto dst_buffer = output_tensors.at(0).buffer();
 
         auto& src_cb_config = GetCircularBufferConfig(program, src_cb);
-        src_cb_config.set_globally_allocated_address(src_buffer->address());
+        src_cb_config.set_globally_allocated_address(*src_buffer);
 
         auto& output_cb_config = GetCircularBufferConfig(program, out_cb);
-        output_cb_config.set_globally_allocated_address(dst_buffer->address());
+        output_cb_config.set_globally_allocated_address(*dst_buffer);
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

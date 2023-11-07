@@ -458,10 +458,10 @@ void Program::validate_circular_buffer_region(const Device *device) const {
     for (const auto &[core, cb_config] : this->per_core_cb_allocator_) {
         uint64_t cb_region_end = cb_config.get_cb_region_end();
         if (cb_region_end > max_l1_size) {
-            log_fatal(tt::LogMetal, "Local buffers on core {} grow to {} B which is beyond max L1 size of {} B", core.str(), cb_region_end, max_l1_size);
+            log_fatal(tt::LogMetal, "Statically allocated circular buffers on core {} grow to {} B which is beyond max L1 size of {} B", core.str(), cb_region_end, max_l1_size);
         }
         if (lowest_address < cb_region_end) {
-            log_fatal(tt::LogMetal, "Circular buffers in program {} clash with L1 buffers on core {}. L1 buffer allocated at {} and local buffers end at {}", this->id, core.str(), lowest_address, cb_region_end);
+            log_fatal(tt::LogMetal, "Statically allocated circular buffers in program {} clash with L1 buffers on core {}. L1 buffer allocated at {} and static circular buffer region ends at {}", this->id, core.str(), lowest_address, cb_region_end);
         }
     }
 }

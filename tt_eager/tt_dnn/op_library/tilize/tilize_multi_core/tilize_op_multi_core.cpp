@@ -395,13 +395,13 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor &input, T
     uint32_t src0_cb_index = CB::c_in0;
     uint32_t num_input_tiles = num_tiles_per_shard;
     tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
-		.set_page_size(src0_cb_index, input_single_tile_size).set_globally_allocated_address(input.buffer()->address());
+		.set_page_size(src0_cb_index, input_single_tile_size).set_globally_allocated_address(*input.buffer());
 	auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
     uint32_t output_cb_index = CB::c_out0;
     uint32_t num_output_tiles = num_tiles_per_shard;
     tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
-		.set_page_size(output_cb_index, output_single_tile_size).set_globally_allocated_address(output.buffer()->address());
+		.set_page_size(output_cb_index, output_single_tile_size).set_globally_allocated_address(*output.buffer());
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     auto src_buffer = input.buffer();
@@ -479,10 +479,10 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor &input, T
         auto dst_buffer = output_tensors.at(0).buffer();
 
         auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
-        src0_cb_config.set_globally_allocated_address(src_buffer->address());
+        src0_cb_config.set_globally_allocated_address(*src_buffer);
 
         auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
-        output_cb_config.set_globally_allocated_address(dst_buffer->address());
+        output_cb_config.set_globally_allocated_address(*dst_buffer);
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
@@ -531,7 +531,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
     tt_metal::CircularBufferConfig src0_cb_config = tt_metal::CircularBufferConfig(input_shard_size_bytes, {{src0_cb_index, input_cb_data_format}})
         .set_page_size(src0_cb_index, input_shard_width_bytes);
     if (src_sharded) {
-        src0_cb_config = src0_cb_config.set_globally_allocated_address(a.buffer()->address());
+        src0_cb_config = src0_cb_config.set_globally_allocated_address(*a.buffer());
     }
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
 
@@ -552,7 +552,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
     tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(ntiles_per_core * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
         .set_page_size(output_cb_index, output_single_tile_size);
     if (out_sharded) {
-        output_cb_config.set_globally_allocated_address(output.buffer()->address());
+        output_cb_config.set_globally_allocated_address(*output.buffer());
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
@@ -658,9 +658,9 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
         bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
         auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
-        src0_cb_config.set_globally_allocated_address(src_buffer->address());
+        src0_cb_config.set_globally_allocated_address(*src_buffer);
         auto& out_cb_config = GetCircularBufferConfig(program, cb_output);
-        out_cb_config.set_globally_allocated_address(dst_buffer->address());
+        out_cb_config.set_globally_allocated_address(*dst_buffer);
 
     };
 

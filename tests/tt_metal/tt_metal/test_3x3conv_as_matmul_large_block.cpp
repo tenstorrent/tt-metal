@@ -153,30 +153,27 @@ int main(int argc, char **argv) {
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
         uint32_t cb0_index = 0;
-        uint32_t cb0_addr = 200 * 1024;
         uint32_t num_cb0_tiles = M * in0_block_w * 2;
         uint32_t cb0_size = num_cb0_tiles * single_tile_size;
-        uint32_t source_addresses_in_l1_addr = cb0_addr + cb0_size;
-        tt_metal::CircularBufferConfig cb0_config = tt_metal::CircularBufferConfig(cb0_size, {{cb0_index, tt::DataFormat::Float16_b}}, cb0_addr)
+        uint32_t source_addresses_in_l1_addr = L1_UNRESERVED_BASE + cb0_size;
+        tt_metal::CircularBufferConfig cb0_config = tt_metal::CircularBufferConfig(cb0_size, {{cb0_index, tt::DataFormat::Float16_b}})
             .set_page_size(cb0_index, single_tile_size);
         auto cb0 = tt_metal::CreateCircularBuffer(program, core, cb0_config);
 
         uint32_t cb1_index = 1;
-        uint32_t cb1_addr = 300 * 1024;
         uint32_t num_cb1_tiles = N * in0_block_w * 2;
         uint32_t cb1_size = num_cb1_tiles * single_tile_size;
-        tt_metal::CircularBufferConfig cb1_config = tt_metal::CircularBufferConfig(cb1_size, {{cb1_index, tt::DataFormat::Float16_b}}, cb1_addr)
+        tt_metal::CircularBufferConfig cb1_config = tt_metal::CircularBufferConfig(cb1_size, {{cb1_index, tt::DataFormat::Float16_b}})
             .set_page_size(cb1_index, single_tile_size);
         auto cb1 = tt_metal::CreateCircularBuffer(program, core, cb1_config);
 
         uint32_t ouput_cb_index = 16; // output operands start at index 16
         uint32_t interm0_cb_index = 24;
-        uint32_t output_cb_addr = 400 * 1024;
         uint32_t num_output_tiles = M * N;
         uint32_t cb_output_size = num_output_tiles * single_tile_size;
         CoreRangeSet cores(std::set<CoreRange>{CoreRange{.start=core, .end=core}});
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(
-                num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}, {interm0_cb_index, tt::DataFormat::Float16_b}}, output_cb_addr
+                num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}, {interm0_cb_index, tt::DataFormat::Float16_b}}
             )
             .set_page_size(ouput_cb_index, single_tile_size)
             .set_page_size(interm0_cb_index, single_tile_size);

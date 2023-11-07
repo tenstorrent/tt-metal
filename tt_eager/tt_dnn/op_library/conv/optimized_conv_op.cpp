@@ -75,9 +75,9 @@ tuple<CircularBufferID, CircularBufferID> create_CBs(tt_metal::Program &program,
                                 DataFormat out_df,
                                 DataFormat bias_df,
                                 bool weight_width_sliced,
+                                const Tensor& output,
                                 uint32_t bias_ntiles = 0,
-                                bool with_bias = false,
-                                std::optional<uint32_t> output_cb_address = std::nullopt
+                                bool with_bias = false
 ) {
 
     uint32_t act_tile_size = tt_metal::detail::TileSize(act_df);
@@ -98,7 +98,7 @@ tuple<CircularBufferID, CircularBufferID> create_CBs(tt_metal::Program &program,
         CircularBufferConfig cb_sharded_act_config = CircularBufferConfig(shard_shape[0] * shard_shape[1] * num_bytes_for_df, {{sharded_act_cb, act_df}})
 		    .set_page_size(sharded_act_cb, shard_shape[1] * num_bytes_for_df);
         // incoming data is the input cb instead of raw l1/dram addr
-        cb_sharded_act_config.set_globally_allocated_address(input.buffer()->address());
+        cb_sharded_act_config.set_globally_allocated_address(*input.buffer());
         cb_sharded_act = tt_metal::CreateCircularBuffer(program, core, cb_sharded_act_config);
 
         // For 2D convs, we need a separate cb to receive mcasted input shards
@@ -132,8 +132,8 @@ tuple<CircularBufferID, CircularBufferID> create_CBs(tt_metal::Program &program,
 
         CircularBufferConfig cb_output_config = CircularBufferConfig(num_writer_output_tiles * out_tile_size, {{out0_cb, out_df}})
 		    .set_page_size(out0_cb, out_tile_size);
-        if (output_cb_address.has_value()) {
-            cb_output_config = cb_output_config.set_globally_allocated_address(output_cb_address.value());
+        if (output.memory_config().is_sharded()) {
+            cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
         }
         cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
     } else {
@@ -145,8 +145,8 @@ tuple<CircularBufferID, CircularBufferID> create_CBs(tt_metal::Program &program,
         CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * out_tile_size, cb_output_data_format_spec)
 		    .set_page_size(out0_cb, out_tile_size)
             .set_page_size(matmul_partials_cb, out_tile_size);
-        if (output_cb_address.has_value()) {
-            cb_matmul_partials_config = cb_matmul_partials_config.set_globally_allocated_address(output_cb_address.value());
+        if (output.memory_config().is_sharded()) {
+            cb_matmul_partials_config = cb_matmul_partials_config.set_globally_allocated_address(*output.buffer());
         }
         cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_matmul_partials_config);
     }
@@ -577,10 +577,6 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
     //     writer_output_block_num_tiles = writer_output_block_num_tiles * 2;
     // }
 
-    std::optional<uint32_t> output_cb_address = std::nullopt;
-    if (output.memory_config().is_sharded()) {
-        output_cb_address = output.buffer()->address();
-    }
     // TODO: Moving this function call to after kernel logic causes pcc fails
     // There are additional CBs and semaphores created in 2D conv in kernel logic,
     // so does order of create_cb calls matter?
@@ -601,9 +597,9 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
             out_df,
             bias_df,
             weight_width_sliced,
+            output,
             bias_ntiles_per_core,
-            has_bias,
-            output_cb_address);
+            has_bias);
 
     string reader_kernel;
     string compute_kernel;
@@ -1277,12 +1273,12 @@ operation::ProgramWithCallbacks optimized_conv_(const Tensor& a, const Tensor &b
 
         if (src_a_is_sharded) {
             auto& sharded_act_cb_config = GetCircularBufferConfig(program, cb_sharded_act);
-            sharded_act_cb_config.set_globally_allocated_address(src_buffer_a->address());
+            sharded_act_cb_config.set_globally_allocated_address(*src_buffer_a);
         }
 
         if (out_sharded) {
             auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
-            output_cb_config.set_globally_allocated_address(dst_buffer->address());
+            output_cb_config.set_globally_allocated_address(*dst_buffer);
         }
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

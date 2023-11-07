@@ -290,7 +290,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
                                                     raw_in_cb_npages * raw_in_cb_pagesize,
                                                     {{raw_in_cb_id, in_df}})
                                                 .set_page_size(raw_in_cb_id, raw_in_cb_pagesize)
-                                                .set_globally_allocated_address(input.buffer()->address());
+                                                .set_globally_allocated_address(*input.buffer());
         auto raw_in_cb = CreateCircularBuffer(program, all_cores, raw_in_cb_config);
     }
 
@@ -327,7 +327,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
 
         uint32_t sharded_out_cb_page_size = output.shard_spec().value().shard_shape[1] * out_nbytes;    // there is just one row of channels after reduction
         CircularBufferConfig cb_sharded_out_config = CircularBufferConfig(sharded_out_num_pages * sharded_out_cb_page_size, {{sharded_out_cb_id, out_df}})
-            .set_page_size(sharded_out_cb_id, sharded_out_cb_page_size).set_globally_allocated_address(output.buffer()->address());
+            .set_page_size(sharded_out_cb_id, sharded_out_cb_page_size).set_globally_allocated_address(*output.buffer());
         cb_sharded_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_out_config);
     }
 
@@ -675,7 +675,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
         }
         if (out_sharded) {
             auto& output_cb_config = GetCircularBufferConfig(program, cb_sharded_out);
-            output_cb_config.set_globally_allocated_address(dst_buffer->address());
+            output_cb_config.set_globally_allocated_address(*dst_buffer);
         }
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

@@ -59,7 +59,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
     uint32_t num_input_units = num_units_per_shard;
     uint32_t page_size = round_up_to_mul32(unit_size);
     tt_metal::CircularBufferConfig cb_out_config = tt_metal::CircularBufferConfig(num_input_units * page_size, {{out_cb_index, cb_data_format}})
-		.set_page_size(out_cb_index, page_size).set_globally_allocated_address(output.buffer()->address());
+		.set_page_size(out_cb_index, page_size).set_globally_allocated_address(*output.buffer());
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
 
     auto src_buffer = input.buffer();
@@ -199,7 +199,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
             }
         }
         auto& cb_out_config = GetCircularBufferConfig(program, cb_output);
-        cb_out_config.set_globally_allocated_address(dst_buffer->address());
+        cb_out_config.set_globally_allocated_address(*dst_buffer);
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
@@ -252,7 +252,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
     uint32_t num_input_units = num_units_per_shard;
     uint32_t page_size = round_up_to_mul32(unit_size);
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_units * page_size, {{src0_cb_index, cb_data_format}})
-		.set_page_size(src0_cb_index, page_size).set_globally_allocated_address(input.buffer()->address());
+		.set_page_size(src0_cb_index, page_size).set_globally_allocated_address(*input.buffer());
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     auto src_buffer = input.buffer();
@@ -431,7 +431,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
             }
         }
         auto& cb_src0_config = GetCircularBufferConfig(program, cb_src0);
-        cb_src0_config.set_globally_allocated_address(src_buffer->address());
+        cb_src0_config.set_globally_allocated_address(*src_buffer);
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
