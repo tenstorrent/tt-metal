@@ -29,22 +29,22 @@ def get_label(image_path):
 
 
 def get_batch(data_loader, image_processor):
-        loaded_images = next(data_loader)
-        images = None
-        labels = []
-        for image in loaded_images:
-            img = image.image
-            labels.append(image.label)
-            if img.mode == "L":
-                img = img.convert(mode="RGB")
-            img = image_processor(img, return_tensors="pt")
-            img = img["pixel_values"]
+    loaded_images = next(data_loader)
+    images = None
+    labels = []
+    for image in loaded_images:
+        img = image.image
+        labels.append(image.label)
+        if img.mode == "L":
+            img = img.convert(mode="RGB")
+        img = image_processor(img, return_tensors="pt")
+        img = img["pixel_values"]
 
-            if images is None:
-                images = img
-            else:
-                images = torch.cat((images, img), dim=0)
-        return images, labels
+        if images is None:
+            images = img
+        else:
+            images = torch.cat((images, img), dim=0)
+    return images, labels
 
 
 def get_data_loader(input_loc, batch_size):
@@ -56,9 +56,9 @@ def get_data_loader(input_loc, batch_size):
         examples = []
         for f1 in files:
             examples.append(
-            InputExample(
-                image=get_input(f1),
-                label=get_label(f1),
+                InputExample(
+                    image=get_input(f1),
+                    label=get_label(f1),
                 )
             )
             if len(examples) == batch_size:
