@@ -35,19 +35,11 @@ class TtRobertaLMHead(nn.Module):
         self.fall_back_to_torch_gelu = fall_back_to_torch_gelu
         self.fallback_to_torch_linear = fall_back_to_torch_linear
 
-        self.dense_weight = torch2tt_tensor(
-            state_dict[f"{base_address}.dense.weight"], self.device
-        )
-        self.dense_bias = torch2tt_tensor(
-            state_dict[f"{base_address}.dense.bias"], self.device
-        )
+        self.dense_weight = torch2tt_tensor(state_dict[f"{base_address}.dense.weight"], self.device)
+        self.dense_bias = torch2tt_tensor(state_dict[f"{base_address}.dense.bias"], self.device)
 
-        self.gamma = torch2tt_tensor(
-            state_dict[f"{base_address}.layer_norm.weight"], self.device
-        )
-        self.beta = torch2tt_tensor(
-            state_dict[f"{base_address}.layer_norm.bias"], self.device
-        )
+        self.gamma = torch2tt_tensor(state_dict[f"{base_address}.layer_norm.weight"], self.device)
+        self.beta = torch2tt_tensor(state_dict[f"{base_address}.layer_norm.bias"], self.device)
         self.layer_norm = fallback_ops.LayerNorm(
             weights=self.gamma,
             biases=self.beta,
@@ -55,21 +47,17 @@ class TtRobertaLMHead(nn.Module):
             normalized_shape=config.hidden_size,
         )
 
-        self.decoder_weight = torch2tt_tensor(
-            state_dict[f"{base_address}.decoder.weight"], self.device
-        )
+        self.decoder_weight = torch2tt_tensor(state_dict[f"{base_address}.decoder.weight"], self.device)
         self.bias = torch2tt_tensor(state_dict[f"{base_address}.bias"], self.device)
 
-        self.decoder_bias = torch2tt_tensor(
-            state_dict[f"{base_address}.decoder.bias"], self.device
-        )
+        self.decoder_bias = torch2tt_tensor(state_dict[f"{base_address}.decoder.bias"], self.device)
         if self.fallback_to_torch_linear:
             self.decoder = nn.Linear(config.hidden_size, config.vocab_size)
             self.decoder.weight.data = state_dict[f"{base_address}.decoder.weight"]
             self.decoder.bias.data = state_dict[f"{base_address}.decoder.bias"]
 
     def linear(self, x, weight, bias):
-        weight = tt_lib.tensor.transpose(weight)
+        weight = tt_lib.tensor.transpose(weight, -2, -1)
         x = tt_lib.tensor.matmul(x, weight, output_mem_config=mem_config)
         x = tt_lib.tensor.bcast(
             x,

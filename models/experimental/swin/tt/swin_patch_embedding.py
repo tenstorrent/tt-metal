@@ -24,19 +24,9 @@ class TtSwinPatchEmbeddings(nn.Module):
         self.device = device
         image_size, patch_size = config.image_size, config.patch_size
         num_channels, hidden_size = config.num_channels, config.embed_dim
-        image_size = (
-            image_size
-            if isinstance(image_size, collections.abc.Iterable)
-            else (image_size, image_size)
-        )
-        patch_size = (
-            patch_size
-            if isinstance(patch_size, collections.abc.Iterable)
-            else (patch_size, patch_size)
-        )
-        num_patches = (image_size[1] // patch_size[1]) * (
-            image_size[0] // patch_size[0]
-        )
+        image_size = image_size if isinstance(image_size, collections.abc.Iterable) else (image_size, image_size)
+        patch_size = patch_size if isinstance(patch_size, collections.abc.Iterable) else (patch_size, patch_size)
+        num_patches = (image_size[1] // patch_size[1]) * (image_size[0] // patch_size[0])
         self.image_size = image_size
         self.patch_size = patch_size
         self.num_channels = num_channels
@@ -45,12 +35,8 @@ class TtSwinPatchEmbeddings(nn.Module):
             image_size[0] // patch_size[0],
             image_size[1] // patch_size[1],
         )
-        self.weight = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.projection.weight"], self.device
-        )
-        self.bias = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.projection.bias"], self.device
-        )
+        self.weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}.projection.weight"], self.device)
+        self.bias = torch_to_tt_tensor_rm(state_dict[f"{base_address}.projection.bias"], self.device)
 
         self.projection = fallback_ops.Conv2d(
             in_channels=num_channels,
@@ -70,9 +56,7 @@ class TtSwinPatchEmbeddings(nn.Module):
             pixel_values = fallback_ops.pad(pixel_values, pad_values)
         return pixel_values
 
-    def forward(
-        self, pixel_values: Optional[tt_lib.tensor.Tensor]
-    ) -> Tuple[tt_lib.tensor.Tensor, Tuple[int]]:
+    def forward(self, pixel_values: Optional[tt_lib.tensor.Tensor]) -> Tuple[tt_lib.tensor.Tensor, Tuple[int]]:
         _, num_channels, height, width = pixel_values.shape()
         if num_channels != self.num_channels:
             raise ValueError(
@@ -84,6 +68,6 @@ class TtSwinPatchEmbeddings(nn.Module):
         batch, channel, height, width = embeddings.shape()
         output_dimensions = (height, width)
         embeddings = fallback_ops.reshape(embeddings, 1, batch, channel, height * width)
-        embeddings = tt_lib.tensor.transpose(embeddings)
+        embeddings = tt_lib.tensor.transpose(embeddings, -2, -1)
 
         return embeddings, output_dimensions

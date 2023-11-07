@@ -62,7 +62,7 @@ def ResnetLinear(
 
     if transpose:
         assert weight.shape() == [1, 1, out_features, in_features], "weight does not have the expected shape"
-        weight_T = tt_lib.tensor.transpose(weight)
+        weight_T = tt_lib.tensor.transpose(weight, -2, -1)
     else:
         assert weight.shape() == [1, 1, in_features, out_features], "weight does not have the expected shape"
         weight_T = weight
@@ -1342,7 +1342,6 @@ class ResNet(nn.Module):
         # extra_padding_for_32B_alignment = 25
         # x = torch.nn.functional.pad(x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1))
         # x = torch.permute(x, (0, 2, 3, 1))
-
 
         # x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
 

@@ -29,34 +29,24 @@ class TtCausalSelfAttention(nn.Module):
         self.tt_weight_c_proj = state_dict[f"{base_address}.c_proj.weight"]
 
         # Push weights to Ttp device
-        self.tt_weight_c_attn = torch_to_tt_tensor_rm(
-            self.tt_weight_c_attn, self.device
-        )
+        self.tt_weight_c_attn = torch_to_tt_tensor_rm(self.tt_weight_c_attn, self.device)
 
-        self.tt_weight_c_proj = torch_to_tt_tensor_rm(
-            self.tt_weight_c_proj, self.device
-        )
+        self.tt_weight_c_proj = torch_to_tt_tensor_rm(self.tt_weight_c_proj, self.device)
 
-        self.tt_weight_c_attn = tt_lib.tensor.transpose(self.tt_weight_c_attn)
-        self.tt_weight_c_proj = tt_lib.tensor.transpose(self.tt_weight_c_proj)
+        self.tt_weight_c_attn = tt_lib.tensor.transpose(self.tt_weight_c_attn, -2, -1)
+        self.tt_weight_c_proj = tt_lib.tensor.transpose(self.tt_weight_c_proj, -2, -1)
 
         # Load biases
-        self.tt_bias_c_attn = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.c_attn.bias"], self.device
-        )
+        self.tt_bias_c_attn = torch_to_tt_tensor_rm(state_dict[f"{base_address}.c_attn.bias"], self.device)
 
-        self.tt_bias_c_proj = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.c_proj.bias"], self.device
-        )
+        self.tt_bias_c_proj = torch_to_tt_tensor_rm(state_dict[f"{base_address}.c_proj.bias"], self.device)
 
         self.n_head = self.config.n_head
         self.n_embd = self.config.n_embd
 
         self.register_buffer(
             "bias",
-            torch.tril(torch.ones(self.block_size, self.block_size)).view(
-                1, 1, self.block_size, self.block_size
-            ),
+            torch.tril(torch.ones(self.block_size, self.block_size)).view(1, 1, self.block_size, self.block_size),
         )
 
         self.c_attn = Linear(
@@ -105,7 +95,7 @@ class TtCausalSelfAttention(nn.Module):
         v = tt_lib.tensor.transpose(v, 1, 2)
 
         # manual implementation of attention
-        key_layer_transposed = tt_lib.tensor.transpose(k)
+        key_layer_transposed = tt_lib.tensor.transpose(k, -2, -1)
         att = tt_lib.tensor.bmm(q, key_layer_transposed)
 
         const_att = self.const_tensor(att.shape(), 1.0 / math.sqrt(k.shape()[-1]))
@@ -121,7 +111,7 @@ class TtCausalSelfAttention(nn.Module):
 
         tt_y = tt_lib.tensor.bmm(tt_att, v)
 
-        tt_y = tt_lib.tensor.transpose_hc(tt_y)
+        tt_y = tt_lib.tensor.transpose(tt_y, 1, -2)
         tt_y = fallback_ops.reshape(tt_y, 1, B, T, C)
 
         # output projection

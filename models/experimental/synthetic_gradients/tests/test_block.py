@@ -14,7 +14,7 @@ epsilon = 1e-5
 
 def ttLinear(weight, bias):
     def linear_(activation):
-        weight_T = tt_lib.tensor.transpose(weight)
+        weight_T = tt_lib.tensor.transpose(weight, -2, -1)
         output = tt_lib.tensor.matmul(activation, weight_T)
         output_plus_bias = tt_lib.tensor.add(output, bias)
         return output_plus_bias
@@ -58,9 +58,7 @@ class PytorchBatchNorm1D(nn.Module):
 
 def run_block_inference(in_features, out_features, device):
     # set inputs
-    inputs_torch = (
-        torch.FloatTensor(1, in_features).uniform_(-1.0, 1.0).requires_grad_(True)
-    )
+    inputs_torch = torch.FloatTensor(1, in_features).uniform_(-1.0, 1.0).requires_grad_(True)
 
     inputs_reshape = inputs_torch.reshape(1, 1, 1, -1)
     inputs_targ = torch.zeros(1, 1, 32, inputs_reshape.shape[3])
@@ -77,9 +75,7 @@ def run_block_inference(in_features, out_features, device):
     # torch linear params
     weight_lin_torch = torch.randn(out_features, in_features)
     bias_lin_torch = torch.randn(out_features)
-    linear_torch = torchLinear(
-        in_features, out_features, weight_lin_torch, bias_lin_torch
-    )
+    linear_torch = torchLinear(in_features, out_features, weight_lin_torch, bias_lin_torch)
 
     # tt linear params
     weight_lin = weight_lin_torch.view(1, 1, out_features, in_features)
@@ -107,18 +103,10 @@ def run_block_inference(in_features, out_features, device):
     # batch norm torch
     bn_torch = PytorchBatchNorm1D(out_features)
     bn_torch.eval()
-    weight_bn_torch = torch.nn.Parameter(
-        torch.FloatTensor(out_features).uniform_(-1.0, 1.0).requires_grad_(True)
-    )
-    bias_bn_torch = torch.nn.Parameter(
-        torch.FloatTensor(out_features).uniform_(-1.0, 1.0).requires_grad_(True)
-    )
-    running_mean_bn_torch = (
-        torch.FloatTensor(out_features).uniform_(-1.0, 1.0).requires_grad_(False)
-    )
-    running_var_bn_torch = (
-        torch.FloatTensor(out_features).uniform_(0.0, 1.0).requires_grad_(False)
-    )  # must be positive
+    weight_bn_torch = torch.nn.Parameter(torch.FloatTensor(out_features).uniform_(-1.0, 1.0).requires_grad_(True))
+    bias_bn_torch = torch.nn.Parameter(torch.FloatTensor(out_features).uniform_(-1.0, 1.0).requires_grad_(True))
+    running_mean_bn_torch = torch.FloatTensor(out_features).uniform_(-1.0, 1.0).requires_grad_(False)
+    running_var_bn_torch = torch.FloatTensor(out_features).uniform_(0.0, 1.0).requires_grad_(False)  # must be positive
 
     bn_torch.batchnorm1d_1.weight = weight_bn_torch
     bn_torch.batchnorm1d_1.bias = bias_bn_torch
@@ -196,50 +184,36 @@ def run_block_inference(in_features, out_features, device):
     # tt
     linear_tt = ttLinear(weight_lin_tt, bias_lin_tt)
     output_lin_tt = linear_tt(inputs_tt)
-    bn_tt = ttBatchnorm1d_inference(
-        gamma, beta, running_mean_tt, running_var_tt, eps_tt
-    )
+    bn_tt = ttBatchnorm1d_inference(gamma, beta, running_mean_tt, running_var_tt, eps_tt)
     output_bn_tt = bn_tt(output_lin_tt)
     output_full_tt = tt_lib.tensor.relu(output_bn_tt)
 
     # compare
-    output_lin_tt_untilized = untilize(
-        torch.Tensor(output_lin_tt.cpu().to_torch()).reshape(output_lin_tt.shape())
-    )
+    output_lin_tt_untilized = untilize(torch.Tensor(output_lin_tt.cpu().to_torch()).reshape(output_lin_tt.shape()))
     output_lin_tt_untilized = output_lin_tt_untilized[0, 0, 0, :]
 
-    output_bn_tt_untilized = untilize(
-        torch.Tensor(output_bn_tt.cpu().to_torch()).reshape(output_bn_tt.shape())
-    )
+    output_bn_tt_untilized = untilize(torch.Tensor(output_bn_tt.cpu().to_torch()).reshape(output_bn_tt.shape()))
     output_bn_tt_untilized = output_bn_tt_untilized[0, 0, 0, :]
 
-    output_full_tt_untilized = untilize(
-        torch.Tensor(output_full_tt.cpu().to_torch()).reshape(output_full_tt.shape())
-    )
+    output_full_tt_untilized = untilize(torch.Tensor(output_full_tt.cpu().to_torch()).reshape(output_full_tt.shape()))
     output_full_tt_untilized = output_full_tt_untilized[0, 0, 0, :]
 
     print("pytorch_linear_out:", output_lin_torch[0][0:10])
     print("tt_linear_out:", output_lin_tt_untilized[0:10])
 
-    liner_test_result, output = comp_allclose_and_pcc(
-        output_lin_torch[0], output_lin_tt_untilized
-    )
+    liner_test_result, output = comp_allclose_and_pcc(output_lin_torch[0], output_lin_tt_untilized)
     print("\n\n", "atol/rtol:", liner_test_result, "| output:", output, "\n\n")
 
     print("pytorch_bn_out:", output_bn_torch[0][0:10])
     print("tt_bn_out:", output_bn_tt_untilized[0:10])
 
-    bn_test_result, output = comp_allclose_and_pcc(
-        output_bn_torch[0], output_bn_tt_untilized
-    )
+    bn_test_result, output = comp_allclose_and_pcc(output_bn_torch[0], output_bn_tt_untilized)
     print("\n\n", "atol/rtol:", bn_test_result, "| output:", output, "\n\n")
 
     print("pytorch_full_out:", output_full_torch[0][0:10])
     print("tt_full_out:", output_full_tt_untilized[0:10])
 
-    full_test_result, output = comp_allclose_and_pcc(
-        output_full_torch[0], output_full_tt_untilized
-    )
+    full_test_result, output = comp_allclose_and_pcc(output_full_torch[0], output_full_tt_untilized)
     print("\n\n", "atol/rtol:", full_test_result, "| output:", output, "\n\n")
 
 

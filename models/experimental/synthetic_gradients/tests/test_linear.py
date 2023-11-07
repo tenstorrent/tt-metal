@@ -12,7 +12,7 @@ from models.utility_functions import tilize_to_list, untilize, comp_allclose_and
 
 def ttLinear(weight, bias):
     def linear_(activation):
-        weight_T = tt_lib.tensor.transpose(weight)
+        weight_T = tt_lib.tensor.transpose(weight, -2, -1)
         output = tt_lib.tensor.matmul(activation, weight_T)
         output_plus_bias = tt_lib.tensor.add(output, bias)
         return output_plus_bias
@@ -73,9 +73,7 @@ def run_linear_test(in_features, out_features, device):
 
     linear_tt = ttLinear(weight_tt, bias_tt)
     output_tt = linear_tt(inputs_tt)
-    output_tt = untilize(
-        torch.Tensor(output_tt.cpu().to_torch()).reshape(output_tt.shape())
-    )
+    output_tt = untilize(torch.Tensor(output_tt.cpu().to_torch()).reshape(output_tt.shape()))
     output_tt = output_tt[0, 0, 0, :]
 
     test_results, output = comp_allclose_and_pcc(output_torch, output_tt)

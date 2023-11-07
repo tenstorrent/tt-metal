@@ -480,36 +480,6 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
         else:
             raise NotImplementedError("Method {method} is not a valid choice")
 
-
-ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
-
-
-def is_wormhole_b0():
-    return "wormhole_b0" in ARCH_NAME
-
-
-def is_grayskull():
-    return "grayskull" in ARCH_NAME
-
-
-def skip_for_wormhole_b0(fn):
-    @pytest.mark.skipif(is_wormhole_b0(), reason="not working for Wormhole B0")
-    @functools.wraps(fn)
-    def _caller_fn(*args, **kwargs):
-        return fn(*args, **kwargs)
-
-    return _caller_fn
-
-
-def skip_for_grayskull(fn):
-    @pytest.mark.skipif(is_grayskull(), reason="not working for Grayskull")
-    @functools.wraps(fn)
-    def _caller_fn(*args, **kwargs):
-        return fn(*args, **kwargs)
-
-    return _caller_fn
-
-
 def set_dispatch_mode(set_var):
     if set_var:
         dispatch = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)

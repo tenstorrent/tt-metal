@@ -15,9 +15,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.common import (
-    is_wormhole_b0,
-)
+from models.utility_functions import is_wormhole_b0
 
 shapes_mm = [
     # Single core (won't be hit after padding is added for multicast)
@@ -57,9 +55,7 @@ if is_wormhole_b0():
 )
 def test_run_matmul_test(input_shapes, device, dtype, function_level_defaults):
     datagen_func = [
-        generation_funcs.gen_func_with_cast(
-            partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
-        )
+        generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
     ] * 2
     comparison_func = partial(comparison_funcs.comp_pcc)
     run_single_pytorch_test(
@@ -71,7 +67,10 @@ def test_run_matmul_test(input_shapes, device, dtype, function_level_defaults):
         {
             "dtype": [dtype, dtype],
             "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-            "input_mem_config": [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)] * 2,
+            "input_mem_config": [
+                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+            ]
+            * 2,
             "output_mem_config": ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
             ),
@@ -116,9 +115,7 @@ if is_wormhole_b0():
 )
 def test_run_bmm_test(input_shapes, device, dtype, function_level_defaults):
     datagen_func = [
-        generation_funcs.gen_func_with_cast(
-            partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32
-        )
+        generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
     ] * 2
     comparison_func = partial(comparison_funcs.comp_pcc)
     run_single_pytorch_test(
@@ -130,7 +127,10 @@ def test_run_bmm_test(input_shapes, device, dtype, function_level_defaults):
         {
             "dtype": [dtype, dtype],
             "layout": [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-            "input_mem_config": [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)] * 2,
+            "input_mem_config": [
+                ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
+            ]
+            * 2,
             "output_mem_config": ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM
             ),

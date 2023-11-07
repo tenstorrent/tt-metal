@@ -12,12 +12,10 @@ from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
 from models.utility_functions import comp_pcc, comp_allclose
 
 
-def feed_forward(
-    ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device
-):
+def feed_forward(ffn_dim, hidden_dim, ff1_weighta, ff1_biasa, ff2_weighta, ff2_biasa, device):
     # Weights pre-transposed on host​. No on-the fly transpose of W.
-    ff1_weighta = ttl.tensor.transpose(ff1_weighta)
-    ff2_weighta = ttl.tensor.transpose(ff2_weighta)
+    ff1_weighta = ttl.tensor.transpose(ff1_weighta, -2, -1)
+    ff2_weighta = ttl.tensor.transpose(ff2_weighta, -2, -1)
 
     # activation = [1, 9, 384, 1024]
     # ff1_weighta = [1, 1, 1024, 4096]
@@ -25,9 +23,7 @@ def feed_forward(
     def op13_MM_bias_gelu(activation, ff1_weighta, ff1_biasa):
         # profiler.start("___op13_MM_bias_gelu")
         output = ttl.tensor.matmul(activation, ff1_weighta)
-        output_plus_bias = ttl.tensor.bcast(
-            output, ff1_biasa, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H
-        )
+        output_plus_bias = ttl.tensor.bcast(output, ff1_biasa, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
         output_plus_bias_act = ttl.tensor.gelu(output_plus_bias)
         # profiler.end("___op13_MM_bias_gelu")
 
@@ -39,9 +35,7 @@ def feed_forward(
     def op14_MM_bias(activation, ff2_weighta, ff2_biasa):
         # profiler.start("___op14_MM_bias")
         output = ttl.tensor.matmul(activation, ff2_weighta)
-        output_plus_bias = ttl.tensor.bcast(
-            output, ff2_biasa, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H
-        )
+        output_plus_bias = ttl.tensor.bcast(output, ff2_biasa, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H)
         # profiler.end("___op14_MM_bias")
 
         return output_plus_bias
@@ -49,9 +43,7 @@ def feed_forward(
     def feed_forward_(activation):
         # profiler.start("__ffn")
         ff1_output_plus_bias_act = op13_MM_bias_gelu(activation, ff1_weighta, ff1_biasa)
-        ff2_output_plus_bias = op14_MM_bias(
-            ff1_output_plus_bias_act, ff2_weighta, ff2_biasa
-        )
+        ff2_output_plus_bias = op14_MM_bias(ff1_output_plus_bias_act, ff2_weighta, ff2_biasa)
         # profiler.end("__ffn")
 
         return ff2_output_plus_bias
@@ -64,12 +56,8 @@ class TtFeedForwardModel(torch.nn.Module):
         super().__init__()
 
         # FF1 params
-        encoder0_ff1_weight = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.weight"]
-        )
-        encoder0_ff1_bias = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.bias"]
-        )
+        encoder0_ff1_weight = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.weight"])
+        encoder0_ff1_bias = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.intermediate.dense.bias"])
 
         encoder0_ff1_weight_shape = encoder0_ff1_weight.shape
         encoder0_ff1_bias_shape = encoder0_ff1_bias.shape
@@ -96,12 +84,8 @@ class TtFeedForwardModel(torch.nn.Module):
         )
 
         # FF2 params
-        encoder0_ff2_weight = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.weight"]
-        )
-        encoder0_ff2_bias = pad_weight(
-            state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.bias"]
-        )
+        encoder0_ff2_weight = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.weight"])
+        encoder0_ff2_bias = pad_weight(state_dict[f"bert.encoder.layer.{encoder_idx}.output.dense.bias"])
 
         encoder0_ff2_weight_shape = encoder0_ff2_weight.shape
         encoder0_ff2_bias_shape = encoder0_ff2_bias.shape
@@ -163,25 +147,16 @@ def summarize_stats(t, name):
     print()
 
 
-def run_ffn_inference(
-    device, model_version, batch, seq_len, pcc, model_location_generator
-):
+def run_ffn_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
 
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(
-        model_name, torchscript=False
-    )
-    tt_ffn_model = TtFeedForwardModel(
-        0, hugging_face_reference_model.state_dict(), device
-    )
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    tt_ffn_model = TtFeedForwardModel(0, hugging_face_reference_model.state_dict(), device)
     pytorch_ffn_model = PytorchFeedForwardModel(hugging_face_reference_model)
 
     # Prepare input
     torch.manual_seed(0)
-    ffn_input = (
-        torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size)
-        * 2
-    ) - 1
+    ffn_input = (torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size) * 2) - 1
 
     pytorch_out = pytorch_ffn_model(ffn_input)
 
@@ -217,9 +192,5 @@ def run_ffn_inference(
         ("phiyodr/bert-large-finetuned-squad2", 1, 384, 0.99),
     ),
 )
-def test_ffn_inference(
-    device, model_version, batch, seq_len, pcc, model_location_generator
-):
-    run_ffn_inference(
-        device, model_version, batch, seq_len, pcc, model_location_generator
-    )
+def test_ffn_inference(device, model_version, batch, seq_len, pcc, model_location_generator):
+    run_ffn_inference(device, model_version, batch, seq_len, pcc, model_location_generator)

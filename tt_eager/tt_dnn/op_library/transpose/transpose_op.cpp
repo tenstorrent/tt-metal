@@ -4,6 +4,8 @@
 
 #include "tt_dnn/op_library/transpose/transpose_op.hpp"
 #include "tt_dnn/op_library/permute/permute_op.hpp"
+#include "tt_dnn/op_library/copy/copy_op.hpp"
+
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 
@@ -103,6 +105,8 @@ TransposeOpParallelizationStrategy Transpose::get_parallelization_strategy(const
         return TransposeOpParallelizationStrategy::MULTI_CORE_WH;
     } else if (this->dim == TransposeOpDim::HC && num_tiles > 1) { // Always true for legal shape until requirement on tile size IO is no longer required
         return TransposeOpParallelizationStrategy::MULTI_CORE_HC;
+    } else if (this->dim == TransposeOpDim::CN && num_tiles > 1) {
+        return TransposeOpParallelizationStrategy::MULTI_CORE_CN;
     } else {
         return TransposeOpParallelizationStrategy::SINGLE_CORE;
     }
@@ -127,65 +131,29 @@ const operation::Hash Transpose::compute_program_hash(
 inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const MemoryConfig& output_mem_config) {
     bool pad_c = false;
     bool pad_n = false;
+
     switch (transpose_dim) {
-        case TransposeOpDim::CN:
-            if (a.shape()[0] == 1 && a.shape()[1] == 1) {
-                return a;
-            }
-            break;
         case TransposeOpDim::HC:
-            if (a.shape()[1] == 1 && a.shape()[2] == 1) {
-                return a;
-            }
             pad_c = true;
             break;
-        case TransposeOpDim::WH:
-            if (a.shape()[2] == 1 && a.shape()[3] == 1) {
-                return a;
-            }
-            break;
         case TransposeOpDim::NH:
-            if (a.shape()[0] == 1 && a.shape()[2] == 1) {
-                return a;
-            }
-            return transpose_nh(a);
+            return permute(a, {2, 1, 0, 3}, output_mem_config);
             pad_n = true;
             break;
         case TransposeOpDim::NW:
-            if (a.shape()[0] == 1 && a.shape()[3] == 1) {
-                return a;
-            }
-            return transpose_nw(a);
+            return permute(a, {3, 1, 2, 0}, output_mem_config);
             pad_n = true;
             break;
         case TransposeOpDim::CW:
-            if (a.shape()[1] == 1 && a.shape()[3] == 1) {
-                return a;
-            }
-            return transpose_cw(a);
+            return permute(a, {0, 3, 2, 1}, output_mem_config);
             pad_c = true;
             break;
         default:
-            TT_ASSERT( false && "unexpected operator mode for transpose ");
+            break;
     }
 
     // TODO: Add pad_n to run_with_autoformat when needed
     return operation::run_with_autoformat(Transpose{transpose_dim, output_mem_config}, {a}, {}, 0, pad_c /*, pad_n */).at(0);
-}
-
-// TODO: Don't bind transpose as transpose_wh, should explicitly bind like the others
-// Alternatively, bind only 1 transpose function and take 2 dims to transpose
-Tensor transpose(const Tensor &a, const MemoryConfig& output_mem_config) { return transpose_(a, TransposeOpDim::WH, output_mem_config); }
-// 4 choose 2 = 6 transposes on NCHW rank-4 tensors without order.
-// Unique transposes : ('n', 'c'), ('n', 'h'), ('n', 'w'), ('c', 'h'), ('c', 'w'), ('h', 'w')
-Tensor transpose_wh(const Tensor &a, const MemoryConfig& output_mem_config) { return transpose_(a, TransposeOpDim::WH, output_mem_config); }
-Tensor transpose_hc(const Tensor &a, const MemoryConfig& output_mem_config) { return transpose_(a, TransposeOpDim::HC, output_mem_config); }
-Tensor transpose_cn(const Tensor &a, const MemoryConfig& output_mem_config) { return transpose_(a, TransposeOpDim::CN, output_mem_config); }
-
-Tensor transpose_nh(const Tensor &a, const MemoryConfig& output_mem_config) { return permute(a, {2, 1, 0, 3}, output_mem_config); }
-Tensor transpose_nw(const Tensor &a, const MemoryConfig& output_mem_config) { return permute(a, {3, 1, 2, 0}, output_mem_config); }
-Tensor transpose_cw(const Tensor& a, const MemoryConfig& output_mem_config) {
-    return permute(a, {0, 3, 2, 1}, output_mem_config);
 }
 
 Tensor transpose(const Tensor &a, std::int64_t dim1, std::int64_t dim2, const MemoryConfig& output_mem_config) {
@@ -195,33 +163,39 @@ Tensor transpose(const Tensor &a, std::int64_t dim1, std::int64_t dim2, const Me
     TT_ASSERT( normalized_dim1 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
     TT_ASSERT(normalized_dim2 <= 3, "dimension have to be 0-3 only corresponding to N,C,H,W");
 
-    if ( normalized_dim1 == normalized_dim2 ) {
-        return a;
+    if (
+        (normalized_dim1 == normalized_dim2) ||
+        (a.shape()[normalized_dim1] == 1 && a.shape()[normalized_dim2] == 1)
+    ) {
+        if (a.memory_config() != output_mem_config) {
+            return clone(a, output_mem_config);
+        } else {
+            return a;
+        }
     }
 
     if ( normalized_dim1 > normalized_dim2 ) {
         std::swap(normalized_dim1, normalized_dim2);
     }
 
-    // N C H W
-    // 0 1 2 3
+    TransposeOpDim transpose_dim;
 
     if ( normalized_dim2 == 3 && normalized_dim1 == 0 ) {
-        return transpose_nw(a);
+        transpose_dim = TransposeOpDim::NW;
     } else if (normalized_dim2 == 3 && normalized_dim1 == 1) {
-        return transpose_cw(a);
+       transpose_dim = TransposeOpDim::CW;
     } else if (normalized_dim2 == 3 && normalized_dim1 == 2) {
-        return transpose_wh(a);
+        transpose_dim = TransposeOpDim::WH;
     } else if (normalized_dim2 == 2 && normalized_dim1 == 0) {
-        return transpose_nh(a);
+        transpose_dim = TransposeOpDim::NH;
     } else if (normalized_dim2 == 2 && normalized_dim1 == 1) {
-        return transpose_hc(a);
+        transpose_dim = TransposeOpDim::HC;
     } else if (normalized_dim2 == 1 && normalized_dim1 == 0) {
-        return transpose_cn(a);
+        transpose_dim = TransposeOpDim::CN;
     } else {
         TT_ASSERT(false, "Unsupported transpose dims");
     }
-    return a;
+    return transpose_(a, transpose_dim, output_mem_config);
 }
 
 

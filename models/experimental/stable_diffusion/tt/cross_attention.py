@@ -55,7 +55,9 @@ class TtCrossAttention(nn.Module):
         self.upcast_softmax = upcast_softmax
         self.device = device
         self.host = host
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+        )
 
         self.scale = dim_head**-0.5
 
@@ -70,41 +72,61 @@ class TtCrossAttention(nn.Module):
         if norm_num_groups is not None:
             self.torch_group_norm_weight = nn.Parameter(state_dict[f"{base_address}.torch_group_norm.weight"])
             self.torch_group_norm_bias = nn.Parameter(state_dict[f"{base_address}.torch_group_norm.bias"])
-            self.torch_group_norm = fallback_ops.GroupNorm(self.torch_group_norm_weight, self.torch_group_norm_bias, num_channels=inner_dim, num_groups=norm_num_groups, eps=1e-5, affine=True)
+            self.torch_group_norm = fallback_ops.GroupNorm(
+                self.torch_group_norm_weight,
+                self.torch_group_norm_bias,
+                num_channels=inner_dim,
+                num_groups=norm_num_groups,
+                eps=1e-5,
+                affine=True,
+            )
         else:
             self.torch_group_norm = None
 
-
         qweights = state_dict[f"{base_address}.to_q.weight"]
         qbias = state_dict[f"{base_address}.to_q.bias"] if bias else None
-        self.to_q = make_linear(in_features=query_dim, out_features=inner_dim, weights=qweights, bias=qbias, device=self.device)
-
+        self.to_q = make_linear(
+            in_features=query_dim, out_features=inner_dim, weights=qweights, bias=qbias, device=self.device
+        )
 
         kweights = state_dict[f"{base_address}.to_k.weight"]
         kbias = state_dict[f"{base_address}.to_k.bias"] if bias else None
-        self.to_k = make_linear(in_features=cross_attention_dim, out_features=inner_dim, weights=kweights, bias=kbias, device=self.device)
-
-
+        self.to_k = make_linear(
+            in_features=cross_attention_dim, out_features=inner_dim, weights=kweights, bias=kbias, device=self.device
+        )
 
         vweights = state_dict[f"{base_address}.to_v.weight"]
         vbias = state_dict[f"{base_address}.to_v.bias"] if bias else None
-        self.to_v = make_linear(in_features=cross_attention_dim, out_features=inner_dim, weights=vweights, bias=vbias, device=self.device)
-
+        self.to_v = make_linear(
+            in_features=cross_attention_dim, out_features=inner_dim, weights=vweights, bias=vbias, device=self.device
+        )
 
         if self.added_kv_proj_dim is not None:
             add_k_proj_weights = state_dict[f"{base_address}.add_k_proj.weight"]
             add_k_proj_bias = state_dict[f"{base_address}.add_k_proj.bias"] if bias else None
-            self.add_k_proj = make_linear(in_features=added_kv_proj_dim, out_features=cross_attention_dim, weights=add_k_proj_weights, bias=add_k_proj_bias, device=self.device)
+            self.add_k_proj = make_linear(
+                in_features=added_kv_proj_dim,
+                out_features=cross_attention_dim,
+                weights=add_k_proj_weights,
+                bias=add_k_proj_bias,
+                device=self.device,
+            )
 
             add_v_proj_weights = state_dict[f"{base_address}.add_v_proj.weight"]
             add_v_proj_bias = state_dict[f"{base_address}.add_v_proj.bias"] if bias else None
-            self.add_v_proj = make_linear(in_features=added_kv_proj_dim, out_features=cross_attention_dim, weights=add_v_proj_weights, bias=add_v_proj_bias, device=self.device)
-
+            self.add_v_proj = make_linear(
+                in_features=added_kv_proj_dim,
+                out_features=cross_attention_dim,
+                weights=add_v_proj_weights,
+                bias=add_v_proj_bias,
+                device=self.device,
+            )
 
         to_out0_weight = state_dict[f"{base_address}.to_out.0.weight"]
         to_out0_bias = state_dict[f"{base_address}.to_out.0.bias"]
-        self.to_out = make_linear(in_features=inner_dim, out_features=query_dim, weights=to_out0_weight, bias=to_out0_bias, device=self.device)
-
+        self.to_out = make_linear(
+            in_features=inner_dim, out_features=query_dim, weights=to_out0_weight, bias=to_out0_bias, device=self.device
+        )
 
     def set_attention_slice(self, slice_size):
         assert False, "Not Implemented"
@@ -112,14 +134,23 @@ class TtCrossAttention(nn.Module):
     def set_processor(self, processor: "AttnProcessor"):
         self.processor = processor
 
-    def forward(self, hidden_states: ttl.tensor.Tensor, encoder_hidden_states=None, attention_mask=None, **cross_attention_kwargs) -> ttl.tensor.Tensor:
+    def forward(
+        self,
+        hidden_states: ttl.tensor.Tensor,
+        encoder_hidden_states=None,
+        attention_mask=None,
+        **cross_attention_kwargs,
+    ) -> ttl.tensor.Tensor:
         # The `CrossAttention` class can call different attention processors / attention functions
         # here we simply pass along all tensors to the selected processor class
         # For standard processors that are defined here, `**cross_attention_kwargs` is empty
-        return CrossAttnProcessor(self, hidden_states,
+        return CrossAttnProcessor(
+            self,
+            hidden_states,
             encoder_hidden_states=encoder_hidden_states,
             attention_mask=attention_mask,
-            **cross_attention_kwargs,)
+            **cross_attention_kwargs,
+        )
 
     def batch_to_head_dim(self, tensor: ttl.tensor.Tensor) -> ttl.tensor.Tensor:
         head_size = self.heads
@@ -137,8 +168,10 @@ class TtCrossAttention(nn.Module):
         tensor = fallback_ops.reshape(tensor, 1, batch_size * head_size, seq_len, dim // head_size)
         return tensor
 
-    def get_attention_scores(self, query: ttl.tensor.Tensor, key: ttl.tensor.Tensor, attention_mask=None) -> ttl.tensor.Tensor:
-        t_key = ttl.tensor.transpose(key)
+    def get_attention_scores(
+        self, query: ttl.tensor.Tensor, key: ttl.tensor.Tensor, attention_mask=None
+    ) -> ttl.tensor.Tensor:
+        t_key = ttl.tensor.transpose(key, -2, -1)
 
         temp = ttl.tensor.bmm(query, t_key)
         # Aaron: TODO: intentionally keeping this here!
@@ -173,7 +206,9 @@ class TtCrossAttention(nn.Module):
         return attention_mask
 
 
-def CrossAttnProcessor(attn: TtCrossAttention, hidden_states: ttl.tensor.Tensor, encoder_hidden_states=None, attention_mask=None) -> ttl.tensor.Tensor:
+def CrossAttnProcessor(
+    attn: TtCrossAttention, hidden_states: ttl.tensor.Tensor, encoder_hidden_states=None, attention_mask=None
+) -> ttl.tensor.Tensor:
     out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
 
     _, batch_size, sequence_length, _ = hidden_states.shape()

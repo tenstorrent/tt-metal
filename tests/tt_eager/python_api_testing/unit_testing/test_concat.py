@@ -17,13 +17,10 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
     comp_equal,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.common import (
-    is_wormhole_b0,
-    skip_for_wormhole_b0,
-)
+from models.utility_functions import skip_for_wormhole_b0
 
 
-@skip_for_wormhole_b0
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "memcfg",
     (
@@ -32,9 +29,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.common import (
     ),
     ids=["out_DRAM", "out_L1"],
 )
-@pytest.mark.parametrize(
-    "dtype", ((ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B))
-)
+@pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B)))
 @pytest.mark.parametrize("nChannels", ((2, 3, 4)))
 def test_tile_simple_concat(memcfg, dtype, nChannels, device, function_level_defaults):
     input_shape = torch.Size([nChannels, nChannels, 32, 32])
@@ -67,7 +62,7 @@ def test_tile_simple_concat(memcfg, dtype, nChannels, device, function_level_def
 
 
 # @pytest.mark.skip(reason="For Stable Diffusion Sizes only")
-@skip_for_wormhole_b0
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "shape_a, shape_b, dim",
     (
@@ -119,7 +114,7 @@ def test_tile_concat(shape_a, shape_b, dim, device, function_level_defaults):
     assert passing
 
 
-@skip_for_wormhole_b0
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "shapes, dim",
     (
@@ -134,9 +129,7 @@ def test_multi_input_concat(shapes, dim, device, function_level_defaults):
     tt_inputs = []
     for i in range(len(shapes)):
         shape = torch.Size(shapes[i])
-        inputs.append(
-            i + torch.arange(0, shape.numel()).reshape(shape).to(torch.bfloat16)
-        )
+        inputs.append(i + torch.arange(0, shape.numel()).reshape(shape).to(torch.bfloat16))
         tt_inputs.append(
             ttl.tensor.Tensor(
                 inputs[i],

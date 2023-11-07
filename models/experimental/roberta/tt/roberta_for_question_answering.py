@@ -36,7 +36,9 @@ class TtRobertaForQuestionAnswering(nn.Module):
         reference_model,
     ):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.mem_config = tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        )
         self.config = config
         self.device = device
         self.num_labels = config.num_labels
@@ -50,16 +52,12 @@ class TtRobertaForQuestionAnswering(nn.Module):
             add_pooling_layer=False,
         )
 
-        self.qa_outputs_weight = torch2tt_tensor(
-            state_dict[f"qa_outputs.weight"], self.device
-        )
+        self.qa_outputs_weight = torch2tt_tensor(state_dict[f"qa_outputs.weight"], self.device)
 
-        self.qa_outputs_bias = torch2tt_tensor(
-            state_dict[f"qa_outputs.bias"], self.device
-        )
+        self.qa_outputs_bias = torch2tt_tensor(state_dict[f"qa_outputs.bias"], self.device)
 
     def linear(self, x, weight, bias):
-        weight = tt_lib.tensor.transpose(weight)
+        weight = tt_lib.tensor.transpose(weight, -2, -1)
         x = tt_lib.tensor.matmul(x, weight, output_mem_config=self.mem_config)
         x = tt_lib.tensor.bcast(
             x,
@@ -94,9 +92,7 @@ class TtRobertaForQuestionAnswering(nn.Module):
             Positions are clamped to the length of the sequence (`sequence_length`). Position outside of the sequence
             are not taken into account for computing the loss.
         """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         outputs = self.roberta(
             input_ids,
@@ -112,9 +108,7 @@ class TtRobertaForQuestionAnswering(nn.Module):
 
         sequence_output = outputs.last_hidden_state
 
-        logits = self.linear(
-            sequence_output, self.qa_outputs_weight, self.qa_outputs_bias
-        )
+        logits = self.linear(sequence_output, self.qa_outputs_weight, self.qa_outputs_bias)
 
         torch_logits = tt2torch_tensor(logits).squeeze(0)
         start_logits, end_logits = torch_logits.split(1, dim=-1)

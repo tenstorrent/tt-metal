@@ -23,28 +23,18 @@ class TtMLP(torch.nn.Module):
         # Push weights to Tt device
         self.tt_weight_c_fc = torch_to_tt_tensor_rm(self.tt_weight_c_fc, self.device)
 
-        self.tt_weight_c_proj = torch_to_tt_tensor_rm(
-            self.tt_weight_c_proj, self.device
-        )
+        self.tt_weight_c_proj = torch_to_tt_tensor_rm(self.tt_weight_c_proj, self.device)
 
         # Load biases
-        self.tt_bias_c_fc = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.c_fc.bias"], self.device
-        )
+        self.tt_bias_c_fc = torch_to_tt_tensor_rm(state_dict[f"{base_address}.c_fc.bias"], self.device)
 
-        self.tt_bias_c_proj = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}.c_proj.bias"], self.device
-        )
+        self.tt_bias_c_proj = torch_to_tt_tensor_rm(state_dict[f"{base_address}.c_proj.bias"], self.device)
 
-        self.tt_weight_c_fc = tt_lib.tensor.transpose(self.tt_weight_c_fc)
-        self.tt_weight_c_proj = tt_lib.tensor.transpose(self.tt_weight_c_proj)
+        self.tt_weight_c_fc = tt_lib.tensor.transpose(self.tt_weight_c_fc, -2, -1)
+        self.tt_weight_c_proj = tt_lib.tensor.transpose(self.tt_weight_c_proj, -2, -1)
 
-        self.c_fc = Linear(
-            config.n_embd, 4 * config.n_embd, self.tt_weight_c_fc, self.tt_bias_c_fc
-        )
-        self.c_proj = Linear(
-            4 * config.n_embd, config.n_embd, self.tt_weight_c_proj, self.tt_bias_c_proj
-        )
+        self.c_fc = Linear(config.n_embd, 4 * config.n_embd, self.tt_weight_c_fc, self.tt_bias_c_fc)
+        self.c_proj = Linear(4 * config.n_embd, config.n_embd, self.tt_weight_c_proj, self.tt_bias_c_proj)
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         x1 = self.c_fc(x)

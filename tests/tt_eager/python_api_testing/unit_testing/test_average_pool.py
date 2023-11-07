@@ -17,7 +17,7 @@ import tt_lib as ttl
 from tt_lib.utils import _nearest_32
 from models.utility_functions import comp_pcc
 
-from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0
 
 TILE_HEIGHT = TILE_WIDTH = 32
 
@@ -26,7 +26,7 @@ def shape_padded(shape):
     return [shape[0], shape[1], _nearest_32(shape[2]), _nearest_32(shape[3])]
 
 
-@skip_for_wormhole_b0
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "act_shape",
     (([1, 7, 7, 2048], ([1, 1, 32, 64]))),
@@ -62,9 +62,7 @@ def test_run_average_pool(act_shape, dtype, device):
     out_pytorch = out.to_torch()
 
     ## reference
-    act_channels_first = torch.permute(
-        act, (0, 3, 1, 2)
-    )  # Torch operates on channels-first tensors
+    act_channels_first = torch.permute(act, (0, 3, 1, 2))  # Torch operates on channels-first tensors
     golden_pytorch = torch.nn.AdaptiveAvgPool2d((1, 1))(act_channels_first)
 
     ## test for equivalance

@@ -22,7 +22,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0
 
 if is_wormhole_b0():
     shapes = [

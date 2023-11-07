@@ -26,19 +26,15 @@ class TtRobertaOutput(nn.Module):
         device,
     ):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.mem_config = tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        )
         self.device = device
 
-        self.dense_weight = pad_by_zero(
-            state_dict[f"{base_address}.dense.weight"], self.device
-        )[0]
-        self.dense_bias = pad_by_zero(
-            state_dict[f"{base_address}.dense.bias"], self.device
-        )[0]
+        self.dense_weight = pad_by_zero(state_dict[f"{base_address}.dense.weight"], self.device)[0]
+        self.dense_bias = pad_by_zero(state_dict[f"{base_address}.dense.bias"], self.device)[0]
 
-        gamma = pad_by_zero(
-            state_dict[f"{base_address}.LayerNorm.weight"], self.device
-        )[0]
+        gamma = pad_by_zero(state_dict[f"{base_address}.LayerNorm.weight"], self.device)[0]
         beta = pad_by_zero(state_dict[f"{base_address}.LayerNorm.bias"], self.device)[0]
 
         self.LayerNorm = self.LayerNorm = partial(
@@ -55,7 +51,7 @@ class TtRobertaOutput(nn.Module):
         )
 
     def linear(self, x, weight, bias):
-        weight = tt_lib.tensor.transpose(weight)
+        weight = tt_lib.tensor.transpose(weight, -2, -1)
         x = tt_lib.tensor.matmul(x, weight, output_mem_config=self.mem_config)
         x = tt_lib.tensor.bcast(
             x,
@@ -66,14 +62,10 @@ class TtRobertaOutput(nn.Module):
         )
         return x
 
-    def forward(
-        self, hidden_states: torch.Tensor, input_tensor: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense_linear(hidden_states)
         # TODO: Add dropout when supported
         # hidden_states = self.dropout(hidden_states)
-        hidden_states = tt_lib.tensor.add(
-            hidden_states, input_tensor, output_mem_config=self.mem_config
-        )
+        hidden_states = tt_lib.tensor.add(hidden_states, input_tensor, output_mem_config=self.mem_config)
         hidden_states = self.LayerNorm(hidden_states)
         return hidden_states

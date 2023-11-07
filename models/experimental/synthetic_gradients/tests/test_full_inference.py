@@ -16,7 +16,7 @@ epsilon2 = 1e-5
 
 def ttLinear(weight, bias):
     def linear_(activation):
-        weight_T = tt_lib.tensor.transpose(weight)
+        weight_T = tt_lib.tensor.transpose(weight, -2, -1)
         output = tt_lib.tensor.matmul(activation, weight_T)
         output_plus_bias = tt_lib.tensor.add(output, bias)
         return output_plus_bias
@@ -60,9 +60,7 @@ class PytorchBatchNorm1D(nn.Module):
 
 def run_full_inference(in_features, hidden_features, out_features, device):
     # set inputs
-    inputs_torch = (
-        torch.FloatTensor(1, in_features).uniform_(-1.0, 1.0).requires_grad_(True)
-    )
+    inputs_torch = torch.FloatTensor(1, in_features).uniform_(-1.0, 1.0).requires_grad_(True)
 
     inputs_reshape = inputs_torch.reshape(1, 1, 1, -1)
     inputs_targ = torch.zeros(1, 1, 32, inputs_reshape.shape[3])
@@ -80,9 +78,7 @@ def run_full_inference(in_features, hidden_features, out_features, device):
     # torch linear params layer1
     weight1_lin_torch = torch.randn(hidden_features, in_features)
     bias1_lin_torch = torch.randn(hidden_features)
-    linear1_torch = torchLinear(
-        in_features, hidden_features, weight1_lin_torch, bias1_lin_torch
-    )
+    linear1_torch = torchLinear(in_features, hidden_features, weight1_lin_torch, bias1_lin_torch)
 
     # tt linear params layer1
     weight1_lin = weight1_lin_torch.view(1, 1, hidden_features, in_features)
@@ -110,15 +106,9 @@ def run_full_inference(in_features, hidden_features, out_features, device):
     # batch norm torch layer1
     bn1_torch = PytorchBatchNorm1D(hidden_features)
     bn1_torch.eval()
-    weight1_bn_torch = torch.nn.Parameter(
-        torch.FloatTensor(hidden_features).uniform_(-1.0, 1.0).requires_grad_(True)
-    )
-    bias1_bn_torch = torch.nn.Parameter(
-        torch.FloatTensor(hidden_features).uniform_(-1.0, 1.0).requires_grad_(True)
-    )
-    running_mean1_bn_torch = (
-        torch.FloatTensor(hidden_features).uniform_(-1.0, 1.0).requires_grad_(False)
-    )
+    weight1_bn_torch = torch.nn.Parameter(torch.FloatTensor(hidden_features).uniform_(-1.0, 1.0).requires_grad_(True))
+    bias1_bn_torch = torch.nn.Parameter(torch.FloatTensor(hidden_features).uniform_(-1.0, 1.0).requires_grad_(True))
+    running_mean1_bn_torch = torch.FloatTensor(hidden_features).uniform_(-1.0, 1.0).requires_grad_(False)
     running_var1_bn_torch = (
         torch.FloatTensor(hidden_features).uniform_(0.0, 1.0).requires_grad_(False)
     )  # must be positive
@@ -194,9 +184,7 @@ def run_full_inference(in_features, hidden_features, out_features, device):
     # torch linear params layer2
     weight2_lin_torch = torch.randn(out_features, hidden_features)
     bias2_lin_torch = torch.randn(out_features)
-    linear2_torch = torchLinear(
-        hidden_features, out_features, weight2_lin_torch, bias2_lin_torch
-    )
+    linear2_torch = torchLinear(hidden_features, out_features, weight2_lin_torch, bias2_lin_torch)
 
     # tt linear params layer2
     weight2_lin = weight2_lin_torch.view(1, 1, out_features, hidden_features)
@@ -224,18 +212,10 @@ def run_full_inference(in_features, hidden_features, out_features, device):
     # batch norm torch layer2
     bn2_torch = PytorchBatchNorm1D(out_features)
     bn2_torch.eval()
-    weight2_bn_torch = torch.nn.Parameter(
-        torch.FloatTensor(out_features).uniform_(-1.0, 1.0).requires_grad_(True)
-    )
-    bias2_bn_torch = torch.nn.Parameter(
-        torch.FloatTensor(out_features).uniform_(-1.0, 1.0).requires_grad_(True)
-    )
-    running_mean2_bn_torch = (
-        torch.FloatTensor(out_features).uniform_(-1.0, 1.0).requires_grad_(False)
-    )
-    running_var2_bn_torch = (
-        torch.FloatTensor(out_features).uniform_(0.0, 1.0).requires_grad_(False)
-    )  # must be positive
+    weight2_bn_torch = torch.nn.Parameter(torch.FloatTensor(out_features).uniform_(-1.0, 1.0).requires_grad_(True))
+    bias2_bn_torch = torch.nn.Parameter(torch.FloatTensor(out_features).uniform_(-1.0, 1.0).requires_grad_(True))
+    running_mean2_bn_torch = torch.FloatTensor(out_features).uniform_(-1.0, 1.0).requires_grad_(False)
+    running_var2_bn_torch = torch.FloatTensor(out_features).uniform_(0.0, 1.0).requires_grad_(False)  # must be positive
 
     bn2_torch.batchnorm1d_1.weight = weight2_bn_torch
     bn2_torch.batchnorm1d_1.bias = bias2_bn_torch
@@ -317,49 +297,37 @@ def run_full_inference(in_features, hidden_features, out_features, device):
     # tt layer 1
     linear1_tt = ttLinear(weight1_lin_tt, bias1_lin_tt)
     output_lin1_tt = linear1_tt(inputs_tt)
-    bn1_tt = ttBatchnorm1d_inference(
-        gamma1, beta1, running_mean1_tt, running_var1_tt, eps1_tt
-    )
+    bn1_tt = ttBatchnorm1d_inference(gamma1, beta1, running_mean1_tt, running_var1_tt, eps1_tt)
     output_bn1_tt = bn1_tt(output_lin1_tt)
     output_layer1_tt = tt_lib.tensor.relu(output_bn1_tt)
     # tt layer 2
     linear2_tt = ttLinear(weight2_lin_tt, bias2_lin_tt)
     output_lin2_tt = linear2_tt(output_layer1_tt)
-    bn2_tt = ttBatchnorm1d_inference(
-        gamma2, beta2, running_mean2_tt, running_var2_tt, eps2_tt
-    )
+    bn2_tt = ttBatchnorm1d_inference(gamma2, beta2, running_mean2_tt, running_var2_tt, eps2_tt)
     output_bn2_tt = bn2_tt(output_lin2_tt)
     output_layer2_tt = tt_lib.tensor.relu(output_bn2_tt)
 
     # compare
     output_layer1_tt_untilized = untilize(
-        torch.Tensor(output_layer1_tt.cpu().to_torch()).reshape(
-            output_layer1_tt.shape()
-        )
+        torch.Tensor(output_layer1_tt.cpu().to_torch()).reshape(output_layer1_tt.shape())
     )
     output_layer1_tt_untilized = output_layer1_tt_untilized[0, 0, 0, :]
 
     output_layer2_tt_untilized = untilize(
-        torch.Tensor(output_layer2_tt.cpu().to_torch()).reshape(
-            output_layer2_tt.shape()
-        )
+        torch.Tensor(output_layer2_tt.cpu().to_torch()).reshape(output_layer2_tt.shape())
     )
     output_layer2_tt_untilized = output_layer2_tt_untilized[0, 0, 0, :]
 
     print("pytorch_layer1_out:", output_layer1_torch[0][0:10])
     print("tt_layer1_out:", output_layer1_tt_untilized[0:10])
 
-    layer1_test_result, output = comp_allclose_and_pcc(
-        output_layer1_torch[0], output_layer1_tt_untilized
-    )
+    layer1_test_result, output = comp_allclose_and_pcc(output_layer1_torch[0], output_layer1_tt_untilized)
     print("\n\n", "atol/rtol 1:", layer1_test_result, "| output:", output, "\n\n")
 
     print("pytorch_layer2_out:", output_layer2_torch[0][0:10])
     print("tt_layer2_out:", output_layer2_tt_untilized[0:10])
 
-    layer2_test_result, output = comp_allclose_and_pcc(
-        output_layer2_torch[0], output_layer2_tt_untilized
-    )
+    layer2_test_result, output = comp_allclose_and_pcc(output_layer2_torch[0], output_layer2_tt_untilized)
     print("\n\n", "atol/rtol 2:", layer2_test_result, "| output:", output, "\n\n")
 
 

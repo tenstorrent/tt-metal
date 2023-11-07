@@ -50,13 +50,9 @@ class TtWhisperAttention(nn.Module):
                 f" and `num_heads`: {num_heads})."
             )
 
-        self.k_proj_weight = torch2tt_tensor(
-            state_dict[f"{base_address}.k_proj.weight"], self.device
-        )
+        self.k_proj_weight = torch2tt_tensor(state_dict[f"{base_address}.k_proj.weight"], self.device)
         self.k_proj_bias = None
-        self.v_proj_weight = torch2tt_tensor(
-            state_dict[f"{base_address}.v_proj.weight"], self.device
-        )
+        self.v_proj_weight = torch2tt_tensor(state_dict[f"{base_address}.v_proj.weight"], self.device)
         self.v_proj_bias = torch2tt_tensor(
             state_dict[f"{base_address}.v_proj.bias"],
             self.device,
@@ -88,10 +84,8 @@ class TtWhisperAttention(nn.Module):
 
     # Copied from transformers.models.bart.modeling_bart.BartAttention._shape with BART->whisper
     def _shape(self, tt_tensor: tt_lib.tensor.Tensor, seq_len: int, bsz: int):
-        tt_tensor = fallback_ops.reshape(
-            tt_tensor, bsz, seq_len, self.num_heads, self.head_dim
-        )
-        tt_tensor = tt_lib.tensor.transpose_hc(tt_tensor)
+        tt_tensor = fallback_ops.reshape(tt_tensor, bsz, seq_len, self.num_heads, self.head_dim)
+        tt_tensor = tt_lib.tensor.transpose(tt_tensor, 1, -2)
         return tt_tensor
 
     def forward(
@@ -102,11 +96,7 @@ class TtWhisperAttention(nn.Module):
         attention_mask: Optional[tt_lib.tensor.Tensor] = None,
         layer_head_mask: Optional[torch.Tensor] = None,
         output_attentions: bool = False,
-    ) -> Tuple[
-        tt_lib.tensor.Tensor,
-        Optional[tt_lib.tensor.Tensor],
-        Optional[Tuple[tt_lib.tensor.Tensor]],
-    ]:
+    ) -> Tuple[tt_lib.tensor.Tensor, Optional[tt_lib.tensor.Tensor], Optional[Tuple[tt_lib.tensor.Tensor]],]:
         # if key_value_states are provided this layer is used as a cross-attention layer for the decoder
         is_cross_attention = key_value_states is not None
 
@@ -141,35 +131,21 @@ class TtWhisperAttention(nn.Module):
 
         elif is_cross_attention:
             # cross_attentions
-            key_states = self._shape(
-                linear(key_value_states, self.k_proj_weight, self.k_proj_bias), -1, bsz
-            )
-            value_states = self._shape(
-                linear(key_value_states, self.v_proj_weight, self.v_proj_bias), -1, bsz
-            )
+            key_states = self._shape(linear(key_value_states, self.k_proj_weight, self.k_proj_bias), -1, bsz)
+            value_states = self._shape(linear(key_value_states, self.v_proj_weight, self.v_proj_bias), -1, bsz)
 
         elif past_key_value is not None:
             # reuse k, v, self_attention
-            key_states = self._shape(
-                linear(hidden_states, self.k_proj_weight, self.k_proj_bias), -1, bsz
-            )
-            value_states = self._shape(
-                linear(hidden_states, self.v_proj_weight, self.v_proj_bias), -1, bsz
-            )
+            key_states = self._shape(linear(hidden_states, self.k_proj_weight, self.k_proj_bias), -1, bsz)
+            value_states = self._shape(linear(hidden_states, self.v_proj_weight, self.v_proj_bias), -1, bsz)
 
             key_states = fallback_ops.concat([past_key_value[0], key_states], dim=-2)
-            value_states = fallback_ops.concat(
-                [past_key_value[1], value_states], dim=-2
-            )
+            value_states = fallback_ops.concat([past_key_value[1], value_states], dim=-2)
 
         else:
             # self_attention
-            key_states = self._shape(
-                linear(hidden_states, self.k_proj_weight, self.k_proj_bias), -1, bsz
-            )
-            value_states = self._shape(
-                linear(hidden_states, self.v_proj_weight, self.v_proj_bias), -1, bsz
-            )
+            key_states = self._shape(linear(hidden_states, self.k_proj_weight, self.k_proj_bias), -1, bsz)
+            value_states = self._shape(linear(hidden_states, self.v_proj_weight, self.v_proj_bias), -1, bsz)
 
         if self.is_decoder:
             # if cross_attention save Tuple(torch.Tensor, torch.Tensor) of all cross attention key/value_states.
@@ -189,7 +165,7 @@ class TtWhisperAttention(nn.Module):
         key_states = fallback_ops.reshape(key_states, *proj_shape)
         value_states = fallback_ops.reshape(value_states, *proj_shape)
 
-        key_states_transposed = tt_lib.tensor.transpose(key_states)
+        key_states_transposed = tt_lib.tensor.transpose(key_states, -2, -1)
         src_len = key_states.shape()[-2]
         attn_weights = tt_lib.tensor.bmm(query_states, key_states_transposed)
 
@@ -208,13 +184,8 @@ class TtWhisperAttention(nn.Module):
             torch_attn_weights = tt2torch_tensor(attn_weights)
             torch_attention_mask = tt2torch_tensor(attention_mask)
 
-            torch_attn_weights = (
-                torch_attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-                + torch_attention_mask
-            )
-            torch_attn_weights = torch_attn_weights.view(
-                bsz * self.num_heads, tgt_len, src_len
-            )
+            torch_attn_weights = torch_attn_weights.view(bsz, self.num_heads, tgt_len, src_len) + torch_attention_mask
+            torch_attn_weights = torch_attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
             attn_weights = torch2tt_tensor(torch_attn_weights, self.device)
         attn_weights = fallback_ops.softmax(attn_weights, dim=-1)
 
@@ -225,21 +196,15 @@ class TtWhisperAttention(nn.Module):
                     f" {layer_head_mask.shape()}"
                 )
 
-            layer_head_mask_reshaped = fallback_ops.reshape(
-                layer_head_mask, 1, -1, 1, 1
-            )
-            attn_weights = fallback_ops.reshape(
-                attn_weights, bsz, self.num_heads, tgt_len, src_len
-            )
+            layer_head_mask_reshaped = fallback_ops.reshape(layer_head_mask, 1, -1, 1, 1)
+            attn_weights = fallback_ops.reshape(attn_weights, bsz, self.num_heads, tgt_len, src_len)
             attn_weights = tt_lib.tensor.bcast(
                 attn_weights,
                 layer_head_mask_reshaped,
                 tt_lib.tensor.BcastOpMath.MUL,
                 tt_lib.tensor.BcastOpDim.HW,
             )
-            attn_weights = fallback_ops.reshape(
-                attn_weights, 1, bsz * self.num_heads, tgt_len, src_len
-            )
+            attn_weights = fallback_ops.reshape(attn_weights, 1, bsz * self.num_heads, tgt_len, src_len)
 
         if output_attentions:
             # this operation is a bit awkward, but it's required to
@@ -248,12 +213,8 @@ class TtWhisperAttention(nn.Module):
             # twice and have to be reused in the following
             # attn_weights_copy = tt2torch_tensor(attn_weights)
             # attn_weights_copy = torch2tt_tensor(attn_weights_copy, self.device)
-            attn_weights_reshaped = fallback_ops.reshape(
-                attn_weights, bsz, self.num_heads, tgt_len, src_len
-            )
-            attn_weights = fallback_ops.reshape(
-                attn_weights_reshaped, 1, bsz * self.num_heads, tgt_len, src_len
-            )
+            attn_weights_reshaped = fallback_ops.reshape(attn_weights, bsz, self.num_heads, tgt_len, src_len)
+            attn_weights = fallback_ops.reshape(attn_weights_reshaped, 1, bsz * self.num_heads, tgt_len, src_len)
 
         else:
             attn_weights_reshaped = None
@@ -273,10 +234,8 @@ class TtWhisperAttention(nn.Module):
                 f"`attn_output` should be of size {(bsz * self.num_heads, tgt_len, self.head_dim)}, but is"
                 f" {attn_output.shape()}"
             )
-        attn_output = tt_lib.tensor.reshape(
-            attn_output, bsz, self.num_heads, tgt_len, self.head_dim
-        )
-        attn_output = tt_lib.tensor.transpose_hc(attn_output)
+        attn_output = tt_lib.tensor.reshape(attn_output, bsz, self.num_heads, tgt_len, self.head_dim)
+        attn_output = tt_lib.tensor.transpose(attn_output, 1, -2)
 
         attn_output = fallback_ops.reshape(attn_output, 1, bsz, tgt_len, self.embed_dim)
 

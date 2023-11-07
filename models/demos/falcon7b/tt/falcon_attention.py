@@ -51,16 +51,10 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         if tt_cache_path is not None:
             # if 0:
             self.tt_cos_cached = tt_lib.tensor.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{layer_name}.cos_cached_{self.model_config['COS_CACHED_WEIGHTS_DTYPE'].name}.bin"
-                )
+                str(tt_cache_path / f"{layer_name}.cos_cached_{self.model_config['COS_CACHED_WEIGHTS_DTYPE'].name}.bin")
             ).to(tt_device, self.model_config["COS_CACHED_WEIGHTS_MEMCFG"])
             self.tt_sin_cached = tt_lib.tensor.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{layer_name}.sin_cached_{self.model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}.bin"
-                )
+                str(tt_cache_path / f"{layer_name}.sin_cached_{self.model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}.bin")
             ).to(tt_device, self.model_config["SIN_CACHED_WEIGHTS_MEMCFG"])
         else:
             self.tt_cos_cached = torch2tt_tensor(
@@ -76,14 +70,9 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
                 tt_dtype=self.model_config["SIN_CACHED_WEIGHTS_DTYPE"],
             )
 
-    def forward(
-        self, layer: tt_lib.tensor.Tensor, token_idx: Optional[int] = None
-    ) -> tt_lib.tensor.Tensor:
+    def forward(self, layer: tt_lib.tensor.Tensor, token_idx: Optional[int] = None) -> tt_lib.tensor.Tensor:
         seq_len = layer.shape()[2]
-        assert (
-            seq_len <= self.max_seq_len_cached
-        ), "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
-
+        assert seq_len <= self.max_seq_len_cached, "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
 
         return tt_lib.tensor.rotary_embedding(
             layer,
@@ -130,16 +119,10 @@ class TtFalconAttention(nn.Module):
         if tt_cache_path is not None:
             # if 0:
             self.query_key_value_weights = tt_lib.tensor.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{query_key_value_str}_{self.model_config['FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin"
-                )
+                str(tt_cache_path / f"{query_key_value_str}_{self.model_config['FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin")
             ).to(device, self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"])
             self.dense_weights = tt_lib.tensor.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{selfout_str}_{self.model_config['SELFOUT_MM_WEIGHTS_DTYPE'].name}.bin"
-                )
+                str(tt_cache_path / f"{selfout_str}_{self.model_config['SELFOUT_MM_WEIGHTS_DTYPE'].name}.bin")
             ).to(device, self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"])
         else:
             self.query_key_value_weights = torch2tt_tensor(
@@ -174,9 +157,7 @@ class TtFalconAttention(nn.Module):
             tt_cache_path=tt_cache_path,
         )
 
-        self.scalar = pad_by_zero(
-            torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device
-        )[0]
+        self.scalar = pad_by_zero(torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device)[0]
 
     def forward(
         self,
@@ -196,9 +177,7 @@ class TtFalconAttention(nn.Module):
         """
         device = hidden_states.device()
 
-        assert (
-            not output_attentions
-        )
+        assert not output_attentions
 
         if llm_mode == "prefill":
             batch = hidden_states.shape()[0]
@@ -212,9 +191,7 @@ class TtFalconAttention(nn.Module):
             assert layer_past is not None
             assert layer_past_len > 0 and layer_past_len <= self.max_position_embeddings
         else:
-            raise NotImplementedError(
-                f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode."
-            )
+            raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
 
         #################
         ### FUSED QKV ###
@@ -267,6 +244,8 @@ class TtFalconAttention(nn.Module):
         ######################
         key_layer_transposed = tt_lib.tensor.transpose(
             key_layer,
+            -2,
+            -1,
             output_mem_config=self.model_config["K_TRANSPOSED_OUTPUT_MEMCFG"],
         )
         key_layer.deallocate()
@@ -284,9 +263,7 @@ class TtFalconAttention(nn.Module):
                 key_layer_transposed,
                 compute_with_storage_grid_size=tt_lib.tensor.CoreCoord(12, 9),
                 output_mem_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config[
-                    "PRE_SOFTMAX_MM_OUTPUT_DTYPE"
-                ],  # Must be BFLOAT16
+                output_dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
             )
         query_layer.deallocate()
         key_layer_transposed.deallocate()
@@ -306,14 +283,12 @@ class TtFalconAttention(nn.Module):
                 output_mem_config=self.model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"],
             )
 
-
         ###############
         ### SOFTMAX ###
         ###############
         # TODO: Replace with scaled_softmax_attention_mask from BERT
         attn_weights = tt_lib.operations.primary.softmax_in_place(
             attn_weights,
-
         )
 
         ######################
@@ -350,9 +325,7 @@ class TtFalconAttention(nn.Module):
                 value_layer,
                 compute_with_storage_grid_size=tt_lib.tensor.CoreCoord(12, 9),
                 output_mem_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                output_dtype=self.model_config[
-                    "POST_SOFTMAX_MM_OUTPUT_DTYPE"
-                ],  # Must be BFLOAT16
+                output_dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
             )
         attn_weights.deallocate()
         value_layer.deallocate()

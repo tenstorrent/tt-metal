@@ -12,6 +12,8 @@ import tt_lib
 
 from models.experimental.roberta.tt.roberta_model import TtRobertaModel
 from models.experimental.roberta.roberta_common import torch2tt_tensor
+
+
 @dataclass
 class TtTokenClassifierOutput:
     loss: tt_lib.tensor.Tensor = None
@@ -23,7 +25,9 @@ class TtTokenClassifierOutput:
 class TtRobertaForTokenClassification(nn.Module):
     def __init__(self, config, state_dict, base_address, device, reference_model):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.mem_config = tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        )
         self.config = config
         self.device = device
         self.num_labels = config.num_labels
@@ -43,15 +47,11 @@ class TtRobertaForTokenClassification(nn.Module):
         # )
         # self.dropout = nn.Dropout(classifier_dropout)
 
-        self.classifier_weight = torch2tt_tensor(
-            state_dict[f"classifier.weight"], self.device
-        )
-        self.classifier_bias = torch2tt_tensor(
-            state_dict[f"classifier.bias"], self.device
-        )
+        self.classifier_weight = torch2tt_tensor(state_dict[f"classifier.weight"], self.device)
+        self.classifier_bias = torch2tt_tensor(state_dict[f"classifier.bias"], self.device)
 
     def linear(self, x, weight, bias):
-        weight = tt_lib.tensor.transpose(weight)
+        weight = tt_lib.tensor.transpose(weight, -2, -1)
         x = tt_lib.tensor.matmul(x, weight, self.mem_config)
         if bias is not None:
             x = tt_lib.tensor.bcast(
@@ -80,9 +80,7 @@ class TtRobertaForTokenClassification(nn.Module):
         labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
             Labels for computing the token classification loss. Indices should be in `[0, ..., config.num_labels - 1]`.
         """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         outputs = self.roberta(
             input_ids,
@@ -99,9 +97,7 @@ class TtRobertaForTokenClassification(nn.Module):
 
         # TODO: Add when implementing training
         # sequence_output = self.dropout(sequence_output)
-        logits = self.linear(
-            sequence_output, self.classifier_weight, self.classifier_bias
-        )
+        logits = self.linear(sequence_output, self.classifier_weight, self.classifier_bias)
 
         loss = None
         if labels is not None:

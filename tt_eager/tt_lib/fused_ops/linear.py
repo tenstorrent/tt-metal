@@ -25,7 +25,7 @@ def Linear(in_features: int, out_features: int, weight: List[Union[int, float]],
         bias = bias.to(device)
 
     def linear_(activation):
-        weight_T = tensor.transpose(weight)
+        weight_T = tensor.transpose(weight, -2, -1)
         output = tensor.matmul(activation, weight_T)
 
         if bias is not None:

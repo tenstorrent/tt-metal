@@ -31,7 +31,9 @@ class TtRobertaForMultipleChoice(nn.Module):
 
     def __init__(self, config, state_dict, base_address, device, reference_model):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.mem_config = tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        )
         self.config = config
         self.device = device
 
@@ -45,17 +47,13 @@ class TtRobertaForMultipleChoice(nn.Module):
         # TODO: Add when implementing training
         # self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-        self.classifier_weight = torch2tt_tensor(
-            state_dict[f"classifier.weight"], self.device
-        )
+        self.classifier_weight = torch2tt_tensor(state_dict[f"classifier.weight"], self.device)
         self.classifier_bias = None
         if state_dict[f"classifier.bias"] is not None:
-            self.classifier_bias = torch2tt_tensor(
-                state_dict[f"classifier.bias"], self.device
-            )
+            self.classifier_bias = torch2tt_tensor(state_dict[f"classifier.bias"], self.device)
 
     def linear(self, x, weight, bias):
-        weight = tt_lib.tensor.transpose(weight)
+        weight = tt_lib.tensor.transpose(weight, -2, -1)
         x = tt_lib.tensor.matmul(x, weight, output_mem_config=self.mem_config)
         if bias is not None:
             x = tt_lib.tensor.bcast(
@@ -86,26 +84,12 @@ class TtRobertaForMultipleChoice(nn.Module):
             num_choices-1]` where `num_choices` is the size of the second dimension of the input tensors. (See
             `input_ids` above)
         """
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
-        num_choices = (
-            input_ids.shape[1] if input_ids is not None else inputs_embeds.shape[1]
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        num_choices = input_ids.shape[1] if input_ids is not None else inputs_embeds.shape[1]
 
-        flat_input_ids = (
-            input_ids.view(-1, input_ids.size(-1)) if input_ids is not None else None
-        )
-        flat_position_ids = (
-            position_ids.view(-1, position_ids.size(-1))
-            if position_ids is not None
-            else None
-        )
-        flat_token_type_ids = (
-            token_type_ids.view(-1, token_type_ids.size(-1))
-            if token_type_ids is not None
-            else None
-        )
+        flat_input_ids = input_ids.view(-1, input_ids.size(-1)) if input_ids is not None else None
+        flat_position_ids = position_ids.view(-1, position_ids.size(-1)) if position_ids is not None else None
+        flat_token_type_ids = token_type_ids.view(-1, token_type_ids.size(-1)) if token_type_ids is not None else None
         flat_attention_mask = (
             fallback_ops.reshape(attention_mask, 1, 1, -1, attention_mask.shape()[-1])
             if attention_mask is not None
@@ -132,9 +116,7 @@ class TtRobertaForMultipleChoice(nn.Module):
 
         # TODO: Add when implementing training
         # pooled_output = self.dropout(pooled_output)
-        logits = self.linear(
-            pooled_output, self.classifier_weight, self.classifier_bias
-        )
+        logits = self.linear(pooled_output, self.classifier_weight, self.classifier_bias)
 
         reshaped_logits = fallback_ops.reshape(logits, 1, 1, -1, num_choices)
 

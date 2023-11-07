@@ -14,6 +14,7 @@ from models.utility_functions import (
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
+
 # Copied from transformers.models.bert.modeling_bert.BertPooler
 class TtRobertaPooler(nn.Module):
     def __init__(
@@ -24,15 +25,13 @@ class TtRobertaPooler(nn.Module):
         device,
     ):
         super().__init__()
-        self.mem_config = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+        self.mem_config = tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        )
         self.device = device
 
-        self.dense_weight = pad_by_zero(
-            state_dict[f"{base_address}.dense.weight"], self.device
-        )[0]
-        self.dense_bias = pad_by_zero(
-            state_dict[f"{base_address}.dense.bias"], self.device
-        )[0]
+        self.dense_weight = pad_by_zero(state_dict[f"{base_address}.dense.weight"], self.device)[0]
+        self.dense_bias = pad_by_zero(state_dict[f"{base_address}.dense.bias"], self.device)[0]
         self.dense_linear = TTLinear(
             self.dense_weight.shape()[-1],
             self.dense_weight.shape()[-2],
@@ -41,7 +40,7 @@ class TtRobertaPooler(nn.Module):
         )
 
     def linear(self, x, weight, bias):
-        weight = tt_lib.tensor.transpose(weight)
+        weight = tt_lib.tensor.transpose(weight, -2, -1)
         x = tt_lib.tensor.matmul(x, weight, self.mem_config)
         x = tt_lib.tensor.bcast(
             x,

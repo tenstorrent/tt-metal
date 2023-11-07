@@ -18,33 +18,25 @@ class TtConvNet(torch.nn.Module):
         self.tt_conv1_weight = torch2tt_tensor(
             state_dict[f"conv1.weight"], None, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
         )
-        self.tt_conv1_bias = torch2tt_tensor(
-            state_dict[f"conv1.bias"], None, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        self.tt_conv1_bias = torch2tt_tensor(state_dict[f"conv1.bias"], None, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
         self.tt_conv2_weight = torch2tt_tensor(
             state_dict[f"conv2.weight"], None, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
         )
-        self.tt_conv2_bias = torch2tt_tensor(
-            state_dict[f"conv2.bias"], None, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        self.tt_conv2_bias = torch2tt_tensor(state_dict[f"conv2.bias"], None, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
         self.linear1_weights = torch2tt_tensor(
             state_dict[f"fc1.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
         )
-        self.linear1_bias = torch2tt_tensor(
-            state_dict[f"fc1.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        self.linear1_bias = torch2tt_tensor(state_dict[f"fc1.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
         self.linear2_weights = torch2tt_tensor(
             state_dict[f"fc2.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
         )
-        self.linear2_bias = torch2tt_tensor(
-            state_dict[f"fc2.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        self.linear2_bias = torch2tt_tensor(state_dict[f"fc2.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
-        self.linear1_weights = tt_lib.tensor.transpose(self.linear1_weights)
-        self.linear2_weights = tt_lib.tensor.transpose(self.linear2_weights)
+        self.linear1_weights = tt_lib.tensor.transpose(self.linear1_weights, -2, -1)
+        self.linear2_weights = tt_lib.tensor.transpose(self.linear2_weights, -2, -1)
 
         self.max_pool2d = fallback_ops.MaxPool2d(2)
 
@@ -89,9 +81,7 @@ def convnet_mnist(device) -> TtConvNet:
     pt_model.load_state_dict(checkpoint)
     pt_model.eval()
 
-    tt_model = _convnet_mnist(
-        device=device, state_dict=pt_model.state_dict()
-    )
+    tt_model = _convnet_mnist(device=device, state_dict=pt_model.state_dict())
 
     tt_model.eval()
     return tt_model, pt_model

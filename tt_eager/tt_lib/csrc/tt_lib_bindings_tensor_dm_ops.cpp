@@ -432,7 +432,7 @@ namespace tt::tt_metal::detail{
             +----------+----------------------------+----------------------------+---------------------------------+----------+
         )doc");
 
-        m_tensor.def("transpose", py::overload_cast<const Tensor&, std::int64_t, std::int64_t, const MemoryConfig&>(&transpose),
+        m_tensor.def("transpose", &transpose,
         py::arg("input").noconvert(), py::arg("dim0"), py::arg("dim1"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``arg1`` and ``arg2`` are swapped.
 
@@ -448,14 +448,6 @@ namespace tt::tt_metal::detail{
             "dim1", "dimension to transpose", "int", "Index within input tensor rank", "Yes"
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
        )doc");
-
-        //transpose = transpose_wh
-        detail::bind_unary_op(m_tensor, "transpose", py::overload_cast<const Tensor&, const MemoryConfig&>(&transpose), R"doc(Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``X`` and ``Y`` are swapped.)doc");
-        detail::bind_unary_op(m_tensor, "transpose_hc", &transpose_hc, R"doc(Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``Y`` and ``Z`` are swapped.)doc");
-        detail::bind_unary_op(m_tensor, "transpose_cn", &transpose_cn, R"doc(Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``Z`` and ``W`` are swapped.)doc");
-        detail::bind_unary_op(m_tensor, "transpose_nh", &transpose_nh, R"doc(Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``W`` and ``Y`` are swapped.)doc");
-        detail::bind_unary_op(m_tensor, "transpose_cw", &transpose_cw, R"doc(Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``Z`` and ``X`` are swapped.)doc");
-        detail::bind_unary_op(m_tensor, "transpose_nw", &transpose_nw, R"doc(Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``W`` and ``X`` are swapped.)doc");
 
         // Sharding ops
         m_tensor.def("interleaved_to_sharded", &interleaved_to_sharded,

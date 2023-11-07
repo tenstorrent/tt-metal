@@ -14,7 +14,7 @@ from operator import ne, truth
 
 from loguru import logger
 
-from tests.tt_eager.python_api_testing.sweep_tests.common import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0
 
 
 class TestSuiteType(Enum):

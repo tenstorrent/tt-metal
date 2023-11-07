@@ -18,30 +18,18 @@ class TtMnistModel(torch.nn.Module):
         self.device = device
 
         # Extract params from state dict
-        self.fc1_weight = torch2tt_tensor(
-            state_dict["fc1.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
-        self.fc1_bias = torch2tt_tensor(
-            state_dict["fc1.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        self.fc1_weight = torch2tt_tensor(state_dict["fc1.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        self.fc1_bias = torch2tt_tensor(state_dict["fc1.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
-        self.fc2_weight = torch2tt_tensor(
-            state_dict["fc2.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
-        self.fc2_bias = torch2tt_tensor(
-            state_dict["fc2.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        self.fc2_weight = torch2tt_tensor(state_dict["fc2.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        self.fc2_bias = torch2tt_tensor(state_dict["fc2.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
-        self.fc3_weight = torch2tt_tensor(
-            state_dict["fc3.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
-        self.fc3_bias = torch2tt_tensor(
-            state_dict["fc3.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        self.fc3_weight = torch2tt_tensor(state_dict["fc3.weight"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
+        self.fc3_bias = torch2tt_tensor(state_dict["fc3.bias"], device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
-        self.fc1_weight = tt_lib.tensor.transpose(self.fc1_weight)
-        self.fc2_weight = tt_lib.tensor.transpose(self.fc2_weight)
-        self.fc3_weight = tt_lib.tensor.transpose(self.fc3_weight)
+        self.fc1_weight = tt_lib.tensor.transpose(self.fc1_weight, -2, -1)
+        self.fc2_weight = tt_lib.tensor.transpose(self.fc2_weight, -2, -1)
+        self.fc3_weight = tt_lib.tensor.transpose(self.fc3_weight, -2, -1)
 
     def forward(self, x):
         # tt_lib.tensor.reshape throws an assertion RuntimeError: TT_ASSERT @ tt_eager/tt_dnn/op_library/reshape/reshape_op.cpp:295: input_tensor_a.shape()[3] % TILE_WIDTH == 0 && W % TILE_WIDTH == 0 info:
@@ -49,21 +37,15 @@ class TtMnistModel(torch.nn.Module):
         x = tt_lib.fallback_ops.reshape(x, x.shape()[0], 1, 1, 784)
 
         x = tt_lib.tensor.matmul(x, self.fc1_weight)
-        x = tt_lib.tensor.bcast(
-            x, self.fc1_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H
-        )
+        x = tt_lib.tensor.bcast(x, self.fc1_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
         x = tt_lib.tensor.relu(x)
 
         x = tt_lib.tensor.matmul(x, self.fc2_weight)
-        x = tt_lib.tensor.bcast(
-            x, self.fc2_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H
-        )
+        x = tt_lib.tensor.bcast(x, self.fc2_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
         x = tt_lib.tensor.relu(x)
 
         x = tt_lib.tensor.matmul(x, self.fc3_weight)
-        x = tt_lib.tensor.bcast(
-            x, self.fc3_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H
-        )
+        x = tt_lib.tensor.bcast(x, self.fc3_bias, tt_lib.tensor.BcastOpMath.ADD, tt_lib.tensor.BcastOpDim.H)
         x = tt_lib.tensor.relu(x)
 
         x = tt_lib.fused_ops.softmax.softmax(x)

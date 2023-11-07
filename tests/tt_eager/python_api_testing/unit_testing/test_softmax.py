@@ -7,10 +7,10 @@ import pytest
 
 import tt_lib as ttl
 from models.utility_functions import print_diff_argmax, comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0
 
 
-@skip_for_wormhole_b0
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("inplace", [True, False])
 def test_softmax(device, inplace):
     torch.manual_seed(0)
@@ -34,7 +34,7 @@ def test_softmax(device, inplace):
         assert allclose, f"FAILED: {output}"
 
 
-@skip_for_wormhole_b0
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("inplace", [True, False])
 def test_softmax_with_program_cache(device, use_program_cache, inplace):
     torch.manual_seed(0)

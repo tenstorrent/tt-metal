@@ -15,12 +15,11 @@ namespace tt {
 
 namespace tt_metal {
 
-
 // Each element of outer vector corresponds to a core
 // Each core has a pair of std::vector<uint32_t>
 // First of pair is reader args
 // Second of pair is writer args
-std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runtime_args_mc_hc(const Tensor &input_tensor,
+std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runtime_args_mc_cn(const Tensor &input_tensor,
                                                                                         Tensor &output_tensor,
                                                                                         uint32_t num_cores_total,
                                                                                         uint32_t num_cores,
@@ -37,18 +36,19 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
     auto output_shape = output_tensor.shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
-    uint32_t HW = H*W;
-    uint32_t HW_bytes = HW * input_tensor.element_size();
-    uint32_t CHW = C*H*W;
-    uint32_t CHW_bytes = CHW * input_tensor.element_size();
 
     uint32_t Wt = W/TILE_WIDTH;
     uint32_t Ht = H/TILE_HEIGHT;
-    uint32_t Ct = C/TILE_HEIGHT;
-    uint32_t CtHWt = Ct*H*Wt;
-    uint32_t CtWt = Ct * Wt;
 
-    std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > ret_val(num_cores_total);
+    uint32_t num_tensor_tiles = N*C*H*W / TILE_HW;
+    uint32_t HtWt = Ht * Wt;
+    uint32_t CHtWt = C * HtWt;
+    uint32_t NCHtWt = num_tensor_tiles;
+    uint32_t batch_step = CHtWt - HtWt;
+    uint32_t channel_step = NCHtWt - HtWt;
+
+    std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > ret_val;
+    ret_val.reserve(num_cores_total);
 
     for(uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -61,23 +61,20 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
             //no-op
             num_tiles_per_core = 0;
         }
-        uint32_t h = num_tiles_read / CtWt % H; // Current h index output of current batch
-        uint32_t ct = num_tiles_read / Wt % Ct; // Current Ct index output tile of current batch
+        uint32_t hw = num_tiles_read % HtWt;
+        uint32_t n = num_tiles_read / HtWt % N;
 
         std::vector<uint32_t> reader_runtime_args = {
             input_buffer->address(),
-            Wt,
-            H,
-            Ct,
-            HW_bytes,
-            CHW_bytes,
-            num_tiles_read, num_tiles_per_core,
-            num_tiles_read / CtHWt * CHW_bytes,
-            h,
-            h / TILE_HEIGHT * Wt,
-            ct,
-            ct * TILE_HEIGHT * HW_bytes,
-            num_tiles_read % Wt
+            N,
+            C,
+            HtWt,
+            batch_step,
+            channel_step,
+            num_tiles_per_core,
+            num_tiles_read,
+            hw,
+            n
         };
 
 
@@ -86,35 +83,29 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
                 num_tiles_per_core,
                 num_tiles_read
             };
-        ret_val[i] = {reader_runtime_args, writer_runtime_args};
+        ret_val[i] = std::make_pair(std::move(reader_runtime_args), std::move(writer_runtime_args));
         num_tiles_read += num_tiles_per_core;
     }
-
-
 
     return ret_val;
 }
 
+operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor &output) {
 
-operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor &output) {
+    TT_ASSERT(a.storage_type() == StorageType::DEVICE, "Operand to transpose_cn needs to be on device!");
+    TT_ASSERT(a.buffer() != nullptr, "Operand to transpose_cn needs to be allocated in a buffer on device!");
 
-
-    const auto shape = a.shape();
-
-
-    uint32_t sub_tile_line_bytes = 16 * a.element_size();
-
-    uint32_t num_tensor_tiles = a.volume() / TILE_HW;
-
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::Program();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
-    tt_metal::Buffer *src0_dram_buffer = a.buffer();
+    tt_metal::Buffer *src0_buffer = a.buffer();
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
+
+    uint32_t num_tensor_tiles = a.volume() / TILE_HW;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -124,7 +115,6 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
 
-    Shape output_shape = output.shape();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -133,13 +123,12 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
     uint32_t num_input_tiles = 2;
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
 		.set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    tt_metal::Buffer *src0_buffer = a.buffer();
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t) src0_is_dram,
-        (std::uint32_t) sub_tile_line_bytes
+        (std::uint32_t) src0_cb_index,
+        (std::uint32_t) src0_is_dram
     };
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
@@ -149,18 +138,17 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
 
     tt_metal::KernelID reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_hc_interleaved_partitioned.cpp",
-        total_cores,
+        "tt_eager/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_cn_interleaved_start_id.cpp",
+        all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     tt_metal::KernelID writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        total_cores,
+        all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
-
-    auto all_runtime_args =  get_runtime_args_mc_hc(a, output, num_cores_total, num_cores, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2);
+    auto all_runtime_args =  std::move(get_runtime_args_mc_cn(a, output, num_cores_total, num_cores, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2));
 
     for(uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -207,7 +195,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
         uint32_t num_tensor_tiles = src_tensor.volume() / TILE_HW;
 
         auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_tensor_tiles);
-        auto all_runtime_args =  get_runtime_args_mc_hc(src_tensor, dst_tensor, num_cores_total, num_cores, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2);
+        auto all_runtime_args =  get_runtime_args_mc_cn(src_tensor, dst_tensor, num_cores_total, num_cores, num_cores_y, core_group_1, num_tiles_per_core_group_1, core_group_2, num_tiles_per_core_group_2);
 
         for(uint32_t i = 0; i < num_cores_total; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
