@@ -193,6 +193,7 @@ void kernel_main() {
     int32_t in_skip_after_each_full_row = get_arg_val<int32_t>(86);
     int32_t in_skip_after_each_stick = get_arg_val<int32_t>(87);
 
+    // Not used
     int32_t initial_skip = get_arg_val<int32_t>(65);
     int32_t partial_first_row_skip = get_arg_val<int32_t>(67);
     int32_t partial_top_image_skip = get_arg_val<int32_t>(69);

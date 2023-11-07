@@ -897,6 +897,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
                 reader_rt_args = {
                     conv_act_size_w,
                     conv_act_size_h,
+                    conv_output_size_w,
+                    conv_output_size_h,
                     weight_size_h,
                     weight_size_w,
 
@@ -941,6 +943,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
                 reader_rt_args = {
                     conv_act_size_w,
                     conv_act_size_h,
+                    conv_output_size_w,
+                    conv_output_size_h,
                     weight_size_h,
                     weight_size_w,
 
