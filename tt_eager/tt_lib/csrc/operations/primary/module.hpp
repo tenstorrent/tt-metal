@@ -16,6 +16,7 @@
 #include "transformers/module.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
 #include "tt_dnn/op_library/moreh_bmm/moreh_bmm_op.hpp"
 #include "tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
@@ -444,6 +445,35 @@ void py_module(py::module& m_primary) {
         py::arg("dim").noconvert(),
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a softmax operation. Returns a output tensor.");
+
+    m_primary.def(
+        "moreh_softmin_backward",
+        &moreh_softmin_backward,
+        py::arg("output_tensor").noconvert(),
+        py::arg("output_grad_tensor").noconvert(),
+        py::arg("dim").noconvert(),
+        py::arg("strategy").noconvert() = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a softmin backward operation. Returns a input grad tensor.");
+
+    m_primary.def(
+        "moreh_arange",
+        &moreh_arange,
+        py::arg("start"),
+        py::arg("end"),
+        py::arg("step"),
+        py::arg("any").noconvert(),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a arange operation. Returns a output tensor.");
+
+    m_primary.def(
+        "moreh_arange_inplace",
+        &moreh_arange_inplace,
+        py::arg("input_tensor").noconvert(),
+        py::arg("start"),
+        py::arg("end"),
+        py::arg("step"),
+        "Performs a arange operation. Returns a output tensor.");
 }
 
 }  // namespace
