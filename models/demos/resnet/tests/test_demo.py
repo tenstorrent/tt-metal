@@ -6,11 +6,10 @@ from loguru import logger
 import pytest
 from models.demos.resnet.demo.demo import run_resnet_inference, run_resnet_imagenet_inference
 
+
 @pytest.mark.parametrize(
     "batch_size, input_loc",
-    (
-        (8, "models/demos/resnet/demo/images/"),
-    ),
+    ((8, "models/demos/resnet/demo/images/"),),
 )
 def test_demo_sample(
     use_program_cache,
@@ -19,7 +18,16 @@ def test_demo_sample(
     imagenet_label_dict,
     device,
 ):
-    expected_prediction = ['ruffed grouse, partridge, Bonasa umbellus', 'hay', 'quail', 'Tibetan mastiff', 'Border terrier', 'brown bear, bruin, Ursus arctos', 'soap dispenser', 'military uniform']
+    expected_prediction = [
+        "ruffed grouse, partridge, Bonasa umbellus",
+        "hay",
+        "quail",
+        "Tibetan mastiff",
+        "Border terrier",
+        "brown bear, bruin, Ursus arctos",
+        "soap dispenser",
+        "military uniform",
+    ]
     measurements, predictions = run_resnet_inference(
         batch_size,
         input_loc,
@@ -29,7 +37,6 @@ def test_demo_sample(
 
     for predicted, expected in zip(predictions, expected_prediction):
         assert predicted == expected, "Some predictions are not what we expected!"
-
 
 
 @pytest.mark.parametrize(
