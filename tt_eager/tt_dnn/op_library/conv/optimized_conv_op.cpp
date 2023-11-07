@@ -81,7 +81,7 @@ Tensor optimized_conv(const Tensor& a,
     }
     auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (output_mem_config.has_value()) {
-        TT_ASSERT((output_mem_config.value().is_sharded() || output_mem_config.value() == a.memory_config()));
+        TT_ASSERT((output_mem_config.value().is_sharded() || output_mem_config.value().memory_layout == TensorMemoryLayout::INTERLEAVED));
     }
     return operation::run_without_autoformat(
         OptimizedConv(conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config.value_or(a.memory_config()), output_dtype.value_or(a.dtype()), ashape
