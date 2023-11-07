@@ -231,7 +231,9 @@ inline uint32_t get_operand_id(uint32_t operand)
 
 inline constexpr bool is_32bit_input(const std::uint32_t operand_id) {
     const uint input_df = unpack_src_format[operand_id];
-    return (input_df == (uint)DataFormat::Int32) || (input_df == (uint)DataFormat::Float32);
+    const uint output_df = unpack_dst_format[operand_id];
+    return (input_df == (uint)DataFormat::Int32)  || (input_df == (uint)DataFormat::Float32) &&
+           (output_df == (uint)DataFormat::Int32) || (output_df == (uint)DataFormat::Float32);
 }
 
 inline constexpr uint32_t get_num_faces(const std::uint32_t operand_id)
