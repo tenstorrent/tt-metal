@@ -1,6 +1,7 @@
 <!-- toc -->
 
    * [Installing](#installing)
+      * [A note about rebooting](#a-note-about-rebooting)
       * [Installing system-level dependencies](#installing-system-level-dependencies)
          * [Installing dependencies on Ubuntu](#installing-dependencies-on-ubuntu)
          * [Installing developer-level dependencies on Ubuntu](#installing-developer-level-dependencies-on-ubuntu)
@@ -46,6 +47,25 @@ installation method in the above list.
 Note that the following installation methods are not officially supported and are under development:
 
 - [From a release wheel (Python, unstable)](#from-a-release-wheel-unstable)
+
+### A note about rebooting
+
+The full installation of accelerator-level and some host-level dependencies to use this software will require
+a large number of reboots.
+
+The minimum number of reboots you will require will be 2, for
+
+- Installing the kernel-mode driver.
+- Installing the first pass of hugepages changes.
+
+If you're using a Grayskull card, flashing the firmware with the required
+version will require another reboot. Wormhole doesn't have this requirement as
+you can use `tt-smi` to reset your card.
+
+If you're doing a full install on a Tenstorrent cloud machine and are planning
+to install WekaFS to use models along with the hugepages changes required to
+use WekaFS, you will require at least 2 more additional reboots. Because of the
+indeterminate nature of WekaFS, you may require more.
 
 ### Installing system-level dependencies
 
