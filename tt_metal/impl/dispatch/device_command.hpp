@@ -53,6 +53,8 @@ class DeviceCommand {
     static constexpr uint32_t data_size_idx = 16;
     static constexpr uint32_t producer_consumer_transfer_num_pages_idx = 17;
 
+    uint32_t& operator[](uint32_t idx);
+
     void wrap();
 
     void finish();
@@ -90,6 +92,8 @@ class DeviceCommand {
         const uint32_t padded_page_size,
         const uint32_t src_buf_type,
         const uint32_t dst_buf_type);
+
+    void write_at_index(uint32_t index, uint32_t value);
 
     void write_program_entry(const uint32_t val);
 

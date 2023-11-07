@@ -50,6 +50,7 @@ struct ProgramMap {
     vector<uint32_t> num_transfers_in_runtime_arg_pages;
     vector<uint32_t> num_transfers_in_cb_config_pages;
     vector<uint32_t> num_transfers_in_go_signal_pages;
+    unique_ptr<DeviceCommand> cached_device_command;
 };
 
 // Only contains the types of commands which are enqueued onto the device
@@ -115,14 +116,14 @@ class EnqueueProgramCommand : public Command {
    private:
     Device* device;
     Buffer& buffer;
-    ProgramMap& program_to_dev_map;
+    ProgramMap& program_map;
     vector<uint32_t>& host_data;
     SystemMemoryWriter& writer;
-    bool stall;
+    bool cache;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_PROGRAM;
 
    public:
-    EnqueueProgramCommand(Device*, Buffer&, ProgramMap&, SystemMemoryWriter&, vector<uint32_t>& host_data, bool stall);
+    EnqueueProgramCommand(Device*, Buffer&, ProgramMap&, SystemMemoryWriter&, vector<uint32_t>& host_data, bool cache);
 
     const DeviceCommand assemble_device_command(uint32_t);
 
@@ -131,9 +132,6 @@ class EnqueueProgramCommand : public Command {
     EnqueueCommandType type();
 };
 
-// Easiest way for us to process finish is to explicitly have the device
-// write to address chosen by us for finish... that way we don't need
-// to mess with checking recv and acked
 class FinishCommand : public Command {
    private:
     Device* device;
@@ -177,11 +175,10 @@ class CommandQueue {
    private:
     Device* device;
     SystemMemoryWriter sysmem_writer;
-    // thread processing_thread;
     map<uint64_t, unique_ptr<Buffer>>
         program_to_buffer;
 
-    map<uint64_t, ProgramMap> program_to_dev_map;
+    map<uint64_t, ProgramMap> program_map;
 
     void enqueue_command(Command& command, bool blocking);
 

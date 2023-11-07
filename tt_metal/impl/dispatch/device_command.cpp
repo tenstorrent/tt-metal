@@ -16,6 +16,10 @@ DeviceCommand::DeviceCommand() {
                                                                       DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
 }
 
+uint32_t& DeviceCommand::operator[](uint32_t idx) {
+    return this->desc[idx];
+}
+
 void DeviceCommand::wrap() { this->desc[this->wrap_idx] = 1; }
 
 void DeviceCommand::finish() { this->desc[this->finish_idx] = 1; }
@@ -81,10 +85,14 @@ void DeviceCommand::add_buffer_transfer_instruction(
     this->buffer_transfer_idx += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
 
     this->desc[this->num_buffer_transfers_idx]++;
-    tt::log_assert(
+    TT_ASSERT(
         this->desc[this->num_buffer_transfers_idx] <= DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS,
         "Surpassing the limit of {} on possible buffer transfers in a single command",
         DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS);
+}
+
+void DeviceCommand::write_at_index(uint32_t index, uint32_t value) {
+    this->desc[index] = value;
 }
 
 void DeviceCommand::write_program_entry(const uint32_t value) {

@@ -268,6 +268,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         .num_transfers_in_runtime_arg_pages = std::move(num_transfers_in_runtime_arg_pages),
         .num_transfers_in_cb_config_pages = std::move(num_transfers_in_cb_config_pages),
         .num_transfers_in_go_signal_pages = std::move(num_transfers_in_go_signal_pages),
+        .cached_device_command = nullptr
     };
 }
 
@@ -322,7 +323,7 @@ void EnqueueReadBufferCommand::process() {
     uint32_t write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
     uint32_t system_memory_temporary_storage_address = write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
     this->read_buffer_addr = system_memory_temporary_storage_address;
-    const auto cmd = this->assemble_device_command(system_memory_temporary_storage_address);
+    const DeviceCommand cmd = this->assemble_device_command(system_memory_temporary_storage_address);
 
     uint32_t num_pages = this->buffer.size() / this->buffer.page_size();
     uint32_t padded_page_size = align(this->buffer.page_size(), 32);
@@ -393,7 +394,7 @@ void EnqueueWriteBufferCommand::process() {
     uint32_t write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
     uint32_t system_memory_temporary_storage_address = write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
-    const auto cmd = this->assemble_device_command(system_memory_temporary_storage_address);
+    const DeviceCommand cmd = this->assemble_device_command(system_memory_temporary_storage_address);
     uint32_t data_size_in_bytes = cmd.get_data_size();
 
     uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
@@ -425,18 +426,18 @@ EnqueueCommandType EnqueueWriteBufferCommand::type() { return this->type_; }
 EnqueueProgramCommand::EnqueueProgramCommand(
     Device* device,
     Buffer& buffer,
-    ProgramMap& program_to_dev_map,
+    ProgramMap& program_map,
     SystemMemoryWriter& writer,
     vector<uint32_t>& host_data,
-    bool stall
+    bool cache
     ) :
-    buffer(buffer), program_to_dev_map(program_to_dev_map), writer(writer), host_data(host_data), stall(stall) {
+    buffer(buffer), program_map(program_map), writer(writer), host_data(host_data), cache(cache) {
     this->device = device;
 }
 
 const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host_data_src) {
     DeviceCommand command;
-    command.set_num_workers(this->program_to_dev_map.num_workers);
+    command.set_num_workers(this->program_map.num_workers);
 
     auto populate_program_data_transfer_instructions =
         [&command](const vector<uint32_t>& num_transfers_per_page, const vector<transfer_info>& transfers_in_pages) {
@@ -458,10 +459,10 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
     // info
     constexpr static uint32_t dummy_dst_addr = 0;
     constexpr static uint32_t dummy_buffer_type = 0;
-    uint32_t num_runtime_arg_pages = this->program_to_dev_map.num_transfers_in_runtime_arg_pages.size();
-    uint32_t num_cb_config_pages = this->program_to_dev_map.num_transfers_in_cb_config_pages.size();
-    uint32_t num_program_binary_pages = this->program_to_dev_map.num_transfers_in_program_pages.size();
-    uint32_t num_go_signal_pages = this->program_to_dev_map.num_transfers_in_go_signal_pages.size();
+    uint32_t num_runtime_arg_pages = this->program_map.num_transfers_in_runtime_arg_pages.size();
+    uint32_t num_cb_config_pages = this->program_map.num_transfers_in_cb_config_pages.size();
+    uint32_t num_program_binary_pages = this->program_map.num_transfers_in_program_pages.size();
+    uint32_t num_go_signal_pages = this->program_map.num_transfers_in_go_signal_pages.size();
     uint32_t num_host_data_pages = num_runtime_arg_pages + num_cb_config_pages;
     uint32_t num_cached_pages = num_program_binary_pages + num_go_signal_pages;
     uint32_t total_num_pages = num_host_data_pages + num_cached_pages;
@@ -488,12 +489,12 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
 
         if (num_runtime_arg_pages) {
             populate_program_data_transfer_instructions(
-                this->program_to_dev_map.num_transfers_in_runtime_arg_pages, this->program_to_dev_map.runtime_arg_page_transfers);
+                this->program_map.num_transfers_in_runtime_arg_pages, this->program_map.runtime_arg_page_transfers);
         }
 
         if (num_cb_config_pages) {
             populate_program_data_transfer_instructions(
-                this->program_to_dev_map.num_transfers_in_cb_config_pages, this->program_to_dev_map.cb_config_page_transfers);
+                this->program_map.num_transfers_in_cb_config_pages, this->program_map.cb_config_page_transfers);
         }
     }
 
@@ -508,12 +509,12 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
 
         if (num_program_binary_pages) {
             populate_program_data_transfer_instructions(
-                this->program_to_dev_map.num_transfers_in_program_pages, this->program_to_dev_map.program_page_transfers);
+                this->program_map.num_transfers_in_program_pages, this->program_map.program_page_transfers);
         }
 
         if (num_go_signal_pages) {
             populate_program_data_transfer_instructions(
-                this->program_to_dev_map.num_transfers_in_go_signal_pages, this->program_to_dev_map.go_signal_page_transfers);
+                this->program_map.num_transfers_in_go_signal_pages, this->program_map.go_signal_page_transfers);
         }
     }
 
@@ -531,7 +532,7 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
     // Should only ever be set if we are
     // enqueueing a program immediately
     // after writing it to a buffer
-    if (this->stall) {
+    if (this->cache) {
         command.set_stall();
     }
 
@@ -545,7 +546,12 @@ void EnqueueProgramCommand::process() {
     uint32_t write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
     uint32_t system_memory_temporary_storage_address = write_ptr + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
-    const DeviceCommand cmd = this->assemble_device_command(system_memory_temporary_storage_address);
+    if (this->cache) {
+        this->program_map.cached_device_command = std::make_unique<DeviceCommand>(this->assemble_device_command(system_memory_temporary_storage_address));
+    }
+
+    DeviceCommand& cmd = *this->program_map.cached_device_command;
+    cmd[DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER] = system_memory_temporary_storage_address;
 
     uint32_t data_size_in_bytes = cmd.get_data_size();
     const uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
@@ -571,7 +577,7 @@ const DeviceCommand FinishCommand::assemble_device_command(uint32_t) {
 
 void FinishCommand::process() {
     uint32_t write_ptr = this->writer.cq_write_interface.fifo_wr_ptr << 4;
-    const auto cmd = this->assemble_device_command(0);
+    const DeviceCommand cmd = this->assemble_device_command(0);
     uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
     this->writer.cq_reserve_back(this->device, cmd_size);
@@ -657,7 +663,7 @@ void send_dispatch_kernel_to_device(Device* device) {
     detail::CompileProgram(device, dispatch_program);
     tt::tt_metal::detail::ConfigureDeviceWithProgram(device, dispatch_program);
 
-    uint32_t fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;
+    uint32_t fifo_addr = (CQ_START) >> 4;
     vector<uint32_t> fifo_addr_vector = {fifo_addr};
     tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_READ_PTR, fifo_addr_vector);
     tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_WRITE_PTR, fifo_addr_vector);
@@ -791,7 +797,7 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
                 this->device, program_data_size_in_bytes, DeviceCommand::PROGRAM_PAGE_SIZE, BufferType::DRAM));
 
         this->enqueue_write_buffer(*this->program_to_buffer.at(program_id), program_pages, blocking);
-        this->program_to_dev_map.emplace(program_id, std::move(program_to_device_map));
+        this->program_map.emplace(program_id, std::move(program_to_device_map));
     }
 
     tt::log_debug(tt::LogDispatch, "EnqueueProgram");
@@ -835,7 +841,7 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
 
     EnqueueProgramCommand command(this->device,
         *this->program_to_buffer.at(program_id),
-        this->program_to_dev_map.at(program_id),
+        this->program_map.at(program_id),
         this->sysmem_writer,
         host_data,
         stall);
@@ -902,7 +908,7 @@ void Finish(CommandQueue& cq) {
 void ClearProgramCache(CommandQueue& cq) {
     detail::DispatchStateCheck(true);
     cq.program_to_buffer.clear();
-    cq.program_to_dev_map.clear();
+    cq.program_map.clear();
 }
 
 }  // namespace tt::tt_metal
