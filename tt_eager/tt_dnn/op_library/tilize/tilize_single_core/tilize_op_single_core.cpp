@@ -167,17 +167,8 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
 
         CoreCoord core = {0, 0};
 
-        {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
-        }
-
-        {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
-        }
+        UpdateRuntimeArg(program, reader_kernel_id, core, 0, src_buffer->address());
+        UpdateRuntimeArg(program, writer_kernel_id, core, 0, dst_buffer->address());
     };
 
     return {std::move(program), override_runtime_args_callback};
@@ -370,18 +361,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
         auto dst_buffer = output_buffers.at(0);
 
         CoreCoord core = {0, 0};
-
-        {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
-        }
-
-        {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
-        }
+        UpdateRuntimeArg(program, reader_kernel_id, core, 0, src_buffer->address());
+        UpdateRuntimeArg(program, writer_kernel_id, core, 0, dst_buffer->address());
     };
 
     return {std::move(program), override_runtime_args_callback};

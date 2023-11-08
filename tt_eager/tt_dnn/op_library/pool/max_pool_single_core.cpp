@@ -245,18 +245,10 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
         auto src_dram_buffer = input_buffers.at(0);
         auto dst_dram_buffer = output_buffers.at(0);
         CoreCoord core = {0, 0};
-        {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernel, core);
-            runtime_args[0] = src_dram_buffer->address();
-            runtime_args[1] = dst_dram_buffer->address();
-            SetRuntimeArgs(program, reader_kernel, core, runtime_args);
-        }
-        {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernel, core);
-            runtime_args[0] = src_dram_buffer->address();
-            runtime_args[1] = dst_dram_buffer->address();
-            SetRuntimeArgs(program, writer_kernel, core, runtime_args);
-        }
+        UpdateRuntimeArg(program, reader_kernel, core, 0, src_dram_buffer->address());
+        UpdateRuntimeArg(program, reader_kernel, core, 1, dst_dram_buffer->address());
+        UpdateRuntimeArg(program, writer_kernel, core, 0, src_dram_buffer->address());
+        UpdateRuntimeArg(program, writer_kernel, core, 1, dst_dram_buffer->address());
     };
     return {std::move(program), override_runtime_args_callback};
 }

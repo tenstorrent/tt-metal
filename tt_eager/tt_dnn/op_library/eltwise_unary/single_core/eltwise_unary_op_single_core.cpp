@@ -114,18 +114,8 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
         auto dst_buffer = output_buffers.at(0);
 
         CoreCoord core = {0, 0};
-
-        {
-            auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-            SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
-        }
-
-        {
-            auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-            SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
-        }
+        UpdateRuntimeArg(program, unary_reader_kernel_id, core, 0, src_buffer->address());
+        UpdateRuntimeArg(program, unary_writer_kernel_id, core, 0, dst_buffer->address());
     };
 
     return {std::move(program), override_runtime_args_callback};

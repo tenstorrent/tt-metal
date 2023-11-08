@@ -147,17 +147,8 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
         for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++){
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-            {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_dram_buffer->address();
-                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
-            }
-
-            {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_dram_buffer->address();
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
-            }
+            UpdateRuntimeArg(program, reader_kernel_id, core, 0, src_dram_buffer->address());
+            UpdateRuntimeArg(program, writer_kernel_id, core, 0, dst_dram_buffer->address());
         }
     };
 

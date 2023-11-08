@@ -163,17 +163,8 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
         for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-            {
-                auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
-                SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
-            }
-
-            {
-                auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
-                SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
-            }
+            UpdateRuntimeArg(program, unary_reader_kernel_id, core, 0, src_buffer->address());
+            UpdateRuntimeArg(program, unary_writer_kernel_id, core, 0, dst_buffer->address());
         }
     };
 

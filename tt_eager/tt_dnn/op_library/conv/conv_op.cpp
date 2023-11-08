@@ -629,22 +629,15 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
 
         CoreCoord core = {0, 0};
 
-        {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer_a->address();
-            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
-        }
+        UpdateRuntimeArg(program, reader_kernel_id, core, 0, src_dram_buffer_a->address());
 
-        {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
-            runtime_args[1] = src_dram_buffer_b->address();
-            if (has_bias) {
-                auto src_dram_buffer_c = input_buffers.at(2);
-                TT_ASSERT(src_dram_buffer_c != nullptr);
-                runtime_args[25] = src_dram_buffer_c->address();
-            }
-            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
+        UpdateRuntimeArg(program, writer_kernel_id, core, 0, dst_dram_buffer->address());
+        UpdateRuntimeArg(program, writer_kernel_id, core, 1, src_dram_buffer_b->address());
+
+        if (has_bias) {
+            auto src_dram_buffer_c = input_buffers.at(2);
+            TT_ASSERT(src_dram_buffer_c != nullptr);
+            UpdateRuntimeArg(program, writer_kernel_id, core, 25, src_dram_buffer_c->address());
         }
     };
 
@@ -1315,22 +1308,14 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 
         CoreCoord core = {0, 0};
 
-        {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer_a->address();
-            runtime_args[1] = src_dram_buffer_a->noc_coordinates().x;
-            runtime_args[2] = src_dram_buffer_a->noc_coordinates().y;
-            runtime_args[8] = src_dram_buffer_b->address();
-            runtime_args[9] = src_dram_buffer_b->noc_coordinates().x;
-            runtime_args[10] = src_dram_buffer_b->noc_coordinates().y;
-            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
-        }
+        UpdateRuntimeArg(program, reader_kernel_id, core, 0, src_dram_buffer_a->address());
+        UpdateRuntimeArg(program, reader_kernel_id, core, 1, src_dram_buffer_a->noc_coordinates().x);
+        UpdateRuntimeArg(program, reader_kernel_id, core, 2, src_dram_buffer_a->noc_coordinates().y);
+        UpdateRuntimeArg(program, reader_kernel_id, core, 8, src_dram_buffer_b->address());
+        UpdateRuntimeArg(program, reader_kernel_id, core, 9, src_dram_buffer_b->noc_coordinates().x);
+        UpdateRuntimeArg(program, reader_kernel_id, core, 10, src_dram_buffer_b->noc_coordinates().y);
 
-        {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
-        }
+        UpdateRuntimeArg(program, writer_kernel_id, core, 0, dst_dram_buffer->address());
     };
 
     return {std::move(program), override_runtime_args_callback};

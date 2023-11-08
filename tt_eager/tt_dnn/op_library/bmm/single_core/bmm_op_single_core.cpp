@@ -120,16 +120,12 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer_a->address();
-            runtime_args[1] = src_dram_buffer_b->address();
-            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
+            UpdateRuntimeArg(program, reader_kernel_id, core, 0, src_dram_buffer_a->address() );
+            UpdateRuntimeArg(program, reader_kernel_id, core, 1, src_dram_buffer_b->address() );
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
+            UpdateRuntimeArg(program, writer_kernel_id, core, 0, dst_dram_buffer->address() );
         }
     };
 

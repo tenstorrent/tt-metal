@@ -574,9 +574,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
                 if (!all_cores.core_coord_in_core_ranges(core)) {
                     continue;
                 }
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
-                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
+                UpdateRuntimeArg(program, reader_kernel_id, core, 0, src_buffer->address());
             }
         }
 
@@ -590,9 +588,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
                 if (!all_cores.core_coord_in_core_ranges(core)) {
                     continue;
                 }
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
+                UpdateRuntimeArg(program, writer_kernel_id, core, 0, dst_buffer->address());
             }
         }
     };
@@ -866,9 +862,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
                 if (!all_cores.core_coord_in_core_ranges(core)) {
                     continue;
                 }
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
+                UpdateRuntimeArg(program, writer_kernel_id, core, 0, dst_buffer->address());
             }
         }
     };

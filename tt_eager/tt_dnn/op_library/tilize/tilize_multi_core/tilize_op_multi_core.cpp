@@ -357,16 +357,8 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
 
         for (uint32_t i = 0; i < ncores; ++ i) {
             CoreCoord core = {i % ncores_x, i / ncores_x};
-            {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
-                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
-            }
-            {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
-            }
+            UpdateRuntimeArg(program, reader_kernel_id, core, 0, src_buffer->address());
+            UpdateRuntimeArg(program, writer_kernel_id, core, 0, dst_buffer->address());
         }
     };
 

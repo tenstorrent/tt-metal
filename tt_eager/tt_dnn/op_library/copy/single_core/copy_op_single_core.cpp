@@ -173,17 +173,8 @@ operation::ProgramWithCallbacks copy_single_core(const Tensor &input, const Tens
 
         CoreCoord core = {0, 0};
 
-        {
-            auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer->address();
-            SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
-        }
-
-        {
-            auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
-        }
+        UpdateRuntimeArg(program, unary_reader_kernel_id, core, 0, src_dram_buffer->address());
+        UpdateRuntimeArg(program, unary_writer_kernel_id, core, 0, dst_dram_buffer->address());
     };
 
     return {std::move(program), override_runtime_args_callback};

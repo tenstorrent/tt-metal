@@ -216,19 +216,9 @@ tt_metal::operation::ProgramWithCallbacks create_program(
                 int core_idx_x = num_blocks_read % num_cores_x;
                 int core_idx_y = num_blocks_read / num_cores_x;
                 CoreCoord core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
-
-                {
-                    auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = src_dram_buffer_a->address();
-                    runtime_args[8] = src_dram_buffer_b->address();
-                    SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
-                }
-
-                {
-                    auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[0] = dst_dram_buffer->address();
-                    SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
-                }
+                UpdateRuntimeArg(program, reader_kernel_id, core, 0, src_dram_buffer_a->address());
+                UpdateRuntimeArg(program, reader_kernel_id, core, 8, src_dram_buffer_b->address());
+                UpdateRuntimeArg(program, writer_kernel_id, core, 0, dst_dram_buffer->address());
                 num_blocks_read++;
             }
         }

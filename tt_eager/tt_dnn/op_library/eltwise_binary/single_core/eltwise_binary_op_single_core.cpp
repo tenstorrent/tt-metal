@@ -155,26 +155,14 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
 
         uint32_t num_tiles = input_tensors.at(0).volume() / TILE_HW;
 
-        {
-            auto runtime_args = GetRuntimeArgs(program, binary_reader_kernel_id, core);
-            runtime_args[0] = src_buffer_a->address();
-            runtime_args[1] = src_buffer_b->address();
-            runtime_args[2] = num_tiles;
-            SetRuntimeArgs(program, binary_reader_kernel_id, core, runtime_args);
-        }
+        UpdateRuntimeArg(program, binary_reader_kernel_id, core, 0, src_buffer_a->address());
+        UpdateRuntimeArg(program, binary_reader_kernel_id, core, 1, src_buffer_b->address());
+        UpdateRuntimeArg(program, binary_reader_kernel_id, core, 2, num_tiles);
 
-        {
-            auto runtime_args = GetRuntimeArgs(program, eltwise_binary_kernel_id, core);
-            runtime_args[0] = num_tiles;
-            SetRuntimeArgs(program, eltwise_binary_kernel_id, core, runtime_args);
-        }
+        UpdateRuntimeArg(program, eltwise_binary_kernel_id, core, 0, num_tiles);
 
-        {
-            auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-            runtime_args[1] = num_tiles;
-            SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
-        }
+        UpdateRuntimeArg(program, unary_writer_kernel_id, core, 0, dst_buffer->address());
+        UpdateRuntimeArg(program, unary_writer_kernel_id, core, 1, num_tiles);
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

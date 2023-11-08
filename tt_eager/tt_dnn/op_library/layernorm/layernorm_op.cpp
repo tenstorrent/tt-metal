@@ -317,26 +317,17 @@ operation::ProgramWithCallbacks layernorm_(
         for (uint32_t i = 0; i < num_cores; ++i) {
             CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-            {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_a_dram_buffer->address();
-                if (src_b_dram_buffer != nullptr) {
-                    runtime_args[8] = src_b_dram_buffer->address();
-                }
-                if (gamma_dram_buffer != nullptr) {
-                    runtime_args[6] = gamma_dram_buffer->address();
-                }
-                if (beta_dram_buffer != nullptr) {
-                    runtime_args[7] = beta_dram_buffer->address();
-                }
-                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
+            UpdateRuntimeArg(program, reader_kernel_id, core, 0, src_a_dram_buffer->address());
+            if (src_b_dram_buffer != nullptr) {
+                UpdateRuntimeArg(program, reader_kernel_id, core, 8, src_b_dram_buffer->address());
             }
-
-            {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = dst_dram_buffer->address();
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
+            if (gamma_dram_buffer != nullptr) {
+                UpdateRuntimeArg(program, reader_kernel_id, core, 6, gamma_dram_buffer->address());
             }
+            if (beta_dram_buffer != nullptr) {
+                UpdateRuntimeArg(program, reader_kernel_id, core, 7, beta_dram_buffer->address());
+            }
+            UpdateRuntimeArg(program, writer_kernel_id, core, 0, dst_dram_buffer->address());
         }
     };
 

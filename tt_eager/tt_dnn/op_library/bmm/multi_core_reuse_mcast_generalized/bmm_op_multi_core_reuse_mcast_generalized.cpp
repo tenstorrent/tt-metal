@@ -321,21 +321,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
                 CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
 
-                {
-                    auto reader_kernel_id = reader_kernel_ids.at(i);
-                    auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = src_dram_buffer_a->address();
-                    runtime_args[8] = src_dram_buffer_b->address();
-                    SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
-                }
+                auto reader_kernel_id = reader_kernel_ids.at(i);
+                UpdateRuntimeArg( program, reader_kernel_id, core, 0, src_dram_buffer_a->address());
+                UpdateRuntimeArg( program, reader_kernel_id, core, 0, src_dram_buffer_b->address());
 
-                {
-                    auto writer_kernel_id = writer_kernel_ids.at(i);
-                    auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[0] = dst_dram_buffer->address();
-                    SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
-                }
-
+                auto writer_kernel_id = writer_kernel_ids.at(i);
+                UpdateRuntimeArg( program, writer_kernel_id, core, 0, dst_dram_buffer->address());
                 i++;
             }
         }
@@ -581,22 +572,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
             for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
                 CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
-
-                {
-                    auto reader_kernel_id = reader_kernel_ids.at(i);
-                    auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = src_dram_buffer_a->address();
-                    runtime_args[8] = src_dram_buffer_b->address();
-                    SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
-                }
-
-                {
-                    auto writer_kernel_id = writer_kernel_ids.at(i);
-                    auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[0] = dst_dram_buffer->address();
-                    SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
-                }
-
+                auto reader_kernel_id = reader_kernel_ids.at(i);
+                UpdateRuntimeArg(program, reader_kernel_id, core, 0, src_dram_buffer_a->address());
+                UpdateRuntimeArg(program, reader_kernel_id, core, 8, src_dram_buffer_b->address());
+                auto writer_kernel_id = writer_kernel_ids.at(i);
+                UpdateRuntimeArg(program, writer_kernel_id, core, 0, dst_dram_buffer->address());
                 i++;
             }
         }
@@ -842,22 +822,11 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
             for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
                 CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
-
-                {
-                    auto reader_kernel_id = reader_kernel_ids.at(i);
-                    auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                    runtime_args[0] = src_dram_buffer_a->address();
-                    runtime_args[8] = src_dram_buffer_b->address();
-                    SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
-                }
-
-                {
-                    auto writer_kernel_id = writer_kernel_ids.at(i);
-                    auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                    runtime_args[0] = dst_dram_buffer->address();
-                    SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
-                }
-
+                auto reader_kernel_id = reader_kernel_ids.at(i);
+                UpdateRuntimeArg(program, reader_kernel_id, core, 0, src_dram_buffer_a->address());
+                UpdateRuntimeArg(program, reader_kernel_id, core, 8, src_dram_buffer_b->address());
+                auto writer_kernel_id = writer_kernel_ids.at(i);
+                UpdateRuntimeArg(program, writer_kernel_id, core, 0, dst_dram_buffer->address());
                 i++;
             }
         }

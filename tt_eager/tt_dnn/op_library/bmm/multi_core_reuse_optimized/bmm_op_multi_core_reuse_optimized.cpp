@@ -375,23 +375,13 @@ operation::ProgramWithCallbacks create_program(
             uint32_t core_idx_x = i / core_range.y;
             uint32_t core_idx_y = i % core_range.y;
             CoreCoord core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
-
-            {
-                auto reader_kernel_id = reader_kernel_ids.at(i);
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = src_dram_buffer_a->address();
-                runtime_args[8] = src_dram_buffer_b->address();
-                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
-            }
-
-            {
-                auto writer_kernel_id = writer_kernel_ids.at(i);
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = src_dram_buffer_a->address();
-                runtime_args[8] = src_dram_buffer_b->address();
-                runtime_args[21] = dst_dram_buffer->address();
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
-            }
+            auto reader_kernel_id = reader_kernel_ids.at(i);
+            UpdateRuntimeArg(program, reader_kernel_id, core, 0, src_dram_buffer_a->address());
+            UpdateRuntimeArg(program, reader_kernel_id, core, 8, src_dram_buffer_b->address());
+            auto writer_kernel_id = writer_kernel_ids.at(i);
+            UpdateRuntimeArg(program, writer_kernel_id, core, 0, src_dram_buffer_a->address());
+            UpdateRuntimeArg(program, writer_kernel_id, core, 8, src_dram_buffer_b->address());
+            UpdateRuntimeArg(program, writer_kernel_id, core, 21, dst_dram_buffer->address());
         }
     };
 

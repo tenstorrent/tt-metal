@@ -745,10 +745,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
 
                 auto reader_kernel_id = reader_kernel_ids.at(i);
-                auto reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-
                 auto writer_kernel_id = writer_kernel_ids.at(i);
-                auto writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
 
                 uint32_t in0_idx = core_idx_y;
                 uint32_t in1_idx = core_idx_x;
@@ -759,8 +756,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
                 // in0 sender
                 if (!src0_sharded && in1_idx == 0) {
-                    reader_runtime_args[0] = src_buffer_a->address();
-                    SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+                    UpdateRuntimeArg(program, reader_kernel_id, core, 0, src_buffer_a->address() );
                 // in0 receiver
                 } else {
 
@@ -768,16 +764,15 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
                 // in1 sender
                 if (in0_idx == 0) {
-                    writer_runtime_args[0] = src_buffer_b->address();
-                    writer_runtime_args[6] = dst_buffer->address();
+                    UpdateRuntimeArg(program, writer_kernel_id, core, 0, src_buffer_b->address() );
+                    UpdateRuntimeArg(program, writer_kernel_id, core, 6, dst_buffer->address() );
+
                     if (bias_tensor.has_value()) {
-                        writer_runtime_args[16] = bias_tensor.value().buffer()->address();
+                        UpdateRuntimeArg(program, writer_kernel_id, core, 16, bias_tensor.value().buffer()->address() );
                     }
-                    SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
                 // in1 receiver
                 } else {
-                    writer_runtime_args[2] = dst_buffer->address();
-                    SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+                    UpdateRuntimeArg(program, writer_kernel_id, core, 2, dst_buffer->address() );
                 }
                 i++;
             }

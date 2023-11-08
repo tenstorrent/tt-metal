@@ -524,18 +524,14 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         auto out_dram_buffer = output_buffers.at(0);
         CoreCoord core = {0, 0};
         {
-            auto runtime_args = GetRuntimeArgs(program, kernel_reader_id, core);
-            runtime_args[0] = in0_dram_buffer->address();
-            runtime_args[9] = in1_dram_buffer->address();
+            UpdateRuntimeArg(program, kernel_reader_id, core, 0, in0_dram_buffer->address() );
+            UpdateRuntimeArg(program, kernel_reader_id, core, 9, in1_dram_buffer->address() );
             if (bias_dram_buffer != nullptr) {
-                runtime_args[22] = bias_dram_buffer->address();
+                UpdateRuntimeArg(program, kernel_reader_id, core, 22, bias_dram_buffer->address() );
             }
-            SetRuntimeArgs(program, kernel_reader_id, core, runtime_args);
         }
         {
-            auto runtime_args = GetRuntimeArgs(program, kernel_writer_id, core);
-            runtime_args[0] = out_dram_buffer->address();
-            SetRuntimeArgs(program, kernel_writer_id, core, runtime_args);
+            UpdateRuntimeArg(program, kernel_writer_id, core, 0, out_dram_buffer->address() );
         }
     };
 
