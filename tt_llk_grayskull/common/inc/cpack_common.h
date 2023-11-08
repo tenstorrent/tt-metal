@@ -309,61 +309,6 @@ namespace ckernel::packer
 
    }
 
-   template <DstTileFaceLayout FaceLayout, bool untilize = false>
-   inline void init_packer_dest_offset_registers()
-   {
-      if constexpr (untilize) {
-         if constexpr (FaceLayout == ColMajor) {
-            // Packer0 :  0,32,  1,33 ...  7, 39
-	    // Packer1 :  8,40,  9,41 ... 15, 47
-	    // Packer2 : 16,48, 17,49 ... 23, 55		  
-	    // Packer3 : 23,56, 24,57 ... 31, 63		  
-            regfile[p_gpr_pack::DEST_OFFSET_LO]   = 0x0;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+1] = 0x0 + 0x8;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+2] = 0x0 + 0x10;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+3] = 0x0 + 0x18;
-            regfile[p_gpr_pack::DEST_OFFSET_HI]   = 0x200;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+1] = 0x200 + 0x8;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+2] = 0x200 + 0x10;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+3] = 0x200 + 0x18;
-         } else {		 
-            // Packer0 :  0,16,  1,17 ...  7, 23
-	    // Packer1 :  8,24,  9,25 ... 15, 31
-	    // Packer2 : 32,48, 33,49 ... 39, 55		  
-	    // Packer3 : 40,56, 41,57 ... 47, 63		  
-            regfile[p_gpr_pack::DEST_OFFSET_LO]   = 0x0;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+1] = 0x0 + 0x8;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+2] = 0x0 + 0x20;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+3] = 0x0 + 0x28;
-            regfile[p_gpr_pack::DEST_OFFSET_HI]   = 0x200;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+1] = 0x200 + 0x8;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+2] = 0x200 + 0x20;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+3] = 0x200 + 0x28;
-	 }    
-      } else { 
-         if constexpr (FaceLayout == ColMajor) {
-            regfile[p_gpr_pack::DEST_OFFSET_LO]   = 0x0;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+1] = 0x0 + 0x20;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+2] = 0x0 + 0x10;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+3] = 0x0 + 0x30;
-            regfile[p_gpr_pack::DEST_OFFSET_HI]   = 0x200;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+1] = 0x200 + 0x20;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+2] = 0x200 + 0x10;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+3] = 0x200 + 0x30;
-         } else { // Default to row major layout
-            regfile[p_gpr_pack::DEST_OFFSET_LO]   = 0x0;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+1] = 0x0 + 0x10;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+2] = 0x0 + 0x20;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+3] = 0x0 + 0x30;
-            regfile[p_gpr_pack::DEST_OFFSET_HI]   = 0x200;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+1] = 0x200 + 0x10;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+2] = 0x200 + 0x20;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+3] = 0x200 + 0x30;
-         }
-      }
-      sync_regfile_write(p_gpr_pack::DEST_OFFSET_HI+3);
-   }
-
    inline uint8_t get_packer_dest_offset_index()
    {
            return (dest_offset_id ? p_gpr_pack::DEST_OFFSET_HI : p_gpr_pack::DEST_OFFSET_LO);
