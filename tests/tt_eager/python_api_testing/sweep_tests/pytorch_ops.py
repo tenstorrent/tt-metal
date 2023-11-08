@@ -1053,9 +1053,21 @@ def rmsnorm_noweights(x, *args, **kwargs):
     eps = 1e-5
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
 
+
 def rmsnorm(x, y, z, *args, **kwargs):
     eps = 1e-5
     y = y.flatten()
     z = z.flatten()
 
     return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * y + z
+
+
+def groupnorm(x, y, z, *args, **kwargs):
+    x_shape = x.shape
+    num_channels = x_shape[1]
+
+    weight = y.reshape(num_channels)
+    bias = z.reshape(num_channels)
+
+    res = torch.nn.functional.group_norm(input=x, num_groups=1, weight=weight, bias=bias, eps=1e-05)
+    return res
