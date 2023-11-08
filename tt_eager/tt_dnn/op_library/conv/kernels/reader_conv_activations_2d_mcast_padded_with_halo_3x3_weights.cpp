@@ -140,27 +140,6 @@ void kernel_main() {
         reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
     }
 
-
-    // DUMMY LOOP TO FILL READER OFFSETS
-    /* We can add another loop to read chunks of a stick as well.
-     * - Duplicate reader_offset for same stick X times (window_inner must be 1)
-     * - New loop between outer and inner that loops X times reading from same stick
-     * - Read conv_act_c_read_bytes / X each time
-     * - Update l1_write_addr_act by conv_act_c_read_bytes
-     */
-    constexpr uint32_t cb_reader_offsets = tt::CB::c_in5;
-    volatile tt_l1_ptr uint32_t* reader_offsets_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_offsets));
-    uint32_t reader_offset = 0; // Constant offset for each pixel within filter window
-    uint32_t reader_offset_idx = 0;
-    for (uint32_t channel_stick_h = 0; channel_stick_h < weight_size_h; channel_stick_h++) {
-        for (uint32_t channel_stick_w = 0; channel_stick_w < weight_size_w; channel_stick_w++) {
-            reader_offsets_ptr[reader_offset_idx++] = reader_offset++;
-        }
-        // -1 to go back to previous reader_offset
-        reader_offset += conv_act_size_w - 1; // Assuming (weight_size_w - 1) / 2 == pad_w
-    }
-
-
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
     volatile tt_l1_ptr uint32_t* act_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_receiver_semaphore_addr);
     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, VALID);
