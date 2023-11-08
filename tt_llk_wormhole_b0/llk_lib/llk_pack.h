@@ -15,7 +15,7 @@ template <bool untilize = false>
 inline void llk_pack_configure_addrmod() {
 
     addr_mod_pack_t{
-        .y_src = {.incr = untilize ? 0 : 15}, // 4-bit value so max is 15. incadcxy will increment it by 1
+        .y_src = {.incr = 15}, // 4-bit value so max is 15. incadcxy will increment it by 1
         .y_dst = {.incr = 1},
     }
         .set(ADDR_MOD_0);
@@ -36,7 +36,7 @@ inline void llk_pack_configure_addrmod() {
     }
 
     addr_mod_pack_t{
-        .y_src = { .incr = 0, .clr = 0, .cr = 0  },
+        .y_src = { .incr = 0, .clr = 1, .cr = 0  },
         .y_dst = { .incr = 0, .clr = 0, .cr = 0  },
     }.set(ADDR_MOD_2);
 
@@ -44,19 +44,19 @@ inline void llk_pack_configure_addrmod() {
 
 template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
 inline void llk_pack_mop_config(const uint32_t output_id) {
+    static_assert(FaceLayout == DstTileFaceLayout::RowMajor, "FaceLayout must be RowMajor");
 
     const uint num_faces = get_num_faces(output_id);
     const uint face_r_dim = get_face_r_dim(output_id);
     const bool partial_face = get_partial_face(output_id) && IS_BFP_FORMAT((uint)pack_dst_format[output_id]);
     
+    const uint PACKCNT = partial_face ? 1 : num_faces;
     constexpr uint MEGAROW = 1;
     constexpr uint ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
-    const uint PACKCNT = partial_face ? 1 : num_faces;
+    constexpr uint MOP_INNER_LOOP = 1;
     
-    // Write header to l1
     if constexpr (!untilize) {
-        const uint MOP_INNER_LOOP = 1;
-        const uint MOP_OUTER_LOOP = 1;
+        constexpr uint MOP_OUTER_LOOP = 1;
         
         ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
 
@@ -72,14 +72,14 @@ inline void llk_pack_mop_config(const uint32_t output_id) {
         tmp.program(instrn_buffer);
     } else {
         const bool narrow_tile = get_narrow_tile(output_id);
-        const uint MOP_UNTILIZE_INNER_LOOP = ((face_r_dim == 1) || narrow_tile) ? 1 : (FaceLayout == DstTileFaceLayout::ColMajor ? 8 : 4);
-        const uint MOP_UNTILIZE_OUTER_LOOP = ((face_r_dim == 1) || narrow_tile) ? 1 : (face_r_dim >> 1);
+        const uint MOP_OUTER_LOOP = ((face_r_dim == 1) || narrow_tile) ? 1 : (face_r_dim >> 1);
 
         if ((face_r_dim == 1) || narrow_tile) {
-            ckernel::ckernel_template tmp(MOP_UNTILIZE_OUTER_LOOP, MOP_UNTILIZE_INNER_LOOP, TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
+            ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
             tmp.program(instrn_buffer);
         } else {
-            ckernel::ckernel_template tmp(MOP_UNTILIZE_OUTER_LOOP, MOP_UNTILIZE_INNER_LOOP, TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
+            // Inc ch0_y+=1 (addr_mod_0 will increment by 15)
+            ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0));
             tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
             tmp.set_end_op(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0)); 
             tmp.program(instrn_buffer);
@@ -268,7 +268,5 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     if constexpr (untilize) {
         TTI_PACR(ADDR_MOD_2, 0, 0xf, 0, 0, 1, 1); // close tile
-        TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Y, 0);
-        TTI_INCADCZW(p_setadc::PAC, 0, 0, 1, 0);
     }
 }
