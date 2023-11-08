@@ -80,6 +80,8 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_softmax_backward/softmax_backward_h_large/softmax_backward_h_large.cpp \
 	tt_eager/tt_dnn/op_library/moreh_softmax_backward/softmax_backward_c_large/softmax_backward_c_large.cpp \
 	tt_eager/tt_dnn/op_library/layernorm/layernorm_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_adam/moreh_adam.cpp \
+	tt_eager/tt_dnn/op_library/moreh_adam/moreh_adam_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_bmm/moreh_bmm_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_linear/moreh_linear_op.cpp \
