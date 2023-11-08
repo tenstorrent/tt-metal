@@ -532,6 +532,10 @@ void *Cluster::host_dma_address(uint64_t offset, chip_id_t src_device_id, uint16
     return this->device_->host_dma_address(offset, src_device_id, channel);
 }
 
+uint64_t Cluster::get_pcie_base_addr_from_device() const {
+    return this->device_->get_pcie_base_addr_from_device();
+}
+
 // Ethernet cluster api
 std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_chip_ids(chip_id_t chip_id) const {
     std::unordered_set<chip_id_t> connected_chips;
