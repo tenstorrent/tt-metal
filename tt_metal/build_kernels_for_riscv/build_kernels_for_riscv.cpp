@@ -45,9 +45,9 @@ struct CompileState {
     ARCH             arch                   { ARCH::GRAYSKULL };
     map<std::string, std::string> kernel_defines;
     string home_;
-    string gpp_           { "/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-g++ " };
-    string gcc_           { "/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-gcc " }; // TODO(AP): this wasn't really necessary for assembler
-    string objcopy_       { "/tt_metal/src/ckernels/sfpi/compiler/bin/riscv32-unknown-elf-objcopy " };
+    string gpp_           { "/tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++ " };
+    string gcc_           { "/tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-gcc " }; // TODO(AP): this wasn't really necessary for assembler
+    string objcopy_       { "/tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-objcopy " };
     int device_id;
     string kernel_subdir_;
     string thread_bin_subdir;
@@ -100,8 +100,7 @@ struct CompileState {
                 "tt_metal/include",
                 "tt_metal/src/ckernels/" + get_string_lowercase(arch) + "/llk_lib/",
                 "tt_metal/src/ckernels/" + get_string_lowercase(arch) + "/common/inc",
-                "tt_metal/src/ckernels/sfpi/include",
-                "tt_metal/src/ckernels/sfpi/include/" + get_string_aliased_arch_lowercase(arch),
+                "tt_metal/third_party/sfpi/include",
                 "tt_metal/src/firmware/riscv/common",
                 "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/noc",
                 "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch),
@@ -119,8 +118,6 @@ struct CompileState {
                 "",
                 "tt_metal/include",
                 "tt_metal/src/ckernels/" + get_string_lowercase(arch) + "/common/inc",
-                "tt_metal/src/ckernels/sfpi/include",
-                "tt_metal/src/ckernels/sfpi/include/" + get_string_aliased_arch_lowercase(arch),
                 "tt_metal/src/firmware/riscv/common",
                 "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch),
                 "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
@@ -152,8 +149,6 @@ struct CompileState {
                 "",
                 "tt_metal/include",
                 "tt_metal/src/ckernels/" + get_string_lowercase(arch) + "/common/inc",
-                "tt_metal/src/ckernels/sfpi/include",
-                "tt_metal/src/ckernels/sfpi/include/" + get_string_aliased_arch_lowercase(arch),
                 "tt_metal/src/firmware/riscv/common",
                 "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch),
                 "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
