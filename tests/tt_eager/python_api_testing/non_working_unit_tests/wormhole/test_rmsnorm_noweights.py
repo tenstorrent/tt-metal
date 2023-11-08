@@ -2,11 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-from pathlib import Path
-import sys
-import time
-import os
 from loguru import logger
 import pytest
 import torch
@@ -27,12 +22,7 @@ def run_rmsnorm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config
     print(in_mem_config)
 
     x = torch.Tensor(size=input_shape[0]).uniform_(-10, 10)
-    # y = torch.Tensor(size=input_shape[1]).uniform_(-10, 10)
-    # z = torch.Tensor(size=input_shape[2]).uniform_(-10, 10)
-
     x_ref = x.detach().clone()
-    # y_ref = y.detach().clone()
-    # z_ref = z.detach().clone()
 
     # compute ref value --------------------------
     ref_value = pytorch_ops.rmsnorm_noweights(x_ref)
@@ -97,7 +87,6 @@ test_sweep_args = [
 ]
 
 
-# @skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
     (test_sweep_args),
