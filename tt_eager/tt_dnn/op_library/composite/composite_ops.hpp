@@ -304,7 +304,7 @@ Tensor tril(const Tensor& input_a, int32_t diag = 0, const MemoryConfig& output_
 //triu : select upper triangular region of input matrix
 Tensor triu(const Tensor& input_a, int32_t diag = 0, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-//masked_fill - ternary operator y = (mask) ? value : input_a; elementwise
+//masked_fill - binary operator y = (mask) ? value : input_a; elementwise
 Tensor masked_fill(const Tensor& input_a, const Tensor& mask, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 } //namespace tt_metal
