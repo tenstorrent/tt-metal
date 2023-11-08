@@ -34,7 +34,7 @@ def run_rmsnorm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config
     z_ref = z.detach().clone()
 
     # compute ref value --------------------------
-    ref_value = pytorch_ops.rmsnorm_noweights(x_ref)
+    ref_value = pytorch_ops.rmsnorm(x_ref, y_ref, z_ref)
 
     # compute tt value ---------------------------
     tt_result = tt_rmsnorm(
