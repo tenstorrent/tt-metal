@@ -24,10 +24,11 @@ from loguru import logger
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 
 resnet_model_config = {
-    "MATH_FIDELITY": tt_lib.tensor.MathFidelity.HiFi4,
-    "WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-    "ACTIVATIONS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+    "MATH_FIDELITY": tt_lib.tensor.MathFidelity.HiFi2,
+    "WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
+    "ACTIVATIONS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
 }
+
 
 def run_resnet_imagenet_inference(
     batch_size,
@@ -57,7 +58,7 @@ def run_resnet_imagenet_inference(
     # Create TT Model Start
     # this will move weights to device
     sharded = False
-    if batch_size == 8:
+    if batch_size >= 8:
         sharded = True
     tt_resnet50 = ResNet(
         Bottleneck,
@@ -72,9 +73,9 @@ def run_resnet_imagenet_inference(
         sharded=sharded,
     )
 
-
     # load ImageNet batch by batch
     # and run inference
+    correct = 0
     for iter in range(iterations):
         predictions = []
         inputs, labels = get_batch(data_loader, image_processor)
@@ -84,9 +85,14 @@ def run_resnet_imagenet_inference(
         prediction = tt_output[:, 0, 0, :].argmax(dim=-1)
         for i in range(batch_size):
             predictions.append(imagenet_label_dict[prediction[i].item()])
-            logger.info(f"Iter: {iter} Sample: {i} - Expected Label: {imagenet_label_dict[labels[i]]} Predicted Label: {predictions[-1]}")
+            logger.info(
+                f"Iter: {iter} Sample: {i} - Expected Label: {imagenet_label_dict[labels[i]]} Predicted Label: {predictions[-1]}"
+            )
+            if imagenet_label_dict[labels[i]] == predictions[-1]:
+                correct += 1
         del tt_output, tt_inputs, inputs, labels, predictions
-
+    accuracy = correct / (batch_size * iterations)
+    logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")
 
 
 def run_resnet_inference(
@@ -129,7 +135,7 @@ def run_resnet_inference(
     # this will move weights to device
     profiler.start(f"move_weights")
     sharded = False
-    if batch_size == 8:
+    if batch_size >= 8:
         sharded = True
     tt_resnet50 = ResNet(
         Bottleneck,
@@ -209,7 +215,10 @@ def run_resnet_inference(
 
 @pytest.mark.parametrize(
     "batch_size, iterations",
-    ((8, 400),),
+    (
+        (8, 400),
+        (16, 200),
+    ),
 )
 def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_location_generator, device):
     run_resnet_imagenet_inference(batch_size, iterations, imagenet_label_dict, model_location_generator, device)
