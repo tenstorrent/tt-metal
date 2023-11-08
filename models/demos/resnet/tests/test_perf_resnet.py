@@ -82,11 +82,16 @@ def run_perf_resnet(
 
         # enable_persistent_kernel_cache()
 
+        from tracy import Profiler
+
+        tracyProfiler = Profiler()
+        tracyProfiler.enable()
         profiler.start(second_key)
         tt_inputs = tt_resnet50.preprocessing(inputs)
         tt_output = tt_resnet50(tt_inputs)
         tt_lib.device.Synchronize()
         profiler.end(second_key)
+        tracyProfiler.disable()
 
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
