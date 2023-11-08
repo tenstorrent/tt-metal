@@ -34,7 +34,7 @@ ignore:  # You can also select ignoring files here
   perform_check: no  # Don't check files from that block
   include:
     - .github/
-    - tt_metal/src/ckernels/sfpi/
+    - tt_metal/third_party/sfpi/
     - tt_metal/third_party/
     - third_party/
     - __pycache__

@@ -24,7 +24,7 @@ TOOLCHAIN := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 include $(TT_METAL_HOME)/tt_metal/common/common.mk
 
-SFPI ?= $(TT_METAL_HOME)/tt_metal/src/ckernels/sfpi
+SFPI ?= $(TT_METAL_HOME)/tt_metal/third_party/sfpi
 RISCV_TOOLS_PREFIX := $(SFPI)/compiler/bin/riscv32-unknown-elf-
 # RISCV_TOOLS_PREFIX := /home/software/risc-v/riscv64-unknown-elf-gcc-8.3.0-2020.04.0-x86_64-linux-ubuntu14/bin/riscv64-unknown-elf-
 CXX := $(CCACHE) $(RISCV_TOOLS_PREFIX)g++
