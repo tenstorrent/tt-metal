@@ -15,8 +15,8 @@ void kernel_main() {
     uint32_t conv_act_size_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_size_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_size_w = get_arg_val<uint32_t>(i); i+=1;
-
-    uint32_t act_block_h_datums = get_arg_val<uint32_t>(i); i+=1;
+    // uint32_t act_block_h_datums = get_arg_val<uint32_t>(i); i+=1;
+    i+=1; // skip an arg
     uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
     uint32_t act_w_num_outer = get_arg_val<uint32_t>(i); i+=1;
 
@@ -65,6 +65,7 @@ void kernel_main() {
     // need to have these as compile-time since we unroll loops based on them
     constexpr uint32_t window_outer                        = get_compile_time_arg_val(10);
     constexpr uint32_t window_inner                        = get_compile_time_arg_val(11);
+    constexpr uint32_t act_block_h_datums                  = get_compile_time_arg_val(12);
 
     constexpr uint32_t cb_id_act = 0;
     constexpr uint32_t cb_id_sharded_act = 3;
@@ -176,7 +177,7 @@ void kernel_main() {
     );
 
     uint64_t act_mcast_receiver_semaphore_noc_addr = act_multicast_noc_addr | act_mcast_receiver_semaphore_addr;
-    uint32_t num_issued_reads_per_block = act_block_h_datums * window_inner;
+    constexpr uint32_t num_issued_reads_per_block = act_block_h_datums * window_inner;
 
     // TODO: need to make the read coalescing optimization cleaner
     // pass coalesce_window_inner_reads as a compile time arg and num_coalesced_reads so we can constexpr the if
@@ -232,19 +233,20 @@ void kernel_main() {
             cb_reserve_back(cb_id_act, act_block_num_tiles);
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
 
+            // #pragma GCC unroll 8 // didn't seem to help, may need to do it manually
             for (uint32_t bh = 0; bh < act_block_h_datums; bh++) {
-                reader_offset_idx = 0;
-                uint32_t act_l1_offset = reader_indices_ptr[reader_idx] << log_base_2_of_conv_act_size_c_bytes;
-                #pragma unroll window_inner
+                uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_indices_ptr[reader_idx] << log_base_2_of_conv_act_size_c_bytes);
+                #pragma GCC unroll window_inner
                 for (uint32_t inner = 0; inner < window_inner; inner++) {
-                    noc_async_read_one_packet_with_state<true>(act_l1_read_addr + act_l1_offset, l1_write_addr_act);
+                    noc_async_read_one_packet_with_state<true>(act_l1_read_addr_plus_offset, l1_write_addr_act);
                     l1_write_addr_act += coalesced_read_bytes;
                     // +2 is hard-coded, TODO: generalize
-                    act_l1_offset += ((conv_act_size_w+2) << log_base_2_of_conv_act_size_c_bytes);
+                    act_l1_read_addr_plus_offset += ((conv_act_size_w+2) << log_base_2_of_conv_act_size_c_bytes);
                 }
                 reader_idx++;
             }
-            // noc_async_read_inc_num_issued(num_issued_reads_per_block);
+            // incrementing num issued in one shot is actually slower
+            // noc_async_read_inc_num_issued(num_issued_reads_per_block); // "false" on read
             noc_async_read_barrier();
             cb_push_back(cb_id_act, act_block_num_tiles);
         }
