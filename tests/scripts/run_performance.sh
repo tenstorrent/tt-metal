@@ -44,6 +44,8 @@ run_device_perf_models() {
     echo $pipeline_type
 
     env pytest models/demos/resnet/tests -m $pipeline_type
+
+    env pytest models/demos/metal_BERT_large_15/tests -m $pipeline_type
 }
 
 main() {
