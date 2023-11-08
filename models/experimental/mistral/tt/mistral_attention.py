@@ -122,7 +122,7 @@ class TtAttention(nn.Module):
         if self.args.FALLBACK_ROTARY_EMBEDDING:
             xq, xk = fallback_apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
         else:
-            xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis, device=self.device)
+            xq, xk = apply_rotary_emb_type2(xq, xk, freqs_cis=freqs_cis, device=self.device)
 
         # The cache is a rotating buffer
         positions = tt_to_torch_tensor(positions).squeeze(0).squeeze(0).squeeze(0)
@@ -200,7 +200,7 @@ def fallback_apply_rotary_emb(
     return xq_out.type_as(xq), xk_out.type_as(xk)
 
 
-def apply_rotary_emb(
+def apply_rotary_emb_type1(
     t_xq: torch.Tensor, t_xk: torch.Tensor, freqs_cis: torch.Tensor, device
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     xq_shape = list(copy.deepcopy(t_xq.shape))
@@ -242,13 +242,77 @@ def apply_rotary_emb(
 
     shapes = xq.shape
     dindex = shapes[3] // 2
-    xq_out = torch.zeros(xq.shape)
+    xq_out = torch.empty(xq.shape)
     xq_out[:, :, :, ::2] = xq[:, :, :, :dindex]
     xq_out[:, :, :, 1::2] = xq[:, :, :, dindex:]
 
     shapes = xk.shape
     dindex = shapes[3] // 2
-    xk_out = torch.zeros(xk.shape)
+    xk_out = torch.empty(xk.shape)
+    xk_out[:, :, :, ::2] = xk[:, :, :, :dindex]
+    xk_out[:, :, :, 1::2] = xk[:, :, :, dindex:]
+    return xq_out, xk_out
+
+
+def apply_rotary_emb_type2(
+    t_xq: torch.Tensor, t_xk: torch.Tensor, freqs_cis: torch.Tensor, device
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    xq_shape = list(copy.deepcopy(t_xq.shape))
+    xq_shape[-1] = xq_shape[-1] // 2
+    freqs_cis = _reshape_for_broadcast(freqs_cis, xq_shape, 4)
+
+    freq_real = torch_to_tt_tensor_rm(freqs_cis.real, device)
+    freq_img = torch_to_tt_tensor_rm(freqs_cis.imag, device)
+    freqs_cis = tt_lib.tensor.type2_complex_tensor(freq_real, freq_img)
+
+    xq_real = torch_to_tt_tensor_rm(t_xq[..., :, :, ::2], device)
+    xq_img = torch_to_tt_tensor_rm(t_xq[..., :, :, 1::2], device)
+    xq = tt_lib.tensor.type2_complex_tensor(xq_real, xq_img)
+
+    xk_real = torch_to_tt_tensor_rm(t_xk[..., :, :, ::2], device)
+    xk_img = torch_to_tt_tensor_rm(t_xk[..., :, :, 1::2], device)
+    xk = tt_lib.tensor.type2_complex_tensor(xk_real, xk_img)
+
+    BCH = tt_lib.tensor.BcastOpDim.H
+    BCMUL = tt_lib.tensor.BcastOpMath.MUL
+
+    t_one = tt_lib.tensor.ones_like(xq.real())
+    bcast_freq_re = tt_lib.tensor.bcast(t_one, freqs_cis.real(), BCMUL, BCH)
+    bcast_freq_im = tt_lib.tensor.bcast(t_one, freqs_cis.imag(), BCMUL, BCH)
+    bcast_freq = tt_lib.tensor.type2_complex_tensor(bcast_freq_re, bcast_freq_im)
+    xq_out = tt_lib.tensor.type2_complex_mul(
+        xq,
+        bcast_freq,
+        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
+    )
+
+    t_one = tt_lib.tensor.ones_like(xk.real())
+    bcast_freq_re = tt_lib.tensor.bcast(t_one, freqs_cis.real(), BCMUL, BCH)
+    bcast_freq_im = tt_lib.tensor.bcast(t_one, freqs_cis.imag(), BCMUL, BCH)
+    bcast_freq = tt_lib.tensor.type2_complex_tensor(bcast_freq_re, bcast_freq_im)
+    xk_out = tt_lib.tensor.type2_complex_mul(
+        xk,
+        bcast_freq,
+        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
+    )
+
+    xq_out = tt_lib.tensor.concat([xq_out.real(), xq_out.imag()], -1)
+    xk_out = tt_lib.tensor.concat([xk_out.real(), xk_out.imag()], -1)
+    xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
+
+    # FIXME: move this operation to on-device - should be easy.
+    shapes = xq.shape
+    dindex = shapes[3] // 2
+    xq_out = torch.empty(xq.shape)
+    # for col in range(dindex):
+    #    xq_out[:,:,:,2*col] = xq[:,:,:,col]
+    #    xq_out[:,:,:,2*col+1] = xq[:,:,:,col+dindex]
+    xq_out[:, :, :, ::2] = xq[:, :, :, :dindex]
+    xq_out[:, :, :, 1::2] = xq[:, :, :, dindex:]
+
+    shapes = xk.shape
+    dindex = shapes[3] // 2
+    xk_out = torch.empty(xk.shape)
     xk_out[:, :, :, ::2] = xk[:, :, :, :dindex]
     xk_out[:, :, :, 1::2] = xk[:, :, :, dindex:]
     return xq_out, xk_out
