@@ -116,13 +116,13 @@ class EnqueueProgramCommand : public Command {
     Device* device;
     Buffer& buffer;
     ProgramMap& program_to_dev_map;
-    vector<uint32_t>& host_data;
+    const Program& program;
     SystemMemoryWriter& writer;
     bool stall;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_PROGRAM;
 
    public:
-    EnqueueProgramCommand(Device*, Buffer&, ProgramMap&, SystemMemoryWriter&, vector<uint32_t>& host_data, bool stall);
+    EnqueueProgramCommand(Device*, Buffer&, ProgramMap&, SystemMemoryWriter&, const Program& program, bool stall);
 
     const DeviceCommand assemble_device_command(uint32_t);
 
