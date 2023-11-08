@@ -629,6 +629,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_isclose,
         "pytorch_op": pytorch_ops.isclose,
     },
+    "eltwise-masked_fill": {
+        "tt_lib_op": tt_lib_ops.masked_fill,
+        "pytorch_op": pytorch_ops.masked_fill,
+    },
     # Eltwise ternary
     "eltwise-arange": {
         "tt_lib_op": tt_lib_ops.arange,

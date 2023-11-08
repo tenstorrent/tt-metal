@@ -1247,6 +1247,13 @@ Tensor power_fp(const Tensor& input_a, float exponent, const MemoryConfig& outpu
     return operation::decorate_as_composite(__func__, _power_fp)(input_a, exponent, output_mem_config);
 }
 
+//masked_fill - ternary operator y = (mask) ? value : input_a; elementwise
+Tensor masked_fill(const Tensor& input_a, const Tensor& mask, float value, const MemoryConfig& output_mem_config) {
+    Tensor t_value = mk_filled_tensor_like(input_a, value, output_mem_config);
+    Tensor result = where(mask, t_value, input_a, output_mem_config);
+    return result;
+}
+
 }//namespace tt_metal
 
 }//namespace tt
