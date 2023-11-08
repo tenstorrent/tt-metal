@@ -234,14 +234,13 @@ void kernel_main() {
 
             for (uint32_t bh = 0; bh < act_block_h_datums; bh++) {
                 reader_offset_idx = 0;
+                uint32_t act_l1_offset = reader_indices_ptr[reader_idx] << log_base_2_of_conv_act_size_c_bytes;
                 #pragma unroll window_inner
                 for (uint32_t inner = 0; inner < window_inner; inner++) {
-                    // local read from reader_index + reader_offset;
-                    act_l1_offset = (reader_indices_ptr[reader_idx] + reader_offsets_ptr[reader_offset_idx]) << log_base_2_of_conv_act_size_c_bytes;
-                     //noc_async_read_one_packet(get_noc_addr(act_l1_read_addr + act_l1_offset), l1_write_addr_act, coalesced_read_bytes);
                     noc_async_read_one_packet_with_state<true>(act_l1_read_addr + act_l1_offset, l1_write_addr_act);
                     l1_write_addr_act += coalesced_read_bytes;
-                    reader_offset_idx += num_coalesced_reads;
+                    // +2 is hard-coded, TODO: generalize
+                    act_l1_offset += ((conv_act_size_w+2) << log_base_2_of_conv_act_size_c_bytes);
                 }
                 reader_idx++;
             }
