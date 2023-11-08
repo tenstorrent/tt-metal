@@ -7,7 +7,6 @@ import pytest
 from loguru import logger
 
 from tt_metal.tools.profiler.common import clear_profiler_runtime_artifacts
-
 from tt_metal.tools.profiler.process_model_log import (
     post_process_ops_log,
     run_device_profiler,
@@ -19,18 +18,15 @@ from tt_metal.tools.profiler.process_model_log import (
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [8, "HiFi4-activations_BFLOAT16-weights_BFLOAT16-batch_8", 2080],
-        [8, "HiFi2-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_8", 2575],
-        [16, "HiFi2-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_16", 3140],
-        [8, "LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_8", 2675],
-        [16, "LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_16", 3355],
+        [9, "BERT_LARGE-batch_9-MIXED_PRECISION_BATCH9", 70],
+        [8, "BERT_LARGE-batch_8-MIXED_PRECISION_BATCH8", 160],
     ],
 )
 def test_perf_device_virtual_machine(batch_size, test, expected_perf):
-    subdir = "resnet50"
+    subdir = "bert"
     num_iterations = 5
     margin = 0.03
-    command = f"pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference[{test}]"
+    command = f"pytest models/demos/metal_BERT_large_15/tests/test_bert.py::test_bert[{test}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     duration_cols = [col + " DURATION [ns]" for col in cols]
     samples_cols = [col + " SAMPLES/S" for col in cols]

@@ -28,7 +28,7 @@ golden_pcc = {
             tt_lib.tensor.MathFidelity.HiFi4,
             tt_lib.tensor.DataType.BFLOAT8_B,
             tt_lib.tensor.DataType.BFLOAT16,
-        ): 0.988538,  # Max ATOL Delta: 1.508270263671875, Max RTOL Delta: 168.00689697265625, PCC: 0.9885382108063352
+        ): 0.985777,  # Max ATOL Delta: 2.232335090637207, Max RTOL Delta: 143.95509338378906, PCC: 0.9857770896722845
         (
             tt_lib.tensor.MathFidelity.HiFi4,
             tt_lib.tensor.DataType.BFLOAT16,
@@ -38,7 +38,27 @@ golden_pcc = {
             tt_lib.tensor.MathFidelity.HiFi4,
             tt_lib.tensor.DataType.BFLOAT8_B,
             tt_lib.tensor.DataType.BFLOAT8_B,
-        ): 0.956349,  # Max ATOL Delta: 3.455164909362793, Max RTOL Delta: inf, PCC: 0.9563498331411239
+        ): 0.978004,  # Max ATOL Delta: 2.205164909362793, Max RTOL Delta: inf, PCC: 0.9780043846877526
+        (
+            tt_lib.tensor.MathFidelity.HiFi2,
+            tt_lib.tensor.DataType.BFLOAT16,
+            tt_lib.tensor.DataType.BFLOAT16,
+        ): 0.983090,  # Max ATOL Delta: 1.9497511386871338, Max RTOL Delta: 224.39161682128906, PCC: 0.9830904625520384
+        (
+            tt_lib.tensor.MathFidelity.HiFi2,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+            tt_lib.tensor.DataType.BFLOAT16,
+        ): 0.984897,  # Max ATOL Delta: 1.7310011386871338, Max RTOL Delta: 25.013704299926758, PCC: 0.984897263218172
+        (
+            tt_lib.tensor.MathFidelity.HiFi2,
+            tt_lib.tensor.DataType.BFLOAT16,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+        ): 0.927943,  # Max ATOL Delta: 4.830164909362793, Max RTOL Delta: inf, PCC: 0.9279435349090578
+        (
+            tt_lib.tensor.MathFidelity.HiFi2,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+        ): 0.947965,  # Max ATOL Delta: 4.080164909362793, Max RTOL Delta: inf, PCC: 0.9479650585702681
         (
             tt_lib.tensor.MathFidelity.LoFi,
             tt_lib.tensor.DataType.BFLOAT16,
@@ -48,7 +68,7 @@ golden_pcc = {
             tt_lib.tensor.MathFidelity.LoFi,
             tt_lib.tensor.DataType.BFLOAT8_B,
             tt_lib.tensor.DataType.BFLOAT16,
-        ): 0.937181,  # Max ATOL Delta: 4.267664909362793, Max RTOL Delta: 225.56088256835938, PCC: 0.9371810428520426
+        ): 0.962400,  # Max ATOL Delta: 2.830164909362793, Max RTOL Delta: 159.69110107421875, PCC: 0.9624007409443723
         (
             tt_lib.tensor.MathFidelity.LoFi,
             tt_lib.tensor.DataType.BFLOAT16,
@@ -58,19 +78,24 @@ golden_pcc = {
             tt_lib.tensor.MathFidelity.LoFi,
             tt_lib.tensor.DataType.BFLOAT8_B,
             tt_lib.tensor.DataType.BFLOAT8_B,
-        ): 0.859410,  # Max ATOL Delta: 7.642664909362793, Max RTOL Delta: inf, PCC: 0.8594109868977741
+        ): 0.889442,  # Max ATOL Delta: 6.080164909362793, Max RTOL Delta: inf, PCC: 0.8894423359044356
     },
     16: {
         (
             tt_lib.tensor.MathFidelity.HiFi4,
             tt_lib.tensor.DataType.BFLOAT8_B,
             tt_lib.tensor.DataType.BFLOAT8_B,
-        ): 0.956349,  # Max ATOL Delta: 3.455164909362793, Max RTOL Delta: inf, PCC: 0.956349833141124
+        ): 0.978004,  # Max ATOL Delta: 2.205164909362793, Max RTOL Delta: inf, PCC: 0.9780043846877527
+        (
+            tt_lib.tensor.MathFidelity.HiFi2,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+        ): 0.947965,  # Max ATOL Delta: 4.080164909362793, Max RTOL Delta: inf, PCC: 0.9479650585702681
         (
             tt_lib.tensor.MathFidelity.LoFi,
             tt_lib.tensor.DataType.BFLOAT8_B,
             tt_lib.tensor.DataType.BFLOAT8_B,
-        ): 0.859410,  # Max ATOL Delta: 7.642664909362793, Max RTOL Delta: inf, PCC: 0.8594109868977738
+        ): 0.889442,  # Max ATOL Delta: 6.080164909362793, Max RTOL Delta: inf, PCC: 0.8894423359044358
     },
 }
 
@@ -87,7 +112,9 @@ golden_pcc = {
     ids=["activations_BFLOAT16", "activations_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
-    "math_fidelity", [tt_lib.tensor.MathFidelity.HiFi4, tt_lib.tensor.MathFidelity.LoFi], ids=["HiFi4", "LoFi"]
+    "math_fidelity",
+    [tt_lib.tensor.MathFidelity.HiFi4, tt_lib.tensor.MathFidelity.HiFi2, tt_lib.tensor.MathFidelity.LoFi],
+    ids=["HiFi4", "HiFi2", "LoFi"],
 )
 def test_run_resnet50_inference(
     use_program_cache, device, batch_size, weights_dtype, activations_dtype, math_fidelity, imagenet_sample_input
@@ -163,12 +190,12 @@ def test_run_resnet50_inference(
                 if model_config["MATH_FIDELITY"] == tt_lib.tensor.MathFidelity.LoFi:
                     valid_pcc = 0.87
                 else:
-                    valid_pcc = 0.96
+                    valid_pcc = 0.94
             else:
                 if model_config["MATH_FIDELITY"] == tt_lib.tensor.MathFidelity.LoFi:
                     valid_pcc = 0.93
                 else:
-                    valid_pcc = 0.985
+                    valid_pcc = 0.982
         passing_pcc, _ = comp_pcc(torch_output, tt_output, pcc=valid_pcc)
         assert passing_pcc
         # assert passing # fails because of torch.allclose

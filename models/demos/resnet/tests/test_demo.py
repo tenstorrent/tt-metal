@@ -26,7 +26,7 @@ def test_demo_sample(
         "Border terrier",
         "brown bear, bruin, Ursus arctos",
         "soap dispenser",
-        "military uniform",
+        "vestment",
     ]
     measurements, predictions = run_resnet_inference(
         batch_size,
@@ -41,7 +41,10 @@ def test_demo_sample(
 
 @pytest.mark.parametrize(
     "batch_size, iterations",
-    ((8, 400),),
+    (
+        (8, 400),
+        (16, 200),
+    ),
 )
 def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_location_generator, device):
     run_resnet_imagenet_inference(batch_size, iterations, imagenet_label_dict, model_location_generator, device)

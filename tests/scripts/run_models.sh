@@ -116,8 +116,7 @@ env pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_i
 #3524 SD gets lower PCC than FD for Resnet
 if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
   env pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference[HiFi4-activations_BFLOAT16-weights_BFLOAT16-batch_8]
-  env pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference[HiFi4-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_8]
-  env pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference[LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_8]
+  env pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference -k "activations_BFLOAT8_B-weights_BFLOAT8_B and (batch_8 or batch_16)"
   env pytest models/demos/resnet/tests/test_demo.py::test_demo_sample[8-models/demos/resnet/demo/images/]
   env pytest models/demos/resnet/tests/test_demo.py::test_demo_imagenet[8-400]
 fi

@@ -139,8 +139,6 @@ class TtBertBatchDram(torch.nn.Module):
         return tt_attention_mask
 
     def forward(self, tt_embeddings, tt_attention_mask=None):
-        print(f"Num encoders {len(self.encoders)}")
-
         # profiler.start("_run_encoders")
         hidden_states = tt_embeddings
         attention_mask = tt_attention_mask

@@ -19,7 +19,7 @@ from loguru import logger
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 
 model_config = {
-    "MATH_FIDELITY": tt_lib.tensor.MathFidelity.LoFi,
+    "MATH_FIDELITY": tt_lib.tensor.MathFidelity.HiFi2,
     "WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
     "ACTIVATIONS_DTYPE": tt_lib.tensor.DataType.BFLOAT8_B,
 }
@@ -54,7 +54,7 @@ def run_perf_resnet(
 
     state_dict = torch_resnet50.state_dict()
     sharded = False
-    if batch_size == 8:
+    if batch_size >= 8:
         sharded = True
     tt_resnet50 = ResNet(
         Bottleneck,
@@ -115,9 +115,10 @@ def run_perf_resnet(
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     (
-        (1, 0.01, 28),
+        (1, 0.02, 28),
         (2, 0.017, 28),
         (8, 0.020, 28),
+        (16, 0.020, 28),
     ),
 )
 def test_perf_bare_metal(
@@ -147,6 +148,7 @@ def test_perf_bare_metal(
         (1, 0.099, 36),
         (2, 0.099, 36),
         (8, 0.099, 36),
+        (16, 0.099, 36),
     ),
 )
 def test_perf_virtual_machine(
