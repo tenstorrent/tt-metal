@@ -658,7 +658,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
         (uint32_t) act_block_w_datums * a.element_size(),
 
         (uint32_t) window_outer,
-        (uint32_t) window_inner};
+        (uint32_t) window_inner,
+        (uint32_t) act_block_h_datums};
 
     // define for bias
     std::map<string, string> writer_defines;
