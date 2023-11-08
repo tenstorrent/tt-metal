@@ -16,7 +16,7 @@ SystemMemoryWriter::SystemMemoryWriter() {
 }
 
 // Ensure that there is enough space to push to the queue first
-void SystemMemoryWriter::cq_reserve_back(Device* device, uint32_t cmd_size_B) {
+void SystemMemoryWriter::cq_reserve_back(Device* device, uint32_t cmd_size_B) const {
     uint32_t cmd_size_16B = (((cmd_size_B - 1) | 31) + 1) >> 4; // Terse way to find next multiple of 32 in 16B words
 
     uint32_t rd_ptr_and_toggle;
@@ -35,12 +35,7 @@ void SystemMemoryWriter::cq_reserve_back(Device* device, uint32_t cmd_size_B) {
              (rd_toggle != this->cq_write_interface.fifo_wr_toggle and this->cq_write_interface.fifo_wr_ptr == rd_ptr));
 }
 
-// Ideally, data should be an array or pointer, but vector for time-being
-void SystemMemoryWriter::cq_write(Device* device, const uint32_t* data, uint32_t size, uint32_t write_ptr) {
-    tt::Cluster::instance().write_sysmem_vec(data, size, write_ptr, device->id());
-}
-
-void SystemMemoryWriter::send_write_ptr(Device* device) {
+void SystemMemoryWriter::send_write_ptr(Device* device) const {
     static CoreCoord dispatch_core = device->worker_core_from_logical_core(*device->dispatch_cores().begin());
     uint32_t chip_id = 0;  // TODO(agrebenisan): Remove hard-coding
 

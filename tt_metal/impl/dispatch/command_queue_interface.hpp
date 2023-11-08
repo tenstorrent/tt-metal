@@ -27,15 +27,24 @@ uint32_t get_cq_rd_ptr(Device* device);
 
 class SystemMemoryWriter {
    public:
+    char* hugepage_start;
     SystemMemoryCQWriteInterface cq_write_interface;
     SystemMemoryWriter();
 
-    void cq_reserve_back(Device* device, uint32_t cmd_size_B);
+    void cq_reserve_back(Device* device, uint32_t cmd_size_B) const;
 
     // Ideally, data should be an array or pointer, but vector for time-being
-    void cq_write(Device* device, const uint32_t* data, uint32_t size, uint32_t write_ptr);
+    void cq_write(Device* device, const uint32_t* data, uint32_t size, uint32_t write_ptr) const {
 
-    void send_write_ptr(Device* device);
+        // There is a 50% overhead if hugepage_start is not made static.
+        // Eventually when we want to have multiple hugepages, we may need to template
+        // the sysmem writer to get this optimization.
+        static char* hugepage_start = this->hugepage_start;
+        void* user_scratchspace = hugepage_start + write_ptr;
+        memcpy(user_scratchspace, data, size);
+    }
+
+    void send_write_ptr(Device* device) const;
 
     void cq_push_back(Device* device, uint32_t push_size_B);
 };
