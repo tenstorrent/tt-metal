@@ -2,11 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-from pathlib import Path
-import sys
-import time
-import os
 from loguru import logger
 import pytest
 import torch
@@ -93,7 +88,6 @@ test_sweep_args = [
 ]
 
 
-# @skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
     (test_sweep_args),
