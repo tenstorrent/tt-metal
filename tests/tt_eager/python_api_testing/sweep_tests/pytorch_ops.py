@@ -889,6 +889,10 @@ def untilize_with_unpadding(x, output_tensor_start, output_tensor_end, *args, **
     return unpad
 
 
+def masked_fill(x, y, value, *args, **kwargs):
+    return torch.masked_fill(x, y > 0, value)
+
+
 ################################################
 #################### Tensor ####################
 ################################################
