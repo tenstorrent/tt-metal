@@ -1,7 +1,7 @@
 all:: # Always first to guarantee all is the default goal.
 
 
-SFPI ?= $(TT_METAL_HOME)/tt_metal/src/ckernels/sfpi
+SFPI ?= $(TT_METAL_HOME)/tt_metal/third_party/sfpi
 
 ifeq ($(RELEASE), 1)
 TOOLCHAIN := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
