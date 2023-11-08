@@ -39,9 +39,7 @@ def run_perf_t5(expected_inference_time, expected_compile_time, device):
 
     # Prepare input
     input_sentance = "Studies have been shown that owning a dog is good for you"
-    tokenized = tokenizer(
-        input_sentance, padding="max_length", max_length=32, return_tensors="pt"
-    )  # Batch size 1
+    tokenized = tokenizer(input_sentance, padding="max_length", max_length=32, return_tensors="pt")  # Batch size 1
 
     input_ids = tokenized.input_ids
     attention_mask = tokenized.attention_mask if use_attention_mask else None
@@ -117,14 +115,12 @@ def run_perf_t5(expected_inference_time, expected_compile_time, device):
     "expected_inference_time, expected_compile_time",
     (
         (
-            0.073,
+            0.068,
             6.5,
         ),
     ),
 )
-def test_perf_bare_metal(
-    use_program_cache, expected_inference_time, expected_compile_time, device
-):
+def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, device):
     run_perf_t5(expected_inference_time, expected_compile_time, device)
 
 
@@ -133,12 +129,10 @@ def test_perf_bare_metal(
     "expected_inference_time, expected_compile_time",
     (
         (
-            0.12,
+            0.10,
             7,
         ),
     ),
 )
-def test_perf_virtual_machine(
-    use_program_cache, expected_inference_time, expected_compile_time, device
-):
+def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, device):
     run_perf_t5(expected_inference_time, expected_compile_time, device)

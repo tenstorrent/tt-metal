@@ -115,8 +115,8 @@ def run_perf_resnet(
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     (
-        (1, 0.014, 28),
-        (2, 0.021, 28),
+        (1, 0.012, 28),
+        (2, 0.020, 28),
         (8, 0.024, 28),
     ),
 )
@@ -144,9 +144,9 @@ def test_perf_bare_metal(
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     (
-        (1, 0.3, 36),
-        (2, 0.3, 36),
-        (8, 0.3, 36),
+        (1, 0.099, 36),
+        (2, 0.099, 36),
+        (8, 0.099, 36),
     ),
 )
 def test_perf_virtual_machine(

@@ -15,7 +15,7 @@ from models.utility_functions import (
     Profiler,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
-    prep_report
+    prep_report,
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
@@ -31,12 +31,8 @@ def run_perf_roberta(expected_inference_time, expected_compile_time, device):
     cpu_key = "ref_key"
 
     with torch.no_grad():
-        tokenizer = AutoTokenizer.from_pretrained(
-            "cardiffnlp/twitter-roberta-base-emotion"
-        )
-        model = RobertaForSequenceClassification.from_pretrained(
-            "cardiffnlp/twitter-roberta-base-emotion"
-        )
+        tokenizer = AutoTokenizer.from_pretrained("cardiffnlp/twitter-roberta-base-emotion")
+        model = RobertaForSequenceClassification.from_pretrained("cardiffnlp/twitter-roberta-base-emotion")
         model.eval()
 
         # Tt roberta
@@ -99,14 +95,12 @@ def run_perf_roberta(expected_inference_time, expected_compile_time, device):
     "expected_inference_time, expected_compile_time",
     (
         (
-            0.425,
+            0.405,
             17,
         ),
     ),
 )
-def test_perf_bare_metal(
-    use_program_cache, expected_inference_time, expected_compile_time, device
-):
+def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, device):
     run_perf_roberta(expected_inference_time, expected_compile_time, device)
 
 
@@ -115,12 +109,10 @@ def test_perf_bare_metal(
     "expected_inference_time, expected_compile_time",
     (
         (
-            0.75,
+            0.60,
             17.5,
         ),
     ),
 )
-def test_perf_virtual_machine(
-    use_program_cache, expected_inference_time, expected_compile_time, device
-):
+def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, device):
     run_perf_roberta(expected_inference_time, expected_compile_time, device)

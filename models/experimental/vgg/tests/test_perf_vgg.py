@@ -24,9 +24,7 @@ from models.utility_functions import (
 BATCH_SIZE = 1
 
 
-def run_perf_vgg(
-    imagenet_sample_input, expected_inference_time, expected_compile_time, device
-):
+def run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compile_time, device):
     profiler = Profiler()
     disable_persistent_kernel_cache()
     first_key = "first_iter"
@@ -103,9 +101,7 @@ def test_perf_bare_metal(
     expected_compile_time,
     device,
 ):
-    run_perf_vgg(
-        imagenet_sample_input, expected_inference_time, expected_compile_time, device
-    )
+    run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compile_time, device)
 
 
 @pytest.mark.models_performance_virtual_machine
@@ -113,7 +109,7 @@ def test_perf_bare_metal(
     "expected_inference_time, expected_compile_time",
     (
         (
-            5.3,
+            5.2,
             15,
         ),
     ),
@@ -125,6 +121,4 @@ def test_perf_virtual_machine(
     expected_compile_time,
     device,
 ):
-    run_perf_vgg(
-        imagenet_sample_input, expected_inference_time, expected_compile_time, device
-    )
+    run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compile_time, device)

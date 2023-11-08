@@ -16,16 +16,14 @@ from models.utility_functions import (
     enable_persistent_kernel_cache,
     prep_report,
     torch_to_tt_tensor_rm,
-    Profiler
+    Profiler,
 )
 
 
 BATCH_SIZE = 1
 
 
-def run_perf_vit(
-    expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device
-):
+def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
     profiler = Profiler()
     disable_persistent_kernel_cache()
     first_key = "first_iter"
@@ -35,14 +33,10 @@ def run_perf_vit(
     image = hf_cat_image_sample_input
 
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
-    HF_model = ViTForImageClassification.from_pretrained(
-        "google/vit-base-patch16-224"
-    )  # loaded for the labels
+    HF_model = ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")  # loaded for the labels
     inputs = image_processor(image, return_tensors="pt")
 
-    tt_inputs = torch_to_tt_tensor_rm(
-        inputs["pixel_values"], device, put_on_device=False
-    )
+    tt_inputs = torch_to_tt_tensor_rm(inputs["pixel_values"], device, put_on_device=False)
 
     tt_inputs = tt_inputs.to(
         device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
@@ -84,6 +78,7 @@ def run_perf_vit(
     compile_time = first_iter_time - second_iter_time
     logger.info(f"vit inference time: {second_iter_time}")
     logger.info(f"vit compile time: {compile_time}")
+
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(

@@ -39,9 +39,7 @@ def run_perf_whisper(expected_inference_time, expected_compile_time, device):
     state_dict = pytorch_model.state_dict()
 
     feature_extractor = AutoFeatureExtractor.from_pretrained("openai/whisper-tiny")
-    ds = load_dataset(
-        "hf-internal-testing/librispeech_asr_dummy", "clean", split="validation"
-    )
+    ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
     inputs = feature_extractor(ds[0]["audio"]["array"], return_tensors="pt")
     # original from HF example should be: seq_len = 3000, when max_source_positions=1500
     input_features = inputs.input_features
@@ -61,36 +59,27 @@ def run_perf_whisper(expected_inference_time, expected_compile_time, device):
 
     with torch.no_grad():
         profiler.start(cpu_key)
-        pytorch_output = pytorch_model(
-            input_features=input_features, decoder_input_ids=decoder_input_ids
-        )
+        pytorch_output = pytorch_model(input_features=input_features, decoder_input_ids=decoder_input_ids)
         profiler.end(cpu_key)
 
-    tt_whisper = TtWhisperModel(
-        state_dict=state_dict, device=device, config=pytorch_model.config
-    )
+    tt_whisper = TtWhisperModel(state_dict=state_dict, device=device, config=pytorch_model.config)
     tt_whisper.eval()
 
     with torch.no_grad():
-        input_features = torch2tt_tensor(
-            input_features, device, tt_lib.tensor.Layout.ROW_MAJOR
-        )
+        input_features = torch2tt_tensor(input_features, device, tt_lib.tensor.Layout.ROW_MAJOR)
         input_features = input_features.to(
-            device, tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+            device,
+            tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1),
         )
         profiler.start(first_key)
-        ttm_output = tt_whisper(
-            input_features=input_features, decoder_input_ids=decoder_input_ids
-        )
+        ttm_output = tt_whisper(input_features=input_features, decoder_input_ids=decoder_input_ids)
         tt_lib.device.Synchronize()
         profiler.end(first_key)
 
         enable_persistent_kernel_cache()
 
         profiler.start(second_key)
-        ttm_output = tt_whisper(
-            input_features=input_features, decoder_input_ids=decoder_input_ids
-        )
+        ttm_output = tt_whisper(input_features=input_features, decoder_input_ids=decoder_input_ids)
         tt_lib.device.Synchronize()
         profiler.end(second_key)
 
@@ -124,9 +113,7 @@ def run_perf_whisper(expected_inference_time, expected_compile_time, device):
         ),
     ),
 )
-def test_perf_bare_metal(
-    use_program_cache, expected_inference_time, expected_compile_time, device
-):
+def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, device):
     run_perf_whisper(expected_inference_time, expected_compile_time, device)
 
 
@@ -135,12 +122,10 @@ def test_perf_bare_metal(
     "expected_inference_time, expected_compile_time",
     (
         (
-            5,
+            4.5,
             27,
         ),
     ),
 )
-def test_perf_virtual_machine(
-    use_program_cache, expected_inference_time, expected_compile_time, device
-):
+def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, device):
     run_perf_whisper(expected_inference_time, expected_compile_time, device)

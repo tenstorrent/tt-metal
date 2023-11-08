@@ -63,9 +63,7 @@ def run_test_FalconCausalLM_end_to_end(
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
-    pytorch_FalconCausalLM = PytorchFalconCausalLM(
-        hugging_face_reference_model, num_layers
-    )
+    pytorch_FalconCausalLM = PytorchFalconCausalLM(hugging_face_reference_model, num_layers)
     profiler.end("hugging_face_model_setup")
 
     # Prepare input ------------------------------------------------------------------------
@@ -79,9 +77,7 @@ def run_test_FalconCausalLM_end_to_end(
         model_input = torch.arange(seq_len * batch).reshape(batch, seq_len)
     else:
         # batch identical sequences for debugging
-        model_input = torch.stack([torch.arange(seq_len)] * batch).reshape(
-            batch, seq_len
-        )
+        model_input = torch.stack([torch.arange(seq_len)] * batch).reshape(batch, seq_len)
 
     # Generate dummy kv_cache --------------------------------------------------------------
     if llm_mode == "prefill":
@@ -119,9 +115,7 @@ def run_test_FalconCausalLM_end_to_end(
             tt_layer_past += ((tt_k_cache, tt_v_cache),)
 
     else:
-        raise NotImplementedError(
-            f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode."
-        )
+        raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
 
     # Prepare output -----------------------------------------------------------------------
     profiler.start("hugging_face_reference_model")
@@ -278,9 +272,7 @@ def run_test_FalconCausalLM_end_to_end(
     profiler.end(f"model_run_for_inference")
 
     if llm_mode == "prefill":
-        tt_out = torch.vstack(
-            [tt2torch_tensor(tt_out).squeeze(1) for tt_out in tt_outs]
-        )
+        tt_out = torch.vstack([tt2torch_tensor(tt_out).squeeze(1) for tt_out in tt_outs])
     elif llm_mode == "decode":
         tt_out = tt2torch_tensor(tt_out).squeeze(1)
         tt_out = tt_out.transpose(0, 1)
@@ -354,11 +346,11 @@ def run_test_FalconCausalLM_end_to_end(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
     (
-        ("prefill", 1, 128, 0, .33),
-        ("prefill", 1, 256, 0, .43),
-        ("decode", 32, 1, 128, 0.30),
-        ("decode", 32, 1, 1024, 0.38),
-        ("decode", 32, 1, 2047, 0.51),
+        ("prefill", 1, 128, 0, 0.30),
+        ("prefill", 1, 256, 0, 0.42),
+        ("decode", 32, 1, 128, 0.27),
+        ("decode", 32, 1, 1024, 0.35),
+        ("decode", 32, 1, 2047, 0.48),
     ),
     ids=[
         "prefill_seq128",
@@ -394,7 +386,7 @@ def test_perf_bare_metal(
     model_location_generator,
     device,
 ):
-    if (is_e75(device) and batch == 32):
+    if is_e75(device) and batch == 32:
         pytest.skip("Falcon batch 32 is not supported on E75")
 
     model_config = get_model_config(model_config_str)
@@ -403,9 +395,7 @@ def test_perf_bare_metal(
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    tt_lib.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/falcon-7b_{request.node.callspec.id}"
-    )
+    tt_lib.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/falcon-7b_{request.node.callspec.id}")
 
     run_test_FalconCausalLM_end_to_end(
         device,
@@ -427,8 +417,8 @@ def test_perf_bare_metal(
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
     (
-        ("prefill", 1, 128, 0, 4.0),
-        ("decode", 32, 1, 128, 10.56),
+        ("prefill", 1, 128, 0, 0.4),
+        ("decode", 32, 1, 128, 0.3),
         # ("prefill", 1, 256, 0, 0.40),
         # ("decode", 32, 1, 1024, 0.36),
         # ("decode", 32, 1, 2047, 0.47),
@@ -464,7 +454,7 @@ def test_perf_virtual_machine(
     model_location_generator,
     device,
 ):
-    if (is_e75(device) and batch == 32):
+    if is_e75(device) and batch == 32:
         pytest.skip("Falcon batch 32 is not supported on E75")
 
     model_config = get_model_config(model_config_str)
@@ -472,9 +462,7 @@ def test_perf_virtual_machine(
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    tt_lib.profiler.set_profiler_location(
-        f"tt_metal/tools/profiler/logs/falcon-7b_{request.node.callspec.id}"
-    )
+    tt_lib.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/falcon-7b_{request.node.callspec.id}")
 
     run_test_FalconCausalLM_end_to_end(
         device,

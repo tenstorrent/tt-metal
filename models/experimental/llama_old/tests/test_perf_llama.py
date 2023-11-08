@@ -17,7 +17,7 @@ from models.utility_functions import (
     enable_persistent_kernel_cache,
     torch_to_tt_tensor_rm,
     Profiler,
-    prep_report
+    prep_report,
 )
 
 
@@ -42,9 +42,7 @@ def run_perf_llama(expected_inference_time, expected_compile_time, device):
     tokenizer_name = tokenizer_version
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=torch.float32
-    )
+    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -120,25 +118,16 @@ def run_perf_llama(expected_inference_time, expected_compile_time, device):
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
-    ((0.160, 10),),
+    ((0.150, 10),),
 )
-def test_perf_bare_metal(
-    use_program_cache, expected_inference_time, expected_compile_time, device
-):
+def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, device):
     run_perf_llama(expected_inference_time, expected_compile_time, device)
 
 
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "expected_inference_time, expected_compile_time",
-    (
-        (
-            0.3,
-            11
-        ),
-    ),
+    ((0.16, 11),),
 )
-def test_perf_virtual_machine(
-    use_program_cache, expected_inference_time, expected_compile_time, device
-):
+def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, device):
     run_perf_llama(expected_inference_time, expected_compile_time, device)

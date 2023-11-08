@@ -100,14 +100,12 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
     "expected_inference_time, expected_compile_time",
     (
         (
-            1.60,
+            1.50,
             16,
         ),
     ),
 )
-def test_perf_bare_metal(
-    use_program_cache, expected_inference_time, expected_compile_time, device
-):
+def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, device):
     run_perf_bloom(expected_inference_time, expected_compile_time, device)
 
 
@@ -116,12 +114,10 @@ def test_perf_bare_metal(
     "expected_inference_time, expected_compile_time",
     (
         (
-            2.0,
+            1.55,
             20,
         ),
     ),
 )
-def test_perf_virtual_machine(
-    use_program_cache, expected_inference_time, expected_compile_time, device
-):
+def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, device):
     run_perf_bloom(expected_inference_time, expected_compile_time, device)

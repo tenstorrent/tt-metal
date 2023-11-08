@@ -16,15 +16,13 @@ from models.utility_functions import (
     enable_persistent_kernel_cache,
     torch_to_tt_tensor_rm,
     profiler,
-    prep_report
+    prep_report,
 )
 
 BATCH_SIZE = 1
 
 
-def run_perf_deit(
-    expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device
-):
+def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_sample_input, device):
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
@@ -33,17 +31,11 @@ def run_perf_deit(
 
     image = hf_cat_image_sample_input
 
-    image_processor = AutoImageProcessor.from_pretrained(
-        "facebook/deit-base-distilled-patch16-224"
-    )
-    HF_model = DeiTForImageClassificationWithTeacher.from_pretrained(
-        "facebook/deit-base-distilled-patch16-224"
-    )
+    image_processor = AutoImageProcessor.from_pretrained("facebook/deit-base-distilled-patch16-224")
+    HF_model = DeiTForImageClassificationWithTeacher.from_pretrained("facebook/deit-base-distilled-patch16-224")
     inputs = image_processor(image, return_tensors="pt")
 
-    tt_inputs = torch_to_tt_tensor_rm(
-        inputs["pixel_values"], device, put_on_device=False
-    )
+    tt_inputs = torch_to_tt_tensor_rm(inputs["pixel_values"], device, put_on_device=False)
     tt_model = deit_for_image_classification_with_teacher(device)
 
     with torch.no_grad():
@@ -88,7 +80,7 @@ def run_perf_deit(
     "expected_inference_time, expected_compile_time",
     (
         (
-            2.0,
+            1.8,
             18,
         ),
     ),
@@ -113,7 +105,7 @@ def test_perf_bare_metal(
     "expected_inference_time, expected_compile_time",
     (
         (
-            2.6,
+            2.0,
             19.5,
         ),
     ),
