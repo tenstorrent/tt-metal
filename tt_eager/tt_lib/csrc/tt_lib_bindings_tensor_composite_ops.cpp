@@ -710,11 +710,11 @@ namespace tt::tt_metal::detail{
 
         m_tensor.def("masked_fill", &masked_fill,
             py::arg("input_a"), py::arg("mask"), py::arg("value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Perform an ternary masked_fill operation on one tensor and one value based on third @mask.
+            Perform an masked_fill operation based on @mask.
 
             masked_fill(input_a, mask, value) implements (mask) ? value : input_a.
 
-            All three input tensors must have BFLOAT16 data type, and be of equal shape.
+            All two input tensors must have BFLOAT16 data type, and be of equal shape.
 
             Output tensor will have BFLOAT16 data type.
 
