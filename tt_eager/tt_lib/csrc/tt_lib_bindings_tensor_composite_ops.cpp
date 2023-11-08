@@ -706,6 +706,25 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
+        m_tensor.def("masked_fill", &masked_fill,
+            py::arg("input_a"), py::arg("mask"), py::arg("value"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Perform an ternary masked_fill operation on one tensor and one value based on third @mask.
+
+            masked_fill(input_a, mask, value) implements (mask) ? value : input_a.
+
+            All three input tensors must have BFLOAT16 data type, and be of equal shape.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "input_a", "False Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "mask", "Predicate Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "value", "Fill value", "float", "", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
         detail::bind_unary_op_with_param(
             m_tensor, "logit", &logit,
             py::arg("eps"),

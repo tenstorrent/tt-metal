@@ -1206,6 +1206,13 @@ Tensor triu(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_
   return mul(input_a,index_u,std::nullopt,output_mem_config);
 }
 
+//masked_fill - ternary operator y = (mask) ? value : input_a; elementwise
+Tensor masked_fill(const Tensor& input_a, const Tensor& mask, float value, const MemoryConfig& output_mem_config) {
+    Tensor t_value = mk_filled_tensor_like(input_a, value, output_mem_config);
+    Tensor result = where(mask, t_value, input_a, output_mem_config);
+    return result;
+}
+
 }//namespace tt_metal
 
 }//namespace tt
