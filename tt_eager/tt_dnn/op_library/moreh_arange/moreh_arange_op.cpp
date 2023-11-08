@@ -24,7 +24,7 @@ operation::ProgramWithCallbacks moreh_arange_(
     const Tensor &input, float start, float end, float step, const CoreRange core_range) {
     // split work
     // N and C are always 1
-    // H is always 32
+    // H is always TILE_HEIGHT
     auto shape = input.shape();
     auto W = shape[3];
     auto Wt = W / TILE_WIDTH;
@@ -123,7 +123,7 @@ std::vector<Shape> MorehArange::compute_output_shapes(const std::vector<Tensor> 
     } else {
         // return size is ceil((end - start) / step)
         uint32_t num_elems = static_cast<uint32_t>(ceil(((this->end - this->start) / this->step)));
-        Shape output_shape = {1, 1, 32, ((num_elems + 32 - 1) / 32) * 32};
+        Shape output_shape = {1, 1, TILE_HEIGHT, ((num_elems + TILE_WIDTH - 1) / TILE_WIDTH) * TILE_WIDTH};
         return {output_shape};
     }
 }
