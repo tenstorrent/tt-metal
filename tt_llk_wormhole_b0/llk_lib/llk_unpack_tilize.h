@@ -30,48 +30,30 @@ inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile=false) {
     tmp.program(instrn_buffer);
 }
 
-template <bool is_fp32_dest_acc_en = false>
-inline void llk_unpack_tilize_hw_configure(const llk_unpack_A_params_t *unpack_tilize_params) {
+template <bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
+inline void _llk_unpack_tilize_hw_configure_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM,  const std::uint32_t within_face_16x16_transpose = 0, const std::uint32_t num_faces = 4) {
 
     constexpr bool is_row_pool = false;
-    constexpr bool transpose_xy_srca = false;
-    constexpr StochRndMode stoch_rnd_mode = StochRndMode::None;
 
-    const uint32_t unpA_operand_id = get_operand_id(unpack_tilize_params->unpA_operand);
-    const uint32_t unpA_num_faces = get_num_faces(unpA_operand_id);
-    const uint32_t unpA_face_r_dim = get_face_r_dim(unpA_operand_id);
     configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, stoch_rnd_mode>(
-        unpA_operand_id, 
-        unpA_operand_id, 
-        unpA_face_r_dim, 
-        unpA_face_r_dim, 
-        transpose_xy_srca, 
-        unpA_num_faces, 
-        unpA_num_faces);
+        unpack_src_format, 
+        unpack_src_format, 
+        unpack_dst_format, 
+        unpack_dst_format, 
+        face_r_dim, 
+        face_r_dim, 
+        within_face_16x16_transpose, 
+        num_faces, 
+        num_faces);
 }
 
-
-template <bool is_fp32_dest_acc_en = false>
-inline void llk_unpack_tilize_hw_configure_disaggregated(
-    const std::uint32_t unpA_operand) {
-    TT_LLK_DUMP("llk_unpack_tilize_hw_configure_disaggregated<{}>({})", is_fp32_dest_acc_en, unpA_operand);
-    const llk_unpack_A_params_t unpack_tilize_params = {
-        .unpA_operand = unpA_operand
-    };
-    llk_unpack_tilize_hw_configure<is_fp32_dest_acc_en>(&unpack_tilize_params);
-}
-
-inline void _llk_unpack_tilize_init_(const std::uint32_t face_r_dim=FACE_R_DIM, const bool narrow_tile=false, const std::uint32_t ct_dim=0, const std::uint32_t unpack_src_format=0, const std::uint32_t unpack_dst_format=0) {
+inline void _llk_unpack_tilize_init_(const std::uint32_t unpack_src_format=0, const std::uint32_t unpack_dst_format=0, const std::uint32_t ct_dim=0, const std::uint32_t face_r_dim=FACE_R_DIM, const bool narrow_tile=false) {
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
     const std::uint32_t block_c_dim = ct_dim * (narrow_tile ? FACE_C_DIM : TILE_C_DIM);
 
     // Set face dim
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim*FACE_C_DIM-1, 0x0);
-
-    // Save state of unpacker config for quick restore
-    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_TILIZER_STATE_0, THCON_SEC0_REG2_Out_data_format_ADDR32); // Save unpack config[0]
-    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_TILIZER_STATE_1, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32); // Save tile x dim per context
 
     // Override default settings to enable tilize mode
     unpack_config_u config = {0};
@@ -88,13 +70,7 @@ inline void _llk_unpack_tilize_init_(const std::uint32_t face_r_dim=FACE_R_DIM, 
     _llk_unpack_tilize_mop_config_(narrow_tile);
 }
 
-inline void llk_unpack_tilize_uninit(const std::uint32_t face_r_dim = FACE_R_DIM) {
-    TT_SETADCXX(p_setadc::UNP_A, face_r_dim*FACE_C_DIM-1, 0x0);
-    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG2_Out_data_format_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::SR_UNPACK_TILIZER_STATE_0); // Restore unpack config[0]
-    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32,  p_gpr_unpack::SR_UNPACK_TILIZER_STATE_1); // Restore tile x dim per context
-}
-
-inline void _llk_unpack_tilize_(const std::uint32_t base_address, const std::uint32_t tile_index, const std::uint32_t face_r_dim=FACE_R_DIM, const std::uint32_t num_faces=4, const bool narrow_tile=false, std::uint32_t unpack_src_format=0, std::uint32_t block_ct_dim=0) {
+inline void _llk_unpack_tilize_(const std::uint32_t base_address, const std::uint32_t tile_index, std::uint32_t unpack_src_format=0, std::uint32_t block_ct_dim=0, const std::uint32_t face_r_dim=FACE_R_DIM, const std::uint32_t num_faces=4, const bool narrow_tile=false) {
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
 

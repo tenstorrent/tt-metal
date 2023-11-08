@@ -133,31 +133,18 @@ inline void llk_unpack_A_mop_config(const bool transpose_of_faces, const std::ui
 }
 
 template <bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
-inline void llk_unpack_A_hw_configure(const llk_unpack_A_params_t *unpack_A_params, const int within_face_16x16_transpose = 0) {
+inline void _llk_unpack_A_hw_configure_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM,  const std::uint32_t within_face_16x16_transpose = 0, const std::uint32_t num_faces = 4) {
     constexpr bool is_row_pool = false;
-    const uint32_t unpA_operand_id = get_operand_id(unpack_A_params->unpA_operand);
-
-    const uint32_t unpA_num_faces = get_num_faces(unpA_operand_id);
-
-    const uint32_t unpA_face_r_dim = get_face_r_dim(unpA_operand_id);
-
     configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, stoch_rnd_mode>(
-        unpA_operand_id, 
-        unpA_operand_id,
-        unpA_face_r_dim, 
-        unpA_face_r_dim, 
+        unpack_src_format, 
+        unpack_src_format, 
+        unpack_dst_format, 
+        unpack_dst_format, 
+        face_r_dim, 
+        face_r_dim, 
         within_face_16x16_transpose, 
-        unpA_num_faces, 
-        unpA_num_faces);
-}
-
-template <bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
-inline void llk_unpack_A_hw_configure_disaggregated(const std::uint32_t unpA_operand, const int within_face_16x16_transpose = 0) {
-    TT_LLK_DUMP("llk_unpack_A_hw_configure_disaggregated<{}, {}>({}, {})", is_fp32_dest_acc_en, (uint8_t)stoch_rnd_mode, unpA_operand, within_face_16x16_transpose);
-    const llk_unpack_A_params_t unpack_A_params = {
-        .unpA_operand = unpA_operand
-    };
-    llk_unpack_A_hw_configure<is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_A_params, within_face_16x16_transpose);
+        num_faces, 
+        num_faces);
 }
 
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE, bool unpack_to_dest = false>

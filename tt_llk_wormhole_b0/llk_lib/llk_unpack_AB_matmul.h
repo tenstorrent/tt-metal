@@ -90,29 +90,18 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
 }
 
 template<bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
-inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_t *unpack_AB_params) {
+inline void _llk_unpack_AB_matmul_hw_configure_(const std::uint32_t unpA_src_format, const std::uint32_t unpB_src_format, const std::uint32_t unpA_dst_format, const std::uint32_t unpB_dst_format,  const std::uint32_t unpA_face_r_dim = FACE_R_DIM, const std::uint32_t unpB_face_r_dim = FACE_R_DIM, const std::uint32_t within_face_16x16_transpose = 0, const std::uint32_t unpA_num_faces = 4, const std::uint32_t unpB_num_faces = 4, const std::uint32_t unpA_tile_size = 0, const std::uint32_t unpB_tile_size = 0) {
+
     constexpr bool is_row_pool = false;
-    const bool transpose_xy_srca = unpack_AB_params->transpose_xy_srca;
-
-    // In0 -> unpB 
-    // In1 -> unpA 
-    const uint32_t unpA_operand_id = get_operand_id(unpack_AB_params->unpB_operand);
-    const uint32_t unpB_operand_id = get_operand_id(unpack_AB_params->unpA_operand);
-
-    // unpA -> srcA
-    // unpB -> srcB
-    const uint32_t unpA_num_faces = get_num_faces(unpA_operand_id);
-    const uint32_t unpB_num_faces = get_num_faces(unpB_operand_id);
-
-    const uint32_t unpA_face_r_dim = get_face_r_dim(unpA_operand_id);
-    const uint32_t unpB_face_r_dim = get_face_r_dim(unpB_operand_id);
 
     configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, stoch_rnd_mode>(
-        unpA_operand_id, 
-        unpB_operand_id, 
+        unpA_src_format, 
+        unpB_src_format, 
+        unpA_dst_format, 
+        unpB_dst_format, 
         unpA_face_r_dim, 
         unpB_face_r_dim, 
-        transpose_xy_srca, 
+        within_face_16x16_transpose, 
         unpA_num_faces, 
         unpB_num_faces);
 
@@ -122,23 +111,12 @@ inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_
     TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
     TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
 
-    std::uint32_t inputA = get_operand_id(unpack_AB_params->unpB_operand);
-    std::uint32_t inputB = get_operand_id(unpack_AB_params->unpA_operand);
-    regfile[p_gpr_unpack::TILE_SIZE_A] = operands[inputA].f.tile_size_words;
-    regfile[p_gpr_unpack::TILE_SIZE_B] = operands[inputB].f.tile_size_words;
+    regfile[p_gpr_unpack::TILE_SIZE_A] = unpA_tile_size;
+    regfile[p_gpr_unpack::TILE_SIZE_B] = unpB_tile_size;
     sync_regfile_write(p_gpr_unpack::TILE_SIZE_B);
 }
 
-template<bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
-inline void llk_unpack_AB_matmul_hw_configure_disaggregated(
-    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose_xy_srca = 0) {
-    TT_LLK_DUMP("llk_unpack_AB_matmul_hw_configure_disaggregated<{}, {}>({}, {}, {})", is_fp32_dest_acc_en, (uint8_t)stoch_rnd_mode, unpA_operand, unpB_operand, transpose_xy_srca);
-    const llk_unpack_AB_matmul_params_t unpack_AB_matmul_params = {
-        .unpA_operand = unpA_operand, .unpB_operand = unpB_operand, .transpose_xy_srca = transpose_xy_srca };
-    llk_unpack_AB_matmul_hw_configure<is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_AB_matmul_params);
-}
-
-__attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(const std::uint32_t unpA_face_r_dim=FACE_R_DIM, const std::uint32_t unpB_face_r_dim=FACE_R_DIM, const std::uint32_t unpA_num_faces=4, const std::uint32_t unpB_num_faces=4, const bool partial_face=false, const std::uint32_t transpose=0, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+__attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(const std::uint32_t transpose=0, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1, const std::uint32_t unpA_face_r_dim=FACE_R_DIM, const std::uint32_t unpB_face_r_dim=FACE_R_DIM, const std::uint32_t unpA_num_faces=4, const std::uint32_t unpB_num_faces=4, const bool partial_face=false) {
 
     const bool reuse_a = ct_dim >= rt_dim; 
 

@@ -70,37 +70,18 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces=false, cons
 }
 
 template <bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
-inline void llk_unpack_AB_hw_configure(const llk_unpack_AB_params_t *unpack_AB_params, const int within_face_16x16_transpose = 0) {
+inline void _llk_unpack_AB_hw_configure_(const std::uint32_t unpA_src_format, const std::uint32_t unpB_src_format, const std::uint32_t unpA_dst_format, const std::uint32_t unpB_dst_format,  const std::uint32_t face_r_dim = FACE_R_DIM,  const std::uint32_t within_face_16x16_transpose = 0, const std::uint32_t num_faces = 4) {
     constexpr bool is_row_pool = false;
-    // In0 -> unpA 
-    // In1 -> unpB 
-    const uint32_t unpA_operand_id = get_operand_id(unpack_AB_params->unpA_operand);
-    const uint32_t unpB_operand_id = get_operand_id(unpack_AB_params->unpB_operand);
-
-    // unpA -> srcA
-    // unpB -> srcB
-    const uint32_t num_faces = get_num_faces(unpA_operand_id);  // num faces in unpA and unpB are the same
- 
-    const uint32_t face_r_dim = get_face_r_dim(unpA_operand_id); // face r dim in unpA and unpB are the same
-
     configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, stoch_rnd_mode>(
-        unpA_operand_id, 
-        unpB_operand_id, 
+        unpA_src_format, 
+        unpB_src_format, 
+        unpA_dst_format, 
+        unpB_dst_format, 
         face_r_dim, 
         face_r_dim, 
         within_face_16x16_transpose, 
         num_faces, 
         num_faces);
-}
-
-template <bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
-inline void llk_unpack_AB_hw_configure_disaggregated(
-    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const int within_face_16x16_transpose = 0 ) {
-
-    TT_LLK_DUMP("llk_unpack_AB_hw_configure_disaggregated<{}, {}>({}, {}, {})", is_fp32_dest_acc_en, (uint8_t)stoch_rnd_mode, unpA_operand, unpB_operand, within_face_16x16_transpose);
-    
-    const llk_unpack_AB_params_t unpack_AB_params = {.unpA_operand = unpA_operand, .unpB_operand = unpB_operand};
-    llk_unpack_AB_hw_configure<is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_AB_params, within_face_16x16_transpose);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>

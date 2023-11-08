@@ -39,62 +39,31 @@ inline void _llk_unpack_reduce_mop_config_() {
     tmp.program(instrn_buffer);
 }
 
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
-inline void llk_unpack_reduce_hw_configure(
-    const llk_unpack_reduce_params_t *unpack_reduce_params, const float const_mult) {
+template <bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
+inline void _llk_unpack_reduce_hw_configure_(const std::uint32_t unpA_src_format, const std::uint32_t unpB_src_format, const std::uint32_t unpA_dst_format, const std::uint32_t unpB_dst_format,  const std::uint32_t unpA_face_r_dim = FACE_R_DIM, const std::uint32_t unpB_face_r_dim = FACE_R_DIM, const std::uint32_t within_face_16x16_transpose = 0, const std::uint32_t unpA_num_faces = 4, const std::uint32_t unpB_num_faces = 4) {
 
-    constexpr uint32_t srca_height = 16;
-    constexpr uint32_t srcb_height = 16;
     constexpr bool is_row_pool = true;
-    constexpr bool transpose_xy_per_face = (ReduceDim::REDUCE_ROW == dim);
 
     configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, stoch_rnd_mode>(
-        get_operand_id(unpack_reduce_params->unpA_operand),
-        get_operand_id(unpack_reduce_params->unpA_operand),
-        srca_height,
-        srcb_height,
-        transpose_xy_per_face);
-
-    if constexpr (type != PoolType::MAX) {
-        union {
-            float f;
-            uint32_t u;
-        } f2u = {.f = const_mult};
-
-        for (uint i = 0; i < 16; i++) l1_buffer[i] = f2u.u;  // Load const into L1 buffer
-    }    
-}
-
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en=false, StochRndMode stoch_rnd_mode = StochRndMode::None>
-inline void llk_unpack_reduce_hw_configure_disaggregated(const std::uint32_t unpA_operand, const float mult) {
-    TT_LLK_DUMP("llk_unpack_reduce_hw_configure_disaggregated<{}, {}, {}, {}>({}, {})", type, dim, is_fp32_dest_acc_en, (uint8_t)stoch_rnd_mode, unpA_operand, mult);
-    const llk_unpack_reduce_params_t unpack_reduce_params = {.unpA_operand = unpA_operand};
-    llk_unpack_reduce_hw_configure<type, dim, is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_reduce_params, mult);
+        unpA_src_format, 
+        unpB_src_format, 
+        unpA_dst_format, 
+        unpB_dst_format, 
+        unpA_face_r_dim, 
+        unpB_face_r_dim, 
+        within_face_16x16_transpose, 
+        unpA_num_faces, 
+        unpB_num_faces);
 }
 
 template <PoolType type, ReduceDim dim>
 inline void _llk_unpack_reduce_init_(const std::uint32_t within_face_16x16_transpose=0) {
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
-
-    const uint unpack_src_df  = (uint) DataFormat::Float32;
-
-    const uint unpack_dst_df = ((uint)unpack_dst_format[0] == (uint) DataFormat::Int8) ? (uint) DataFormat::Float16 : // Int8 is treated as fp16_a 
-                               ((((uint)unpack_dst_format[0]>>2)&0x1) ? (uint) DataFormat::Float16_b : (uint) DataFormat::Float16);
-
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(unpack_dst_df);
 
     // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(ReduceDim::REDUCE_ROW == dim ? !within_face_16x16_transpose : within_face_16x16_transpose);
 
     TTI_SETADCXX(0b11, FACE_R_DIM*FACE_C_DIM-1, 0x0);
-
-    cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0xf>(unpack_src_df);
-    cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpack_dst_df);
-
-    TTI_WRCFG(p_gpr_unpack::L1_BUFFER_ADDR, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_address_ADDR32);
-    TTI_WRCFG(p_gpr_unpack::L1_BUFFER_ADDR, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
-    TTI_NOP; TTI_NOP;
 
     _llk_unpack_reduce_mop_config_<type, dim>();
 }
