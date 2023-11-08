@@ -221,6 +221,7 @@ def apply_rotary_emb(
 
     BCH = tt_lib.tensor.BcastOpDim.H
     BCMUL = tt_lib.tensor.BcastOpMath.MUL
+
     t_one = tt_lib.tensor.ones_like(xq)
     bcast_freq = tt_lib.tensor.bcast(t_one, freqs_cis, BCMUL, BCH)
     xq_out = tt_lib.tensor.complex_mul(
