@@ -134,29 +134,29 @@ namespace ckernel::packer
    } pack_counters_u;
 
    
-   inline const uint32_t get_num_faces(const std::uint32_t output_id) //FIXME: why we have to always inline
+   inline constexpr uint32_t get_num_faces(const std::uint32_t output_id)
    {
       return pack_tile_num_faces[output_id];
    }
 
-   inline const uint32_t get_face_r_dim(const std::uint32_t output_id)
+   inline constexpr uint32_t get_face_r_dim(const std::uint32_t output_id)
    {
       return pack_tile_face_r_dim[output_id];
    }
 
-   inline const uint32_t get_tile_c_dim(const std::uint32_t output_id)
+   inline constexpr uint32_t get_tile_c_dim(const std::uint32_t output_id)
    {
       return pack_tile_dims[output_id][TileDim::C_IDX];
    }
 
-   inline constexpr uint32_t get_partial_face(const std::uint32_t operand_id)
+   inline constexpr uint32_t get_partial_face(const std::uint32_t output_id)
    {
-      return pack_partial_face[operand_id];
+      return pack_partial_face[output_id];
    }
 
-   inline constexpr uint32_t get_narrow_tile(const std::uint32_t operand_id)
+   inline constexpr uint32_t get_narrow_tile(const std::uint32_t output_id)
    {
-      return pack_narrow_tile[operand_id];
+      return pack_narrow_tile[output_id];
    }
 
    // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
@@ -336,7 +336,11 @@ namespace ckernel::packer
 
 
    template <bool is_fp32_dest_acc_en = false>
-   inline void reconfig_packer_data_format(const uint output_id)
+   inline void reconfig_packer_data_format(
+      const uint pack_src_format, 
+      const uint pack_dst_format, 
+      const uint tile_size,
+      const uint face_r_dim = FACE_R_DIM)
    {
       // Get pointer to registers for current state ID
       volatile uint *cfg = get_cfg_pointer();
@@ -346,35 +350,35 @@ namespace ckernel::packer
       config.val[2] = 0; // Only need to modify word[2][15:0]
 
       config.f.uncompress   = 1;
-      config.f.out_data_format   = (uint)pack_dst_format[output_id];
-      config.f.in_data_format    = (uint)pack_src_format[output_id];
+      config.f.out_data_format   = pack_dst_format;
+      config.f.in_data_format    = pack_src_format;
       TT_SETDMAREG(0, LOWER_HALFWORD(config.val[2]), 0, LO_16(p_gpr_pack::TMP_LO));
       TTI_REG2FLOP(2,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32+2-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO); //16-bit write
       TTI_REG2FLOP(2,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32+2-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
       TTI_REG2FLOP(2,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32+2-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
       TTI_REG2FLOP(2,0,0,0,THCON_SEC1_REG8_Row_start_section_size_ADDR32+2-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
 
-      if (IS_BFP_FORMAT(pack_dst_format[output_id])) {
+      if (IS_BFP_FORMAT(pack_dst_format)) {
          // Override exp section size for packers 1,2,3
          // Tile header + exp size + datum size 
          TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP0_SEC_SIZE_BFP);
-         if ((uint)(pack_dst_format[output_id]&0x1F) == (uint)DataFormat::Bfp8 || (uint)(pack_dst_format[output_id]&0x1F) == (uint)DataFormat::Bfp8_b) {
+         if ((pack_dst_format&0x1F) == (uint)DataFormat::Bfp8 || (pack_dst_format&0x1F) == (uint)DataFormat::Bfp8_b) {
             TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP1_SEC_SIZE_BFP8);
             TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP2_SEC_SIZE_BFP8);
             TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG8_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP3_SEC_SIZE_BFP8);
-         } else if ((uint)(pack_dst_format[output_id]&0x1F) == (uint)DataFormat::Bfp4 || (uint)(pack_dst_format[output_id]&0x1F) == (uint)DataFormat::Bfp4_b) {
+         } else if ((pack_dst_format&0x1F) == (uint)DataFormat::Bfp4 || (pack_dst_format&0x1F) == (uint)DataFormat::Bfp4_b) {
             TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP1_SEC_SIZE_BFP4);
             TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP2_SEC_SIZE_BFP4);
             TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG8_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP3_SEC_SIZE_BFP4);
-         } else if ((uint)(pack_dst_format[output_id]&0x1F) == (uint)DataFormat::Bfp2 || (uint)(pack_dst_format[output_id]&0x1F) == (uint)DataFormat::Bfp2_b) {
+         } else if ((pack_dst_format&0x1F) == (uint)DataFormat::Bfp2 || (pack_dst_format&0x1F) == (uint)DataFormat::Bfp2_b) {
             TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP1_SEC_SIZE_BFP2);
             TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP2_SEC_SIZE_BFP2);
             TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG8_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP3_SEC_SIZE_BFP2);
          } else {
             FWASSERT("Other data formats not supported", false);
          }
-      } else if (((uint)pack_dst_format[output_id] == (uint)DataFormat::Lf8) || 
-                 ((uint)pack_dst_format[output_id] == (uint)DataFormat::Int8)) {
+      } else if ((pack_dst_format == (uint)DataFormat::Lf8) || 
+                 (pack_dst_format == (uint)DataFormat::Int8)) {
          TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
          TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
          TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
@@ -382,13 +386,13 @@ namespace ckernel::packer
       }   
 
       // Set l1 address offset
-      set_packer_l1_offset(pack_dst_format[output_id], get_face_r_dim(output_id));
+      set_packer_l1_offset(pack_dst_format, face_r_dim);
 
-      TT_SETDMAREG(0, LOWER_HALFWORD((std::uint32_t)outputs[output_id].f.tile_size_words), 0, LO_16(p_gpr_pack::TILE_HEADER));
+      TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_pack::TILE_HEADER));
 
       // Workaround for HW bug: tenstorrent/budabackend#1394
       if constexpr (is_fp32_dest_acc_en) {
-         if (IS_BFP_A_FORMAT((uint)pack_dst_format[output_id])) {
+         if (IS_BFP_A_FORMAT(pack_dst_format)) {
             config.val[3] = 0; // Only need to modify word[2][15:0]
             config.f.exp_threshold_en = 1;
             config.f.exp_threshold = 113;
@@ -407,12 +411,12 @@ namespace ckernel::packer
 
       // Flush packer pipeline before strides gasket alu format change
       TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
-      cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(pack_src_format[output_id]);
+      cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(pack_src_format);
 
       tensix_sync(); //FIXME: why stallwait on cfg write doesn't work!
 
       // Set packer strides
-      set_packer_strides(pack_src_format[output_id], pack_dst_format[output_id]);
+      set_packer_strides(pack_src_format, pack_dst_format);
 
 
    }
