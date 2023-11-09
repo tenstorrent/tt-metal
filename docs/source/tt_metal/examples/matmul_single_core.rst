@@ -4,18 +4,21 @@ Matmul (Single Core)
 ====================
 
 We'll build a program that will perform matmul operations on two tensors
-with equal-size inner dimension.
+with equal-size inner dimension. We will then go through specific sections of
+the propram.
 
 The full example program is in
 ``tt_metal/programming_examples/matmul_single_core/matmul_single_core.cpp``
 
-
 Host Code
 ---------
+
+The initial level of host-side code can broken up into sections:
+
 - Create Device
 - Set input and output vector variables, using the user-defined parameters (M, N, K, B)
 - Tilizing the input vector, and untilizing the device output to vector (row-major layout)
-- Call matmul_single_core() program and retrieve output results (details in next section)
+- Call ``matmul_single_core()`` program and retrieve output results (details in next section)
 - Validate the device compuation results vs. golden results on cpu
 - Close Device
 
@@ -51,20 +54,26 @@ Host Code
 
     CloseDevice(device);
 
-Keeping all code details inside matmul_single_core(), allowing for calling consecutive functions in the main function
+We are keeping all code details with specific host API calls inside
+``matmul_single_core``, allowing for calling consecutive functions in the
+main function.
 
 Main blocks in matmul_single_core function
 ------------------------------------------
-- Program, enqueue and core range settings
-- Create DRAM buffers based on input and output vectors
-- Create L1 Circular buffers
-- Kernels declarations and related compile and runtime arguments
-- Program launch and reading data from DRAM output buffer to result vector
 
+We will go through sections of the ``matmul_single_core`` function:
 
-A- Create Program, Enqueue initialization, and core range definition
---------------------------------------------------------------------
-Setting core range to be just one core at (0,0)
+- A - Program, enqueue and core range settings
+- B - Create DRAM buffers based on input and output vectors
+- C - Create L1 Circular buffers
+- D - Kernels declarations and related compile and runtime arguments
+- E - Program launch and reading data from DRAM output buffer to result vector
+
+A - Create Program, Enqueue initialization, and core range definition
+---------------------------------------------------------------------
+
+We want a just a single core, so we will restrict the core range to be just one
+core at (0, 0).
 
 .. code-block:: cpp
 
@@ -73,10 +82,10 @@ Setting core range to be just one core at (0,0)
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
 
-B- Create DRAM buffers & Circular buffers
------------------------------------------
-In terms of DRAM buffers, We need two source buffers and one destination buffer.
-Writing data from input vectors to source buffers
+B - Create DRAM buffers & Circular buffers
+------------------------------------------
+
+In terms of DRAM buffers, we need two source buffers and one destination buffer.
 
 .. code-block:: cpp
 
@@ -105,8 +114,10 @@ Writing data from input vectors to source buffers
     uint32_t dst_addr = dst_dram_buffer.address();
 
 
-We need to declare three circular buffers to enable data transfer between the reader, compute, and writer engines.
-Input tiles count is = 2 because it's single tile process, and double-buffer.
+We need to declare three circular buffers to enable data transfer between the
+reader, compute, and writer engines. Input tiles count is 2 because although
+the computation is a single tile process, we want to get a performance boost by
+double buffering..
 
 .. code-block:: cpp
 
@@ -127,8 +138,9 @@ Input tiles count is = 2 because it's single tile process, and double-buffer.
         .set_page_size(output_cb_index, single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-C- Compile-time kernels arguments
----------------------------------
+C - Compile-time kernels arguments
+----------------------------------
+
 We have to declare some compile-time arguments for read/write kernels. Some default
 parameters here will suffice.
 
@@ -149,36 +161,40 @@ parameters here will suffice.
     };
 
 
-D- Compute kernel declaration and compile-time defines
-------------------------------------------------------
-We're using a reader kernel to take in data from DRAM into L1, and a writer kernel to write out results from the
-compute engine back to the destination DRAM buffer.
+D - Compute kernel declaration and compile-time defines
+-------------------------------------------------------
+
+We're using a special reader kernel to take in data from DRAM into L1, and a
+special writer kernel to write out results from the compute engine back to the
+destination DRAM buffer.
 
 .. code-block:: cpp
 
     auto reader_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_bmm_8bank.cpp",
+        "tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     auto writer_id = tt_metal::CreateDataMovementKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_bmm_8bank.cpp",
+        "tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_bmm_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     auto matmul_single_core_kernel_id = tt_metal::CreateComputeKernel(
         program,
-        "tt_metal/kernels/compute/bmm.cpp",
+        "tt_metal/programming_examples/matmul_common/kernels/compute/bmm.cpp",
         core,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args}
     );
 
 
-E- Runtime arguments and program launch
------------------------------------------
-Runtime settings to loop on the input tiles to run the matmul on the single core (one tile operation)
+E - Runtime arguments and program launch
+----------------------------------------
+
+We will now set runtime arguments for the reader and writer kernels to run the
+matmul operation on a single core and a single tile at a time.
 
 .. code-block:: cpp
 
@@ -194,6 +210,7 @@ Runtime settings to loop on the input tiles to run the matmul on the single core
 
 
 Launch program, enqueue & read in output buffer result into the host vector.
+
 .. code-block:: cpp
 
     EnqueueWriteBuffer(cq, src0_dram_buffer, a, false);
@@ -203,5 +220,6 @@ Launch program, enqueue & read in output buffer result into the host vector.
 
 Conclusion
 ----------
-Those are the additional steps for getting matmul_single_core operations up and
-running on the compute engine.
+
+Those are the additional steps for getting ``matmul_single_core`` operations up
+and running on the compute engine.
