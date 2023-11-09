@@ -129,8 +129,7 @@ void matmul_single_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_
     */
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
-    //uint32_t single_tile_size = detail::TileSize(cb_data_format);
-    uint32_t single_tile_size = 2 * 1024;
+    uint32_t single_tile_size = 2 * 32 * 32;
 
     uint32_t dram_buffer_A_size = single_tile_size * Mt * Kt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
@@ -144,9 +143,6 @@ void matmul_single_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_
     uint32_t src0_addr = src0_dram_buffer.address();
     uint32_t src1_addr = src1_dram_buffer.address();
     uint32_t dst_addr = dst_dram_buffer.address();
-
-    //WriteToBuffer(src0_dram_buffer, a);
-    //WriteToBuffer(src1_dram_buffer, b);
 
     /*
     * Config of Circular Buffer in the device L1
@@ -221,9 +217,6 @@ void matmul_single_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_
     );
 
     /* Launch program & read in output buffer result into the host vector */
-    //LaunchProgram(device, program);
-    //ReadFromBuffer(dst_dram_buffer, output);
-    //ReadFromBuffer(src0_dram_buffer, output);
 
     EnqueueWriteBuffer(cq, src0_dram_buffer, a, false);
     EnqueueWriteBuffer(cq, src1_dram_buffer, b, false);
@@ -238,7 +231,6 @@ void matmul_single_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_
 
 int main(int argc, char **argv) {
     bool pass = true;
-    //auto slow_dispatch_mode = 1;
 
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         tt::log_fatal("Test not supported w/ slow dispatch, exiting");
@@ -264,12 +256,9 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt; // num_tiles of FP16_B
         uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B
 
-        /* input vectors */
+        /* input vectors with various ranges of values */
         std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_A_size, 1, 123);
         std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(dram_buffer_B_size, 1, 12522);
-
-        //std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(dram_buffer_A_size, false);
-        //std::vector<uint32_t> src1_vec = pack_bfloat16_vec_into_uint32_vec(create_identity_matrix(K, N, K));
 
         /* Input vector tilizing */
         std::vector<uint32_t> tilized_src0_vec = pack_bfloat16_vec_into_uint32_vec(tilize(unpack_uint32_vec_into_bfloat16_vec(src0_vec), M, K));
@@ -277,7 +266,7 @@ int main(int argc, char **argv) {
 
         cout << "-input size- " << src0_vec.size() << " -- " << src1_vec.size() << endl;
 
-
+        /* Printing out input data for user to see */
         cout << "----orig input 0--" << endl;
         for (int i = 0; i < src0_vec.size(); i++) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(src0_vec.at(i));
@@ -288,16 +277,6 @@ int main(int argc, char **argv) {
                 cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << src0_vec.at(i) << endl;
             }
         }
-        /*
-        cout << "----orig input 1--" << endl;
-        for (int i = 0; i < 512; i++) {
-            std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(src1_vec.at(i));
-            float a1 = as.first.to_float();
-            float a2 = as.second.to_float();
-            cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << src1_vec.at(i) << endl;
-        }
-        */
-
 
         cout << "----tiled input--" << endl;
         for (int i = 0; i < src0_vec.size(); i++) {
@@ -323,7 +302,6 @@ int main(int argc, char **argv) {
                 cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << result_vec.at(i) << endl;
             }
         }
-
 
         vector<uint32_t> result_vec_untilized = pack_bfloat16_vec_into_uint32_vec(untilize(unpack_uint32_vec_into_bfloat16_vec(result_vec), M, N));
         cout << "----metal_untilized--" << endl;
@@ -360,15 +338,13 @@ int main(int argc, char **argv) {
             return is_close(a, b, rel_tolerance, abs_tolerance);
         };
 
-        // float calc_pcc = packed_uint32_t_vector_pcc(golden_vec_tilized, result_vec);
-        // cout << "PCC= " << calc_pcc << endl;
-
         float pearson = packed_uint32_t_vector_pcc_v2(golden_vec_tilized, result_vec);
         cout << "PCC_v2= " << pearson << endl;
 
         tt::log_assert(pearson > 0.97, "PCC not high");
 
-        //pass &= packed_uint32_t_vector_comparison(golden_vec, result_vec_untilized, comparison_function);
+        // In progress: tolerances might be way too tight
+        // pass &= packed_uint32_t_vector_comparison(golden_vec, result_vec_untilized, comparison_function);
         // pass &= packed_uint32_t_vector_comparison(golden_vec_tilized, result_vec, comparison_function);
 
         pass &= CloseDevice(device);

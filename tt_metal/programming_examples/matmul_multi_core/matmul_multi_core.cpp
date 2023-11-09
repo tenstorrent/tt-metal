@@ -119,11 +119,18 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
+
+    // From tt_metal/common/constants.hpp
     auto num_output_tiles_total = (M * N) / TILE_HW;
+
+    /*
+     * Use a helper function to deduce the splits needed to co-operatively do
+     * this matmul.
+     */
     auto [num_cores, all_cores, core_group_1, core_group_2, num_output_tiles_per_core_group_1, num_output_tiles_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
 
     /*
-    * EXtracting Matrix dimensions from input/output vectors
+    * Extracting Matrix dimensions from input/output vectors
     */
     // C = A*B
     // MN = MK*KN
@@ -141,7 +148,7 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     //uint32_t single_tile_size = detail::TileSize(cb_data_format);
-    uint32_t single_tile_size = 2 * 1024;
+    uint32_t single_tile_size = 2 * 32 * 32;
 
     uint32_t dram_buffer_A_size = single_tile_size * Mt * Kt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
@@ -238,13 +245,14 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_output_tiles_per_core;
-		if (core_group_1.core_coord_in_core_ranges(core)) {
-			num_output_tiles_per_core = num_output_tiles_per_core_group_1;
-		} else if (core_group_2.core_coord_in_core_ranges(core)) {
-			num_output_tiles_per_core = num_output_tiles_per_core_group_2;
-		} else {
-			TT_ASSERT(false, "Core not in specified core ranges");
-		}
+        if (core_group_1.core_coord_in_core_ranges(core)) {
+            num_output_tiles_per_core = num_output_tiles_per_core_group_1;
+        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            num_output_tiles_per_core = num_output_tiles_per_core_group_2;
+        } else {
+            TT_ASSERT(false, "Core not in specified core ranges");
+        }
+
         tt_metal::SetRuntimeArgs(
             program, reader_id, core,
             {src0_addr,
@@ -272,10 +280,6 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
     }
 
     /* Launch program & read in output buffer result into the host vector */
-    //LaunchProgram(device, program);
-    //ReadFromBuffer(dst_dram_buffer, output);
-    //ReadFromBuffer(src0_dram_buffer, output);
-
     EnqueueWriteBuffer(cq, src0_dram_buffer, a, false);
     EnqueueWriteBuffer(cq, src1_dram_buffer, b, false);
     EnqueueProgram(cq, program, false);
@@ -309,17 +313,14 @@ int main(int argc, char **argv) {
         uint32_t Kt = K / TILE_WIDTH;
         uint32_t Nt = N / TILE_WIDTH;
 
-        constexpr uint32_t single_tile_size = 2 * 1024;
+        constexpr uint32_t single_tile_size = 2 * 32 * 32;
         uint32_t dram_buffer_A_size = single_tile_size * Mt * Kt; // num_tiles of FP16_B
         uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt; // num_tiles of FP16_B
         uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B
 
-        /* input vectors */
+        /* input vectors with various ranges of values */
         std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_A_size, 1, 123, -0.4);
         std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(dram_buffer_B_size, 1, 12522, -0.2);
-
-        //std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(dram_buffer_A_size, false);
-        //std::vector<uint32_t> src1_vec = pack_bfloat16_vec_into_uint32_vec(create_identity_matrix(K, N, K));
 
         /* Input vector tilizing */
         std::vector<uint32_t> tilized_src0_vec = pack_bfloat16_vec_into_uint32_vec(tilize(unpack_uint32_vec_into_bfloat16_vec(src0_vec), M, K));
@@ -327,7 +328,7 @@ int main(int argc, char **argv) {
 
         cout << "-input size- " << src0_vec.size() << " -- " << src1_vec.size() << endl;
 
-
+        /* Printing out input data for user to see */
         cout << "----orig input 0--" << endl;
         for (int i = 0; i < src0_vec.size(); i++) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(src0_vec.at(i));
@@ -412,15 +413,13 @@ int main(int argc, char **argv) {
             return is_close(a, b, rel_tolerance, abs_tolerance);
         };
 
-        // float calc_pcc = packed_uint32_t_vector_pcc(golden_vec_tilized, result_vec);
-        // cout << "PCC= " << calc_pcc << endl;
-
         float pearson = packed_uint32_t_vector_pcc_v2(golden_vec_tilized, result_vec);
         cout << "PCC_v2= " << pearson << endl;
 
         tt::log_assert(pearson > 0.99, "PCC not high");
 
-        //pass &= packed_uint32_t_vector_comparison(golden_vec, result_vec_untilized, comparison_function);
+        // In progress: tolerances might be way too tight
+        // pass &= packed_uint32_t_vector_comparison(golden_vec, result_vec_untilized, comparison_function);
         // pass &= packed_uint32_t_vector_comparison(golden_vec_tilized, result_vec, comparison_function);
 
         pass &= CloseDevice(device);
