@@ -320,8 +320,9 @@ namespace detail {
         for (auto kernel_id : program.kernel_ids()) {
             const auto kernel = detail::GetKernel(program, kernel_id);
             auto processor = kernel->processor();
-            for (const auto &[logical_core, rt_args] : kernel->runtime_args()) {
+            for (const auto &logical_core : kernel->cores_with_runtime_args()) {
                 auto worker_core = device->worker_core_from_logical_core(logical_core);
+                const auto & rt_args = kernel->runtime_args(logical_core);
                 tt::llrt::write_hex_vec_to_core(device_id, worker_core, rt_args, get_l1_arg_base_addr(processor));
             }
         }

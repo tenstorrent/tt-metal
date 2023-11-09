@@ -106,8 +106,9 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     for (const auto kernel_id : program.kernel_ids()) {
         const Kernel* kernel = detail::GetKernel(program, kernel_id);
         uint32_t dst = processor_to_l1_arg_base_addr.at(kernel->processor());
-        for (const auto& [core_coord, runtime_args] : kernel->runtime_args()) {
+        for (const auto &core_coord : kernel->cores_with_runtime_args()) {
             CoreCoord physical_core = device->worker_core_from_logical_core(core_coord);
+            const auto & runtime_args = kernel->runtime_args(core_coord);
             uint32_t num_bytes = runtime_args.size() * sizeof(uint32_t);
             uint32_t dst_noc = get_noc_unicast_encoding(physical_core);
 
@@ -556,7 +557,8 @@ void EnqueueProgramCommand::process() {
     constexpr static uint32_t padding_alignment = 16;
     for (const auto kernel_id : this->program.kernel_ids()) {
         const Kernel* kernel = detail::GetKernel(program, kernel_id);
-        for (const auto& [_, core_runtime_args] : kernel->runtime_args()) {
+        for (const auto& c: kernel->cores_with_runtime_args()) {
+            const auto & core_runtime_args = kernel->runtime_args(c);
             this->writer.cq_write(this->device, core_runtime_args.data(), core_runtime_args.size() * sizeof(uint32_t), system_memory_temporary_storage_address);
             system_memory_temporary_storage_address = align(system_memory_temporary_storage_address + core_runtime_args.size() * sizeof(uint32_t), padding_alignment);
         }

@@ -87,8 +87,9 @@ bool verify_result_data_movement(
     for (auto kernel_id : program.kernel_ids()) {
         const auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
         auto processor = kernel->processor();
-        for (const auto &[logical_core, rt_args] : kernel->runtime_args()) {
+        for (const auto &logical_core : kernel->cores_with_runtime_args()) {
             auto expected_rt_args = core_to_rt_args.at(logical_core);
+            auto rt_args = kernel->runtime_args(logical_core);
             EXPECT_TRUE(rt_args == expected_rt_args);
             std::vector<uint32_t> written_args;
             tt_metal::detail::ReadFromDeviceL1(
@@ -176,8 +177,9 @@ bool verify_result_compute(
     for (auto kernel_id : program.kernel_ids()) {
         const auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
         auto processor = kernel->processor();
-        for (const auto &[logical_core, rt_args] : kernel->runtime_args()) {
+        for (const auto &logical_core : kernel->cores_with_runtime_args()) {
             auto expected_rt_args = core_to_rt_args.at(logical_core);
+            auto rt_args = kernel->runtime_args(logical_core);
             EXPECT_TRUE(rt_args == expected_rt_args);
             std::vector<uint32_t> written_args;
             tt_metal::detail::ReadFromDeviceL1(
