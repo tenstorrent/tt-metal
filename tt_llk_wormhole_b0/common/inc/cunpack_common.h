@@ -211,8 +211,8 @@ namespace ckernel::unpacker
      const uint unpB_src_format, 
      const uint unpA_dst_format, 
      const uint unpB_dst_format, 
-     const uint unpA_face_r_dim=16,
-     const uint unpB_face_r_dim=16,
+     const uint unpA_face_r_dim=FACE_R_DIM,
+     const uint unpB_face_r_dim=FACE_R_DIM,
      const bool transpose_xy_srca_en=false,
      const uint unpA_num_faces = 4,
      const uint unpB_num_faces = 4)
