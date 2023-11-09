@@ -26,7 +26,7 @@ Kernel::Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &cor
     core_range_set_(core_range_set),
     binary_size16_(0),
     compile_time_args_(compile_args), defines_(defines) {
-
+    size_t max_x = 0, max_y = 0;
     for (auto core_range : this->core_range_set_.ranges()) {
         auto start = core_range.start;
         auto end = core_range.end;
@@ -34,10 +34,12 @@ Kernel::Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &cor
             for (auto y = start.y; y <= end.y; y++) {
                 CoreCoord logical_core({.x=x, .y=y});
                 this->logical_cores_.insert(logical_core);
+                max_x = std::max( max_x, x );
+                max_y = std::max( max_y, y);
             }
         }
     }
-    core_to_runtime_args_.reserve ( logical_cores_.size() );
+    this->core_to_runtime_args_ = { max_x+1, std::vector< std::vector<uint32_t > > (max_y+1, std::vector<uint32_t>() ) };
 }
 
 std::string Kernel::name() const {
@@ -99,16 +101,16 @@ std::string Kernel::compute_hash() const {
 }
 
 void Kernel::update_runtime_arg( const CoreCoord &logical_core, size_t idx, uint32_t value){
-    TT_ASSERT( this->core_to_runtime_args_.find(logical_core) != this->core_to_runtime_args_.end(), "Runtime args for core {} not found", logical_core.str());
-    auto & v = this->core_to_runtime_args_[logical_core];
+    ZoneScoped;
+    auto & v = this->core_to_runtime_args_[logical_core.x][logical_core.y];
     TT_ASSERT( idx < v.size(), "Runtime arg offset {} for Core {} out of bounds", idx, logical_core.str());
     v[idx] = value;
 }
 
-std::vector<uint32_t> const& Kernel::runtime_args(const CoreCoord &logical_core) {
+std::vector<uint32_t> const& Kernel::runtime_args(const CoreCoord &logical_core) const {
     // TODO (abhullar): Should this check only be enabled in debug mode?
     // TT_ASSERT(this->is_on_logical_core(logical_core), "Cannot get runtime args for kernel {} that is not placed on core {}", this->name(), logical_core.str());
-    return this->core_to_runtime_args_[logical_core];
+    return this->core_to_runtime_args_.at(logical_core.x).at(logical_core.y);
 }
 
 std::pair<uint64_t, uint64_t> DataMovementKernel::get_runtime_args_range() const {
@@ -154,9 +156,10 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
     //                  Should this check only be enabled in debug mode?
     // TT_FATAL(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
     validate_runtime_args_size();
-    auto &set_rt_args = this->core_to_runtime_args_[logical_core];
+    auto &set_rt_args = this->core_to_runtime_args_[logical_core.x][logical_core.y];
     TT_ASSERT(set_rt_args.empty() or set_rt_args.size() == runtime_args.size(), "Illegal Runtime Args: Number of runtime args cannot be modified!");
     set_rt_args = runtime_args;
+    this->core_with_runtime_args_.insert( logical_core );
 }
 
 void DataMovementKernel::set_build_options(build_kernel_for_riscv_options_t &build_options) const {
