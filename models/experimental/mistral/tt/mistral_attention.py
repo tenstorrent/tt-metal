@@ -265,13 +265,22 @@ def apply_rotary_emb_type2(
     freq_img = torch_to_tt_tensor_rm(freqs_cis.imag, device)
     freqs_cis = tt_lib.tensor.complex_tensor(freq_real, freq_img)
 
+    freq_real.deallocate()
+    freq_img.deallocate()
+
     xq_real = torch_to_tt_tensor_rm(t_xq[..., :, :, ::2], device)
     xq_img = torch_to_tt_tensor_rm(t_xq[..., :, :, 1::2], device)
     xq = tt_lib.tensor.complex_tensor(xq_real, xq_img)
 
+    xq_real.deallocate()
+    xq_img.deallocate()
+
     xk_real = torch_to_tt_tensor_rm(t_xk[..., :, :, ::2], device)
     xk_img = torch_to_tt_tensor_rm(t_xk[..., :, :, 1::2], device)
     xk = tt_lib.tensor.complex_tensor(xk_real, xk_img)
+
+    xk_real.deallocate()
+    xk_img.deallocate()
 
     BCH = tt_lib.tensor.BcastOpDim.H
     BCMUL = tt_lib.tensor.BcastOpMath.MUL
@@ -300,6 +309,8 @@ def apply_rotary_emb_type2(
     xk_out = tt_lib.tensor.concat([xk_out.real, xk_out.imag], -1)
     xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
 
+    xq_out.deallocate()
+    xk_out.deallocate()
     # FIXME: move this operation to on-device - should be easy.
     shapes = xq.shape
     dindex = shapes[3] // 2
