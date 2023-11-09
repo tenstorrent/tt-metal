@@ -74,6 +74,8 @@ tuple<CircularBufferID, CircularBufferID> create_CBs_for_sharded_input(
     if (input.memory_config().is_sharded()) {
         uint32_t num_bytes_for_df = datum_size(act_df);
         auto shard_shape = input.shard_spec().value().shard_shape;
+        // 2D-sys-conv already has uint16_t indicies, TODO: do the same for 1D-sys-conv
+        TT_ASSERT(shard_shape[0] <= (1<<16), "Shard height must be less than 2^16, read pattern indicies are uint16_t");
         CircularBufferConfig cb_sharded_act_config = CircularBufferConfig(shard_shape[0] * shard_shape[1] * num_bytes_for_df, {{sharded_act_cb, act_df}})
 		    .set_page_size(sharded_act_cb, shard_shape[1] * num_bytes_for_df);
         // incoming data is the input cb instead of raw l1/dram addr
@@ -322,6 +324,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
 
     //uint32_t conv_output_size_h = ((conv_act_size_h - weight_size_h + (2 * pad_h)) / stride_h) + 1;
     //uint32_t conv_output_size_w = ((conv_act_size_w - weight_size_w + (2 * pad_w)) / stride_w) + 1;
+    uint32_t window_outer = 1; // window_outer = 1 becasue all of filter window is processed in the inner loop
+    uint32_t window_inner = 3; // window_inner = 9 / 3, ie. read 3 width coalesced
 
     auto [conv_output_size_h, conv_output_size_w] = optimized_conv_op_utils::compute_opt_conv_output_face_shape(conv_act_size_h, conv_act_size_w, weight_size_h, weight_size_w, stride_h, stride_w, pad_h, pad_w, extra_padding_for_32B_alignment);
 
@@ -334,6 +338,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
     if (conv_act_c_blocks > 1) {
         reader_defines["ACT_W_OUTER_BLOCKS"] = "1";
     }
+
+    reader_defines["WINDOW_INNER"] = std::to_string(window_inner);
 
     uint32_t output_height_padded_to_tile_height = round_up(act_matrix_height_unpadded, TILE_HEIGHT);
     uint32_t output_height_num_tiles = output_height_padded_to_tile_height / TILE_HEIGHT;
@@ -544,8 +550,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
     if (rn50_first_conv) {
         num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles * num_blocks_weight_w * num_blocks_act_w;
     }
+    // std::cout << "num_act_cb_tiles = " << num_act_cb_tiles << std::endl;
     if (conv_act_size_c / conv_act_c_blocks < 256) {
         num_act_cb_tiles = num_act_cb_tiles * 2; // double buffered
+        // std::cout << "num_act_cb_tiles (post DB) = " << num_act_cb_tiles << std::endl;
     }
     uint32_t writer_output_block_num_tiles = out_block_h_ntiles * weight_block_w_ntiles;
 
@@ -617,11 +625,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
             }
 
             // Local L1 to store array for reader indices
+            // TODO: once 1D-sys-conv is uint16_t indicies (2D-sys-conv already is), then each entry can be 2B (not 4)
             CircularBufferConfig cb_for_reader_indices_config = CircularBufferConfig(act_block_h_datums * 4, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
 		        .set_page_size(cb_for_reader_indices, 4);
             auto cb_for_reader_indices_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_indices_config);
 
             // Local L1 to store array for reader offsets
+            // TODO: this is not used in 2D-sys-conv, remove also from 1D-sys-conv
             CircularBufferConfig cb_for_reader_offsets_config = CircularBufferConfig(weight_size_h * weight_size_w * 4, {{cb_for_reader_offsets, tt::DataFormat::Float16_b}})
 		        .set_page_size(cb_for_reader_offsets, 4);
             auto cb_for_reader_offsets_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_offsets_config);
@@ -636,8 +646,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
     std::vector<uint32_t> writer_rt_args;
     std::vector<uint32_t> writer_compile_time_args;
 
-    uint32_t window_outer = 1; // window_outer = 1 becasue all of filter window is processed in the inner loop
-    uint32_t window_inner = 3; // window_inner = 9 / 3, ie. read 3 width coalesced
 
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
     // For new reader_with_indices, this is used to calculate offset so use actual read_bytes along c

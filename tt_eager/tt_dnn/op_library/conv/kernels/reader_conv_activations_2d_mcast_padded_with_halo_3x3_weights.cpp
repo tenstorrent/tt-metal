@@ -8,6 +8,20 @@
 
 auto s1 = SliceRange{ .h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1 };
 
+FORCE_INLINE
+void read_channels(uint32_t& l1_write_addr_act, const uint32_t act_l1_read_addr, const uint32_t reader_channel_idx,
+        const uint32_t log_base_2_of_conv_act_size_c_bytes, const uint32_t coalesced_read_bytes, const uint32_t stride_h_bytes) {
+
+    constexpr uint32_t unroll_factor = WINDOW_INNER;
+    uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx << log_base_2_of_conv_act_size_c_bytes);
+    #pragma GCC unroll unroll_factor
+    for (uint32_t inner = 0; inner < WINDOW_INNER; inner++) {
+        noc_async_read_one_packet_with_state<true>(act_l1_read_addr_plus_offset, l1_write_addr_act);
+        l1_write_addr_act += coalesced_read_bytes;
+        // +2 is hard-coded, TODO: generalize
+        act_l1_read_addr_plus_offset += stride_h_bytes;
+    }
+}
 
 void kernel_main() {
     uint32_t i = 0;
@@ -95,7 +109,7 @@ void kernel_main() {
 
     // DUMMY LOOP TO FILL READER INDICES
     constexpr uint32_t cb_reader_indices = tt::CB::c_in4;
-    volatile tt_l1_ptr uint32_t* reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
+    volatile tt_l1_ptr uint16_t* reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_reader_indices));
 
     uint32_t weights_top_left_corner_idx = 0;
     uint32_t reader_idx = 0;
@@ -159,15 +173,13 @@ void kernel_main() {
     constexpr uint32_t num_issued_reads_per_block = act_block_h_datums * window_inner;
 
     // TODO: need to make the read coalescing optimization cleaner
-    // pass coalesce_window_inner_reads as a compile time arg and num_coalesced_reads so we can constexpr the if
     // currently works for the case of num_coalesced_reads == weight_size_w since these reads are contiguous on both src/dst side
-    // we check if window_inner == weight_size_w to make sure coalescing is legal along full window_inner so the loop can be removed
-    constexpr bool coalesce_window_inner_reads = true;
     constexpr uint32_t num_coalesced_reads = 3;
-    const uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
-    // we want to have the check hoisted out because in act_block_h_datums loop it would be to expensive (unless we make it ifdef)
-    uint32_t act_l1_offset = 0;
+    constexpr uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
+
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act_mcast_receiver);
+
+    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
     for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
         if (act_w_outer_i == act_mcast_sender_id) {
@@ -212,16 +224,14 @@ void kernel_main() {
             cb_reserve_back(cb_id_act, act_block_num_tiles);
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
 
-            // #pragma GCC unroll 8 // didn't seem to help, may need to do it manually
-            for (uint32_t bh = 0; bh < act_block_h_datums; bh++) {
-                uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_indices_ptr[reader_idx] << log_base_2_of_conv_act_size_c_bytes);
-                #pragma GCC unroll window_inner
-                for (uint32_t inner = 0; inner < window_inner; inner++) {
-                    noc_async_read_one_packet_with_state<true>(act_l1_read_addr_plus_offset, l1_write_addr_act);
-                    l1_write_addr_act += coalesced_read_bytes;
-                    // +2 is hard-coded, TODO: generalize
-                    act_l1_read_addr_plus_offset += ((conv_act_size_w+2) << log_base_2_of_conv_act_size_c_bytes);
-                }
+            constexpr uint32_t stride_h_bytes = (conv_act_size_w+2) << log_base_2_of_conv_act_size_c_bytes;
+            static_assert(act_block_h_datums % 2 == 0); // need to be even to read 2 in the body, due to packing of 2 indices in 1 uint32_t word
+            // #pragma GCC unroll 4 // didn't seem to help (neutral), manual unroll 2x perf drop
+            for (uint32_t bh = 0; bh < act_block_h_datums/2; bh++) {
+                uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, log_base_2_of_conv_act_size_c_bytes, coalesced_read_bytes, stride_h_bytes);
+                read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , log_base_2_of_conv_act_size_c_bytes, coalesced_read_bytes, stride_h_bytes);
+
                 reader_idx++;
             }
             // incrementing num issued in one shot is actually slower
