@@ -38,28 +38,6 @@ static Device* get_device(const std::vector<Tensor>& input_tensors, const std::v
 
 }  // namespace detail
 
-
-std::vector<Tensor> generic_create_output_tensors(
-    const DeviceOperation& operation,
-    const std::vector<Tensor>& input_tensors,
-    const DataType output_dtype,
-    const Layout output_layout,
-    const MemoryConfig& output_mem_config
-) {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& output_shapes = operation.compute_output_shapes(input_tensors);
-
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
-
-    std::vector<Tensor> output_tensors;
-    output_tensors.reserve(output_shapes.size());
-    for (const auto& output_shape : output_shapes) {
-        output_tensors.emplace_back(create_device_tensor(output_shape, output_dtype, output_layout, input_tensor.device(), output_mem_config));
-    }
-    return output_tensors;
-}
-
-
 namespace detail {
 
 void override_addresses(
