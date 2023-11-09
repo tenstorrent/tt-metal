@@ -615,11 +615,10 @@ int main(int argc, char **argv) {
             return is_close(a, b, rel_tolerance, abs_tolerance);
         };
 
-        //float calc_pcc = packed_uint32_t_vector_pcc(golden_vec_tilized, result_vec);
-        //cout << "PCC= " << calc_pcc << endl;
-
         float pearson = packed_uint32_t_vector_pcc_v2(golden_vec_tilized, result_vec);
         cout << "PCC= " << pearson << endl;
+
+        tt::log_assert(pearson > 0.98, "PCC not high");
 
         //pass &= packed_uint32_t_vector_comparison(golden_vec, result_vec_untilized, comparison_function);
         //pass &= packed_uint32_t_vector_comparison(golden_vec_tilized, result_vec, comparison_function);

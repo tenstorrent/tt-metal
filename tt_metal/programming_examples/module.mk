@@ -23,6 +23,7 @@ programming_examples: programming_examples/loopback \
                       programming_examples/matmul_single_core \
                       programming_examples/matmul_multi_core \
                       programming_examples/matmul_multicore_reuse \
+                      programming_examples/matmul_multicore_reuse_mcast \
                       $(PROFILER_TESTS)
 
 programming_examples/loopback: $(PROGRAMMING_EXAMPLES_TESTDIR)/loopback;
