@@ -401,7 +401,7 @@ hardcoded_conv_blocking_and_parallelization_config = {
         (128, 128, 56, 56, 3, 3, 2, 2, 1, 1),  # not supported yet
         (128, 128, 28, 28, 3, 3, 1, 1, 1, 1),
         # layer3
-        # (256, 256, 28, 28, 3, 3, 2, 2, 1, 1), # not supported yet
+        (256, 256, 28, 28, 3, 3, 2, 2, 1, 1),
         # (1024, 512, 28, 28, 1, 1, 2, 2, 0, 0), # not supported yet
         (256, 256, 14, 14, 3, 3, 1, 1, 1, 1),
         # layer4
@@ -619,7 +619,7 @@ def test_resnet50_conv(
                 conv_input_on_device,
                 grid_size,
                 [
-                    act_block_h_datums,
+                    act_block_h_datums * stride_h * stride_w,
                     weight_block_w_datums,
                 ],  # act_block_w_datums may include reads of multiple pixels in window
                 tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
@@ -643,6 +643,7 @@ def test_resnet50_conv(
         )
 
         # Conv with new reader for sharded untilized with halo inputs
+        print("running conv")
         output_on_device = conv(conv_input_on_device)
 
         # Convert sharded output to tiled interleaved

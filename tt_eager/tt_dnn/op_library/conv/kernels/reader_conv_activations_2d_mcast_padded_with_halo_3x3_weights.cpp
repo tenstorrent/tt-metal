@@ -11,7 +11,7 @@ auto s1 = SliceRange{ .h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1 };
 
 void kernel_main() {
     uint32_t i = 0;
-    uint32_t conv_act_size_w_ = get_arg_val<uint32_t>(i); i+=1;
+    uint32_t conv_act_size_w = get_arg_val<uint32_t>(i); i+=1;
     uint32_t conv_act_size_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t conv_output_size_w = get_arg_val<uint32_t>(i); i+=1;
     uint32_t conv_output_size_h = get_arg_val<uint32_t>(i); i+=1;
@@ -61,7 +61,7 @@ void kernel_main() {
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t stride_h = get_compile_time_arg_val(1);
     constexpr uint32_t stride_w = get_compile_time_arg_val(2);
-    constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(3);
+    constexpr uint32_t conv_act_size_w_ = get_compile_time_arg_val(3);
     constexpr uint32_t conv_output_w_last_index = get_compile_time_arg_val(4) - 1;
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t log_base_2_of_conv_act_size_c_bytes = get_compile_time_arg_val(6);
@@ -99,19 +99,20 @@ void kernel_main() {
     uint32_t weights_top_left_corner_idx = 0;
     uint32_t reader_idx = 0;
 
-
     // First partial right-aligned row
     for (uint32_t k = 0; k < first_partial_right_aligned_row_width; k++) {
-        reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
+        reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx;
+        weights_top_left_corner_idx += skip_after_each_stick;
     }
     weights_top_left_corner_idx += skip_after_partial_right_aligned_row; // Skip padded width
 
     // First partial image
     for (uint32_t j = 0; j < first_partial_image_num_rows; j++) {
-        for (uint32_t k = 0; k < conv_act_size_w_; k++) {
-            reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
+        for (uint32_t k = 0; k < conv_act_size_w; k++) {
+            reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx;
+            weights_top_left_corner_idx += skip_after_each_stick;
         }
-        weights_top_left_corner_idx += weight_size_w - 1;
+        weights_top_left_corner_idx += skip_after_each_full_row;
     }
     weights_top_left_corner_idx += skip_after_first_partial_image_row; // Skip padded rows
 
@@ -119,9 +120,10 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_full_images; i++) {
         for (uint32_t j = 0; j < conv_act_size_h; j++) {
             for (uint32_t k = 0; k < conv_act_size_w; k++) {
-                reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
+                reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx;
+                weights_top_left_corner_idx += skip_after_each_stick;
             }
-            weights_top_left_corner_idx += weight_size_w - 1;
+            weights_top_left_corner_idx += skip_after_each_full_row;
         }
         weights_top_left_corner_idx += skip_after_full_image; // Skip padded rows
     }
@@ -129,14 +131,16 @@ void kernel_main() {
     // Last partial image
     for (uint32_t j = 0; j < last_partial_image_num_rows; j++) {
         for (uint32_t k = 0; k < conv_act_size_w; k++) {
-            reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
+            reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx;
+            weights_top_left_corner_idx += skip_after_each_stick;
         }
-        weights_top_left_corner_idx += weight_size_w - 1;
+        weights_top_left_corner_idx += skip_after_each_full_row;
     }
 
     // Last partial left-alighted row
     for (uint32_t k = 0; k < last_partial_left_aligned_row_width; k++) {
-        reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx++;
+        reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx;
+        weights_top_left_corner_idx += skip_after_each_stick;
     }
 
 

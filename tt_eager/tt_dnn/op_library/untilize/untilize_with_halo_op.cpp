@@ -122,15 +122,45 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     uint32_t in_tile_size = tt_metal::detail::TileSize(in_df);
     uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
 
+    auto grid_size = device->compute_with_storage_grid_size();
+    untilize_with_halo_helpers::init_neighbor_core_xy_mapping(grid_size, input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+
+    int32_t ncores_x = grid_size.x;     // distributing data to cores row-wise
+    int32_t ncores_y = grid_size.y;
+    CoreRangeSet all_cores = input.shard_spec().value().shard_grid;
+    int32_t ncores = all_cores.num_cores();
+    int32_t ncores_col = 1;
+    if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        auto core_range = *(all_cores.ranges().begin());
+        ncores = core_range.end.x - core_range.start.x + 1;
+        ncores_col = core_range.end.y - core_range.start.y + 1;
+    }
+
+    CoreRangeSet core_range_cliff = CoreRangeSet({});
+
     uint32_t ntiles = input.volume() / TILE_HW;
     uint32_t ntiles_per_block = input_shape[3] / TILE_WIDTH;
     uint32_t nblocks = ceil((float) ntiles / ntiles_per_block);
     uint32_t block_size_nbytes = input_shape[3] * output.element_size();
 
+    auto shard_shape = input.shard_spec().value().shard_shape;
+
+    if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        ntiles = input_shape[0] * input_shape[1] * shard_shape[0] * shard_shape[1];
+        ntiles_per_block = shard_shape[1] / TILE_WIDTH;
+        nblocks = ceil((float) ntiles / ntiles_per_block);
+        block_size_nbytes = shard_shape[1] * output.element_size();
+        auto core_range = *(all_cores.ranges().begin());
+        int32_t ncores_y = core_range.end.y - core_range.start.y + 1;
+        TT_ASSERT(shard_shape[1] * ncores_y == input_shape[3], "Input shape in W should be same as shard width * num cores along each row!");
+    } else {
+        TT_ASSERT(shard_shape[1] == input_shape[3], "Input shape in W should be same as shard width!");
+    }
+
     // TODO: hard coded for testing only. need to pass these args in.
     // These are the input values before inserting and padding or halo
     TT_ASSERT(in_h * in_w == input_shape[2] || in_b * in_h * in_w == input_shape[2]);
-    uint32_t in_c = input_shape[3];
+    uint32_t in_c = shard_shape[1]; // this is per core row
 
     if (1) {
         log_debug(LogOp, "ntiles: {}", ntiles);
@@ -148,24 +178,16 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         log_debug(LogOp, "stride_w: {}", pc.stride_w);
     }
 
-    auto grid_size = device->compute_with_storage_grid_size();
-
-    untilize_with_halo_helpers::init_neighbor_core_xy_mapping(grid_size);
-
-    int32_t ncores_x = grid_size.x;     // distributing data to cores row-wise
-    CoreRangeSet all_cores = input.shard_spec().value().shard_grid;
-    int32_t ncores = 0;
-    for (const auto& core_range : all_cores.ranges()) {
-        ncores += core_range.size();
-    }
-    CoreRangeSet core_range_cliff = CoreRangeSet({});
-    uint32_t nblocks_per_core = input.shard_spec().value().shard_shape[0] / TILE_HEIGHT;
+    uint32_t nblocks_per_core = shard_shape[0] / TILE_HEIGHT;
     uint32_t nblocks_per_core_cliff = 0;
 
     uint32_t in_hw = pc.in_h * pc.in_w;
     uint32_t in_nhw = in_b * in_hw;
     uint32_t in_stick_nbytes = in_c * out_nbytes;
     uint32_t in_nsticks = in_nhw;
+    if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        in_nsticks = shard_shape[0] * ncores;
+    }
     uint32_t in_nsticks_per_batch = in_hw;
     uint32_t in_nsticks_per_core = in_nhw / ncores;
 
@@ -303,7 +325,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
             .compile_args = compute_args});
 
     // 1D distribution of blocks across all cores
-    uint32_t ncores_full = ncores;
     // cliff core not yet supported
     TT_ASSERT(nblocks_per_core_cliff == 0);
 
@@ -312,7 +333,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         ntiles_per_block * nblocks_per_core // ntiles
     };
 
-    TT_ASSERT(in_nhw % ncores == 0);
+    if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        TT_ASSERT(in_nhw % ncores == 0);
+    }
 
     // writer inserts halo and padding where needed
     vector<uint32_t> writer_rt_args = {
@@ -563,60 +586,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
 
     // Calculate all information needed to copy locally owned data to output shard.
     in_stick_start = 0;
-    for (uint32_t core = 0; core < ncores; ++ core) {
-        CoreCoord core_coord = {core % ncores_x, core / ncores_x};  // logical
-
-        // set reader rt args
-        SetRuntimeArgs(program, reader_kernel_id, core_coord, reader_rt_args);
-
+    for (uint32_t i = 0; i < ncores; ++ i) {
         // for each core, identify its sections with padding for the data it locally owns
         // that is, compute the sharding config
         uint32_t in_stick_end = in_stick_start + in_nsticks_per_core;
-
-        // left neighbor args
-        if (untilize_with_halo_helpers::left_neighbor_core.count(core_coord) > 0) {
-            CoreCoord left_core = untilize_with_halo_helpers::left_neighbor_core.at(core_coord);
-            CoreCoord left_noc = device->worker_core_from_logical_core(left_core);
-            writer_rt_args[19] = 1;
-            writer_rt_args[20] = left_noc.x;
-            writer_rt_args[21] = left_noc.y;
-            if (untilize_with_halo_helpers::left_neighbor_core.count(left_core) > 0) {
-                CoreCoord left_left_core = untilize_with_halo_helpers::left_neighbor_core.at(left_core);
-                CoreCoord left_left_noc = device->worker_core_from_logical_core(left_left_core);
-                writer_rt_args[25] = 1;
-                writer_rt_args[26] = left_left_noc.x;
-                writer_rt_args[27] = left_left_noc.y;
-            } else {
-                // no left-left neighbor
-                writer_rt_args[25] = 0;
-            }
-        } else {
-            // no left neighbors
-            writer_rt_args[19] = 0;
-            writer_rt_args[25] = 0;
-        }
-        // right neighbor args
-        if (untilize_with_halo_helpers::right_neighbor_core.count(core_coord) > 0) {
-            CoreCoord right_core = untilize_with_halo_helpers::right_neighbor_core.at(core_coord);
-            CoreCoord right_noc = device->worker_core_from_logical_core(right_core);
-            writer_rt_args[22] = 1;
-            writer_rt_args[23] = right_noc.x;
-            writer_rt_args[24] = right_noc.y;
-            if (untilize_with_halo_helpers::right_neighbor_core.count(right_core) > 0) {
-                CoreCoord right_right_core = untilize_with_halo_helpers::right_neighbor_core.at(right_core);
-                CoreCoord right_right_noc = device->worker_core_from_logical_core(right_right_core);
-                writer_rt_args[28] = 1;
-                writer_rt_args[29] = right_right_noc.x;
-                writer_rt_args[30] = right_right_noc.y;
-            } else {
-                // no right-right neighbor
-                writer_rt_args[28] = 0;
-            }
-        } else {
-            // no right neighbors
-            writer_rt_args[22] = 0;
-            writer_rt_args[28] = 0;
-        }
 
         // logically insert padding into locally owned data and generate the sharding config
         // information to calculate for a core:
@@ -650,8 +623,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         //     full_image_skip
         //     partial_bottom_image_nrows, partial_bottom_image_skip_per_row
         //     partial_last_row_nsticks
-        writer_rt_args[47] = initial_pad_nsticks[core];
-        writer_rt_args[48] = receive_at_offset_nsticks[core][NEIGHBORHOOD_DIST]; // local_offset_nsticks
+        writer_rt_args[47] = initial_pad_nsticks[i];
+        writer_rt_args[48] = receive_at_offset_nsticks[i][NEIGHBORHOOD_DIST]; // local_offset_nsticks
         writer_rt_args[49] = partial_first_row_nsticks;
         writer_rt_args[50] = skip_after_partial_first_row;
         writer_rt_args[51] = partial_first_image_nrows;
@@ -679,24 +652,81 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         //     rr_send_from_offset
         //     rr_send_at_offset
         // LL
-        writer_rt_args[60] = updated_count_to_send[core][0];
-        writer_rt_args[61] = send_from_offset_nsticks[core][0] * in_stick_nbytes;
-        writer_rt_args[62] = send_to_offset_nsticks[core][0] * in_stick_nbytes;
+        writer_rt_args[60] = updated_count_to_send[i][0];
+        writer_rt_args[61] = send_from_offset_nsticks[i][0] * in_stick_nbytes;
+        writer_rt_args[62] = send_to_offset_nsticks[i][0] * in_stick_nbytes;
         // L
-        writer_rt_args[63] = updated_count_to_send[core][1];
-        writer_rt_args[64] = send_from_offset_nsticks[core][1] * in_stick_nbytes;
-        writer_rt_args[65] = send_to_offset_nsticks[core][1] * in_stick_nbytes;
+        writer_rt_args[63] = updated_count_to_send[i][1];
+        writer_rt_args[64] = send_from_offset_nsticks[i][1] * in_stick_nbytes;
+        writer_rt_args[65] = send_to_offset_nsticks[i][1] * in_stick_nbytes;
         // R
-        writer_rt_args[66] = updated_count_to_send[core][3];
-        writer_rt_args[67] = send_from_offset_nsticks[core][3] * in_stick_nbytes;
-        writer_rt_args[68] = send_to_offset_nsticks[core][3] * in_stick_nbytes;
+        writer_rt_args[66] = updated_count_to_send[i][3];
+        writer_rt_args[67] = send_from_offset_nsticks[i][3] * in_stick_nbytes;
+        writer_rt_args[68] = send_to_offset_nsticks[i][3] * in_stick_nbytes;
         // RR
-        writer_rt_args[69] = updated_count_to_send[core][4];
-        writer_rt_args[70] = send_from_offset_nsticks[core][4] * in_stick_nbytes;
-        writer_rt_args[71] = send_to_offset_nsticks[core][4] * in_stick_nbytes;
+        writer_rt_args[69] = updated_count_to_send[i][4];
+        writer_rt_args[70] = send_from_offset_nsticks[i][4] * in_stick_nbytes;
+        writer_rt_args[71] = send_to_offset_nsticks[i][4] * in_stick_nbytes;
 
-        SetRuntimeArgs(program, writer_kernel_id, core_coord, writer_rt_args);
+        for (uint32_t j = 0; j < ncores_col; ++ j) {
+            CoreCoord core;
 
+            if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+                core = {i, j};
+            } else {
+                core = {i % ncores_x, i / ncores_x};
+            }
+
+            // left neighbor args
+            if (untilize_with_halo_helpers::left_neighbor_core.count(core) > 0) {
+                CoreCoord left_core = untilize_with_halo_helpers::left_neighbor_core.at(core);
+                CoreCoord left_noc = device->worker_core_from_logical_core(left_core);
+                writer_rt_args[19] = 1;
+                writer_rt_args[20] = left_noc.x;
+                writer_rt_args[21] = left_noc.y;
+                if (untilize_with_halo_helpers::left_neighbor_core.count(left_core) > 0) {
+                    CoreCoord left_left_core = untilize_with_halo_helpers::left_neighbor_core.at(left_core);
+                    CoreCoord left_left_noc = device->worker_core_from_logical_core(left_left_core);
+                    writer_rt_args[25] = 1;
+                    writer_rt_args[26] = left_left_noc.x;
+                    writer_rt_args[27] = left_left_noc.y;
+                } else {
+                    // no left-left neighbor
+                    writer_rt_args[25] = 0;
+                }
+            } else {
+                // no left neighbors
+                writer_rt_args[19] = 0;
+                writer_rt_args[25] = 0;
+            }
+            // right neighbor args
+            if (untilize_with_halo_helpers::right_neighbor_core.count(core) > 0) {
+                CoreCoord right_core = untilize_with_halo_helpers::right_neighbor_core.at(core);
+                CoreCoord right_noc = device->worker_core_from_logical_core(right_core);
+                writer_rt_args[22] = 1;
+                writer_rt_args[23] = right_noc.x;
+                writer_rt_args[24] = right_noc.y;
+                if (untilize_with_halo_helpers::right_neighbor_core.count(right_core) > 0) {
+                    CoreCoord right_right_core = untilize_with_halo_helpers::right_neighbor_core.at(right_core);
+                    CoreCoord right_right_noc = device->worker_core_from_logical_core(right_right_core);
+                    writer_rt_args[28] = 1;
+                    writer_rt_args[29] = right_right_noc.x;
+                    writer_rt_args[30] = right_right_noc.y;
+                } else {
+                    // no right-right neighbor
+                    writer_rt_args[28] = 0;
+                }
+            } else {
+                // no right neighbors
+                writer_rt_args[22] = 0;
+                writer_rt_args[28] = 0;
+            }
+
+            // set reader rt args
+            SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
+            // writer rt args
+            SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
+        }
         in_stick_start += in_nsticks_per_core;
     }
 
@@ -798,9 +828,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
         block_size_nbytes = shard_shape[1] * output.element_size();
         auto core_range = *(all_cores.ranges().begin());
         int32_t ncores_y = core_range.end.y - core_range.start.y + 1;
-        TT_ASSERT(a.shard_spec().value().shard_shape[1] * ncores_y == input_shape[3], "Input shape in W should be same as shard width * num cores along each row!");
+        TT_ASSERT(shard_shape[1] * ncores_y == input_shape[3], "Input shape in W should be same as shard width * num cores along each row!");
     } else {
-        TT_ASSERT(a.shard_spec().value().shard_shape[1] == input_shape[3], "Input shape in W should be same as shard width!");
+        TT_ASSERT(shard_shape[1] == input_shape[3], "Input shape in W should be same as shard width!");
     }
 
     // TODO: hard coded for now. need to pass these args in.
