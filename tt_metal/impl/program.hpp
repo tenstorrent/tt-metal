@@ -117,13 +117,17 @@ class Program {
 
         // Returns address for next circular buffer
         // Circular buffers are placed sequentially on a core so the next available address gets appended to the last L1 region
-        uint64_t get_address_candidate() const;
+        uint64_t get_address_candidate() const {
+            return this->l1_regions.back().second;
+        }
 
         // If address is the end of the last L1 region, the last region is extended by size bytes,
         //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
         void mark_address(uint64_t address, uint64_t size);
 
-        uint64_t get_cb_region_end() const;
+        uint64_t get_cb_region_end() const {
+            return this->l1_regions.back().second;
+        }
 
         // Reset when circular buffer allocation is invalidated
         void reset_available_addresses() { this->l1_regions = {{L1_UNRESERVED_BASE, L1_UNRESERVED_BASE}}; }
@@ -142,7 +146,7 @@ class Program {
 
     CoreRangeSet worker_crs_;
     std::unordered_map<chip_id_t, bool> compile_needed_;
-    bool circular_buffer_allocation_needed_;
+    bool local_circular_buffer_allocation_needed_;
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
     std::vector<KernelGroup> kernel_groups_;

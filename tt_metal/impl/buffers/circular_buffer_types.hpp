@@ -21,6 +21,9 @@ namespace tt::tt_metal {
 
 using CircularBufferID = uintptr_t;
 
+// Fwd declares
+class CircularBuffer;
+
 class CircularBufferConfig {
    public:
     // Static circular buffer spec
@@ -88,6 +91,11 @@ class CircularBufferConfig {
                 "of {} B",
                 total_size,
                 this->max_size_.value());
+        } else if (not dynamic_cb_) {
+            // Notify all cbs using this config to invalidate their locally allocated address
+            for (const auto &cb_addr_invalidator : this->local_cb_addr_invalidators_) {
+                cb_addr_invalidator();
+            }
         }
         if (total_size == 0) {
             TT_THROW("Total size for circular buffer must be non-zero!");
@@ -144,6 +152,13 @@ class CircularBufferConfig {
     bool dynamic_cb_ = false;
     // `max_size_` is used to ensure that total size does not grow beyond associated buffer size
     std::optional<uint32_t> max_size_ = std::nullopt;
+
+    std::vector< std::function<void()> > local_cb_addr_invalidators_;
+
+    friend class CircularBuffer;
+    void add_local_circular_buffer_addr_invalidator(std::function<void()> addr_invalidator) {
+        local_cb_addr_invalidators_.emplace_back(addr_invalidator);
+    }
 };
 
 }  // namespace tt::tt_metal

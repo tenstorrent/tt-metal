@@ -383,7 +383,6 @@ CircularBufferID CreateCircularBuffer(Program &program, const std::variant<CoreC
 }
 
 CircularBufferConfig &GetCircularBufferConfig(Program &program, CircularBufferID circular_buffer_id) {
-    program.invalidate_circular_buffer_allocation();
     return detail::GetCircularBuffer(program, circular_buffer_id)->config();
 }
 

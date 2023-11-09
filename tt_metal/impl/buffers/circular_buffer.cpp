@@ -3,15 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
 
 #include "llrt/llrt.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
 
 namespace tt {
 
 namespace tt_metal {
 
-CircularBuffer::CircularBuffer(const CoreRangeSet &core_ranges, const CircularBufferConfig &config) : id_(reinterpret_cast<uintptr_t>(this)), core_ranges_(core_ranges), config_(config), is_allocated_(false) {
+// Dynamic CBs will be created with address_ initialized to globally allocated address
+// Static CBs will not have address set until their owning Program allocates them
+CircularBuffer::CircularBuffer(
+    const CoreRangeSet &core_ranges,
+    const CircularBufferConfig &config,
+    std::function<void()> cb_allocation_invalidator) :
+    id_(reinterpret_cast<uintptr_t>(this)),
+    core_ranges_(core_ranges),
+    config_(config),
+    locally_allocated_address_(std::nullopt),
+    cb_allocation_invalidator_(cb_allocation_invalidator),
+    size_locally_allocated_(config.total_size()) {
     if (this->config_.total_size() == 0) {
         TT_THROW("Circular Buffer Config Error: Circular buffer size cannot be 0 B");
     }
@@ -32,14 +43,11 @@ CircularBuffer::CircularBuffer(const CoreRangeSet &core_ranges, const CircularBu
             this->buffer_indices_.insert(buffer_index);
         }
     }
+
+    config_.add_local_circular_buffer_addr_invalidator([&, this]() { return this->invalidate_locally_allocated_address(); });
 }
 
-CircularBufferConfig &CircularBuffer::config() {
-    this->invalidate_allocation();
-    return this->config_;
-}
-
-bool CircularBuffer::is_on_logical_corerange( const CoreRange & logical_cr ) const{
+bool CircularBuffer::is_on_logical_corerange(const CoreRange &logical_cr) const {
     return this->core_ranges_.intersects(logical_cr);
 }
 
@@ -62,14 +70,6 @@ uint32_t CircularBuffer::page_size(uint32_t buffer_index) const {
     return page_size;
 }
 
-bool CircularBuffer::globally_allocated() const {
-    return this->config_.globally_allocated_address().has_value();
-}
-
-uint32_t CircularBuffer::size() const {
-    return this->config_.total_size();
-}
-
 uint32_t CircularBuffer::num_pages(uint32_t buffer_index) const {
     uint32_t page_size = this->page_size(buffer_index);
     if (this->size() % page_size != 0) {
@@ -86,15 +86,17 @@ DataFormat CircularBuffer::data_format(uint32_t buffer_index) const {
 }
 
 uint32_t CircularBuffer::address() const {
-    if (not this->is_allocated_) {
+    if (not locally_allocated_address_.has_value() and not this->globally_allocated()) {
         TT_THROW("Circular buffer has not been allocated, cannot request address at this time!");
     }
-    return this->address_;
+
+    return this->globally_allocated() ? config_.globally_allocated_address().value()
+                                      : locally_allocated_address_.value();
 }
 
-void CircularBuffer::set_address(uint32_t address) {
-    this->address_ = address;
-    this->is_allocated_ = true;
+void CircularBuffer::invalidate_locally_allocated_address() {
+    this->cb_allocation_invalidator_();
+    this->locally_allocated_address_ = std::nullopt;
 }
 
 }  // namespace tt_metal
