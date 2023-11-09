@@ -403,12 +403,12 @@ namespace ckernel::unpacker
       return (operand>=INTERMEDIATE_BASE_ID) ? operand - 8 : operand - OPERAND_BASE_ID;
    }
 
-inline constexpr bool is_32bit_input(const std::uint32_t operand_id) {
-    const uint input_df = unpack_src_format[operand_id];
-    const uint output_df = unpack_dst_format[operand_id];
-    return (input_df == (uint)DataFormat::Int32)  || (input_df == (uint)DataFormat::Float32) &&
-           (output_df == (uint)DataFormat::Int32) || (output_df == (uint)DataFormat::Float32);
-}
+   inline constexpr bool is_32bit_input(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format) {
+       const uint input_df = unpack_src_format;
+       const uint output_df = unpack_dst_format;
+       return ((input_df == (uint)DataFormat::Int32)  || (input_df == (uint)DataFormat::Float32)) &&
+              ((output_df == (uint)DataFormat::Int32) || (output_df == (uint)DataFormat::Float32));
+   }
 
    inline void wait_for_dest_available() {
       t6_semaphore_wait_on_max<p_stall::UNPACK>(semaphore::UNPACK_TO_DEST);
