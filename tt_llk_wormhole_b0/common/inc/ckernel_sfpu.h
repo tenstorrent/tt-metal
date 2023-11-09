@@ -1088,13 +1088,20 @@ inline void calculate_max(const int iterations)
 {
     for (int d = 0; d < iterations; d++)
     {
-        vFloat a = dst_reg[0];
-        vFloat b = dst_reg[32];
-        v_if(a < b) { 
-            dst_reg[0] = b; 
-        }
-        v_endif;
+        // vFloat a = dst_reg[0];
+        // vFloat b = dst_reg[32];
+        // v_if(a < b) { 
+        //     dst_reg[0] = b; 
+        // }
+        // v_endif;
 
+        // dst_reg++;
+        TTI_SFPLOAD(2, 12, 3, 0);
+        TTI_SFPLOAD(0, 12, 3, 64);
+        TTI_SFPMOV(0, 0, 1, 0);
+        TTI_SFPIADD(0, 2, 1, 2);
+        TTI_SFPSTORE(0, 12, 3, 0);
+        TTI_SFPENCC(0x003, 0, 0, 10);
         dst_reg++;
     }
 }
