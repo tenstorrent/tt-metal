@@ -604,12 +604,12 @@ get_inout_shard_specs(int32_t start_stick, int32_t end_stick, const PoolConfig& 
 
     // calculate the initial skip in input if starting stick is left-most and not the first in image
     // TODO: Which case does this cover?
-    //if (start_out_w_i == 0 && start_out_h_i != 0) {
-    //    in_sc.initial_skip = 2 * pc.pad_w;
-    //}
-    if (pc.stride_h == 2 && start_out_w_i == 0 && start_out_h_i != 0) {
-        in_sc.initial_skip = pc.in_w + 2 * pc.pad_w;
+    if (start_out_w_i == 0 && start_out_h_i != 0) {
+        in_sc.initial_skip = 2 * pc.pad_w;
     }
+    //if (pc.stride_h == 2 && start_out_w_i == 0 && start_out_h_i != 0) {
+    //    in_sc.initial_skip = pc.in_w + 2 * pc.pad_w;
+    //}
 
     out_sc.skip_after_stick = 0;
     in_sc.skip_after_stick = pc.stride_w;

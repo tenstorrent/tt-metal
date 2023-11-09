@@ -127,19 +127,19 @@ void kernel_main() {
     uint32_t partial_bottom_image_skip_per_row = get_arg_val<uint32_t>(58);
     uint32_t partial_last_row_nsticks = get_arg_val<uint32_t>(59);
 
-    DPRINT << "intial_pad_nsticks: " << initial_pad_nsticks << ENDL();
-    DPRINT << "local_offset_nsticks: " << local_offset_nsticks << ENDL();
-    DPRINT << "partial_first_row_nsticks: " << partial_first_row_nsticks << ENDL();
-    DPRINT << "partial_first_row_skip: " << partial_first_row_skip << ENDL();
-    DPRINT << "partial_top_image_nrows: " << partial_top_image_nrows << ENDL();
-    DPRINT << "partial_top_image_skip_per_row: " << partial_top_image_skip_per_row << ENDL();
-    DPRINT << "partial_top_image_skip: " << partial_top_image_skip << ENDL();
-    DPRINT << "full_nimages: " << full_nimages << ENDL();
-    DPRINT << "full_image_skip_per_row: " << full_image_skip_per_row << ENDL();
-    DPRINT << "full_image_skip: " << full_image_skip << ENDL();
-    DPRINT << "partial_bottom_image_nrows: " << partial_bottom_image_nrows << ENDL();
-    DPRINT << "partial_bottom_image_skip_per_row: " << partial_bottom_image_skip_per_row << ENDL();
-    DPRINT << "partial_last_row_nsticks: " << partial_last_row_nsticks << ENDL();
+    // DPRINT << "intial_pad_nsticks: " << initial_pad_nsticks << ENDL();
+    // DPRINT << "local_offset_nsticks: " << local_offset_nsticks << ENDL();
+    // DPRINT << "partial_first_row_nsticks: " << partial_first_row_nsticks << ENDL();
+    // DPRINT << "partial_first_row_skip: " << partial_first_row_skip << ENDL();
+    // DPRINT << "partial_top_image_nrows: " << partial_top_image_nrows << ENDL();
+    // DPRINT << "partial_top_image_skip_per_row: " << partial_top_image_skip_per_row << ENDL();
+    // DPRINT << "partial_top_image_skip: " << partial_top_image_skip << ENDL();
+    // DPRINT << "full_nimages: " << full_nimages << ENDL();
+    // DPRINT << "full_image_skip_per_row: " << full_image_skip_per_row << ENDL();
+    // DPRINT << "full_image_skip: " << full_image_skip << ENDL();
+    // DPRINT << "partial_bottom_image_nrows: " << partial_bottom_image_nrows << ENDL();
+    // DPRINT << "partial_bottom_image_skip_per_row: " << partial_bottom_image_skip_per_row << ENDL();
+    // DPRINT << "partial_last_row_nsticks: " << partial_last_row_nsticks << ENDL();
 
     // DPRINT << "0" << ENDL();
 

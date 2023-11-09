@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "debug_print.h"
 
+auto s1 = SliceRange{ .h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1 };
 
 void kernel_main() {
     uint32_t i = 0;
@@ -126,9 +127,9 @@ void kernel_main() {
         weights_top_left_corner_idx += skip_after_each_stick;
     }
 
-    for (uint32_t i = 0; i < act_block_h_datums; i++) {
-        DPRINT << i << ": " << reader_indices_ptr[i] << ENDL();
-    }
+    //for (uint32_t i = 0; i < act_block_h_datums; i++) {
+    //    DPRINT << i << ": " << reader_indices_ptr[i] << ENDL();
+    //}
 
 
     // DUMMY LOOP TO FILL READER OFFSETS
@@ -204,6 +205,18 @@ void kernel_main() {
                 reader_idx++;
             }
             noc_async_read_barrier();
+
+            if (outer == 0 or outer == 8) {
+                DPRINT << "Window: " << outer << ENDL();
+                DPRINT << TileSlice(cb_id_act, 0, s1, true, false) << ENDL();
+                //DPRINT << TileSlice(cb_id_act, 1, s1, true, false) << ENDL();
+                //DPRINT << TileSlice(cb_id_act, 2, s1, true, false) << ENDL();
+                //DPRINT << TileSlice(cb_id_act, 3, s1, true, false) << ENDL();
+                //DPRINT << TileSlice(cb_id_act, 4, s1, true, false) << ENDL();
+                //DPRINT << TileSlice(cb_id_act, 5, s1, true, false) << ENDL();
+                //DPRINT << TileSlice(cb_id_act, 6, s1, true, false) << ENDL();
+                DPRINT << TileSlice(cb_id_act, 7, s1, true, false) << ENDL();
+            }
             cb_push_back(cb_id_act, act_block_num_tiles);
 
             reader_offset_idx += window_inner;

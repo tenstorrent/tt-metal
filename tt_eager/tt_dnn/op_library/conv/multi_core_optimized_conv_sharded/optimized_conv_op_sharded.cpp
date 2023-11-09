@@ -784,16 +784,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
         .dilation_w = 1,
         .dilation_h = 1
     };
-    std::cout << "in_w: " << conv_act_size_w << std::endl;
-    std::cout << "in_h: " << conv_act_size_h << std::endl;
-    std::cout << "out_w: " << conv_output_size_w << std::endl;
-    std::cout << "out_h: " << conv_output_size_h << std::endl;
-    std::cout << "stride_w: " << stride_w << std::endl;
-    std::cout << "stride_h: " << stride_h << std::endl;
-    std::cout << "pad_w: " << pad_w << std::endl;
-    std::cout << "pad_h:" << pad_h << std::endl;
-    std::cout << "window_w: " << weight_size_w << std::endl;
-    std::cout << "window_h: " << weight_size_h << std::endl;
+    //std::cout << "in_w: " << conv_act_size_w << std::endl;
+    //std::cout << "in_h: " << conv_act_size_h << std::endl;
+    //std::cout << "out_w: " << conv_output_size_w << std::endl;
+    //std::cout << "out_h: " << conv_output_size_h << std::endl;
+    //std::cout << "stride_w: " << stride_w << std::endl;
+    //std::cout << "stride_h: " << stride_h << std::endl;
+    //std::cout << "pad_w: " << pad_w << std::endl;
+    //std::cout << "pad_h:" << pad_h << std::endl;
+    //std::cout << "window_w: " << weight_size_w << std::endl;
+    //std::cout << "window_h: " << weight_size_h << std::endl;
 
     vector<KernelID> reader_ids;
     vector<KernelID> writer_ids;

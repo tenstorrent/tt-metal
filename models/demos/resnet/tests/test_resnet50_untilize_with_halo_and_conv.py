@@ -638,7 +638,9 @@ def test_resnet50_conv(
             )
 
         # Untilize with halo concat
-        conv_input_on_device = tt_lib.tensor.untilize_with_halo(conv_input_on_device, 0x0, N, H, W, 1, in_mem_config)
+        conv_input_on_device = tt_lib.tensor.untilize_with_halo(
+            conv_input_on_device, 0x0, N, H, W, stride_h, in_mem_config
+        )
 
         # Conv with new reader for sharded untilized with halo inputs
         output_on_device = conv(conv_input_on_device)

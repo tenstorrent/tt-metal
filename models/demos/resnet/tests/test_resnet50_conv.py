@@ -596,6 +596,6 @@ def test_resnet50_conv(
         # Compare against golden
         assert out_result.shape == out_golden.shape
         passing_pcc, output_pcc = comp_pcc(out_golden, out_result, 0.99)
-        logger.info("Passing=", passing_pcc)
-        logger.info("Output pcc=", output_pcc)
+        logger.info(f"Passing={passing_pcc}")
+        logger.info(f"Output pcc={output_pcc}")
         assert passing_pcc
