@@ -20,27 +20,26 @@ namespace tt::tt_metal {
 namespace operation {
 
 
-std::vector<Tensor> generic_create_output_tensors(
-    const DeviceOperation& operation,
-    const std::vector<Tensor>& input_tensors,
-    const DataType output_dtype,
-    const Layout output_layout,
-    const MemoryConfig& output_mem_config
-);
 template<typename ConcreteOperation>
 std::vector<Tensor> generic_create_output_tensors(
-    const ConcreteOperation& concrete_op,
+    const ConcreteOperation& operation,
     const std::vector<Tensor>& input_tensors,
     const DataType output_dtype,
     const Layout output_layout,
     const MemoryConfig& output_mem_config
 ) {
-    if constexpr (detail::is_device_operation<ConcreteOperation>()) {
-        const auto operation = DeviceOperation(concrete_op);
-        return generic_create_output_tensors(operation, input_tensors, output_dtype, output_layout, output_mem_config);
-    } else {
-        static_assert(tt::stl::concepts::always_false_v<ConcreteOperation>, "Unsupported Operation");
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_shapes = operation.compute_output_shapes(input_tensors);
+
+    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
+
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(output_shapes.size());
+    for (const auto& output_shape : output_shapes) {
+        output_tensors.emplace_back(
+            create_device_tensor(output_shape, output_dtype, output_layout, input_tensor.device(), output_mem_config));
     }
+    return output_tensors;
 }
 
 

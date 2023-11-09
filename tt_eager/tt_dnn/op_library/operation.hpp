@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <any>
 #include <boost/core/demangle.hpp>
 #include <experimental/type_traits>
 #include <tensor/tensor.hpp>
@@ -160,9 +159,8 @@ constexpr bool implements_get_parallelization_strategy() {
 
 }  // namespace detail
 
-struct HostOperation {
-
-    const std::any type_erased_operation;
+struct HostOperation final {
+    using storage_t = std::array<std::byte, 512>;
 
     // Methods
     const std::function<const std::string()> get_type_name;
@@ -173,22 +171,27 @@ struct HostOperation {
     const std::function<const tt::stl::reflection::Attributes()> attributes;
 
     template <typename T>
-    explicit HostOperation(const T operation) :
-        // Initialize attributes
-        type_erased_operation(operation),
+    explicit HostOperation(T&& operation) :
+
+        pointer{new(&type_erased_storage) std::decay_t<T>{std::forward<T>(operation)}},
+
+        delete_storage{[](storage_t& self) {
+            using Type = std::decay_t<T>;
+            reinterpret_cast<Type*>(&self)->~Type();
+        }},
 
         // Initialize methods
         get_type_name{[]() -> const std::string { return boost::core::demangle(typeid(T).name()); }},
         validate{[this](const std::vector<Tensor>& input_tensors) {
-            auto operation = std::any_cast<const T&>(this->type_erased_operation);
+            const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&this->type_erased_storage);
             operation.validate(input_tensors);
         }},
         compute_output_shapes{[this](const std::vector<Tensor>& input_tensors) {
-            auto operation = std::any_cast<const T&>(this->type_erased_operation);
+            const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&this->type_erased_storage);
             return operation.compute_output_shapes(input_tensors);
         }},
         compute_output_tensors{[this](const std::vector<Tensor>& input_tensors) {
-            auto operation = std::any_cast<const T&>(this->type_erased_operation);
+            const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&this->type_erased_storage);
             return operation.compute_output_tensors(input_tensors);
         }},
         create_profiler_info{[this](const std::vector<Tensor>& input_tensors) -> ProfilerInfo {
@@ -197,155 +200,234 @@ struct HostOperation {
             return {.preferred_name = preferred_name, .parallelization_strategy = parallelization_strategy};
         }},
         attributes{[this] {
-            auto operation = std::any_cast<const T&>(this->type_erased_operation);
+            const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&this->type_erased_storage);
             return operation.attributes();
-        }} {}
+        }} {
+        static_assert(sizeof(T) <= sizeof(storage_t));
+    }
+
+    HostOperation(const HostOperation&) = delete;
+    HostOperation& operator=(const HostOperation&) = delete;
+
+    HostOperation(HostOperation&&) = delete;
+    HostOperation& operator=(HostOperation&&) = delete;
+
+   private:
+    alignas(32) void* pointer = nullptr;
+    alignas(32) storage_t type_erased_storage;
+
+    void (*delete_storage)(storage_t&) = nullptr;
 };
 
-struct DeviceOperation {
+struct DeviceOperation final {
+    using storage_t = std::array<std::byte, 768>;
 
-    const std::any type_erased_operation;
+    inline const std::string get_type_name() const { return this->get_type_name_impl_(this->type_erased_storage); }
 
-    // Methods
-    const std::function<const std::string()> get_type_name;
-    const std::function<void(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)> validate;
-    const std::function<const std::vector<Shape>(const std::vector<Tensor>&)> compute_output_shapes;
-    const std::function<const std::vector<Tensor>(const std::vector<Tensor>&)> create_output_tensors;
-    const std::function<ProgramWithCallbacks(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&, std::vector<Tensor>&)> create_program;
-    const std::function<void(OverrideRuntimeArgumentsCallback&, Program&, const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&, std::vector<Tensor>&)> override_runtime_arguments;
-    const std::function<const Hash(const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&)> compute_program_hash;
-    const std::function<const ProfilerInfo(const std::vector<Tensor> &input_tensors)> create_profiler_info;
-    const std::function<const tt::stl::reflection::Attributes()> attributes;
+    inline const void validate(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+        return this->validate_impl_(this->type_erased_storage, input_tensors, optional_input_tensors);
+    }
+
+    inline const std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+        return this->compute_output_shapes_impl_(this->type_erased_storage, input_tensors);
+    }
+
+    inline const std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+        return this->create_output_tensors_impl_(this->type_erased_storage, input_tensors);
+    }
+
+    inline ProgramWithCallbacks create_program(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor>& output_tensors) const {
+        return this->create_program_impl_(
+            this->type_erased_storage, input_tensors, optional_input_tensors, output_tensors);
+    }
+
+    inline void override_runtime_arguments(
+        OverrideRuntimeArgumentsCallback& override_runtime_arguments_callback,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor>& output_tensors) const {
+        return this->override_runtime_arguments_impl_(
+            this->type_erased_storage,
+            override_runtime_arguments_callback,
+            program,
+            input_tensors,
+            optional_input_tensors,
+            output_tensors);
+    }
+
+    inline const Hash compute_program_hash(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+        return this->compute_program_hash_impl_(this->type_erased_storage, input_tensors, optional_input_tensors);
+    }
+
+    inline const ProfilerInfo create_profiler_info(const std::vector<Tensor>& input_tensors) const {
+        return this->create_profiler_info_impl_(this->type_erased_storage, input_tensors);
+    }
+
+    inline const tt::stl::reflection::Attributes attributes() const {
+        return this->attributes_impl_(this->type_erased_storage);
+    }
 
     template <typename T>
-    explicit DeviceOperation(const T operation) :
-        // Initialize attributes
-        type_erased_operation(operation),
+    explicit DeviceOperation(T&& operation) :
+
+        pointer{new(&type_erased_storage) std::decay_t<T>{std::forward<T>(operation)}},
+
+        delete_storage{[](storage_t& self) {
+            using Type = std::decay_t<T>;
+            reinterpret_cast<Type*>(&self)->~Type();
+        }},
 
         // Initialize methods
-        get_type_name{
-            [this] () -> const std::string {
-                auto operation = std::any_cast<const T&>(this->type_erased_operation);
-                if constexpr (detail::implements_get_type_name<T>()) {
-                    return operation.get_type_name();
-                }
-                else {
-                    return boost::core::demangle(typeid(T).name());
-                }
+        get_type_name_impl_{[](const storage_t& storage) -> const std::string {
+            const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
+            if constexpr (detail::implements_get_type_name<T>()) {
+                return operation.get_type_name();
+            } else {
+                return boost::core::demangle(typeid(T).name());
             }
-        },
-        validate{
-            [this] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
-                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+        }},
+        validate_impl_{
+            [](const storage_t& storage,
+               const std::vector<Tensor>& input_tensors,
+               const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> void {
+                const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (detail::implements_validate<T>()) {
                     TT_ASSERT(optional_input_tensors.empty());
                     static_assert(detail::implements_create_program<T>());
-                    return operation.validate(input_tensors);
-                }
-                else if constexpr (detail::implements_validate_with_optional_input_tensors<T>()) {
+                    operation.validate(input_tensors);
+                } else if constexpr (detail::implements_validate_with_optional_input_tensors<T>()) {
                     TT_ASSERT(not optional_input_tensors.empty());
                     static_assert(detail::implements_create_program_with_optional_input_tensors<T>());
-                    return operation.validate(input_tensors, optional_input_tensors);
-                }
-                else {
+                    operation.validate(input_tensors, optional_input_tensors);
+                } else {
                     static_assert(tt::stl::concepts::always_false_v<T>, "Operation doesn't implement validate");
                 }
-            }
-        },
-        compute_output_shapes{
-            [this] (const std::vector<Tensor>& input_tensors) {
-                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+            }},
+        compute_output_shapes_impl_{
+            [](const storage_t& storage, const std::vector<Tensor>& input_tensors) -> const std::vector<Shape> {
+                const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 return operation.compute_output_shapes(input_tensors);
-            }
-        },
-        create_output_tensors{
-            [this] (const std::vector<Tensor>& input_tensors) {
-                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+            }},
+        create_output_tensors_impl_{
+            [](const storage_t& storage, const std::vector<Tensor>& input_tensors) -> const std::vector<Tensor> {
+                const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 return operation.create_output_tensors(input_tensors);
-            }
-        },
-        create_program{
-            [this] (
-                const std::vector<Tensor>& input_tensors,
-                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-                std::vector<Tensor>& output_tensors
-            ) {
-                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+            }},
+        create_program_impl_{
+            [](const storage_t& storage,
+               const std::vector<Tensor>& input_tensors,
+               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+               std::vector<Tensor>& output_tensors) -> ProgramWithCallbacks {
+                const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (detail::implements_create_program<T>()) {
                     TT_ASSERT(optional_input_tensors.empty());
                     return operation.create_program(input_tensors, output_tensors);
-                }
-                else if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
+                } else if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
                     TT_ASSERT(not optional_input_tensors.empty());
                     return operation.create_program(input_tensors, optional_input_tensors, output_tensors);
-                }
-                else {
+                } else {
                     static_assert(tt::stl::concepts::always_false_v<T>, "Operation doesn't implement create_program");
                 }
-            }
-        },
-        override_runtime_arguments{
-            [this] (
-                OverrideRuntimeArgumentsCallback& override_runtime_arguments_callback,
-                Program& program,
-                const std::vector<Tensor>& input_tensors,
-                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-                std::vector<Tensor>& output_tensors
-            ) {
-                auto operation = std::any_cast<const T&>(this->type_erased_operation);
-                override_runtime_arguments_callback(&operation, program, input_tensors, optional_input_tensors, output_tensors);
-            }
-        },
-        compute_program_hash{
-            [this] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> const Hash {
-                auto operation = std::any_cast<const T&>(this->type_erased_operation);
+            }},
+        override_runtime_arguments_impl_{
+            [](const storage_t& storage,
+               OverrideRuntimeArgumentsCallback& override_runtime_arguments_callback,
+               Program& program,
+               const std::vector<Tensor>& input_tensors,
+               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+               std::vector<Tensor>& output_tensors) -> void {
+                const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
+                override_runtime_arguments_callback(
+                    &operation, program, input_tensors, optional_input_tensors, output_tensors);
+            }},
+        compute_program_hash_impl_{
+            [](const storage_t& storage,
+               const std::vector<Tensor>& input_tensors,
+               const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> const Hash {
+                const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
 
                 if constexpr (detail::implements_compute_program_hash<T>()) {
                     static_assert(detail::implements_create_program<T>());
                     TT_ASSERT(optional_input_tensors.empty());
                     return operation.compute_program_hash(input_tensors);
-                }
-                else if constexpr (detail::implements_compute_program_hash_with_optional_input_tensors<T>()) {
+                } else if constexpr (detail::implements_compute_program_hash_with_optional_input_tensors<T>()) {
                     static_assert(detail::implements_create_program_with_optional_input_tensors<T>());
                     TT_ASSERT(not optional_input_tensors.empty());
                     return operation.compute_program_hash(input_tensors, optional_input_tensors);
-                }
-                else if constexpr (detail::implements_create_program<T>()) {
+                } else if constexpr (detail::implements_create_program<T>()) {
                     TT_ASSERT(optional_input_tensors.empty());
                     return hash_operation<T>(operation, input_tensors);
-                }
-                else if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
+                } else if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
                     TT_ASSERT(not optional_input_tensors.empty());
                     return hash_operation<T>(operation, input_tensors, optional_input_tensors);
-                }
-                else {
+                } else {
                     static_assert(tt::stl::concepts::always_false_v<T>, "Operation doesn't implement create_program");
                 }
-            }
-        },
-        create_profiler_info{
-            [this] (const std::vector<Tensor>& input_tensors) -> ProfilerInfo {
-                auto operation = std::any_cast<const T&>(this->type_erased_operation);
-                std::optional<std::string> preferred_name = this->get_type_name();
+            }},
+        create_profiler_info_impl_{
+            [](const storage_t& storage, const std::vector<Tensor>& input_tensors) -> const ProfilerInfo {
+                const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
+                std::optional<std::string> preferred_name = boost::core::demangle(typeid(T).name());
 
                 std::optional<std::string> parallelization_strategy = std::nullopt;
                 if constexpr (detail::implements_get_parallelization_strategy<T>()) {
                     parallelization_strategy = fmt::format("{}", operation.get_parallelization_strategy(input_tensors));
                 }
-                return {
-                    .preferred_name = preferred_name,
-                    .parallelization_strategy = parallelization_strategy
-                };
-            }
-        },
-        attributes{
-            [this] {
-                auto operation = std::any_cast<const T&>(this->type_erased_operation);
-                return operation.attributes();
-            }
-        }
-        {}
+                return {.preferred_name = preferred_name, .parallelization_strategy = parallelization_strategy};
+            }},
+        attributes_impl_{[](const storage_t& storage) -> const tt::stl::reflection::Attributes {
+            const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
+            return operation.attributes();
+        }} {
+        static_assert(sizeof(T) <= sizeof(storage_t));
+    }
 
+    DeviceOperation(const DeviceOperation&) = delete;
+    DeviceOperation& operator=(const DeviceOperation&) = delete;
+
+    DeviceOperation(DeviceOperation&&) = delete;
+    DeviceOperation& operator=(DeviceOperation&&) = delete;
+
+    ~DeviceOperation() {
+        this->delete_storage(this->type_erased_storage);
+        this->pointer = nullptr;
+    }
+
+   private:
+    alignas(32) void* pointer = nullptr;
+    alignas(32) storage_t type_erased_storage;
+
+    void (*delete_storage)(storage_t&) = nullptr;
+
+    const std::string (*get_type_name_impl_)(const storage_t& value);
+    void (*validate_impl_)(
+        const storage_t& value, const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&);
+    const std::vector<Shape> (*compute_output_shapes_impl_)(const storage_t& value, const std::vector<Tensor>&);
+    const std::vector<Tensor> (*create_output_tensors_impl_)(const storage_t& value, const std::vector<Tensor>&);
+    ProgramWithCallbacks (*create_program_impl_)(
+        const storage_t& value,
+        const std::vector<Tensor>&,
+        const std::vector<std::optional<const Tensor>>&,
+        std::vector<Tensor>&);
+    void (*override_runtime_arguments_impl_)(
+        const storage_t& value,
+        OverrideRuntimeArgumentsCallback&,
+        Program&,
+        const std::vector<Tensor>&,
+        const std::vector<std::optional<const Tensor>>&,
+        std::vector<Tensor>&);
+    const Hash (*compute_program_hash_impl_)(
+        const storage_t& value, const std::vector<Tensor>&, const std::vector<std::optional<const Tensor>>&);
+    const ProfilerInfo (*create_profiler_info_impl_)(const storage_t& value, const std::vector<Tensor>& input_tensors);
+    const tt::stl::reflection::Attributes (*attributes_impl_)(const storage_t& value);
 };
 
 struct ExternalOperation {
