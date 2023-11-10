@@ -21,7 +21,7 @@ using namespace tt::tt_metal;
 int main(int argc, char** argv) {
 
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        log_fatal("Test not supported w/ slow dispatch, exiting");
+        TT_THROW("Test not supported w/ slow dispatch, exiting");
     }
 
     bool pass = true;
@@ -205,7 +205,7 @@ int main(int argc, char** argv) {
     if (pass) {
         log_info(LogTest, "Test Passed");
     } else {
-        log_fatal(LogTest, "Test Failed");
+        TT_THROW("Test Failed");
     }
 
     TT_FATAL(pass);

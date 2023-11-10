@@ -286,7 +286,7 @@ const DataFormat get_single_pack_src_format(
         } else if(output_format == DataFormat::Float16){
             pack_src_format = DataFormat::Float16_b;
         } else {
-            log_fatal("No valid conversion from fp32 dest to output format = {}", output_format);
+            TT_THROW("No valid conversion from fp32 dest to output format = {}", output_format);
         }
     } else if (int_fpu_en) {
         TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Integer math is not supported for arch grayskull");

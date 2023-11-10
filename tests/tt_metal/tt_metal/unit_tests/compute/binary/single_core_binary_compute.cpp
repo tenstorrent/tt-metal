@@ -132,7 +132,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
             } else if (test_config.binary_op == "mul") {
                 return (lhs.to_float() * rhs.to_float());
             } else {
-                log_fatal("Unsupported binary_op={}", test_config.binary_op);
+                TT_THROW("Unsupported binary_op={}", test_config.binary_op);
                 return 0.0f;
             }
         });

@@ -84,7 +84,7 @@ static FILE * create_file(const string& log_path) {
     const char *fmode = getenv("TT_METAL_WATCHER_APPEND") ? "a" : "w";
     string fname = log_path + "watcher.log";
     if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
-        log_fatal(LogLLRuntime, "Watcher failed to create log file\n");
+        TT_THROW("Watcher failed to create log file\n");
     }
     log_info(LogLLRuntime, "Watcher log file: {}", fname);
 
@@ -126,7 +126,7 @@ static void dump_l1_status(FILE *f, WatcherDevice *wdev, CoreCoord core, const l
     // XXXX TODO(pgk): get this const from llrt (jump to fw insn)
     if (data[0] != 0x2010006f) {
         log_running_kernels(launch_msg);
-        log_fatal(LogLLRuntime, "Watcher found corruption at L1[0] on core {}: read {}", core.str(), data[0]);
+        TT_THROW("Watcher found corruption at L1[0] on core {}: read {}", core.str(), data[0]);
     }
 }
 
@@ -145,7 +145,7 @@ static const char * get_sanity_riscv_name(CoreCoord core, const launch_msg_t *la
         return "trisc2";
     default:
         log_running_kernels(launch_msg);
-        log_fatal(LogLLRuntime, "Watcher unexpected riscv type on core {}: {}", core.str(), type);
+        TT_THROW("Watcher unexpected riscv type on core {}: {}", core.str(), type);
     }
     return nullptr;
 }
@@ -158,7 +158,7 @@ static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *
             san->len != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 ||
             san->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_16) {
             log_running_kernels(launch_msg);
-            log_fatal(LogLLRuntime, "Watcher unexpected noc debug state on core {}, reported valid got (addr,len,which)=({},{},{})",
+            TT_THROW("Watcher unexpected noc debug state on core {}, reported valid got (addr,len,which)=({},{},{})",
                       core.str(), san->addr, san->len, san->which);
         }
         break;
@@ -166,7 +166,7 @@ static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *
         fprintf(f, "noc%d:%s{0x%08lx, %d}", noc, get_sanity_riscv_name(core, launch_msg, san->which), san->addr, san->len);
         fflush(f);
         log_running_kernels(launch_msg);
-        log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC L1/reg address, see log");
+        TT_THROW("Watcher stopped the device due to bad NOC L1/reg address, see log");
         break;
     case DebugSanitizeNocInvalidUnicast:
         fprintf(f, "noc%d:%s{(%02ld,%02ld) 0x%08lx, %d}",
@@ -177,7 +177,7 @@ static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *
                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
         fflush(f);
         log_running_kernels(launch_msg);
-        log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC unicast transaction, see log");
+        TT_THROW("Watcher stopped the device due to bad NOC unicast transaction, see log");
         break;
     case DebugSanitizeNocInvalidMulticast:
         fprintf(f, "noc%d:%s{(%02ld,%02ld)-(%02ld,%02ld) 0x%08lx, %d}",
@@ -190,11 +190,11 @@ static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *
                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
         fflush(f);
         log_running_kernels(launch_msg);
-        log_fatal(LogLLRuntime, "Watcher stopped the device due to bad NOC multicast transaction, see log");
+        TT_THROW("Watcher stopped the device due to bad NOC multicast transaction, see log");
         break;
     default:
         log_running_kernels(launch_msg);
-        log_fatal(LogLLRuntime, "Watcher unexpected noc debug state on core {}, unknown failure code: {}\n",
+        TT_THROW("Watcher unexpected noc debug state on core {}, unknown failure code: {}\n",
                   core.str(), san->invalid);
     }
 }
@@ -213,7 +213,7 @@ static void dump_run_state(FILE *f, CoreCoord core, const launch_msg_t *launch_m
     else if (state == RUN_MSG_DONE) code = 'D';
     if (code == 'U') {
         log_running_kernels(launch_msg);
-        log_fatal(LogLLRuntime, "Watcher unexpected run state on core{}: {} (expected {} or {} or {})",
+        TT_THROW("Watcher unexpected run state on core{}: {} (expected {} or {} or {})",
                   core.str(), state, RUN_MSG_INIT, RUN_MSG_GO, RUN_MSG_DONE);
     } else {
         fprintf(f, "%c", code);
@@ -233,7 +233,7 @@ static void dump_run_mailboxes(FILE *f,
         fprintf(f, "H");
     } else {
         log_running_kernels(launch_msg);
-        log_fatal(LogLLRuntime, "Watcher unexpected launch mode on core {}: {} (expected {} or {})",
+        TT_THROW("Watcher unexpected launch mode on core {}: {} (expected {} or {})",
                   core.str(), launch_msg->mode, DISPATCH_MODE_DEV, DISPATCH_MODE_HOST);
     }
 
@@ -241,7 +241,7 @@ static void dump_run_mailboxes(FILE *f,
         fprintf(f, "%d", launch_msg->brisc_noc_id);
     } else {
         log_running_kernels(launch_msg);
-        log_fatal(LogLLRuntime, "Watcher unexpected brisc noc_id on core {}: {} (expected 0 or 1)",
+        TT_THROW("Watcher unexpected brisc noc_id on core {}: {} (expected 0 or 1)",
                   core.str(), launch_msg->brisc_noc_id);
     }
 
@@ -255,7 +255,7 @@ static void dump_run_mailboxes(FILE *f,
         fprintf(f, "b");
     } else {
         log_running_kernels(launch_msg);
-        log_fatal(LogLLRuntime, "Watcher unexpected brisc enable on core {}: {} (expected 0 or 1)",
+        TT_THROW("Watcher unexpected brisc enable on core {}: {} (expected 0 or 1)",
                   core.str(),
                   launch_msg->enable_brisc);
     }
@@ -266,7 +266,7 @@ static void dump_run_mailboxes(FILE *f,
         fprintf(f, "n");
     } else {
         log_running_kernels(launch_msg);
-        log_fatal(LogLLRuntime, "Watcher unexpected ncrisc enable on core {}: {} (expected 0 or 1)",
+        TT_THROW("Watcher unexpected ncrisc enable on core {}: {} (expected 0 or 1)",
                   core.str(),
                   launch_msg->enable_ncrisc);
     }
@@ -277,7 +277,7 @@ static void dump_run_mailboxes(FILE *f,
         fprintf(f, "t");
     } else {
         log_running_kernels(launch_msg);
-        log_fatal(LogLLRuntime, "Watcher unexpected trisc enable on core {}: {} (expected 0 or 1)",
+        TT_THROW("Watcher unexpected trisc enable on core {}: {} (expected 0 or 1)",
                   core.str(),
                   launch_msg->enable_triscs);
     }
@@ -303,7 +303,7 @@ static void dump_debug_status(FILE *f, CoreCoord core, launch_msg_t *launch_msg,
                 fprintf(f, "%c", v);
             } else {
                 log_running_kernels(launch_msg);
-                log_fatal(LogLLRuntime, "Watcher unexpected debug status on core {}, unprintable character {}",
+                TT_THROW("Watcher unexpected debug status on core {}, unprintable character {}",
                           core.str(), (int)v);
             }
         }
@@ -342,19 +342,19 @@ static void validate_kernel_ids(FILE *f,
                                 const launch_msg_t *launch) {
 
     if (launch->brisc_watcher_kernel_id >= kernel_names.size()) {
-        log_fatal(LogLLRuntime, "Watcher unexpected brisc kernel id on core {}: {} (last valid {})",
+        TT_THROW("Watcher unexpected brisc kernel id on core {}: {} (last valid {})",
                   core.str(), launch->brisc_watcher_kernel_id, kernel_names.size());
     }
     used_kernel_names[launch->brisc_watcher_kernel_id] = true;
 
     if (launch->ncrisc_watcher_kernel_id >= kernel_names.size()) {
-        log_fatal(LogLLRuntime, "Watcher unexpected ncrisc kernel id on core {}: {} (last valid {})",
+        TT_THROW("Watcher unexpected ncrisc kernel id on core {}: {} (last valid {})",
                   core.str(), launch->ncrisc_watcher_kernel_id, kernel_names.size());
     }
     used_kernel_names[launch->ncrisc_watcher_kernel_id] = true;
 
     if (launch->triscs_watcher_kernel_id >= kernel_names.size()) {
-        log_fatal(LogLLRuntime, "Watcher unexpected trisc kernel id on core {}: {} (last valid {})",
+        TT_THROW("Watcher unexpected trisc kernel id on core {}: {} (last valid {})",
                   core.str(), launch->triscs_watcher_kernel_id, kernel_names.size());
     }
     used_kernel_names[launch->triscs_watcher_kernel_id] = true;
@@ -492,26 +492,26 @@ static void watcher_sanitize_host_noc(const char* what,
                                       uint32_t lbytes) {
 
     if (coord_found_p(soc_d.get_pcie_cores(), core)) {
-        log_fatal(LogLLRuntime, "Host watcher: bad {} NOC coord {}", what, core.str());
+        TT_THROW("Host watcher: bad {} NOC coord {}", what, core.str());
     } else if (coord_found_p(soc_d.get_dram_cores(), core)) {
         if (!DEBUG_VALID_DRAM_ADDR(addr, lbytes)) {
             print_stack_trace();
-            log_fatal(LogLLRuntime, "Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
+            TT_THROW("Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
         }
     } else if (coord_found_p(soc_d.get_physical_ethernet_cores(), core)) {
         if (!DEBUG_VALID_ETH_ADDR(addr, lbytes)) {
             print_stack_trace();
-            log_fatal(LogLLRuntime, "Host watcher: bad {} eth address {}", what, noc_address(core, addr, lbytes));
+            TT_THROW("Host watcher: bad {} eth address {}", what, noc_address(core, addr, lbytes));
         }
     } else if (coord_found_p(soc_d.grid_size, core)) {
         if (!DEBUG_VALID_WORKER_ADDR(addr, lbytes)) {
             print_stack_trace();
-            log_fatal(LogLLRuntime, "Host watcher: bad {} worker address {}", what, noc_address(core, addr, lbytes));
+            TT_THROW("Host watcher: bad {} worker address {}", what, noc_address(core, addr, lbytes));
         }
     } else {
         // Bad COORD
         print_stack_trace();
-        log_fatal(LogLLRuntime, "Host watcher: bad {} NOC coord {}", core.str());
+        TT_THROW("Host watcher: bad {} NOC coord {}", core.str());
     }
 }
 

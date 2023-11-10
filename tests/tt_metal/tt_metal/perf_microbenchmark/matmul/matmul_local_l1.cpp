@@ -172,7 +172,7 @@ void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
 
 int main(int argc, char **argv) {
   if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-    log_fatal("Test not supported w/ slow dispatch, exiting");
+    TT_THROW("Test not supported w/ slow dispatch, exiting");
   }
 
   bool pass = true;
@@ -220,7 +220,7 @@ int main(int argc, char **argv) {
           test_args::get_command_option_uint32_and_remaining_args(
               input_args, "--validation", 1);
     } catch (const std::exception &e) {
-      log_fatal(tt::LogTest, "Command line arguments found exception",
+      TT_THROW("Command line arguments found exception",
                 e.what());
     }
 
@@ -243,13 +243,13 @@ int main(int argc, char **argv) {
     log_info(LogTest, "Weights = {}x{}", Kt * 32, Nt * 32);
 
     if (Mt % num_cores_r != 0) {
-      log_fatal(LogTest, "Mt {} must be a multiple of num_cores_r {}", Mt,
+      TT_THROW("Mt {} must be a multiple of num_cores_r {}", Mt,
                 num_cores_r);
       TT_FATAL(false);
     }
 
     if (Nt % num_cores_c != 0) {
-      log_fatal(LogTest, "Nt {} must be a multiple of num_cores_c {}", Nt,
+      TT_THROW("Nt {} must be a multiple of num_cores_c {}", Nt,
                 num_cores_c);
       TT_FATAL(false);
     }
@@ -453,7 +453,7 @@ int main(int argc, char **argv) {
   if (pass) {
     log_info(LogTest, "Test Passed");
   } else {
-    log_fatal(LogTest, "Test Failed");
+    TT_THROW("Test Failed");
   }
 
   TT_FATAL(pass);

@@ -91,7 +91,7 @@ bfloat16 sfpu_function(const string& op_name, const bfloat16& input) {
     } else if (op_name == "tan") {
         return bfloat16(std::tan(input.to_float()));
     } else {
-        tt::log_fatal("Unsupported op_name in test");
+        TT_THROW("Unsupported op_name in test");
         return bfloat16(0.0f);
     }
 }

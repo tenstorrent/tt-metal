@@ -206,7 +206,7 @@ bool run_sfpu_test(string sfpu_name) {
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());
         // Capture system call errors that may have returned from driver/kernel
-        log_fatal(LogTest, "System error message: {}", std::strerror(errno));
+        TT_THROW("System error message: {}", std::strerror(errno));
     }
 
     return pass;
@@ -239,7 +239,7 @@ int main(int argc, char **argv) {
     if (pass) {
         log_info(LogTest, "Sfpu tests passed");
     } else {
-        log_fatal(LogTest, "Sfpu tests failed");
+        TT_THROW("Sfpu tests failed");
     }
 
     return 0;

@@ -80,11 +80,11 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         if (core_node.IsScalar()) {
             this->preferred_eth_dram_core.push_back(format_node(core_node.as<std::string>()));
         } else {
-            tt::log_fatal("Only NOC coords supported for dram_preferred_eth_endpoint cores");
+            TT_THROW("Only NOC coords supported for dram_preferred_eth_endpoint cores");
         }
     }
     if (this->preferred_eth_dram_core.size() != num_dram_channels) {
-        tt::log_fatal(
+        TT_THROW(
             "Expected to specify preferred DRAM endpoint for ethernet core for {} channels but yaml specifies {} "
             "channels",
             num_dram_channels,
@@ -96,11 +96,11 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         if (core_node.IsScalar()) {
             this->preferred_worker_dram_core.push_back(format_node(core_node.as<std::string>()));
         } else {
-            tt::log_fatal("Only NOC coords supported for dram_preferred_worker_endpoint");
+            TT_THROW("Only NOC coords supported for dram_preferred_worker_endpoint");
         }
     }
     if (this->preferred_worker_dram_core.size() != num_dram_channels) {
-        tt::log_fatal(
+        TT_THROW(
             "Expected to specify preferred DRAM endpoint for worker core for {} channels but yaml specifies {} "
             "channels",
             num_dram_channels,
@@ -109,7 +109,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
 
     this->dram_address_offsets = device_descriptor_yaml["dram_address_offsets"].as<std::vector<size_t>>();
     if (this->dram_address_offsets.size() != num_dram_channels) {
-        tt::log_fatal(
+        TT_THROW(
             "Expected DRAM offsets for {} channels but yaml specified {} channels",
             num_dram_channels,
             this->dram_address_offsets.size());
@@ -120,7 +120,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     for (int dram_channel = 0; dram_channel < this->dram_address_offsets.size(); dram_channel++) {
         if (this->dram_address_offsets.at(dram_channel) == 0) {
             if (dram_banks_per_prev_core > 0 and dram_banks_per_prev_core != dram_banks_per_core) {
-                tt::log_fatal("Expected {} DRAM banks per DRAM core", dram_banks_per_prev_core);
+                TT_THROW("Expected {} DRAM banks per DRAM core", dram_banks_per_prev_core);
             } else if (dram_banks_per_core != 0) {
                 dram_banks_per_prev_core = dram_banks_per_core;
             }
@@ -182,7 +182,7 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
     }
 
     if (row_coordinates_to_remove.size() != virtual_harvested_rows.size()) {
-        tt::log_fatal(
+        TT_THROW(
             "Expected number of harvested rows removed by UMD ({}) to match number of harvested rows set in harvesting "
             "mask ({})",
             virtual_harvested_rows.size(),
@@ -259,11 +259,11 @@ void metal_SocDescriptor::load_dispatch_and_banking_config(uint32_t harvesting_m
     uint32_t num_harvested_noc_rows = mask_bitset.count();
 
     if (num_harvested_noc_rows > 2) {
-        tt::log_fatal(
+        TT_THROW(
             tt::LogDevice, "At most two rows can be harvested, but detected {} harvested rows", num_harvested_noc_rows);
     }
     if (num_harvested_noc_rows == 1 and this->arch == tt::ARCH::GRAYSKULL) {
-        tt::log_fatal(tt::LogDevice, "One row harvested Grayskull is not supported");
+        TT_THROW("One row harvested Grayskull is not supported");
     }
 
     YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
@@ -302,7 +302,7 @@ void metal_SocDescriptor::load_dispatch_and_banking_config(uint32_t harvesting_m
             // Logical coord
             coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
         } else {
-            tt::log_fatal("Only logical relative coords supported for storage_cores cores");
+            TT_THROW("Only logical relative coords supported for storage_cores cores");
         }
         this->storage_cores.push_back(coord);
     }
@@ -315,7 +315,7 @@ void metal_SocDescriptor::load_dispatch_and_banking_config(uint32_t harvesting_m
             // Logical coord
             coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
         } else {
-            tt::log_fatal("Only logical relative coords supported for dispatch_cores cores");
+            TT_THROW("Only logical relative coords supported for dispatch_cores cores");
         }
         this->dispatch_cores.push_back(coord);
     }

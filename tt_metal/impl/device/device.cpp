@@ -26,7 +26,7 @@ ActiveDevices::ActiveDevices() {
 ActiveDevices::~ActiveDevices() {
     for (size_t i = 0; i < active_devices_.size(); i++) {
         if (active_devices_[i] == ActiveState::ACTIVE) {
-            log_fatal("Process tear down with device {} still active", i);
+            TT_THROW("Process tear down with device {} still active", i);
         }
     }
 }
@@ -38,7 +38,7 @@ bool ActiveDevices::activate_device(chip_id_t id) {
         this->active_devices_.resize(id + 1);
         already_initialized = false;
     } else if (this->active_devices_[id] == ActiveState::ACTIVE) {
-        log_fatal("Cannot re-initialize device {}, must first call close()", id);
+        TT_THROW("Cannot re-initialize device {}, must first call close()", id);
     } else {
         already_initialized = true;
     }
@@ -274,7 +274,7 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
 bool Device::close() {
     log_info(tt::LogMetal, "Closing device {}", this->id_);
     if (not this->initialized_) {
-        log_fatal("Cannot close device {} that has not been initialized!", this->id_);
+        TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
     this->deallocate_buffers();
     llrt::watcher_detach(this);

@@ -465,7 +465,7 @@ static vector<CoreCoord> parse_core_range_env(const char* envvar)
             // Assume this is a single core
             uint32_t x, y;
             if (sscanf(str, "%d,%d", &x, &y) != 2) {
-                tt::log_fatal("Invalid {}", envvar);
+                TT_THROW("Invalid {}", envvar);
             }
             cores.push_back({x, y});
         } else if (str[0] == '(') {
@@ -473,11 +473,11 @@ static vector<CoreCoord> parse_core_range_env(const char* envvar)
                 // Assume this is a range
                 CoreCoord start, end;
                 if (sscanf(str, "(%zu,%zu)", &start.x, &start.y) != 2) {
-                    tt::log_fatal("Invalid {}", envvar);
+                    TT_THROW("Invalid {}", envvar);
                 }
                 str = strchr(str, '-');
                 if (sscanf(str, "-(%zu,%zu)", &end.x, &end.y) != 2) {
-                    tt::log_fatal("Invalid {}", envvar);
+                    TT_THROW("Invalid {}", envvar);
                 }
                 for (uint32_t x = start.x; x <= end.x; x++) {
                     for (uint32_t y = start.y; y <= end.y; y++) {
@@ -489,7 +489,7 @@ static vector<CoreCoord> parse_core_range_env(const char* envvar)
                 while (str != nullptr) {
                     uint32_t x, y;
                     if (sscanf(str, "(%d,%d)", &x, &y) != 2) {
-                        tt::log_fatal("Invalid {}", envvar);
+                        TT_THROW("Invalid {}", envvar);
                     }
                     cores.push_back({x, y});
                     str = strchr(str, ',');
@@ -498,7 +498,7 @@ static vector<CoreCoord> parse_core_range_env(const char* envvar)
                 }
             }
         } else {
-            tt::log_fatal("Invalid {}", envvar);
+            TT_THROW("Invalid {}", envvar);
         }
     }
 
@@ -512,7 +512,7 @@ static vector<int> parse_chip_list_env(const char* envvar)
     while (str != nullptr) {
         uint32_t chip;
         if (sscanf(str, "%d", &chip) != 1) {
-            tt::log_fatal("Invalid {}", envvar);
+            TT_THROW("Invalid {}", envvar);
         }
         chips.push_back(chip);
         str = strchr(str, ',');
@@ -545,7 +545,7 @@ void tt_start_debug_print_server()
             } else if (strcmp(dbg_riscvs, "TR2") == 0) {
                 riscv_mask = DPRINT_RISCV_TR2;
             } else {
-                tt::log_fatal("Invalid TT_DEBUG_PRINT_RISCV");
+                TT_THROW("Invalid TT_DEBUG_PRINT_RISCV");
             }
         }
         char *db_file = std::getenv("TT_METAL_DPRINT_FILE");
