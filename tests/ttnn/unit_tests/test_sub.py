@@ -72,8 +72,8 @@ def test_sub(device, h, w):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
-@pytest.mark.parametrize("n", [32])
-@pytest.mark.parametrize("c", [2 * 32])
+@pytest.mark.parametrize("n", [2])
+@pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [4 * 32])
 @pytest.mark.parametrize("w", [4 * 32])
 def test_sub_4D(device, n, c, h, w):

@@ -2,19 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_eager/tensor/tensor.hpp>
-#include "tt_dnn/op_library/auto_format.hpp"
-#include "tt_dnn/op_library/operation.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_dnn/op_library/program_cache.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_numpy/functions.hpp"
 
-#include "tt_stl/reflection.hpp"
+#include <chrono>
+#include <tt_eager/tensor/tensor.hpp>
 
 #include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_dnn/op_library/auto_format.hpp"
+#include "tt_dnn/op_library/operation.hpp"
+#include "tt_dnn/op_library/program_cache.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "tt_metal/tools/profiler/op_profiler.hpp"
+#include "tt_numpy/functions.hpp"
+#include "tt_stl/reflection.hpp"
 
 namespace tt::tt_metal::operation {
 
@@ -157,19 +158,51 @@ std::vector<Tensor> run_with_program_cache(
     return output_tensors;
 }
 
+template <typename OperationType>
+constexpr op_profiler::OpType get_profiler_operation_type() {
+    if constexpr (std::is_same_v<OperationType, HostOperation>) {
+        return op_profiler::OpType::tt_dnn_cpu;
+    } else if constexpr (std::is_same_v<OperationType, DeviceOperation>) {
+        return op_profiler::OpType::tt_dnn_device;
+    } else if constexpr (std::is_same_v<OperationType, ExternalOperation>) {
+        return op_profiler::OpType::python_fallback;
+    } else {
+        static_assert(always_false_v<false>, "OperationType is not supported!");
+    }
 }
 
-std::vector<Tensor> run(
-    const HostOperation& operation,
-    const std::vector<Tensor>& input_tensors
-) {
+template <typename Function>
+constexpr auto decorate_operation(const Function& function) {
+#ifndef DEBUG
+    return function;
+#else
+    return [function]<typename Operation, typename... Args>(Operation operation, Args&&... args) {
+        const auto start{std::chrono::steady_clock::now()};
+
+        log_operation(operation, args...);
+
+        auto output_tensors = function(operation, args...);
+
+        const auto end{std::chrono::steady_clock::now()};
+        const std::chrono::duration<double> elapsed_seconds{end - start};
+        tt::log_info(
+            tt::LogOp, "Operation {:50} finished in {:15} seconds", operation.get_type_name(), elapsed_seconds.count());
+
+        return output_tensors;
+    };
+#endif
+}
+std::vector<Tensor> run_host_operation(const HostOperation& operation, const std::vector<Tensor>& input_tensors) {
     ZoneScoped;
-    ZoneName(operation.get_type_name().c_str(),operation.get_type_name().size());
-    log_operation(operation, input_tensors);
+    ZoneName(operation.get_type_name().c_str(), operation.get_type_name().size());
+
+    operation.validate(input_tensors);
 
     auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_cpu);
     auto do_profile = op_profiler::get_profiler_flag();
-    if (do_profile) { detail::setup_profiler(operation, input_tensors); }
+    if (do_profile) {
+        detail::setup_profiler(operation, input_tensors);
+    }
 
     operation.validate(input_tensors);
     auto output_tensors = operation.compute_output_tensors(input_tensors);
@@ -179,14 +212,10 @@ std::vector<Tensor> run(
     return output_tensors;
 }
 
-std::vector<Tensor> run(
+std::vector<Tensor> run_device_operation(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors
-) {
-
-    log_operation(operation, input_tensors, optional_input_tensors);
-
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
     auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
 
     operation.validate(input_tensors, optional_input_tensors);
@@ -201,6 +230,18 @@ std::vector<Tensor> run(
     op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);
 
     return output_tensors;
+}
+}  // namespace detail
+
+std::vector<Tensor> run(const HostOperation& operation, const std::vector<Tensor>& input_tensors) {
+    return detail::decorate_operation(detail::run_host_operation)(operation, input_tensors);
+}
+
+std::vector<Tensor> run(
+    const DeviceOperation& operation,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
+    return detail::decorate_operation(detail::run_device_operation)(operation, input_tensors, optional_input_tensors);
 }
 
 std::vector<Tensor> run_without_autoformat(
@@ -320,6 +361,7 @@ std::vector<Tensor> run_with_autoformat(
     for (auto i = 0; i < output_tensors.size(); i++) {
         formatted_output_tensors.push_back(AutoFormat::format_output_tensor(output_tensors[i], output_shapes[i], device, output_layouts[i]));
     }
+
     return formatted_output_tensors;
 }
 
