@@ -48,7 +48,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
     // Define the bank assignment here.
     std::vector<uint32_t> shuffled_bank_id = {};
     if (not alloc_config.l1_bank_remap.empty()) {
-        log_assert(
+        TT_ASSERT(
             num_banks.total == alloc_config.l1_bank_remap.size(),
             "override l1_bank_remap.size()={} which is not equal to the expected expected_num_l1_banks={} from soc-desc",
             alloc_config.l1_bank_remap.size(), num_banks.total
@@ -110,7 +110,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
         }
     }
 
-    log_assert(
+    TT_ASSERT(
         bank_id_to_bank_offset.size() == num_banks.total,
         "init_compute_and_storage_l1_bank_manager() -- banks setup={} must be equal to the number of bankes expected={}",
         bank_id_to_bank_offset.size(),

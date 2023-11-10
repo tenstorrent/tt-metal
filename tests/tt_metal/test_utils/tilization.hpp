@@ -20,12 +20,12 @@ namespace test_utils {
 // is contiguous
 template <typename T, unsigned int TileHeight=32, unsigned int TileWidth=32>
 std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-    log_assert(
+    TT_ASSERT(
         (rows % TileHeight) == 0,
         "rows={} % TileHeight={} must equal 0",
         rows,
         TileHeight);
-    log_assert(
+    TT_ASSERT(
         (cols % TileWidth) == 0,
         "rows={} % TileHeight={} must equal 0",
         cols,
@@ -51,12 +51,12 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
 // transform it back to row major full tensor. (This function inverts the tilize() function)
 template <typename T, unsigned int TileHeight=32, unsigned int TileWidth=32>
 std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
-    log_assert(
+    TT_ASSERT(
         (rows % TileHeight) == 0,
         "rows={} % TileHeight={} must equal 0",
         rows,
         TileHeight);
-    log_assert(
+    TT_ASSERT(
         (cols % TileWidth) == 0,
         "rows={} % TileHeight={} must equal 0",
         cols,

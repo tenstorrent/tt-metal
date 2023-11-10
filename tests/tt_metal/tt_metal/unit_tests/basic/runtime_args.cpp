@@ -73,7 +73,7 @@ bool verify_result_data_movement(
             case tt::RISCV::NCRISC: {
                 arg_base = NCRISC_L1_ARG_BASE;
             } break;
-            default: log_assert(false, "Only BRISC and NCRISC have runtime arg support");
+            default: log_fatal("Only BRISC and NCRISC have runtime arg support");
         }
         return arg_base;
     };
@@ -160,7 +160,7 @@ bool verify_result_compute(
             case tt::RISCV::COMPUTE: {
                 result_base = TRISC_L1_ARG_BASE;
             } break;
-            default: log_assert(false, "Unknown processor");
+            default: log_fatal("Unknown processor");
         }
         return result_base;
     };

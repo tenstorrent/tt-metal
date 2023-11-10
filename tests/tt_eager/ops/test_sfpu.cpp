@@ -215,7 +215,7 @@ bool run_sfpu_test(string sfpu_name) {
 int main(int argc, char **argv) {
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////

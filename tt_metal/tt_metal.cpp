@@ -299,7 +299,7 @@ namespace detail {
                     l1_arg_base = TRISC_L1_ARG_BASE;
                 }
                 break;
-                default: log_assert(false, "Unsupported {} processor does not support runtime args", riscv);
+                default: log_fatal("Unsupported {} processor does not support runtime args", riscv);
             }
             return l1_arg_base;
         };

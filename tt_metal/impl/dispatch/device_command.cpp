@@ -81,7 +81,7 @@ void DeviceCommand::add_buffer_transfer_instruction(
     this->buffer_transfer_idx += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
 
     this->desc[this->num_buffer_transfers_idx]++;
-    tt::log_assert(
+    TT_ASSERT(
         this->desc[this->num_buffer_transfers_idx] <= DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS,
         "Surpassing the limit of {} on possible buffer transfers in a single command",
         DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS);

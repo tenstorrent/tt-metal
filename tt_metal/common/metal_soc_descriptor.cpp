@@ -14,7 +14,7 @@
 #include "yaml-cpp/yaml.h"
 
 CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_channel(int dram_chan) const {
-    tt::log_assert(
+    TT_ASSERT(
         dram_chan < this->preferred_worker_dram_core.size(),
         "dram_chan={} must be within range of preferred_worker_dram_core.size={}",
         dram_chan,
@@ -23,7 +23,7 @@ CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_channel(int dr
 };
 
 CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_channel(int dram_chan) const {
-    tt::log_assert(
+    TT_ASSERT(
         dram_chan < this->preferred_eth_dram_core.size(),
         "dram_chan={} must be within range of preferred_eth_dram_core.size={}",
         dram_chan,
@@ -32,7 +32,7 @@ CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_channel(int dram_
 };
 
 size_t metal_SocDescriptor::get_address_offset(int dram_chan) const {
-    tt::log_assert(
+    TT_ASSERT(
         dram_chan < this->dram_address_offsets.size(),
         "dram_chan={} must be within range of dram_address_offsets.size={}",
         dram_chan,

@@ -109,13 +109,13 @@ std::unordered_map<chip_id_t, metal_SocDescriptor> get_metal_desc_from_tt_desc(
 void Cluster::open_device(
     const std::string &sdesc_path, const std::string &ndesc_path, const bool &skip_driver_allocs) {
 #ifdef ARCH_GRAYSKULL
-    tt::log_assert(
+    TT_FATAL(
         this->arch_ == tt::ARCH::GRAYSKULL,
         "Arch={} doesn't match compile-time build for GRAYSKULL",
         get_string(this->arch_));
 #endif
 #ifdef ARCH_WORMHOLE
-    tt::log_assert(
+    TT_FATAL(
         (this->arch_ == tt::ARCH::WORMHOLE_B0) || (this->arch_ == tt::ARCH::WORMHOLE),
         "Arch={} doesn't match compile-time build for WORMHOLE",
         get_string(this->arch_));
@@ -372,7 +372,7 @@ void Cluster::write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_
     int chip_id, d_chan, d_subchannel;
     std::tie(chip_id, d_chan, d_subchannel) = dram;
     const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
-    tt::log_assert(
+    TT_ASSERT(
         d_chan < desc_to_use.dram_cores.size(),
         "Bounds-Error -- dram_channel={} is outside of num_dram_channels={}",
         d_chan,
@@ -390,7 +390,7 @@ void Cluster::read_dram_vec(
     int chip_id, d_chan, d_subchannel;
     std::tie(chip_id, d_chan, d_subchannel) = dram;
     const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
-    tt::log_assert(
+    TT_ASSERT(
         d_chan < desc_to_use.dram_cores.size(),
         "Bounds-Error -- dram_channel={} is outside of num_dram_channels={}",
         d_chan,

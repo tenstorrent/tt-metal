@@ -75,11 +75,11 @@ int main(int argc, char **argv) {
         pass &= test_compile_args({0, 68, 0, 124}, device_id);
         pass &= test_compile_args({1, 5, 0, 124}, device_id);
 
-        log_assert(std::filesystem::exists(binary_path_str), "Expected kernel to be compiled!");
+        TT_FATAL(std::filesystem::exists(binary_path_str), "Expected kernel to be compiled!");
 
         std::filesystem::path binary_path{binary_path_str};
         auto num_built_kernels = std::distance(std::filesystem::directory_iterator(binary_path), std::filesystem::directory_iterator{});
-        log_assert(num_built_kernels == 2, "Expected compute kernel test_compile_args to be compiled twice!");
+        TT_FATAL(num_built_kernels == 2, "Expected compute kernel test_compile_args to be compiled twice!");
 
     } catch (const std::exception &e) {
         pass = false;

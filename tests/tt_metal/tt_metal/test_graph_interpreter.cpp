@@ -109,7 +109,7 @@ const map<string, std::function<float(float, float)>> binary_op_to_function = {
 bool run_chained_sfpu_test(int chain_length) {
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     TT_ASSERT(chain_length > 0 && chain_length <= 10, "Cannot have a graph of more than 10 ops in L1");
 
@@ -323,7 +323,7 @@ bool run_chained_sfpu_test(int chain_length) {
 bool run_binary_add_and_then_eltwise_gelu_test() {
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     uint32_t chain_length = 2;
     bool pass = true;
@@ -547,7 +547,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
 bool run_forked_binary_test() {
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     int chain_length = 10;
 

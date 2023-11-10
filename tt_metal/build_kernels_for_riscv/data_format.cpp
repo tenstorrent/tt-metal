@@ -76,11 +76,11 @@ DataFormat check_consistent_format_within_operand(DataFormat data_format[NUM_OPE
         }
 
         if (data_format[i] != DataFormat::Invalid) {
-            log_assert((ALL_VALID_FORMATS.find(data_format[i]) != ALL_VALID_FORMATS.end()),
+            TT_FATAL(ALL_VALID_FORMATS.find(data_format[i]) != ALL_VALID_FORMATS.end(),
                 "Format = {} not supported", data_format[i]);
 
             if(last_valid_format != DataFormat::Invalid) {
-                log_assert((is_exp_b_format(data_format[i]) == is_exp_b_format(last_valid_format)),
+                TT_FATAL(is_exp_b_format(data_format[i]) == is_exp_b_format(last_valid_format),
                     "All input data-formats must have the same exponent format.");
                 // dump_data_formats(data_format);
                 last_valid_format = data_format[i];
@@ -97,7 +97,7 @@ DataFormat check_same_format_within_operand(DataFormat data_format[NUM_OPERANDS]
     DataFormat last_valid_format = DataFormat::Invalid;
     for (int i = 0; i < NUM_OPERANDS; i++) {
         if (data_format[i] != DataFormat::Invalid && last_valid_format != DataFormat::Invalid) {
-            log_assert(data_format[i] == last_valid_format,
+            TT_FATAL(data_format[i] == last_valid_format,
                 "Not all buffer data-formats within this operand are the same");
 
             // dump_data_formats(data_format);
@@ -112,7 +112,7 @@ DataFormat check_valid_formats_within_operand(DataFormat data_format[NUM_OPERAND
     DataFormat last_valid_format = DataFormat::Invalid;
     for (int i = 0; i < NUM_OPERANDS; i++) {
         if (data_format[i] != DataFormat::Invalid) {
-            log_assert((ALL_VALID_FORMATS.find(data_format[i]) != ALL_VALID_FORMATS.end()),
+            TT_FATAL(ALL_VALID_FORMATS.find(data_format[i]) != ALL_VALID_FORMATS.end(),
                 "Format = {} not supported", data_format[i]);
             last_valid_format = data_format[i];
         }
@@ -127,7 +127,7 @@ void check_consistent_format_across_input_operands(DataFormat input_format[NUM_O
     DataFormat last_input_valid_format = check_consistent_format_within_operand(input_format);
     DataFormat last_param_valid_format = check_consistent_format_within_operand(param_format);
     if (last_input_valid_format != DataFormat::Invalid && last_param_valid_format != DataFormat::Invalid) {
-        log_assert((is_exp_b_format(last_input_valid_format) == is_exp_b_format(last_param_valid_format)),
+        TT_FATAL(is_exp_b_format(last_input_valid_format) == is_exp_b_format(last_param_valid_format),
             "Formats don't have same exponent width");
     }
 }
@@ -162,19 +162,16 @@ void check_valid_in_out_data_formats(DataFormat input_formats[NUM_OPERANDS], Dat
     DataFormat last_valid_input_format = check_consistent_format_within_operand(input_formats);
     DataFormat last_valid_param_format = check_consistent_format_within_operand(param_formats);
     if (last_valid_input_format != DataFormat::Invalid && last_valid_param_format != DataFormat::Invalid) {
-        log_assert((is_exp_b_format(last_valid_input_format) == is_exp_b_format(last_valid_param_format)),
+        TT_FATAL(is_exp_b_format(last_valid_input_format) == is_exp_b_format(last_valid_param_format),
             "Input format = {} and Param format = {} must have same exp width", last_valid_input_format, last_valid_param_format);
     }
 
     //If intermediate buffers are used, check they have same exp width as inputs
     DataFormat last_valid_intermed_format = check_consistent_format_within_operand(intermed_formats);
     if (last_valid_input_format != DataFormat::Invalid && last_valid_intermed_format != DataFormat::Invalid) {
-        log_assert((is_exp_b_format(last_valid_input_format) == is_exp_b_format(last_valid_intermed_format)),
+        TT_FATAL(is_exp_b_format(last_valid_input_format) == is_exp_b_format(last_valid_intermed_format),
             "Input format = {} and Intermed format = {} must have same exp width", last_valid_input_format, last_valid_intermed_format);
     }
-
-    // DataFormat last_out_valid_format = check_valid_formats_within_operand(output_formats);
-    // log_assert((last_out_valid_format != DataFormat::Invalid), "Output format not found");
 }
 
 std::vector<DataFormat> get_unpack_src_formats(DataFormat input_formats[NUM_OPERANDS], DataFormat param_formats[NUM_OPERANDS], DataFormat intermed_formats[NUM_OPERANDS]) {
@@ -205,7 +202,7 @@ const DataFormat get_single_unpack_dst_format(const DataFormat src_format, const
 
     DataFormat dst_format = src_format;
     if (src_format == DataFormat::Float32){
-        log_assert((unpack_conditional_dst_format == DataFormat::Float16) || (unpack_conditional_dst_format == DataFormat::Float16_b) || (unpack_conditional_dst_format == DataFormat::Tf32),
+        TT_FATAL((unpack_conditional_dst_format == DataFormat::Float16) || (unpack_conditional_dst_format == DataFormat::Float16_b) || (unpack_conditional_dst_format == DataFormat::Tf32),
                     "fp32 conditional format can only be fp16a/b or fp32");
         dst_format = unpack_conditional_dst_format;
     } else if (is_bfp_format(src_format)) {
@@ -280,7 +277,7 @@ const DataFormat get_single_pack_src_format(
     } else if ((input_format == DataFormat::Invalid) || (output_format == DataFormat::Invalid)) {
         pack_src_format =  DataFormat::Invalid;
     } else if (fp32_dest_acc_en) {
-        log_assert(arch != tt::ARCH::GRAYSKULL, "Dest Fp32 mode is not supported for arch grayskull");
+        TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Dest Fp32 mode is not supported for arch grayskull");
 
         if (is_bfp_format(output_format)) {
             pack_src_format = DataFormat::Bfp8_b;
@@ -289,10 +286,10 @@ const DataFormat get_single_pack_src_format(
         } else if(output_format == DataFormat::Float16){
             pack_src_format = DataFormat::Float16_b;
         } else {
-            log_assert(false, "No valid conversion from fp32 dest to output format = {}", output_format);
+            log_fatal("No valid conversion from fp32 dest to output format = {}", output_format);
         }
     } else if (int_fpu_en) {
-        log_assert(arch != tt::ARCH::GRAYSKULL, "Integer math is not supported for arch grayskull");
+        TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Integer math is not supported for arch grayskull");
         // If output is integer, then pack_src_format is integer as conversion in packer is not supported
         // If output if float, then pack_src_format is Float32 as sfpu outut if Float32
         // if (tt::is_integer_format(output_format)) {
@@ -303,11 +300,11 @@ const DataFormat get_single_pack_src_format(
     } else if ( (!is_input_or_output_float32 && input_exp_width == output_exp_width ) || condition_exp_float32_match_output || output_format == DataFormat::Float32) {
         if (is_input_or_output_float32) {
             //Assert that pack_src_format has same exp width as input format
-            log_assert((unpack_conditional_dst_format == DataFormat::Float16_b || unpack_conditional_dst_format == DataFormat::Float16),
+            TT_FATAL((unpack_conditional_dst_format == DataFormat::Float16_b || unpack_conditional_dst_format == DataFormat::Float16),
                         "fp32 conditional format can only be fp16a/b");
 
             if(input_format != DataFormat::Float32) {
-                log_assert((input_exp_width == fp32_condition_exp_width),
+                TT_FATAL((input_exp_width == fp32_condition_exp_width),
                     "Input format exponent width = {}, must match pack src format exponent width = {}", input_format, unpack_conditional_dst_format);
             }
             pack_src_format = unpack_conditional_dst_format;
@@ -319,7 +316,7 @@ const DataFormat get_single_pack_src_format(
     } else {
         //Inputs and outputs are different exponent widths, gs/wha0 only support this mode for fp16
         if(arch != tt::ARCH::WORMHOLE_B0) {
-            log_assert((output_format == DataFormat::Float16_b) || (output_format == DataFormat::Float16),
+            TT_FATAL((output_format == DataFormat::Float16_b) || (output_format == DataFormat::Float16),
                 "Exponent width conversion is only supported for float16 formats for grayskull/wormhole_a0");
         }
 
@@ -334,7 +331,7 @@ const DataFormat get_single_pack_src_format(
         if (pack_src_format_tmp != DataFormat::Float32) {
             pack_src_format = CONVERT_EXP_WIDTH.at(pack_src_format_tmp);
             if (input_format != DataFormat::Float32) {
-                log_assert(input_exp_width == get_exp_precison(pack_src_format),
+                TT_FATAL(input_exp_width == get_exp_precison(pack_src_format),
                     "Input format exponent width = {}, must match pack src format exponent width = {}", input_format, pack_src_format);
             }
         } else {

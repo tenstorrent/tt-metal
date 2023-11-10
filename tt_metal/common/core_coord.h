@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <limits>
 #include "common/assert.hpp"
+#include "common/logger.hpp"
 #include "third_party/umd/device/tt_xy_pair.h"
 
 using std::pair;
@@ -51,7 +52,7 @@ struct CoreRange {
     }
 
     CoreRange(const CoreCoord & start, const CoreCoord & end) {
-        tt::log_assert(
+        TT_ASSERT(
             end.x >= start.x and end.y >= start.y,
             "Invalid core range for start: {}, end: {}", start.str(), end.str());
 
@@ -63,6 +64,11 @@ struct CoreRange {
     CoreRange& operator=(const CoreRange &other) = default;
     CoreRange(CoreRange &&other) = default;
     CoreRange& operator=(CoreRange &&other) = default;
+
+    void validate() {
+        TT_FATAL(end.x >= start.x and end.y >= start.y,
+            "Invalid core range for start: {}, end: {}", start.str(), end.str());
+    }
 
     std::optional<CoreRange> intersects ( const CoreRange & other ) const
     {
@@ -191,7 +197,7 @@ class CoreRangeSet {
           bool first_core_below_second = first_core_range.start.y > second_core_range.end.y;
           auto no_overlap = first_core_left_of_second or first_core_right_of_second or first_core_above_second or first_core_below_second;
           if (not no_overlap) {
-            TT_THROW("Cannot create CoreRangeSet with specified core ranges because core ranges " + first_core_range.str() + " and " + second_core_range.str() + " overlap!");
+              tt::log_fatal(("Cannot create CoreRangeSet with specified core ranges because core ranges " + first_core_range.str() + " and " + second_core_range.str() + " overlap!").c_str());
           }
         }
       }

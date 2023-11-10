@@ -553,7 +553,7 @@ void Program::compile( Device * device )
     detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("CompileProgram");
     bool profile_kernel = getDeviceProfilerState();
     std::vector<std::future<void>> events;
-    log_assert(
+    TT_FATAL(
         !(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
     tt_set_profiler_state_for_debug_print(profile_kernel);
 

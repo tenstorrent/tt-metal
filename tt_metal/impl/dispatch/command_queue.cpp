@@ -719,7 +719,7 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<uint32_t>& dst, bo
     ZoneScopedN("CommandQueue_read_buffer");
     uint32_t read_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + buffer.size();
     if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + read_buffer_command_size >= DeviceCommand::HUGE_PAGE_SIZE) {
-        tt::log_assert(read_buffer_command_size <= DeviceCommand::HUGE_PAGE_SIZE - CQ_START, "EnqueueReadBuffer command is too large");
+        TT_ASSERT(read_buffer_command_size <= DeviceCommand::HUGE_PAGE_SIZE - CQ_START, "EnqueueReadBuffer command is too large");
         this->wrap();
     }
     tt::log_debug(tt::LogDispatch, "EnqueueReadBuffer");
@@ -770,7 +770,7 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<uint32_t>& src, b
 
     uint32_t write_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + buffer.size();
     if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + write_buffer_command_size >= DeviceCommand::HUGE_PAGE_SIZE) {
-        tt::log_assert(
+        TT_ASSERT(
             write_buffer_command_size <= DeviceCommand::HUGE_PAGE_SIZE - CQ_START,
             "EnqueueWriteBuffer command is too large: {}",
             write_buffer_command_size);
@@ -823,7 +823,7 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
 
     if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + host_data_and_device_command_size >=
         DeviceCommand::HUGE_PAGE_SIZE) {
-        tt::log_assert(
+        TT_ASSERT(
             host_data_and_device_command_size <= DeviceCommand::HUGE_PAGE_SIZE - CQ_START, "EnqueueProgram command size too large");
         this->wrap();
     }

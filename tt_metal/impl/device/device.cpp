@@ -389,7 +389,7 @@ uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id) const {
 }
 
 CoreCoord Device::core_from_dram_channel(uint32_t dram_channel) const {
-    log_assert(
+    TT_ASSERT(
         dram_channel < this->num_dram_channels(),
         "Bounds-Error -- dram_channel={} is outside of num_dram_channels={}",
         dram_channel,
