@@ -7,9 +7,6 @@ from typing import Optional
 import tt_lib as ttl
 
 
-Device = ttl.device.Device
-
-
 DataType = ttl.tensor.DataType
 uint32 = DataType.UINT32
 float32 = DataType.FLOAT32
@@ -52,20 +49,18 @@ class Tensor:
         if self.layout != ROW_MAJOR_LAYOUT:
             raise RuntimeError("Tensor must be in ROW_MAJOR layout to use slicing!")
 
-        @ttl.tensor.decorate_external_operation
-        def torch_getitem(tensor, slices):
-            return tensor[slices]
-
         if self._tensor.storage_type() == ttl.tensor.StorageType.DEVICE:
             tensor = self
             tensor = from_device(tensor)
             tensor = to_torch(tensor)
-            tensor = torch_getitem(tensor, slices)
+            ttl.tensor.log_external_operation(tensor.__getitem__, tensor, slices)
+            tensor = tensor[slices]
             tensor = from_torch(tensor, dtype=self.dtype)
         else:
             tensor = self
             tensor = to_torch(tensor)
-            tensor = torch_getitem(tensor, slices)
+            ttl.tensor.log_external_operation(tensor.__getitem__, tensor, slices)
+            tensor = tensor[slices]
             tensor = from_torch(tensor, dtype=self.dtype)
         return tensor
 
@@ -93,12 +88,8 @@ def from_torch(
         Tensor([ [1.375, -1.30469, -0.714844],
             [-0.761719, 0.53125, -0.652344]], dtype=bfloat16 )
     """
-
-    @ttl.tensor.decorate_external_operation
-    def impl(tensor, dtype):
-        return Tensor(ttl.tensor.Tensor(tensor, dtype))
-
-    return impl(tensor, dtype)
+    ttl.tensor.log_external_operation(from_torch, tensor)
+    return Tensor(ttl.tensor.Tensor(tensor, dtype))
 
 
 def to_torch(tensor: Tensor) -> "torch.Tensor":
@@ -117,20 +108,16 @@ def to_torch(tensor: Tensor) -> "torch.Tensor":
         tensor([[-0.3008, -0.8438,  0.3242],
                 [ 0.9023, -0.5820,  0.5312]], dtype=torch.bfloat16)
     """
+    ttl_tensor = tensor._tensor
+    ttl.tensor.log_external_operation(to_torch, ttl_tensor)
 
-    @ttl.tensor.decorate_external_operation
-    def impl(tensor):
-        ttl_tensor = tensor._tensor
+    if ttl_tensor.layout() != ROW_MAJOR_LAYOUT:
+        raise RuntimeError("ttnn.Tensor has to be in ROW_MAJOR Layout to be convered to torch.Tensor")
 
-        if ttl_tensor.layout() != ROW_MAJOR_LAYOUT:
-            raise RuntimeError("ttnn.Tensor has to be in ROW_MAJOR Layout to be convered to torch.Tensor")
+    if ttl_tensor.storage_type() == ttl.tensor.StorageType.DEVICE:
+        raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch!")
 
-        if ttl_tensor.storage_type() == ttl.tensor.StorageType.DEVICE:
-            raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch!")
-
-        return ttl_tensor.to_torch()
-
-    return impl(tensor)
+    return ttl_tensor.to_torch()
 
 
 def to_device(tensor, device, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG):
@@ -153,13 +140,9 @@ def to_device(tensor, device, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFI
         >>> print(tensor_on_device[0,0,:3])
         Tensor([ 0.800781, -0.455078, -0.585938], dtype=bfloat16 )
     """
-
-    @ttl.tensor.decorate_external_operation
-    def impl(tensor):
-        ttl_tensor = tensor._tensor
-        return Tensor(ttl_tensor.to(device, memory_config))
-
-    return impl(tensor)
+    ttl_tensor = tensor._tensor
+    ttl.tensor.log_external_operation(to_device, ttl_tensor)
+    return Tensor(ttl_tensor.to(device, memory_config))
 
 
 def from_device(tensor):
@@ -179,13 +162,9 @@ def from_device(tensor):
         >>> print(tensor_on_host[0,0,:3])
         Tensor([ 0.365234, 0.130859, 0.75], dtype=bfloat16 )
     """
-
-    @ttl.tensor.decorate_external_operation
-    def impl(tensor):
-        ttl_tensor = tensor._tensor
-        return Tensor(ttl_tensor.cpu())
-
-    return impl(tensor)
+    ttl_tensor = tensor._tensor
+    ttl.tensor.log_external_operation(from_device, ttl_tensor)
+    return Tensor(ttl_tensor.cpu())
 
 
 def to_layout(tensor, layout: Layout):
@@ -216,9 +195,9 @@ def to_layout(tensor, layout: Layout):
     return Tensor(ttl_tensor)
 
 
-def free(tensor: Tensor) -> None:
+def free(tensor: Tensor):
     """
-    free(tensor: ttnn.Tensor) -> None
+    free(tensor: ttnn.Tensor)
 
     Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
 
@@ -232,16 +211,10 @@ def free(tensor: Tensor) -> None:
         >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
         >>> ttnn.free(tensor)
     """
-
-    @ttl.tensor.decorate_external_operation
-    def impl(tensor):
-        tensor._tensor.deallocate(force=True)
-
-    impl(tensor)
+    tensor._tensor.deallocate(force=True)
 
 
 __all__ = [
-    "Device",
     "DataType",
     "uint32",
     "float32",
@@ -253,8 +226,8 @@ __all__ = [
     "TILE_LAYOUT",
     "TILE_SIZE",
     "Tensor",
-    "from_torch",
-    "to_torch",
+    "from_tensor",
+    "to_tensor",
     "to_device",
     "from_device",
     "to_layout",

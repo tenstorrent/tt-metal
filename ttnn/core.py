@@ -78,7 +78,7 @@ def _reshape_to_4D(tensor):
     if len(tensor.shape) > 4:
         raise RuntimeError("Tensor cannot have more than 4 dimensions!")
     num_missing_dims = 4 - len(tensor.shape)
-    shape = tuple(([1] * num_missing_dims) + tensor.shape)
+    shape = ([1] * num_missing_dims) + tensor.shape
     return reshape(tensor, shape=shape)
 
 
@@ -165,7 +165,7 @@ def matmul(
 
     input_shape_a = input_tensor_a.shape
     input_shape_b = input_tensor_b.shape
-    output_shape = tuple(input_shape_a[:-1] + input_shape_b[-1:])
+    output_shape = input_shape_a[:-1] + input_shape_b[-1:]
 
     if not isinstance(input_tensor_a, Tensor):
         raise RuntimeError("Expected first argument to be a ttnn.Tensor")
@@ -199,8 +199,8 @@ def matmul(
     else:
         *batch_shape_b, height_b, width_b = input_shape_b
 
-    input_tensor_a = reshape(input_tensor_a, tuple(batch_shape_a + [height_a, width_a]))
-    input_tensor_b = reshape(input_tensor_b, tuple(batch_shape_b + [height_b, width_b]))
+    input_tensor_a = reshape(input_tensor_a, batch_shape_a + [height_a, width_a])
+    input_tensor_b = reshape(input_tensor_b, batch_shape_b + [height_b, width_b])
 
     input_tensor_a = _reshape_to_4D(input_tensor_a)
     input_tensor_b = _reshape_to_4D(input_tensor_b)
@@ -209,49 +209,53 @@ def matmul(
         raise RuntimeError("The width of the first tensor must be equal to the height of the second tensor")
 
     if core_grid != None:
-        if height_a % TILE_SIZE != 0 or width_a % TILE_SIZE != 0:
-            raise TypeError("The last two dimensions of the first tensor must be a multiple of 32")
+        try:
+            if height_a % TILE_SIZE != 0 or width_a % TILE_SIZE != 0:
+                raise TypeError("The last two dimensions of the first tensor must be a multiple of 32")
 
-        if height_b % TILE_SIZE != 0 or width_b % TILE_SIZE != 0:
-            raise TypeError("The last two dimensions of the second tensor must be a multiple of 32")
+            if height_b % TILE_SIZE != 0 or width_b % TILE_SIZE != 0:
+                raise TypeError("The last two dimensions of the second tensor must be a multiple of 32")
 
-        per_core_M = int(math.ceil((height_a / TILE_SIZE) / core_grid[0]))
-        per_core_N = int(math.ceil(width_b / TILE_SIZE) / core_grid[1])
+            per_core_M = int(math.ceil((height_a / TILE_SIZE) / core_grid[0]))
+            per_core_N = int(math.ceil(width_b / TILE_SIZE) / core_grid[1])
 
-        in0_block_w = 1
-        out_subblock_h = 1
-        out_subblock_w = 1
+            in0_block_w = 1
+            out_subblock_h = 1
+            out_subblock_w = 1
 
-        if per_core_M % out_subblock_h != 0:
-            raise RuntimeError("Invalid matmul")
+            if per_core_M % out_subblock_h != 0:
+                raise RuntimeError("Invalid matmul")
 
-        if per_core_N % out_subblock_w != 0:
-            raise RuntimeError("Invalid matmul")
+            if per_core_N % out_subblock_w != 0:
+                raise RuntimeError("Invalid matmul")
 
-        if out_subblock_h * out_subblock_w > 8:
-            raise RuntimeError("Cannot have more than 8 output tiles")
+            if out_subblock_h * out_subblock_w > 8:
+                raise RuntimeError("Cannot have more than 8 output tiles")
 
-        ttl_input_tensor_a = input_tensor_a._tensor
-        ttl_input_tensor_b = input_tensor_b._tensor
-        ttl_output_tensor = ttl.operations.primary.matmul(
-            ttl_input_tensor_a,
-            ttl_input_tensor_b,
-            program_config=ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
-                in0_block_w=in0_block_w,  # k
-                out_subblock_h=out_subblock_h,  # m
-                out_subblock_w=out_subblock_w,  # n
-                per_core_M=per_core_M,
-                per_core_N=per_core_N,
-                transpose_mcast=False,
-                fused_activation=None,
-            ),
-            output_mem_config=memory_config,
-        )
-        output_tensor = Tensor(ttl_output_tensor)
+            ttl_input_tensor_a = input_tensor_a._tensor
+            ttl_input_tensor_b = input_tensor_b._tensor
+            ttl_output_tensor = ttl.operations.primary.matmul(
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                program_config=ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                    in0_block_w=in0_block_w,  # k
+                    out_subblock_h=out_subblock_h,  # m
+                    out_subblock_w=out_subblock_w,  # n
+                    per_core_M=per_core_M,
+                    per_core_N=per_core_N,
+                    fused_activation=None,
+                ),
+                output_mem_config=memory_config,
+            )
 
-    elif height_a == 1 and width_b == 1:  # dot product
-        input_tensor_b = reshape(input_tensor_b, tuple(input_tensor_b.shape[:-2] + [width_b, height_b]))
+            return Tensor(ttl_output_tensor)
+        except Exception as e:
+            logger.warning("Matmul with user-specified core grid failed to run. Defaulting to general implementation.")
+            logger.debug(e)
+
+    if height_a == 1 and width_b == 1:  # dot product
+        input_tensor_b = reshape(input_tensor_b, input_tensor_b.shape[:-2] + [width_b, height_b])
 
         ttl_input_tensor_a = input_tensor_a._tensor
         ttl_input_tensor_b = input_tensor_b._tensor
@@ -329,7 +333,7 @@ def add(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, al
     if not isinstance(input_tensor_a, Tensor):
         raise TypeError("Expected first argument to be a ttnn.Tensor")
 
-    original_shape = tuple(input_tensor_a.shape)
+    original_shape = input_tensor_a.shape
     input_tensor_a = _reshape_to_4D(input_tensor_a)
     ttl_input_tensor_a = input_tensor_a._tensor
 
@@ -413,7 +417,7 @@ def sub(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, al
     if not isinstance(input_tensor_a, Tensor):
         raise TypeError("Expected first argument to be a ttnn.Tensor")
 
-    original_shape = tuple(input_tensor_a.shape)
+    original_shape = input_tensor_a.shape
     input_tensor_a = _reshape_to_4D(input_tensor_a)
     ttl_input_tensor_a = input_tensor_a._tensor
 
@@ -562,20 +566,12 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
 
     """
 
-    if not isinstance(shape, tuple):
-        raise RuntimeError("order must be a tuple")
-
     ttl_input_tensor = input_tensor._tensor
 
-    if input_tensor.shape == shape:
-        return input_tensor
+    if ttl_input_tensor.layout() == ROW_MAJOR_LAYOUT:
+        return Tensor(ttl_input_tensor.reshape(shape))
 
-    if input_tensor.layout == ROW_MAJOR_LAYOUT:
-        # TODO: figure out how to make this work
-        if input_tensor.shape != [1, 64, 4, 32]:
-            return Tensor(ttl_input_tensor.reshape(shape))
-
-    if input_tensor.layout == TILE_LAYOUT:
+    elif ttl_input_tensor.layout() == TILE_LAYOUT:
         *_, old_height, old_width = input_tensor.shape
         *_, new_height, new_width = shape
         if (
@@ -590,16 +586,12 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
         w, z, y, x = shape
         return Tensor(ttl.tensor.reshape(ttl_input_tensor, w, z, y, x))
     except:
-
-        @ttl.tensor.decorate_external_operation
-        def torch_reshape(tensor, shape):
-            return tensor.reshape(shape).contiguous()
-
         device = ttl_input_tensor.device()
         tensor = to_layout(input_tensor, ROW_MAJOR_LAYOUT)
         tensor = from_device(tensor)
         tensor = to_torch(tensor)
-        tensor = torch_reshape(tensor, shape)
+        ttl.tensor.log_external_operation(tensor.reshape, ttl_input_tensor, shape)
+        tensor = tensor.reshape(shape=shape).contiguous()
         tensor = from_torch(tensor, input_tensor.dtype)
         tensor = to_device(tensor, device)
         return tensor
@@ -624,24 +616,17 @@ def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
 
     """
 
-    if not isinstance(order, tuple):
-        raise RuntimeError("order must be a tuple")
-
     ttl_input_tensor = input_tensor._tensor
 
     try:
         return Tensor(ttl.tensor.permute(input_tensor._tensor, order))
     except:
-
-        @ttl.tensor.decorate_external_operation
-        def torch_permute(tensor, order):
-            return tensor.permute(order).contiguous()
-
         device = ttl_input_tensor.device()
         tensor = to_layout(input_tensor, ROW_MAJOR_LAYOUT)
         tensor = from_device(tensor)
         tensor = to_torch(tensor)
-        tensor = torch_permute(tensor, order)
+        ttl.tensor.log_external_operation(tensor.permute, ttl_input_tensor, order)
+        tensor = tensor.permute(order).contiguous()
         tensor = from_torch(tensor, input_tensor.dtype)
         tensor = to_device(tensor, device)
         return tensor
@@ -677,60 +662,6 @@ def softmax(input_tensor: Tensor, dim: int) -> Tensor:
     return Tensor(ttl_output_tensor)
 
 
-def embedding(
-    input_tensor: Tensor,
-    weights: Tensor,
-    *,
-    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
-):
-    """
-    embedding(input_tensor: ttnn.Tensor, weights: ttnn.Tensor) -> None
-
-    Retrieves word embeddings using input_tensor. The input_tensor is a list of indices, and the embedding matrix, and the output is the corresponding word embeddings.
-
-    Args:
-        * :attr:`input_tensor`: the indices ttnn.Tensor
-        * :attr:`weights`: the embeddings ttnn.Tensor that correspond to the indices ttnn.Tensor
-
-    Example::
-        >>> device_id = 0
-        >>> device = ttnn.open(device_id)
-        >>> input_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor([[1, 2, 4, 5], [4, 3, 2, 9]]), dtype=ttnn.uint32), device)
-        >>> # an embedding matrix containing 10 tensors of size 4
-        >>> weights = ttnn.to_device(ttnn.from_torch(torch.rand(10, 4), dtype=ttnn.bfloat16), device)
-        >>> ttnn.embedding(input_tensor, weights)
-        Tensor([ [[1, 0.106445, 0.988281, 0.59375],
-            [0.212891, 0.964844, 0.199219, 0.996094],
-            [3.78362e-38, 0, 7.89785e-39, 0],
-            [8.04479e-38, 0, 1.25815e-38, 0]],
-
-           [[2.71833e-38, 0, 3.59995e-38, 0],
-            [7.60398e-38, 0, 1.83671e-38, 0],
-            [2.22242e-38, 0, 1.88263e-38, 0],
-            [1.35917e-38, 0, 4.49994e-39, 0]]], dtype=bfloat16 )
-
-    """
-    if len(input_tensor.shape) != 2:
-        raise RuntimeError("Input Tensor must have strictly 2 dimensions!")
-    if len(weights.shape) != 2:
-        raise RuntimeError("Weight Tensor must have strictly 2 dimensions!")
-
-    *_, hidden_embedding_dim = tuple(weights.shape)
-    weights = _reshape_to_4D(weights)
-
-    *_, batch_size, sentence_size = input_tensor.shape
-    input_tensor = reshape(input_tensor, shape=(batch_size, 1, sentence_size, 1))
-
-    split_weights = False
-    tilized = False
-    embeddings = Tensor(
-        ttl.tensor.embeddings(input_tensor._tensor, weights._tensor, split_weights, tilized, memory_config)
-    )
-    embeddings = reshape(embeddings, shape=(batch_size, sentence_size, hidden_embedding_dim))
-
-    return embeddings
-
-
 __all__ = [
     "matmul",
     "add",
@@ -741,5 +672,4 @@ __all__ = [
     "reshape",
     "permute",
     "softmax",
-    "embedding",
 ]
