@@ -20,7 +20,7 @@ void static_assert_sfpu_type_dependent() {
 inline void eltwise_unary_sfpu_configure_addrmod();
 inline void eltwise_unary_sfpu_configure_mop();
 
-template <SfpuType sfpu_op, bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <SfpuType sfpu_op, bool APPROXIMATE, DstSync Dst = DstSync::SyncFull, bool IS_INT_SFPU_EN=false>
 inline void llk_math_eltwise_unary_sfpu(
     const uint operand,
     uint dst_index, 
