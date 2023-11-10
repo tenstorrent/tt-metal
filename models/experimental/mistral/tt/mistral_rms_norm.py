@@ -18,7 +18,15 @@ class TtRMSNorm(nn.Module):
         super().__init__()
         self.eps = eps
         self.device = device
-        self.weight = torch_to_tt_tensor_rm(state_dict[f"{base_address}weight"], self.device)
+        weight = state_dict[f"{base_address}weight"]
+
+        # converting to bfp8 reduces PCC
+        self.weight = tt_lib.tensor.Tensor(
+            weight.unsqueeze(0).unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
+            weight.unsqueeze(0).unsqueeze(0).unsqueeze(0).shape,
+            tt_lib.tensor.DataType.BFLOAT16,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+        )
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         return tt_lib.tensor.rmsnorm(x, self.eps, self.weight)

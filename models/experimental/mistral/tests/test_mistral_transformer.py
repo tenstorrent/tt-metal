@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
+import tt_lib
 import pytest
 from loguru import logger
 import json
@@ -18,10 +19,14 @@ from models.utility_functions import (
 
 
 @pytest.mark.parametrize(
+    "dtype",
+    (tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B),
+)
+@pytest.mark.parametrize(
     "pcc",
     ((0.99),),
 )
-def test_mistral_transformer_inference(pcc, model_location_generator, device, reset_seeds):
+def test_mistral_transformer_inference(pcc, model_location_generator, device, dtype, reset_seeds):
     prompts = [
         "This is a sample text for single layer execution ",
     ]
@@ -35,6 +40,7 @@ def test_mistral_transformer_inference(pcc, model_location_generator, device, re
 
     model_args.max_batch_size = 1
     model_args.n_layers = 32
+    model_args.WEIGHTS_DTYPE = dtype
     reference_model = Transformer(args=model_args)
     reference_model.load_state_dict(state_dict)
 

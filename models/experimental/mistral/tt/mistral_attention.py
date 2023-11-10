@@ -35,7 +35,13 @@ class TtAttention(nn.Module):
 
         self.scale = self.args.head_dim**-0.5
 
-        self.wq_weights = torch_to_tt_tensor_rm(self.state_dict[f"{base_address}wq.weight"], self.device)
+        wq_weights = self.state_dict[f"{base_address}wq.weight"]
+        self.wq_weights = tt_lib.tensor.Tensor(
+            wq_weights.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
+            wq_weights.unsqueeze(0).unsqueeze(0).shape,
+            self.args.WEIGHTS_DTYPE,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+        )
         self.wq = TtLinear(
             args.dim,
             args.n_heads * args.head_dim,
@@ -43,7 +49,13 @@ class TtAttention(nn.Module):
             device=self.device,
         )
 
-        self.wk_weights = torch_to_tt_tensor_rm(self.state_dict[f"{base_address}wk.weight"], self.device)
+        wk_weights = self.state_dict[f"{base_address}wk.weight"]
+        self.wk_weights = tt_lib.tensor.Tensor(
+            wk_weights.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
+            wk_weights.unsqueeze(0).unsqueeze(0).shape,
+            self.args.WEIGHTS_DTYPE,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+        )
         self.wk = TtLinear(
             args.dim,
             args.n_kv_heads * args.head_dim,
@@ -51,7 +63,13 @@ class TtAttention(nn.Module):
             device=self.device,
         )
 
-        self.wv_weights = torch_to_tt_tensor_rm(self.state_dict[f"{base_address}wv.weight"], self.device)
+        wv_weights = self.state_dict[f"{base_address}wv.weight"]
+        self.wv_weights = tt_lib.tensor.Tensor(
+            wv_weights.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
+            wv_weights.unsqueeze(0).unsqueeze(0).shape,
+            self.args.WEIGHTS_DTYPE,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+        )
         self.wv = TtLinear(
             args.dim,
             args.n_kv_heads * args.head_dim,
@@ -59,7 +77,13 @@ class TtAttention(nn.Module):
             device=self.device,
         )
 
-        self.wo_weights = torch_to_tt_tensor_rm(self.state_dict[f"{base_address}wo.weight"], self.device)
+        wo_weights = state_dict[f"{base_address}wo.weight"]
+        self.wo_weights = tt_lib.tensor.Tensor(
+            wo_weights.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
+            wo_weights.unsqueeze(0).unsqueeze(0).shape,
+            self.args.WEIGHTS_DTYPE,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+        )
         self.wo = TtLinear(
             args.n_heads * args.head_dim,
             args.dim,

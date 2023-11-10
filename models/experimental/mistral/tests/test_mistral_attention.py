@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
+import tt_lib
 import pytest
 from loguru import logger
 import json
@@ -29,11 +30,22 @@ from models.utility_functions import (
     (True, False),
 )
 @pytest.mark.parametrize(
+    "dtype",
+    (tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B),
+)
+@pytest.mark.parametrize(
     "pcc",
     ((0.9793647197892646),),
 )
 def test_mistral_attention_inference(
-    pcc, model_location_generator, device, reset_seeds, empty_ondevice, rotary_embedding_ondevice, softmax_ondevice
+    pcc,
+    model_location_generator,
+    device,
+    reset_seeds,
+    empty_ondevice,
+    rotary_embedding_ondevice,
+    softmax_ondevice,
+    dtype,
 ):
     mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
     state_dict = torch.load(mistral_path / "consolidated.00.pth")
@@ -49,6 +61,7 @@ def test_mistral_attention_inference(
     model_args.FALLBACK_ROTARY_EMBEDDING = rotary_embedding_ondevice
     model_args.FALLBACK_SOFTMAX = softmax_ondevice
     model_args.FALLBACK_EMPTY = empty_ondevice
+    model_args.WEIGHTS_DTYPE = dtype
     tt_model = TtAttention(
         args=model_args,
         state_dict=state_dict,

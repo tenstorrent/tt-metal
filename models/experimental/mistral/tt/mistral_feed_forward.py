@@ -19,8 +19,13 @@ class TtFeedForward(nn.Module):
     ):
         super().__init__()
         self.device = device
-        self.w1_weights = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}w1.weight"], self.device, put_on_device=False
+
+        w1_weights = state_dict[f"{base_address}w1.weight"]
+        self.w1_weights = tt_lib.tensor.Tensor(
+            w1_weights.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
+            w1_weights.unsqueeze(0).unsqueeze(0).shape,
+            args.WEIGHTS_DTYPE,
+            tt_lib.tensor.Layout.ROW_MAJOR,
         )
         self.w1 = TtLinear(
             args.dim,
@@ -28,8 +33,13 @@ class TtFeedForward(nn.Module):
             self.w1_weights,
             device=self.device,
         )
-        self.w2_weights = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}w2.weight"], self.device, put_on_device=False
+
+        w2_weights = state_dict[f"{base_address}w2.weight"]
+        self.w2_weights = tt_lib.tensor.Tensor(
+            w2_weights.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
+            w2_weights.unsqueeze(0).unsqueeze(0).shape,
+            args.WEIGHTS_DTYPE,
+            tt_lib.tensor.Layout.ROW_MAJOR,
         )
         self.w2 = TtLinear(
             args.hidden_dim,
@@ -37,8 +47,13 @@ class TtFeedForward(nn.Module):
             self.w2_weights,
             device=self.device,
         )
-        self.w3_weights = torch_to_tt_tensor_rm(
-            state_dict[f"{base_address}w3.weight"], self.device, put_on_device=False
+
+        w3_weights = state_dict[f"{base_address}w3.weight"]
+        self.w3_weights = tt_lib.tensor.Tensor(
+            w3_weights.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
+            w3_weights.unsqueeze(0).unsqueeze(0).shape,
+            args.WEIGHTS_DTYPE,
+            tt_lib.tensor.Layout.ROW_MAJOR,
         )
         self.w3 = TtLinear(
             args.dim,

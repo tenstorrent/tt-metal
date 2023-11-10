@@ -49,7 +49,13 @@ class TtTransformer(nn.Module):
             ]
         )
         self.norm = TtRMSNorm(args.dim, base_address=f"norm.", state_dict=state_dict, device=device, eps=args.norm_eps)
-        self.output_weight = torch_to_tt_tensor_rm(state_dict["output.weight"], self.device)
+        output_weight = state_dict["output.weight"]
+        self.output_weight = tt_lib.tensor.Tensor(
+            output_weight.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
+            output_weight.unsqueeze(0).unsqueeze(0).shape,
+            args.WEIGHTS_DTYPE,
+            tt_lib.tensor.Layout.ROW_MAJOR,
+        )
         self.output = TtLinear(
             args.dim,
             args.vocab_size,
