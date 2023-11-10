@@ -33,7 +33,7 @@ def test_reshape_negative_1(device, h, w):
     # activations.reshape(-1) is currently not supported
 
     activations = ttnn.from_torch(torch_activations)
-    tt_output = ttnn.reshape(activations, (h * w,))  # TODO: allow passing in -1
+    tt_output = ttnn.reshape(activations, (1, 1, h, w))
     tt_output = ttnn.to_torch(tt_output)
 
     assert_with_pcc(torch_output, tt_output, 0.9999)

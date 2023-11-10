@@ -3,16 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from ttnn.tensor import (
-    Device,
-    DataType,
     uint32,
     float32,
     bfloat16,
     bfloat8_b,
-    MemoryConfig,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
-    Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
     Tensor,
@@ -40,7 +36,6 @@ from ttnn.core import (
     # data operations
     reshape,
     permute,
-    embedding,
     # unary operations
     softmax,
 )

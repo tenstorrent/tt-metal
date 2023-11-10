@@ -6,8 +6,6 @@ import os
 import nbformat
 from nbconvert.preprocessors import ExecutePreprocessor, CellExecutionError
 
-from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
-
 
 def run_all_notebooks(directory_path):
     all_passed = True
@@ -29,7 +27,6 @@ def run_all_notebooks(directory_path):
     return all_passed
 
 
-@skip_for_wormhole_b0
 def test_tutorials():
     script_directory = os.path.dirname(os.path.abspath(__file__))
     directory_path = os.path.join(script_directory, "../../ttnn/tutorials")

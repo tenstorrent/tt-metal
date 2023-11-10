@@ -2,13 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <chrono>
-
-#include "tensor/borrowed_buffer.hpp"
+#include "tt_lib_bindings_tensor.hpp"
 #include "tensor/owned_buffer.hpp"
+#include "tensor/borrowed_buffer.hpp"
 #include "tensor/tensor_impl.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
-#include "tt_lib_bindings_tensor.hpp"
 
 namespace tt::tt_metal::detail {
 Tensor convert_torch_tensor_to_tt_tensor(
@@ -188,66 +186,47 @@ Tensor convert_torch_tensor_to_tt_tensor(
         return tensor;
     }
 
-    auto parse_external_operation(
-        const py::function &external_operation,
-        const py::args &args,
-        const py::kwargs &kwargs,
-        std::optional<std::string> function_name_override = std::nullopt) {
-        std::string function_name;
-        if (function_name_override.has_value()) {
-            function_name = function_name_override.value();
-        } else {
-            function_name = py::cast<std::string>(external_operation.attr("__qualname__"));
-        }
-
-        std::vector<Tensor> input_tensors;
-        tt::stl::reflection::Attributes attributes;
-
-        auto process_name_and_value = [&function_name, &input_tensors, &attributes](
-                                          const auto &name, const auto &value) {
-            py::object torch = py::module_::import("torch");
-            py::object ttnn = py::module_::import("ttnn");
-            if (py::isinstance<Tensor>(value)) {
-                auto tensor = py::cast<Tensor>(value);
-                input_tensors.push_back(tensor);
-            } else if (py::isinstance(value, ttnn.attr("Tensor"))) {
-                auto tensor = py::cast<Tensor>(value.attr("_tensor"));
-                input_tensors.push_back(tensor);
-            } else if (py::isinstance(value, torch.attr("nn").attr("Module"))) {
-                // do nothing
-            } else if (py::isinstance(value, torch.attr("Tensor"))) {
-                auto tensor = detail::convert_torch_tensor_to_tt_tensor(value);
-                input_tensors.push_back(tensor);
-            } else {
-                struct PythonObject {
-                    PythonObject(const py::handle &value) : to_string([value] { return fmt::format("{}", value); }) {}
-                    const std::function<std::string()> to_string;
-                    tt::stl::reflection::Attributes attributes() const { return {{"value", this->to_string()}}; }
-                };
-                attributes.push_back({name, PythonObject(value)});
-            }
-        };
-
-        auto arg_index = 0;
-        for (const auto &&value : args) {
-            auto name = fmt::format("arg_{}", arg_index++);
-            process_name_and_value(name, value);
-        }
-
-        for (const auto &&[name, value] : kwargs) {
-            process_name_and_value(py::cast<std::string>(name), value);
-        }
-
-        auto operation = tt::tt_metal::operation::ExternalOperation{function_name, attributes};
-        return std::make_tuple(operation, input_tensors);
-    }
-
-    void TensorModulePyTensor(py::module &m_tensor) {
+    void TensorModulePyTensor( py::module & m_tensor)
+    {
         m_tensor.def(
             "log_external_operation",
-            [](const py::function &external_operation, const py::args &args, const py::kwargs &kwargs) -> void {
-                auto &&[op, input_tensors] = detail::parse_external_operation(external_operation, args, kwargs);
-                operation::log_operation(op, input_tensors);
+            [](const py::function &fallback_operation, const py::args &args, const py::kwargs &kwargs) -> void {
+
+                auto function_name = py::cast<std::string>(fallback_operation.attr("__qualname__"));
+
+                std::vector<Tensor> input_tensors;
+                tt::stl::reflection::Attributes attributes;
+
+                auto process_name_and_value = [&function_name, &input_tensors, &attributes] (const auto& name, const auto& value) {
+                    py::object torch = py::module_::import("torch");
+                    if (py::isinstance<Tensor>(value)) {
+                        auto tensor = py::cast<Tensor>(value);
+                        input_tensors.push_back(tensor);
+                    }
+                    else if (py::isinstance(value, torch.attr("nn").attr("Module"))) {
+                        // do nothing
+                    }
+                    else if (py::isinstance(value, torch.attr("Tensor"))) {
+                        auto tensor = detail::convert_torch_tensor_to_tt_tensor(value);
+                        input_tensors.push_back(tensor);
+                    }
+                    else {
+                        attributes.push_back({fmt::format("{}", name), fmt::format("{}", value)});
+                    }
+                };
+
+                auto arg_index = 0;
+                for (const auto& value : args) {
+                    auto name = fmt::format("arg_{}", arg_index++);
+                    process_name_and_value(name, value);
+                }
+
+                for (const auto& [name, value] : kwargs) {
+                    process_name_and_value(name, value);
+                }
+
+                auto operation = tt::tt_metal::operation::ExternalOperation{function_name, attributes};
+                operation::log_operation(operation, input_tensors);
             },
             R"doc(
             Log fallback operation using operation infrastructure.
@@ -261,50 +240,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
                 +----------+----------------------+-----------+-------------+----------+
                 | kwargs   | Packed kwargs        | dict      |             | No       |
                 +----------+----------------------+-----------+-------------+----------+
-        )doc");
-
-        m_tensor.def(
-            "decorate_external_operation",
-            [](const py::function &function, std::optional<std::string> function_name) -> py::function {
-#ifndef DEBUG
-                return function;
-#else
-                return py::cpp_function(std::function([function, function_name](
-                                                          const py::args &args, const py::kwargs &kwargs) {
-                    const auto start{std::chrono::steady_clock::now()};
-
-                    auto [op, input_tensors] = detail::parse_external_operation(function, args, kwargs, function_name);
-                    operation::log_operation(op, input_tensors);
-
-                    auto output_tensors = function(*args, **kwargs);
-                    const auto end{std::chrono::steady_clock::now()};
-                    const std::chrono::duration<double> elapsed_seconds{end - start};
-                    tt::log_info(
-                        tt::LogOp,
-                        "Operation {:50} finished in {:15} seconds",
-                        op.get_type_name(),
-                        elapsed_seconds.count());
-
-                    return output_tensors;
-                }));
-#endif
-            },
-            py::arg("function").noconvert(),
-            py::arg("function_name").noconvert() = std::nullopt,
-            R"doc(
-            Decorate external operation for purposes of reporting and profiling.
-
-                +----------+----------------------+-----------+-------------+----------+
-                | Argument | Description          | Data type | Valid range | Required |
-                +==========+======================+===========+=============+==========+
-                | function | Fallback Operation   | Function  |             | Yes      |
-                +----------+----------------------+-----------+-------------+----------+
-                | args     | Packed args          | tuple     |             | No       |
-                +----------+----------------------+-----------+-------------+----------+
-                | kwargs   | Packed kwargs        | dict      |             | No       |
-                +----------+----------------------+-----------+-------------+----------+
-        )doc");
-
+            )doc");
         // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that Device needs to outlive Tensor.
         // This is because when tensors on device are destroyed they need to deallocate their buffers via device.
         // keep_alive increases the ref count of the Device object being passed into the constructor and .to() function.
@@ -946,10 +882,8 @@ Tensor convert_torch_tensor_to_tt_tensor(
             )doc")
             .def("shape_without_padding", [](const Tensor &self) {
                 Shape shape_without_padding = self.shape().without_padding();
-                std::vector<uint32_t> unpadded_shape;
-                for (auto value : shape_without_padding) {
-                    unpadded_shape.push_back(value);
-                }
+                std::array<uint32_t, 4> unpadded_shape;
+                std::copy(std::begin(shape_without_padding), std::end(shape_without_padding), std::begin(unpadded_shape));
                 return unpadded_shape;
             }, R"doc(
                 Get shape without padding of TT Tensor.
