@@ -15,15 +15,15 @@ namespace tt_metal {
 
 void Copy::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to copy need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
+    TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to copy need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
     if (input_tensors.size() == 2) {
         const auto& dst_tensor = input_tensors[1];
-        TT_ASSERT(input_tensor_a.shape() == dst_tensor.shape());
-        TT_ASSERT(input_tensor_a.layout() == dst_tensor.layout());
-        TT_ASSERT(input_tensor_a.dtype() == dst_tensor.dtype());
-        TT_ASSERT(input_tensor_a.memory_config().memory_layout == dst_tensor.memory_config().memory_layout);
+        TT_FATAL(input_tensor_a.shape() == dst_tensor.shape());
+        TT_FATAL(input_tensor_a.layout() == dst_tensor.layout());
+        TT_FATAL(input_tensor_a.dtype() == dst_tensor.dtype());
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == dst_tensor.memory_config().memory_layout);
     }
 }
 

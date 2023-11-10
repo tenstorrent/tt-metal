@@ -61,7 +61,7 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
         start_dram_addr_offset_for_tensor_row += num_tile_cols * 16;
     }
 
-    TT_ASSERT(expected_dst_vec.size() == (num_tile_rows * 32) * (num_tile_cols * 16) * 32);
+    TT_FATAL(expected_dst_vec.size() == (num_tile_rows * 32) * (num_tile_cols * 16) * 32);
     return expected_dst_vec;
 }
 
@@ -189,7 +189,7 @@ int main(int argc, char **argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
 
-        TT_ASSERT(golden.size() == result_vec.size());
+        TT_FATAL(golden.size() == result_vec.size());
         pass &= (golden == result_vec);
 
         if (not pass) {
@@ -216,7 +216,7 @@ int main(int argc, char **argv) {
         log_fatal(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

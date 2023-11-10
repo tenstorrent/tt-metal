@@ -60,8 +60,8 @@ int main(int argc, char **argv) {
         uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0];
         uint32_t HW = H*W;
         uint32_t N = shape[0]*shape[1];
-        TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-        TT_ASSERT(H > 0 && W > 0 && NC > 0);
+        TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
+        TT_FATAL(H > 0 && W > 0 && NC > 0);
         uint32_t Wt = W/TILE_WIDTH;
         uint32_t Ht = H/TILE_HEIGHT;
         float scaler = do_max ? 1.0f : 1.0f/H;
@@ -104,9 +104,9 @@ int main(int argc, char **argv) {
         auto cb_temp_reduce_tile = tt_metal::CreateCircularBuffer(program, core, cb_temp_reduce_tile_config);
 
 
-        TT_ASSERT(num_tensor_tiles%Ht == 0);
+        TT_FATAL(num_tensor_tiles%Ht == 0);
 
-        TT_ASSERT(multibank == true);
+        TT_FATAL(multibank == true);
         bfloat16 bfloat_scaler_value = bfloat16(scaler);
         uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
         std::vector<uint32_t> reader_compile_args = {(std::uint32_t) true, packed_scaler_value};
@@ -188,7 +188,7 @@ int main(int argc, char **argv) {
         vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
-        TT_ASSERT(result_vec.size() == NC*W*32/2); // we are expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
+        TT_FATAL(result_vec.size() == NC*W*32/2); // we are expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -234,7 +234,7 @@ int main(int argc, char **argv) {
         log_fatal(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

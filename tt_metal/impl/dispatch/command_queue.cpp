@@ -731,7 +731,7 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<uint32_t>& dst, bo
     // device moves data into the buffer we want to read out
     // of, we then need to consume it into a vector. This
     // is easiest way to bring this up
-    TT_ASSERT(blocking, "EnqueueReadBuffer only has support for blocking mode currently");
+    TT_FATAL(blocking, "EnqueueReadBuffer only has support for blocking mode currently");
     this->enqueue_command(command, blocking);
 
     uint32_t num_pages = buffer.size() / buffer.page_size();
@@ -757,7 +757,7 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<uint32_t>& dst, bo
 
 void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<uint32_t>& src, bool blocking) {
     ZoneScopedN("CommandQueue_write_buffer");
-    TT_ASSERT(not blocking, "EnqueueWriteBuffer only has support for non-blocking mode currently");
+    TT_FATAL(not blocking, "EnqueueWriteBuffer only has support for non-blocking mode currently");
     uint32_t src_size_bytes = src.size() * sizeof(uint32_t);
     TT_ASSERT(
         src_size_bytes <= buffer.size(),
@@ -786,7 +786,7 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<uint32_t>& src, b
 
 void CommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("CommandQueue_enqueue_program");
-    TT_ASSERT(not blocking, "EnqueueProgram only has support for non-blocking mode currently");
+    TT_FATAL(not blocking, "EnqueueProgram only has support for non-blocking mode currently");
 
     // Need to relay the program into DRAM if this is the first time
     // we are seeing it
@@ -870,7 +870,7 @@ void CommandQueue::wrap() {
 // OpenCL-like APIs
 void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& dst, bool blocking) {
     detail::DispatchStateCheck(true);
-    TT_ASSERT(blocking, "Non-blocking EnqueueReadBuffer not yet supported");
+    TT_FATAL(blocking, "Non-blocking EnqueueReadBuffer not yet supported");
     cq.enqueue_read_buffer(buffer, dst, blocking);
 }
 

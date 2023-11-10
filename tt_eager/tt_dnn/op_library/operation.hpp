@@ -300,11 +300,11 @@ struct DeviceOperation final {
                const std::vector<std::optional<const Tensor>>& optional_input_tensors) -> void {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (detail::implements_validate<T>()) {
-                    TT_ASSERT(optional_input_tensors.empty());
+                    TT_FATAL(optional_input_tensors.empty());
                     static_assert(detail::implements_create_program<T>());
                     operation.validate(input_tensors);
                 } else if constexpr (detail::implements_validate_with_optional_input_tensors<T>()) {
-                    TT_ASSERT(not optional_input_tensors.empty());
+                    TT_FATAL(not optional_input_tensors.empty());
                     static_assert(detail::implements_create_program_with_optional_input_tensors<T>());
                     operation.validate(input_tensors, optional_input_tensors);
                 } else {

@@ -41,7 +41,7 @@ inline vector<uint32_t> gold_standard_untilize(std::vector<uint32_t> src_vec, ve
                     // Left face row copy
                     for (int k = 0; k < 8; k++) {
                         int idx = physical_start_for_tile_row + i * 8 + k + j * tile_size;
-                        TT_ASSERT(ind.find(idx) == ind.end(), t);
+                        TT_FATAL(ind.find(idx) == ind.end(), t);
                         ind.insert(idx);
                         dst_vec.push_back(src_vec.at(idx));
                     }
@@ -49,7 +49,7 @@ inline vector<uint32_t> gold_standard_untilize(std::vector<uint32_t> src_vec, ve
                     // Right face row copy
                     for (int k = 0; k < 8; k++) {
                         int idx = physical_start_for_tile_row + i * 8 + k + face_size + j * tile_size;
-                        TT_ASSERT(ind.find(idx) == ind.end(), t);
+                        TT_FATAL(ind.find(idx) == ind.end(), t);
                         ind.insert(idx);
                         dst_vec.push_back(src_vec.at(idx));
                     }
@@ -247,7 +247,7 @@ int main(int argc, char **argv) {
         log_fatal(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

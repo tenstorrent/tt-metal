@@ -27,7 +27,7 @@ std::map<string, string> get_defines(BinaryOpType::Enum op_type){
         case BinaryOpType::ADD: op_name = "add_tiles"; op_code = "0"; break;
         case BinaryOpType::SUB: op_name = "sub_tiles"; op_code = "1"; break;
         case BinaryOpType::MUL: op_name = "mul_tiles"; op_code = "2"; break;
-        default: TT_ASSERT(false && "Undefined op type");
+        default: TT_FATAL(false && "Undefined op type");
     }
     defines["ELTWISE_OP"] = op_name.c_str();
     defines["ELTWISE_OP_CODE"] = op_code.c_str();
@@ -298,7 +298,7 @@ int main(int argc, char **argv) {
         log_fatal(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

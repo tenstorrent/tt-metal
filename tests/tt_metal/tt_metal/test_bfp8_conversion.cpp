@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
         // Ensure that passing in row_major_input=true and row_major_output=true are inverses of row_major_input=false and row_major_output=false yield the same result
         pass &= (packed_bfp8b_tile_vec_rm_in == packed_bfp8b_tile_vec_tile_in);
 
-        TT_ASSERT(unpacked_bfp8b_tile_vec_rm_out.size() == fp32_vec.size());
+        TT_FATAL(unpacked_bfp8b_tile_vec_rm_out.size() == fp32_vec.size());
         for (int rm_idx = 0; rm_idx < fp32_vec.size(); rm_idx++) {
             float golden = fp32_vec.at(rm_idx);
             float converted = unpacked_bfp8b_tile_vec_rm_out.at(rm_idx);
@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
             pass &= comp;
         }
 
-        TT_ASSERT(unpacked_bfp8b_tile_vec_tile_out.size() == tiled_fp32_vec.size());
+        TT_FATAL(unpacked_bfp8b_tile_vec_tile_out.size() == tiled_fp32_vec.size());
         for (int rm_idx = 0; rm_idx < fp32_vec.size(); rm_idx++) {
             float golden = tiled_fp32_vec.at(rm_idx);
             float converted = unpacked_bfp8b_tile_vec_tile_out.at(rm_idx);
@@ -87,7 +87,7 @@ int main(int argc, char **argv) {
         log_fatal(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

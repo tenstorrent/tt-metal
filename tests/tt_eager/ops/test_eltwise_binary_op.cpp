@@ -54,51 +54,51 @@ int main() {
     {
         Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
         auto allclose = run_test<host_function<std::plus<float>>>(shape, tt::tt_metal::add, device);
-        TT_ASSERT(allclose);
+        TT_FATAL(allclose);
     }
 
     {
         Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
         auto allclose = run_test<host_function<std::minus<float>>>(shape, tt::tt_metal::sub, device);
-        TT_ASSERT(allclose);
+        TT_FATAL(allclose);
     }
 
     {
         Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
         auto allclose = run_test<host_function<std::multiplies<float>>>(shape, tt::tt_metal::mul, device, 1e-2f, 1e-3f);
-        TT_ASSERT(allclose);
+        TT_FATAL(allclose);
     }
 
     auto run_binary_ops = [&] {
         {
             Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
             auto allclose = run_test<host_function<std::plus<float>>>(shape, tt::tt_metal::add, device);
-            TT_ASSERT(allclose);
+            TT_FATAL(allclose);
         }
 
         {
             Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
             auto allclose = run_test<host_function<std::minus<float>>>(shape, tt::tt_metal::sub, device);
-            TT_ASSERT(allclose);
+            TT_FATAL(allclose);
         }
 
         {
             Shape shape = {1, 1, tt::constants::TILE_HEIGHT * 2, tt::constants::TILE_WIDTH * 2};
             auto allclose = run_test<host_function<std::plus<float>>>(shape, tt::tt_metal::add, device);
-            TT_ASSERT(allclose);
+            TT_FATAL(allclose);
         }
 
         {
             Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
             auto allclose =
                 run_test<host_function<std::multiplies<float>>>(shape, tt::tt_metal::mul, device, 1e-2f, 1e-3f);
-            TT_ASSERT(allclose);
+            TT_FATAL(allclose);
         }
 
         {
             Shape shape = {1, 1, tt::constants::TILE_HEIGHT * 4, tt::constants::TILE_WIDTH * 4};
             auto allclose = run_test<host_function<std::plus<float>>>(shape, tt::tt_metal::add, device);
-            TT_ASSERT(allclose);
+            TT_FATAL(allclose);
         }
     };
 
@@ -113,15 +113,15 @@ int main() {
 
     run_binary_ops();
 
-    TT_ASSERT(tt::tt_metal::program_cache::num_entries() == 4,
+    TT_FATAL(tt::tt_metal::program_cache::num_entries() == 4,
         "There are {} entries",
         tt::tt_metal::program_cache::num_entries());
 
     tt::tt_metal::program_cache::disable_and_clear();
 
-    TT_ASSERT(tt::tt_metal::program_cache::num_entries() == 0);
+    TT_FATAL(tt::tt_metal::program_cache::num_entries() == 0);
 
-    TT_ASSERT(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device));
 
     return 0;
 }

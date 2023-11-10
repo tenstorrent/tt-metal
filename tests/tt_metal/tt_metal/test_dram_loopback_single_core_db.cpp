@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
         // We read and write total_l1_buffer_size_tiles / 2 tiles from and to DRAM
         uint32_t l1_buffer_addr = 400 * 1024;
         uint32_t total_l1_buffer_size_tiles = num_tiles / 2;
-        TT_ASSERT(total_l1_buffer_size_tiles % 2 == 0);
+        TT_FATAL(total_l1_buffer_size_tiles % 2 == 0);
         uint32_t total_l1_buffer_size_bytes = total_l1_buffer_size_tiles * single_tile_size;
 
         auto input_dram_buffer = CreateBuffer(device, dram_buffer_size_bytes, dram_buffer_size_bytes, tt_metal::BufferType::DRAM);
@@ -121,7 +121,7 @@ int main(int argc, char **argv) {
         log_fatal(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

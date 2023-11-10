@@ -25,8 +25,8 @@ using namespace tt;
 // is contiguous
 template <typename T>
 std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-  TT_ASSERT(rows % 32 == 0);
-  TT_ASSERT(cols % 32 == 0);
+  TT_FATAL(rows % 32 == 0);
+  TT_FATAL(cols % 32 == 0);
   int num_tiles_r = rows / 32;
   int num_tiles_c = cols / 32;
   std::vector<T> result;
@@ -52,8 +52,8 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
 // tilize() function)
 template <typename T>
 std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
-  TT_ASSERT(rows % 32 == 0);
-  TT_ASSERT(cols % 32 == 0);
+  TT_FATAL(rows % 32 == 0);
+  TT_FATAL(cols % 32 == 0);
   int num_tiles_r = rows / 32;
   int num_tiles_c = cols / 32;
   std::vector<T> result;
@@ -245,13 +245,13 @@ int main(int argc, char **argv) {
     if (Mt % num_cores_r != 0) {
       log_fatal(LogTest, "Mt {} must be a multiple of num_cores_r {}", Mt,
                 num_cores_r);
-      TT_ASSERT(false);
+      TT_FATAL(false);
     }
 
     if (Nt % num_cores_c != 0) {
       log_fatal(LogTest, "Nt {} must be a multiple of num_cores_c {}", Nt,
                 num_cores_c);
-      TT_ASSERT(false);
+      TT_FATAL(false);
     }
 
     tt::DataFormat data_format = tt::DataFormat::Float16_b;
@@ -285,7 +285,7 @@ int main(int argc, char **argv) {
     if (output_addr + (per_core_output_tiles * single_tile_size) >
         1024 * 1024) {
       log_error(LogTest, "inputs and output CBs don't fit in L1");
-      TT_ASSERT(false);
+      TT_FATAL(false);
     }
 
     SHAPE shape = {1, 1, Mt * 32, Kt * 32};
@@ -319,7 +319,7 @@ int main(int argc, char **argv) {
             pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         pass &= tt_metal::detail::WriteToDeviceL1(
             device, core, activations_addr, activations);
-        TT_ASSERT(pass);
+        TT_FATAL(pass);
 
         auto identity_tilized =
             tilize(weights_slice, Kt * 32, per_core_Nt * 32);
@@ -329,7 +329,7 @@ int main(int argc, char **argv) {
             transpose_tiles(weights, Kt, per_core_Nt, 1);
         pass &= tt_metal::detail::WriteToDeviceL1(device, core, weights_addr,
                                                   weights_tile_transposed);
-        TT_ASSERT(pass);
+        TT_FATAL(pass);
       }
     }
 
@@ -456,7 +456,7 @@ int main(int argc, char **argv) {
     log_fatal(LogTest, "Test Failed");
   }
 
-  TT_ASSERT(pass);
+  TT_FATAL(pass);
 
   return 0;
 }

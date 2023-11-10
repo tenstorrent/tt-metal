@@ -22,32 +22,32 @@ namespace tt_metal {
 
 void Untilize::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to untilize need to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to untilize need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
+    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to untilize need to be on device!");
+    TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to untilize need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
-    TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
+    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (this->output_mem_config.is_sharded()) {
-            TT_ASSERT(this->output_mem_config == input_tensor_a.memory_config());
+            TT_FATAL(this->output_mem_config == input_tensor_a.memory_config());
         }
         if (input_tensor_a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-            TT_ASSERT(input_tensor_a.shard_spec().value().shard_grid.ranges().size() == 1);
+            TT_FATAL(input_tensor_a.shard_spec().value().shard_grid.ranges().size() == 1);
         }
-        TT_ASSERT(this->use_multicore == true);
+        TT_FATAL(this->use_multicore == true);
     } else if (this->output_mem_config.is_sharded()) {
-        TT_ASSERT(this->use_multicore == true);
-        TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_FATAL(this->use_multicore == true);
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
         uint32_t ntiles = input_tensor_a.volume() / TILE_HW;
         uint32_t ntiles_per_block = input_tensor_a.shape()[-1] / TILE_WIDTH;
         uint32_t nblocks = ceil((float) ntiles / ntiles_per_block);
         auto num_cores = untilize_helpers::get_num_cores(input_tensor_a.device()->compute_with_storage_grid_size(), nblocks);
         uint32_t fused_height = input_tensor_a.volume() / input_tensor_a.shape()[-1] / TILE_HEIGHT;
-        TT_ASSERT(fused_height % num_cores == 0);
+        TT_FATAL(fused_height % num_cores == 0);
     } else {
-        TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
-        TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
     }
 }
 
@@ -120,57 +120,57 @@ Tensor untilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_con
 
 void UntilizeWithUnpadding::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operandsneed to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
+    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operandsneed to be on device!");
+    TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
-    TT_ASSERT(
+    TT_FATAL(
         (this->output_tensor_start[0] == 0 && this->output_tensor_start[1] == 0 && this->output_tensor_start[2] == 0 && this->output_tensor_start[3] == 0),
         "On device unpadding only supports unpadding at end of dims"
     );
 
-    TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
-    TT_ASSERT(this->output_tensor_start[0] < input_tensor_a.shape()[0]);
-    TT_ASSERT(this->output_tensor_end[0] < input_tensor_a.shape()[0]);
-    TT_ASSERT(this->output_tensor_start[1] < input_tensor_a.shape()[1]);
-    TT_ASSERT(this->output_tensor_end[1] < input_tensor_a.shape()[1]);
-    TT_ASSERT(this->output_tensor_start[2] < input_tensor_a.shape()[2]);
-    TT_ASSERT(this->output_tensor_end[2] < input_tensor_a.shape()[2]);
-    TT_ASSERT(this->output_tensor_start[3] < input_tensor_a.shape()[3]);
-    TT_ASSERT(this->output_tensor_end[3] < input_tensor_a.shape()[3]);
+    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
+    TT_FATAL(this->output_tensor_start[0] < input_tensor_a.shape()[0]);
+    TT_FATAL(this->output_tensor_end[0] < input_tensor_a.shape()[0]);
+    TT_FATAL(this->output_tensor_start[1] < input_tensor_a.shape()[1]);
+    TT_FATAL(this->output_tensor_end[1] < input_tensor_a.shape()[1]);
+    TT_FATAL(this->output_tensor_start[2] < input_tensor_a.shape()[2]);
+    TT_FATAL(this->output_tensor_end[2] < input_tensor_a.shape()[2]);
+    TT_FATAL(this->output_tensor_start[3] < input_tensor_a.shape()[3]);
+    TT_FATAL(this->output_tensor_end[3] < input_tensor_a.shape()[3]);
 
     // Check if start shape is <= end shape
-    TT_ASSERT(this->output_tensor_start[0] <= this->output_tensor_end[0]);
-    TT_ASSERT(this->output_tensor_start[1] <= this->output_tensor_end[1]);
-    TT_ASSERT(this->output_tensor_start[2] <= this->output_tensor_end[2]);
-    TT_ASSERT(this->output_tensor_start[3] <= this->output_tensor_end[3]);
+    TT_FATAL(this->output_tensor_start[0] <= this->output_tensor_end[0]);
+    TT_FATAL(this->output_tensor_start[1] <= this->output_tensor_end[1]);
+    TT_FATAL(this->output_tensor_start[2] <= this->output_tensor_end[2]);
+    TT_FATAL(this->output_tensor_start[3] <= this->output_tensor_end[3]);
 
-    TT_ASSERT(((this->output_tensor_end[3] - this->output_tensor_start[3] + 1) % 2 == 0), "Can only unpad to row major tensor of even width");
+    TT_FATAL(((this->output_tensor_end[3] - this->output_tensor_start[3] + 1) % 2 == 0), "Can only unpad to row major tensor of even width");
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            TT_ASSERT(input_tensor_a.shard_spec().value().shard_grid.ranges().size() == 1);
-            TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
-            TT_ASSERT(input_tensor_a.volume() / (input_tensor_a.shape()[-2] * input_tensor_a.shape()[-1]) == 1, "Can only write unbatched output interleaved");
+            TT_FATAL(input_tensor_a.shard_spec().value().shard_grid.ranges().size() == 1);
+            TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+            TT_FATAL(input_tensor_a.volume() / (input_tensor_a.shape()[-2] * input_tensor_a.shape()[-1]) == 1, "Can only write unbatched output interleaved");
         } else if(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             auto output_shape = this->compute_output_shapes(input_tensors).at(0);
             for (uint32_t i = 0; i < output_shape.rank(); i++) {
                 if (i != output_shape.rank() - 2) {
-                    TT_ASSERT(input_tensor_a.shape()[i] == output_shape[i]);
+                    TT_FATAL(input_tensor_a.shape()[i] == output_shape[i]);
                 }
                 if (output_mem_config.is_sharded()) {
-                    TT_ASSERT(this->output_mem_config == input_tensor_a.memory_config());
+                    TT_FATAL(this->output_mem_config == input_tensor_a.memory_config());
                 } else {
-                    TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
-                    TT_ASSERT(input_tensor_a.volume() / (input_tensor_a.shape()[-2] * input_tensor_a.shape()[-1]) == 1, "Can only write unbatched output interleaved");
+                    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+                    TT_FATAL(input_tensor_a.volume() / (input_tensor_a.shape()[-2] * input_tensor_a.shape()[-1]) == 1, "Can only write unbatched output interleaved");
                 }
             }
         } else {
-            TT_ASSERT(false, "Unsupported sharding scheme");
+            TT_FATAL(false, "Unsupported sharding scheme");
         }
     } else {
-        TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
-        TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
     }
 }
 std::vector<Shape> UntilizeWithUnpadding::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {

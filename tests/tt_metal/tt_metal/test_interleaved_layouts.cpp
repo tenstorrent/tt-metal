@@ -436,7 +436,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     tt_metal::Buffer src;
     tt_metal::Buffer dst;
     if constexpr (src_is_in_l1) {
-        TT_ASSERT((buffer_size % num_l1_banks) == 0);
+        TT_FATAL((buffer_size % num_l1_banks) == 0);
 
         src = CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::L1);
         tt_metal::detail::WriteToBuffer(src, host_buffer);
@@ -448,7 +448,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
             {src.address(), 0, 0, num_pages});
 
     } else {
-        TT_ASSERT((buffer_size % num_dram_banks) == 0);
+        TT_FATAL((buffer_size % num_dram_banks) == 0);
 
         src = CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::DRAM);
         tt_metal::detail::WriteToBuffer(src, host_buffer);
@@ -500,7 +500,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
     pass &= tt_metal::CloseDevice(device);
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return pass;
 }

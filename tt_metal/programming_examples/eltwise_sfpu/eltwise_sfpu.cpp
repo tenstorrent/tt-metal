@@ -189,7 +189,7 @@ int main(int argc, char **argv) {
         tt::log_fatal(tt::LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

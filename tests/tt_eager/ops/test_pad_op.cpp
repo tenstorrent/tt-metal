@@ -34,8 +34,8 @@ void test_operation_infrastructure() {
     auto output_tensor = operation::run(PadOnHost{padded_shape, {0, 0, 0, 0}, 0}, {input_tensor}).at(0);
 
     auto output_shape = output_tensor.shape();
-    TT_ASSERT(output_shape == padded_shape);
-    TT_ASSERT(output_shape.without_padding() == input_shape);
+    TT_FATAL(output_shape == padded_shape);
+    TT_FATAL(output_shape.without_padding() == input_shape);
 }
 
 int main(int argc, char** argv) {

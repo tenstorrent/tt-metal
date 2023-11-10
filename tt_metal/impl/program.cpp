@@ -544,7 +544,7 @@ void Program::compile( Device * device )
         return;
     }
 
-    TT_ASSERT(
+    TT_FATAL(
         device->is_initialized(),
         "Device needs to be initialized before program {} compilation! Generating headers for banking information is "
         "dependent on information that is set during device initialization.",

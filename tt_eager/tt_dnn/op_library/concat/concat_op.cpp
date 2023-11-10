@@ -31,13 +31,13 @@ void Concat::validate(const std::vector<Tensor> &input_tensors) const {
     shape_first[dim] = 0;
 
     for (const Tensor &in_ref : input_tensors) {
-        TT_ASSERT((in_ref.layout() == Layout::TILE) && "Only tile layout supported.");
-        TT_ASSERT(in_ref.device() && "Operand to concat needs to be on device.");
-        TT_ASSERT(in_ref.buffer() && "Operand to concat needs to be allocated in a buffer on device.");
-        TT_ASSERT(in_ref.layout() == input_tensors.at(0).layout() && "All Tensors should have same layouts.");
+        TT_FATAL((in_ref.layout() == Layout::TILE) && "Only tile layout supported.");
+        TT_FATAL(in_ref.device() && "Operand to concat needs to be on device.");
+        TT_FATAL(in_ref.buffer() && "Operand to concat needs to be allocated in a buffer on device.");
+        TT_FATAL(in_ref.layout() == input_tensors.at(0).layout() && "All Tensors should have same layouts.");
         tt::tt_metal::Shape curr_shape = in_ref.shape();
         curr_shape[dim] = 0;
-        TT_ASSERT(curr_shape == shape_first, "concat tensors differ in shape across non-concat dimensions.");
+        TT_FATAL(curr_shape == shape_first, "concat tensors differ in shape across non-concat dimensions.");
     }
 }
 

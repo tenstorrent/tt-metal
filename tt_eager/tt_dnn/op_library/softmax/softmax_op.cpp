@@ -315,30 +315,30 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
 
 
 void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    TT_ASSERT(input_tensors.size() == 1 and optional_input_tensors.size() <= 1, "Must have 1 or 2 input tensors");
+    TT_FATAL(input_tensors.size() == 1 and optional_input_tensors.size() <= 1, "Must have 1 or 2 input tensors");
     auto& input_tensor = input_tensors.at(0);
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr , "Operands to softmax need to be allocated in buffers on device!");
-    TT_ASSERT((input_tensor.layout() == Layout::TILE), "Inputs to softmax must be tilized");
-    TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B);
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr , "Operands to softmax need to be allocated in buffers on device!");
+    TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to softmax must be tilized");
+    TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B);
     if (optional_input_tensors.size() == 1) {
         if (optional_input_tensors.at(0).has_value()) {
             auto& mask = optional_input_tensors.at(0).value();
-            TT_ASSERT(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
-            TT_ASSERT(input_tensor.device() == mask.device());
-            TT_ASSERT(input_tensor.dtype() == mask.dtype());
-            TT_ASSERT(input_tensor.layout() == mask.layout());
-            TT_ASSERT(input_tensor.shape()[-1] == mask.shape()[-1]);
-            TT_ASSERT(input_tensor.shape()[0] == mask.shape()[0]);
-            TT_ASSERT(mask.shape()[-2] == TILE_HEIGHT);
+            TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
+            TT_FATAL(input_tensor.device() == mask.device());
+            TT_FATAL(input_tensor.dtype() == mask.dtype());
+            TT_FATAL(input_tensor.layout() == mask.layout());
+            TT_FATAL(input_tensor.shape()[-1] == mask.shape()[-1]);
+            TT_FATAL(input_tensor.shape()[0] == mask.shape()[0]);
+            TT_FATAL(mask.shape()[-2] == TILE_HEIGHT);
             for (uint32_t i = 1; i < input_tensor.shape().rank() - 2; i++) {
-                TT_ASSERT(mask.shape()[i] == 1);
+                TT_FATAL(mask.shape()[i] == 1);
             }
         } else {
-            TT_ASSERT(not this->scale.has_value());
+            TT_FATAL(not this->scale.has_value());
         }
     } else {
-        TT_ASSERT(not this->scale.has_value());
+        TT_FATAL(not this->scale.has_value());
     }
 
 

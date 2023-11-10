@@ -28,7 +28,7 @@ namespace tt::tt_metal{
 
         inline static bool DispatchStateCheck( bool isFastDispatch){
             static bool fd = isFastDispatch;
-            TT_ASSERT( fd == isFastDispatch, "Mixing fast and slow dispatch is prohibited!" );
+            TT_FATAL( fd == isFastDispatch, "Mixing fast and slow dispatch is prohibited!" );
             return fd;
         }
 
@@ -172,7 +172,7 @@ namespace tt::tt_metal{
         inline bool WriteToDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, std::vector<uint32_t> &host_buffer)
         {
             bool pass = true;
-            TT_ASSERT(address >= DRAM_UNRESERVED_BASE, "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!", DRAM_UNRESERVED_BASE);
+            TT_FATAL(address >= DRAM_UNRESERVED_BASE, "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!", DRAM_UNRESERVED_BASE);
             tt::Cluster::instance().write_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
             return pass;
         }
@@ -373,15 +373,15 @@ namespace tt::tt_metal{
                                 set_global_and_local_noc_usage(kernel_group->riscv1_id.value(), local_noc0_in_use, local_noc1_in_use);
                             }
                             if (kernel_group->riscv0_id.has_value() and kernel_group->riscv1_id.has_value()) {
-                                TT_ASSERT(local_noc0_in_use and local_noc1_in_use, "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, doing so results in hangs!", CoreCoord(x, y).str());
+                                TT_FATAL(local_noc0_in_use and local_noc1_in_use, "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, doing so results in hangs!", CoreCoord(x, y).str());
                             }
                         }
                     }
                 }
             }
 
-            TT_ASSERT(not (riscv0_in_use and riscv1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because both data movement processors are in use!", file_name);
-            TT_ASSERT(not (noc0_in_use and noc1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernels for {} across specified cores because both NOCs are in use!", file_name);
+            TT_FATAL(not (riscv0_in_use and riscv1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernel for {} across specified cores because both data movement processors are in use!", file_name);
+            TT_FATAL(not (noc0_in_use and noc1_in_use), "DataMovementKernel creation failure: Cannot create data movement kernels for {} across specified cores because both NOCs are in use!", file_name);
         }
 
         inline CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet> &specified_core_spec) {

@@ -141,8 +141,5 @@ void tt_assert(char const* file, int line, const std::string& assert_type, bool 
 #endif
 
 #ifndef TT_FATAL
-#define TT_FATAL(cond, fmt, ...)                \
-    if (!(cond)) {                              \
-        tt::log_fatal(fmt, ##__VA_ARGS__);      \
-    }
+#define TT_FATAL(condition, ...) do { if (not (condition)) tt::assert::tt_throw(__FILE__, __LINE__, "TT_FATAL", #condition, ##__VA_ARGS__); } while (0)
 #endif

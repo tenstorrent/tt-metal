@@ -104,7 +104,7 @@ void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *devi
         EnqueueReadBuffer(cq, out, out_vec, true);
     }
 
-    TT_ASSERT(out_vec == inp);
+    TT_FATAL(out_vec == inp);
     tt_metal::CloseDevice(device);
 }
 

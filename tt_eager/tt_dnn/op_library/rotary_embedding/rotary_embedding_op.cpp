@@ -21,25 +21,25 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& cos = input_tensors.at(1);
     const auto& sin = input_tensors.at(2);
-    TT_ASSERT(input_tensors.size() == 3);
+    TT_FATAL(input_tensors.size() == 3);
     auto ref_device = input_tensor.device();
     for (const auto& input : input_tensors) {
-        TT_ASSERT(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
-        TT_ASSERT(input.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
-        TT_ASSERT(input.device() == ref_device, "Operands to rotary embedding need to be on same device!");
-        TT_ASSERT((input.layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
+        TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
+        TT_FATAL(input.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
+        TT_FATAL(input.device() == ref_device, "Operands to rotary embedding need to be on same device!");
+        TT_FATAL((input.layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
     }
 
-    TT_ASSERT(input_tensor.shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
+    TT_FATAL(input_tensor.shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
     uint32_t seq_len = input_tensor.shape()[-2];
     uint32_t B = input_tensor.shape()[0];
     uint32_t X = input_tensor.shape()[-1];
-    TT_ASSERT(cos.shape() == sin.shape(), "Cos and Sin dims must match");
-    TT_ASSERT(cos.shape()[0] == 1 && cos.shape()[1] == 1 && cos.shape()[-1] == X, "Cos dims must match input dims");
+    TT_FATAL(cos.shape() == sin.shape(), "Cos and Sin dims must match");
+    TT_FATAL(cos.shape()[0] == 1 && cos.shape()[1] == 1 && cos.shape()[-1] == X, "Cos dims must match input dims");
     if (this->token_idx.has_value()) {
-        TT_ASSERT(cos.shape()[-2] >= token_idx, "Cos dims must match input dims");
+        TT_FATAL(cos.shape()[-2] >= token_idx, "Cos dims must match input dims");
     } else {
-        TT_ASSERT(cos.shape()[-2] >= seq_len, "Cos dims must match input dims");
+        TT_FATAL(cos.shape()[-2] >= seq_len, "Cos dims must match input dims");
     }
 }
 

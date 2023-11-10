@@ -942,8 +942,8 @@ tt_metal::Program create_program_mcast_in0_in1(
 // is contiguous
 template <typename T>
 std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-  TT_ASSERT(rows % 32 == 0);
-  TT_ASSERT(cols % 32 == 0);
+  TT_FATAL(rows % 32 == 0);
+  TT_FATAL(cols % 32 == 0);
   int num_tiles_r = rows / 32;
   int num_tiles_c = cols / 32;
   std::vector<T> result;
@@ -969,8 +969,8 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
 // tilize() function)
 template <typename T>
 std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
-  TT_ASSERT(rows % 32 == 0);
-  TT_ASSERT(cols % 32 == 0);
+  TT_FATAL(rows % 32 == 0);
+  TT_FATAL(cols % 32 == 0);
   int num_tiles_r = rows / 32;
   int num_tiles_c = cols / 32;
   std::vector<T> result;
@@ -1169,20 +1169,20 @@ int main(int argc, char** argv) {
     //                      Matmul Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     uint32_t B = 1;
-    TT_ASSERT(Kt % in0_block_w == 0);
+    TT_FATAL(Kt % in0_block_w == 0);
 
     uint32_t num_blocks_y = (Mt - 1) / per_core_Mt + 1;
     uint32_t num_blocks_x = (Nt - 1) / per_core_Nt + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
-    TT_ASSERT(num_blocks_total <= num_cores_x * num_cores_y);
+    TT_FATAL(num_blocks_total <= num_cores_x * num_cores_y);
     CoreCoord core_range =
         get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
-    TT_ASSERT(num_cores_y == core_range.y && num_cores_x == core_range.x);
+    TT_FATAL(num_cores_y == core_range.y && num_cores_x == core_range.x);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    TT_ASSERT(core_range.x > 1 && core_range.y > 1);
+    TT_FATAL(core_range.x > 1 && core_range.y > 1);
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     tt_metal::Buffer* bias_buffer = nullptr;
 
@@ -1242,7 +1242,7 @@ int main(int argc, char** argv) {
     log_fatal(LogTest, "Test Failed");
   }
 
-  TT_ASSERT(pass);
+  TT_FATAL(pass);
 
   return 0;
 }

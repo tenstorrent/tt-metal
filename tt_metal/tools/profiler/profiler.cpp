@@ -34,8 +34,8 @@ void Profiler::dumpHostResults(const std::string& timer_name, const std::vector<
     auto timer = name_to_timer_map[timer_name];
 
     auto timer_period_ns = timerToTimerInt(timer);
-    TT_ASSERT (timer_period_ns.start != 0 , "Timer start cannot be zero on : " + timer_name);
-    TT_ASSERT (timer_period_ns.stop != 0 , "Timer stop cannot be zero on : " + timer_name);
+    TT_FATAL (timer_period_ns.start != 0 , "Timer start cannot be zero on : " + timer_name);
+    TT_FATAL (timer_period_ns.stop != 0 , "Timer stop cannot be zero on : " + timer_name);
 
     std::filesystem::path log_path = output_dir / HOST_SIDE_LOG;
     std::ofstream log_file;

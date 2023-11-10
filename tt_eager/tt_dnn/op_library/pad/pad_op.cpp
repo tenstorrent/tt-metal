@@ -525,25 +525,25 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
 
 void Pad::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
-    TT_ASSERT(input_tensor.layout() == Layout::TILE || input_tensor.layout() == Layout::ROW_MAJOR);
-    TT_ASSERT(
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operand to pad needs to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operand to pad needs to be allocated in a buffer on device!");
+    TT_FATAL(input_tensor.layout() == Layout::TILE || input_tensor.layout() == Layout::ROW_MAJOR);
+    TT_FATAL(
         (this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 && this->input_tensor_start[3] == 0),
         "On device padding only supports padding at end of dims"
     );
-    TT_ASSERT(input_tensor.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0], "Output size cannot fit input with offset");
-    TT_ASSERT(input_tensor.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1], "Output size cannot fit input with offset");
-    TT_ASSERT(input_tensor.shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2], "Output size cannot fit input with offset");
-    TT_ASSERT(input_tensor.shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3], "Output size cannot fit input with offset");
 
     if (input_tensor.layout() == Layout::TILE) {
-        TT_ASSERT((this->output_tensor_shape[2] % TILE_HEIGHT == 0), "Can only pad tilized tensor with full tiles");
-        TT_ASSERT((this->output_tensor_shape[3] % TILE_WIDTH == 0), "Can only pad tilized tensor with full tiles");
-        TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16, "Cannot pad tilized tensor with specified format");
+        TT_FATAL((this->output_tensor_shape[2] % TILE_HEIGHT == 0), "Can only pad tilized tensor with full tiles");
+        TT_FATAL((this->output_tensor_shape[3] % TILE_WIDTH == 0), "Can only pad tilized tensor with full tiles");
+        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "Cannot pad tilized tensor with specified format");
     } else if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        TT_ASSERT(this->output_tensor_shape[3] % 2 == 0, "RM padding requires output X dim to be a multiple of 2");
-        TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16, "Cannot pad RM tensor with specified format");
+        TT_FATAL(this->output_tensor_shape[3] % 2 == 0, "RM padding requires output X dim to be a multiple of 2");
+        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "Cannot pad RM tensor with specified format");
     }
 }
 
@@ -609,12 +609,12 @@ Tensor pad(const Tensor &input_tensor, const Shape &output_tensor_shape, const S
 
 void PadOnHost::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    TT_ASSERT(input_tensor.storage_type() == StorageType::OWNED or input_tensor.storage_type() == StorageType::BORROWED);
-    TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR);
-    TT_ASSERT(input_tensor.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0], "Output size cannot fit input with offset");
-    TT_ASSERT(input_tensor.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1], "Output size cannot fit input with offset");
-    TT_ASSERT(input_tensor.shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2], "Output size cannot fit input with offset");
-    TT_ASSERT(input_tensor.shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.storage_type() == StorageType::OWNED or input_tensor.storage_type() == StorageType::BORROWED);
+    TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR);
+    TT_FATAL(input_tensor.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2], "Output size cannot fit input with offset");
+    TT_FATAL(input_tensor.shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3], "Output size cannot fit input with offset");
 }
 
 std::vector<Shape> PadOnHost::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {

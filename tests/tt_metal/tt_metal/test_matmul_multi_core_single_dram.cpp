@@ -22,8 +22,8 @@ using namespace tt;
 // is contiguous
 template <typename T>
 std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-    TT_ASSERT(rows % 32 == 0);
-    TT_ASSERT(cols % 32 == 0);
+    TT_FATAL(rows % 32 == 0);
+    TT_FATAL(cols % 32 == 0);
     int num_tiles_r = rows / 32;
     int num_tiles_c = cols / 32;
     std::vector<T> result;
@@ -49,8 +49,8 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
 // transform it back to row major full tensor. (This function inverts the tilize() function)
 template <typename T>
 std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
-    TT_ASSERT(rows % 32 == 0);
-    TT_ASSERT(cols % 32 == 0);
+    TT_FATAL(rows % 32 == 0);
+    TT_FATAL(cols % 32 == 0);
     int num_tiles_r = rows / 32;
     int num_tiles_c = cols / 32;
     std::vector<T> result;
@@ -161,9 +161,9 @@ std::tuple<tt_metal::Program, tt_metal::KernelID , tt_metal::KernelID> create_pr
     uint32_t in1_CB_size = in1_block_tiles * 2 * single_tile_size; // double buffer
     uint32_t out_CB_tiles = per_core_M * per_core_N;
     uint32_t out_CB_size = out_CB_tiles * single_tile_size;
-    TT_ASSERT(in0_CB_size <= 130*1024);
-    TT_ASSERT(in1_CB_size <= 130*1024);
-    TT_ASSERT(out_CB_size <= 540*1024);
+    TT_FATAL(in0_CB_size <= 130*1024);
+    TT_FATAL(in1_CB_size <= 130*1024);
+    TT_FATAL(out_CB_size <= 540*1024);
 
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};;
@@ -341,9 +341,9 @@ int main(int argc, char **argv) {
                 uint32_t dram_buffer_size_weights = single_tile_size * K * per_core_N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
                 uint32_t dram_buffer_size_out = single_tile_size * per_core_M * per_core_N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-                TT_ASSERT(dram_buffer_src0_addr + dram_buffer_size_act < 1024 * 1024 * 1024);
-                TT_ASSERT(dram_buffer_src1_addr + dram_buffer_size_weights < 1024 * 1024 * 1024);
-                TT_ASSERT(dram_buffer_dst_addr + dram_buffer_size_out < 1024 * 1024 * 1024);
+                TT_FATAL(dram_buffer_src0_addr + dram_buffer_size_act < 1024 * 1024 * 1024);
+                TT_FATAL(dram_buffer_src1_addr + dram_buffer_size_weights < 1024 * 1024 * 1024);
+                TT_FATAL(dram_buffer_dst_addr + dram_buffer_size_out < 1024 * 1024 * 1024);
 
                 auto dram_src0_noc_xy = device->core_from_dram_channel(dram_src0_channel_id);
                 auto dram_src1_noc_xy = device->core_from_dram_channel(dram_src1_channel_id);
@@ -432,7 +432,7 @@ int main(int argc, char **argv) {
         log_fatal(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

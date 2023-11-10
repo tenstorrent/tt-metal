@@ -31,34 +31,34 @@ bool test_free_list() {
 
     bool allocate_bottom_up = true;
     auto addr_0 = free_list_allocator.allocate(32, true);
-    TT_ASSERT(addr_0.has_value());
+    TT_FATAL(addr_0.has_value());
     pass &= addr_0 == 0;
 
     auto addr_1 = free_list_allocator.allocate_at_address(64, 32);
-    TT_ASSERT(addr_1.has_value());
+    TT_FATAL(addr_1.has_value());
     pass &= addr_1 == 64;
 
     auto addr_2 = free_list_allocator.allocate(48, true);
-    TT_ASSERT(addr_2.has_value());
+    TT_FATAL(addr_2.has_value());
     pass &= addr_2 == 96;
 
     auto addr_3 = free_list_allocator.allocate(16, true);
-    TT_ASSERT(addr_3.has_value());
+    TT_FATAL(addr_3.has_value());
     pass &= addr_3 == 32;
 
     auto addr_4 = free_list_allocator.allocate_at_address(512, 128);
-    TT_ASSERT(addr_4.has_value());
+    TT_FATAL(addr_4.has_value());
     pass &= addr_4 == 512;
 
     free_list_allocator.deallocate(96); // coalesce with next block
     // After deallocating check that memory between the coalesced blocks
     // is free to be allocated
     auto addr_5 = free_list_allocator.allocate_at_address(128, 64);
-    TT_ASSERT(addr_5.has_value());
+    TT_FATAL(addr_5.has_value());
     pass &= addr_5 == 128;
 
     auto addr_6 = free_list_allocator.allocate(32, true);
-    TT_ASSERT(addr_6.has_value());
+    TT_FATAL(addr_6.has_value());
     pass &= addr_6 == 96;
 
     free_list_allocator.deallocate(32);
@@ -66,11 +66,11 @@ bool test_free_list() {
     // After deallocating check that memory between the coalesced blocks
     // is free to be allocated
     auto addr_7 = free_list_allocator.allocate(64, true);
-    TT_ASSERT(addr_7.has_value());
+    TT_FATAL(addr_7.has_value());
     pass &= addr_7 == 32;
 
     auto addr_8 = free_list_allocator.allocate(316, true);
-    TT_ASSERT(addr_8.has_value());
+    TT_FATAL(addr_8.has_value());
     pass &= addr_8 == 192;
 
     free_list_allocator.deallocate(32);
@@ -79,17 +79,17 @@ bool test_free_list() {
     // After deallocating check that memory between the coalesced blocks
     // is free to be allocated
     auto addr_9 = free_list_allocator.allocate_at_address(64, 96);
-    TT_ASSERT(addr_9.has_value());
+    TT_FATAL(addr_9.has_value());
     pass &= addr_9 == 64;
 
     free_list_allocator.deallocate(192);
     auto addr_10 = free_list_allocator.allocate_at_address(256, 128);
-    TT_ASSERT(addr_10.has_value());
+    TT_FATAL(addr_10.has_value());
     pass &= addr_10 == 256;
 
     free_list_allocator.deallocate(0);
     auto addr_11 = free_list_allocator.allocate(28, true);
-    TT_ASSERT(addr_11.has_value());
+    TT_FATAL(addr_11.has_value());
     pass &= addr_11 == 0;
 
     auto addr_12 = free_list_allocator.allocate(64, false);
@@ -117,17 +117,17 @@ bool test_free_list() {
     // Allocate entire region
     free_list_allocator.clear();
     auto addr_18 = free_list_allocator.allocate(max_size_bytes, true);
-    TT_ASSERT(addr_18.has_value());
+    TT_FATAL(addr_18.has_value());
     pass &= addr_18 == 0;
 
     free_list_allocator.deallocate(0);
 
     auto addr_19 = free_list_allocator.allocate(64, true);
-    TT_ASSERT(addr_19.has_value());
+    TT_FATAL(addr_19.has_value());
     pass &= addr_19 == 0;
 
     auto addr_20 = free_list_allocator.allocate(max_size_bytes - 64, true);
-    TT_ASSERT(addr_20.has_value());
+    TT_FATAL(addr_20.has_value());
     pass &= addr_20 == 64;
 
     return pass;
@@ -153,7 +153,7 @@ int main(int argc, char **argv) {
         log_fatal(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

@@ -20,8 +20,8 @@ using namespace tt;
 
 std::string get_latest_kernel_binary_path(int device_id, const tt_metal::Kernel *kernel) {
     auto root_dir = get_kernel_compile_outpath(device_id);
-    TT_ASSERT(kernel != nullptr);
-    TT_ASSERT(std::filesystem::exists(root_dir + kernel->name()));
+    TT_FATAL(kernel != nullptr);
+    TT_FATAL(std::filesystem::exists(root_dir + kernel->name()));
 
     std::filesystem::path kernel_path{root_dir + kernel->name()};
     std::filesystem::file_time_type ftime = std::filesystem::last_write_time(*kernel_path.begin());
@@ -33,7 +33,7 @@ std::string get_latest_kernel_binary_path(int device_id, const tt_metal::Kernel 
             latest_hash = dir_entry.path().filename().string();
         }
     }
-    TT_ASSERT(not latest_hash.empty());
+    TT_FATAL(not latest_hash.empty());
     return kernel->name() + "/" + latest_hash;
 }
 
@@ -112,7 +112,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         // Check that binary memory objects in the kernel match the ones obtained from the persistent cache
         const KernelGroup *kernel_group = program.kernels_on_core(core);
-        TT_ASSERT(kernel_group != nullptr && kernel_group->compute_id.has_value() and kernel_group->riscv0_id.has_value() and kernel_group->riscv1_id.has_value());
+        TT_FATAL(kernel_group != nullptr && kernel_group->compute_id.has_value() and kernel_group->riscv0_id.has_value() and kernel_group->riscv1_id.has_value());
         tt_metal::Kernel *compute_kernel = tt_metal::detail::GetKernel(program, kernel_group->compute_id.value());
         tt_metal::Kernel *riscv0_kernel = tt_metal::detail::GetKernel(program, kernel_group->riscv0_id.value());
         tt_metal::Kernel *riscv1_kernel = tt_metal::detail::GetKernel(program, kernel_group->riscv1_id.value());
@@ -130,27 +130,27 @@ int main(int argc, char **argv) {
             tt_metal::detail::CompileProgram(device, program);
             if (i == 0) {
                 compute_binaries = compute_kernel->binaries(device->id());
-                TT_ASSERT(compute_binaries.size() == 3, "Expected 3 Compute binaries!");
+                TT_FATAL(compute_binaries.size() == 3, "Expected 3 Compute binaries!");
                 brisc_binaries = riscv0_kernel->binaries(device->id());
-                TT_ASSERT(brisc_binaries.size() == 1, "Expected 1 BRISC binary!");
+                TT_FATAL(brisc_binaries.size() == 1, "Expected 1 BRISC binary!");
                 ncrisc_binaries = riscv1_kernel->binaries(device->id());
-                TT_ASSERT(ncrisc_binaries.size() == 1, "Expected 1 NCRISC binary!");
+                TT_FATAL(ncrisc_binaries.size() == 1, "Expected 1 NCRISC binary!");
             } else {
-                TT_ASSERT(compute_kernel->binaries(device->id()) == compute_binaries);
-                TT_ASSERT(riscv0_kernel->binaries(device->id()) == brisc_binaries);
-                TT_ASSERT(riscv1_kernel->binaries(device->id()) == ncrisc_binaries);
+                TT_FATAL(compute_kernel->binaries(device->id()) == compute_binaries);
+                TT_FATAL(riscv0_kernel->binaries(device->id()) == brisc_binaries);
+                TT_FATAL(riscv1_kernel->binaries(device->id()) == ncrisc_binaries);
             }
             std::string brisc_hex_path = get_latest_kernel_binary_path(device->id(), riscv0_kernel) + "/brisc/brisc.hex";
             ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path, device->id(), false);
-            TT_ASSERT(brisc_binary == brisc_binaries.at(0), "Expected saved BRISC binary to be the same as binary in persistent cache");
+            TT_FATAL(brisc_binary == brisc_binaries.at(0), "Expected saved BRISC binary to be the same as binary in persistent cache");
             std::string ncrisc_hex_path = get_latest_kernel_binary_path(device->id(), riscv1_kernel) + "/ncrisc/ncrisc.hex";
             ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path, device->id(), false);
-            TT_ASSERT(ncrisc_binary == ncrisc_binaries.at(0), "Expected saved NCRISC binary to be the same as binary in persistent cache");
+            TT_FATAL(ncrisc_binary == ncrisc_binaries.at(0), "Expected saved NCRISC binary to be the same as binary in persistent cache");
             for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                 std::string trisc_id_str = std::to_string(trisc_id);
                 std::string trisc_hex_path = get_latest_kernel_binary_path(device->id(), compute_kernel) + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
                 ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path, device->id(), false);
-                TT_ASSERT(trisc_binary == compute_binaries.at(trisc_id), "Expected saved TRISC binary for " + trisc_id_str + " to be the same as binary in persistent cache");
+                TT_FATAL(trisc_binary == compute_binaries.at(trisc_id), "Expected saved TRISC binary for " + trisc_id_str + " to be the same as binary in persistent cache");
             }
         }
 
@@ -170,7 +170,7 @@ int main(int argc, char **argv) {
         log_fatal(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

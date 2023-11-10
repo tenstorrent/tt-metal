@@ -160,11 +160,11 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t single_tile_size = 2 * 1024;
-    TT_ASSERT(
+    TT_FATAL(
         cfg.M * cfg.in0_block_w * single_tile_size * 2 <= 150 * 1024, "input0 block must fit within 150kB of L1");
-    TT_ASSERT(
+    TT_FATAL(
         cfg.N * cfg.in0_block_w * single_tile_size * 2 <= 100 * 1024, "input1 block must fit within 100kB of L1");
-    TT_ASSERT(cfg.M * cfg.N * single_tile_size <= 600 * 1024, "output block must fit within 600kB of L1");
+    TT_FATAL(cfg.M * cfg.N * single_tile_size <= 600 * 1024, "output block must fit within 600kB of L1");
     uint32_t dram_buffer_size_input0 =
         single_tile_size * cfg.M * cfg.K;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
     uint32_t dram_buffer_size_input1 =
@@ -269,10 +269,10 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
         cfg.in0_block_w,
         cfg.out_subblock_h);
 
-    TT_ASSERT(
+    TT_FATAL(
         in0_subblock_h * cfg.in0_block_w * in0_num_subblocks == in0_block_num_tiles,
         "in0_subblock_h * cfg.in0_block_w * in0_num_subblocks == in0_block_num_tiles");
-    TT_ASSERT(cfg.in0_block_w == cfg.K, "Must match k tiles");
+    TT_FATAL(cfg.in0_block_w == cfg.K, "Must match k tiles");
 
     vector<uint32_t> compute_kernel_args = {
         uint(cfg.in0_block_w),

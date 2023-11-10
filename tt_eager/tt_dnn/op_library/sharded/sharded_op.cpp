@@ -17,21 +17,21 @@ namespace tt_metal {
 
 void Sharded::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr , "Operands to shard need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr , "Operands to shard need to be allocated in buffers on device!");
     if (this->sharded_op_type == ShardedOpType::InterleavedToSharded) {
-        TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
     } else if (this->sharded_op_type == ShardedOpType::ShardedToInterleaved) {
-        TT_ASSERT(input_tensor.memory_config().is_sharded());
+        TT_FATAL(input_tensor.memory_config().is_sharded());
         if(input_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
             if (input_tensor.shape()[-1] % this->shard_spec.shard_shape[1] != 0
                 || ((input_tensor.volume() / input_tensor.shape()[-1]) % this->shard_spec.shard_shape[0]) != 0) {
-                TT_ASSERT(input_tensor.shard_spec().value().shard_grid.ranges().size() == 1);
+                TT_FATAL(input_tensor.shard_spec().value().shard_grid.ranges().size() == 1);
             }
         }
     }
     auto device_grid = input_tensor.device()->compute_with_storage_grid_size();
-    TT_ASSERT(this->grid_size.x <= device_grid.x && this->grid_size.y <= device_grid.y);
+    TT_FATAL(this->grid_size.x <= device_grid.x && this->grid_size.y <= device_grid.y);
     // Divisibility of num_cores and shard size with tensor shape is done in tensor creation, so no need to assert here
 }
 

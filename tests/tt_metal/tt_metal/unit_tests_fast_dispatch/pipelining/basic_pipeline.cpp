@@ -44,8 +44,8 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
     uint32_t num_blocks_in_CB = (uint32_t)test_config.num_blocks_in_CB;
     uint32_t num_repetitions = (uint32_t)test_config.num_repetitions;
 
-    TT_ASSERT(num_cores >= 2 && num_cores <= 12);  // grayskull
-    TT_ASSERT(num_tiles % block_size_tiles == 0);
+    TT_FATAL(num_cores >= 2 && num_cores <= 12);  // grayskull
+    TT_FATAL(num_tiles % block_size_tiles == 0);
 
     std::vector<CoreCoord> cores;
     for (uint32_t i = 0; i < num_cores; i++) {

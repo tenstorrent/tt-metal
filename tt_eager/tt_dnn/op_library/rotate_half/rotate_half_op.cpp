@@ -19,10 +19,10 @@ namespace tt_metal {
 
 void RotateHalf::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to rotate half need to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operands to rotate half need to be allocated in buffers on device!");
-    TT_ASSERT((input_tensor.layout() == Layout::TILE), "Inputs to rotate half must be tilized");
-    TT_ASSERT(input_tensor.shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to rotate half need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to rotate half need to be allocated in buffers on device!");
+    TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to rotate half must be tilized");
+    TT_FATAL(input_tensor.shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
 }
 
 std::vector<Shape> RotateHalf::compute_output_shapes(

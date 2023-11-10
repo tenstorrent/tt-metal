@@ -303,7 +303,7 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
         uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, run) & 3));
         if (run != run_state && run != RUN_MSG_DONE) {
             fprintf(stderr, "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n", run, run_state, RUN_MSG_DONE);
-            TT_ASSERT(
+            TT_FATAL(
                 run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE);
         }
 

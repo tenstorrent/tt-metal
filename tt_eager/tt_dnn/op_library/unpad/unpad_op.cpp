@@ -21,29 +21,29 @@ namespace tt_metal {
 
 void Unpad::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to unpad need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR);
+    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
+    TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to unpad need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR);
 
-    TT_ASSERT(
+    TT_FATAL(
         (this->output_tensor_start[0] == 0 && this->output_tensor_start[1] == 0 && output_tensor_start[2] == 0 && output_tensor_start[3] == 0),
         "On device unpadding only supports unpadding at end of dims"
     );
 
-    TT_ASSERT(this->output_tensor_start[0] < input_tensor_a.shape()[0]);
-    TT_ASSERT(this->output_tensor_end[0] < input_tensor_a.shape()[0]);
-    TT_ASSERT(this->output_tensor_start[1] < input_tensor_a.shape()[1]);
-    TT_ASSERT(this->output_tensor_end[1] < input_tensor_a.shape()[1]);
-    TT_ASSERT(this->output_tensor_start[2] < input_tensor_a.shape()[2]);
-    TT_ASSERT(this->output_tensor_end[2] < input_tensor_a.shape()[2]);
-    TT_ASSERT(this->output_tensor_start[3] < input_tensor_a.shape()[3]);
-    TT_ASSERT(this->output_tensor_end[3] < input_tensor_a.shape()[3]);
+    TT_FATAL(this->output_tensor_start[0] < input_tensor_a.shape()[0]);
+    TT_FATAL(this->output_tensor_end[0] < input_tensor_a.shape()[0]);
+    TT_FATAL(this->output_tensor_start[1] < input_tensor_a.shape()[1]);
+    TT_FATAL(this->output_tensor_end[1] < input_tensor_a.shape()[1]);
+    TT_FATAL(this->output_tensor_start[2] < input_tensor_a.shape()[2]);
+    TT_FATAL(this->output_tensor_end[2] < input_tensor_a.shape()[2]);
+    TT_FATAL(this->output_tensor_start[3] < input_tensor_a.shape()[3]);
+    TT_FATAL(this->output_tensor_end[3] < input_tensor_a.shape()[3]);
 
     // Check if start shape is <= end shape
-    TT_ASSERT(this->output_tensor_start[0] <= this->output_tensor_end[0]);
-    TT_ASSERT(this->output_tensor_start[1] <= this->output_tensor_end[1]);
-    TT_ASSERT(this->output_tensor_start[2] <= this->output_tensor_end[2]);
-    TT_ASSERT(this->output_tensor_start[3] <= this->output_tensor_end[3]);
+    TT_FATAL(this->output_tensor_start[0] <= this->output_tensor_end[0]);
+    TT_FATAL(this->output_tensor_start[1] <= this->output_tensor_end[1]);
+    TT_FATAL(this->output_tensor_start[2] <= this->output_tensor_end[2]);
+    TT_FATAL(this->output_tensor_start[3] <= this->output_tensor_end[3]);
 
     Shape output_tensor_shape = {
         this->output_tensor_end[0] - this->output_tensor_start[0] + 1,
@@ -53,11 +53,11 @@ void Unpad::validate(const std::vector<Tensor> &input_tensors) const {
     };
 
     if (input_tensor_a.layout() == Layout::TILE) {
-        TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
-        TT_ASSERT((output_tensor_shape[2] % TILE_HEIGHT == 0), "Can only unpad tilized tensor with full tiles");
-        TT_ASSERT((output_tensor_shape[3] % TILE_WIDTH == 0), "Can only unpad tilized tensor with full tiles");
+        TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
+        TT_FATAL((output_tensor_shape[2] % TILE_HEIGHT == 0), "Can only unpad tilized tensor with full tiles");
+        TT_FATAL((output_tensor_shape[3] % TILE_WIDTH == 0), "Can only unpad tilized tensor with full tiles");
     } else if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
-        TT_ASSERT(output_tensor_shape[3] % 2 == 0, "RM unpadding requires output X dim to be a multiple of 2");
+        TT_FATAL(output_tensor_shape[3] % 2 == 0, "RM unpadding requires output X dim to be a multiple of 2");
     }
 }
 std::vector<Shape> Unpad::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -166,23 +166,23 @@ Tensor unpad(const Tensor &input_tensor_a, const Shape &output_tensor_start, con
 
 void UnpadOnHost::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    TT_ASSERT(input_tensor.storage_type() == StorageType::OWNED);
-    TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR);
+    TT_FATAL(input_tensor.storage_type() == StorageType::OWNED);
+    TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR);
 
-    TT_ASSERT(this->output_tensor_start[0] < input_tensor.shape()[0]);
-    TT_ASSERT(this->output_tensor_end[0] < input_tensor.shape()[0]);
-    TT_ASSERT(this->output_tensor_start[1] < input_tensor.shape()[1]);
-    TT_ASSERT(this->output_tensor_end[1] < input_tensor.shape()[1]);
-    TT_ASSERT(this->output_tensor_start[2] < input_tensor.shape()[2]);
-    TT_ASSERT(this->output_tensor_end[2] < input_tensor.shape()[2]);
-    TT_ASSERT(this->output_tensor_start[3] < input_tensor.shape()[3]);
-    TT_ASSERT(this->output_tensor_end[3] < input_tensor.shape()[3]);
+    TT_FATAL(this->output_tensor_start[0] < input_tensor.shape()[0]);
+    TT_FATAL(this->output_tensor_end[0] < input_tensor.shape()[0]);
+    TT_FATAL(this->output_tensor_start[1] < input_tensor.shape()[1]);
+    TT_FATAL(this->output_tensor_end[1] < input_tensor.shape()[1]);
+    TT_FATAL(this->output_tensor_start[2] < input_tensor.shape()[2]);
+    TT_FATAL(this->output_tensor_end[2] < input_tensor.shape()[2]);
+    TT_FATAL(this->output_tensor_start[3] < input_tensor.shape()[3]);
+    TT_FATAL(this->output_tensor_end[3] < input_tensor.shape()[3]);
 
     // Check if start shape is <= end shape
-    TT_ASSERT(this->output_tensor_start[0] <= this->output_tensor_end[0]);
-    TT_ASSERT(this->output_tensor_start[1] <= this->output_tensor_end[1]);
-    TT_ASSERT(this->output_tensor_start[2] <= this->output_tensor_end[2]);
-    TT_ASSERT(this->output_tensor_start[3] <= this->output_tensor_end[3]);
+    TT_FATAL(this->output_tensor_start[0] <= this->output_tensor_end[0]);
+    TT_FATAL(this->output_tensor_start[1] <= this->output_tensor_end[1]);
+    TT_FATAL(this->output_tensor_start[2] <= this->output_tensor_end[2]);
+    TT_FATAL(this->output_tensor_start[3] <= this->output_tensor_end[3]);
 }
 std::vector<Shape> UnpadOnHost::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     Shape output_tensor_shape = {

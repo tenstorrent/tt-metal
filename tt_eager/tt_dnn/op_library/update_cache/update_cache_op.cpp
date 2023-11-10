@@ -19,22 +19,22 @@ namespace tt_metal {
 void UpdateCache::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& cache_tensor = input_tensors.at(0);
     const auto& input_tensor = input_tensors.at(1);
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE and cache_tensor.storage_type() == StorageType::DEVICE, "Operands to update_cache need to be on device!");
-    TT_ASSERT(input_tensor.device() == cache_tensor.device(), "Operands to update_cache need to be on the same device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr and cache_tensor.buffer() != nullptr, "Operands to update_cache need to be allocated in buffers on device!");
-    TT_ASSERT((input_tensor.layout() == Layout::TILE && cache_tensor.layout() == Layout::TILE), "Inputs to update_cache must be tilized");
-    TT_ASSERT(input_tensor.dtype() == cache_tensor.dtype());
-    TT_ASSERT(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B);
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE and cache_tensor.storage_type() == StorageType::DEVICE, "Operands to update_cache need to be on device!");
+    TT_FATAL(input_tensor.device() == cache_tensor.device(), "Operands to update_cache need to be on the same device!");
+    TT_FATAL(input_tensor.buffer() != nullptr and cache_tensor.buffer() != nullptr, "Operands to update_cache need to be allocated in buffers on device!");
+    TT_FATAL((input_tensor.layout() == Layout::TILE && cache_tensor.layout() == Layout::TILE), "Inputs to update_cache must be tilized");
+    TT_FATAL(input_tensor.dtype() == cache_tensor.dtype());
+    TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B);
 
-    TT_ASSERT(input_tensor.shape()[-1] == cache_tensor.shape()[-1]);
-    TT_ASSERT(cache_tensor.shape()[1] == 1);
-    TT_ASSERT(input_tensor.shape()[0] * input_tensor.shape()[1] == 1);
+    TT_FATAL(input_tensor.shape()[-1] == cache_tensor.shape()[-1]);
+    TT_FATAL(cache_tensor.shape()[1] == 1);
+    TT_FATAL(input_tensor.shape()[0] * input_tensor.shape()[1] == 1);
 
     if (this->op_type == UpdateCacheOpType::FILL) {
-        TT_ASSERT(this->batch_idx < cache_tensor.shape()[0]);
-        TT_ASSERT(input_tensor.shape()[-2] <= cache_tensor.shape()[-2]);
+        TT_FATAL(this->batch_idx < cache_tensor.shape()[0]);
+        TT_FATAL(input_tensor.shape()[-2] <= cache_tensor.shape()[-2]);
     } else if (this->op_type == UpdateCacheOpType::UPDATE) {
-        TT_ASSERT(cache_tensor.shape()[0] == input_tensor.shape()[-2]);
+        TT_FATAL(cache_tensor.shape()[0] == input_tensor.shape()[-2]);
     }
 }
 

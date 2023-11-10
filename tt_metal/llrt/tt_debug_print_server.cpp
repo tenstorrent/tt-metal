@@ -111,7 +111,7 @@ struct DebugPrintServerContext {
         for (int i = 0; i < print_threads_.size(); i++) {
             auto future = std::async(std::launch::async, &std::thread::join, print_threads_[i]);
             if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
-                TT_ASSERT(false && "Timed out waiting on debug print thread to terminate.");
+                TT_FATAL(false && "Timed out waiting on debug print thread to terminate.");
             }
             delete print_threads_[i];
             print_threads_[i] = nullptr;
@@ -387,7 +387,7 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                     TT_ASSERT(sz == 8);
                 break;
                 default:
-                    TT_ASSERT("Unexpected debug print type code" && false);
+                    TT_FATAL("Unexpected debug print type code" && false);
             }
 
             // TODO(AP): this is slow but leaving here for now for debugging the debug prints themselves
@@ -550,8 +550,8 @@ void tt_start_debug_print_server()
         }
         char *db_file = std::getenv("TT_METAL_DPRINT_FILE");
 
-        TT_ASSERT(DebugPrintServerContext::inst == nullptr, "Multiple print servers not allowed");
-        TT_ASSERT(DebugPrintServerContext::ProfilerIsRunning == false, "Device side profiler is running, cannot start print server");
+        TT_FATAL(DebugPrintServerContext::inst == nullptr, "Multiple print servers not allowed");
+        TT_FATAL(DebugPrintServerContext::ProfilerIsRunning == false, "Device side profiler is running, cannot start print server");
 
         tt::Cluster::instance().reset_debug_print_server_buffers();
 
