@@ -197,7 +197,7 @@ class CoreRangeSet {
           bool first_core_below_second = first_core_range.start.y > second_core_range.end.y;
           auto no_overlap = first_core_left_of_second or first_core_right_of_second or first_core_above_second or first_core_below_second;
           if (not no_overlap) {
-              tt::log_fatal(("Cannot create CoreRangeSet with specified core ranges because core ranges " + first_core_range.str() + " and " + second_core_range.str() + " overlap!").c_str());
+              TT_THROW(("Cannot create CoreRangeSet with specified core ranges because core ranges " + first_core_range.str() + " and " + second_core_range.str() + " overlap!").c_str());
           }
         }
       }

@@ -21,7 +21,7 @@ class DeviceFixture : public ::testing::Test {
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (not slow_dispatch) {
-            tt::log_fatal("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
+            TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
         arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());

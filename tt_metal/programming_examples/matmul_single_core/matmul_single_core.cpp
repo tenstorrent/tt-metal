@@ -233,7 +233,7 @@ int main(int argc, char **argv) {
     bool pass = true;
 
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        tt::log_fatal("Test not supported w/ slow dispatch, exiting");
+        TT_THROW("Test not supported w/ slow dispatch, exiting");
     }
 
     try {
@@ -359,7 +359,7 @@ int main(int argc, char **argv) {
     if (pass) {
         tt::log_info(tt::LogTest, "Test Passed");
     } else {
-        tt::log_fatal(tt::LogTest, "Test Failed");
+        TT_THROW("Test Failed");
     }
 
     TT_ASSERT(pass);

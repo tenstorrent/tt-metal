@@ -307,7 +307,7 @@ int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
         chip_id_t mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(chip_id);
         return this->device_->get_clocks().at(mmio_device_id);
     }
-    log_fatal(LogLLRuntime, "Cannot get frequency for device {} that is not initialized!", chip_id);
+    TT_THROW("Cannot get frequency for device {} that is not initialized!", chip_id);
     return 0;
 }
 

@@ -32,7 +32,7 @@ namespace{
             generate_descriptors(build_options, op_path_suffix, device->arch());
             kernel->generate_binaries(device, build_options, op_path_suffix);
         } catch (std::runtime_error &ex) {
-            log_fatal("Failed to generate binaries for {} {}", kernel->name(), ex.what());
+            TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
         }
     }
 
@@ -314,10 +314,10 @@ std::vector<std::string> Program::cores_to_ops() const {
 
 void Program::CircularBufferAllocator::add_index(uint32_t index) {
     if (index > NUM_CIRCULAR_BUFFERS) {
-        log_fatal(tt::LogMetal, "Invalid circular buffer index: {} should be between 0 and {}", index, NUM_CIRCULAR_BUFFERS);
+        TT_THROW("Invalid circular buffer index: {} should be between 0 and {}", index, NUM_CIRCULAR_BUFFERS);
     }
     if (this->indices.to_ulong() & (1 << index)) {
-        log_fatal(tt::LogMetal, "Invalid circular buffer index: Cannot add circular buffer at index {}, another circular buffer already exists", index);
+        TT_THROW("Invalid circular buffer index: Cannot add circular buffer at index {}, another circular buffer already exists", index);
     }
     this->indices[index] = 1;
 }
@@ -330,7 +330,7 @@ uint64_t Program::CircularBufferAllocator::get_address_candidate() const {
 void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t size) {
     auto &last_region = this->l1_regions.back();
     if (address < last_region.second) {
-        log_fatal(tt::LogMetal, "Local buffer address {} has to append to last L1 region [{}, {}) or be at a higher address", address, last_region.first, last_region.second);
+        TT_THROW("Local buffer address {} has to append to last L1 region [{}, {}) or be at a higher address", address, last_region.first, last_region.second);
     }
     if (address == last_region.second) {
         last_region.second += size;
@@ -369,7 +369,7 @@ CircularBufferID Program::add_circular_buffer(const CoreRangeSet &core_range_set
 
 std::shared_ptr<CircularBuffer> Program::get_circular_buffer(CircularBufferID cb_id) const {
     if (this->circular_buffer_by_id_.find(cb_id) == this->circular_buffer_by_id_.end()) {
-        log_fatal(tt::LogMetal, "No circular buffer with id {} exists in Program {}", cb_id, this->id);
+        TT_THROW("No circular buffer with id {} exists in Program {}", cb_id, this->id);
     }
     return this->circular_buffer_by_id_.at(cb_id);
 }
@@ -462,10 +462,10 @@ void Program::validate_circular_buffer_region(const Device *device) const {
     for (const auto &[core, cb_config] : this->per_core_cb_allocator_) {
         uint64_t cb_region_end = cb_config.get_cb_region_end();
         if (cb_region_end > max_l1_size) {
-            log_fatal(tt::LogMetal, "Statically allocated circular buffers on core {} grow to {} B which is beyond max L1 size of {} B", core.str(), cb_region_end, max_l1_size);
+            TT_THROW("Statically allocated circular buffers on core {} grow to {} B which is beyond max L1 size of {} B", core.str(), cb_region_end, max_l1_size);
         }
         if (lowest_address.value() < cb_region_end) {
-            log_fatal(tt::LogMetal, "Statically allocated circular buffers in program {} clash with L1 buffers on core {}. L1 buffer allocated at {} and static circular buffer region ends at {}", this->id, core.str(), lowest_address.value(), cb_region_end);
+            TT_THROW("Statically allocated circular buffers in program {} clash with L1 buffers on core {}. L1 buffer allocated at {} and static circular buffer region ends at {}", this->id, core.str(), lowest_address.value(), cb_region_end);
         }
     }
 }

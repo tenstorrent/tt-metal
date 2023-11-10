@@ -46,7 +46,7 @@ void measure_latency(string kernel_name) {
 
 int main(int argc, char **argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-        log_fatal("Test not supported w/ fast dispatch, exiting");
+        TT_THROW("Test not supported w/ fast dispatch, exiting");
     }
 
     measure_latency("multicast_to_single_core");

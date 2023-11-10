@@ -34,7 +34,7 @@ void validate_num_banks(uint32_t num_banks, const BufferType &buffer_type) {
     bool custom_mod_bank_id_calculation_exists = (num_banks == 12 or num_banks == 94);
     bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists);
     if (not valid_num_banks) {
-        log_fatal(LogMetal, "Invalid number of memory banks for {}. Num banks must be power of 2 or have a dedicated modulo implementation", magic_enum::enum_name(buffer_type));
+        TT_THROW("Invalid number of memory banks for {}. Num banks must be power of 2 or have a dedicated modulo implementation", magic_enum::enum_name(buffer_type));
     }
 }
 
@@ -60,7 +60,7 @@ uint32_t BankManager::num_banks() const {
 uint32_t BankManager::bank_size() const {
     uint64_t max_size_bytes_u64 = this->allocator_->max_size_bytes();
     if (max_size_bytes_u64 > std::numeric_limits<uint32_t>::max()) {
-        tt::log_fatal(tt::LogMetal, "Bank size {} overflows uint32_t", max_size_bytes_u64);
+        TT_THROW("Bank size {} overflows uint32_t", max_size_bytes_u64);
     }
     uint32_t max_size_bytes = (uint32_t)max_size_bytes_u64;
     return max_size_bytes;
@@ -82,7 +82,7 @@ uint64_t BankManager::allocate_buffer(uint32_t size, uint32_t page_size, bool bo
 
     auto address = this->allocator_->allocate(size_per_bank, bottom_up);
     if (not address.has_value()) {
-        log_fatal(tt::LogMetal, "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to store {} B", size, magic_enum::enum_name(this->buffer_type_), num_banks, size_per_bank);
+        TT_THROW("Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to store {} B", size, magic_enum::enum_name(this->buffer_type_), num_banks, size_per_bank);
     }
     allocated_buffers_.insert(address.value());
     return address.value();
@@ -160,7 +160,7 @@ uint32_t num_banks(const Allocator &allocator, const BufferType &buffer_type) {
         case BufferType::DRAM: return allocator.dram_manager.num_banks();
         case BufferType::L1: return allocator.l1_manager.num_banks();
         default: {
-            log_fatal("Unsupported buffer type!");
+            TT_THROW("Unsupported buffer type!");
         }
     }
     return 0;
@@ -171,7 +171,7 @@ uint32_t bank_size(const Allocator &allocator, const BufferType &buffer_type) {
         case BufferType::DRAM: return allocator.dram_manager.bank_size();
         case BufferType::L1: return allocator.l1_manager.bank_size();
         default: {
-            log_fatal(tt::LogMetal, "Unsupported buffer type!");
+            TT_THROW("Unsupported buffer type!");
         }
     }
     return 0;
@@ -197,14 +197,14 @@ int32_t dram_bank_offset_from_bank_id(const Allocator &allocator, uint32_t bank_
 
 const std::vector<uint32_t> &bank_ids_from_dram_channel(const Allocator &allocator, uint32_t dram_channel) {
     if (allocator.dram_channel_to_bank_ids.find(dram_channel) == allocator.dram_channel_to_bank_ids.end()) {
-        log_fatal(LogMetal, "No DRAM bank exists for DRAM channel {}", dram_channel);
+        TT_THROW("No DRAM bank exists for DRAM channel {}", dram_channel);
     }
     return allocator.dram_channel_to_bank_ids.at(dram_channel);
 }
 
 const std::vector<uint32_t> &bank_ids_from_logical_core(const Allocator &allocator, const CoreCoord &logical_core) {
     if (allocator.logical_core_to_bank_ids.find(logical_core) == allocator.logical_core_to_bank_ids.end()) {
-        log_fatal(LogMetal, "No L1 bank exists for core {}", logical_core.str());
+        TT_THROW("No L1 bank exists for core {}", logical_core.str());
     }
     return allocator.logical_core_to_bank_ids.at(logical_core);
 }
@@ -215,7 +215,7 @@ Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_t
         case BufferType::DRAM: return allocator.dram_manager.get_statistics();
         case BufferType::L1: return allocator.l1_manager.get_statistics();
         default: {
-            log_fatal("Unsupported buffer type!");
+            TT_THROW("Unsupported buffer type!");
         }
     }
     return stats;
@@ -228,7 +228,7 @@ void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_typ
         case BufferType::L1: allocator.l1_manager.dump_blocks(out);
         break;
         default: {
-            log_fatal("Unsupported buffer type!");
+            TT_THROW("Unsupported buffer type!");
         }
     }
 }
@@ -247,7 +247,7 @@ uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size
         case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, size, page_size, bottom_up);
         case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, size, page_size, bottom_up);
         default: {
-            log_fatal("Unsupported buffer type!");
+            TT_THROW("Unsupported buffer type!");
         }
     }
     return address;
@@ -262,7 +262,7 @@ void deallocate_buffer(Allocator &allocator, uint64_t address, const BufferType 
             allocator.l1_manager.deallocate_buffer(address);
         break;
         default: {
-            log_fatal("Unsupported buffer type!");
+            TT_THROW("Unsupported buffer type!");
         }
     }
 }

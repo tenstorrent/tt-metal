@@ -34,8 +34,7 @@ int main(int argc, char** argv) {
           test_args::get_command_option_uint32_and_remaining_args(input_args,
                                                            "--iter", 1);
     } catch (const std::exception& e) {
-      log_fatal(tt::LogTest,
-                "Please input test size with \"--size <size to test>\"",
+      TT_THROW("Please input test size with \"--size <size to test>\"",
                 e.what());
     }
     uint64_t buffer_size = stoul(size_string);
@@ -111,7 +110,7 @@ int main(int argc, char** argv) {
   if (pass) {
     log_info(LogTest, "Test Passed");
   } else {
-    log_fatal(LogTest, "Test Failed");
+    TT_THROW("Test Failed");
   }
 
   TT_FATAL(pass);

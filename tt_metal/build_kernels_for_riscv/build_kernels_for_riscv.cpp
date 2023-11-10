@@ -310,7 +310,7 @@ struct CompileState {
         }
         if (std::getenv("TT_METAL_DPRINT_CORES") != nullptr) {
             if (profile_kernel) {
-                log_fatal(tt::LogBuildKernels, "Cannot enable debug printing and profiling");
+                TT_THROW("Cannot enable debug printing and profiling");
             }
             result += " -DDEBUG_PRINT_ENABLED";
         }
@@ -407,7 +407,7 @@ struct CompileState {
         if (!is_fw_build_) {
             string weakened_elf_name = tt::get_firmware_compile_outpath(device_id) + elfname + "/" + elfname + "_weakened.elf";
             if (!fs::exists(weakened_elf_name)) {
-                log_fatal(tt::LogBuildKernels, "File {} does not exist, link failed\n", weakened_elf_name);
+                TT_THROW("File {} does not exist, link failed\n", weakened_elf_name);
             }
             linkopts += " -Xlinker \"--just-symbols=" + weakened_elf_name + "\"";
         }
@@ -520,9 +520,9 @@ static void build_failure(RISCID thread,
     string cat = "cat " + logfile;
     // XXXX PGK(TODO) not portable
     if (system(cat.c_str())) {
-        log_fatal(tt::LogBuildKernels, "Failed system comand {}", cat);
+        TT_THROW("Failed system comand {}", cat);
     }
-    log_fatal(tt::LogBuildKernels, "{}RISC build failed", thread_name);
+    TT_THROW("{}RISC build failed", thread_name);
 }
 
 static void compile_for_risc(
@@ -695,7 +695,7 @@ void link_for_risc(RISCID risc_id,
         string weaken_cmd = ctx.get_weaken_cmd(link[1]);
         log_debug(tt::LogBuildKernels, "    objcopy cmd: {}", weaken_cmd);
         if (!tt::utils::run_command(weaken_cmd, ctx.log_file, false)) {
-            log_fatal(tt::LogBuildKernels, "{}RISC objcopy failed -- cmd: {}", RISCID_to_string(ctx.hwthread), weaken_cmd);
+            TT_THROW("{}RISC objcopy failed -- cmd: {}", RISCID_to_string(ctx.hwthread), weaken_cmd);
         }
     }
 }

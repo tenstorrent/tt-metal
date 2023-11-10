@@ -100,7 +100,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
                         uint64_t storage_core_offset = storage_bank_index * alloc_config.l1_bank_size;
                         bank_offset_bytes = static_cast<int64_t>(storage_core_offset) - alloc_config.l1_bank_size; // Assuming top-down here --  Not sure if this is hacky... need to specialize based off top-down cofnig flag or not?
                     } else if (num_banks.per_storage_core != 1) {
-                        tt::log_fatal(LogMetal, "Expected 1 bank per storage core if L1 bank size equals total worker L1 size but have {} banks", num_banks.per_storage_core);
+                        TT_THROW("Expected 1 bank per storage core if L1 bank size equals total worker L1 size but have {} banks", num_banks.per_storage_core);
                     }
                     bank_id_to_bank_offset.insert({remapped_bank_id, bank_offset_bytes});
                     bank_id++;

@@ -313,7 +313,7 @@ bool run_chained_sfpu_test(int chain_length) {
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());
         // Capture system call errors that may have returned from driver/kernel
-        log_fatal(LogTest, "System error message: {}", std::strerror(errno));
+        TT_THROW("System error message: {}", std::strerror(errno));
     }
 
     return pass;
@@ -535,7 +535,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());
         // Capture system call errors that may have returned from driver/kernel
-        log_fatal(LogTest, "System error message: {}", std::strerror(errno));
+        TT_THROW("System error message: {}", std::strerror(errno));
     }
 
     return pass;
@@ -1013,7 +1013,7 @@ bool run_forked_binary_test() {
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());
         // Capture system call errors that may have returned from driver/kernel
-        log_fatal(LogTest, "System error message: {}", std::strerror(errno));
+        TT_THROW("System error message: {}", std::strerror(errno));
     }
 
     return pass;

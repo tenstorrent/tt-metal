@@ -165,7 +165,7 @@ void DataMovementKernel::set_build_options(build_kernel_for_riscv_options_t &bui
         }
         break;
         default:
-            log_fatal("Unsupported data movement processor!");
+            TT_THROW("Unsupported data movement processor!");
         break;
     }
 }
@@ -194,7 +194,7 @@ void DataMovementKernel::generate_binaries(Device *device, build_kernel_for_risc
         }
         break;
         default:
-            log_fatal("Unsupported data movement processor!");
+            TT_THROW("Unsupported data movement processor!");
     }
 }
 
@@ -233,7 +233,7 @@ void DataMovementKernel::read_binaries(chip_id_t device_id) {
         }
         break;
         default:
-            log_fatal("Unsupported data movement processor!");
+            TT_THROW("Unsupported data movement processor!");
     }
 
     ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, device_id, false);
@@ -274,7 +274,7 @@ RISCV DataMovementKernel::processor() const {
         case DataMovementProcessor::RISCV_0: return RISCV::BRISC;
         case DataMovementProcessor::RISCV_1: return RISCV::NCRISC;
         default:
-            log_fatal("Unsupported data movement processor");
+            TT_THROW("Unsupported data movement processor");
     }
     return RISCV::BRISC;
 }
@@ -303,7 +303,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
         }
         break;
         default:
-            log_fatal("Unsupported data movement processor!");
+            TT_THROW("Unsupported data movement processor!");
     }
 
     pass &= tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, worker_core, riscv_id);
@@ -345,7 +345,7 @@ std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processo
     switch (processor) {
         case DataMovementProcessor::RISCV_0: os << "RISCV_0"; break;
         case DataMovementProcessor::RISCV_1: os << "RISCV_1"; break;
-        default: log_fatal("Unknown data movement processor");
+        default: TT_THROW("Unknown data movement processor");
     }
     return os;
 }

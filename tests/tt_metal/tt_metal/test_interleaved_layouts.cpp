@@ -520,7 +520,7 @@ int main(int argc, char **argv) {
         std::tie(arch_name, input_args) =
             test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
     } catch (const std::exception& e) {
-        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
+        TT_THROW("Command line arguments found exception", e.what());
     }
     const tt::ARCH arch = tt::get_arch_from_string(arch_name);
 
@@ -538,6 +538,6 @@ int main(int argc, char **argv) {
     if (pass) {
         log_info(LogTest, "Test Passed");
     } else {
-        log_fatal(LogTest, "Test Failed");
+        TT_THROW("Test Failed");
     }
 }

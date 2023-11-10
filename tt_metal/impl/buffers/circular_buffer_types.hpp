@@ -37,10 +37,10 @@ class CircularBufferConfig {
         dynamic_cb_(true),
         max_size_(buffer.size()) {
         if (buffer.buffer_type() != BufferType::L1) {
-            tt::log_fatal(tt::LogMetal, "Only L1 buffers can have an associated circular buffer!");
+            TT_THROW("Only L1 buffers can have an associated circular buffer!");
         }
         if (total_size > buffer.size()) {
-            tt::log_fatal(
+            TT_THROW(
                 tt::LogMetal,
                 "Requested {} B but dynamic circular buffer cannot be larger than allocated L1 buffer of {} B",
                 total_size,
@@ -51,28 +51,28 @@ class CircularBufferConfig {
 
     CircularBufferConfig set_page_size(uint8_t buffer_index, uint32_t page_size) {
         if (buffer_index > NUM_CIRCULAR_BUFFERS - 1) {
-            log_fatal(
+            TT_THROW(
                 tt::LogMetal,
                 "Buffer index ({}) exceeds max number of circular buffers per core ({})",
                 buffer_index,
                 NUM_CIRCULAR_BUFFERS);
         }
         if (this->buffer_indices_.find(buffer_index) == this->buffer_indices_.end()) {
-            log_fatal(
+            TT_THROW(
                 tt::LogMetal,
                 "Illegal circular buffer index {}. Page size can only be specified for buffer indices configured "
                 "during config creation",
                 buffer_index);
         }
         if (this->total_size_ % page_size != 0) {
-            log_fatal(
+            TT_THROW(
                 tt::LogMetal,
                 "Total circular buffer size {} B must be divisible by page size {} B",
                 this->total_size_,
                 page_size);
         }
         if (page_size % sizeof(uint32_t) != 0) {
-            log_fatal(
+            TT_THROW(
                 tt::LogMetal, "Page size must be divisible by sizeof(uint32_t) because buffers holds uint32_t values");
         }
 
@@ -82,7 +82,7 @@ class CircularBufferConfig {
 
     CircularBufferConfig set_total_size(uint32_t total_size) {
         if (dynamic_cb_ and total_size > this->max_size_.value()) {
-            log_fatal(
+            TT_THROW(
                 tt::LogMetal,
                 "Cannot grow circular buffer to {} B. This is larger than associated dynamically allocated L1 buffer "
                 "of {} B",
@@ -90,7 +90,7 @@ class CircularBufferConfig {
                 this->max_size_.value());
         }
         if (total_size == 0) {
-            log_fatal(tt::LogMetal, "Total size for circular buffer must be non-zero!");
+            TT_THROW("Total size for circular buffer must be non-zero!");
         }
         this->total_size_ = total_size;
         return *this;
@@ -116,7 +116,7 @@ class CircularBufferConfig {
    private:
     void set_config(const std::map<uint8_t, tt::DataFormat> &data_format_spec) {
         if (data_format_spec.size() > NUM_CIRCULAR_BUFFERS) {
-            log_fatal(
+            TT_THROW(
                 tt::LogMetal,
                 "Only {} circular buffer slots are available but data formats are specified for {} indices",
                 NUM_CIRCULAR_BUFFERS,
@@ -125,7 +125,7 @@ class CircularBufferConfig {
 
         for (const auto &[buffer_index, data_format] : data_format_spec) {
             if (buffer_index > NUM_CIRCULAR_BUFFERS - 1) {
-                log_fatal(
+                TT_THROW(
                     tt::LogMetal,
                     "Buffer index ({}) exceeds max number of circular buffers per core ({})",
                     buffer_index,
