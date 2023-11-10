@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 from dataclasses import dataclass
+import tt_lib
 
 
 @dataclass
@@ -20,3 +21,4 @@ class TtModelArgs:
     FALLBACK_SOFTMAX: bool = False
     FALLBACK_ROTARY_EMBEDDING: bool = False
     FALLBACK_EMPTY: bool = False
+    WEIGHTS_DTYPE = tt_lib.tensor.DataType.BFLOAT16

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
+import tt_lib
 import pytest
 from loguru import logger
 import json
@@ -16,10 +17,14 @@ from models.utility_functions import (
 
 
 @pytest.mark.parametrize(
+    "dtype",
+    (tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B),
+)
+@pytest.mark.parametrize(
     "pcc",
     ((0.99),),
 )
-def test_mistral_feed_forward_inference(pcc, model_location_generator, device, reset_seeds):
+def test_mistral_feed_forward_inference(pcc, model_location_generator, device, dtype, reset_seeds):
     mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
     state_dict = torch.load(mistral_path / "consolidated.00.pth")
     base_address = f""
@@ -28,6 +33,7 @@ def test_mistral_feed_forward_inference(pcc, model_location_generator, device, r
 
     state_dict = {k[22:]: v for k, v in state_dict.items() if (k.startswith("layers.0.feed_forward"))}
     model_args.max_batch_size = 1
+    model_args.WEIGHTS_DTYPE = dtype
     reference_model = FeedForward(args=model_args)
     reference_model.load_state_dict(state_dict)
 
