@@ -9,7 +9,8 @@ import torch.nn.functional as F
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, torch_random
+from models.utility_functions import skip_for_wormhole_b0
 
 
 def multi_head_attention(
@@ -56,8 +57,8 @@ def multi_head_attention(
     context_layer = ttnn.reshape(context_layer, (batch_size, sequence_size, hidden_size))
 
     self_output = context_layer
-    # self_output = self_output @ output_weight
-    # self_output = self_output + output_bias
+    self_output = self_output @ output_weight
+    self_output = self_output + output_bias
 
     return self_output
 
@@ -106,18 +107,15 @@ def pytorch_multi_head_attention(
     context_layer = torch.reshape(context_layer, (batch_size, sequence_size, hidden_size))
 
     self_output = context_layer
-    # self_output = self_output @ output_weight
-    # self_output = self_output + output_bias
+    self_output = self_output @ output_weight
+    self_output = self_output + output_bias
 
     return self_output
 
 
-def torch_random(shape, low, high, dtype):
-    return torch.zeros(shape, dtype=dtype).uniform_(low, high)
-
-
 # Note that our reshape requires the width and height to both be multiples of 32
 # so the number of heads must be 32
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [2 * 32])
 @pytest.mark.parametrize("num_heads", [4])

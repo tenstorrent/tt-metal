@@ -9,6 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_wormhole_b0
 
 
 # fmt: off
@@ -258,6 +259,7 @@ def test_tutorial_matmul_with_tilized_inputs_in_l1_memory(device):
     assert_with_pcc(torch_output, output, pcc=0.999)
 
 
+@skip_for_wormhole_b0()
 def test_tutorial_matmul_with_tilized_input_in_l1_memory_and_user_specified_core_grid(device):
     torch.manual_seed(0)
 

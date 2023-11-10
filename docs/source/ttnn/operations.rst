@@ -5,6 +5,7 @@ Operations
    :maxdepth: 1
 
    operations/add
+   operations/embedding
    operations/free
    operations/from_device
    operations/from_torch
