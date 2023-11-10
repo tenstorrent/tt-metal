@@ -99,7 +99,7 @@ std::string Kernel::compute_hash() const {
 
 std::vector<uint32_t> const &Kernel::runtime_args(const CoreCoord &logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
-    // log_assert(this->is_on_logical_core(logical_core), "Cannot get runtime args for kernel {} that is not placed on core {}", this->name(), logical_core.str());
+    // TT_ASSERT(this->is_on_logical_core(logical_core), "Cannot get runtime args for kernel {} that is not placed on core {}", this->name(), logical_core.str());
     return this->core_to_runtime_args_[logical_core];
 }
 
@@ -144,7 +144,7 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
 
     // TODO (abhullar): If we don't include this check then user can write runtime args to a core that the kernel is not placed on.
     //                  Should this check only be enabled in debug mode?
-    // log_assert(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
+    // TT_FATAL(this->is_on_logical_core(logical_core), "Cannot set runtime args for core {} since kernel {} is not placed on it!", logical_core.str(), this->name());
     validate_runtime_args_size();
     auto &set_rt_args = this->core_to_runtime_args_[logical_core];
     TT_ASSERT(set_rt_args.empty() or set_rt_args.size() == runtime_args.size(), "Illegal Runtime Args: Number of runtime args cannot be modified!");
@@ -165,7 +165,7 @@ void DataMovementKernel::set_build_options(build_kernel_for_riscv_options_t &bui
         }
         break;
         default:
-            TT_ASSERT(false, "Unsupported data movement processor!");
+            log_fatal("Unsupported data movement processor!");
         break;
     }
 }
@@ -194,7 +194,7 @@ void DataMovementKernel::generate_binaries(Device *device, build_kernel_for_risc
         }
         break;
         default:
-            log_assert(false, "Unsupported data movement processor!");
+            log_fatal("Unsupported data movement processor!");
     }
 }
 
@@ -233,7 +233,7 @@ void DataMovementKernel::read_binaries(chip_id_t device_id) {
         }
         break;
         default:
-            TT_ASSERT(false, "Unsupported data movement processor!");
+            log_fatal("Unsupported data movement processor!");
     }
 
     ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, device_id, false);
@@ -274,7 +274,7 @@ RISCV DataMovementKernel::processor() const {
         case DataMovementProcessor::RISCV_0: return RISCV::BRISC;
         case DataMovementProcessor::RISCV_1: return RISCV::NCRISC;
         default:
-            log_assert(false, "Unsupported data movement processor");
+            log_fatal("Unsupported data movement processor");
     }
     return RISCV::BRISC;
 }
@@ -303,7 +303,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
         }
         break;
         default:
-            TT_ASSERT(false, "Unsupported data movement processor!");
+            log_fatal("Unsupported data movement processor!");
     }
 
     pass &= tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, worker_core, riscv_id);
@@ -345,7 +345,7 @@ std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processo
     switch (processor) {
         case DataMovementProcessor::RISCV_0: os << "RISCV_0"; break;
         case DataMovementProcessor::RISCV_1: os << "RISCV_1"; break;
-        default: TT_THROW("Unknown data movement processor");
+        default: log_fatal("Unknown data movement processor");
     }
     return os;
 }

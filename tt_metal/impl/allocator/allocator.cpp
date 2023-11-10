@@ -72,7 +72,7 @@ int64_t BankManager::bank_offset(uint32_t bank_id) const {
 }
 
 void BankManager::validate_bank_id(uint32_t bank_id) const {
-    log_assert(this->bank_id_to_bank_offset_.find(bank_id) != this->bank_id_to_bank_offset_.end(), "Expected bank {} to be tracked!", bank_id);
+    TT_FATAL(this->bank_id_to_bank_offset_.find(bank_id) != this->bank_id_to_bank_offset_.end(), "Expected bank {} to be tracked!", bank_id);
 }
 
 uint64_t BankManager::allocate_buffer(uint32_t size, uint32_t page_size, bool bottom_up) {
@@ -160,7 +160,7 @@ uint32_t num_banks(const Allocator &allocator, const BufferType &buffer_type) {
         case BufferType::DRAM: return allocator.dram_manager.num_banks();
         case BufferType::L1: return allocator.l1_manager.num_banks();
         default: {
-            TT_ASSERT(false && "Unsupported buffer type!");
+            log_fatal("Unsupported buffer type!");
         }
     }
     return 0;
@@ -215,7 +215,7 @@ Statistics get_statistics(const Allocator &allocator, const BufferType &buffer_t
         case BufferType::DRAM: return allocator.dram_manager.get_statistics();
         case BufferType::L1: return allocator.l1_manager.get_statistics();
         default: {
-            log_assert(false, "Unsupported buffer type!");
+            log_fatal("Unsupported buffer type!");
         }
     }
     return stats;
@@ -228,7 +228,7 @@ void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_typ
         case BufferType::L1: allocator.l1_manager.dump_blocks(out);
         break;
         default: {
-            log_assert(false, "Unsupported buffer type!");
+            log_fatal("Unsupported buffer type!");
         }
     }
 }
@@ -247,7 +247,7 @@ uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size
         case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, size, page_size, bottom_up);
         case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, size, page_size, bottom_up);
         default: {
-            TT_ASSERT(false && "Unsupported buffer type!");
+            log_fatal("Unsupported buffer type!");
         }
     }
     return address;
@@ -262,7 +262,7 @@ void deallocate_buffer(Allocator &allocator, uint64_t address, const BufferType 
             allocator.l1_manager.deallocate_buffer(address);
         break;
         default: {
-            TT_ASSERT(false && "Unsupported buffer type!");
+            log_fatal("Unsupported buffer type!");
         }
     }
 }

@@ -27,18 +27,18 @@ std::vector<PackType> pack_vector(const std::vector<ValueType>& values) {
     static_assert(
         std::is_integral<PackType>::value,
         "Packed Type must be an integral type we are packing to -- uint8_t/uint16_t/uint32_t...");
-    tt::log_assert(
+    TT_ASSERT(
         sizeof(PackType) > ValueType::SIZEOF,
         "sizeof(PackType)={} > ValueType::SIZEOF)={}",
         sizeof(PackType),
         ValueType::SIZEOF);
-    tt::log_assert(
+    TT_ASSERT(
         (sizeof(PackType) % ValueType::SIZEOF) == 0,
         "sizeof(PackType)={} % ValueType::SIZEOF={} must equal 0",
         sizeof(PackType),
         ValueType::SIZEOF);
     constexpr unsigned int num_values_to_pack = sizeof(PackType) / ValueType::SIZEOF;
-    tt::log_assert(
+    TT_ASSERT(
         (values.size() % num_values_to_pack) == 0,
         "Number of values must evenly divide into the final packed type... no padding assumed");
     std::vector<PackType> results(values.size() / num_values_to_pack, 0);
@@ -58,12 +58,12 @@ std::vector<ValueType> unpack_vector(const std::vector<PackType>& values) {
     static_assert(
         std::is_integral<PackType>::value,
         "Packed Type must be an integral type we are packing to -- uint8_t/uint16_t/uint32_t...");
-    tt::log_assert(
+    TT_ASSERT(
         sizeof(PackType) > ValueType::SIZEOF,
         "sizeof(PackType)={} > ValueType::SIZEOF)={}",
         sizeof(PackType),
         ValueType::SIZEOF);
-    tt::log_assert(
+    TT_ASSERT(
         (sizeof(PackType) % ValueType::SIZEOF) == 0,
         "sizeof(PackType)={} % ValueType::SIZEOF={} must equal 0",
         sizeof(PackType),

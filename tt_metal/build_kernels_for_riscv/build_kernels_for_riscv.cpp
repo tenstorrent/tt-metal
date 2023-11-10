@@ -1243,7 +1243,7 @@ static string generate_noc_addr_ranges_string(
     const std::vector<uint32_t>& harvested_rows,
     const vector<CoreCoord>& dispatch_cores) {
 
-    tt::log_assert(dispatch_cores.size() == 1, "Only 1 dispatch core supported so far");
+    TT_ASSERT(dispatch_cores.size() == 1, "Only 1 dispatch core supported so far");
 
     stringstream ss;
 

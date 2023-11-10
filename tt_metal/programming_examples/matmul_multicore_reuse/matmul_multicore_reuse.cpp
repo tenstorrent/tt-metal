@@ -510,7 +510,7 @@ int main(int argc, char **argv) {
         float pearson = packed_uint32_t_vector_pcc_v2(golden_vec_tilized, result_vec);
         cout << "PCC_v2= " << pearson << endl;
 
-        tt::log_assert(pearson > 0.99, "PCC not high");
+        TT_FATAL(pearson > 0.99, "PCC not high");
 
         //pass &= packed_uint32_t_vector_comparison(golden_vec, result_vec_untilized, comparison_function);
         // pass &= packed_uint32_t_vector_comparison(golden_vec_tilized, result_vec, comparison_function);

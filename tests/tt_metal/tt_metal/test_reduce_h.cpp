@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
     bool multibank = true;
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    tt::log_assert(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
+    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     for (int do_max = 0; do_max <= 1; do_max++) {
     log_info(LogTest, "Running reduce test for max={}", do_max);

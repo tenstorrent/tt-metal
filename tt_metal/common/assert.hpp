@@ -139,3 +139,10 @@ void tt_assert(char const* file, int line, const std::string& assert_type, bool 
 #ifndef TT_THROW
 #define TT_THROW(...)             ::tt::assert::tt_throw(__FILE__, __LINE__, "TT_THROW",     "tt::exception", ##__VA_ARGS__)
 #endif
+
+#ifndef TT_FATAL
+#define TT_FATAL(cond, fmt, ...)                \
+    if (!(cond)) {                              \
+        tt::log_fatal(fmt, ##__VA_ARGS__);      \
+    }
+#endif

@@ -54,7 +54,7 @@ bool is_close_vectors(
     const std::vector<ValueType>& vec_b,
     std::function<bool(ValueType, ValueType)> comparison_function,
     int* argfail = nullptr) {
-    tt::log_assert(vec_a.size() == vec_b.size(), "is_close_vectors -- vec_a.size()={} == vec_b.size()={}", vec_a.size(), vec_b.size());
+    TT_ASSERT(vec_a.size() == vec_b.size(), "is_close_vectors -- vec_a.size()={} == vec_b.size()={}", vec_a.size(), vec_b.size());
 
     for (unsigned int i = 0; i < vec_a.size(); i++) {
         if (not comparison_function(vec_a.at(i), vec_b.at(i))) {
