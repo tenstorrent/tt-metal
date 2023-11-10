@@ -1336,14 +1336,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(const Tensor& a, T
 
 void UntilizeWithHalo::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to untilize need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Input tensor is not TILE for untilize");
-    TT_ASSERT(input_tensor_a.memory_config().is_sharded());
-    TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED or input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Only works for sharded input");
-    TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
+    TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to untilize need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Input tensor is not TILE for untilize");
+    TT_FATAL(input_tensor_a.memory_config().is_sharded());
+    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED or input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED, "Only works for sharded input");
+    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
 
     // Only stride 1 and 2 mode are supported
-    TT_ASSERT(stride_ == 1 || stride_ == 2, "Only stride 1 and stride 2 modes are supported.");
+    TT_FATAL(stride_ == 1 || stride_ == 2, "Only stride 1 and stride 2 modes are supported.");
 }
 
 std::vector<Shape> UntilizeWithHalo::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {

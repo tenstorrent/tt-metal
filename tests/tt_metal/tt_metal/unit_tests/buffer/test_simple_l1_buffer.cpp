@@ -46,7 +46,7 @@ namespace tt::test::buffer::detail {
     }
     // input_l1_buffer -->  Reader reads from this location --> CB --> Writer --> output_l1_buffer
     bool SimpleTiledL1WriteCBRead  (Device* device, CoreCoord core, size_t input_local_address, size_t output_local_address, size_t byte_size) {
-        TT_ASSERT ((byte_size % (32*32*2)) == 0, "byte_size={} must be multiple of tile size (32x32x2(w*h*datum_byte_size))", byte_size);
+        TT_FATAL ((byte_size % (32*32*2)) == 0, "byte_size={} must be multiple of tile size (32x32x2(w*h*datum_byte_size))", byte_size);
         int page_size = (32 * 32 * 2);
         int num_tiles = byte_size / page_size;
 

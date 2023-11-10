@@ -78,16 +78,16 @@ void test_operation_infrastructure() {
     auto op = operation::DeviceOperation(EltwiseUnary{{tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::SQRT, std::nullopt}}, MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}});
 
     auto program_hash = op.compute_program_hash({input_tensor}, {});
-    TT_ASSERT(
+    TT_FATAL(
         program_hash == 8760077129436357413ULL,
         fmt::format("Actual value is {}", program_hash));
 
     auto profiler_info = op.create_profiler_info({input_tensor});
-    TT_ASSERT(
+    TT_FATAL(
         profiler_info.preferred_name.value() == "tt::tt_metal::EltwiseUnary",
         fmt::format("Actual value is {}", profiler_info.preferred_name.value())
     );
-    TT_ASSERT(
+    TT_FATAL(
         profiler_info.parallelization_strategy.value() == "UnaryOpParallelizationStrategy::SINGLE_CORE",
         fmt::format("Actual value is {}", profiler_info.parallelization_strategy.value())
     );
@@ -112,10 +112,10 @@ void test_shape_padding() {
     auto output_tensor = tt::tt_metal::operation::run(tt::tt_metal::EltwiseUnary{{tt::tt_metal::UnaryWithParam{tt::tt_metal::UnaryOpType::SQRT, std::nullopt}}, tt::tt_metal::MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}}, {padded_input_tensor}).at(0);
 
     auto output_shape = output_tensor.shape();
-    TT_ASSERT(output_shape == padded_input_shape);
-    TT_ASSERT(output_shape.without_padding() == input_shape);
+    TT_FATAL(output_shape == padded_input_shape);
+    TT_FATAL(output_shape.without_padding() == input_shape);
 
-    TT_ASSERT(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device));
 }
 
 namespace tt {
@@ -144,56 +144,56 @@ void test_numerically() {
     {
         auto allclose = run_test<host_function<::detail::sqrt>>(
             tt::tt_metal::sqrt, device, shape, 0.0f, 1.0f, 1e-1f, 1e-5f);
-        TT_ASSERT(allclose);
+        TT_FATAL(allclose);
     }
     {
         auto allclose = run_test<host_function<::detail::exp>>(
         exp_with_param<true>::fn, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
-        TT_ASSERT(allclose);
+        TT_FATAL(allclose);
     }
     {
         auto allclose = run_test<host_function<::detail::exp>>(
         exp_with_param<false>::fn, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
-        TT_ASSERT(allclose);
+        TT_FATAL(allclose);
     }
     {
         auto allclose = run_test<host_function<::detail::recip>>(
         tt::tt_metal::recip, device, shape, 1.0f, 10.0f, 1e-1f, 1e-5f);
-        TT_ASSERT(allclose);
+        TT_FATAL(allclose);
     }
     {
         auto allclose = run_test<host_function<::detail::gelu>>(
         gelu_fast, device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
-        TT_ASSERT(allclose);
+        TT_FATAL(allclose);
     }
     {
         auto allclose = run_test<host_function<::detail::gelu>>(
             gelu_slow, device, shape, 1.0f, 10.0f, 1e-1f, 1e-3f);
-        TT_ASSERT(allclose);
+        TT_FATAL(allclose);
     }
 
     {
         auto allclose = run_test<host_function<::detail::relu>>(
             tt::tt_metal::relu, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
-        TT_ASSERT(allclose);
+        TT_FATAL(allclose);
     }
     {
         auto allclose = run_test<host_function<::detail::sigmoid>>(
             tt::tt_metal::sigmoid, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
-        TT_ASSERT(allclose);
+        TT_FATAL(allclose);
     }
     {
         auto allclose = run_test<host_function<::detail::log>>(
             tt::tt_metal::log, device, shape, 0.0f, 1.0f, 1e-1f, 1e-2f);
-        TT_ASSERT(allclose);
+        TT_FATAL(allclose);
     }
     {
         auto allclose = run_test<host_function<::detail::tanh>>(
             tt::tt_metal::tanh, device, shape, -1.0f, 1.0f, 1e-1f, 1e-5f);
-        TT_ASSERT(allclose);
+        TT_FATAL(allclose);
     }
 
-    TT_ASSERT(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device));
 }
 
 void test_program_cache() {
@@ -256,16 +256,16 @@ void test_program_cache() {
     tt::tt_metal::program_cache::enable();
     run_tests();
 
-    TT_ASSERT(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device));
 
-    TT_ASSERT(
+    TT_FATAL(
         tt::tt_metal::program_cache::num_entries() == 5,
         "There are {} entries",
         tt::tt_metal::program_cache::num_entries());
 
     tt::tt_metal::program_cache::disable_and_clear();
 
-    TT_ASSERT(tt::tt_metal::program_cache::num_entries() == 0);
+    TT_FATAL(tt::tt_metal::program_cache::num_entries() == 0);
 }
 
 int main(int argc, char** argv) {

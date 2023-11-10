@@ -17,21 +17,21 @@ void NlpTM::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.shape();
 
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
 
     switch (this->nlp_tm_op_type) {
         case NlpTMOpType::CREATE_QKV_HEADS:
-            TT_ASSERT(input_shape[2] % TILE_HEIGHT == 0);
-            TT_ASSERT((input_shape == Shape({input_shape[0], 1, input_shape[2], 4672})), "Unsupported input shape");
+            TT_FATAL(input_shape[2] % TILE_HEIGHT == 0);
+            TT_FATAL((input_shape == Shape({input_shape[0], 1, input_shape[2], 4672})), "Unsupported input shape");
             break;
         case NlpTMOpType::CONCAT_HEADS:
-            TT_ASSERT(input_shape[2] % TILE_HEIGHT == 0);
-            TT_ASSERT(input_shape[3] == 64, "Head dim must be 64!");
+            TT_FATAL(input_shape[2] % TILE_HEIGHT == 0);
+            TT_FATAL(input_shape[3] == 64, "Head dim must be 64!");
             break;
         default:
-            TT_ASSERT(false, "Unknown nlp tm op in validate!");
+            TT_FATAL(false, "Unknown nlp tm op in validate!");
     }
 }
 

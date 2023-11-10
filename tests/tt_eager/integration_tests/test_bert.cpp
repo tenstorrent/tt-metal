@@ -262,7 +262,7 @@ void test_bert() {
     run_loop();
     tt::tt_metal::program_cache::disable_and_clear();
 
-    TT_ASSERT(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device));
 }
 
 int main(int argc, char** argv) {

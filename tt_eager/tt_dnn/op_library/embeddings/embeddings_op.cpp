@@ -532,22 +532,22 @@ operation::ProgramWithCallbacks embeddings_(
 
 
 void Embeddings::validate(const std::vector<Tensor> &input_tensors) const  {
-    TT_ASSERT(input_tensors.size() == 2 , "Must have between 2 input tensors");
+    TT_FATAL(input_tensors.size() == 2 , "Must have between 2 input tensors");
     auto& a = input_tensors.at(0);
     const auto& weights = input_tensors.at(1);
-    TT_ASSERT(a.layout() == Layout::ROW_MAJOR);
-    TT_ASSERT(weights.layout() == Layout::ROW_MAJOR);
-    TT_ASSERT(a.dtype() == DataType::UINT32, "Input must be UIN32");
-    TT_ASSERT(weights.dtype() == DataType::BFLOAT16 ||
+    TT_FATAL(a.layout() == Layout::ROW_MAJOR);
+    TT_FATAL(weights.layout() == Layout::ROW_MAJOR);
+    TT_FATAL(a.dtype() == DataType::UINT32, "Input must be UIN32");
+    TT_FATAL(weights.dtype() == DataType::BFLOAT16 ||
             weights.dtype() == DataType::BFLOAT8_B);
 
 
-    TT_ASSERT(weights.shape()[0] == 1 && weights.shape()[1] == 1,
+    TT_FATAL(weights.shape()[0] == 1 && weights.shape()[1] == 1,
                 "First two dimensions for the weights must be 1");
     if(this->tilized){
-        TT_ASSERT(weights.shape()[3] % TILE_WIDTH == 0, "Number of columns in table must be factor of tile width");
+        TT_FATAL(weights.shape()[3] % TILE_WIDTH == 0, "Number of columns in table must be factor of tile width");
     }
-    TT_ASSERT(a.shape()[1] == 1 && a.shape()[3] == 1, "Only dim 0 && 2 for the input can be non 1");
+    TT_FATAL(a.shape()[1] == 1 && a.shape()[3] == 1, "Only dim 0 && 2 for the input can be non 1");
 }
 
 std::vector<Shape> Embeddings::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {

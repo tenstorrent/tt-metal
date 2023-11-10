@@ -106,7 +106,7 @@ int main(int argc, char **argv) {
       log_error(LogTest,
                 "activations({} tiles) should be divided cb buffer ({} tiles)",
                 Nt, cb_n);
-      TT_ASSERT(false);
+      TT_FATAL(false);
     }
 
     tt::DataFormat data_format = tt::DataFormat::Float16_b;
@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
 
     if (activations_addr + total_tiles_size_bytes > 1024 * 1024) {
       log_error(LogTest, "cb and activations buffer exceeds local L1 size");
-      TT_ASSERT(false);
+      TT_FATAL(false);
     }
 
     // copy activation to l1 buffer
@@ -289,7 +289,7 @@ int main(int argc, char **argv) {
     log_fatal(LogTest, "Test Failed");
   }
 
-  TT_ASSERT(pass);
+  TT_FATAL(pass);
 
   return 0;
 }

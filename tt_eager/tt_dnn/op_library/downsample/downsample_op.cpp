@@ -21,13 +21,13 @@ namespace tt_metal {
 
 void Downsample::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to downsample need to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to downsample need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor_a.layout() == Layout::TILE, "Can only downsample tile major data");
+    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to downsample need to be on device!");
+    TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to downsample need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only downsample tile major data");
 
-    TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
-    TT_ASSERT(input_tensor_a.memory_config().is_sharded());
-    TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
+    TT_FATAL(input_tensor_a.memory_config().is_sharded());
+    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
 }
 
 std::pair<uint32_t, uint32_t> get_num_cores_height_width_sliced(CoreRangeSet all_cores, TensorMemoryLayout memory_layout, ShardOrientation shard_orientation) {

@@ -56,18 +56,18 @@ namespace tt_metal {
 
 void Reduce::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to reduce need to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr , "Operands to reduce need to be allocated in buffers on device!");
-    TT_ASSERT((input_tensor.layout() == Layout::TILE), "Inputs to reduce must be tilized");
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to reduce need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr , "Operands to reduce need to be allocated in buffers on device!");
+    TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to reduce must be tilized");
     if (this->dim == ReduceOpDim::H) {
         if (input_tensor.memory_config().is_sharded()) {
-            TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
+            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
         } else {
-            TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
         }
-        TT_ASSERT(input_tensor.memory_config().memory_layout == this->output_mem_config.memory_layout);
+        TT_FATAL(input_tensor.memory_config().memory_layout == this->output_mem_config.memory_layout);
     } else {
-        TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
     }
 }
 

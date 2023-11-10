@@ -1325,23 +1325,23 @@ void OptimizedConv::validate(const std::vector<Tensor>& input_tensors, const std
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     // TODO: ...
-    TT_ASSERT(!input_tensor_b.memory_config().is_sharded());
+    TT_FATAL(!input_tensor_b.memory_config().is_sharded());
     if (this->untilize_out) {
-        TT_ASSERT(this->output_dtype == DataType::BFLOAT16);
+        TT_FATAL(this->output_dtype == DataType::BFLOAT16);
     }
     if (this->output_mem_config.is_sharded()) {
-        TT_ASSERT(!this->untilize_out);
+        TT_FATAL(!this->untilize_out);
         uint32_t out_block_h_ntiles = block_config.out_block_h_ntiles;
         auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_opt_conv_activation_as_mm_shape(input_tensor_a.shape(), conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
         uint32_t out_width_ntiles = this->compute_output_shapes(input_tensors).at(0)[-1] / TILE_WIDTH;
         if(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-            TT_ASSERT(this->parallelization_config.per_core_weight_matrix_width_ntiles == out_width_ntiles);
-            TT_ASSERT(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
+            TT_FATAL(this->parallelization_config.per_core_weight_matrix_width_ntiles == out_width_ntiles);
+            TT_FATAL(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
         } else if (this->output_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             // For block sharded, out_width per core is shard width, and this is split along row
             // TODO: We should clean this up and relax constraints on out_subblock h and w
             out_width_ntiles /= this->parallelization_config.grid_size.y;
-            TT_ASSERT(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
+            TT_FATAL(this->block_config.out_subblock_w_ntiles == out_width_ntiles || this->block_config.out_subblock_h_ntiles == 1);
         }
     }
 }

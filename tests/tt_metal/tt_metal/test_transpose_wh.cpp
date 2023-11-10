@@ -50,12 +50,12 @@ int main(int argc, char **argv) {
         vector<uint32_t> shape = {1, 3, 3*32*1, 4*32*1};
         uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0];
         uint32_t HW = H*W;
-        TT_ASSERT(W % 32 == 0 && H % 32 == 0);
-        TT_ASSERT(H > 0 && W > 0 && NC > 0);
+        TT_FATAL(W % 32 == 0 && H % 32 == 0);
+        TT_FATAL(H > 0 && W > 0 && NC > 0);
         uint32_t Wt = W/32;
         // TODO(AP): temporary limitation
         // size of DST register, with unary r/w this currently only works if the entire Wt fits into DST for reduce
-        TT_ASSERT(Wt <= 16);
+        TT_FATAL(Wt <= 16);
         uint32_t Ht = H/32;
         float scaler = 1.0f/W;
         uint32_t num_tensor_tiles = NC*H*W / (32*32);
@@ -162,7 +162,7 @@ int main(int argc, char **argv) {
         // The kernel will view the input as TILED32_4FACES
         vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
-        TT_ASSERT(result_vec.size() == NC*H*W/2); // we are expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
+        TT_FATAL(result_vec.size() == NC*H*W/2); // we are expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -209,7 +209,7 @@ int main(int argc, char **argv) {
         log_fatal(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

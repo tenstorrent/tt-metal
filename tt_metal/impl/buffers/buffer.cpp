@@ -16,15 +16,15 @@ namespace tt {
 namespace tt_metal {
 
 void validate_buffer_size_and_page_size(uint64_t size, uint64_t page_size, const BufferType &buffer_type) {
-    TT_ASSERT(size != 0 and page_size != 0, "Buffer size and page size should be larger than 0 bytes!");
+    TT_FATAL(size != 0 and page_size != 0, "Buffer size and page size should be larger than 0 bytes!");
     bool valid_page_size = (size % page_size == 0);
-    TT_ASSERT(valid_page_size, "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers page size should be divisible by buffer size", page_size, size);
-    TT_ASSERT(page_size % sizeof(uint32_t) == 0, "Page size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values");
+    TT_FATAL(valid_page_size, "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers page size should be divisible by buffer size", page_size, size);
+    TT_FATAL(page_size % sizeof(uint32_t) == 0, "Page size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values");
 }
 
 Buffer::Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferType buffer_type)
     : device_(device), size_(size), page_size_(page_size), buffer_type_(buffer_type) {
-    TT_ASSERT(this->device_ != nullptr and this->device_->allocator_ != nullptr);
+    TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr);
     validate_buffer_size_and_page_size(size, page_size, buffer_type);
     this->allocate();
 }

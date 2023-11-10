@@ -35,7 +35,7 @@ inline vector<uint16_t> gold_transpose_wh(std::vector<uint16_t> src_vec, vector<
     for (int w = 0; w < shape[3]; w++) {
         auto toffs = addrt.offs(n, c, w, h);
         auto offs = addr.offs(n, c, h, w);
-        TT_ASSERT(toffs < transposed.size() && offs < src_vec.size());
+        TT_FATAL(toffs < transposed.size() && offs < src_vec.size());
         transposed[toffs] = src_vec[offs];
     }
 
@@ -58,7 +58,7 @@ inline vector<uint16_t> gold_transpose_hc(std::vector<uint16_t> src_vec, vector<
     for (int w = 0; w < shape[3]; w++) {
         auto toffs = addrt.offs(n, h, c, w);
         auto offs = addr.offs(n, c, h, w);
-        TT_ASSERT(toffs < transposed.size() && offs < src_vec.size());
+        TT_FATAL(toffs < transposed.size() && offs < src_vec.size());
         transposed[toffs] = src_vec[offs];
     }
     //log_info(tt::LogVerif, "Prior size = {}", transposed.size());
@@ -105,7 +105,7 @@ inline vector<uint16_t> gold_reduce_hw(vector<uint16_t> src_vec, vector<uint32_t
 // result is also untilized
 inline vector<uint16_t> gold_reduce_h(vector<uint16_t> src_vec, vector<uint32_t> shape, float scaler, bool red_max = false, bool zeropad = true) {
     vector<uint32_t> shape_dst{shape[0], shape[1], 1, shape[3]};
-    TT_ASSERT(shape[2] > 0);
+    TT_FATAL(shape[2] > 0);
     if (zeropad)
         shape_dst[2] = 32;
     TensAddr addr(shape);
@@ -198,9 +198,9 @@ inline vector<uint16_t> gold_bcast_op(
     BcastOp::Enum bcast_op
 ) {
     uint32_t N = shape[0], C = shape[1], H = shape[2], W = shape[3];
-    TT_ASSERT(bcast_dim == BcastDim::W ? bcast_vals.size() == N*C*H : true);
-    TT_ASSERT(bcast_dim == BcastDim::H ? bcast_vals.size() == N*C*W : true);
-    TT_ASSERT(bcast_dim == BcastDim::HW ? bcast_vals.size() == N*C : true);
+    TT_FATAL(bcast_dim == BcastDim::W ? bcast_vals.size() == N*C*H : true);
+    TT_FATAL(bcast_dim == BcastDim::H ? bcast_vals.size() == N*C*W : true);
+    TT_FATAL(bcast_dim == BcastDim::HW ? bcast_vals.size() == N*C : true);
 
     vector<uint32_t> shape_dst{N, C, H, W};
     TensAddr addr(shape);
@@ -217,7 +217,7 @@ inline vector<uint16_t> gold_bcast_op(
             case BcastDim::W:  b_index = h + c*H + n*C*H; break; // bcast tensor is nch
             case BcastDim::HW: b_index = c + n*C; break; // bcast tensor is nc
             default:
-            TT_ASSERT(false && "Unexpected broadcast mode in gold_bcast_op");
+            TT_FATAL(false && "Unexpected broadcast mode in gold_bcast_op");
         }
         float bval = bfloat16(bcast_vals[b_index]).to_float();
         float result1;
@@ -226,7 +226,7 @@ inline vector<uint16_t> gold_bcast_op(
             case BcastOp::SUB: result1 = bfloat16(src_vec[offs]).to_float() - bval; break;
             case BcastOp::MUL: result1 = bfloat16(src_vec[offs]).to_float() * bval; break;
             default:
-                TT_ASSERT(false && "Unexpected bcast_op");
+                TT_FATAL(false && "Unexpected bcast_op");
         }
         result[offs] = bfloat16(result1).to_uint16();
     }
@@ -246,10 +246,10 @@ inline vector<uint16_t> gold_bmm(
     bool acc16 = false
     )
 {
-    TT_ASSERT(shapeB[0] == 1 && shapeA[0] == 1);
-    uint32_t nb = shapeA[1]; TT_ASSERT(shapeB[1] == nb);
+    TT_FATAL(shapeB[0] == 1 && shapeA[0] == 1);
+    uint32_t nb = shapeA[1]; TT_FATAL(shapeB[1] == nb);
     uint32_t M = shapeA[2];
-    uint32_t K = shapeA[3]; TT_ASSERT(shapeB[2] == K);
+    uint32_t K = shapeA[3]; TT_FATAL(shapeB[2] == K);
     uint32_t N = shapeB[3];
 
     vector<uint32_t> shapeC{1, nb, M, N};

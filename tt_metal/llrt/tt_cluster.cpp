@@ -51,7 +51,7 @@ Cluster::Cluster() {
     for (int dev_index = 1; dev_index < physical_mmio_device_ids.size(); dev_index++) {
         chip_id_t device_id = physical_mmio_device_ids.at(dev_index);
         tt::ARCH detected_arch = detect_arch(device_id);
-        TT_ASSERT(
+        TT_FATAL(
             this->arch_ == detected_arch,
             "Expected all devices to be {} but device {} is {}",
             get_arch_str(this->arch_),
@@ -64,7 +64,7 @@ Cluster::Cluster() {
     this->target_type_ = TargetDevice::Versim;
     std::vector<chip_id_t> physical_mmio_device_ids = {0};
     auto arch_env = getenv("ARCH_NAME");
-    TT_ASSERT(arch_env, "arch_env needs to be set for versim (ARCH_NAME=)");
+    TT_FATAL(arch_env, "arch_env needs to be set for versim (ARCH_NAME=)");
     this->arch_ = tt::get_arch_from_string(arch_env);
     const std::string sdesc_file = get_soc_description_file(this->arch_, this->target_type_);
     const std::string cluster_desc_path = "";
@@ -120,7 +120,7 @@ void Cluster::open_device(
         "Arch={} doesn't match compile-time build for WORMHOLE",
         get_string(this->arch_));
 #endif
-    TT_ASSERT(this->target_type_ == TargetDevice::Versim or this->target_type_ == TargetDevice::Silicon);
+    TT_FATAL(this->target_type_ == TargetDevice::Versim or this->target_type_ == TargetDevice::Silicon);
 
     if (this->target_type_ == TargetDevice::Silicon) {
         // This is the target/desired number of mem channels per arch/device. Silicon driver will attempt to open
@@ -250,8 +250,8 @@ void Cluster::configure_static_tlbs(const std::uint32_t &chip) {
 }
 
 void Cluster::start_device(const tt_device_params &device_params) {
-    TT_ASSERT(this->sdesc_per_chip_.size(), "Descriptor must be loaded. Try open_device()");
-    TT_ASSERT(this->device_ != nullptr, "Device not initialized, make sure compile is done before running!");
+    TT_FATAL(this->sdesc_per_chip_.size(), "Descriptor must be loaded. Try open_device()");
+    TT_FATAL(this->device_ != nullptr, "Device not initialized, make sure compile is done before running!");
 
     if (this->target_type_ == TargetDevice::Silicon && device_params.init_device) {
         for (auto &device_id : this->device_->get_target_mmio_device_ids()) {
@@ -284,7 +284,7 @@ uint32_t Cluster::get_harvested_rows(chip_id_t chip) const {
 
 // clean up bad system resource state that may be carried over
 void Cluster::clean_system_resources() const {
-    TT_ASSERT(this->device_ != nullptr, "Device not initialized, make sure compile is done before running!");
+    TT_FATAL(this->device_ != nullptr, "Device not initialized, make sure compile is done before running!");
     this->device_->clean_system_resources();
 }
 
@@ -501,9 +501,9 @@ void Cluster::verify_sw_fw_versions(
     for (std::uint32_t &fw_version : fw_versions) {
         tt_version fw(fw_version);
 
-        TT_ASSERT(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
-        TT_ASSERT(sw.major == fw.major, "SW/FW major version number out of sync");
-        TT_ASSERT(sw.minor <= fw.minor, "SW version is newer than FW version");
+        TT_FATAL(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
+        TT_FATAL(sw.major == fw.major, "SW/FW major version number out of sync");
+        TT_FATAL(sw.minor <= fw.minor, "SW version is newer than FW version");
     }
 }
 

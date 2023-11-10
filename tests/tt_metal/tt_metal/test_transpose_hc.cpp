@@ -206,7 +206,7 @@ int main(int argc, char **argv) {
         log_fatal(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

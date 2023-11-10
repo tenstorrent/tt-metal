@@ -20,11 +20,11 @@ namespace borrowed_buffer {
 template<typename T>
 void validate_datatype(const Tensor& tensor) {
     if constexpr (std::is_same_v<T, uint32_t>) {
-        TT_ASSERT(tensor.dtype() == DataType::UINT32);
+        TT_FATAL(tensor.dtype() == DataType::UINT32);
     } else if constexpr (std::is_same_v<T, float>) {
-        TT_ASSERT(tensor.dtype() == DataType::FLOAT32);
+        TT_FATAL(tensor.dtype() == DataType::FLOAT32);
     } else if constexpr (std::is_same_v<T, bfloat16>) {
-        TT_ASSERT(tensor.dtype() == DataType::BFLOAT16);
+        TT_FATAL(tensor.dtype() == DataType::BFLOAT16);
     }
 }
 

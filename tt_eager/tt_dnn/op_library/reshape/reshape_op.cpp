@@ -271,26 +271,26 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
 
 void Reshape::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to reshape need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
-    TT_ASSERT((input_tensor_a.buffer()->buffer_type() == BufferType::DRAM));
+    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
+    TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to reshape need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16);
+    TT_FATAL((input_tensor_a.buffer()->buffer_type() == BufferType::DRAM));
 
-    TT_ASSERT(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR, "Only tile and row major reshape supported!");
+    TT_FATAL(input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR, "Only tile and row major reshape supported!");
 
     auto output_shape = infer_dims_for_reshape(this->N, this->C, this->H, this->W, input_tensor_a.volume());
-    TT_ASSERT(input_tensor_a.volume() == output_shape[0] * output_shape[1] * output_shape[2] * output_shape[3], "New shape volume must match old shape volume");
+    TT_FATAL(input_tensor_a.volume() == output_shape[0] * output_shape[1] * output_shape[2] * output_shape[3], "New shape volume must match old shape volume");
 
     if (input_tensor_a.layout() == Layout::TILE) {
-        TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
-        TT_ASSERT(output_shape[2] % TILE_HEIGHT == 0 && output_shape[3] % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) for reshape!");
+        TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
+        TT_FATAL(output_shape[2] % TILE_HEIGHT == 0 && output_shape[3] % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) for reshape!");
     } else if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
-        TT_ASSERT(input_tensor_a.shape()[3] % TILE_WIDTH == 0 && W % TILE_WIDTH == 0, "Operand/target width must be a multiple of 32");
+        TT_FATAL(input_tensor_a.shape()[3] % TILE_WIDTH == 0 && W % TILE_WIDTH == 0, "Operand/target width must be a multiple of 32");
         uint32_t num_old_sticks = input_tensor_a.shape()[0] * input_tensor_a.shape()[1] * input_tensor_a.shape()[2];
         uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
-        TT_ASSERT(num_old_sticks % TILE_HEIGHT == 0 && num_new_sticks % TILE_HEIGHT == 0, "Operand/target number of rows must be a multiple of 32");
+        TT_FATAL(num_old_sticks % TILE_HEIGHT == 0 && num_new_sticks % TILE_HEIGHT == 0, "Operand/target number of rows must be a multiple of 32");
     } else {
-        TT_ASSERT(false, "Unsupported layout for reshape");
+        TT_FATAL(false, "Unsupported layout for reshape");
     }
 }
 

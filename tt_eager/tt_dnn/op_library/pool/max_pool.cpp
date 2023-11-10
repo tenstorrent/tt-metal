@@ -18,31 +18,31 @@ namespace tt_metal {
 
 void MaxPool::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input = input_tensors.at(0);
-    TT_ASSERT(input.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
-    TT_ASSERT(input.buffer() != nullptr , "Operands to reshape need to be allocated in buffers on device!");
-    TT_ASSERT(input.dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
-    TT_ASSERT(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now");
+    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
+    TT_FATAL(input.buffer() != nullptr , "Operands to reshape need to be allocated in buffers on device!");
+    TT_FATAL(input.dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
+    TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now");
 
     // NOTE: This is not a hard requirement. If need to support non-power-of-2, simply change the address generator in reader to generic one.
     uint32_t in_nbytes_c = (input.shape()[3]) * (input.dtype() == DataType::BFLOAT16 ? 2 : 1);
     bool is_pow2 = (in_nbytes_c & (in_nbytes_c - 1)) == 0;
-    TT_ASSERT(is_pow2, "Row size (nchannels * bytes = {}) should be power of 2 ({}).", in_nbytes_c, is_pow2);
+    TT_FATAL(is_pow2, "Row size (nchannels * bytes = {}) should be power of 2 ({}).", in_nbytes_c, is_pow2);
 
-    TT_ASSERT(2 * pad_h_ < kernel_size_h_ && 2 * pad_w_ < kernel_size_w_,
+    TT_FATAL(2 * pad_h_ < kernel_size_h_ && 2 * pad_w_ < kernel_size_w_,
               "Total padding along a dim should be less than kernel/window size along same dim");
-    TT_ASSERT(out_w_ % nblocks_ == 0, "Make sure out_w is divisible by nblocks for now.");
+    TT_FATAL(out_w_ % nblocks_ == 0, "Make sure out_w is divisible by nblocks for now.");
 
     if (input.memory_config().is_sharded()) {
-        TT_ASSERT(input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
-        TT_ASSERT(this->use_multicore_);
+        TT_FATAL(input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_FATAL(this->use_multicore_);
     } else {
-        TT_ASSERT(input.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(input.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
     }
     if (this->out_mem_config_.is_sharded()) {
-        TT_ASSERT(this->out_mem_config_.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
-        TT_ASSERT(this->use_multicore_);
+        TT_FATAL(this->out_mem_config_.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_FATAL(this->use_multicore_);
     } else {
-        TT_ASSERT(this->out_mem_config_.memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(this->out_mem_config_.memory_layout == TensorMemoryLayout::INTERLEAVED);
     }
 }
 

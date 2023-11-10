@@ -182,7 +182,7 @@ int main(int argc, char **argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
 
-        TT_ASSERT(golden.size() == result_vec.size());
+        TT_FATAL(golden.size() == result_vec.size());
         pass &= (golden == result_vec);
 
         if (not pass) {
@@ -209,7 +209,7 @@ int main(int argc, char **argv) {
         log_fatal(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

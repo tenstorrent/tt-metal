@@ -18,13 +18,13 @@ void SplitFusedQKVAndSplitHeads::validate(const std::vector<Tensor>& input_tenso
     const auto& input_tensor = input_tensors.at(0);
     const auto batch_size = input_tensor.shape()[0];
     // TODO: See issue #1744
-    TT_ASSERT(batch_size >= 7 && batch_size <= 9, "Input batch size must be between 2 to 9 for bert large TM ops!");
+    TT_FATAL(batch_size >= 7 && batch_size <= 9, "Input batch size must be between 2 to 9 for bert large TM ops!");
 
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
 
-    TT_ASSERT((input_tensor.shape() == Shape({batch_size, 1, 384, 3072})), "Unsupported input shape");
+    TT_FATAL((input_tensor.shape() == Shape({batch_size, 1, 384, 3072})), "Unsupported input shape");
 }
 
 std::vector<Shape> SplitFusedQKVAndSplitHeads::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -60,13 +60,13 @@ void ConcatenateHeads::validate(const std::vector<Tensor>& input_tensors) const 
     const auto& input_tensor = input_tensors.at(0);
     const auto batch_size = input_tensor.shape()[0];
     // TODO: See issue #1744
-    TT_ASSERT(batch_size >= 7 && batch_size <= 9, "Input batch size must be between 2 to 9 for bert large TM ops!");
+    TT_FATAL(batch_size >= 7 && batch_size <= 9, "Input batch size must be between 2 to 9 for bert large TM ops!");
 
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
 
-    TT_ASSERT((input_tensor.shape() == Shape({batch_size, 16, 384, 64})), "Unsupported input shape");
+    TT_FATAL((input_tensor.shape() == Shape({batch_size, 16, 384, 64})), "Unsupported input shape");
 }
 
 std::vector<Shape> ConcatenateHeads::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
@@ -104,38 +104,38 @@ void AttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
     // intermediate: [q_heads, batch, batch, kv_len]
     // output: [q_len, q_heads, batch, kv_len]
 
-    TT_ASSERT(input_tensors.size() == 2);
+    TT_FATAL(input_tensors.size() == 2);
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    TT_ASSERT((input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE), "Inputs to matmul must be tilized");
+    TT_FATAL((input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE), "Inputs to matmul must be tilized");
 
     // TODO: Uplift to support BFLOAT8_B and mixed precision
-    TT_ASSERT(input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format");
-    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
-    TT_ASSERT(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format");
+    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
+    TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
+    TT_FATAL(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
     const auto ashape = input_tensor_a.shape();
     const auto bshape = input_tensor_b.shape();
-    TT_ASSERT((ashape[0] == 1), "Input q_len must be 1!");
-    TT_ASSERT((bshape[1] == 1), "Number of kv_heads must be 1!"); // TODO: May need to uplift to support falcon-40B
-    TT_ASSERT((ashape[2] == bshape[0]), "Num of users must match!");
+    TT_FATAL((ashape[0] == 1), "Input q_len must be 1!");
+    TT_FATAL((bshape[1] == 1), "Number of kv_heads must be 1!"); // TODO: May need to uplift to support falcon-40B
+    TT_FATAL((ashape[2] == bshape[0]), "Num of users must match!");
 
     bool read_from_kv_cache = false;
     if (this->num_tokens.has_value() or this->transpose_hw.has_value()) {
-        TT_ASSERT((this->num_tokens.has_value() and this->transpose_hw.has_value()), "Must provide num_tokens and transpose_hw flag if we are reading from cache for in1!");
-        TT_ASSERT(this->num_tokens.value() % 32 == 0, "Number of tokens must be divisble by 32!");
+        TT_FATAL((this->num_tokens.has_value() and this->transpose_hw.has_value()), "Must provide num_tokens and transpose_hw flag if we are reading from cache for in1!");
+        TT_FATAL(this->num_tokens.value() % 32 == 0, "Number of tokens must be divisble by 32!");
         read_from_kv_cache = true;
     }
 
     if (read_from_kv_cache) {
         if (this->transpose_hw.value()) {
-            TT_ASSERT(ashape[3] == bshape[3] && "For pre-attention matmul, dimension K for B is in B.shape[3], so A.shape[3] must match B.shape[3]"); // A.K == B.K
+            TT_FATAL(ashape[3] == bshape[3] && "For pre-attention matmul, dimension K for B is in B.shape[3], so A.shape[3] must match B.shape[3]"); // A.K == B.K
         } else {
-            TT_ASSERT(ashape[3] == this->num_tokens && "For post-attention matmul, dimension K (A.shape[3]) is the kv_seq_len in this case and must match the length of the cache we read"); // A.K == B.K
+            TT_FATAL(ashape[3] == this->num_tokens && "For post-attention matmul, dimension K (A.shape[3]) is the kv_seq_len in this case and must match the length of the cache we read"); // A.K == B.K
         }
     } else {
-        TT_ASSERT(ashape[3] == bshape[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in attn_matmul op"); // A.K == B.K
+        TT_FATAL(ashape[3] == bshape[2] && "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in attn_matmul op"); // A.K == B.K
     }
 }
 

@@ -78,17 +78,17 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
-    TT_ASSERT(input_tensor_a.device() != nullptr and input_tensor_b.device() != nullptr, "Operands to bcast need to be on device!");
-    TT_ASSERT(input_tensor_a.device() == input_tensor_b.device(), "Operands to bcast need to be on the same device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to bcast need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.device() != nullptr and input_tensor_b.device() != nullptr, "Operands to bcast need to be on device!");
+    TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to bcast need to be on the same device!");
+    TT_FATAL(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to bcast need to be allocated in buffers on device!");
 
     const auto input_shape_a = input_tensor_a.shape();
     const auto input_shape_b = input_tensor_b.shape();
 
-    TT_ASSERT(input_tensor_a.layout() == Layout::TILE);
-    TT_ASSERT(input_tensor_b.layout() == Layout::TILE);
-    TT_ASSERT(input_tensor_a.dtype() == input_tensor_b.dtype());
-    TT_ASSERT(input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
+    TT_FATAL(input_tensor_a.layout() == Layout::TILE);
+    TT_FATAL(input_tensor_b.layout() == Layout::TILE);
+    TT_FATAL(input_tensor_a.dtype() == input_tensor_b.dtype());
+    TT_FATAL(input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
 
     auto batch_size_a = input_shape_a[0];
     auto num_channels_a = input_shape_a[1];
@@ -99,15 +99,15 @@ void EltwiseBinaryBroadcast::validate(const std::vector<Tensor> &input_tensors) 
     auto height_b = input_shape_b[2];
     auto width_b = input_shape_b[3];
 
-    TT_ASSERT((batch_size_b * num_channels_b == 1 || (batch_size_b == batch_size_a && num_channels_b == num_channels_a)) && "Broadcast is currently only supported when bN*bC=1 or N & C match");
+    TT_FATAL((batch_size_b * num_channels_b == 1 || (batch_size_b == batch_size_a && num_channels_b == num_channels_a)) && "Broadcast is currently only supported when bN*bC=1 or N & C match");
 
     // validate input dimensions
     if (this->dim == BcastOpDim::W)
-        TT_ASSERT(height_a == height_b && width_b == TILE_WIDTH);
+        TT_FATAL(height_a == height_b && width_b == TILE_WIDTH);
     if (this->dim == BcastOpDim::H)
-        TT_ASSERT(width_a == width_b && height_b == TILE_HEIGHT);
+        TT_FATAL(width_a == width_b && height_b == TILE_HEIGHT);
     if (this->dim == BcastOpDim::HW)
-        TT_ASSERT(width_b == TILE_WIDTH && height_b == TILE_HEIGHT);
+        TT_FATAL(width_b == TILE_WIDTH && height_b == TILE_HEIGHT);
 }
 
 

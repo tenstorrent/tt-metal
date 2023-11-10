@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
         uint32_t stream_register_address1 = STREAM_REG_ADDR(0, 12);
         uint32_t stream_register_address2 = STREAM_REG_ADDR(0, 24);
 
-        TT_ASSERT(num_output_tiles % transient_buffer_size_tiles == 0);
+        TT_FATAL(num_output_tiles % transient_buffer_size_tiles == 0);
 
         auto input_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
         uint32_t dram_buffer_src_addr = input_dram_buffer.address();
@@ -189,7 +189,7 @@ int main(int argc, char **argv) {
         log_fatal(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

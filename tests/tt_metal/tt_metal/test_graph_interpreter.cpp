@@ -69,7 +69,7 @@ float multiply(float x, float y) {
 
 vector<uint32_t> eltwise_binary(const vector<uint32_t> &srcA, const vector<uint32_t> srcB, std::function<float(float, float)> binary_func) {
     vector<uint32_t> dst;
-    TT_ASSERT(srcA.size() == srcB.size(), "Vectors being added need to have the same size");
+    TT_FATAL(srcA.size() == srcB.size(), "Vectors being added need to have the same size");
 
     for (int i = 0; i < srcA.size(); i++) {
         uint32_t elA = srcA.at(i);
@@ -111,7 +111,7 @@ bool run_chained_sfpu_test(int chain_length) {
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
-    TT_ASSERT(chain_length > 0 && chain_length <= 10, "Cannot have a graph of more than 10 ops in L1");
+    TT_FATAL(chain_length > 0 && chain_length <= 10, "Cannot have a graph of more than 10 ops in L1");
 
     bool pass = true;
 
@@ -278,7 +278,7 @@ bool run_chained_sfpu_test(int chain_length) {
 
 
 
-        // TT_ASSERT(false);
+        // TT_FATAL(false);
         tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
@@ -503,7 +503,7 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
 
 
 
-        // TT_ASSERT(false);
+        // TT_FATAL(false);
         tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
@@ -1037,6 +1037,6 @@ int main(int argc, char **argv) {
     // Binary forked graph
     pass &= run_forked_binary_test();
 
-    TT_ASSERT(pass, "Graph interpreter test failed");
+    TT_FATAL(pass, "Graph interpreter test failed");
     return 0;
 }

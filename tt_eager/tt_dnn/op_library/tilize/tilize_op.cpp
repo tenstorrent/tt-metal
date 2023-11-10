@@ -24,29 +24,29 @@ namespace tt_metal {
 
 void Tilize::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands to tilize need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
+    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
+    TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to tilize need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
 
-    TT_ASSERT(input_tensor_a.volume() % TILE_HW == 0);
+    TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
 
     auto width = input_tensor_a.shape()[-1];
     uint32_t stick_s =  width;
     uint32_t num_sticks = input_tensor_a.volume() / width;
-    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
+    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16);
 
     uint32_t stick_size = stick_s * input_tensor_a.element_size(); // Assuming bfloat16 dataformat
 
-    TT_ASSERT((stick_size % 2) == 0, "Stick size must be divisible by 2");
+    TT_FATAL((stick_size % 2) == 0, "Stick size must be divisible by 2");
 
     if (input_tensor_a.memory_config().is_sharded()) {
-        TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
-        TT_ASSERT(this->output_mem_config == input_tensor_a.memory_config());
-        TT_ASSERT(this->use_multicore == true);
-        TT_ASSERT(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED);
+        TT_FATAL(this->output_mem_config == input_tensor_a.memory_config());
+        TT_FATAL(this->use_multicore == true);
+        TT_FATAL(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::ROW_MAJOR);
     } else {
-        TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
-        TT_ASSERT(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
     }
 }
 
@@ -108,28 +108,28 @@ Tensor tilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_confi
 
 void TilizeWithValPadding::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_ASSERT(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
-    TT_ASSERT(input_tensor_a.buffer() != nullptr , "Operands need to be allocated in buffers on device!");
-    TT_ASSERT(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
-    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
+    TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
+    TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
+    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16);
 
-    TT_ASSERT(input_tensor_a.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0]);
-    TT_ASSERT(input_tensor_a.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1]);
-    TT_ASSERT(input_tensor_a.shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2]);
-    TT_ASSERT(input_tensor_a.shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3]);
-    TT_ASSERT((this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 && this->input_tensor_start[3] == 0), "On device padding only supports padding at end of dims");
+    TT_FATAL(input_tensor_a.shape()[0] + this->input_tensor_start[0] <= this->output_tensor_shape[0]);
+    TT_FATAL(input_tensor_a.shape()[1] + this->input_tensor_start[1] <= this->output_tensor_shape[1]);
+    TT_FATAL(input_tensor_a.shape()[2] + this->input_tensor_start[2] <= this->output_tensor_shape[2]);
+    TT_FATAL(input_tensor_a.shape()[3] + this->input_tensor_start[3] <= this->output_tensor_shape[3]);
+    TT_FATAL((this->input_tensor_start[0] == 0 && this->input_tensor_start[1] == 0 && this->input_tensor_start[2] == 0 && this->input_tensor_start[3] == 0), "On device padding only supports padding at end of dims");
 
     uint32_t num_rows = this->output_tensor_shape[2];
     uint32_t inner_dim = this->output_tensor_shape[3];
-    TT_ASSERT(num_rows % TILE_HEIGHT == 0, "Output shape must be tilizable");
-    TT_ASSERT(inner_dim % TILE_WIDTH == 0, "Output shape must be tilizable");
+    TT_FATAL(num_rows % TILE_HEIGHT == 0, "Output shape must be tilizable");
+    TT_FATAL(inner_dim % TILE_WIDTH == 0, "Output shape must be tilizable");
 
     if (input_tensor_a.memory_config().is_sharded()) {
-        TT_ASSERT(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
-        TT_ASSERT(this->output_mem_config == input_tensor_a.memory_config());
+        TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
+        TT_FATAL(this->output_mem_config == input_tensor_a.memory_config());
         for (uint32_t i = 0; i < input_tensor_a.shape().rank(); i++) {
             if (i != input_tensor_a.shape().rank() - 2) {
-                TT_ASSERT(input_tensor_a.shape()[i] == this->output_tensor_shape[i]);
+                TT_FATAL(input_tensor_a.shape()[i] == this->output_tensor_shape[i]);
             }
         }
     }

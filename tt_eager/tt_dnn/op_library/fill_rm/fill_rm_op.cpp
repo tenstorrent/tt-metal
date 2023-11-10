@@ -74,9 +74,9 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
 
 void FillRM::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_ASSERT((this->N > 0 && this->C > 0 && this-> H > 0 && this-> W > 0));
-    TT_ASSERT((this->hFill <= this->H && this->wFill <= this->W));
-    TT_ASSERT(input_tensor_a.dtype() == DataType::BFLOAT16);
+    TT_FATAL((this->N > 0 && this->C > 0 && this-> H > 0 && this-> W > 0));
+    TT_FATAL((this->hFill <= this->H && this->wFill <= this->W));
+    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16);
 }
 
 std::vector<Shape> FillRM::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {

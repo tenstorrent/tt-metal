@@ -32,7 +32,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Since memset.py would always correctly launch
-    TT_ASSERT(
+    TT_FATAL(
         num_user_provided_arguments == 5,
         "Invalid number of supplied arguments. For an example of usage on how to launch the program, read tools/README.md. "
         "If you don't want to launch from memset.py, the order of arguments supplied is specified by the command list in memset.py.");

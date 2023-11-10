@@ -110,7 +110,7 @@ int main(int argc, char **argv) {
     }
 
     // Error out with non-zero return code if we don't detect a pass
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

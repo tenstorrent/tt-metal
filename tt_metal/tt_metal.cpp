@@ -92,16 +92,16 @@ namespace detail {
         detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("WriteToDevice");
 
         uint32_t host_buffer_size_bytes = host_buffer.size() * sizeof(uint32_t);
-        TT_ASSERT(
+        TT_FATAL(
             host_buffer_size_bytes <= buffer.size(),
             "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer", host_buffer_size_bytes, buffer.size());
 
         uint32_t page_size = buffer.page_size();
-        TT_ASSERT(buffer.size() % page_size == 0);
+        TT_FATAL(buffer.size() % page_size == 0);
         uint32_t num_pages = buffer.size() / page_size;
 
         static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
-        TT_ASSERT(page_size % bytes_per_page_entry == 0);
+        TT_FATAL(page_size % bytes_per_page_entry == 0);
         uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
 
         auto device = buffer.device();
@@ -122,7 +122,7 @@ namespace detail {
                     auto noc_coordinates = buffer.noc_coordinates(bank_index);
                     llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
                 } break;
-                default: TT_ASSERT(false && "Unsupported buffer type to write to device!");
+                default: TT_FATAL(false && "Unsupported buffer type to write to device!");
             }
 
             bank_index = (bank_index + 1) % num_banks;
@@ -137,9 +137,9 @@ namespace detail {
                 WriteToDevice(buffer, host_buffer);
             } break;
             case BufferType::SYSTEM_MEMORY: {
-                TT_ASSERT(false && "Writing to host memory is unsupported!");
+                TT_FATAL(false && "Writing to host memory is unsupported!");
             } break;
-            default: TT_ASSERT(false && "Unsupported buffer type!");
+            default: TT_FATAL(false && "Unsupported buffer type!");
         }
     }
 
@@ -149,7 +149,7 @@ namespace detail {
 
         host_buffer.clear();  // overwrite the data
         uint32_t page_size = buffer.page_size();
-        TT_ASSERT(buffer.size() % page_size == 0);
+        TT_FATAL(buffer.size() % page_size == 0);
         uint32_t num_pages = buffer.size() / page_size;
 
         auto device = buffer.device();
@@ -168,7 +168,7 @@ namespace detail {
                     auto noc_coordinates = buffer.noc_coordinates(bank_index);
                     page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
                 } break;
-                default: TT_ASSERT(false && "Unsupported buffer type to write to device!");
+                default: TT_FATAL(false && "Unsupported buffer type to write to device!");
             }
 
             // Copy page into host buffer
@@ -194,9 +194,9 @@ namespace detail {
                 ReadFromDevice(buffer, host_buffer);
             } break;
             case BufferType::SYSTEM_MEMORY: {
-                TT_ASSERT(false && "Reading from host memory is unsupported!");
+                TT_FATAL(false && "Reading from host memory is unsupported!");
             } break;
-            default: TT_ASSERT(false && "Unsupported buffer type!");
+            default: TT_FATAL(false && "Unsupported buffer type!");
         }
     }
 
@@ -386,11 +386,11 @@ uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRang
                 crs = c;
             }
             std::optional<uint32_t> address;
-            TT_ASSERT(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
+            TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
             for (const auto& core_range : crs.ranges()) {
                 CoreCoord start_core = core_range.start;
                 CoreCoord end_core = core_range.end;
-                TT_ASSERT(start_core == end_core or start_core < end_core && "Invalid core range!");
+                TT_FATAL(start_core == end_core or start_core < end_core && "Invalid core range!");
                 auto addr = get_semaphore_address(program, core_range);
                 if (!address.has_value()) {
                     address = addr;
@@ -398,7 +398,7 @@ uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRang
                     TT_ASSERT(addr == address);
                 }
             }
-            TT_ASSERT(address.has_value(), "Expecting a valid Semaphore address!");
+            TT_FATAL(address.has_value(), "Expecting a valid Semaphore address!");
 
             program.add_semaphore(crs, address.value(), initial_value);
 

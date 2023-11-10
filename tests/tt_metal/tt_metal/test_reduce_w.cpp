@@ -57,8 +57,8 @@ int main(int argc, char **argv) {
         //vector<uint32_t> shape = {1, 1, 17*TILE_HEIGHT, 19*TILE_WIDTH};
         uint32_t W = shape[3], H = shape[2], NC = shape[1]*shape[0];
         uint32_t HW = H*W;
-        TT_ASSERT(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
-        TT_ASSERT(H > 0 && W > 0 && NC > 0);
+        TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0);
+        TT_FATAL(H > 0 && W > 0 && NC > 0);
         uint32_t Wt = W/TILE_WIDTH;
         uint32_t Ht = H/TILE_HEIGHT;
         float scaler = do_max ? 1.0f : 1.0f/W;
@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
             .set_page_size(CB::c_in2, single_tile_bytes);
         auto cb_temp_reduce_tile = tt_metal::CreateCircularBuffer(program, core, cb_temp_reduce_tile_config);
 
-        TT_ASSERT(num_tensor_tiles%Wt == 0);
+        TT_FATAL(num_tensor_tiles%Wt == 0);
 
         auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
@@ -181,7 +181,7 @@ int main(int argc, char **argv) {
         // The kernel will view the input as TILED32_4FACES
         vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
-        TT_ASSERT(result_vec.size() == NC*H*TILE_WIDTH/2); // we are expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
+        TT_FATAL(result_vec.size() == NC*H*TILE_WIDTH/2); // we are expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
@@ -227,7 +227,7 @@ int main(int argc, char **argv) {
         log_fatal(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    TT_FATAL(pass);
 
     return 0;
 }

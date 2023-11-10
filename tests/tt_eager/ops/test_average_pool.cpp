@@ -36,9 +36,9 @@ int main () {
     Shape resnet18_shape = {1, 1, 7 * 7, 2048};
     auto result = run_avg_pool_2d_resnet(resnet18_shape, device);
 
-    TT_ASSERT(result.shape() == Shape({1, 1, TILE_HEIGHT, 2048}));
-    TT_ASSERT(result.shape().without_padding() == Shape({1, 1, 1, 2048}));
+    TT_FATAL(result.shape() == Shape({1, 1, TILE_HEIGHT, 2048}));
+    TT_FATAL(result.shape().without_padding() == Shape({1, 1, 1, 2048}));
 
-    TT_ASSERT(tt::tt_metal::CloseDevice(device));
+    TT_FATAL(tt::tt_metal::CloseDevice(device));
     return 0;
 }
