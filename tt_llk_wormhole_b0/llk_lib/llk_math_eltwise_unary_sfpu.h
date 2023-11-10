@@ -32,7 +32,7 @@ inline void eltwise_unary_sfpu_configure_addrmod(){
 }
 inline void eltwise_unary_sfpu_configure_mop();
 
-template <SfpuType sfpu_op, bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
+template <SfpuType sfpu_op, bool APPROXIMATE, DstSync Dst = DstSync::SyncFull, bool IS_INT_SFPU_EN=false>
 inline void llk_math_eltwise_unary_sfpu(
     const uint operand,
     uint dst_index, 
@@ -43,7 +43,7 @@ inline void llk_math_eltwise_unary_sfpu(
     uint param3 = 0,
     uint param4 = 0,
     uint param5 = 0) {
-    TT_LLK_DUMP("llk_math_eltwise_unary_sfpu<{}, {}, {}>({}, {}, {}, {}, {}, {}, {}, {}, {})", (int)sfpu_op, APPROXIMATE, Dst, operand, dst_index, vector_mode, param0, param1, param2, param3, param4, param5);
+    TT_LLK_DUMP("llk_math_eltwise_unary_sfpu<{}, {}, {}, {}>({}, {}, {}, {}, {}, {}, {}, {}, {})", (int)sfpu_op, APPROXIMATE, Dst, IS_INT_SFPU_EN, operand, dst_index, vector_mode, param0, param1, param2, param3, param4, param5);
     
     constexpr int ITERATIONS = 8;
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
@@ -60,7 +60,7 @@ inline void llk_math_eltwise_unary_sfpu(
                                     ((math::get_face_r_dim(operand_id) <= 2) ? 2 : math::get_face_r_dim(operand_id)/2) : 2; // At least 2 iterations for odd and even columns
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++) {
-            sfpu::calculate_sfpu<sfpu_op, APPROXIMATE, 0, ITERATIONS>(iterations, param0, param1, param2, param3, param4, param5);
+            sfpu::calculate_sfpu<sfpu_op, APPROXIMATE, 0, ITERATIONS, IS_INT_SFPU_EN>(iterations, param0, param1, param2, param3, param4, param5);
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         }
@@ -73,7 +73,7 @@ inline void llk_math_eltwise_unary_sfpu(
         const std::uint32_t operand_id = get_operand_id(operand);
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++) {
-            sfpu::calculate_sfpu<sfpu_op, APPROXIMATE, 0, ITERATIONS>(ITERATIONS, param0, param1, param2, param3, param4, param5);
+            sfpu::calculate_sfpu<sfpu_op, APPROXIMATE, 0, ITERATIONS, IS_INT_SFPU_EN>(ITERATIONS, param0, param1, param2, param3, param4, param5);
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
             if (math::get_num_faces(operand_id)>2) { // Skip next 2 faces if tile is 32x32
@@ -91,7 +91,7 @@ inline void llk_math_eltwise_unary_sfpu(
         // Do all four faces, and iterate through all 4 blocks of 4 rows each
 #pragma GCC unroll 0
         for (int face = 0; face < 4; face++) {
-            sfpu::calculate_sfpu<sfpu_op, APPROXIMATE, 0, ITERATIONS>(ITERATIONS, param0, param1, param2, param3, param4, param5);
+            sfpu::calculate_sfpu<sfpu_op, APPROXIMATE, 0, ITERATIONS, IS_INT_SFPU_EN>(ITERATIONS, param0, param1, param2, param3, param4, param5);
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         }

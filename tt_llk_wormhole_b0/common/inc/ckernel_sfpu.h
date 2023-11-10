@@ -1346,7 +1346,7 @@ inline void dequant_int32(const int iterations, const uint dst_offset)
     }
 }
 
-template <SfpuType operation, bool APPROXIMATION_MODE, int SfpuType_PARAM=0, int ITERATIONS=8>
+template <SfpuType operation, bool APPROXIMATION_MODE, int SfpuType_PARAM=0, int ITERATIONS=8, bool IS_INT_SFPU_EN = false>
 inline void calculate_sfpu(const int iterations = ITERATIONS, uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0)
 {
     if constexpr (operation == SfpuType::exponential) {
@@ -1415,7 +1415,7 @@ inline void calculate_sfpu(const int iterations = ITERATIONS, uint param0 = 0, u
         calculate_sign<APPROXIMATION_MODE, ITERATIONS>(iterations, param5);
     }
     else if constexpr (operation == SfpuType::max) {
-        if constexpr (IS_INT_FPU_EN)
+        if constexpr (IS_INT_SFPU_EN)
             calculate_max_int32<APPROXIMATION_MODE, ITERATIONS>(iterations);
         else
             calculate_max<APPROXIMATION_MODE, ITERATIONS>(iterations);
