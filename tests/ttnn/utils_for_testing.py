@@ -5,6 +5,11 @@
 from models.utility_functions import comp_pcc
 import os
 import json
+import torch
+
+
+def torch_random(shape, low, high, dtype):
+    return torch.zeros(shape, dtype=dtype).uniform_(low, high)
 
 
 def print_comparison(message, expected_pytorch_result, actual_pytorch_result):
@@ -21,6 +26,9 @@ def print_comparison(message, expected_pytorch_result, actual_pytorch_result):
 
 
 def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.99):
+    assert list(expected_pytorch_result.shape) == list(
+        actual_pytorch_result.shape
+    ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
     pcc_passed, pcc_message = comp_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
     assert pcc_passed, print_comparison(pcc_message, expected_pytorch_result, actual_pytorch_result)
 
