@@ -1088,14 +1088,22 @@ inline void calculate_max(const int iterations)
 {
     for (int d = 0; d < iterations; d++)
     {
-        // vFloat a = dst_reg[0];
-        // vFloat b = dst_reg[32];
-        // v_if(a < b) { 
-        //     dst_reg[0] = b; 
-        // }
-        // v_endif;
+        vFloat a = dst_reg[0];
+        vFloat b = dst_reg[32];
+        v_if(a < b) { 
+            dst_reg[0] = b; 
+        }
+        v_endif;
 
-        // dst_reg++;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_max_int32(const int iterations)
+{
+    for (int d = 0; d < iterations; d++)
+    {
         TTI_SFPLOAD(2, 12, 3, 0);
         TTI_SFPLOAD(0, 12, 3, 64);
         TTI_SFPMOV(0, 0, 1, 0);
@@ -1405,9 +1413,12 @@ inline void calculate_sfpu(const int iterations = ITERATIONS, uint param0 = 0, u
     }
     else if constexpr (operation == SfpuType::sign) {
         calculate_sign<APPROXIMATION_MODE, ITERATIONS>(iterations, param5);
-    }	
+    }
     else if constexpr (operation == SfpuType::max) {
-        calculate_max<APPROXIMATION_MODE, ITERATIONS>(iterations);
+        if constexpr (IS_INT_FPU_EN)
+            calculate_max_int32<APPROXIMATION_MODE, ITERATIONS>(iterations);
+        else
+            calculate_max<APPROXIMATION_MODE, ITERATIONS>(iterations);
     }
     else if constexpr (operation == SfpuType::sine) {
         calculate_sine<APPROXIMATION_MODE, ITERATIONS>(iterations);
