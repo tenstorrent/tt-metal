@@ -6,8 +6,6 @@
 #include "dataflow_api.h"
 #include "debug_print.h"
 
-auto s1 = SliceRange{ .h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1 };
-
 FORCE_INLINE
 void read_channels(uint32_t& l1_write_addr_act, const uint32_t act_l1_read_addr, const uint32_t reader_channel_idx,
         const uint32_t log_base_2_of_conv_act_size_c_bytes, const uint32_t coalesced_read_bytes, const uint32_t stride_h_bytes) {
@@ -67,7 +65,6 @@ void kernel_main() {
     uint32_t act_mcast_sender_noc_x                      = get_arg_val<uint32_t>(i); i+=1;
     volatile tt_l1_ptr uint32_t *act_mcast_sender_noc_y  = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
-
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t stride_h = get_compile_time_arg_val(1);
     constexpr uint32_t stride_w = get_compile_time_arg_val(2);
@@ -85,7 +82,6 @@ void kernel_main() {
     constexpr uint32_t cb_id_sharded_act = 3;
     constexpr uint32_t cb_id_sharded_act_mcast_receiver = 6;
 
-
     // Assumptions. Must be true. Validate on host.
     // assert(act_block_w_datums == C * weight_size_w)
     // assert(num_blocks_act_w == weight_size_h)
@@ -96,24 +92,12 @@ void kernel_main() {
     // assert(act_block_w_ntiles == act_block_w_datums/32)
     // assert(act_block_num_tiles == (act_block_h_datums * act_block_w_datums)/1024)
 
-
-    //DPRINT << "partial right aligned width: " << first_partial_right_aligned_row_width << ENDL();
-    //DPRINT << "--- skip after: " << skip_after_partial_right_aligned_row << ENDL();
-    //DPRINT << "first partial image rows: " << first_partial_image_num_rows << ENDL();
-    //DPRINT << "--- skip after: " << skip_after_first_partial_image_row << ENDL();
-    //DPRINT << "full images: " << num_full_images << ENDL();
-    //DPRINT << "--- skip after: " << skip_after_full_image << ENDL();
-    //DPRINT << "last partial image rows: " << last_partial_image_num_rows << ENDL();
-    //DPRINT << "partial left aligned width: " << last_partial_left_aligned_row_width << ENDL();
-
-
-    // DUMMY LOOP TO FILL READER INDICES
+    // LOOP TO FILL READER INDICES
     constexpr uint32_t cb_reader_indices = tt::CB::c_in4;
     volatile tt_l1_ptr uint16_t* reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_reader_indices));
 
     uint32_t weights_top_left_corner_idx = 0;
     uint32_t reader_idx = 0;
-
 
     // First partial right-aligned row
     for (uint32_t k = 0; k < first_partial_right_aligned_row_width; k++) {
@@ -215,7 +199,7 @@ void kernel_main() {
             noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
         }
 
-
+        // set_state uses just x/y from the get_noc_addr, addr is ignored
         noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
 
         for (uint32_t outer = 0; outer < window_outer; outer++) {
