@@ -324,8 +324,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
 
     //uint32_t conv_output_size_h = ((conv_act_size_h - weight_size_h + (2 * pad_h)) / stride_h) + 1;
     //uint32_t conv_output_size_w = ((conv_act_size_w - weight_size_w + (2 * pad_w)) / stride_w) + 1;
-    uint32_t window_outer = 1; // window_outer = 1 becasue all of filter window is processed in the inner loop
-    uint32_t window_inner = 3; // window_inner = 9 / 3, ie. read 3 width coalesced
 
     auto [conv_output_size_h, conv_output_size_w] = optimized_conv_op_utils::compute_opt_conv_output_face_shape(conv_act_size_h, conv_act_size_w, weight_size_h, weight_size_w, stride_h, stride_w, pad_h, pad_w, extra_padding_for_32B_alignment);
 
@@ -338,8 +336,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
     if (conv_act_c_blocks > 1) {
         reader_defines["ACT_W_OUTER_BLOCKS"] = "1";
     }
-
-    reader_defines["WINDOW_INNER"] = std::to_string(window_inner);
 
     uint32_t output_height_padded_to_tile_height = round_up(act_matrix_height_unpadded, TILE_HEIGHT);
     uint32_t output_height_num_tiles = output_height_padded_to_tile_height / TILE_HEIGHT;
@@ -407,7 +403,21 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
     // cout << "act_matrix_height_ntiles=" << act_matrix_height_ntiles << endl;
     // cout << "act_block_h_datums=" << act_block_h_datums << endl;
     // cout << "num_blocks_act_h=" << num_blocks_act_h << endl;
+
+    // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
     bool weight_width_sliced = per_core_weight_matrix_width_ntiles < weight_matrix_width_ntiles;
+    uint32_t window_outer;
+    uint32_t window_inner;
+    if (weight_width_sliced) {
+        window_outer = 1; // window_outer = 1 becasue all of filter window is processed in the inner loop
+        window_inner = 3; // window_inner = 9 / 3, ie. read 3 width coalesced
+    } else {
+        window_outer = num_blocks_act_w; // window_outer
+        window_inner = weight_size_h * weight_size_w / num_blocks_act_w; // window_inner
+    }
+    reader_defines["WINDOW_INNER"] = std::to_string(window_inner);
+    log_debug("window_outer: {}, window_inner: {}", window_outer, window_inner);
+
     assert(weight_matrix_width_ntiles % per_core_weight_matrix_width_ntiles == 0);
     assert(per_core_weight_matrix_width_ntiles % weight_block_w_ntiles == 0);
     uint32_t num_blocks_weight_w_per_core = per_core_weight_matrix_width_ntiles / weight_block_w_ntiles;
@@ -941,8 +951,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
                     last_partial_left_aligned_row_width,
 
                     // Specs for reader offsets
-                    num_blocks_act_w, // window_outer
-                    weight_size_h * weight_size_w / num_blocks_act_w, // window_inner
+                    window_outer, // window_outer
+                    window_inner, // window_inner
 
                     (uint32_t) noop_core
                 };
