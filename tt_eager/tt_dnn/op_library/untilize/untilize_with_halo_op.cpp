@@ -909,7 +909,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
         (std::uint32_t) out_cb_id,
         (std::uint32_t) pad_cb_id,
         (std::uint32_t) pad_val,
-        (std::uint32_t) in_c    // stick len
+        (std::uint32_t) in_c,    // stick len
+        (std::uint32_t) in_stick_nbytes,    // bytes per stick (in RM, after untilize)
+        (std::uint32_t) in_w,
+        (std::uint32_t) in_h,
     };
     KernelID writer_kernel_id = CreateKernel(
         program,
