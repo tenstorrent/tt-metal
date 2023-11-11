@@ -8,7 +8,6 @@
 
 auto s1 = SliceRange{ .h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1 };
 
-
 void kernel_main() {
     uint32_t i = 0;
     uint32_t conv_act_size_w = get_arg_val<uint32_t>(i); i+=1;
@@ -82,14 +81,17 @@ void kernel_main() {
     // assert(act_block_num_tiles == (act_block_h_datums * act_block_w_datums)/1024)
 
 
-    //DPRINT << "partial right aligned width: " << first_partial_right_aligned_row_width << ENDL();
-    //DPRINT << "--- skip after: " << skip_after_partial_right_aligned_row << ENDL();
-    //DPRINT << "first partial image rows: " << first_partial_image_num_rows << ENDL();
-    //DPRINT << "--- skip after: " << skip_after_first_partial_image_row << ENDL();
-    //DPRINT << "full images: " << num_full_images << ENDL();
-    //DPRINT << "--- skip after: " << skip_after_full_image << ENDL();
-    //DPRINT << "last partial image rows: " << last_partial_image_num_rows << ENDL();
-    //DPRINT << "partial left aligned width: " << last_partial_left_aligned_row_width << ENDL();
+    DPRINT << "--- initial skip: " << initial_skip << ENDL();
+    DPRINT << "partial right aligned width: " << first_partial_right_aligned_row_width << ENDL();
+    DPRINT << "--- skip after: " << skip_after_partial_right_aligned_row << ENDL();
+    DPRINT << "first partial image rows: " << first_partial_image_num_rows << ENDL();
+    DPRINT << "--- skip after: " << skip_after_first_partial_image_row << ENDL();
+    DPRINT << "full images: " << num_full_images << ENDL();
+    DPRINT << "--- skip after image: " << skip_after_full_image << ENDL();
+    DPRINT << "--- skip after stick: " << skip_after_each_stick << ENDL();
+    DPRINT << "--- skip after row: " << skip_after_each_full_row << ENDL();
+    DPRINT << "last partial image rows: " << last_partial_image_num_rows << ENDL();
+    DPRINT << "partial left aligned width: " << last_partial_left_aligned_row_width << ENDL();
 
 
     // DUMMY LOOP TO FILL READER INDICES
@@ -245,6 +247,23 @@ void kernel_main() {
                 reader_idx++;
             }
             noc_async_read_barrier();
+            if (act_w_outer_i == 0) {
+            if (outer == 0) {
+                // Print all 9 windows, full 5 tiles
+                for (int window = 0; window < 1; window++) {
+                    DPRINT << "-------> Window: " << window << ENDL();
+                for (int height = 0; height < 5; height++) {
+                    DPRINT << "------------> TILE: " << height << ENDL();
+                    for (int i = 0; i < 9; i++) {
+                        auto offset = (9 - (32 * i) % 9 + window) % 9;
+
+                        auto s2_p = SliceRange{ .h0 = offset, .h1 = 32, .hs = 9, .w0 = 0, .w1 = 1, .ws = 1 };
+                        DPRINT << TileSlice(cb_id_act, height*9 + i, s2_p, true, false) << ENDL();
+                    }
+                }
+                }
+            }
+            }
             cb_push_back(cb_id_act, act_block_num_tiles);
         }
     }

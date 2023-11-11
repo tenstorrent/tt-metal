@@ -7,6 +7,7 @@
 #include "debug_print.h"
 
 auto s1 = SliceRange{ .h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1 };
+auto s2 = SliceRange{ .h0 = 0, .h1 = 3, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1 };
 
 inline void pad_l1_buffer_with_zeroes(uint32_t l1_addr, uint32_t pad_size_bytes) {
     volatile std::uint32_t* dst = reinterpret_cast<volatile std::uint32_t*>(l1_addr);
@@ -179,16 +180,15 @@ void kernel_main() {
                         noc_async_read_barrier();
                         //DPRINT << "done on read barrier" << ENDL();
 
-                        if ((channel_stick_h == 0 and channel_stick_w == 0) or (channel_stick_h == 2 and channel_stick_w == 2)) {
-                            DPRINT << "Window: " << channel_stick_h * 3 + channel_stick_w << ENDL();
-                            DPRINT << TileSlice(cb_id_act, 0, s1, true, false) << ENDL();
-                            //DPRINT << TileSlice(cb_id_act, 1, s1, true, false) << ENDL();
-                            //DPRINT << TileSlice(cb_id_act, 2, s1, true, false) << ENDL();
-                            //DPRINT << TileSlice(cb_id_act, 3, s1, true, false) << ENDL();
-                            //DPRINT << TileSlice(cb_id_act, 4, s1, true, false) << ENDL();
-                            //DPRINT << TileSlice(cb_id_act, 5, s1, true, false) << ENDL();
-                            //DPRINT << TileSlice(cb_id_act, 6, s1, true, false) << ENDL();
-                            DPRINT << TileSlice(cb_id_act, 7, s1, true, false) << ENDL();
+                        if (act_w_outer_i == 0) {
+                        // Print all 9 windows, full 5 tiles
+                        if ((channel_stick_h == 0 and channel_stick_w == 0) or (channel_stick_h == 0 and channel_stick_w == 0)) {
+                            DPRINT << "-------> Window: " << channel_stick_h * 3 + channel_stick_w << ENDL();
+                            for (int height = 0; height < 5; height++) {
+                                DPRINT << "------------> TILE: " << height << ENDL();
+                                DPRINT << TileSlice(cb_id_act, height, s1, true, false) << ENDL();
+                            }
+                        }
                         }
                         cb_push_back(cb_id_act, act_block_num_tiles);
                     } // for filter window width
