@@ -955,6 +955,74 @@ void noc_async_read_one_packet_with_state(std::uint32_t src_noc_addr, std::uint3
     DEBUG_STATUS('N', 'A', 'R', 'D');
 }
 
+// TODO: write docs
+FORCE_INLINE
+void noc_async_read_set_state(std::uint64_t src_noc_addr) {
+    /*
+        Read requests - use static VC
+        Read responses - assigned VCs dynamically
+    */
+
+    DEBUG_STATUS('N', 'A', 'R', 'W');
+    DEBUG_STATUS('R', 'P', 'W');
+    while (!ncrisc_noc_fast_read_ok(noc_index, NCRISC_RD_CMD_BUF));
+    DEBUG_STATUS('R', 'P', 'D');
+
+    // TODO: need to sanitize in noc_async_read_with_state
+    // DEBUG_SANITIZE_NOC_ADDR(src_noc_addr, size);
+
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, src_noc_addr >> 32);
+
+    DEBUG_STATUS('N', 'A', 'R', 'D');
+}
+
+// TODO: write docs
+template <bool inc_num_issued = true>
+FORCE_INLINE
+void noc_async_read_with_state(std::uint32_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size) {
+    /*
+        Read requests - use static VC
+        Read responses - assigned VCs dynamically
+    */
+    DEBUG_STATUS('N', 'A', 'R', 'W');
+
+    // TODO: need a way sanitize size + addr w/o directly providing x/y here (grab x/y form state?)
+    // DEBUG_SANITIZE_NOC_ADDR(src_noc_addr, size);
+    DEBUG_SANITIZE_WORKER_ADDR(dst_local_l1_addr, size);
+
+    while (size > NOC_MAX_BURST_SIZE) {
+        DEBUG_STATUS('R', 'P', 'W');
+        while (!ncrisc_noc_fast_read_ok(noc_index, NCRISC_RD_CMD_BUF));
+        DEBUG_STATUS('R', 'P', 'D');
+
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dst_local_l1_addr);
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_noc_addr);
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+        size -= NOC_MAX_BURST_SIZE;
+        src_noc_addr += NOC_MAX_BURST_SIZE;
+        dst_local_l1_addr += NOC_MAX_BURST_SIZE;
+        if constexpr (inc_num_issued) {
+            noc_reads_num_issued[noc_index] += 1;
+        }
+    }
+
+    // left-over packet
+    DEBUG_STATUS('R', 'P', 'W');
+    while (!ncrisc_noc_fast_read_ok(noc_index, NCRISC_RD_CMD_BUF));
+    DEBUG_STATUS('R', 'P', 'D');
+
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dst_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, src_noc_addr);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, size);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (inc_num_issued) {
+        noc_reads_num_issued[noc_index] += 1;
+    }
+
+    DEBUG_STATUS('N', 'A', 'R', 'D');
+}
+
 FORCE_INLINE
 void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc) {
     noc_reads_num_issued[noc_index] += num_issued_reads_inc;
