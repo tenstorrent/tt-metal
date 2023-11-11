@@ -21,7 +21,7 @@ namespace tt {
 
 namespace tt_metal {
 
-using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
+using Config = std::variant<DataMovementConfig, experimental::EthernetConfig, ComputeConfig>;
 
 class Kernel {
    public:
@@ -122,7 +122,7 @@ class DataMovementKernel : public Kernel {
 
 class EthernetKernel : public Kernel {
    public:
-    EthernetKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const EthernetConfig &config) : Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) {}
+    EthernetKernel(const std::string &kernel_path, const CoreRangeSet &cr_set, const experimental::EthernetConfig &config) : Kernel(kernel_path, cr_set, config.compile_args, config.defines), config_(config) {}
 
     ~EthernetKernel() {}
 
@@ -137,7 +137,7 @@ class EthernetKernel : public Kernel {
     Config config() const { return this->config_; }
 
    private:
-    const EthernetConfig config_;
+    const experimental::EthernetConfig config_;
 
     uint8_t expected_num_binaries() const;
 

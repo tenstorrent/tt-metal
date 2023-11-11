@@ -52,7 +52,7 @@ bool reader_kernel_no_send(
         program,
         "tt_metal/kernels/dataflow/unit_tests/erisc/direct_reader_dram_to_l1.cpp",
         eth_reader_core,
-        tt_metal::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
+        tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
@@ -136,7 +136,7 @@ bool eth_direct_sender_receiver_kernels(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
         eth_sender_core,
-        tt_metal::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
+        tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
 
     tt_metal::SetRuntimeArgs(
         sender_program,
@@ -157,7 +157,7 @@ bool eth_direct_sender_receiver_kernels(
         receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
         eth_receiver_core,
-        tt_metal::EthernetConfig{
+        tt_metal::experimental::EthernetConfig{
             .eth_mode = tt_metal::Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0});  // probably want to use NOC_1 here
 
     tt_metal::SetRuntimeArgs(
@@ -250,7 +250,7 @@ bool eth_scatter_sender_receiver_kernels(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_scatter_send.cpp",
         eth_sender_core,
-        tt_metal::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
+        tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
 
     tt_metal::SetRuntimeArgs(
         sender_program,
@@ -274,7 +274,7 @@ bool eth_scatter_sender_receiver_kernels(
         receiver_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
         eth_receiver_core,
-        tt_metal::EthernetConfig{
+        tt_metal::experimental::EthernetConfig{
             .eth_mode = tt_metal::Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0});  // probably want to use NOC_1 here
 
     tt_metal::SetRuntimeArgs(
@@ -332,14 +332,14 @@ bool eth_hung_kernels(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/hung_kernel.cpp",
         hung_cores[0],
-        tt_metal::EthernetConfig{.eth_mode = tt_metal::Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0});
+        tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0});
     // Runtime arg at 0 will be used to kill kernel
 
     auto eth_kernel_1 = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/hung_kernel.cpp",
         hung_cores[1],
-        tt_metal::EthernetConfig{.eth_mode = tt_metal::Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0});
+        tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0});
 
     std::thread th1 = std::thread([&] {
         tt_metal::detail::LaunchProgram(hung_device, program);
