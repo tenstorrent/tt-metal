@@ -577,8 +577,9 @@ std::tuple<chip_id_t, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple
     ethernet_channel_t eth_chan = soc_desc.logical_eth_core_to_chan_map.at(std::get<1>(eth_core));
     TT_ASSERT(
         (this->cluster_desc_->ethernet_core_has_active_ethernet_link(std::get<0>(eth_core), eth_chan)),
-        "Logical eth core {} is not an active eth core.",
-        std::get<1>(eth_core).str());
+        "Logical eth core {} is not an active eth core on chip {}.",
+        std::get<1>(eth_core).str(),
+        std::get<0>(eth_core));
     auto connected_eth_core =
         this->cluster_desc_->get_chip_and_channel_of_remote_ethernet_core(std::get<0>(eth_core), eth_chan);
     return std::make_tuple(

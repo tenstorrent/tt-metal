@@ -323,9 +323,8 @@ void metal_SocDescriptor::load_dispatch_and_banking_config(uint32_t harvesting_m
 
 void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
     this->physical_ethernet_cores = this->ethernet_cores;
-    constexpr int x_size = 4;
     for (int i = 0; i < this->physical_ethernet_cores.size(); i++) {
-        CoreCoord core = {.x = static_cast<size_t>(i / x_size), .y = static_cast<size_t>(i % x_size)};
+        CoreCoord core = {.x = 0, .y = static_cast<size_t>(i)};
         this->logical_eth_core_to_chan_map.insert({core, i});
         this->chan_to_logical_eth_core_map.insert({i, core});
         this->logical_ethernet_cores.emplace_back(core);
