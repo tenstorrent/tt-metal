@@ -913,6 +913,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
         (std::uint32_t) in_stick_nbytes,    // bytes per stick (in RM, after untilize)
         (std::uint32_t) in_w,
         (std::uint32_t) in_h,
+        (std::uint32_t) pad_w,
+        (std::uint32_t) pad_h,
     };
     KernelID writer_kernel_id = CreateKernel(
         program,
@@ -1157,12 +1159,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
 
         writer_rt_args[45] = initial_pad_nsticks;
 
-        writer_rt_args[2] = partial_first_row_nsticks;
+        uint32_t partial_first_row_nbytes = partial_first_row_nsticks * in_stick_nbytes;
+        writer_rt_args[2] = partial_first_row_nbytes;
         writer_rt_args[5] = partial_top_image_nrows;
         writer_rt_args[8] = full_nimages;
         writer_rt_args[9] = partial_bottom_image_nrows;
-        writer_rt_args[10] = partial_last_row_nsticks;
 
+        uint32_t partial_last_row_nbytes = partial_last_row_nsticks * in_stick_nbytes;
+        writer_rt_args[10] = partial_last_row_nbytes;
         writer_rt_args[42] = partial_first_row_skip;
         writer_rt_args[43] = partial_top_image_skip;
         writer_rt_args[44] = full_image_skip;
