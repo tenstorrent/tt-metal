@@ -24,6 +24,16 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
+struct erisc_info_t {
+  volatile uint32_t num_bytes;
+  volatile uint32_t mode;
+  volatile uint32_t reserved_0_;
+  volatile uint32_t reserved_1_;
+  volatile uint32_t bytes_done;
+  volatile uint32_t reserverd_2_;
+  volatile uint32_t reserverd_3_;
+  volatile uint32_t reserverd_4_;
+};
 namespace unit_tests::erisc::direct_send {
 // Tests ethernet direct send/receive from ERISC_APP_RESERVED_BASE
 bool send_over_eth(
@@ -65,7 +75,7 @@ bool send_over_eth(
             sender_device->id(), eth_core, run_test_app_flag, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
         llrt::write_hex_vec_to_core(
             receiver_device->id(), eth_core, run_test_app_flag, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
-        std::vector<uint32_t> zero = {0, 0};
+        std::vector<uint32_t> zero = {0, 0, 0, 0, 0, 0, 0, 0};
         llrt::write_hex_vec_to_core(
             sender_device->id(), eth_core, zero, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
         llrt::write_hex_vec_to_core(
@@ -82,15 +92,14 @@ bool send_over_eth(
     llrt::write_hex_vec_to_core(
         receiver_device->id(), receiver_core, all_zeros, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE);
 
-    uint32_t arg_0 = byte_size;
-    std::vector<uint32_t> args = {arg_0, 0};
-    llrt::write_hex_vec_to_core(sender_device->id(), sender_core, args, eth_l1_mem::address_map::ERISC_L1_ARG_BASE);
-    args = {arg_0, 1};
-    llrt::write_hex_vec_to_core(receiver_device->id(), receiver_core, args, eth_l1_mem::address_map::ERISC_L1_ARG_BASE);
+    std::vector<uint32_t> args_0 = {uint32_t(byte_size), 0};
+    llrt::write_hex_vec_to_core(sender_device->id(), sender_core, args_0, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+    std::vector<uint32_t> args_1 = {uint32_t(byte_size), 1};
+    llrt::write_hex_vec_to_core(receiver_device->id(), receiver_core, args_1, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
 
     // TODO: this should be updated to use kernel api
-    ll_api::memory binary_mem_send = llrt::get_risc_binary("erisc/erisc_app.hex", sender_device->id(), true);
-    ll_api::memory binary_mem_receive = llrt::get_risc_binary("erisc/erisc_app.hex", receiver_device->id(), true);
+    ll_api::memory binary_mem_send = llrt::get_risc_binary("erisc/erisc.hex", sender_device->id(), true);
+    ll_api::memory binary_mem_receive = llrt::get_risc_binary("erisc/erisc.hex", receiver_device->id(), true);
 
     for (const auto& eth_core : eth_cores) {
         llrt::write_hex_vec_to_core(

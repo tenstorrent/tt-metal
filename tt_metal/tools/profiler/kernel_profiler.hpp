@@ -7,7 +7,7 @@
 
 #include <climits>
 
-#if defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_BRISC) | defined(COMPILE_FOR_ERISC)
 #include "risc_common.h"
 #else
 #include "ckernel.h"

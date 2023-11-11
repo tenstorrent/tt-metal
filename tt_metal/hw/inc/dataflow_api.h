@@ -45,7 +45,11 @@ inline uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | 
 
 constexpr static uint32_t get_arg_addr(int arg_idx) {
     // args are 4B in size
-    return L1_ARG_BASE + (arg_idx << 2);
+    #if defined(COMPILE_FOR_ERISC)
+        return eth_l1_mem::address_map::ERISC_L1_ARG_BASE + (arg_idx << 2);
+    #else
+        return L1_ARG_BASE + (arg_idx << 2);
+    #endif
 }
 
 /**

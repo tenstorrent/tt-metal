@@ -18,6 +18,7 @@ extern uint8_t noc_size_x;
 extern uint8_t noc_size_y;
 extern uint8_t noc_trans_table_en;
 
+
 extern int post_index;
 
 inline void RISC_POST_FW_VERSION(uint32_t status) {

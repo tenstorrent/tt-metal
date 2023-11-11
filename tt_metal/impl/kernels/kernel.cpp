@@ -132,7 +132,7 @@ std::pair<uint64_t, uint64_t> DataMovementKernel::get_runtime_args_range() const
 
 std::pair<uint64_t, uint64_t> EthernetKernel::get_runtime_args_range() const {
     // TODO: get this from eth l1 map
-    std::pair<uint64_t, uint64_t> arg_base_to_result_base = {0x3E420, 0x3E800};
+    std::pair<uint64_t, uint64_t> arg_base_to_result_base = {eth_l1_mem::address_map::ERISC_L1_ARG_BASE, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE};
     return arg_base_to_result_base;
 }
 
@@ -181,6 +181,8 @@ void DataMovementKernel::set_build_options(build_kernel_for_riscv_options_t &bui
 }
 
 void EthernetKernel::set_build_options(build_kernel_for_riscv_options_t &build_options) const {
+    build_options.erisc_kernel_file_name = this->kernel_path_file_name_;
+    build_options.erisc_defines = this->defines_;
 }
 
 void ComputeKernel::set_build_options(build_kernel_for_riscv_options_t &build_options) const {
@@ -210,6 +212,7 @@ void DataMovementKernel::generate_binaries(Device *device, build_kernel_for_risc
 
 void EthernetKernel::generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const {
     std::string arch_name = tt::get_string_lowercase(device->arch());
+    detail::GenerateDeviceHeaders(device, build_options, op_path_suffix);
     generate_binary_for_erisc(build_options, op_path_suffix, arch_name, this->config_.noc, this->compile_time_args_);
 }
 
@@ -258,9 +261,8 @@ void EthernetKernel::read_binaries(int device_id) {
    // untested
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
-    uint32_t riscv_id;
-    std::string binary_path_suffix = "/erisc/erisc_app.hex";
-    ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, device_id, true);
+    std::string binary_path_suffix = "/erisc/erisc.hex";
+    ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, device_id, false);
     binaries.push_back(binary_mem);
     this->set_binaries(device_id, std::move(binaries));
 }
@@ -320,14 +322,13 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     return pass;
 }
 
-bool EthernetKernel::configure(Device *device, const CoreCoord &worker_core) const {
-    // TODO: use logical core somehow
-    // untested
+bool EthernetKernel::configure(Device *device, const CoreCoord &logical_core) const {
     bool pass = true;
     auto device_id = device->id();
+    auto ethernet_core = device->ethernet_core_from_logical_core(logical_core);
     ll_api::memory binary_mem = this->binaries(device_id).at(0);
     int riscv_id = 5;
-    pass &= tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, worker_core, riscv_id);
+    pass &= tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, ethernet_core, riscv_id);
     return pass;
 }
 

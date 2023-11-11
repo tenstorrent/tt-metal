@@ -32,7 +32,7 @@ struct address_map {
   //    -  53 * 1024 eth app reserved buffer space
   //    - 106 * 1024 L1 unreserved buffer space
   static constexpr std::int32_t ERISC_BARRIER_SIZE = 32;
-  static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = 32;
+  static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = 64;
 
   static constexpr std::int32_t ERISC_BARRIER_BASE = TILE_HEADER_BUFFER_BASE;
   static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = ERISC_BARRIER_BASE + ERISC_BARRIER_SIZE;
@@ -42,10 +42,10 @@ struct address_map {
   static constexpr std::int32_t ERISC_APP_RESERVED_SIZE = 53 * 1024;
   static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = ERISC_APP_RESERVED_BASE + ERISC_APP_RESERVED_SIZE;
 
-  // static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = L1_EPOCH_Q_BASE; // Ideally, we can use this address somehow,
-  // but currently we need to load some other epoch q objects
-  static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = 0x10e8;
+  static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = L1_EPOCH_Q_BASE + 4;
 
+  // TODO: risky, is there a check for FW size we can add?
+  static constexpr std::int32_t PRINT_BUFFER_ER = COMMAND_Q_BASE - 204;
   template <std::size_t A, std::size_t B>
   struct TAssertEquality {
       static_assert(A == B, "Not equal");
