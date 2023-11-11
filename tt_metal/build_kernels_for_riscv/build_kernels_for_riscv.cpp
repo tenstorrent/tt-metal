@@ -377,7 +377,7 @@ struct CompileState {
                 elfname = "tensix_thread2";
             break;
             case RISCID::ER:
-                elfname = "erisc_app";
+                elfname = "erisc";
             break;
             default: TT_ASSERT(false); break;
         }
@@ -482,6 +482,9 @@ static CompileState pre_compile_for_risc(
         } else if (ctx.is_brisc()) {
             kernel_file_name = build_kernel_for_riscv_options->brisc_kernel_file_name;
             fs::copy(ctx.home_+ kernel_file_name, kernel_dir + "/kernel.cpp", fs::copy_options::overwrite_existing);
+        } else if (ctx.is_erisc()) {
+            kernel_file_name = build_kernel_for_riscv_options->erisc_kernel_file_name;
+            fs::copy(ctx.home_+ kernel_file_name, kernel_dir + "/kernel.cpp", fs::copy_options::overwrite_existing);
         }
 
         // copy unpack/pack data formats to the kernel dir
@@ -551,10 +554,12 @@ static void compile_for_risc(
         },
         {   // erisc
             {   // kernel
+                {"erisck.cc", "substitutes.cpp", "tmu-crt0k.S"},
+                {"erisck.o", "substitutes.o", "tmu-crt0k.o"},
             },
             {   // firmware
-                {"erisc.cc", "tt_eth_api.cpp"},
-                {"erisc.o", "tt_eth_api.o"},
+                {"erisc.cc", "substitutes.cpp"},
+                {"erisc.o", "substitutes.o"},
             },
         },
     };
@@ -597,9 +602,9 @@ static void compile_for_risc(
             risc_type = 1;
         break;
         case RISCID::ER:
-            cwds.resize(4);
+            cwds.resize(3);
             cwds[0] = "tt_metal/hw/firmware/src";
-            cwds[1] = "tt_metal/hw/firmware/src";
+            cwds[1] = "tt_metal/hw/toolchain";
             cwds[2] = "tt_metal/hw/toolchain";
             risc_type = 3;
         break;
@@ -640,12 +645,13 @@ void link_for_risc(RISCID risc_id,
         bobjl = {"brisck.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o", "tmu-crt0k.o"};
         nobjl = {"ncrisck.o", "risc_common.o", "substitutes.o", "tmu-crt0k.o"};
         tobjl = {"trisck.o", "substitutes.o", "ckernel_template.o", "tmu-crt0k.o" };
+        eobjl = {"erisck.o", "substitutes.o", "tmu-crt0k.o"};
     } else {
         bobjl = {"brisc.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o", "tmu-crt0.o"};
         nobjl = {"ncrisc.o", "risc_common.o", "substitutes.o", "ncrisc-halt.o", "tmu-crt0.o"};
         tobjl = {"substitutes.o", "trisc.o", "tmu-crt0.o" };
+        eobjl = {"erisc.o", "substitutes.o"};
     }
-    eobjl = {"erisc.o", "tt_eth_api.o"}; // TODO: add tmu-crtok
 
     vector<string> objls;
     switch (risc_id) {
@@ -1187,6 +1193,10 @@ void generate_bank_to_noc_coord_descriptor(
     ofstream file_stream_nc(full_path + "/ncrisc/generated_bank_to_noc_coord_mapping.h");
     file_stream_nc << output_string;
     file_stream_nc.close();
+    fs::create_directories(full_path + "/erisc");
+    ofstream file_stream_ec(full_path + "/erisc/generated_bank_to_noc_coord_mapping.h");
+    file_stream_ec << output_string;
+    file_stream_ec.close();
 }
 
 static string generate_noc_core_xy_range_define(const std::vector<CoreCoord>& cores) {
@@ -1319,6 +1329,7 @@ void generate_noc_addr_ranges_header(
 
     string full_path = build_kernel_for_riscv_options->outpath;
     full_path += out_dir_path;
+    fs::create_directories(full_path + "/brisc");
     ofstream file_stream_br(full_path + "/brisc/noc_addr_ranges_gen.h");
     file_stream_br << output_string;
     file_stream_br.close();
@@ -1327,6 +1338,11 @@ void generate_noc_addr_ranges_header(
     ofstream file_stream_nc(full_path + "/ncrisc/noc_addr_ranges_gen.h");
     file_stream_nc << output_string;
     file_stream_nc.close();
+
+    fs::create_directories(full_path + "/erisc");
+    ofstream file_stream_er(full_path + "/erisc/noc_addr_ranges_gen.h");
+    file_stream_er << output_string;
+    file_stream_er.close();
 }
 
 void generate_binaries_all_riscs(

@@ -33,16 +33,19 @@ SECTIONS
     KEEP (*(SORT_NONE(.init)))
   } > REGION_APP_CODE
   PROVIDE (__ecode_l1 = .);
+  /* TODO: add back when using iram code loading
   .text :
+
   {
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
     *(.text.exit .text.exit.*)
     *(.text.startup .text.startup.*)
     *(.text.hot .text.hot.*)
     *(.text .stub .text.* .gnu.linkonce.t.*)
-    /* .gnu.warning sections are handled specially by elf32.em.  */
+    /* .gnu.warning sections are handled specially by elf32.em.
     *(.gnu.warning)
-  } > REGION_APP_IRAM_CODE AT > ERISC_OVERLAY
+  } > REGION_APP_IRAM_CODE AT > ERISC_OVERLAY*/
+
 
   PROVIDE (__etext = .);
   _etext = .; PROVIDE (_etext = .);

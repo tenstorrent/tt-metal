@@ -33,11 +33,15 @@ class build_kernel_for_riscv_options_t
     // NCRISC config
     std::string ncrisc_kernel_file_name;
 
+    // ERISC config
+    std::string erisc_kernel_file_name;
+
     bool fw_build_;
 
     std::map<std::string, std::string> hlk_defines; // preprocessor defines for HLK
     std::map<std::string, std::string> ncrisc_defines;
     std::map<std::string, std::string> brisc_defines;
+    std::map<std::string, std::string> erisc_defines;
 
     build_kernel_for_riscv_options_t(int device_id);
     build_kernel_for_riscv_options_t(int device_id, std::string name);

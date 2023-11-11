@@ -23,9 +23,10 @@ enum debug_sanitize_which_riscv {
     DebugSanitizeTrisc0 = 2,
     DebugSanitizeTrisc1 = 3,
     DebugSanitizeTrisc2 = 4,
+    DebugSanitizeErisc = 5,
 };
 
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC)
 
 #if defined(WATCHER_ENABLED)
 
