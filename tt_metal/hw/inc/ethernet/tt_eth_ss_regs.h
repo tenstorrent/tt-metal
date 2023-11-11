@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef ETH_SS_REGS_H
-#define ETH_SS_REGS_H
+#ifndef TT_ETH_SS_REGS_H
+#define TT_ETH_SS_REGS_H
 
 ///////////////
 // ETH Params
