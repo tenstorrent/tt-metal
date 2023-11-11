@@ -387,8 +387,8 @@ bool eth_hung_kernels(
 TEST_F(N300DeviceFixture, EthKernelsDirectSendChip0ToChip1) {
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
-    CoreCoord sender_core_0 = {.x = 2, .y = 0};
-    CoreCoord sender_core_1 = {.x = 2, .y = 1};
+    CoreCoord sender_core_0 = {.x = 0, .y = 8};
+    CoreCoord sender_core_1 = {.x = 0, .y = 9};
 
     CoreCoord receiver_core_0 = {.x = 0, .y = 0};
     CoreCoord receiver_core_1 = {.x = 0, .y = 1};
@@ -437,8 +437,8 @@ TEST_F(N300DeviceFixture, EthKernelsDirectSendChip1ToChip0) {
     CoreCoord sender_core_0 = {.x = 0, .y = 0};
     CoreCoord sender_core_1 = {.x = 0, .y = 1};
 
-    CoreCoord receiver_core_0 = {.x = 2, .y = 0};
-    CoreCoord receiver_core_1 = {.x = 2, .y = 1};
+    CoreCoord receiver_core_0 = {.x = 0, .y = 8};
+    CoreCoord receiver_core_1 = {.x = 0, .y = 9};
 
     ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
         device_1, device_0, 16, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, sender_core_0, receiver_core_0));
@@ -482,8 +482,8 @@ TEST_F(N300DeviceFixture, EthKernelsScatterSend) {
     GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
-    CoreCoord sender_core_0 = {.x = 2, .y = 0};
-    CoreCoord sender_core_1 = {.x = 2, .y = 1};
+    CoreCoord sender_core_0 = {.x = 0, .y = 8};
+    CoreCoord sender_core_1 = {.x = 0, .y = 9};
 
     CoreCoord receiver_core_0 = {.x = 0, .y = 0};
     CoreCoord receiver_core_1 = {.x = 0, .y = 1};
@@ -509,7 +509,7 @@ TEST_F(N300DeviceFixture, HungEthKernelsContextSwitch) {
     GTEST_SKIP();
     const auto& mmio_device = devices_.at(0);
     const auto& remote_device = devices_.at(1);
-    std::vector<CoreCoord> hung_cores = {{.x = 2, .y = 0}, {.x = 2, .y = 1}};
+    std::vector<CoreCoord> hung_cores = {{.x = 0, .y = 8}, {.x = 0, .y = 9}};
 
     ASSERT_TRUE(unit_tests::erisc::kernels::eth_hung_kernels(mmio_device, remote_device, hung_cores));
 }
