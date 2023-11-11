@@ -134,6 +134,7 @@ struct CompileState {
                 "",
                 "tt_metal/include",
                 "tt_metal/hw/inc",
+                "tt_metal/hw/inc/ethernet",
                 "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch),
                 "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
                 "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/noc",
