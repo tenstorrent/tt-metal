@@ -277,7 +277,12 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         (std::uint32_t) out_cb_id,
         (std::uint32_t) pad_cb_id,
         (std::uint32_t) pad_val,
-        (std::uint32_t) in_c    // stick len
+        (std::uint32_t) in_c,    // stick len
+        (std::uint32_t) in_stick_nbytes,    // bytes per stick (in RM, after untilize)
+        (std::uint32_t) pc.in_w,
+        (std::uint32_t) pc.in_h,
+        (std::uint32_t) pc.pad_w,
+        (std::uint32_t) pc.pad_h,
     };
     KernelID writer_kernel_id = CreateKernel(
         program,
@@ -652,7 +657,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         //     partial_last_row_nsticks
         writer_rt_args[47] = initial_pad_nsticks[core];
         writer_rt_args[48] = receive_at_offset_nsticks[core][NEIGHBORHOOD_DIST]; // local_offset_nsticks
-        writer_rt_args[49] = partial_first_row_nsticks;
+        uint32_t partial_first_row_nbytes = partial_first_row_nsticks * in_stick_nbytes;
+        writer_rt_args[49] = partial_first_row_nbytes;
         writer_rt_args[50] = skip_after_partial_first_row;
         writer_rt_args[51] = partial_first_image_nrows;
         writer_rt_args[52] = partial_first_image_nrows > 0 ? 2 * pc.pad_w : 0;                          // partial_top_image_skip_per_row
@@ -662,7 +668,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         writer_rt_args[56] = full_nimages > 0 ? pc.pad_h * (pc.in_w + 2 * pc.pad_w) : 0;   // full_image_skip
         writer_rt_args[57] = partial_last_image_nrows;
         writer_rt_args[58] = partial_last_image_nrows > 0 ? 2 * pc.pad_w : 0;                          // partial_bottom_image_skip_per_row
-        writer_rt_args[59] = partial_last_row_nsticks;
+        uint32_t partial_last_row_nbytes = partial_last_row_nsticks * in_stick_nbytes;
+        writer_rt_args[59] = partial_last_row_nbytes;
 
         // args for handling remote data shuffle:
         //     NEIGHBORHOOD_DIST
