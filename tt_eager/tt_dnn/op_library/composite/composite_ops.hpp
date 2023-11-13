@@ -296,10 +296,10 @@ Tensor triu(const Tensor& input_a, int32_t diag = 0, const MemoryConfig& output_
 //masked_fill - binary operator y = (mask) ? value : input_a; elementwise
 Tensor masked_fill(const Tensor& input_a, const Tensor& mask, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-//masked_fill_ - binary operator y = (mask) ? value : input_a; elementwise
+//masked_fill_ - binary operator input_a = (mask) ? value : input_a; elementwise
 Tensor masked_fill_(const Tensor& input_a, const Tensor& mask, float value);
 
-//masked_fill_backward - binary operator y = (mask) ? 0 : output_grad; elementwise
+//masked_fill_backward - binary operator input_grad = (mask) ? 0 : output_grad; elementwise
 Tensor masked_fill_backward(const Tensor& output_grad, const Tensor& mask, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 } //namespace tt_metal
