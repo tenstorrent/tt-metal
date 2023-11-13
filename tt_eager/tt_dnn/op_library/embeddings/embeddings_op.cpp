@@ -274,16 +274,14 @@ operation::ProgramWithCallbacks embeddings_tilized(
                         auto weights_dram_buffer = input_buffers.at(1);
                         {
 
-                            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                             runtime_args[2] = input_dram_buffer->address();
                             runtime_args[3] = weights_dram_buffer->address();
-                            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
                         }
 
                         {
-                            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                             runtime_args[0] = output_dram_buffer->address();
-                            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
                         }
                     }
                 }
@@ -494,11 +492,10 @@ operation::ProgramWithCallbacks embeddings_rm(
                             auto output_dram_buffer = output_buffers.at(0);
                             {
 
-                                auto runtime_args = GetRuntimeArgs(program, kernIds[idc], core);
+                                auto &runtime_args = GetRuntimeArgs(program, kernIds[idc], core);
                                 runtime_args[4] = input_dram_buffer->address();
                                 runtime_args[5] = weights_dram_buffer->address();
                                 runtime_args[6] = output_dram_buffer->address();
-                                SetRuntimeArgs(program, kernIds[idc], core, runtime_args);
                             }
                         }
                     }

@@ -151,15 +151,13 @@ In order for an op to be cachable, it needs to implement the following:
                 CoreCoord core = {0, 0};
 
                 {
-                    auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
                     runtime_args[0] = src_dram_buffer->address();
-                    SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
                 }
 
                 {
-                    auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                     runtime_args[0] = dst_dram_buffer->address();
-                    SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
                 }
             };
 

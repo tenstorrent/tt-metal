@@ -193,9 +193,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
                 if (!all_cores.core_coord_in_core_ranges(core)) {
                     continue;
                 }
-                auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
-                SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
             }
         }
         auto& cb_out_config = GetCircularBufferConfig(program, cb_output);
@@ -446,9 +445,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
                 if (!all_cores.core_coord_in_core_ranges(core)) {
                     continue;
                 }
-                auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
-                SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
             }
         }
         auto& cb_src0_config = GetCircularBufferConfig(program, cb_src0);

@@ -193,7 +193,7 @@ void UpdateRuntimeArg(const Program &program, KernelID kernel, const std::varian
 /**
  * Get the runtime args for a kernel.
  *
- * Return value: const std::vector<uint32_t> &
+ * Return value: std::vector<uint32_t> &
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
@@ -201,7 +201,7 @@ void UpdateRuntimeArg(const Program &program, KernelID kernel, const std::varian
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelID (uint64_t)                |                                    | Yes      |
  * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate | Yes      |
  */
-const std::vector<uint32_t>& GetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreCoord &logical_core);
+std::vector<uint32_t>& GetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreCoord &logical_core);
 
 /**
  * Reads a buffer from the device

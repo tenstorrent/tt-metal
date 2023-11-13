@@ -202,17 +202,15 @@ operation::ProgramWithCallbacks multi_core_split_fused_qkv_and_split_heads(const
                 CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
 
                 {
-                    auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                     runtime_args[0] = src_dram_buffer->address();
-                    SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
                 }
 
                 {
-                    auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                     runtime_args[0] = dst_dram_buffer_query->address();
                     runtime_args[1] = dst_dram_buffer_key->address();
                     runtime_args[2] = dst_dram_buffer_value->address();
-                    SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
                 }
             }
         }

@@ -479,7 +479,7 @@ void UpdateRuntimeArg(const Program &program, KernelID kernel_id, const std::var
     );
 }
 
-const std::vector<uint32_t> & GetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreCoord &logical_core) {
+std::vector<uint32_t> & GetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreCoord &logical_core) {
     return detail::GetKernel(program, kernel_id)->runtime_args(logical_core);
 }
 

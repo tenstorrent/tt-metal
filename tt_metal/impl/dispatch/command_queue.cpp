@@ -104,7 +104,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     // want to send host data first because of the higher latency to pull
     // in host data.
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        const Kernel* kernel = detail::GetKernel(program, kernel_id);
+        Kernel* kernel = detail::GetKernel(program, kernel_id);
         uint32_t dst = processor_to_l1_arg_base_addr.at(kernel->processor());
         for (const auto &core_coord : kernel->cores_with_runtime_args()) {
             CoreCoord physical_core = device->worker_core_from_logical_core(core_coord);
@@ -556,7 +556,7 @@ void EnqueueProgramCommand::process() {
     uint32_t start_addr = system_memory_temporary_storage_address;
     constexpr static uint32_t padding_alignment = 16;
     for (size_t kernel_id = 0; kernel_id < this->program.num_kernels(); kernel_id++) {
-        const Kernel* kernel = detail::GetKernel(program, kernel_id);
+        Kernel* kernel = detail::GetKernel(program, kernel_id);
         for (const auto& c: kernel->cores_with_runtime_args()) {
             const auto & core_runtime_args = kernel->runtime_args(c);
             this->writer.cq_write(this->device, core_runtime_args.data(), core_runtime_args.size() * sizeof(uint32_t), system_memory_temporary_storage_address);

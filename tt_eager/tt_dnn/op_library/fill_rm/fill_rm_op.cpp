@@ -63,9 +63,8 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(program, kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, kernel_id, core);
             runtime_args[0] = dst_buffer->address();
-            SetRuntimeArgs(program, kernel_id, core, runtime_args);
         }
     };
 

@@ -146,15 +146,13 @@ operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &in
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             std::copy(src_addrs.begin(), src_addrs.end(), runtime_args.begin() + 4);
-            SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
-            SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
 

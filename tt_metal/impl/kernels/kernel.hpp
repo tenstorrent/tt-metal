@@ -51,7 +51,7 @@ class Kernel {
 
     void update_runtime_arg( const CoreCoord &logical_core, size_t idx, uint32_t value);
 
-    std::vector<uint32_t> const & runtime_args(const CoreCoord &logical_core) const;
+    std::vector<uint32_t> & runtime_args(const CoreCoord &logical_core);
 
     std::map<std::string, std::string> defines() const { return defines_; }
 

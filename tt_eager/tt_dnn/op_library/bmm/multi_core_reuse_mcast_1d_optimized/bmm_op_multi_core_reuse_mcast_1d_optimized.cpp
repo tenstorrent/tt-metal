@@ -512,15 +512,14 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
 
             auto reader_kernel_id = reader_kernel_ids.at(i);
-            auto reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto &reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
 
             auto writer_kernel_id = writer_kernel_ids.at(i);
-            auto writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto &writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
 
             // in0 sender
             if (!src0_sharded && core_idx_x == 0 and core_idx_y == 0) {
                 reader_runtime_args[0] = src_buffer_a->address();
-                SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
             // in0 receiver
             } else {
 
@@ -532,7 +531,6 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 if (bias_tensor.has_value()) {
                     writer_runtime_args[16] = bias_tensor.value().buffer()->address();
                 }
-                SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
             }
         }
         if (src0_sharded) {

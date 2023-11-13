@@ -106,10 +106,10 @@ void Kernel::update_runtime_arg( const CoreCoord &logical_core, size_t idx, uint
     v[idx] = value;
 }
 
-std::vector<uint32_t> const& Kernel::runtime_args(const CoreCoord &logical_core) const {
+std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord &logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
     // TT_ASSERT(this->is_on_logical_core(logical_core), "Cannot get runtime args for kernel {} that is not placed on core {}", this->name(), logical_core.str());
-    return this->core_to_runtime_args_.at(logical_core.x).at(logical_core.y);
+    return this->core_to_runtime_args_[logical_core.x][logical_core.y];
 }
 
 std::pair<uint64_t, uint64_t> DataMovementKernel::get_runtime_args_range() const {

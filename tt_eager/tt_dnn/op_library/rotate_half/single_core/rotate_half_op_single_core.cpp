@@ -152,15 +152,13 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
-            SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
-            SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
 

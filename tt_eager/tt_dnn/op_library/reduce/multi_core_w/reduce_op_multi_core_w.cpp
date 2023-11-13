@@ -170,15 +170,13 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = src_dram_buffer->address();
-                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = dst_dram_buffer->address();
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
             }
         }
     };
