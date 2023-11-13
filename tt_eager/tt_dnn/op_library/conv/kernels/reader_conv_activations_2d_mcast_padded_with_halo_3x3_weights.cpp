@@ -110,7 +110,7 @@ void kernel_main() {
 
     // First partial image
     for (uint32_t j = 0; j < first_partial_image_num_rows; j++) {
-        for (uint32_t k = 0; k < conv_act_size_w; k++) {
+        for (uint32_t k = 0; k < conv_output_size_w; k++) {
             reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx;
             weights_top_left_corner_idx += skip_after_each_stick;
         }
@@ -120,8 +120,8 @@ void kernel_main() {
 
     // Full images
     for (uint32_t i = 0; i < num_full_images; i++) {
-        for (uint32_t j = 0; j < conv_act_size_h; j++) {
-            for (uint32_t k = 0; k < conv_act_size_w; k++) {
+        for (uint32_t j = 0; j < conv_output_size_h; j++) {
+            for (uint32_t k = 0; k < conv_output_size_w; k++) {
                 reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx;
                 weights_top_left_corner_idx += skip_after_each_stick;
             }
@@ -132,7 +132,7 @@ void kernel_main() {
 
     // Last partial image
     for (uint32_t j = 0; j < last_partial_image_num_rows; j++) {
-        for (uint32_t k = 0; k < conv_act_size_w; k++) {
+        for (uint32_t k = 0; k < conv_output_size_w; k++) {
             reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx;
             weights_top_left_corner_idx += skip_after_each_stick;
         }
@@ -144,6 +144,10 @@ void kernel_main() {
         reader_indices_ptr[reader_idx++] = weights_top_left_corner_idx;
         weights_top_left_corner_idx += skip_after_each_stick;
     }
+
+    //for (uint32_t k = 0; k < 160; k++) {
+    //    DPRINT << reader_indices_ptr[k] << ENDL();
+    //}
 
 
     // DUMMY LOOP TO FILL READER OFFSETS
@@ -250,7 +254,7 @@ void kernel_main() {
             if (act_w_outer_i == 0) {
             if (outer == 0) {
                 // Print all 9 windows, full 5 tiles
-                for (int window = 0; window < 1; window++) {
+                for (int window = 0; window < 9; window++) {
                     DPRINT << "-------> Window: " << window << ENDL();
                 for (int height = 0; height < 5; height++) {
                     DPRINT << "------------> TILE: " << height << ENDL();
@@ -258,7 +262,7 @@ void kernel_main() {
                         auto offset = (9 - (32 * i) % 9 + window) % 9;
 
                         auto s2_p = SliceRange{ .h0 = offset, .h1 = 32, .hs = 9, .w0 = 0, .w1 = 1, .ws = 1 };
-                        DPRINT << TileSlice(cb_id_act, height*9 + i, s2_p, true, false) << ENDL();
+                        DPRINT << TileSlice(cb_id_act, height*9 + i, s2_p, true, false);
                     }
                 }
                 }

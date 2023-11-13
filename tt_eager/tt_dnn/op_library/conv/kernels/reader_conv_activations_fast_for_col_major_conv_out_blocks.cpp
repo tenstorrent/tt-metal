@@ -182,11 +182,11 @@ void kernel_main() {
 
                         if (act_w_outer_i == 0) {
                         // Print all 9 windows, full 5 tiles
-                        if ((channel_stick_h == 0 and channel_stick_w == 0) or (channel_stick_h == 0 and channel_stick_w == 0)) {
+                        if (1) { //(channel_stick_h == 1 and channel_stick_w == 1) or (channel_stick_h == 1 and channel_stick_w == 2)) {
                             DPRINT << "-------> Window: " << channel_stick_h * 3 + channel_stick_w << ENDL();
                             for (int height = 0; height < 5; height++) {
                                 DPRINT << "------------> TILE: " << height << ENDL();
-                                DPRINT << TileSlice(cb_id_act, height, s1, true, false) << ENDL();
+                                DPRINT << TileSlice(cb_id_act, height, s1, true, false);
                             }
                         }
                         }

@@ -176,7 +176,7 @@ private:
 
 static void print_tile_slice(ostream& stream, uint8_t* ptr) {
     TileSliceHostDev<0>* ts = reinterpret_cast<TileSliceHostDev<0>*>(ptr);
-    stream << "TILE: (" << endl << std::flush;
+    //stream << "TILE: (" << endl << std::flush;
     if (ts->w0_ == 0xFFFF) {
         stream << "BAD TILE POINTER" << std::flush;
         stream << " count=" << ts->count_ << std::flush;
@@ -196,7 +196,8 @@ static void print_tile_slice(ostream& stream, uint8_t* ptr) {
         }
     }
 done:
-    stream << endl << "  ptr=" << ts->ptr_ << ")" << endl;
+    {}
+    //stream << endl << "  ptr=" << ts->ptr_ << ")" << endl;
 }
 
 // Checks if our magic value was cleared by the device code
