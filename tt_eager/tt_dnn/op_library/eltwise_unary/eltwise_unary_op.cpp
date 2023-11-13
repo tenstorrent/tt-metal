@@ -279,13 +279,6 @@ UnaryOpParallelizationStrategy EltwiseUnary::get_parallelization_strategy(const 
     }
 }
 
-tt::stl::reflection::Attributes EltwiseUnary::attributes() const {
-    return {
-        {"op_chain", this->op_chain},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& input_shape = input_tensor.shape();

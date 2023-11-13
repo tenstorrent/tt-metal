@@ -26,7 +26,13 @@ struct Untilize {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     UntilizeOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names =
+        std::make_tuple("output_mem_config", "use_multicore");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->output_mem_config), std::cref(this->use_multicore));
+    }
 };
 
 enum class UntilizeWithUnpaddingOpParallelizationStrategy {
@@ -43,7 +49,13 @@ struct UntilizeWithUnpadding {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     UntilizeWithUnpaddingOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names =
+        std::make_tuple("output_tensor_start", "output_tensor_end", "output_mem_config");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->output_tensor_start), std::cref(this->output_tensor_end), std::cref(this->output_mem_config));
+    }
 };
 
 operation::ProgramWithCallbacks untilize_multi_core(const Tensor &a, Tensor& output);
@@ -68,7 +80,19 @@ struct UntilizeWithHalo {
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::make_tuple(
+        "pad_val", "in_b", "in_h", "in_w", "out_shard_size_max_per_core", "stride", "output_mem_config");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->pad_val_),
+            std::cref(this->in_b),
+            std::cref(this->in_h),
+            std::cref(this->in_w),
+            std::cref(this->out_shard_size_max_per_core),
+            std::cref(this->stride_),
+            std::cref(this->output_mem_config));
+    }
 };
 Tensor untilize_with_halo(const Tensor &a, const uint32_t pad_val, const uint32_t &in_b, const uint32_t &in_h, const uint32_t &in_w, const uint32_t stride = 1, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 

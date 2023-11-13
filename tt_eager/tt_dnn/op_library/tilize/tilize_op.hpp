@@ -27,7 +27,12 @@ struct Tilize {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     TilizeOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::make_tuple("output_mem_config", "output_dtype", "use_multicore");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->output_mem_config), std::cref(this->output_dtype), std::cref(this->use_multicore));
+    }
 };
 
 
@@ -47,7 +52,17 @@ struct TilizeWithValPadding {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     TilizeWithValPaddingOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names =
+        std::make_tuple("output_tensor_shape", "input_tensor_start", "pad_value", "output_mem_config", "output_dtype");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->output_tensor_shape),
+            std::cref(this->input_tensor_start),
+            std::cref(this->pad_value),
+            std::cref(this->output_mem_config),
+            std::cref(this->output_dtype));
+    }
 };
 
 operation::ProgramWithCallbacks tilize_multi_core(const Tensor &a, Tensor& output);

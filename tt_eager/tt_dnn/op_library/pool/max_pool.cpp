@@ -149,22 +149,6 @@ operation::ProgramWithCallbacks MaxPool::create_program(const std::vector<Tensor
     }
 }
 
-tt::stl::reflection::Attributes MaxPool::attributes() const {
-    return {
-        {"in_n", in_n_},    // input batch
-        {"in_h", in_h_},    // input height
-        {"in_w", in_w_},    // input width
-        {"kernel_size_h", kernel_size_h_},
-        {"kernel_size_w", kernel_size_w_},
-        {"stride_h", stride_h_},
-        {"stride_w", stride_w_},
-        {"pad_h", pad_h_},
-        {"pad_w", pad_w_},
-        {"dilation_h", dilation_h_},
-        {"dilation_w", dilation_w_},
-    };
-}
-
 Tensor max_pool2d(const Tensor &input,
                   uint32_t in_n, uint32_t in_h, uint32_t in_w,
                   uint32_t kernel_size_h, uint32_t kernel_size_w,

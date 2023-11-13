@@ -7,11 +7,12 @@
 
 #pragma once
 
-#include <string>
-#include <set>
-#include <optional>
 #include <algorithm>
 #include <limits>
+#include <optional>
+#include <set>
+#include <string>
+
 #include "common/assert.hpp"
 #include "common/logger.hpp"
 #include "third_party/umd/device/tt_xy_pair.h"
@@ -19,6 +20,17 @@
 using std::pair;
 
 using CoreCoord = tt_xy_pair;
+
+template <>
+struct fmt::formatter<CoreCoord> {
+    constexpr auto parse(format_parse_context &ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const CoreCoord &core_coord, format_context &ctx) const -> format_context::iterator {
+        std::stringstream ss;
+        ss << core_coord.str();
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
 
 constexpr inline bool operator<=(const CoreCoord &a, const CoreCoord &b) {
     return (a < b) or (a == b);
@@ -181,6 +193,29 @@ struct CoresInCoreRangeGenerator {
     }
 };
 
+template <>
+struct fmt::formatter<CoreRange> {
+    constexpr auto parse(format_parse_context &ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const CoreRange &core_range, format_context &ctx) const -> format_context::iterator {
+        std::stringstream ss;
+        ss << core_range.str();
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
+namespace std {
+template <>
+struct hash<CoreRange> {
+    std::size_t operator()(const CoreRange &core_range) const {
+        std::size_t seed = 0;
+        seed = std::hash<CoreCoord>{}(core_range.start) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed = std::hash<CoreCoord>{}(core_range.end) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        return seed;
+    }
+};
+}  // namespace std
+
 class CoreRangeSet {
   public:
     CoreRangeSet(const std::set<CoreRange> &core_ranges) : ranges_(core_ranges) {
@@ -327,6 +362,7 @@ class CoreRangeSet {
   private:
     std::set<CoreRange> ranges_;
 };
+
 const inline bool operator==(const CoreRangeSet &a, const CoreRangeSet &b) {
   if (a.ranges().size() == b.ranges().size()) {
     auto range_a = a.ranges();
@@ -342,6 +378,30 @@ const inline bool operator==(const CoreRangeSet &a, const CoreRangeSet &b) {
 }
 
 const inline bool operator!=(const CoreRangeSet &a, const CoreRangeSet &b) { return !(a == b); }
+
+template <>
+struct fmt::formatter<CoreRangeSet> {
+    constexpr auto parse(format_parse_context &ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const CoreRangeSet &core_range_set, format_context &ctx) const -> format_context::iterator {
+        std::stringstream ss;
+        ss << core_range_set.str();
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
+namespace std {
+template <>
+struct hash<CoreRangeSet> {
+    std::size_t operator()(const CoreRangeSet &core_range_set) const {
+        std::size_t seed = 0;
+        for (const auto &core_range : core_range_set.ranges()) {
+            seed = std::hash<CoreRange>{}(core_range) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        }
+        return seed;
+    }
+};
+}  // namespace std
 
 namespace std {
 template <>

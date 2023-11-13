@@ -99,11 +99,11 @@ class Tensor {
         static constexpr auto attribute_names = std::make_tuple("storage", "shape", "dtype", "layout", "shard_spec");
         const auto attribute_values() const {
             return std::make_tuple(
-                std::ref(this->storage_),
-                std::ref(this->shape_),
-                std::ref(this->dtype_),
-                std::ref(this->layout_),
-                std::ref(this->shard_spec_));
+                std::cref(this->storage_),
+                std::cref(this->shape_),
+                std::cref(this->dtype_),
+                std::cref(this->layout_),
+                std::cref(this->shard_spec_));
         }
 
     private:

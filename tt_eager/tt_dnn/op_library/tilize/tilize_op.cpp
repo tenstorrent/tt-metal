@@ -85,14 +85,6 @@ TilizeOpParallelizationStrategy Tilize::get_parallelization_strategy(const std::
     }
 }
 
-tt::stl::reflection::Attributes Tilize::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-        {"output_dtype", this->output_dtype},
-        {"use_multicore", this->use_multicore},
-    };
-}
-
 Tensor tilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype, bool use_multicore) {
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::TILE) {
@@ -177,16 +169,6 @@ TilizeWithValPaddingOpParallelizationStrategy TilizeWithValPadding::get_parallel
     } else {
         return TilizeWithValPaddingOpParallelizationStrategy::SINGLE_CORE;
     }
-}
-
-tt::stl::reflection::Attributes TilizeWithValPadding::attributes() const {
-    return {
-        {"output_tensor_shape", this->output_tensor_shape},
-        {"input_tensor_start", this->input_tensor_start},
-        {"pad_value", this->pad_value},
-        {"output_mem_config", this->output_mem_config},
-        {"output_dtype", this->output_dtype},
-    };
 }
 
 Tensor tilize_with_val_padding(const Tensor &input_tensor_a, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value, const MemoryConfig& output_mem_config, std::optional<const DataType> output_dtype) {

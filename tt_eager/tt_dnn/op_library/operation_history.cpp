@@ -13,16 +13,6 @@ namespace tt_metal {
 
 namespace operation_history {
 
-tt::stl::reflection::Attributes TensorRecord::attributes() const {
-    return {
-        {"storage_type", this->storage_type},
-        {"shape", this->shape},
-        {"data_type", this->data_type},
-        {"layout", this->layout},
-        {"memory_config", this->memory_config},
-    };
-}
-
 namespace detail {
 
 OperationHistory::~OperationHistory() {

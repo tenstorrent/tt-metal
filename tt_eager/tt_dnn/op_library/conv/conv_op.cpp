@@ -1441,24 +1441,6 @@ operation::ProgramWithCallbacks Conv::create_program(const std::vector<Tensor>& 
     }
 }
 
-tt::stl::reflection::Attributes Conv::attributes() const {
-    return {
-        {"conv_params", this->conv_params},
-        {"act_block_h_ntiles", this->act_block_h_ntiles},
-        {"act_block_w_ntiles", this->act_block_w_ntiles},
-        {"weight_block_w_ntiles", this->weight_block_w_ntiles},
-        {"out_subblock_h_ntiles", this->out_subblock_h_ntiles},
-        {"out_subblock_w_ntiles", this->out_subblock_w_ntiles},
-        {"output_channels", this->output_channels},
-        {"use_address_map", this->use_address_map},
-        {"use_fast_reader", this->use_fast_reader},
-        {"untilize_out", this->untilize_out},
-        {"has_bias", this->has_bias},
-        {"fuse_relu", this->fuse_relu},
-        {"math_fidelity", this->math_fidelity},
-    };
-}
-
 }  // namespace tt_metal
 
 }  // namespace tt

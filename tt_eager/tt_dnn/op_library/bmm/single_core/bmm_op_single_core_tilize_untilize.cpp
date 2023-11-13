@@ -588,22 +588,5 @@ operation::ProgramWithCallbacks BMMTilizeUntilize::create_program(const std::vec
                                            out);
 }
 
-stl::reflection::Attributes BMMTilizeUntilize::attributes() const {
-    return {
-        {"out_dt", this->out_dt_},
-        {"in0_nblocks_h", this->in0_nblocks_h_},
-        {"in0_nblocks_w", this->in0_nblocks_w_},
-        {"in1_nblocks_w", this->in1_nblocks_w_},
-        {"in0_block_ntiles_h", this->in0_block_ntiles_h_},
-        {"in0_block_ntiles_w", this->in0_block_ntiles_w_},
-        {"in1_block_ntiles_w", this->in1_block_ntiles_w_},
-        {"out_subblock_ntiles_h", this->out_subblock_ntiles_h_},
-        {"out_subblock_ntiles_w", this->out_subblock_ntiles_w_},
-        {"tilize_in0", this->tilize_in0_},
-        {"untilize_out", this->untilize_out_},
-        {"has_bias", this->has_bias_},
-    };
-}
-
 }  // namespace tt_metal
 }  // namespace tt

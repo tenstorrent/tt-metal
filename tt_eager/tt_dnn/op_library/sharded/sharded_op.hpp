@@ -41,7 +41,16 @@ struct Sharded {
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     ShardedOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
     std::string get_type_name() const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names =
+        std::make_tuple("grid_size", "shard_spec", "sharded_op_type", "output_mem_config");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->grid_size),
+            std::cref(this->shard_spec),
+            std::cref(this->sharded_op_type),
+            std::cref(this->output_mem_config));
+    }
 };
 
 inline Tensor interleaved_to_sharded(const Tensor &input_tensor, CoreCoord grid_size, std::array<uint32_t, 2> shard_shape, TensorMemoryLayout shard_scheme, ShardOrientation shard_orientation) {

@@ -142,14 +142,6 @@ operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(const std
     }
 }
 
-tt::stl::reflection::Attributes EltwiseBinaryBroadcast::attributes() const {
-    return {
-        {"math_op", this->math_op},
-        {"dim", this->dim},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 const operation::Hash EltwiseBinaryBroadcast::compute_program_hash(
     const std::vector<Tensor> &input_tensors) const {
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);

@@ -54,7 +54,7 @@ Or to add one with a memmber:
 
         static constexpr auto attribute_names = std::make_tuple("some_member");
         const auto attribute_values() const {
-            return std::make_tuple(std::ref(some_member));
+            return std::make_tuple(std::cref(some_member));
         }
     };
 

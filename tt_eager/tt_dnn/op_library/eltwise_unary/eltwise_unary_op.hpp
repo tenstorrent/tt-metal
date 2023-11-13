@@ -51,12 +51,8 @@ struct UnaryWithParam {
     UnaryOpType op_type;
     std::optional<float> param = std::nullopt;
 
-    tt::stl::reflection::Attributes attributes() const {
-        return {
-            {"op_type", this->op_type},
-            {"param", this->param},
-        };
-    }
+    static constexpr auto attribute_names = std::make_tuple("op_type", "param");
+    const auto attribute_values() const { return std::make_tuple(std::cref(this->op_type), std::cref(this->param)); }
 };
 
 enum class UnaryOpParallelizationStrategy {
@@ -72,7 +68,11 @@ struct EltwiseUnary {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     UnaryOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::make_tuple("op_chain", "output_mem_config");
+    const auto attribute_values() const {
+        return std::make_tuple(std::cref(this->op_chain), std::cref(this->output_mem_config));
+    }
 
     const operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };

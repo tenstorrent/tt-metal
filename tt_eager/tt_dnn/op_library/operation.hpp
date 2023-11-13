@@ -201,7 +201,7 @@ struct HostOperation final {
         }},
         attributes{[this] {
             const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&this->type_erased_storage);
-            return operation.attributes();
+            return tt::stl::reflection::get_attributes(operation);
         }} {
         static_assert(sizeof(T) <= sizeof(storage_t));
     }
@@ -385,26 +385,7 @@ struct DeviceOperation final {
             }},
         attributes_impl_{[](const storage_t& storage) -> const tt::stl::reflection::Attributes {
             const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
-            if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_v<std::decay_t<T>>) {
-                constexpr auto num_attributes = tt::stl::reflection::detail::get_num_attributes<std::decay_t<T>>();
-                tt::stl::reflection::Attributes attributes;
-                [&operation, &attributes]<size_t... Ns>(std::index_sequence<Ns...>) {
-                    (
-                        [&operation, &attributes] {
-                            const auto& attribute_name = std::get<Ns>(operation.attribute_names);
-                            const auto& attribute = std::get<Ns>(operation.attribute_values());
-                            attributes.push_back({attribute_name, attribute});
-                        }(),
-                        ...);
-                }(std::make_index_sequence<num_attributes>{});
-                return attributes;
-            } else if constexpr (tt::stl::reflection::detail::supports_runtime_time_attributes_v<std::decay_t<T>>) {
-                return operation.attributes();
-            } else {
-                static_assert(
-                    tt::stl::concepts::always_false_v<T>,
-                    "Operation doesn't support compile-time or run-time attributes!");
-            }
+            return tt::stl::reflection::get_attributes(operation);
         }} {
         static_assert(sizeof(T) <= sizeof(storage_t));
     }

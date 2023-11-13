@@ -28,7 +28,14 @@ struct OptimizedConvParallelizationConfig {
     // std::size_t per_core_M;
     // std::size_t per_core_N;
 
-    tt::stl::reflection::Attributes attributes() const;
+    static constexpr auto attribute_names =
+        std::make_tuple("grid_size", "per_core_out_matrix_height_ntiles", "per_core_weight_matrix_width_ntiles");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->grid_size),
+            std::cref(this->per_core_out_matrix_height_ntiles),
+            std::cref(this->per_core_weight_matrix_width_ntiles));
+    }
 };
 
 struct OptimizedConvBlockConfig {
@@ -39,7 +46,25 @@ struct OptimizedConvBlockConfig {
     uint32_t out_block_h_ntiles;
     uint32_t out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::make_tuple(
+        "act_block_h_ntiles",
+        "act_block_w_ntiles",
+        "act_c_num_blocks",
+        "weight_block_w_ntiles",
+        "out_block_h_ntiles",
+        "out_subblock_h_ntiles",
+        "out_subblock_w_ntiles");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->act_block_h_ntiles),
+            std::cref(this->act_block_w_ntiles),
+            std::cref(this->act_c_num_blocks),
+            std::cref(this->weight_block_w_ntiles),
+            std::cref(this->out_block_h_ntiles),
+            std::cref(this->out_subblock_h_ntiles),
+            std::cref(this->out_subblock_w_ntiles));
+    }
 };
 
 struct OptimizedConv {
@@ -76,7 +101,29 @@ struct OptimizedConv {
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::make_tuple(
+        "conv_params",
+        "output_channels",
+        "untilize_out",
+        "has_bias",
+        "fuse_relu",
+        "math_fidelity",
+        "extra_padding_for_32B_alignment",
+        "output_mem_config",
+        "output_dtype");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->conv_params),
+            std::cref(this->output_channels),
+            std::cref(this->untilize_out),
+            std::cref(this->has_bias),
+            std::cref(this->fuse_relu),
+            std::cref(this->math_fidelity),
+            std::cref(this->extra_padding_for_32B_alignment),
+            std::cref(this->output_mem_config),
+            std::cref(this->output_dtype));
+    }
 };
 
 Tensor optimized_conv(const Tensor& a, const Tensor &b, std::optional<const Tensor> bias,
