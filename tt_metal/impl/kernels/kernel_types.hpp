@@ -13,7 +13,7 @@
 
 namespace tt::tt_metal {
 
-using KernelID = uintptr_t;
+using KernelID = std::uint16_t;
 
 enum class DataMovementProcessor {
     RISCV_0 = 0,  // BRISC

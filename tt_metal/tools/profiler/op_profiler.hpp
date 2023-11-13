@@ -512,7 +512,7 @@ namespace op_profiler {
     static void append_math_fidelities (const Program& program)
     {
 #if defined(PROFILER)
-        for (const auto& kernel_id : program.kernel_ids()) {
+        for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
             Kernel * kernel = tt::tt_metal::detail::GetKernel(program, kernel_id);
             if (kernel->processor() == RISCV::COMPUTE) {
                 ComputeKernel * compute_kernel = static_cast<ComputeKernel*>(kernel);

@@ -103,7 +103,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     // Step 1: Get transfer info for runtime args (soon to just be host data). We
     // want to send host data first because of the higher latency to pull
     // in host data.
-    for (const auto kernel_id : program.kernel_ids()) {
+    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         const Kernel* kernel = detail::GetKernel(program, kernel_id);
         uint32_t dst = processor_to_l1_arg_base_addr.at(kernel->processor());
         for (const auto &core_coord : kernel->cores_with_runtime_args()) {
@@ -155,7 +155,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
 
     // Step 3: Determine the transfer information for each program binary
     src = 0; // Restart src since it begins in a new page
-    for (KernelID kernel_id : program.kernel_ids()) {
+    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         const Kernel* kernel = detail::GetKernel(program, kernel_id);
         vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
             extract_dst_noc_multicast_info(kernel->core_range_set().ranges());
@@ -231,7 +231,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
 
     // Create a vector of all program binaries/cbs/semaphores
     uint32_t program_page_idx = 0;
-    for (KernelID kernel_id : program.kernel_ids()) {
+    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         const Kernel* kernel = detail::GetKernel(program, kernel_id);
 
         for (const ll_api::memory& kernel_bin : kernel->binaries(device->id())) {
@@ -555,7 +555,7 @@ void EnqueueProgramCommand::process() {
 
     uint32_t start_addr = system_memory_temporary_storage_address;
     constexpr static uint32_t padding_alignment = 16;
-    for (const auto kernel_id : this->program.kernel_ids()) {
+    for (size_t kernel_id = 0; kernel_id < this->program.num_kernels(); kernel_id++) {
         const Kernel* kernel = detail::GetKernel(program, kernel_id);
         for (const auto& c: kernel->cores_with_runtime_args()) {
             const auto & core_runtime_args = kernel->runtime_args(c);

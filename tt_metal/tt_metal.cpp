@@ -317,7 +317,7 @@ namespace detail {
             return l1_arg_base;
         };
 
-        for (auto kernel_id : program.kernel_ids()) {
+        for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
             const auto kernel = detail::GetKernel(program, kernel_id);
             auto processor = kernel->processor();
             for (const auto &logical_core : kernel->cores_with_runtime_args()) {
@@ -371,8 +371,7 @@ KernelID CreateKernel(Program &program, const std::string &file_name, const std:
                             else if constexpr (std::is_same_v<T, EthernetConfig>) {
                                 kernel = new EthernetKernel(file_name, core_ranges, cfg);
                             }
-                            detail::AddKernel(program, kernel);
-                            return kernel->id();
+                            return detail::AddKernel(program, kernel);
                         },
                         config
                     );

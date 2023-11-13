@@ -449,7 +449,7 @@ TEST_F(CommandQueueFixture, ComputeRuntimeArgs) {
 
 
     std::vector<uint32_t> initial_runtime_args = {101, 202};
-    SetRuntimeArgs(program, program.kernel_ids().at(0), cr_set, initial_runtime_args);
+    SetRuntimeArgs(program, 0, cr_set, initial_runtime_args);
     EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
     Finish(*tt::tt_metal::detail::GLOBAL_CQ);
 

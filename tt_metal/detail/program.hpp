@@ -9,17 +9,19 @@
 #include "tt_metal/impl/program.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include "tt_metal/impl/kernels/kernel_types.hpp"
+
 using namespace tt::tt_metal;
 
 namespace tt::tt_metal::detail{
 
-    inline void AddKernel ( Program & program, Kernel * kernel)
+    inline KernelID AddKernel ( Program & program, Kernel * kernel)
     {
-        program.add_kernel(kernel);
+        return program.add_kernel(kernel);
     }
 
     inline Kernel *GetKernel(const Program &program, KernelID kernel_id) {
-        return program.get_kernel(kernel_id);
+        return program.kernels_.at(kernel_id);
     }
 
     inline std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CircularBufferID id) {
