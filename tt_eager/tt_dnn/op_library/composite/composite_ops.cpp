@@ -1208,7 +1208,7 @@ Tensor triu(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_
 
 //masked_fill - binary operator y = (mask) ? value : input_a; elementwise
 Tensor masked_fill(const Tensor& input_a, const Tensor& mask, float value, const MemoryConfig& output_mem_config) {
-    // TODO: remove t_value if `where` function recive float type `value`. because tensor type `value` ​​can waste memory
+    // TODO: remove t_value if `where` function receive float type `value`. because tensor type `value` ​​can waste memory
     Tensor t_value = mk_filled_tensor_like(input_a, value, output_mem_config);
     Tensor result = where(mask, t_value, input_a, output_mem_config);
     return result;
@@ -1223,7 +1223,7 @@ Tensor masked_fill_(const Tensor& input_a, const Tensor& mask, float value) {
 
 Tensor masked_fill_backward(const Tensor& output_grad, const Tensor& mask, const MemoryConfig& output_mem_config)
 {
-    // TODO: remove zero_like if `where` function recive float type `value`. because tensor type `value` ​​can waste memory
+    // TODO: remove zero_like if `where` function receive float type `value`. because tensor type `value` ​​can waste memory
     Tensor zero_like = mk_zero_tensor_like(output_grad, output_mem_config);
     Tensor result = where(mask, zero_like, output_grad, output_mem_config);
     return result;
