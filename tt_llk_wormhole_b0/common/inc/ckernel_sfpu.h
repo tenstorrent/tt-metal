@@ -1,8 +1,8 @@
 #pragma once
 
 #include "ckernel_defs.h"
-#include "ckernel.h"
 #include "noc_nonblocking_api.h"
+#include "ckernel.h"
 #include <limits>
 
 #include "sfpi.h"
