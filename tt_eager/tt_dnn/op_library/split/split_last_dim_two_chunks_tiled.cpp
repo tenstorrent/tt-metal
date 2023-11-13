@@ -5,6 +5,7 @@
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/auto_format.hpp"
+#include "tt_dnn/op_library/reshape/reshape_op.hpp"
 
 #include "common/constants.hpp"
 #include "tt_metal/host_api.hpp"
@@ -279,10 +280,34 @@ operation::ProgramWithCallbacks SplitLastDimTwoChunksTiled::create_program(
     return split_last_dim_two_chunks_tiled(input_tensor, output_tensors, this->output_mem_config);
 }
 
+std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor &input_tensor, const MemoryConfig &mem_config);
+
 std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor &input_tensor, const MemoryConfig &mem_config) {
+  const auto shape = input_tensor.shape();
+  const bool pre_post_reshape = shape[0] > 1;
+
+  if ( !pre_post_reshape ) {
+     return impl_split_last_dim_two_chunks_tiled( input_tensor, mem_config );
+  }
+
+  const int W = 1, Z = shape[0]*shape[1], Y = shape[2], X = shape[3];
+  const Tensor& reshaped_tensor = reshape(input_tensor, 1, -1, Y, X,mem_config);
+
+  auto part_reshaped = impl_split_last_dim_two_chunks_tiled( reshaped_tensor, mem_config );
+
+  std::vector<Tensor> results;
+  for(auto& part : part_reshaped) {
+    results.push_back( reshape( part, -1, shape[1], Y, X/2, mem_config ) );
+  }
+  return results;
+}
+
+
+std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor &input_tensor, const MemoryConfig &mem_config) {
     SplitLastDimTwoChunksTiled op(mem_config);
 
     tt_metal::Device *device;
+
     // Get the device
     if (input_tensor.storage_type() == StorageType::OWNED) {
         device = AutoFormat::GetDefaultDevice();
