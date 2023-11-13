@@ -143,16 +143,14 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
-                SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
                 runtime_args[2] = start_idx + num_tiles_written;
-                SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
             }
             num_tiles_written += num_tiles_per_core;
         }

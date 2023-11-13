@@ -239,16 +239,14 @@ operation::ProgramWithCallbacks create_program(
                 CoreCoord core = {(std::size_t) core_idx_x, (std::size_t) core_idx_y};
 
                 {
-                    auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                     runtime_args[0] = src_dram_buffer_a->address();
                     runtime_args[8] = src_dram_buffer_b->address();
-                    SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
                 }
 
                 {
-                    auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                     runtime_args[0] = dst_dram_buffer->address();
-                    SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
                 }
                 num_blocks_read++;
             }

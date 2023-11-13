@@ -156,24 +156,21 @@ operation::ProgramWithCallbacks eltwise_binary_single_core(const Tensor &a, cons
         uint32_t num_tiles = input_tensors.at(0).volume() / TILE_HW;
 
         {
-            auto runtime_args = GetRuntimeArgs(program, binary_reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, binary_reader_kernel_id, core);
             runtime_args[0] = src_buffer_a->address();
             runtime_args[1] = src_buffer_b->address();
             runtime_args[2] = num_tiles;
-            SetRuntimeArgs(program, binary_reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, eltwise_binary_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, eltwise_binary_kernel_id, core);
             runtime_args[0] = num_tiles;
-            SetRuntimeArgs(program, eltwise_binary_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
             runtime_args[1] = num_tiles;
-            SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
 

@@ -168,15 +168,13 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
-            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
-            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
 
@@ -372,15 +370,13 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
-            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
-            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
 

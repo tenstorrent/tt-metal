@@ -654,16 +654,14 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
         for (uint32_t i = 0; i < ncores; ++ i) {
             CoreCoord core{i % ncores_w, i / ncores_w };
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel, core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
-                SetRuntimeArgs(program, reader_kernel, core, runtime_args);
             }
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
-                SetRuntimeArgs(program, writer_kernel, core, runtime_args);
             }
         }
         if (input_sharded) {
@@ -985,16 +983,14 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
         for (uint32_t i = 0; i < ncores_hw; ++ i) {
             CoreCoord core{i % ncores_w, i / ncores_w };
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel, core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel, core);
                 runtime_args[0] = src_dram_buffer->address();
                 runtime_args[1] = dst_dram_buffer->address();
-                SetRuntimeArgs(program, reader_kernel, core, runtime_args);
             }
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel, core);
                 runtime_args[0] = src_dram_buffer->address();
                 runtime_args[1] = dst_dram_buffer->address();
-                SetRuntimeArgs(program, writer_kernel, core, runtime_args);
             }
         }
     };
@@ -1590,16 +1586,14 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
         for (uint32_t i = 0; i < ncores; ++ i) {
             CoreCoord core{i % ncores_w, i / ncores_w };
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel, core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
-                SetRuntimeArgs(program, reader_kernel, core, runtime_args);
             }
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
-                SetRuntimeArgs(program, writer_kernel, core, runtime_args);
             }
         }
         if (input_sharded) {

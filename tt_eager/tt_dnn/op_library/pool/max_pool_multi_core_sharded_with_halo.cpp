@@ -662,16 +662,14 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
         for (uint32_t i = 0; i < ncores; ++ i) {
             CoreCoord core{i % ncores_w, i / ncores_w };
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel, core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
-                SetRuntimeArgs(program, reader_kernel, core, runtime_args);
             }
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
-                SetRuntimeArgs(program, writer_kernel, core, runtime_args);
             }
         }
         if (input_sharded) {

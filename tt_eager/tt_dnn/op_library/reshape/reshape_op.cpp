@@ -102,15 +102,13 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
-            SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
-            SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
 
@@ -254,15 +252,13 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
-            SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
-            SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
 

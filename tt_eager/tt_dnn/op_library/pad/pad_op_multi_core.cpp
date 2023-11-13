@@ -338,16 +338,14 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
             for (uint32_t i = 0; i < ncores_w; ++ i) {
                 CoreCoord core = {i, j};
                 {
-                    auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                     runtime_args[0] = src_buffer->address();
                     runtime_args[1] = dst_buffer->address();
-                    SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
                 }
                 {
-                    auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                     runtime_args[0] = src_buffer->address();
                     runtime_args[1] = dst_buffer->address();
-                    SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
                 }
             }
         }

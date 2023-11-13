@@ -156,16 +156,14 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
         auto dst_buffer = output_buffers.at(0);
         CoreCoord core = {0, 0};
         {
-            auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
             runtime_args[1] = dst_buffer->address();
-            SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
         }
         {
-            auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = src_buffer->address();
             runtime_args[1] = dst_buffer->address();
-            SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
         }
     };
 
@@ -279,10 +277,9 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
         auto dst_buffer = output_buffers.at(0);
         CoreCoord core = {0, 0};
         {
-            auto runtime_args = GetRuntimeArgs(program, kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, kernel_id, core);
             runtime_args[0] = src_buffer->address();
             runtime_args[1] = dst_buffer->address();
-            SetRuntimeArgs(program, kernel_id, core, runtime_args);
         }
     };
 
@@ -377,10 +374,9 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(program, kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, kernel_id, core);
             runtime_args[0] = src_buffer->address();
             runtime_args[1] = dst_buffer->address();
-            SetRuntimeArgs(program, kernel_id, core, runtime_args);
         }
     };
 
@@ -507,15 +503,13 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
         CoreCoord core = {0, 0};
 
         {
-            auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer->address();
-            SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
         }
 
         {
-            auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
-            SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
         }
     };
 

@@ -318,7 +318,7 @@ operation::ProgramWithCallbacks layernorm_(
             CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
             {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = src_a_dram_buffer->address();
                 if (src_b_dram_buffer != nullptr) {
                     runtime_args[8] = src_b_dram_buffer->address();
@@ -329,13 +329,11 @@ operation::ProgramWithCallbacks layernorm_(
                 if (beta_dram_buffer != nullptr) {
                     runtime_args[7] = beta_dram_buffer->address();
                 }
-                SetRuntimeArgs(program, reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = dst_dram_buffer->address();
-                SetRuntimeArgs(program, writer_kernel_id, core, runtime_args);
             }
         }
     };

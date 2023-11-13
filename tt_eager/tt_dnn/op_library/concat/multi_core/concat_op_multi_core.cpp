@@ -186,15 +186,13 @@ operation::ProgramWithCallbacks concat_multi_core(const std::vector<Tensor> &inp
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
                 std::copy(src_addrs.begin(), src_addrs.end(), runtime_args.begin() + 4);
-                SetRuntimeArgs(program, unary_reader_kernel_id, core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
-                SetRuntimeArgs(program, unary_writer_kernel_id, core, runtime_args);
             }
         }
     };
