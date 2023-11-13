@@ -59,6 +59,18 @@ bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
     return this->core_range_set_.core_coord_in_core_ranges(logical_core);
 }
 
+CoreType Kernel::get_kernel_core_type() const {
+    RISCV riscv_processor = this->processor();
+    switch (riscv_processor) {
+        case RISCV::BRISC:
+        case RISCV::NCRISC:
+        case RISCV::COMPUTE: return CoreType::WORKER;
+        case RISCV::ERISC: return CoreType::ETH;
+        default: TT_ASSERT(false, "Unsupported kernel processor!");
+    }
+    return CoreType::WORKER;
+}
+
 uint8_t DataMovementKernel::expected_num_binaries() const { return 1; }
 
 uint8_t EthernetKernel::expected_num_binaries() const { return 1; }

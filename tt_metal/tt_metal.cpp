@@ -35,6 +35,9 @@ void ConfigureKernelGroup(const Program &program, const KernelGroup *kernel_grou
     if (kernel_group->riscv0_id.has_value()) {
         detail::GetKernel(program, kernel_group->riscv0_id.value())->configure(device, logical_core);
     }
+    if (kernel_group->erisc_id.has_value()) {
+        detail::GetKernel(program, kernel_group->erisc_id.value())->configure(device, logical_core);
+    }
 }
 
 std::optional<uint32_t> get_semaphore_address(const Program &program, const CoreRange &core_range) {
@@ -214,15 +217,16 @@ namespace detail {
         // don't get the GO mailbox (eg, storage cores) have all landed
         tt::Cluster::instance().l1_barrier(device->id());
 
-        std::vector<CoreCoord> logical_cores_used_in_program = program.logical_cores();
+        std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
         std::unordered_set<CoreCoord> not_done_cores;
-        for (const auto &logical_core : logical_cores_used_in_program) {
-            launch_msg_t *msg = &program.kernels_on_core(logical_core)->launch_msg;
-            auto worker_core = device->worker_core_from_logical_core(logical_core);
-            not_done_cores.insert(worker_core);
-            tt::llrt::write_launch_msg_to_core(device->id(), worker_core, msg);
+        for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {
+            for (const auto &logical_core : logical_cores) {
+                launch_msg_t *msg = &program.kernels_on_core(logical_core)->launch_msg;
+                auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
+                not_done_cores.insert(physical_core);
+                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg);
+            }
         }
-
         // Wait for all cores to be done
         llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
 
@@ -237,43 +241,47 @@ namespace detail {
         detail::DispatchStateCheck( false );
         detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ConfigureDeviceWithProgram");
 
-        std::unordered_set<CoreCoord> worker_cores;
         auto device_id = device->id();
 
         program.allocate_circular_buffers();
         detail::ValidateCircularBufferRegion(program, device);
 
-        std::vector<CoreCoord> logical_cores_used_in_program = program.logical_cores();
-        for (const auto &logical_core : logical_cores_used_in_program) {
-            KernelGroup *kernel_group = program.kernels_on_core(logical_core);
-            auto worker_core = device->worker_core_from_logical_core(logical_core);
-            worker_cores.insert(worker_core);
+        std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
+        for (const auto &[core_type, logical_cores] : logical_cores_used_in_program) {
+            for (const auto &logical_core : logical_cores) {
+                KernelGroup *kernel_group = program.kernels_on_core(logical_core);
+                CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
 
-            // CircularBufferConfigVec -- common across all kernels, so written once to the core
-            llrt::CircularBufferConfigVec circular_buffer_config_vec = llrt::create_circular_buffer_config_vector();
+                ConfigureKernelGroup(
+                    program, kernel_group, device, logical_core);  // PROF_BEGIN("CONF_KERN") PROF_END("CONF_KERN")
+                // TODO: add support for CB for ethernet cores
+                if (core_type == CoreType::WORKER) {
+                    // CircularBufferConfigVec -- common across all kernels, so written once to the core
+                    llrt::CircularBufferConfigVec circular_buffer_config_vec =
+                        llrt::create_circular_buffer_config_vector();
 
-            ConfigureKernelGroup(program, kernel_group, device, logical_core); // PROF_BEGIN("CONF_KERN") PROF_END("CONF_KERN")
+                    auto cbs_on_core = program.circular_buffers_on_core(logical_core);  // PROF_BEGIN("CBS")
+                    for (auto circular_buffer : cbs_on_core) {
+                        for (uint32_t buffer_index : circular_buffer->buffer_indices()) {
+                            llrt::set_config_for_circular_buffer(
+                                circular_buffer_config_vec,
+                                buffer_index,
+                                circular_buffer->address(),
+                                circular_buffer->size(),
+                                circular_buffer->num_pages(buffer_index));
+                        }
+                    }  // PROF_END("CBS")
 
-            auto cbs_on_core = program.circular_buffers_on_core(logical_core);         // PROF_BEGIN("CBS")
-            for (auto circular_buffer : cbs_on_core) {
-                for (uint32_t buffer_index : circular_buffer->buffer_indices()) {
-                    llrt::set_config_for_circular_buffer(
-                        circular_buffer_config_vec,
-                        buffer_index,
-                        circular_buffer->address(),
-                        circular_buffer->size(),
-                        circular_buffer->num_pages(buffer_index));
+                    if (cbs_on_core.size()) {
+                        llrt::write_circular_buffer_config_vector_to_core(
+                            device_id,
+                            physical_core,
+                            circular_buffer_config_vec);  // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
+                    }
+
+                    program.init_semaphores(*device, logical_core);
                 }
-            }  // PROF_END("CBS")
-
-            if (cbs_on_core.size()) {
-                llrt::write_circular_buffer_config_vector_to_core(
-                    device_id,
-                    worker_core,
-                    circular_buffer_config_vec);  // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
             }
-
-            program.init_semaphores(*device, logical_core);
         }
 
         return pass;
@@ -293,6 +301,9 @@ namespace detail {
                 case RISCV::NCRISC: {
                     l1_arg_base = NCRISC_L1_ARG_BASE;
                 } break;
+                case RISCV::ERISC: {
+                    l1_arg_base = eth_l1_mem::address_map::ERISC_L1_ARG_BASE;
+                } break;
                 case RISCV::COMPUTE: {
                     l1_arg_base = TRISC_L1_ARG_BASE;
                 }
@@ -306,9 +317,9 @@ namespace detail {
             const auto kernel = detail::GetKernel(program, kernel_id);
             auto processor = kernel->processor();
             for (const auto &logical_core : kernel->cores_with_runtime_args()) {
-                auto worker_core = device->worker_core_from_logical_core(logical_core);
+                auto physical_core = device->physical_core_from_logical_core(logical_core, kernel->get_kernel_core_type());
                 const auto & rt_args = kernel->runtime_args(logical_core);
-                tt::llrt::write_hex_vec_to_core(device_id, worker_core, rt_args, get_l1_arg_base_addr(processor));
+                tt::llrt::write_hex_vec_to_core(device_id, physical_core, rt_args, get_l1_arg_base_addr(processor));
             }
         }
     }
@@ -431,18 +442,6 @@ Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size,
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
-
-void ConfigureKernelGroup(const Program &program, const KernelGroup &kernel_group, Device *device, const CoreCoord &logical_core) {
-    if (kernel_group.compute_id.has_value()) {
-        detail::GetKernel(program, kernel_group.compute_id.value())->configure(device, logical_core);
-    }
-    if (kernel_group.riscv1_id.has_value()) {
-        detail::GetKernel(program, kernel_group.riscv1_id.value())->configure(device, logical_core);
-    }
-    if (kernel_group.riscv0_id.has_value()) {
-        detail::GetKernel(program, kernel_group.riscv0_id.value())->configure(device, logical_core);
-    }
-}
 void SetRuntimeArgs(const Program &program, KernelID kernel_id, const std::variant<CoreCoord,CoreRange,CoreRangeSet> &core_spec, const std::vector<uint32_t> &runtime_args) {
     ZoneScoped;
     std::visit(

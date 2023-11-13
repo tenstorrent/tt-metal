@@ -112,18 +112,21 @@ Kernel *Program::get_kernel(KernelID kernel_id) const {
 KernelGroup::KernelGroup() : core_ranges({}) {
 }
 
-KernelGroup::KernelGroup(const Program& program,
-                         std::optional<KernelID> brisc_id,
-                         std::optional<KernelID> ncrisc_id,
-                         std::optional<KernelID> trisc_id,
-                         int last_cb_index,
-                         const CoreRangeSet& new_ranges) : core_ranges({}) {
-
+KernelGroup::KernelGroup(
+    const Program &program,
+    std::optional<KernelID> brisc_id,
+    std::optional<KernelID> ncrisc_id,
+    std::optional<KernelID> trisc_id,
+    std::optional<KernelID> erisc_id,
+    int last_cb_index,
+    const CoreRangeSet &new_ranges) :
+    core_ranges({}) {
     this->core_ranges = this->core_ranges.merge(new_ranges);
 
     this->riscv0_id = brisc_id;
     this->riscv1_id = ncrisc_id;
     this->compute_id = trisc_id;
+    this->erisc_id = erisc_id;
 
     // The code below sets the brisc_noc_id for use by the device firmware
     // Use 0 if neither brisc nor trisc specify a noc
@@ -160,6 +163,12 @@ KernelGroup::KernelGroup(const Program& program,
         this->launch_msg.enable_triscs = false;
     }
 
+    if (erisc_id) {
+        this->launch_msg.enable_erisc = true;
+    } else {
+        this->launch_msg.enable_erisc = false;
+    }
+
     this->launch_msg.max_cb_index = last_cb_index + 1;
     this->launch_msg.run = RUN_MSG_GO;
 }
@@ -181,6 +190,8 @@ struct KernelGroupInt {
     std::optional<KernelID> trisc_id = std::nullopt;
     std::optional<KernelID> brisc_id = std::nullopt;
     std::optional<KernelID> ncrisc_id = std::nullopt;
+    std::optional<KernelID> erisc_id = std::nullopt;
+
     bool operator==(const KernelGroupInt& b) const;
     void update(Kernel* kernel, size_t kernel_idx) {
         RISCV riscv_processor = kernel->processor();
@@ -194,6 +205,9 @@ struct KernelGroupInt {
         case RISCV::COMPUTE:
             this->trisc_id = static_cast<KernelID>(kernel_idx);
             break;
+        case RISCV::ERISC:
+            this->erisc_id = static_cast<KernelID>(kernel_idx);
+            break;
         default:
             TT_ASSERT(false, "Unsupported kernel processor!");
         }
@@ -201,15 +215,13 @@ struct KernelGroupInt {
 };
 
 bool KernelGroupInt::operator==(const KernelGroupInt& b) const {
-    return
-        trisc_id == b.trisc_id &&
-        brisc_id == b.brisc_id &&
-        ncrisc_id == b.ncrisc_id;
+    return trisc_id == b.trisc_id && brisc_id == b.brisc_id && ncrisc_id == b.ncrisc_id && erisc_id == b.erisc_id;
 }
 
 struct KernelGroupIntHasher {
     std::size_t operator()(const KernelGroupInt& x) const {
-        return static_cast<size_t>(x.trisc_id.value_or(0) ) | static_cast<size_t>(x.brisc_id.value_or(0)) << 16 | static_cast<size_t>(x.ncrisc_id.value_or(0)) << 32;
+        return static_cast<size_t>(x.erisc_id.value_or(0)) | static_cast<size_t>(x.trisc_id.value_or(0)) |
+               static_cast<size_t>(x.brisc_id.value_or(0)) << 16 | static_cast<size_t>(x.ncrisc_id.value_or(0)) << 32;
     }
 };
 
@@ -284,12 +296,14 @@ void Program::update_kernel_groups() {
                 }
             }
 
-            kernel_groups_.push_back(KernelGroup(*this,
-                                                 kg_to_cores.first.brisc_id,
-                                                 kg_to_cores.first.ncrisc_id,
-                                                 kg_to_cores.first.trisc_id,
-                                                 last_cb_index,
-                                                 kg_to_cores.second));
+            kernel_groups_.push_back(KernelGroup(
+                *this,
+                kg_to_cores.first.brisc_id,
+                kg_to_cores.first.ncrisc_id,
+                kg_to_cores.first.trisc_id,
+                kg_to_cores.first.erisc_id,
+                last_cb_index,
+                kg_to_cores.second));
             index++;
         }
     }
@@ -298,11 +312,13 @@ void Program::update_kernel_groups() {
 std::vector<std::string> Program::cores_to_ops() const {
     std::vector<std::string> ops;
 
-    for (const auto &core : this->logical_cores()) {
-        for (Kernel * kernel : kernels_) {
-            auto cores = kernel->logical_cores();
-            if (std::find(cores.begin(), cores.end(), core) != cores.end()) {
-                ops.push_back(kernel->name());
+    for (const auto &[core_type, cores_of_type] : this->logical_cores()) {
+        for (const auto &core : cores_of_type) {
+            for (Kernel * kernel : kernels_) {
+                auto cores = kernel->logical_cores();
+                if (std::find(cores.begin(), cores.end(), core) != cores.end()) {
+                    ops.push_back(kernel->name());
+                }
             }
         }
     }
@@ -488,16 +504,23 @@ void Program::add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t
     semaphores_.emplace_back(Semaphore( crs, address, init_value));
 }
 
-std::vector<CoreCoord> Program::logical_cores() const {
-    std::vector<CoreCoord> cores_in_program;
-    std::set<CoreCoord> unique_cores;
+std::unordered_map<CoreType, std::vector<CoreCoord>> Program::logical_cores() const {
+    std::unordered_map<CoreType, std::vector<CoreCoord>> cores_in_program;
+    std::unordered_map<CoreType, std::set<CoreCoord>> unique_cores;
     for (Kernel * kernel : kernels_){
+        const auto &core_type = kernel->get_kernel_core_type();
+        if (cores_in_program.find(core_type) == cores_in_program.end()) {
+            cores_in_program.insert({core_type, {}});
+        }
+        if (unique_cores.find(core_type) == unique_cores.end()) {
+            unique_cores.insert({core_type, {}});
+        }
         for (auto core : kernel->logical_cores()) {
-            if (unique_cores.find(core) != unique_cores.end()) {
+            if (unique_cores.at(core_type).find(core) != unique_cores.at(core_type).end()) {
                 continue;
             }
-            unique_cores.insert(core);
-            cores_in_program.push_back(core);
+            unique_cores.at(core_type).insert(core);
+            cores_in_program.at(core_type).push_back(core);
         }
     }
     return cores_in_program;

@@ -286,8 +286,12 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         program_page_idx += 4;
     }
 
+    uint32_t num_workers = 0;
+    if (program.logical_cores().find(CoreType::WORKER) != program.logical_cores().end()) {
+        num_workers = program.logical_cores().at(CoreType::WORKER).size();
+    }
     return {
-        .num_workers = uint32_t(program.logical_cores().size()),
+        .num_workers = num_workers,
         .program_pages = std::move(program_pages),
         .program_page_transfers = std::move(program_page_transfers),
         .runtime_arg_page_transfers = std::move(runtime_arg_page_transfers),

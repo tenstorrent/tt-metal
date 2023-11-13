@@ -34,15 +34,18 @@ struct KernelGroup {
     std::optional<KernelID> compute_id = std::nullopt;
     std::optional<KernelID> riscv0_id = std::nullopt;
     std::optional<KernelID> riscv1_id = std::nullopt;
+    std::optional<KernelID> erisc_id = std::nullopt;
     launch_msg_t launch_msg;
 
     KernelGroup();
-    KernelGroup(const Program& program,
-                std::optional<KernelID> brisc_id,
-                std::optional<KernelID> ncrisc_id,
-                std::optional<KernelID> trisc_id,
-                int last_cb_index,
-                const CoreRangeSet& new_ranges);
+    KernelGroup(
+        const Program &program,
+        std::optional<KernelID> brisc_id,
+        std::optional<KernelID> ncrisc_id,
+        std::optional<KernelID> trisc_id,
+        std::optional<KernelID> erisc_id,
+        int last_cb_index,
+        const CoreRangeSet &new_ranges);
 };
 
 class Program {
@@ -83,7 +86,7 @@ class Program {
     size_t num_semaphores () const;
     uint32_t semaphore_address ( uint32_t sem_index ) const;
     void init_semaphores ( const Device & device, const CoreCoord &logical_core ) const;
-    std::vector<CoreCoord> logical_cores() const;
+    std::unordered_map<CoreType, std::vector<CoreCoord>> logical_cores() const;
 
     const CoreRangeSet& get_worker_core_range_set() const { return worker_crs_; };
 

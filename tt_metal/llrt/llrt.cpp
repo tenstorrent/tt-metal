@@ -156,7 +156,12 @@ std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoor
 void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg) {
     msg->mode = DISPATCH_MODE_HOST;
     TT_ASSERT(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
-    tt::Cluster::instance().write_core((void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
+    if (static_cast<bool>(msg->enable_erisc)) {
+        llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
+    } else {
+        tt::Cluster::instance().write_core(
+            (void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
+    }
 }
 
 void print_worker_cores(chip_id_t chip_id) {
@@ -170,6 +175,11 @@ void print_worker_cores(chip_id_t chip_id) {
 bool is_worker_core(const CoreCoord &core, chip_id_t chip_id) {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
     return std::find(soc_desc.physical_workers.begin(), soc_desc.physical_workers.end(), core) != soc_desc.physical_workers.end();
+}
+bool is_ethernet_core(const CoreCoord &core, chip_id_t chip_id) {
+    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
+    return std::find(soc_desc.physical_ethernet_cores.begin(), soc_desc.physical_ethernet_cores.end(), core) !=
+           soc_desc.physical_ethernet_cores.end();
 }
 
 CircularBufferConfigVec create_circular_buffer_config_vector() {
@@ -249,8 +259,7 @@ void program_brisc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
 }
 
 bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id) {
-
-    assert(is_worker_core(core, chip_id));
+    assert(is_worker_core(core, chip_id) or is_ethernet_core(core, chip_id));
 
     uint64_t local_init_addr;
     switch (riscv_id) {
@@ -259,6 +268,7 @@ bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, co
         case 2: local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE; break;
         case 3: local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE; break;
         case 4: local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE; break;
+        case 5: local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE; break;
     }
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
@@ -331,7 +341,13 @@ void wait_until_cores_done(chip_id_t device_id,
         for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {
             const auto &phys_core = *it;
 
-            bool is_done = llrt::internal_::check_if_riscs_on_specified_core_done(device_id, phys_core, run_state);
+            bool is_done = false;
+            if (is_ethernet_core(phys_core, device_id)) {
+                // TODO: add same RUN_MSG_DONE check for eth cores
+                is_done = true;
+            } else {
+                is_done = llrt::internal_::check_if_riscs_on_specified_core_done(device_id, phys_core, run_state);
+            }
 
             if (is_done) {
                 log_debug(tt::LogMetal, "Phys cores just done: {}", phys_core.str());

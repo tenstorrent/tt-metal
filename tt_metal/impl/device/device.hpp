@@ -78,6 +78,7 @@ class Device {
 
     CoreCoord compute_with_storage_grid_size() const;
 
+    CoreCoord physical_core_from_logical_core(const CoreCoord &logical_core, const CoreType &core_type) const;
     CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const;
 
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
