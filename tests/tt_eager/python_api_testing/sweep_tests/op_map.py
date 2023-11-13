@@ -633,6 +633,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.masked_fill,
         "pytorch_op": pytorch_ops.masked_fill,
     },
+    "eltwise-masked_fill_backward": {
+        "tt_lib_op": tt_lib_ops.masked_fill_backward,
+        "pytorch_op": pytorch_ops.masked_fill_backward,
+    },
     # Eltwise ternary
     "eltwise-arange": {
         "tt_lib_op": tt_lib_ops.arange,

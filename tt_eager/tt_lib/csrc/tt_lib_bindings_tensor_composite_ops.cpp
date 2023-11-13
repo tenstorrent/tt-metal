@@ -727,6 +727,24 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
+        m_tensor.def("masked_fill_backward", &masked_fill_backward,
+            py::arg("output_grad"), py::arg("mask"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Perform an masked_fill_backward operation based on @mask.
+
+            masked_fill_backward(output_grad, mask) implements (mask) ? 0 : output_grad.
+
+            All two input tensors must have BFLOAT16 data type, and be of equal shape.
+
+            Output tensor will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "output_grad", "False Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "mask", "Predicate Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
         detail::bind_unary_op_with_param(
             m_tensor, "logit", &logit,
             py::arg("eps"),

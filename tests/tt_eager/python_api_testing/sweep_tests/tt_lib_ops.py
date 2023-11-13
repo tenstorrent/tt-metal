@@ -1787,6 +1787,14 @@ def masked_fill(x, y, value, device, dtype, layout, input_mem_config, output_mem
     return tt2torch_tensor(t3)
 
 
+@setup_host_and_device
+def masked_fill_backward(x, y, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
+    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+    t3 = ttl.tensor.masked_fill_backward(t0, t1, output_mem_config=output_mem_config)
+
+    return tt2torch_tensor(t3)
+
 def make_unary_op(ttl_tensor_unop):
     @setup_host_and_device
     def unary_op(
