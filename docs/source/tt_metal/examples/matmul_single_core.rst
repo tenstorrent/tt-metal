@@ -63,14 +63,14 @@ Main blocks in matmul_single_core function
 
 We will go through sections of the ``matmul_single_core`` function:
 
-- A - Program, enqueue and core range settings
-- B - Create DRAM buffers based on input and output vectors
-- C - Create L1 Circular buffers
-- D - Kernels declarations and related compile and runtime arguments
-- E - Program launch and reading data from DRAM output buffer to result vector
+- Program, enqueue and core range settings
+- Create DRAM buffers based on input and output vectors
+- Create L1 Circular buffers
+- Kernels declarations and related compile and runtime arguments
+- Program launch and reading data from DRAM output buffer to result vector
 
-A - Create Program, Enqueue initialization, and core range definition
----------------------------------------------------------------------
+Create Program, Enqueue initialization, and core range definition
+-----------------------------------------------------------------
 
 We want a just a single core, so we will restrict the core range to be just one
 core at (0, 0).
@@ -82,8 +82,8 @@ core at (0, 0).
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
 
-B - Create DRAM buffers & Circular buffers
-------------------------------------------
+Create DRAM buffers & Circular buffers
+--------------------------------------
 
 In terms of DRAM buffers, we need two source buffers and one destination buffer.
 
@@ -138,8 +138,8 @@ double buffering..
         .set_page_size(output_cb_index, single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-C - Compile-time kernels arguments
-----------------------------------
+Compile-time kernels arguments
+------------------------------
 
 We have to declare some compile-time arguments for read/write kernels. Some default
 parameters here will suffice.
@@ -161,8 +161,8 @@ parameters here will suffice.
     };
 
 
-D - Compute kernel declaration and compile-time defines
--------------------------------------------------------
+Compute kernel declaration and compile-time defines
+---------------------------------------------------
 
 We're using a special reader kernel to take in data from DRAM into L1, and a
 special writer kernel to write out results from the compute engine back to the
@@ -190,8 +190,8 @@ destination DRAM buffer.
     );
 
 
-E - Runtime arguments and program launch
-----------------------------------------
+Runtime arguments and program launch
+------------------------------------
 
 We will now set runtime arguments for the reader and writer kernels to run the
 matmul operation on a single core and a single tile at a time.
@@ -222,4 +222,6 @@ Conclusion
 ----------
 
 Those are the additional steps for getting ``matmul_single_core`` operations up
-and running on the compute engine.
+and running on the compute engine. To see a more complicated example using as
+many cores as possible, please refer to please refer to the :ref:`Matmul
+multi-core example<MatMul_Multi_Core example>`.
