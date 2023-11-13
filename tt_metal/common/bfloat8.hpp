@@ -69,6 +69,7 @@ inline uint32_t get_byte(uint32_t word, uint32_t index) {
     return masked;
 }
 
+template <bool truncate_bfp_mantissa=false>
 inline uint8_t convert_u32_to_bfp8(uint32_t input, uint32_t shared_exp, bool is_exp_a) {
     //check for both +/- 0.0
     constexpr uint32_t EXP_MANTISSA_BMSK = ((1U << 31) - 1);
@@ -115,7 +116,16 @@ inline uint8_t convert_u32_to_bfp8(uint32_t input, uint32_t shared_exp, bool is_
     }
 
     // this needs to become 7 bits so shift 17 times
-    mantissa = mantissa >> 17;
+    if (truncate_bfp_mantissa) {
+        // Truncation: Round down
+        mantissa = mantissa >> 17;
+    }
+    else {
+        // Round mantissa to nearest even
+        mantissa += 1 << 16;
+        mantissa = mantissa >> 17;
+        if(mantissa > 127) mantissa = 127;
+    }
 
     // add sign bit only if result is not 0
     if (0 == mantissa) {
