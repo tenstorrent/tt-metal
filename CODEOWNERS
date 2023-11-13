@@ -16,6 +16,7 @@ third_party/ @tt-rkim @TT-billteng @kkwong10
 MANIFEST.in @tt-rkim
 setup.py @tt-rkim
 pyproject.toml @tt-rkim
+requirements*.txt @tt-rkim
 
 Makefile @tt-rkim
 /module.mk @tt-rkim
