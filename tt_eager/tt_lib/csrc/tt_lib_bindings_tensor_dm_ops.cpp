@@ -314,7 +314,7 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("reduce", &reduce,
-            py::arg("input").noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("scaler"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("input").noconvert(), py::arg("math_op"), py::arg("dim"), py::arg("scaler"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
             Perform a reduction of input tensor ``arg0`` using mathematical operation ``arg1`` on dimension ``arg2``.
 
             For ``arg2=ReduceOpDim::W`` reduce is done on dimension X.
@@ -334,6 +334,7 @@ namespace tt::tt_metal::detail{
                 "math_op", "Aggregating math operation", " ReduceOpMath", "SUM, MAX, MIN", "Yes"
                 "dim", "Dimension on which reduction is performed", "ReduceOpDim", "W, H, HW", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                "output_dtype", "DataType of output tensor", "DataType", "Default is None (use input dtype)", "No"
         )doc");
 
         // *** experimental operations ***

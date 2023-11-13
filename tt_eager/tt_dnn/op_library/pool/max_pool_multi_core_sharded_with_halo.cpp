@@ -644,7 +644,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
     }
 
     auto override_runtime_arguments_callback = [
-            reader_kernel, writer_kernel, cb_sharded_out, ncores, ncores_w
+            reader_kernel, writer_kernel, raw_in_cb, cb_sharded_out, ncores, ncores_w
         ]
     (
         const void* operation,
@@ -654,9 +654,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
         const std::vector<Tensor>& output_tensors
     ) {
         auto src_buffer = input_tensors.at(0).buffer();
+        bool input_sharded = inout_tensors.at(0).is_sharded();
 
         auto dst_buffer = output_tensors.at(0).buffer();
-        bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
+        bool out_sharded = output_tensors.at(0).is_sharded();
 
         for (uint32_t i = 0; i < ncores; ++ i) {
             CoreCoord core{i % ncores_w, i / ncores_w };
@@ -672,6 +673,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
                 runtime_args[1] = dst_buffer->address();
                 SetRuntimeArgs(program, writer_kernel, core, runtime_args);
             }
+        }
+        if (input_sharded) {
+            auto& raw_in_cb_config = GetCircularBufferConfig(program, raw_in_cb);
+            raw_in_cb_config.set_globally_allocated_address(src_buffer->address());
         }
         if (out_sharded) {
             auto& output_cb_config = GetCircularBufferConfig(program, cb_sharded_out);
