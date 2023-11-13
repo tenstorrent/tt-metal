@@ -48,7 +48,15 @@ struct EltwiseBinary {
         const std::vector<Tensor> &input_tensors,
         std::vector<Tensor> &output_tensors) const;
 
-    tt::stl::reflection::Attributes attributes() const;
+    static constexpr auto attribute_names =
+        std::make_tuple("op_type", "fused_activations", "output_mem_config", "output_dtype");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->op_type),
+            std::cref(this->fused_activations),
+            std::cref(this->output_mem_config),
+            std::cref(this->output_dtype));
+    }
 
     const operation::Hash compute_program_hash(
         const std::vector<Tensor> &input_tensors) const;

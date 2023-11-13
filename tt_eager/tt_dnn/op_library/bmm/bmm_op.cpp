@@ -403,14 +403,6 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
 
 }
 
-tt::stl::reflection::Attributes Matmul::attributes() const {
-    return {
-        {"bcast_batch", this->bcast_batch},
-        {"output_mem_config", this->output_mem_config},
-        {"output_dtype", this->output_dtype},
-    };
-}
-
 MatmulParallelizationStrategy Matmul::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     return bmm_op_utils::get_parallelization_strategy(input_tensors);
 }
@@ -598,45 +590,6 @@ Tensor resnet_matmul(const Tensor& input_a, const Tensor& input_b, std::optional
 namespace operations {
 
 namespace primary {
-
-
-tt::stl::reflection::Attributes MatmulMultiCoreReuseProgramConfig::attributes() const {
-    return {
-        {"compute_with_storage_grid_size",  this->compute_with_storage_grid_size.str()},
-        {"in0_block_w",  this->in0_block_w},
-        {"out_subblock_h",  this->out_subblock_h},
-        {"out_subblock_w",  this->out_subblock_w},
-        {"per_core_M",  this->per_core_M},
-        {"per_core_N",  this->per_core_N},
-    };
-}
-
-tt::stl::reflection::Attributes MatmulMultiCoreReuseMultiCastProgramConfig::attributes() const {
-    return {
-        {"compute_with_storage_grid_size",  this->compute_with_storage_grid_size.str()},
-        {"in0_block_w",  this->in0_block_w},
-        {"out_subblock_h",  this->out_subblock_h},
-        {"out_subblock_w",  this->out_subblock_w},
-        {"per_core_M",  this->per_core_M},
-        {"per_core_N",  this->per_core_N},
-        {"transpose_mcast", this->transpose_mcast},
-        {"fused_activation",  this->fused_activation},
-    };
-}
-
-tt::stl::reflection::Attributes MatmulMultiCoreReuseMultiCast1DProgramConfig::attributes() const {
-    return {
-        {"compute_with_storage_grid_size",  this->compute_with_storage_grid_size.str()},
-        {"in0_block_w",  this->in0_block_w},
-        {"out_subblock_h",  this->out_subblock_h},
-        {"out_subblock_w",  this->out_subblock_w},
-        {"per_core_M",  this->per_core_M},
-        {"per_core_N",  this->per_core_N},
-        {"fuse_batch",  this->fuse_batch},
-        {"fused_activation",  this->fused_activation},
-        {"mcast_in0",  this->mcast_in0},
-    };
-}
 
 void Matmul::validate(
     const std::vector<Tensor>& input_tensors,
@@ -987,16 +940,6 @@ MatmulParallelizationStrategy Matmul::get_parallelization_strategy(const std::ve
         },
         this->program_config
     );
-}
-
-
-tt::stl::reflection::Attributes Matmul::attributes() const {
-    return {
-        {"program_config", this->program_config},
-        {"output_mem_config",  this->output_mem_config},
-        {"output_dtype", this->output_dtype},
-        {"math_fidelity", this->math_fidelity},
-    };
 }
 
 Tensor matmul_1d(const Tensor &input_tensor_a, const Tensor &input_tensor_b, std::optional<const Tensor> bias, std::optional<MatmulMultiCoreReuseMultiCast1DProgramConfig> program_config, const MemoryConfig& mem_config, std::optional<const DataType> output_dtype, const MathFidelity math_fidelity) {

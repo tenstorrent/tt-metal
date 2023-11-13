@@ -211,15 +211,6 @@ BinaryOpParallelizationStrategy EltwiseBinary::get_parallelization_strategy(cons
     }
 }
 
-tt::stl::reflection::Attributes EltwiseBinary::attributes() const {
-    return {
-        {"op_type", this->op_type},
-        {"fused_activations", this->fused_activations},
-        {"output_mem_config", this->output_mem_config},
-        {"output_dtype", this->output_dtype},
-    };
-}
-
 const operation::Hash EltwiseBinary::compute_program_hash(
     const std::vector<Tensor> &input_tensors) const {
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);

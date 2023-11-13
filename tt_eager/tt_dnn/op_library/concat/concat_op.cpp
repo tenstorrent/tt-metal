@@ -56,13 +56,6 @@ std::vector<Tensor> Concat::create_output_tensors(const std::vector<Tensor> &inp
     return operation::generic_create_output_tensors(*this, input_tensors, ref_in_tensor.dtype(), Layout::TILE, this->output_mem_config);
 }
 
-tt::stl::reflection::Attributes Concat::attributes() const {
-    return {
-        {"dim", this->dim},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 operation::ProgramWithCallbacks Concat::create_program(
     const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {
     switch(this->get_parallelization_strategy(input_tensors)) {

@@ -32,7 +32,39 @@ struct MaxPool {
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::make_tuple(
+        "in_n",
+        "in_h",
+        "in_w",
+        "kernel_size_h",
+        "kernel_size_w",
+        "stride_h",
+        "stride_w",
+        "pad_h",
+        "pad_w",
+        "dilation_h",
+        "dilation_w",
+        "out_mem_config",
+        "nblocks",
+        "use_multicore");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->in_n_),
+            std::cref(this->in_h_),
+            std::cref(this->in_w_),
+            std::cref(this->kernel_size_h_),
+            std::cref(this->kernel_size_w_),
+            std::cref(this->stride_h_),
+            std::cref(this->stride_w_),
+            std::cref(this->pad_h_),
+            std::cref(this->pad_w_),
+            std::cref(this->dilation_h_),
+            std::cref(this->dilation_w_),
+            std::cref(this->out_mem_config_),
+            std::cref(this->nblocks_),
+            std::cref(this->use_multicore_));
+    }
 };
 
 operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Tensor& output,

@@ -24,6 +24,9 @@ namespace stl {
 
 // Forward Declare hash_object
 namespace hash {
+
+constexpr bool DEBUG_HASH_OBJECT_FUNCTION = false;
+
 using hash_t = std::uint64_t;
 
 template <typename T, std::size_t N>
@@ -34,6 +37,10 @@ inline hash_t hash_object(const std::variant<Ts...>& variant) noexcept;
 
 template <typename T>
 inline hash_t hash_object(const T& object) noexcept;
+
+template <typename... Types>
+inline hash_t hash_objects(hash_t seed, const Types&... objects) noexcept;
+
 }  // namespace hash
 
 namespace reflection {
@@ -52,23 +59,7 @@ struct Attribute {
 
 using Attributes = std::vector<std::tuple<AttributeName, Attribute>>;
 
-static std::ostream& operator<<(std::ostream& os, const Attribute& attribute) {
-    os << attribute.to_string();
-    return os;
-}
 
-static std::ostream& operator<<(std::ostream& os, const Attributes& attributes) {
-    os << "(";
-    for (auto index = 0; index < attributes.size(); index++) {
-        auto&& [key, value] = attributes[index];
-        os << key << "=" << value;
-        if (index != attributes.size() - 1) {
-            os << ", ";
-        }
-    }
-    os << ")";
-    return os;
-}
 
 namespace detail {
 template <typename T>
@@ -91,6 +82,49 @@ template <typename T>
 constexpr bool supports_compile_time_attributes_v = std::experimental::is_detected_v<has_attribute_names_t, T> and
                                                     std::experimental::is_detected_v<has_attribute_values_t, T>;
 }  // namespace detail
+
+template<typename T>
+Attributes get_attributes(const T& object) {
+    if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_v<std::decay_t<T>>) {
+        constexpr auto num_attributes = tt::stl::reflection::detail::get_num_attributes<std::decay_t<T>>();
+        tt::stl::reflection::Attributes attributes;
+        [&object, &attributes]<size_t... Ns>(std::index_sequence<Ns...>) {
+            (
+                [&object, &attributes] {
+                    const auto& attribute_name = std::get<Ns>(object.attribute_names);
+                    const auto& attribute = std::get<Ns>(object.attribute_values());
+                    attributes.push_back({attribute_name, attribute});
+                }(),
+                ...);
+        }(std::make_index_sequence<num_attributes>{});
+        return attributes;
+    } else if constexpr (tt::stl::reflection::detail::supports_runtime_time_attributes_v<std::decay_t<T>>) {
+        return object.attributes();
+    } else {
+        static_assert(
+            tt::stl::concepts::always_false_v<T>,
+            "Object doesn't support compile-time or run-time attributes!");
+    }
+}
+
+
+static std::ostream& operator<<(std::ostream& os, const Attribute& attribute) {
+    os << attribute.to_string();
+    return os;
+}
+
+static std::ostream& operator<<(std::ostream& os, const Attributes& attributes) {
+    os << "(";
+    for (auto index = 0; index < attributes.size(); index++) {
+        auto&& [key, value] = attributes[index];
+        os << key << "=" << value;
+        if (index != attributes.size() - 1) {
+            os << ", ";
+        }
+    }
+    os << ")";
+    return os;
+}
 
 template <typename T>
 typename std::enable_if_t<detail::supports_runtime_time_attributes_v<T>, std::ostream>& operator<<(
@@ -323,38 +357,61 @@ constexpr bool is_specialization_v = is_specialization<Test, Ref>::value;
 
 }  // namespace detail
 
-template <typename... Types>
-inline hash_t hash_objects(hash_t seed, const Types&... objects) noexcept;
-
 template <typename T, std::size_t N>
 inline hash_t hash_object(const std::array<T, N>& array) noexcept {
-    auto hash = 0;
-    for (const auto& element : array) {
-        hash = hash_objects(hash, element);
+    if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+        fmt::print("Hashing std::array<{}, {}>\n", boost::core::demangle(typeid(T).name()), N);
     }
+    std::size_t hash = 0;
+    [&array, &hash]<size_t... Ns>(std::index_sequence<Ns...>) {
+        (
+            [&array, &hash] {
+                const auto& element = std::get<Ns>(array);
+                hash = hash_objects(hash, element);
+            }(),
+            ...);
+    }(std::make_index_sequence<N>{});
     return hash;
 }
 
 template <typename... Ts>
 inline hash_t hash_object(const std::variant<Ts...>& variant) noexcept {
+    if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+        fmt::print("Hashing std::variant\n");
+    }
     return std::visit([](const auto& value) { return hash_object(value); }, variant);
 }
 
 template <typename T>
 inline hash_t hash_object(const T& object) noexcept {
     if constexpr (std::numeric_limits<T>::is_integer) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing integer of type {}\n", boost::core::demangle(typeid(T).name()));
+        }
         return object;
     } else if constexpr (detail::is_std_hashable_v<T>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing {} using std::hash\n", boost::core::demangle(typeid(T).name()));
+        }
         return std::hash<T>{}(object);
     } else if constexpr (std::is_same_v<T, tt::stl::reflection::Attribute>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing tt::stl::reflection::Attribute\n");
+        }
         return object.to_hash();
     } else if constexpr (std::is_same_v<T, tt::stl::reflection::Attributes>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing tt::stl::reflection::Attributes\n");
+        }
         auto hash = 0;
         for (auto&& [name, attribute] : object) {
             hash = hash_objects(hash, attribute);
         }
         return hash;
     } else if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_v<T>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing struct {} using compile-time attributes\n", boost::core::demangle(typeid(T).name()));
+        }
         constexpr auto num_attributes = reflection::detail::get_num_attributes<T>();
         std::size_t hash = 0;
         [&object, &hash]<size_t... Ns>(std::index_sequence<Ns...>) {
@@ -367,14 +424,23 @@ inline hash_t hash_object(const T& object) noexcept {
         }(std::make_index_sequence<num_attributes>{});
         return hash;
     } else if constexpr (tt::stl::reflection::detail::supports_runtime_time_attributes_v<T>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing struct {} using run-time attributes\n", boost::core::demangle(typeid(T).name()));
+        }
         return hash_object(object.attributes());
     } else if constexpr (detail::is_specialization_v<T, std::vector>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::vector<{}>\n", boost::core::demangle(typeid(T).name()));
+        }
         auto hash = 0;
         for (const auto& element : object) {
             hash = hash_objects(hash, element);
         }
         return hash;
     } else if constexpr (detail::is_specialization_v<T, std::optional>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::optional<{}>\n", boost::core::demangle(typeid(T).name()));
+        }
         if (object.has_value()) {
             return hash_object(object.value());
         } else {

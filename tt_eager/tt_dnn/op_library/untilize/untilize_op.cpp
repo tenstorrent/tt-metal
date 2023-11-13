@@ -98,12 +98,6 @@ UntilizeOpParallelizationStrategy Untilize::get_parallelization_strategy(const s
     }
 }
 
-tt::stl::reflection::Attributes Untilize::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 Tensor untilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_config, bool use_multicore) {
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
@@ -216,14 +210,6 @@ UntilizeWithUnpaddingOpParallelizationStrategy UntilizeWithUnpadding::get_parall
     } else {
         return UntilizeWithUnpaddingOpParallelizationStrategy::SINGLE_CORE;
     }
-}
-
-tt::stl::reflection::Attributes UntilizeWithUnpadding::attributes() const {
-    return {
-        {"output_tensor_start", this->output_tensor_start},
-        {"output_tensor_end", this->output_tensor_end},
-        {"output_mem_config", this->output_mem_config},
-    };
 }
 
 Tensor untilize_with_unpadding(const Tensor &input_tensor_a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& output_mem_config) {

@@ -74,7 +74,7 @@ struct Padding {
         std::size_t back;
 
         static constexpr auto attribute_names = std::make_tuple("front", "back");
-        const auto attribute_values() const { return std::make_tuple(std::ref(this->front), std::ref(this->back)); }
+        const auto attribute_values() const { return std::make_tuple(std::cref(this->front), std::cref(this->back)); }
     };
 
     std::size_t rank_;
@@ -92,7 +92,7 @@ struct Padding {
 
     static constexpr auto attribute_names = std::make_tuple("rank", "pad_dimensions", "pad_value");
     const auto attribute_values() const {
-        return std::make_tuple(std::ref(this->rank_), std::ref(this->pad_dimensions_), std::ref(this->pad_value_));
+        return std::make_tuple(std::cref(this->rank_), std::cref(this->pad_dimensions_), std::cref(this->pad_value_));
     }
 };
 
@@ -125,7 +125,7 @@ class Shape {
 
     static constexpr auto attribute_names = std::make_tuple("rank", "dimensions", "padding");
     const auto attribute_values() const {
-        return std::make_tuple(std::ref(this->rank_), std::ref(this->dimensions_), std::ref(this->padding_));
+        return std::make_tuple(std::cref(this->rank_), std::cref(this->dimensions_), std::cref(this->padding_));
     }
 };
 
@@ -139,7 +139,7 @@ struct MemoryConfig {
 
     static constexpr auto attribute_names = std::make_tuple("memory_layout", "buffer_type");
     const auto attribute_values() const {
-        return std::make_tuple(std::ref(this->memory_layout), std::ref(this->buffer_type));
+        return std::make_tuple(std::cref(this->memory_layout), std::cref(this->buffer_type));
     }
 };
 
@@ -165,7 +165,7 @@ struct DeviceStorage {
     MemoryConfig memory_config;
 
     static constexpr auto attribute_names = std::make_tuple("memory_config");
-    const auto attribute_values() const { return std::make_tuple(std::ref(this->memory_config)); }
+    const auto attribute_values() const { return std::make_tuple(std::cref(this->memory_config)); }
 };
 
 using BorrowedBuffer = std::variant<
@@ -242,10 +242,10 @@ struct ShardSpec {
     static constexpr auto attribute_names = std::make_tuple("shard_grid", "shard_shape", "shard_orientation", "halo");
     const auto attribute_values() const {
         return std::make_tuple(
-            this->shard_grid.str(),
-            std::ref(this->shard_shape),
-            std::ref(this->shard_orientation),
-            std::ref(this->halo));
+            std::cref(this->shard_grid),
+            std::cref(this->shard_shape),
+            std::cref(this->shard_orientation),
+            std::cref(this->halo));
     }
 };
 

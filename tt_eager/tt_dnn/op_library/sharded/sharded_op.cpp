@@ -68,15 +68,6 @@ ShardedOpParallelizationStrategy Sharded::get_parallelization_strategy(const std
     return ShardedOpParallelizationStrategy::MULTI_CORE;
 }
 
-tt::stl::reflection::Attributes Sharded::attributes() const {
-    return {
-        {"shard_spec", this->shard_spec},
-        {"sharded_op_type", this->sharded_op_type},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
-
 }  // namespace tt_metal
 
 }  // namespace tt

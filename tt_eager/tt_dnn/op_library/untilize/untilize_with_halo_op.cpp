@@ -1435,18 +1435,6 @@ operation::ProgramWithCallbacks UntilizeWithHalo::create_program(const std::vect
     return {};
 }
 
-tt::stl::reflection::Attributes UntilizeWithHalo::attributes() const {
-    return {
-        {"pad_val", pad_val_},
-        {"in_b", this->in_b},
-        {"in_h", this->in_h},
-        {"in_w", this->in_w},
-        {"out_shard_size_max_per_core", this->out_shard_size_max_per_core},
-        {"stride", stride_},
-        {"output_mem_config", output_mem_config},
-    };
-}
-
 Tensor untilize_with_halo(const Tensor &input_tensor_a, const uint32_t pad_val, const uint32_t &in_b, const uint32_t &in_h, const uint32_t &in_w, const uint32_t stride, const MemoryConfig& mem_config) {
     TT_ASSERT(input_tensor_a.memory_config().is_sharded()); // TODO: Remove from validate?
 

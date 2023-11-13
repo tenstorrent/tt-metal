@@ -23,7 +23,12 @@ struct TensorRecord {
     const DataType data_type;
     const Layout layout;
     const std::optional<MemoryConfig> memory_config;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::make_tuple("storage_type", "shape", "data_type", "layout", "memory_config");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->storage_type), std::cref(this->shape), std::cref(this->data_type), std::cref(this->layout), std::cref(this->memory_config));
+    }
 };
 
 struct OperationRecord {

@@ -1426,40 +1426,6 @@ operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<
             fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_tensor)};
 }
 
-tt::stl::reflection::Attributes OptimizedConv::attributes() const {
-    return {
-        {"conv_params", this->conv_params},
-        {"output_channels", this->output_channels},
-        {"untilize_out", this->untilize_out},
-        {"has_bias", this->has_bias},
-        {"fuse_relu", this->fuse_relu},
-        {"math_fidelity", this->math_fidelity},
-        {"extra_padding_for_32B_alignment", this->extra_padding_for_32B_alignment},
-        {"output_mem_config", this->output_mem_config},
-        {"output_dtype", this->output_dtype},
-    };
-}
-
-tt::stl::reflection::Attributes OptimizedConvParallelizationConfig::attributes() const {
-    return {
-        {"grid_size",  this->grid_size.str()},
-        {"per_core_out_matrix_height_ntiles",  this->per_core_out_matrix_height_ntiles},
-        {"per_core_weight_matrix_width_ntiles",  this->per_core_weight_matrix_width_ntiles},
-    };
-}
-
-tt::stl::reflection::Attributes OptimizedConvBlockConfig::attributes() const {
-    return {
-        {"act_block_h_ntiles",  this->act_block_h_ntiles},
-        {"act_block_w_ntiles",  this->act_block_w_ntiles},
-        {"act_c_num_blocks",  this->act_c_num_blocks},
-        {"weight_block_w_ntiles",  this->weight_block_w_ntiles},
-        {"out_block_h_ntiles",  this->out_block_h_ntiles},
-        {"out_subblock_h_ntiles",  this->out_subblock_h_ntiles},
-        {"out_subblock_w_ntiles",  this->out_subblock_w_ntiles},
-    };
-}
-
 }  // namespace tt_metal
 
 }  // namespace tt

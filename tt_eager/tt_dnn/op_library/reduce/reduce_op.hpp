@@ -46,7 +46,7 @@ struct Reduce {
     static constexpr auto attribute_names = std::make_tuple("math_op", "dim", "scaler", "output_mem_config");
     const auto attribute_values() const {
         return std::make_tuple(
-            std::ref(this->math_op), std::ref(this->dim), std::ref(this->scaler), std::ref(this->output_mem_config));
+            std::cref(this->math_op), std::cref(this->dim), std::cref(this->scaler), std::cref(this->output_mem_config));
     }
 };
 

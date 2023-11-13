@@ -46,7 +46,12 @@ struct EltwiseBinaryBroadcast {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     BcastOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names =
+        std::make_tuple("math_op", "dim", "output_mem_config");
+    const auto attribute_values() const {
+        return std::make_tuple(std::cref(this->math_op), std::cref(this->dim), std::cref(this->output_mem_config));
+    }
 
     const operation::Hash compute_program_hash(
         const std::vector<Tensor> &input_tensors) const;
