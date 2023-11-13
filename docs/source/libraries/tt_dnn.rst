@@ -383,6 +383,8 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.masked_fill
 
+.. autofunction:: tt_lib.tensor.masked_fill_backward
+
 Tensor relational operations
 ----------------------------------
 .. autofunction:: tt_lib.tensor.gtz
