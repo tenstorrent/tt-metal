@@ -95,17 +95,18 @@ std::atomic<uint64_t> Program::program_counter = 0;
 
 Program::Program(): id(program_counter++),worker_crs_({}), circular_buffer_allocation_needed_(false) {}
 
-void Program::add_kernel(Kernel *kernel) {
+KernelID Program::add_kernel(Kernel *kernel) {
     this->invalidate_compile();
-    kernel_ids_.push_back(kernel->id());
+    KernelID id = kernels_.size();
+    kernels_.push_back(kernel);
     kernel_groups_.resize(0);
     core_to_kernel_group_index_table_.clear();
-    kernel_by_id_[kernel->id()] = kernel;
+    return id;
 }
 
 Kernel *Program::get_kernel(KernelID kernel_id) const {
-    TT_ASSERT(this->kernel_by_id_.find(kernel_id) != this->kernel_by_id_.end(), "Expected Kernel with ID {} to be in Program {}", kernel_id, this->id);
-    return this->kernel_by_id_.at(kernel_id);
+    //TT_ASSERT(kernel_id < this->kernels_.size(), "Expected Kernel with ID {} to be in Program {}", kernel_id, this->id);
+    return this->kernels_.at(kernel_id);
 }
 
 KernelGroup::KernelGroup() : core_ranges({}) {
@@ -180,19 +181,18 @@ struct KernelGroupInt {
     std::optional<KernelID> trisc_id = std::nullopt;
     std::optional<KernelID> brisc_id = std::nullopt;
     std::optional<KernelID> ncrisc_id = std::nullopt;
-
     bool operator==(const KernelGroupInt& b) const;
-    void update(const Kernel *kernel) {
+    void update(Kernel* kernel, size_t kernel_idx) {
         RISCV riscv_processor = kernel->processor();
         switch (riscv_processor) {
         case RISCV::BRISC:
-            this->brisc_id = kernel->id();
+            this->brisc_id = static_cast<KernelID>(kernel_idx);
             break;
         case RISCV::NCRISC:
-            this->ncrisc_id = kernel->id();
+            this->ncrisc_id = static_cast<KernelID>(kernel_idx);
             break;
         case RISCV::COMPUTE:
-            this->trisc_id = kernel->id();
+            this->trisc_id = static_cast<KernelID>(kernel_idx);
             break;
         default:
             TT_ASSERT(false, "Unsupported kernel processor!");
@@ -209,10 +209,7 @@ bool KernelGroupInt::operator==(const KernelGroupInt& b) const {
 
 struct KernelGroupIntHasher {
     std::size_t operator()(const KernelGroupInt& x) const {
-        return
-            (x.trisc_id.value_or(0) << 0) |
-            (x.brisc_id.value_or(0) << 16) |
-            (x.ncrisc_id.value_or(0) << 32);
+        return static_cast<size_t>(x.trisc_id.value_or(0) ) | static_cast<size_t>(x.brisc_id.value_or(0)) << 16 | static_cast<size_t>(x.ncrisc_id.value_or(0)) << 32;
     }
 };
 
@@ -222,7 +219,7 @@ void Program::update_kernel_groups() {
         CoreCoord base = {std::numeric_limits<decltype(base.x)>::max(),
                           std::numeric_limits<decltype(base.y)>::max()};
         grid_extent_ = {0, 0};
-        for (auto &[kernel_id, kernel] : this->kernel_by_id_) {
+        for (Kernel * kernel : kernels_) {
             for (auto core : kernel->logical_cores()) {
                 if (core.x > grid_extent_.x) grid_extent_.x = core.x;
                 if (core.y > grid_extent_.y) grid_extent_.y = core.y;
@@ -236,11 +233,12 @@ void Program::update_kernel_groups() {
         // grid maps cores to sets-of-kernels running on that core
         std::vector<KernelGroupInt> grid;
         grid.resize(grid_extent_.x * grid_extent_.y);
-        for (auto &[kernel_id, kernel] : this->kernel_by_id_) {
+        for (size_t kidx = 0; kidx < this->num_kernels(); kidx++) {
+            Kernel * kernel = kernels_[kidx];
             for (auto core : kernel->logical_cores()) {
                 int core_index = core.y * grid_extent_.x + core.x;
                 grid[core_index].valid = true;
-                grid[core_index].update(kernel);
+                grid[core_index].update(kernel, kidx);
             }
         }
 
@@ -301,9 +299,8 @@ std::vector<std::string> Program::cores_to_ops() const {
     std::vector<std::string> ops;
 
     for (const auto &core : this->logical_cores()) {
-        for (auto kernel_id : this->kernel_ids_) {
-        auto kernel = this->get_kernel(kernel_id);
-        auto cores = kernel->logical_cores();
+        for (Kernel * kernel : kernels_) {
+            auto cores = kernel->logical_cores();
             if (std::find(cores.begin(), cores.end(), core) != cores.end()) {
                 ops.push_back(kernel->name());
             }
@@ -498,7 +495,7 @@ void Program::add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t
 std::vector<CoreCoord> Program::logical_cores() const {
     std::vector<CoreCoord> cores_in_program;
     std::set<CoreCoord> unique_cores;
-    for (const auto &[kernel_id, kernel] : this->kernel_by_id_) {
+    for (Kernel * kernel : kernels_){
         for (auto core : kernel->logical_cores()) {
             if (unique_cores.find(core) != unique_cores.end()) {
                 continue;
@@ -512,7 +509,7 @@ std::vector<CoreCoord> Program::logical_cores() const {
 
 void Program::construct_core_range_set_for_worker_cores() {
     bool found_kernels = false;
-    for (const auto &[kernel_id, kernel] : this->kernel_by_id_) {
+    for (Kernel * kernel : kernels_){
         this->worker_crs_ = this->worker_crs_.merge ( kernel->core_range_set() );
         found_kernels = true;
     }
@@ -559,8 +556,7 @@ void Program::compile( Device * device )
     tt_set_profiler_state_for_debug_print(profile_kernel);
 
     // compile all kernels in parallel
-    for (auto kernel_id : this->kernel_ids()) {
-        auto kernel = this->get_kernel(kernel_id);
+    for (Kernel * kernel : kernels_) {
         events.emplace_back ( detail::async ( [kernel, device, this] {
             build_kernel_for_riscv_options_t build_options(device->id(), kernel->name());
             ZoneScoped;
@@ -590,8 +586,7 @@ void Program::compile( Device * device )
     for (auto & f : events)
         f.wait();
 
-    for (auto kernel_id : this->kernel_ids()) {
-        auto kernel = this->get_kernel(kernel_id);
+    for (Kernel * kernel : kernels_) {
         events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device->id()); }));
     }
 
@@ -610,7 +605,7 @@ void Program::compile( Device * device )
 }
 
 Program::~Program() {
-    for (const auto &[kernel_id, kernel] : this->kernel_by_id_) {
+    for (Kernel * kernel : kernels_) {
         delete kernel;
     }
 }

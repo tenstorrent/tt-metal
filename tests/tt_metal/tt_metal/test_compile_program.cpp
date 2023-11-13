@@ -32,7 +32,7 @@ void ClearKernelCache (int device_id){
 std::unordered_map<std::string, std::string> get_last_program_binary_path(const Program &program, int device_id) {
     std::unordered_map<std::string, std::string> kernel_name_to_last_compiled_dir;
     auto root_dir = get_kernel_compile_outpath(device_id);
-    for (auto kernel_id : program.kernel_ids()) {
+    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         tt_metal::Kernel *kernel = detail::GetKernel(program, kernel_id);
         if (not std::filesystem::exists(root_dir + kernel->name())) {
             continue;
@@ -145,7 +145,7 @@ Program create_program(Device *device, const ProgramAttributes &program_attribut
 
 void assert_kernel_binary_path_exists(const Program &program, int device_id, const KernelCacheStatus &kernel_cache_status) {
     auto kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
-    for (auto kernel_id : program.kernel_ids()) {
+    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         tt_metal::Kernel *kernel = detail::GetKernel(program, kernel_id);
         auto hash = kernel_name_to_hash.at(kernel->name());
         auto kernel_binary_path = get_kernel_compile_outpath(device_id) + kernel->name() + "/" + hash;
@@ -155,7 +155,7 @@ void assert_kernel_binary_path_exists(const Program &program, int device_id, con
 
 void assert_program_cache_hit_status(const Program &program, bool hit_expected, const KernelCacheStatus &kernel_cache_status) {
     auto kernel_name_to_cache_hit_status = kernel_cache_status.kernel_name_to_cache_hit;
-    for (auto kernel_id : program.kernel_ids()) {
+    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         tt_metal::Kernel *kernel = detail::GetKernel(program, kernel_id);
         auto hit_status = kernel_name_to_cache_hit_status.at(kernel->name());
         TT_FATAL(hit_status == hit_expected, "Did not get expected cache status " + std::to_string(hit_expected) + " for kernel " + kernel->name());
@@ -223,7 +223,7 @@ void assert_hash_comparison_for_kernel_type(
     const KernelCacheStatus &kernel_cache_status
 ) {
     auto curr_kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
-    for (auto kernel_id : program.kernel_ids()) {
+    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         tt_metal::Kernel *kernel = detail::GetKernel(program, kernel_id);
         auto prev_hash = prev_kernel_name_to_hash.at(kernel->name());
         auto curr_hash = curr_kernel_name_to_hash.at(kernel->name());
@@ -238,7 +238,7 @@ void assert_hash_comparison_for_kernel_type(
 
 void assert_cache_hit_status_for_kernel_type(const Program &program, const std::unordered_map<tt::RISCV, bool> &type_to_cache_hit_status, const KernelCacheStatus &kernel_cache_status) {
     auto kernel_name_to_cache_hit_status = kernel_cache_status.kernel_name_to_cache_hit;
-    for (auto kernel_id : program.kernel_ids()) {
+    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         tt_metal::Kernel *kernel = detail::GetKernel(program, kernel_id);
         bool hit_expected = type_to_cache_hit_status.at(kernel->processor());
         auto hit_status = kernel_name_to_cache_hit_status.at(kernel->name());

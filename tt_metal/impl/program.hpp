@@ -16,6 +16,7 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "tt_metal/impl/kernels/kernel_types.hpp"
 
 // XXXX TODO(PGK): fix include paths so device can export interfaces
 #include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
@@ -27,7 +28,7 @@ namespace tt_metal {
 // Fwd declares
 namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device);
-    void AddKernel ( Program & program, Kernel * kernel);
+    KernelID AddKernel ( Program & program, Kernel * kernel);
     Kernel *GetKernel(const Program &program, KernelID kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CircularBufferID id);
 }
@@ -66,7 +67,7 @@ class Program {
 
     const uint64_t get_id() const { return this->id; }
 
-    std::vector<KernelID> kernel_ids() const { return kernel_ids_; }
+    size_t num_kernels() const { return kernels_.size(); }
 
     const std::vector<std::shared_ptr<CircularBuffer>> &circular_buffers() const { return circular_buffers_; }
 
@@ -130,8 +131,7 @@ class Program {
 
     uint64_t id; // Need to make non-const due to move constructor
     static std::atomic<uint64_t> program_counter;
-    std::vector<KernelID> kernel_ids_;
-    std::unordered_map<KernelID, Kernel *> kernel_by_id_;
+    std::vector<Kernel*> kernels_;
     CoreCoord grid_extent_;
 
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_;
@@ -152,11 +152,11 @@ class Program {
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CircularBufferID id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
-    friend void detail::AddKernel(Program &program, Kernel *kernel);
+    friend KernelID detail::AddKernel(Program &program, Kernel *kernel);
     friend Kernel *detail::GetKernel(const Program &program, KernelID kernel_id);
 
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value);
-    void add_kernel(Kernel *kernel);
+    KernelID add_kernel(Kernel *kernel);
     Kernel *get_kernel(KernelID kernel_id) const;
 
     CircularBufferID add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);

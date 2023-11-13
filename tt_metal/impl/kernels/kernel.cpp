@@ -20,7 +20,6 @@ namespace tt {
 namespace tt_metal {
 
 Kernel::Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compile_args, const std::map<std::string, std::string> &defines) :
-    id_(reinterpret_cast<uintptr_t>(this)),
     watcher_kernel_id_(llrt::watcher_register_kernel(kernel_path_file_name)),
     kernel_path_file_name_(kernel_path_file_name),
     core_range_set_(core_range_set),

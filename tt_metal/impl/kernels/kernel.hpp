@@ -31,8 +31,6 @@ class Kernel {
 
     virtual ~Kernel() {}
 
-    const uintptr_t id() const { return id_; }
-
     std::string kernel_path_file_name() const { return kernel_path_file_name_; }
 
     std::string name() const;
@@ -76,7 +74,6 @@ class Kernel {
     int get_watcher_kernel_id() { return watcher_kernel_id_; }
 
    protected:
-    const uintptr_t id_;
     const int watcher_kernel_id_;
     std::string kernel_path_file_name_;                 // Full kernel path and file name
     CoreRangeSet core_range_set_;
