@@ -262,16 +262,16 @@ void kernel_main() {
     // }
 
     // Handle data shuffle
-    uint32_t ll_send_count = get_arg_val<uint32_t>(60);
+    uint32_t ll_send_nbytes = get_arg_val<uint32_t>(60);
     uint32_t ll_send_from_offset = get_arg_val<uint32_t>(61);
     uint32_t ll_send_to_offset = get_arg_val<uint32_t>(62);
-    uint32_t l_send_count = get_arg_val<uint32_t>(63);
+    uint32_t l_send_nbytes = get_arg_val<uint32_t>(63);
     uint32_t l_send_from_offset = get_arg_val<uint32_t>(64);
     uint32_t l_send_to_offset = get_arg_val<uint32_t>(65);
-    uint32_t r_send_count = get_arg_val<uint32_t>(66);
+    uint32_t r_send_nbytes = get_arg_val<uint32_t>(66);
     uint32_t r_send_from_offset = get_arg_val<uint32_t>(67);
     uint32_t r_send_to_offset = get_arg_val<uint32_t>(68);
-    uint32_t rr_send_count = get_arg_val<uint32_t>(69);
+    uint32_t rr_send_nbytes = get_arg_val<uint32_t>(69);
     uint32_t rr_send_from_offset = get_arg_val<uint32_t>(70);
     uint32_t rr_send_to_offset = get_arg_val<uint32_t>(71);
 
@@ -298,56 +298,33 @@ void kernel_main() {
     if (has_left_left) {
         uint32_t to_l1_addr = out_base_l1_addr + ll_send_to_offset;
         uint32_t from_l1_addr = out_base_l1_addr + ll_send_from_offset;
-        for (uint32_t i = 0; i < ll_send_count; ++ i) {
-            uint64_t noc_addr = get_noc_addr(left_left_noc_x, left_left_noc_y, to_l1_addr);
-            noc_async_write_one_packet(from_l1_addr, noc_addr, stick_nbytes);
-            to_l1_addr += stick_nbytes;
-            from_l1_addr += stick_nbytes;
-        }
+        uint64_t noc_addr = get_noc_addr(left_left_noc_x, left_left_noc_y, to_l1_addr);
+        noc_async_write(from_l1_addr, noc_addr, ll_send_nbytes);
     }
 
     // push to L
     if (has_left) {
         uint32_t to_l1_addr = out_base_l1_addr + l_send_to_offset;
         uint32_t from_l1_addr = out_base_l1_addr + l_send_from_offset;
-        for (uint32_t i = 0; i < l_send_count; ++ i) {
-            uint64_t noc_addr = get_noc_addr(left_noc_x, left_noc_y, to_l1_addr);
-            noc_async_write_one_packet(from_l1_addr, noc_addr, stick_nbytes);
-            to_l1_addr += stick_nbytes;
-            from_l1_addr += stick_nbytes;
-        }
+        uint64_t noc_addr = get_noc_addr(left_noc_x, left_noc_y, to_l1_addr);
+        noc_async_write(from_l1_addr, noc_addr, l_send_nbytes);
     }
 
     // push to R
     if (has_right) {
         uint32_t to_l1_addr = out_base_l1_addr + r_send_to_offset;
         uint32_t from_l1_addr = out_base_l1_addr + r_send_from_offset;
-        for (uint32_t i = 0; i < r_send_count; ++ i) {
-            uint64_t noc_addr = get_noc_addr(right_noc_x, right_noc_y, to_l1_addr);
-            noc_async_write_one_packet(from_l1_addr, noc_addr, stick_nbytes);
-            to_l1_addr += stick_nbytes;
-            from_l1_addr += stick_nbytes;
-        }
+        uint64_t noc_addr = get_noc_addr(right_noc_x, right_noc_y, to_l1_addr);
+        noc_async_write(from_l1_addr, noc_addr, r_send_nbytes);
     }
 
     // push to RR
     if (has_right_right) {
         uint32_t to_l1_addr = out_base_l1_addr + rr_send_to_offset;
         uint32_t from_l1_addr = out_base_l1_addr + rr_send_from_offset;
-        for (uint32_t i = 0; i < rr_send_count; ++ i) {
-            uint64_t noc_addr = get_noc_addr(right_right_noc_x, right_right_noc_y, to_l1_addr);
-            noc_async_write_one_packet(from_l1_addr, noc_addr, stick_nbytes);
-            to_l1_addr += stick_nbytes;
-            from_l1_addr += stick_nbytes;
-        }
+        uint64_t noc_addr = get_noc_addr(right_right_noc_x, right_right_noc_y, to_l1_addr);
+        noc_async_write(from_l1_addr, noc_addr, rr_send_nbytes);
     }
 
     noc_async_write_barrier();
-
-    // DPRINT << "==== PADDED OUTPUT:" << ENDL();
-    // for (uint32_t row = 0; row < 14; ++ row) {
-    //     DPRINT << "=== ROW " << row << ":" << ENDL();
-    //     print_sticks(out_base_l1_addr, 114 * row, 114, 64);
-    //     DPRINT << "=== ROW " << row << " END" << ENDL();
-    // }
 }

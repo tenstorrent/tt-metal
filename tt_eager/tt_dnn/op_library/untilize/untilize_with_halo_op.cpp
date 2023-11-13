@@ -685,20 +685,21 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         //     rr_send_count
         //     rr_send_from_offset
         //     rr_send_at_offset
+
         // LL
-        writer_rt_args[60] = updated_count_to_send[core][0];
+        writer_rt_args[60] = updated_count_to_send[core][0] * in_stick_nbytes;
         writer_rt_args[61] = send_from_offset_nsticks[core][0] * in_stick_nbytes;
         writer_rt_args[62] = send_to_offset_nsticks[core][0] * in_stick_nbytes;
         // L
-        writer_rt_args[63] = updated_count_to_send[core][1];
+        writer_rt_args[63] = updated_count_to_send[core][1] * in_stick_nbytes;
         writer_rt_args[64] = send_from_offset_nsticks[core][1] * in_stick_nbytes;
         writer_rt_args[65] = send_to_offset_nsticks[core][1] * in_stick_nbytes;
         // R
-        writer_rt_args[66] = updated_count_to_send[core][3];
+        writer_rt_args[66] = updated_count_to_send[core][3] * in_stick_nbytes;
         writer_rt_args[67] = send_from_offset_nsticks[core][3] * in_stick_nbytes;
         writer_rt_args[68] = send_to_offset_nsticks[core][3] * in_stick_nbytes;
         // RR
-        writer_rt_args[69] = updated_count_to_send[core][4];
+        writer_rt_args[69] = updated_count_to_send[core][4] * in_stick_nbytes;
         writer_rt_args[70] = send_from_offset_nsticks[core][4] * in_stick_nbytes;
         writer_rt_args[71] = send_to_offset_nsticks[core][4] * in_stick_nbytes;
 
@@ -1193,7 +1194,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
                 writer_rt_args[19] = 1;
                 writer_rt_args[20] = left_noc.x;
                 writer_rt_args[21] = left_noc.y;
-                writer_rt_args[33] = my_right_halo[i - 1];      // sticks to left neighbor core's right halo
+                // my_right_halo[i - 1] == sticks to left neighbor core's right halo
+                uint32_t left_core_nbytes = (my_right_halo[i - 1] + 2*pad_w)*in_stick_nbytes;
+                writer_rt_args[33] = left_core_nbytes;
                 writer_rt_args[37] = my_right_halo_offset[i - 1];
                 if (untilize_with_halo_helpers::left_neighbor_core.count(left_core) > 0) {
                     CoreCoord left_left_core = untilize_with_halo_helpers::left_neighbor_core.at(left_core);
@@ -1217,7 +1220,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
                 writer_rt_args[22] = 1;
                 writer_rt_args[23] = right_noc.x;
                 writer_rt_args[24] = right_noc.y;
-                writer_rt_args[34] = my_left_halo[i + 1];       // sticks to right neighbor core's left halo
+                // my_left_halo[i + 1]  == sticks to right neighbor core's left halo
+                uint32_t right_core_nbytes = (my_left_halo[i + 1] + 2*pad_w)*in_stick_nbytes;
+                writer_rt_args[34] = right_core_nbytes;
                 writer_rt_args[38] = my_left_halo_offset[i + 1];
                 if (untilize_with_halo_helpers::right_neighbor_core.count(right_core) > 0) {
                     CoreCoord right_right_core = untilize_with_halo_helpers::right_neighbor_core.at(right_core);
