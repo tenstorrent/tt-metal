@@ -893,6 +893,10 @@ def masked_fill(x, y, value, *args, **kwargs):
     return torch.masked_fill(x, y > 0, value)
 
 
+def masked_fill_(x, y, value, *args, **kwargs):
+    return x.masked_fill(y > 0, value)
+
+
 def masked_fill_backward(dy, mask, *args, **kwargs):
     return torch.where(mask > 0, 0, dy)
 

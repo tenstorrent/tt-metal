@@ -200,11 +200,13 @@ class TestEltwiseBinary:
             test_args,
         )
 
+    @pytest.mark.parametrize("masked_fill_kind", ["masked_fill", "masked_fill_"])
     def test_run_eltwise_masked_fill_ops(
         self,
         input_shapes,
         input_mem_config,
         output_mem_config,
+        masked_fill_kind,
         device,
         function_level_defaults,
     ) :
@@ -221,8 +223,9 @@ class TestEltwiseBinary:
         )
         test_args.update({"value": 100})
         comparison_func = partial(comparison_funcs.comp_pcc)
+
         run_single_pytorch_test(
-            "eltwise-masked_fill",
+            f"eltwise-{masked_fill_kind}",
             input_shapes,
             datagen_func,
             comparison_func,
