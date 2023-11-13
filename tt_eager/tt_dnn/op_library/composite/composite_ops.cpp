@@ -1214,6 +1214,14 @@ Tensor masked_fill(const Tensor& input_a, const Tensor& mask, float value, const
     return result;
 }
 
+Tensor masked_fill_backward(const Tensor& output_grad, const Tensor& mask, const MemoryConfig& output_mem_config)
+{
+    // TODO: remove zero_like if `where` function recive float type `value`. because tensor type `value` ​​can waste memory
+    Tensor zero_like = mk_zero_tensor_like(output_grad, output_mem_config);
+    Tensor result = where(mask, zero_like, output_grad, output_mem_config);
+    return result;
+}
+
 }//namespace tt_metal
 
 }//namespace tt
