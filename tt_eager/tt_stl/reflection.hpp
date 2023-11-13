@@ -71,12 +71,29 @@ static std::ostream& operator<<(std::ostream& os, const Attributes& attributes) 
 }
 
 namespace detail {
-template<typename T>
+template <typename T>
 using has_attributes_t = decltype(std::declval<T>().attributes());
-}
 
 template <typename T>
-typename std::enable_if_t<std::experimental::is_detected_v<detail::has_attributes_t, T>, std::ostream>& operator<<(
+constexpr bool supports_runtime_time_attributes_v = std::experimental::is_detected_v<has_attributes_t, T>;
+
+template <typename T>
+inline constexpr std::size_t get_num_attributes() {
+    return std::tuple_size_v<decltype(T::attribute_names)>;
+}
+template <typename T>
+using has_attribute_names_t = decltype(std::declval<T>().attribute_names);
+
+template <typename T>
+using has_attribute_values_t = decltype(std::declval<T>().attribute_values());
+
+template <typename T>
+constexpr bool supports_compile_time_attributes_v = std::experimental::is_detected_v<has_attribute_names_t, T> and
+                                                    std::experimental::is_detected_v<has_attribute_values_t, T>;
+}  // namespace detail
+
+template <typename T>
+typename std::enable_if_t<detail::supports_runtime_time_attributes_v<T>, std::ostream>& operator<<(
     std::ostream& os, const T& object) {
     static_assert(std::is_same_v<decltype(object.attributes()), Attributes>);
     os << boost::core::demangle(typeid(T).name());
@@ -84,14 +101,43 @@ typename std::enable_if_t<std::experimental::is_detected_v<detail::has_attribute
     return os;
 }
 
-template<typename T>
-typename std::enable_if_t<std::is_enum<T>::value, std::ostream>&
-operator<<(std::ostream& os, const T& value) {
+template <typename T>
+typename std::enable_if_t<detail::supports_compile_time_attributes_v<T>, std::ostream>& operator<<(
+    std::ostream& os, const T& object) {
+    constexpr auto num_attributes = detail::get_num_attributes<T>();
+    os << boost::core::demangle(typeid(T).name());
+    os << "(";
+
+    if constexpr (num_attributes > 0) {
+        [&os, &object]<std::size_t... Ns>(std::index_sequence<Ns...>) {
+            (
+                [&os, &object] {
+                    const auto& attribute = std::get<Ns>(object.attribute_values());
+                    os << std::get<Ns>(object.attribute_names);
+                    os << "=";
+                    os << attribute;
+                    os << ",";
+                }(),
+                ...);
+        }(std::make_index_sequence<num_attributes - 1>{});
+
+        const auto& attribute = std::get<num_attributes - 1>(object.attribute_values());
+        os << std::get<num_attributes - 1>(object.attribute_names);
+        os << "=";
+        os << attribute;
+    }
+
+    os << ")";
+    return os;
+}
+
+template <typename T>
+typename std::enable_if_t<std::is_enum<T>::value, std::ostream>& operator<<(std::ostream& os, const T& value) {
     os << magic_enum::enum_type_name<T>() << "::" << magic_enum::enum_name(value);
     return os;
 }
 
-template<typename T>
+template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::optional<T>& optional) {
     if (optional.has_value()) {
         os << optional.value();
@@ -101,18 +147,13 @@ std::ostream& operator<<(std::ostream& os, const std::optional<T>& optional) {
     return os;
 }
 
-template<typename ... Ts>
+template <typename... Ts>
 std::ostream& operator<<(std::ostream& os, const std::variant<Ts...>& variant) {
-    std::visit(
-        [&os](const auto& value) {
-            os << value;
-        },
-        variant
-    );
+    std::visit([&os](const auto& value) { os << value; }, variant);
     return os;
 }
 
-template<typename T, std::size_t N>
+template <typename T, std::size_t N>
 std::ostream& operator<<(std::ostream& os, const std::array<T, N>& array) {
     os << "{";
     for (auto index = 0; index < array.size(); index++) {
@@ -126,7 +167,7 @@ std::ostream& operator<<(std::ostream& os, const std::array<T, N>& array) {
     return os;
 }
 
-template<typename T>
+template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::vector<T>& vector) {
     os << "{";
     for (auto index = 0; index < vector.size(); index++) {
@@ -144,14 +185,12 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& vector) {
 }  // namespace stl
 }  // namespace tt
 
-
 template <>
 struct fmt::formatter<tt::stl::reflection::Attributes> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
-        return ctx.end();
-    }
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const tt::stl::reflection::Attributes& attributes, format_context& ctx) const -> format_context::iterator {
+    auto format(const tt::stl::reflection::Attributes& attributes, format_context& ctx) const
+        -> format_context::iterator {
         using tt::stl::reflection::operator<<;
         std::stringstream ss;
         ss << attributes;
@@ -160,10 +199,19 @@ struct fmt::formatter<tt::stl::reflection::Attributes> {
 };
 
 template <typename T>
-struct fmt::formatter<
-    T,
-    char,
-    std::enable_if_t<std::experimental::is_detected_v<tt::stl::reflection::detail::has_attributes_t, T>>> {
+struct fmt::formatter<T, char, std::enable_if_t<tt::stl::reflection::detail::supports_compile_time_attributes_v<T>>> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const T& object, format_context& ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << object;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
+template <typename T>
+struct fmt::formatter<T, char, std::enable_if_t<tt::stl::reflection::detail::supports_runtime_time_attributes_v<T>>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
         return ctx.end();
     }
@@ -306,7 +354,19 @@ inline hash_t hash_object(const T& object) noexcept {
             hash = hash_objects(hash, attribute);
         }
         return hash;
-    } else if constexpr (std::experimental::is_detected_v<tt::stl::reflection::detail::has_attributes_t, T>) {
+    } else if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_v<T>) {
+        constexpr auto num_attributes = reflection::detail::get_num_attributes<T>();
+        std::size_t hash = 0;
+        [&object, &hash]<size_t... Ns>(std::index_sequence<Ns...>) {
+            (
+                [&object, &hash] {
+                    const auto& attribute = std::get<Ns>(object.attribute_values());
+                    hash = hash_objects(hash, attribute);
+                }(),
+                ...);
+        }(std::make_index_sequence<num_attributes>{});
+        return hash;
+    } else if constexpr (tt::stl::reflection::detail::supports_runtime_time_attributes_v<T>) {
         return hash_object(object.attributes());
     } else if constexpr (detail::is_specialization_v<T, std::vector>) {
         auto hash = 0;

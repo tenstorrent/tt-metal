@@ -33,7 +33,29 @@ Below, is an example of how to declare a new on-device operation with all of the
         std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
         std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
         operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
-        tt::stl::reflection::Attributes attributes() const;
+
+        static constexpr auto attribute_names = std::make_tuple();
+        const auto attribute_values() const {
+            return std::make_tuple();
+        }
+    };
+
+Or to add one with a memmber:
+
+.. code-block::
+
+    struct <NewOperation> {
+        bool some_member
+
+        void validate(const std::vector<Tensor> &input_tensors) const;
+        std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+        std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+        operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+
+        static constexpr auto attribute_names = std::make_tuple("some_member");
+        const auto attribute_values() const {
+            return std::make_tuple(std::ref(some_member));
+        }
     };
 
 And below, is an example of how to declare a new on-host operation with all of the methods required by the interface.
@@ -44,7 +66,11 @@ And below, is an example of how to declare a new on-host operation with all of t
         void validate(const std::vector<Tensor> &input_tensors) const;
         std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
         std::vector<Tensor> compute_output_tensors(const std::vector<Tensor> &input_tensors) const;
-        tt::stl::reflection::Attributes attributes() const;
+
+        static constexpr auto attribute_names = std::make_tuple();
+        const auto attribute_values() const {
+            return std::make_tuple();
+        }
     };
 
 Profiler

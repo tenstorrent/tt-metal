@@ -245,16 +245,6 @@ uint32_t Tensor::volume() const {
     return tt::tt_metal::compute_volume(this->shape_);
 }
 
-tt::stl::reflection::Attributes Tensor::attributes() const {
-    return {
-        {"storage", this->storage_},
-        {"shape", this->shape_},
-        {"dtype", this->dtype_},
-        {"layout", this->layout_},
-        {"shard_spec", this->shard_spec_},
-    };
-}
-
 Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
     ZoneScoped;
     uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));

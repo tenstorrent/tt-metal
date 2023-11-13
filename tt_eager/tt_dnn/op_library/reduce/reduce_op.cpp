@@ -126,15 +126,6 @@ operation::ProgramWithCallbacks Reduce::create_program(const std::vector<Tensor>
 
 }
 
-tt::stl::reflection::Attributes Reduce::attributes() const {
-    return {
-        {"math_op", this->math_op},
-        {"dim", this->dim},
-        {"scaler", this->scaler},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 ReduceOpParallelizationStrategy Reduce::get_parallelization_strategy(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 

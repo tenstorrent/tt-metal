@@ -25,20 +25,15 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
     }
 }
 
-tt::stl::reflection::Attributes Padding::PadDimension::attributes() const {
-    return {
-        {"front", this->front},
-        {"back", this->back},
-    };
-}
-
 Padding::Padding(const std::size_t rank) : rank_{rank}, pad_dimensions_{}, pad_value_{} {}
 
-Padding::Padding(const std::initializer_list<PadDimension> pad_dimensions, PadValue pad_value) : rank_(pad_dimensions.size()), pad_value_(pad_value) {
+Padding::Padding(const std::initializer_list<PadDimension> pad_dimensions, PadValue pad_value) :
+    rank_(pad_dimensions.size()), pad_dimensions_{}, pad_value_(pad_value) {
     std::copy(std::begin(pad_dimensions), std::end(pad_dimensions), std::begin(this->pad_dimensions_));
 }
 
-Padding::Padding(const std::vector<PadDimension>& pad_dimensions, PadValue pad_value) : rank_(pad_dimensions.size()), pad_value_(pad_value) {
+Padding::Padding(const std::vector<PadDimension>& pad_dimensions, PadValue pad_value) :
+    rank_(pad_dimensions.size()), pad_dimensions_{}, pad_value_(pad_value) {
     std::copy(std::begin(pad_dimensions), std::end(pad_dimensions), std::begin(this->pad_dimensions_));
 }
 
@@ -52,36 +47,31 @@ const Padding::PadDimension& Padding::operator[](const std::int64_t index) const
 
 Padding::PadValue Padding::pad_value() const { return this->pad_value_; }
 
-tt::stl::reflection::Attributes Padding::attributes() const {
-    std:vector<PadDimension> pad_dimensions;
-    for (auto index = 0; index < this->rank_; index++) {
-        pad_dimensions.push_back(this->pad_dimensions_[index]);
-    }
-    return {
-        {"pad_dimensions", pad_dimensions},
-        {"pad_value", this->pad_value_},
-    };
-}
-
-Shape::Shape(const std::initializer_list<uint32_t> dimensions) : rank_(dimensions.size()), padding_(dimensions.size()) {
+Shape::Shape(const std::initializer_list<uint32_t> dimensions) :
+    rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
-Shape::Shape(const std::array<uint32_t, 4>& dimensions) : rank_(dimensions.size()), padding_(dimensions.size())  {
+Shape::Shape(const std::array<uint32_t, 4>& dimensions) :
+    rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
-Shape::Shape(const std::vector<uint32_t>& dimensions) : rank_(dimensions.size()), padding_(dimensions.size())  {
+Shape::Shape(const std::vector<uint32_t>& dimensions) :
+    rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
 
-Shape::Shape(const std::initializer_list<uint32_t> dimensions, const Padding& padding) : rank_(dimensions.size()), padding_(padding) {
+Shape::Shape(const std::initializer_list<uint32_t> dimensions, const Padding& padding) :
+    rank_(dimensions.size()), dimensions_{}, padding_(padding) {
     TT_ASSERT(this->padding_.rank_ == this->rank_);
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
-Shape::Shape(const std::vector<uint32_t>& dimensions, const Padding& padding) : rank_(dimensions.size()), padding_(padding) {
+Shape::Shape(const std::vector<uint32_t>& dimensions, const Padding& padding) :
+    rank_(dimensions.size()), dimensions_{}, padding_(padding) {
     TT_ASSERT(this->padding_.rank_ == this->rank_);
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
-Shape::Shape(const Shape& other, const Padding& padding) : dimensions_(other.dimensions_), rank_(other.rank_), padding_(padding) {
+Shape::Shape(const Shape& other, const Padding& padding) :
+    dimensions_(other.dimensions_), rank_(other.rank_), padding_(padding) {
     TT_ASSERT(this->padding_.rank_ == this->rank_);
 }
 
@@ -122,58 +112,26 @@ const uint32_t Shape::get_normalized_index(std::int64_t index) const {
     return normalized_index;
 }
 
-tt::stl::reflection::Attributes Shape::attributes() const {
-    std:vector<uint32_t> dimensions;
-    for (auto index = 0; index < this->rank_; index++) {
-        dimensions.push_back(this->dimensions_[index]);
-    }
-
-    auto has_padding = false;
-    for (auto index = 0; index < this->rank_; index++) {
-        const auto& dimension = this->padding_.pad_dimensions_[index];
-        auto&& [front, back] = dimension;
-        if (front or back) {
-            has_padding = true;
-            break;
-        }
-    }
-    if (not has_padding) {
-        return {
-            {"dimensions", dimensions},
-        };
-    }
-
-    return {
-        {"dimensions", dimensions},
-        {"padding", this->padding_},
-    };
-}
-
-
 bool operator==(const Shape& shape_a, const Shape& shape_b) {
     if (shape_a.rank() != shape_b.rank()) {
         return false;
     }
     for (auto index = 0; index < shape_a.rank(); index++) {
-        if ( shape_a[index] != shape_b[index]) {
+        if (shape_a[index] != shape_b[index]) {
             return false;
         }
     }
     return true;
 }
 
-bool operator!=(const Shape& shape_a, const Shape& shape_b) {
-    return not (shape_a == shape_b);
-}
+bool operator!=(const Shape& shape_a, const Shape& shape_b) { return not(shape_a == shape_b); }
 
 bool MemoryConfig::is_sharded() const {
     switch (this->memory_layout) {
         case TensorMemoryLayout::HEIGHT_SHARDED:
         case TensorMemoryLayout::WIDTH_SHARDED:
-        case TensorMemoryLayout::BLOCK_SHARDED:
-            return true;
-        default:
-            return false;
+        case TensorMemoryLayout::BLOCK_SHARDED: return true;
+        default: return false;
     }
 }
 
@@ -181,34 +139,7 @@ bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
     return config_a.buffer_type == config_b.buffer_type && config_a.memory_layout == config_b.memory_layout;
 }
 
-bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b){
-    return not (config_a == config_b);
-}
-
-
-tt::stl::reflection::Attributes MemoryConfig::attributes() const {
-    return {
-        {"memory_layout", this->memory_layout},
-        {"buffer_type", this->buffer_type},
-    };
-}
-
-
-tt::stl::reflection::Attributes OwnedStorage::attributes() const {
-    return {};
-}
-
-
-tt::stl::reflection::Attributes DeviceStorage::attributes() const {
-    return {
-        {"memory_config", this->memory_config},
-    };
-}
-
-
-tt::stl::reflection::Attributes BorrowedStorage::attributes() const {
-    return {};
-}
+bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) { return not(config_a == config_b); }
 
 bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b) {
     if (spec_a.shard_shape != spec_b.shard_shape) {
@@ -225,15 +156,6 @@ bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b) {
 
 bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b) {
     return !(spec_a == spec_b);
-}
-
-tt::stl::reflection::Attributes ShardSpec::attributes() const {
-    return {
-        {"shard_grid", this->shard_grid.str()},
-        {"shard_shape", this->shard_shape},
-        {"shard_orientation", this->shard_orientation},
-        {"halo", this->halo},
-    };
 }
 
 }  // namespace tt_metal

@@ -72,7 +72,9 @@ struct Padding {
     struct PadDimension {
         std::size_t front;
         std::size_t back;
-        tt::stl::reflection::Attributes attributes() const;
+
+        static constexpr auto attribute_names = std::make_tuple("front", "back");
+        const auto attribute_values() const { return std::make_tuple(std::ref(this->front), std::ref(this->back)); }
     };
 
     std::size_t rank_;
@@ -88,7 +90,10 @@ struct Padding {
 
     PadValue pad_value() const;
 
-    tt::stl::reflection::Attributes attributes() const;
+    static constexpr auto attribute_names = std::make_tuple("rank", "pad_dimensions", "pad_value");
+    const auto attribute_values() const {
+        return std::make_tuple(std::ref(this->rank_), std::ref(this->pad_dimensions_), std::ref(this->pad_value_));
+    }
 };
 
 class Shape {
@@ -118,7 +123,10 @@ class Shape {
 
     const uint32_t get_normalized_index(std::int64_t index) const;
 
-    tt::stl::reflection::Attributes attributes() const;
+    static constexpr auto attribute_names = std::make_tuple("rank", "dimensions", "padding");
+    const auto attribute_values() const {
+        return std::make_tuple(std::ref(this->rank_), std::ref(this->dimensions_), std::ref(this->padding_));
+    }
 };
 
 bool operator==(const Shape& shape_a, const Shape& shape_b);
@@ -128,7 +136,11 @@ struct MemoryConfig {
     TensorMemoryLayout memory_layout = TensorMemoryLayout::INTERLEAVED;    // Interleave the data across multiple banks
     BufferType buffer_type = BufferType::DRAM; // Can be either DRAM or L1
     bool is_sharded() const;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::make_tuple("memory_layout", "buffer_type");
+    const auto attribute_values() const {
+        return std::make_tuple(std::ref(this->memory_layout), std::ref(this->buffer_type));
+    }
 };
 
 bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b);
@@ -141,7 +153,9 @@ using OwnedBuffer = std::variant<
 >;
 struct OwnedStorage {
     OwnedBuffer buffer;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::make_tuple();
+    const auto attribute_values() const { return std::make_tuple(); }
 };
 
 using DeviceBuffer = std::shared_ptr<Buffer>;
@@ -149,7 +163,9 @@ struct DeviceStorage {
     DeviceBuffer buffer;
     Device* device;
     MemoryConfig memory_config;
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::make_tuple("memory_config");
+    const auto attribute_values() const { return std::make_tuple(std::ref(this->memory_config)); }
 };
 
 using BorrowedBuffer = std::variant<
@@ -200,7 +216,8 @@ struct BorrowedStorage {
         this->on_destruction_callback();
     }
 
-    tt::stl::reflection::Attributes attributes() const;
+    static constexpr auto attribute_names = std::make_tuple();
+    const auto attribute_values() const { return std::make_tuple(); }
 };
 
 using Storage = std::variant<
@@ -221,7 +238,15 @@ struct ShardSpec {
     bool halo = false;
     const uint32_t num_cores() const { return this->shard_grid.num_cores(); }
     const uint32_t numel() const { return this->shard_shape[0] * this->shard_shape[1]; }
-    tt::stl::reflection::Attributes attributes() const;
+
+    static constexpr auto attribute_names = std::make_tuple("shard_grid", "shard_shape", "shard_orientation", "halo");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            this->shard_grid.str(),
+            std::ref(this->shard_shape),
+            std::ref(this->shard_orientation),
+            std::ref(this->halo));
+    }
 };
 
 bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b);
