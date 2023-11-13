@@ -1218,7 +1218,7 @@ Tensor masked_fill(const Tensor& input_a, const Tensor& mask, float value, const
     return operation::decorate_as_composite(__func__, _masked_fill)(input_a, mask, value, output_mem_config);
 }
 
-//masked_fill - binary operator y = (mask) ? value : input_a; elementwise
+//masked_fill_ - binary operator input_a = (mask) ? value : input_a; elementwise
 Tensor _masked_fill_(const Tensor& input_a, const Tensor& mask, float value) {
     // TODO: remove assign and use in-place version of where
     Tensor result = masked_fill(input_a, mask, value, input_a.memory_config());
@@ -1229,6 +1229,7 @@ Tensor masked_fill_(const Tensor& input_a, const Tensor& mask, float value) {
     return operation::decorate_as_composite(__func__, _masked_fill_)(input_a, mask, value);
 }
 
+//masked_fill_backward - binary operator input_grad = (mask) ? 0 : output_grad; elementwise
 Tensor _masked_fill_backward(const Tensor& output_grad, const Tensor& mask, const MemoryConfig& output_mem_config)
 {
     // TODO: remove zero_like if `where` function receive float type `value`. because tensor type `value` ​​can waste memory
