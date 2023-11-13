@@ -1255,6 +1255,13 @@ Tensor masked_fill(const Tensor& input_a, const Tensor& mask, float value, const
     return result;
 }
 
+//masked_fill - binary operator y = (mask) ? value : input_a; elementwise
+Tensor masked_fill_(const Tensor& input_a, const Tensor& mask, float value) {
+    // TODO: remove assign and use in-place version of where
+    Tensor result = masked_fill(input_a, mask, value, input_a.memory_config());
+    return assign(result, input_a);
+}
+
 Tensor masked_fill_backward(const Tensor& output_grad, const Tensor& mask, const MemoryConfig& output_mem_config)
 {
     // TODO: remove zero_like if `where` function recive float type `value`. because tensor type `value` ​​can waste memory
