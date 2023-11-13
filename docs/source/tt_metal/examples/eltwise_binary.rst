@@ -83,4 +83,6 @@ Conclusion
 Those are the additional steps for getting eltwise binary operations up and
 running on the compute engine. We essentially repeat the same process to chain
 together two operations, with one DRAM read in the middle to get the
-intermediate result and hold it in a DRAM buffer.
+intermediate result and hold it in a DRAM buffer. For an example involving
+matrix multiplication on a single core, please refer to the :ref:`Matmul single
+core example<MatMul_Single_Core example>`.

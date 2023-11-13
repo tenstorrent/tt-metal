@@ -7,3 +7,4 @@ Programming Examples
    eltwise_sfpu
    eltwise_binary
    matmul_single_core
+   matmul_multi_core
