@@ -47,7 +47,19 @@ def run_complex_div_test(input_shape, dtype, dlayout, in_mem_config, out_mem_con
 
 test_sweep_args = [
     (
-        (1, 7, 32, 192),
+        (1, 9, 64, 448),
+        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
+        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
+        [
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        ],
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        18361995,
+        False,
+    ),
+    (
+        (1, 9, 64, 448),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
         [
@@ -55,23 +67,11 @@ test_sweep_args = [
             ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        16305027,
+        19717156,
         False,
     ),
     (
-        (1, 7, 32, 192),
-        [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
-        [
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ],
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        13587334,
-        False,
-    ),
-    (
-        (1, 7, 32, 192),
+        (1, 9, 64, 448),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.TILE, ttl.tensor.Layout.TILE],
         [
@@ -79,11 +79,11 @@ test_sweep_args = [
             ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        10177486,
+        14931354,
         False,
     ),
     (
-        (1, 9, 160, 256),
+        (1, 6, 96, 448),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
         [
@@ -91,11 +91,11 @@ test_sweep_args = [
             ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        16180402,
-        True,
+        12321236,
+        False,
     ),
     (
-        (1, 9, 160, 256),
+        (1, 6, 96, 448),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
         [
@@ -103,20 +103,20 @@ test_sweep_args = [
             ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        13038208,
-        True,
+        3144302,
+        False,
     ),
     (
-        (1, 9, 160, 256),
+        (1, 6, 96, 448),
         [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT16],
         [ttl.tensor.Layout.ROW_MAJOR, ttl.tensor.Layout.ROW_MAJOR],
         [
             ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+            ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        19675931,
-        True,
+        1196734,
+        False,
     ),
 ]
 
