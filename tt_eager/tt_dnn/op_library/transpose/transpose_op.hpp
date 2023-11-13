@@ -23,7 +23,7 @@ enum class TransposeOpParallelizationStrategy {
 
 struct Transpose {
     const TransposeOpDim dim;
-    const MemoryConfig& output_mem_config;
+    const MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;

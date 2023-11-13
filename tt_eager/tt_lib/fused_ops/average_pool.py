@@ -8,8 +8,8 @@ from typing import Union, List
 
 
 def run_avg_pool_on_device_wrapper(device):
-    def average_pool_2d(x, output_mem_config):
-        out = ttl.tensor.average_pool_2d(x, output_mem_config)
+    def average_pool_2d(x, output_mem_config, output_dtype=None):
+        out = ttl.tensor.average_pool_2d(x, output_mem_config, output_dtype)
         return out
 
     return average_pool_2d

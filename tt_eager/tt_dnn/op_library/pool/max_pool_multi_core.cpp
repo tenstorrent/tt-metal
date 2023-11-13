@@ -280,6 +280,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
 		                                        .set_page_size(in_scalar_cb_id, in_scalar_cb_pagesize);
     auto in_scalar_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config);
 
+    CircularBufferID raw_in_cb = 0;
     if (input.memory_config().is_sharded()) {
         // incoming data is the input cb instead of raw l1/dram addr
         auto raw_in_cb_id = CB::c_in2;
@@ -290,7 +291,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                                     {{raw_in_cb_id, in_df}})
                                                 .set_page_size(raw_in_cb_id, raw_in_cb_pagesize)
                                                 .set_globally_allocated_address(*input.buffer());
-        auto raw_in_cb = CreateCircularBuffer(program, all_cores, raw_in_cb_config);
+        raw_in_cb = CreateCircularBuffer(program, all_cores, raw_in_cb_config);
     }
 
     // reader output == input to tilize
@@ -635,7 +636,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
     }
 
     auto override_runtime_arguments_callback = [
-            reader_kernel, writer_kernel, cb_sharded_out, ncores, ncores_w
+            reader_kernel, writer_kernel, raw_in_cb, cb_sharded_out, ncores, ncores_w
         ]
     (
         const void* operation,
@@ -645,9 +646,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
         const std::vector<Tensor>& output_tensors
     ) {
         auto src_buffer = input_tensors.at(0).buffer();
+        bool input_sharded = input_tensors.at(0).is_sharded();
 
         auto dst_buffer = output_tensors.at(0).buffer();
-        bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
+        bool out_sharded = output_tensors.at(0).is_sharded();
 
         for (uint32_t i = 0; i < ncores; ++ i) {
             CoreCoord core{i % ncores_w, i / ncores_w };
@@ -663,6 +665,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                 runtime_args[1] = dst_buffer->address();
                 SetRuntimeArgs(program, writer_kernel, core, runtime_args);
             }
+        }
+        if (input_sharded) {
+            auto& raw_in_cb_config = GetCircularBufferConfig(program, raw_in_cb);
+            raw_in_cb_config.set_globally_allocated_address(*src_buffer);
         }
         if (out_sharded) {
             auto& output_cb_config = GetCircularBufferConfig(program, cb_sharded_out);
@@ -1566,7 +1572,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
     }
 
     auto override_runtime_arguments_callback = [
-            reader_kernel, writer_kernel, cb_sharded_out, ncores, ncores_w
+            reader_kernel, writer_kernel, raw_in_cb, cb_sharded_out, ncores, ncores_w
         ]
     (
         const void* operation,
@@ -1576,9 +1582,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
         const std::vector<Tensor>& output_tensors
     ) {
         auto src_buffer = input_tensors.at(0).buffer();
+        bool input_sharded = input_tensors.at(0).is_sharded();
 
         auto dst_buffer = output_tensors.at(0).buffer();
-        bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
+        bool out_sharded = output_tensors.at(0).is_sharded();
 
         for (uint32_t i = 0; i < ncores; ++ i) {
             CoreCoord core{i % ncores_w, i / ncores_w };
@@ -1594,6 +1601,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
                 runtime_args[1] = dst_buffer->address();
                 SetRuntimeArgs(program, writer_kernel, core, runtime_args);
             }
+        }
+        if (input_sharded) {
+            auto& raw_in_cb_config = GetCircularBufferConfig(program, raw_in_cb);
+            raw_in_cb_config.set_globally_allocated_address(*src_buffer);
         }
         if (out_sharded) {
             auto& output_cb_config = GetCircularBufferConfig(program, cb_sharded_out);

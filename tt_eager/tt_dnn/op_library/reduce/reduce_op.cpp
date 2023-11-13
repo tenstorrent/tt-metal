@@ -102,9 +102,9 @@ std::vector<Tensor> Reduce::create_output_tensors(const std::vector<Tensor> &inp
         auto output_shape = this->compute_output_shapes(input_tensors).at(0);
         auto shard_spec = input_tensor.shard_spec().value();
         shard_spec.shard_shape[0] = tt_metal::compute_volume(output_shape) / output_shape[-1];
-        return {create_sharded_device_tensor(output_shape, input_tensor.dtype(), Layout::TILE, input_tensor.device(), this->output_mem_config, shard_spec)};
+        return {create_sharded_device_tensor(output_shape, this->output_dtype, Layout::TILE, input_tensor.device(), this->output_mem_config, shard_spec)};
     } else {
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
+        return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
     }
 }
 
@@ -154,7 +154,7 @@ Tensor reduce_min(const Tensor &input_tensor, ReduceOpDim reduce_dim, float scal
     return min_tensor;
 }
 
-Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim reduce_dim, float scaler, const MemoryConfig& output_mem_config) {
+Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim reduce_dim, float scaler, const MemoryConfig& output_mem_config, const std::optional<DataType>& output_dtype) {
     if ( reduce_math == ReduceOpMath::MIN ) {
         return reduce_min(input_tensor,reduce_dim,scaler,output_mem_config);
     }
@@ -178,10 +178,10 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim 
         if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
             formatted_input_tensor = AutoFormat::format_input_tensor(input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
         }
-        const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, 1.0, output_mem_config}, {formatted_input_tensor}).at(0);
+        const Tensor output_tensor = operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::W, 1.0, output_mem_config, output_dtype.value_or(input_tensor.dtype())}, {formatted_input_tensor}).at(0);
         return operation::run_without_autoformat(Reduce{reduce_math, ReduceOpDim::H, scaler, output_mem_config}, {output_tensor}).at(0);
     } else {
-        return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler, output_mem_config}, {input_tensor}, {}, pad_value).at(0);
+        return operation::run_with_autoformat(Reduce{reduce_math, reduce_dim, scaler, output_mem_config, output_dtype.value_or(input_tensor.dtype())}, {input_tensor}, {}, pad_value).at(0);
     }
 }
 Tensor mean_hw(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {

@@ -35,7 +35,8 @@ struct Reduce {
     const ReduceOpMath math_op;
     const ReduceOpDim dim;
     const float scaler;
-    const MemoryConfig& output_mem_config;
+    const MemoryConfig output_mem_config;
+    const DataType output_dtype;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -46,11 +47,11 @@ struct Reduce {
     static constexpr auto attribute_names = std::make_tuple("math_op", "dim", "scaler", "output_mem_config");
     const auto attribute_values() const {
         return std::make_tuple(
-            std::cref(this->math_op), std::cref(this->dim), std::cref(this->scaler), std::cref(this->output_mem_config));
+            std::cref(this->math_op), std::cref(this->dim), std::cref(this->scaler), std::cref(this->output_mem_config), std::cref(this->output_dtype));
     }
 };
 
-Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim reduce_dim, float scaler = 1.0f, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim reduce_dim, float scaler = 1.0f, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const std::optional<DataType>& output_dtype=std::nullopt);
 Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 Tensor mean(const Tensor& input_tensor, uint aggregate_dims=2, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 Tensor mean_hw(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
