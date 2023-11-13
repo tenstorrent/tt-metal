@@ -100,7 +100,10 @@ int main () {
 
     run_reduce_ops();
 
-    TT_FATAL(tt::tt_metal::program_cache::num_entries() == 6);
+    TT_FATAL(
+        tt::tt_metal::program_cache::num_entries() == 6,
+        "There are {} entries",
+        tt::tt_metal::program_cache::num_entries());
 
     tt::tt_metal::program_cache::disable_and_clear();
 
