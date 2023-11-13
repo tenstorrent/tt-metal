@@ -113,4 +113,33 @@ TEST_F(N300DeviceFixture, ValidateAllEthernetCoreMapping) {
             expected_mapping_logical_to_physical.at(logical_core));
     }
 }
+
+TEST_F(N300DeviceFixture, ValidatePhysicalCoreConversion) {
+    static std::map<CoreCoord, CoreCoord> expected_mapping_logical_to_physical = {
+        {CoreCoord({.x = 0, .y = 0}), CoreCoord({.x = 9, .y = 0})},
+        {CoreCoord({.x = 0, .y = 1}), CoreCoord({.x = 1, .y = 0})},
+        {CoreCoord({.x = 0, .y = 2}), CoreCoord({.x = 8, .y = 0})},
+        {CoreCoord({.x = 0, .y = 3}), CoreCoord({.x = 2, .y = 0})},
+        {CoreCoord({.x = 0, .y = 4}), CoreCoord({.x = 7, .y = 0})},
+        {CoreCoord({.x = 0, .y = 5}), CoreCoord({.x = 3, .y = 0})},
+        {CoreCoord({.x = 0, .y = 6}), CoreCoord({.x = 6, .y = 0})},
+        {CoreCoord({.x = 0, .y = 7}), CoreCoord({.x = 4, .y = 0})},
+        {CoreCoord({.x = 0, .y = 8}), CoreCoord({.x = 9, .y = 6})},
+        {CoreCoord({.x = 0, .y = 9}), CoreCoord({.x = 1, .y = 6})},
+        {CoreCoord({.x = 0, .y = 10}), CoreCoord({.x = 8, .y = 6})},
+        {CoreCoord({.x = 0, .y = 11}), CoreCoord({.x = 2, .y = 6})},
+        {CoreCoord({.x = 0, .y = 12}), CoreCoord({.x = 7, .y = 6})},
+        {CoreCoord({.x = 0, .y = 13}), CoreCoord({.x = 3, .y = 6})},
+        {CoreCoord({.x = 0, .y = 14}), CoreCoord({.x = 6, .y = 6})},
+        {CoreCoord({.x = 0, .y = 15}), CoreCoord({.x = 4, .y = 6})},
+    };
+    const auto& device_0 = this->devices_.at(0);
+    for (const auto& logical_core : device_0->ethernet_cores()) {
+        ASSERT_TRUE(
+            device_0->physical_core_from_logical_core(logical_core, CoreType::ETH) ==
+            expected_mapping_logical_to_physical.at(logical_core));
+    }
+    // Check an invalid core type
+    EXPECT_ANY_THROW(device_0->physical_core_from_logical_core({.x = 0, .y = 0}, CoreType::DRAM));
+}
 }  // namespace unit_tests::multichip::cluster

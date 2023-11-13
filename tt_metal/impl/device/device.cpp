@@ -321,6 +321,14 @@ CoreCoord Device::compute_with_storage_grid_size() const {
     return tt::Cluster::instance().get_soc_desc(id_).compute_with_storage_grid_size;
 }
 
+CoreCoord Device::physical_core_from_logical_core(const CoreCoord &logical_coord, const CoreType &core_type) const {
+    switch (core_type) {
+        case CoreType::ETH: return this->ethernet_core_from_logical_core(logical_coord);
+        case CoreType::WORKER: return this->worker_core_from_logical_core(logical_coord);
+        default: TT_THROW("Undefined conversion for core type.");
+    }
+}
+
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {
     CoreCoord logical_grid_size = this->logical_grid_size();
     TT_ASSERT(

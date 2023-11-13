@@ -14,7 +14,11 @@ namespace tt {
 namespace tt_metal {
 
 void DumpDeviceProfileResults(Device *device, const Program &program) {
-    detail::DumpDeviceProfileResults(device, program.logical_cores());
+    const auto &all_logical_cores = program.logical_cores();
+    if (all_logical_cores.find(CoreType::WORKER) != all_logical_cores.end()) {
+        detail::DumpDeviceProfileResults(device, program.logical_cores().at(CoreType::WORKER));
+    }
+    // TODO: add support for ethernet core device dumps
 }
 
 

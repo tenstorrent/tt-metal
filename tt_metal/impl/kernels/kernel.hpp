@@ -71,6 +71,8 @@ class Kernel {
 
     int get_watcher_kernel_id() { return watcher_kernel_id_; }
 
+    CoreType get_kernel_core_type() const;
+
    protected:
     const int watcher_kernel_id_;
     std::string kernel_path_file_name_;                 // Full kernel path and file name
