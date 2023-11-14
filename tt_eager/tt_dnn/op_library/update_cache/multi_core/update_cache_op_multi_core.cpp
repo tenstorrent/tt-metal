@@ -69,7 +69,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_tiles_per_core;
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.core_coord_in_core_ranges(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
@@ -133,7 +133,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
 
         for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++){
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
-            uint32_t num_tiles_per_core;
+            uint32_t num_tiles_per_core = 0;
             if (core_group_1.core_coord_in_core_ranges(core)) {
                 num_tiles_per_core = num_tiles_per_core_group_1;
             } else if (core_group_2.core_coord_in_core_ranges(core)) {

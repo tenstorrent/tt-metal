@@ -220,7 +220,7 @@ inline vector<uint16_t> gold_bcast_op(
             TT_FATAL(false && "Unexpected broadcast mode in gold_bcast_op");
         }
         float bval = bfloat16(bcast_vals[b_index]).to_float();
-        float result1;
+        float result1 = 0.0f;
         switch (bcast_op) {
             case BcastOp::ADD: result1 = bfloat16(src_vec[offs]).to_float() + bval; break;
             case BcastOp::SUB: result1 = bfloat16(src_vec[offs]).to_float() - bval; break;

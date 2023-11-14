@@ -178,7 +178,7 @@ Tensor transpose(const Tensor &a, std::int64_t dim1, std::int64_t dim2, const Me
         std::swap(normalized_dim1, normalized_dim2);
     }
 
-    TransposeOpDim transpose_dim;
+    TransposeOpDim transpose_dim = TransposeOpDim::NW;
 
     if ( normalized_dim2 == 3 && normalized_dim1 == 0 ) {
         transpose_dim = TransposeOpDim::NW;
