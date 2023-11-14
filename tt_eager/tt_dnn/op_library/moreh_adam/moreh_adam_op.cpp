@@ -83,7 +83,6 @@ operation::ProgramWithCallbacks MorehAdam::create_program(
     const auto& grad = input_tensors.at(1);
     const auto& exp_avg = input_tensors.at(2);
     const auto& exp_avg_sq = input_tensors.at(3);
-
     const auto& max_exp_avg_sq = optional_input_tensors.at(0);
 
     return moreh_adam_(
