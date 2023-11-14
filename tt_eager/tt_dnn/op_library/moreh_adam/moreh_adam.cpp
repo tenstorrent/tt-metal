@@ -63,13 +63,15 @@ operation::ProgramWithCallbacks moreh_adam_(
             {CB::c_in2, 1},        // exp_avg
             {CB::c_in3, 1},        // exp_avg_sq
             {CB::c_in4, 1},        // max_exp_avg_sq (optional)
+            {CB::c_in5, 5},        // lr, beta1, beta2, eps, weight_decay
+            {CB::c_in6, 1},         // 1.0f
 
-            {CB::c_intermed0, 1},        // lr
-            {CB::c_intermed1, 1},        // beta1
-            {CB::c_intermed2, 1},        // beta2
-            {CB::c_intermed3, 1},        // eps
-            {CB::c_intermed4, 1},        // weight_decay
-            {CB::c_intermed5, 1},        // 1
+            {CB::c_intermed0, 1},        // tmp_grad
+            {CB::c_intermed1, 1},        // tmp_exp_avg
+            {CB::c_intermed2, 1},        // tmp_exp_avg_sq
+            {CB::c_intermed3, 1},        // tmp_max_exp_avg_sq
+            {CB::c_intermed4, 1},        //
+            {CB::c_intermed5, 1},        //
             {CB::c_intermed6, 1},        // tmp1
             {CB::c_intermed7, 1},        // tmp2
 
@@ -171,19 +173,18 @@ operation::ProgramWithCallbacks moreh_adam_(
             TT_ASSERT(false, "Core not in specified core ranges.");
         }
         tt::log_info("i = {} -> {}.{}", i, core.x, core.y);
-        tt::log_info("param_addr={}, grad_addr={}, exp_avg_addr={}, exp_avg_sq_addr={}, num_tiles_per_core={}, tile_offset={}",
-            param_addr, grad_addr, exp_avg_addr, exp_avg_sq_addr,
+        tt::log_info("param_addr={}, grad_addr={}, exp_avg_addr={}, exp_avg_sq_addr={} max_exp_avg_sq_addr={}, num_tiles_per_core={}, tile_offset={}",
+            param_addr, grad_addr, exp_avg_addr, exp_avg_sq_addr, max_exp_avg_sq_addr,
             num_tiles_per_core, tile_offset);
 
         const std::vector<uint32_t> reader_runtime_args{
-            param_addr, grad_addr, exp_avg_addr, exp_avg_sq_addr,
+            param_addr, grad_addr, exp_avg_addr, exp_avg_sq_addr, max_exp_avg_sq_addr,
+            f2u_lr.u, f2u_beta1.u, f2u_beta2.u, f2u_eps.u, f2u_weight_decay.u, step, static_cast<uint32_t>(amsgrad),
             num_tiles_per_core, tile_offset};
-            // f2u_lr.u, f2u_beta1.u, f2u_beta2.u, f2u_eps.u, f2u_weight_decay.u, step, static_cast<uint32_t>(amsgrad),
-            // num_tiles_per_core, tile_offset};
         tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args{
-            param_addr, grad_addr, exp_avg_addr, exp_avg_sq_addr,
+            param_addr, exp_avg_addr, exp_avg_sq_addr, max_exp_avg_sq_addr,
             num_tiles_per_core, tile_offset};
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 

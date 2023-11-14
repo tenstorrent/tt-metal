@@ -335,6 +335,10 @@ Device *CreateDevice(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_r
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         detail::GLOBAL_CQ = std::make_unique<CommandQueue>(dev);
+        log_info("TT_METAL_SLOW_DISPATCH_MODE is null");
+    }
+    else {
+        log_info("TT_METAL_SLOW_DISPATCH_MODE is not null");
     }
     return dev;
 }

@@ -455,6 +455,14 @@ ALWI void power_tile_init() {
     MATH(( llk_math_eltwise_unary_sfpu_power_init<APPROX>() ));
 }
 
+ALWI void max_tile(uint32_t idst) {
+    MATH(( llk_math_eltwise_unary_sfpu_max<APPROX, SyncHalf>(idst) ));
+}
+
+ALWI void max_tile_init() {
+    MATH(( llk_math_eltwise_unary_sfpu_max_init<APPROX>() ));
+}
+
 ALWI void get_next_op_info(tt::op_info_t& op_info)
 {
     MATH(( llk_get_next_op_info(op_info) ));

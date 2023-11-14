@@ -16,8 +16,8 @@ from loguru import logger
 @pytest.mark.parametrize(
     "shape",
     (
-        (1, 1, 32 * 2, 32 * 2),  # single tile
-
+        (1, 1, 32, 32),   # singl
+        (12, 6, 64, 64),   # multi tile
     ),
 )
 @skip_for_wormhole_b0
@@ -29,47 +29,57 @@ def test_moreh_adam(shape, device):
     H = shape[2]
     W = shape[3]
 
-    x_data = torch.randn(N * C * H * W).reshape((N, C, H, W)).to(torch.bfloat16)
-    y_data = 2 * x_data + 1
+    x_data = torch.rand((N, C, H, W)).to(torch.bfloat16)
+    y_data = torch.rand((N, C, H, W)).to(torch.bfloat16)
 
-    class LinearRegression(nn.Module):
+    class SimpleModel(nn.Module):
         def __init__(self):
-            super(LinearRegression, self).__init__()
-            self.linear = nn.Linear(64, 64).to(torch.bfloat16)  # 1 입력 피처, 1 출력
+            super(SimpleModel, self).__init__()
+            self.weight = nn.Parameter(torch.randn(N, C, H, W))
 
         def forward(self, x):
-            return self.linear(x)
+            return torch.mul(x, self.weight)
 
-    model = LinearRegression()
-    print("weigth:", model.linear.weight)
-    cpu_exp_avg = torch.zeros_like(model.linear.weight.unsqueeze(0).unsqueeze(0))
-    cpu_exp_avg_sq = torch.zeros_like(model.linear.weight.unsqueeze(0).unsqueeze(0))
+    model = SimpleModel()
+    print("x_data:", x_data)
+    cpu_exp_avg = torch.zeros_like(model.weight)
+    cpu_exp_avg_sq = torch.zeros_like(model.weight)
+    cpu_max_exp_avg_sq = torch.zeros_like(model.weight)
 
     dev_param = ttl.tensor.Tensor(
-        model.linear.weight.reshape(-1).tolist(),
-        (1, 1, *model.linear.weight.shape),
+        model.weight.reshape(-1).tolist(),
+        model.weight.shape,
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(ttl.tensor.Layout.TILE).to(device)
-    print("dev_param:", model.linear.weight)
+
+    print("weigth:", model.weight)
+    print("dev_param:", dev_param)
 
     criterion = nn.L1Loss()
 
-    optimizer = optim.Adam({model.linear.weight}, lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0, amsgrad=False)
+    optimizer = optim.Adam({model.weight}, lr=0.01, betas=(0.8, 0.888), eps=1e-06, weight_decay=0.1, amsgrad=True)
 
     optimizer.zero_grad()
+
+    optimizer_state_dict = optimizer.state_dict()
 
     outputs = model(x_data)
 
     loss = criterion(outputs, y_data)
 
     loss.backward()
-    cpu_grad = model.linear.weight.grad.clone().reshape((N, C, H, W))
-    print("cpu_grad:", cpu_grad.shape)
+
+    print("grad = ", model.weight.grad)
+    cpu_grad = model.weight.grad.clone()
+
+    print("before optimizer_state_dict:", optimizer_state_dict)
+
+    print("cpu_grad:", cpu_grad)
 
     dev_grad = ttl.tensor.Tensor(
         cpu_grad.reshape(-1).tolist(),
-        cpu_grad.shape,
+        model.weight.grad.shape,
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(ttl.tensor.Layout.TILE).to(device)
@@ -88,27 +98,48 @@ def test_moreh_adam(shape, device):
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(ttl.tensor.Layout.TILE).to(device)
 
+    dev_max_exp_avg_sq = ttl.tensor.Tensor(
+        cpu_max_exp_avg_sq.reshape(-1).tolist(),
+        cpu_max_exp_avg_sq.shape,
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+    ).to(ttl.tensor.Layout.TILE).to(device)
+
     optimizer.step()
 
-    print("Updated weigth:", model.linear.weight)
+    optimizer_state_dict = optimizer.state_dict()
 
-    print("dev_param:", dev_param.shape())
-    print("dev_grad:", dev_grad.shape())
-    print("dev_exp_avg:", dev_exp_avg.shape())
-    print("dev_exp_avg_sq:", dev_exp_avg_sq.shape())
 
-    # lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0, amsgrad=False
+    print("")
+    print("")
+    print("after optimizer_state_dict:", optimizer_state_dict)
+    print("Updated weigth:", model.weight)
+    print("")
+    print("", optimizer_state_dict['state'][0]['max_exp_avg_sq'])
+
+    cpu_max_exp_avg_sq_result = optimizer_state_dict['state'][0]['max_exp_avg_sq']
+    dev_max_exp_avg_sq_result = ttl.tensor.Tensor(
+        cpu_max_exp_avg_sq_result.reshape(-1).tolist(),
+        cpu_max_exp_avg_sq_result.shape,
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+    ).to(ttl.tensor.Layout.TILE).to(device)
+    print("dev_max_exp_avg_sq_result:", dev_max_exp_avg_sq_result)
+
     ret_list_ = ttl.operations.primary.moreh_adam(dev_param, dev_grad, dev_exp_avg, dev_exp_avg_sq
-        , 0.001, 0.9, 0.999, 1e-08, 0.0, 0, False)
+        , 0.01, 0.8, 0.888, 1e-06, 0.1, 1, True, dev_max_exp_avg_sq)
 
-    assert dev_param.shape() == list((1, 1, *model.linear.weight.shape))
-    print("Updated param end2")
-    result = dev_param.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
-    print("Updated param end3")
+    assert dev_param.shape() == list(model.weight.shape)
 
-    print("result:", result)
+    param_result = dev_param.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    max_exp_avg_sq_result = dev_max_exp_avg_sq.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    print("param_result:", param_result.shape)
+    print("param_result:", param_result)
 
-    passing, out = comp_pcc(model.linear.weight, result)
+    print("max_exp_avg_sq_result:", max_exp_avg_sq_result.shape)
+    print("max_exp_avg_sq_result:", max_exp_avg_sq_result)
+
+    passing, out = comp_pcc(model.weight, param_result)
     logger.info(f"Out passing={passing}")
     logger.info(f"Output pcc={out}")
     assert passing

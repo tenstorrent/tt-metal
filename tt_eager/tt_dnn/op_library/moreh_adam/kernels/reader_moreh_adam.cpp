@@ -6,7 +6,6 @@
 
 #include "dataflow_api.h"
 #include "debug_print.h"
-#include "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/common.hpp"
 
 void fill_cb_with_value(uint32_t cb_id, uint32_t value) {
     cb_reserve_back(cb_id, 1);
@@ -39,12 +38,9 @@ void kernel_main() {
     constexpr uint32_t cb_id_exp_avg = tt::CB::c_in2;
     constexpr uint32_t cb_id_exp_avg_sq = tt::CB::c_in3;
 
-    constexpr uint32_t cb_id_lr = tt::CB::c_intermed0;
-    constexpr uint32_t cb_id_beta1 = tt::CB::c_intermed1;
-    constexpr uint32_t cb_id_beta2 = tt::CB::c_intermed2;
-    constexpr uint32_t cb_id_eps = tt::CB::c_intermed3;
-    constexpr uint32_t cb_id_weight_decay = tt::CB::c_intermed4;
-    constexpr uint32_t cb_id_one = tt::CB::c_intermed5;
+    // lr, beta1, beta2, eps, weight_decay
+    constexpr uint32_t cb_scalar_args = tt::CB::c_in5;
+    constexpr uint32_t cb_id_one = tt::CB::c_in6;
 
     const uint32_t param_tile_bytes = get_tile_size(cb_id_param);
     const auto param_data_format = get_dataformat(cb_id_param);
@@ -87,11 +83,11 @@ void kernel_main() {
         .bank_base_address = max_exp_avg_sq_addr, .page_size = max_exp_avg_sq_tile_bytes, .data_format = max_exp_avg_sq_data_format};
 #endif
 
-    fill_cb_with_value(cb_id_lr, lr);
-    fill_cb_with_value(cb_id_beta1, beta1);
-    fill_cb_with_value(cb_id_beta2, beta2);
-    fill_cb_with_value(cb_id_eps, eps);
-    fill_cb_with_value(cb_id_weight_decay, weight_decay);
+    fill_cb_with_value(cb_scalar_args, lr);
+    fill_cb_with_value(cb_scalar_args, beta1);
+    fill_cb_with_value(cb_scalar_args, beta2);
+    fill_cb_with_value(cb_scalar_args, eps);
+    fill_cb_with_value(cb_scalar_args, weight_decay);
     union {
         float f;
         uint32_t u;
