@@ -103,6 +103,169 @@ void init_neighbor_core_xy_mapping(CoreCoord grid_size, bool is_twod = false) {
 
 } // namespace untilize_with_halo_helpers
 
+std::vector<uint16_t> get_neighbour_core_send_configs(uint16_t curr_in_start_stick, uint32_t curr_in_end_stick, uint16_t neighbour_req_input_shard_start_stick, uint16_t neighbour_req_input_shard_end_stick) {
+    std::vector<uint16_t> neighbour_send_configs;
+    TT_ASSERT(neighbour_req_input_shard_end_stick >= neighbour_req_input_shard_start_stick);
+    TT_ASSERT(curr_in_end_stick >= curr_in_start_stick);
+    // 4 ways of overlapping
+    if (neighbour_req_input_shard_start_stick >= curr_in_start_stick && neighbour_req_input_shard_start_stick <= curr_in_end_stick) {
+        uint16_t neighbour_send_count_nsticks = curr_in_end_stick - neighbour_req_input_shard_start_stick + 1;
+        uint16_t neighbour_send_dst_offset_nsticks = 0;
+        uint16_t neighbour_send_src_offset_nsticks = neighbour_req_input_shard_start_stick - curr_in_start_stick;
+        neighbour_send_configs = {neighbour_send_count_nsticks, neighbour_send_src_offset_nsticks, neighbour_send_dst_offset_nsticks};
+    } else if (neighbour_req_input_shard_end_stick <= curr_in_end_stick && neighbour_req_input_shard_end_stick >= curr_in_start_stick) {
+        uint16_t neighbour_send_count_nsticks = neighbour_req_input_shard_end_stick - curr_in_start_stick + 1;
+        uint16_t neighbour_send_dst_offset_nsticks = curr_in_start_stick - neighbour_req_input_shard_start_stick;
+        uint16_t neighbour_send_src_offset_nsticks = 0;
+        neighbour_send_configs = {neighbour_send_count_nsticks, neighbour_send_src_offset_nsticks, neighbour_send_dst_offset_nsticks};
+    } else if (neighbour_req_input_shard_start_stick >= curr_in_start_stick && neighbour_req_input_shard_end_stick <= curr_in_end_stick) {
+        uint16_t neighbour_send_count_nsticks = neighbour_req_input_shard_end_stick - neighbour_req_input_shard_start_stick + 1;
+        uint16_t neighbour_send_dst_offset_nsticks = 0;
+        uint16_t neighbour_send_src_offset_nsticks = neighbour_req_input_shard_start_stick - curr_in_start_stick;
+        neighbour_send_configs = {neighbour_send_count_nsticks, neighbour_send_src_offset_nsticks, neighbour_send_dst_offset_nsticks};
+    } else if (neighbour_req_input_shard_start_stick <= curr_in_start_stick && neighbour_req_input_shard_end_stick >= curr_in_end_stick) {
+        uint16_t neighbour_send_count_nsticks = curr_in_end_stick - curr_in_start_stick + 1;
+        uint16_t neighbour_send_dst_offset_nsticks = curr_in_start_stick - neighbour_req_input_shard_start_stick;
+        uint16_t neighbour_send_src_offset_nsticks = 0;
+        neighbour_send_configs = {neighbour_send_count_nsticks, neighbour_send_src_offset_nsticks, neighbour_send_dst_offset_nsticks};
+    }
+    return neighbour_send_configs;
+}
+
+// helper function to increment b,h,w coordinates of tensor
+std::tuple<uint32_t, uint32_t, uint32_t> increment_coordinates(uint32_t b, uint32_t h, uint32_t w, uint32_t in_h, uint32_t in_w) {
+    if (w < in_w - 1) {
+        w++;
+    } else if (h < in_h -1) {
+        w = 0;
+        h++;
+    } else {
+        b++;
+        h = 0;
+        w = 0;
+    }
+    return {b, h, w};
+}
+
+std::vector<UntilizeWithHaloReaderConfigs> get_untilize_with_halo_reader_configs(std::vector<uint16_t> data_indices,
+                                                                                std::vector<uint16_t> data_start_size,
+                                                                                std::vector<uint16_t> pad_start_size,
+                                                                                const uint32_t &num_cores,
+
+                                                                                const uint32_t &in_b,
+                                                                                const uint32_t &in_h,
+                                                                                const uint32_t &in_w,
+                                                                                const uint32_t& pad_h,
+                                                                                const uint32_t& pad_w,
+                                                                                const uint32_t& window_h,
+                                                                                const uint32_t& window_w,
+                                                                                const uint32_t& stride_h,
+                                                                                const uint32_t& stride_w) {
+    std::vector<UntilizeWithHaloReaderConfigs> untilize_with_halo_reader_configs;
+    uint32_t input_flat_height = in_b * in_h * in_w;
+    TT_ASSERT(input_flat_height % num_cores == 0);
+    uint32_t input_shard_height = input_flat_height / num_cores;
+    TT_ASSERT(input_shard_height % TILE_HEIGHT == 0);
+
+    // "out" here refers to the output of the op succeeding untilize with halo
+    uint32_t out_h = ((in_h + (2 * pad_h) - window_h) / stride_h) + 1;
+    uint32_t out_w = ((in_w + (2 * pad_w) - window_w) / stride_w) + 1;
+    uint32_t output_flat_height = in_b * out_h * out_w;
+    TT_ASSERT(output_flat_height % num_cores == 0);
+
+    // Compute output shard size
+    uint32_t output_shard_height = output_flat_height / num_cores;
+
+    // Map output shards to required input
+    uint16_t out_shard_start_stick = 0; // global shard stick index of output of op succeeding untilize with halo op (conv or pool)
+    // the required input shard refers to the outptut shard that untilize with halo will produce
+    std::vector<std::pair<uint16_t, uint16_t>> req_input_shard_start_end; // required input shard i.e. output of untilize with halo
+    for(uint32_t core_i = 0; core_i < num_cores; core_i++) {
+        // output is mapped to top left of input filter window
+        uint16_t req_input_shard_start_stick = data_indices[out_shard_start_stick];
+        uint16_t req_input_shard_end_stick = data_indices[out_shard_start_stick + output_shard_height - 1];
+        // add halo sticks
+        uint16_t halo_nsticks =  ((window_h-1) * in_w) + (window_w-1);
+        req_input_shard_end_stick += halo_nsticks;
+        req_input_shard_start_end.push_back({req_input_shard_start_stick, req_input_shard_end_stick});
+        out_shard_start_stick += output_shard_height;
+    }
+
+    uint16_t input_padded_shard_start_stick = 0;
+    uint16_t padded_input_stick = 0;
+    uint16_t pad_start_size_array_idx = 0;
+    uint16_t data_start_size_array_idx = 0;
+    uint32_t b = 0;
+    uint32_t h = 0;
+    uint32_t w = 0;
+    // Add halo and calculate left and right data shuffling given required input shard
+    for(uint32_t core_i = 0; core_i < num_cores; core_i++) {
+        // determine # of padded sticks
+        // TODO: move code to determine pad to op tracing
+
+        uint16_t input_shard_local_nsticks = 0;
+        uint16_t pad_nsticks = 0;
+        while (input_shard_local_nsticks < input_shard_height) {
+            if (h < pad_h || h >= in_h + pad_h || w < pad_w || w >= in_w + pad_w) {
+                pad_nsticks++;
+            } else {
+                input_shard_local_nsticks++;
+            }
+            std::tie(b, h, w) = increment_coordinates(b, h, w, in_h, in_w);
+        }
+        uint16_t padded_input_shard_nsticks = input_shard_local_nsticks + pad_nsticks;
+
+        // TODO
+        std::vector<uint16_t> local_data_start_size;
+        uint16_t local_data_write_offset;
+        std::vector<uint16_t> pad_start_size;
+
+        // Done
+        std::vector<uint32_t> left_left_send_configs;
+        std::vector<uint32_t> left_send_configs;
+        std::vector<uint32_t> right_send_configs;
+        std::vector<uint32_t> right_right_send_configs;
+        if (core_i >= 2) {
+            left_left_send_configs = get_neighbour_core_send_configs(
+                input_padded_shard_start_stick,
+                input_padded_shard_start_stick + padded_input_shard_nsticks - 1,
+                req_input_shard_start_end[core_i-2].first,
+                req_input_shard_start_end[core_i-2].second);
+        }
+        if (core_i >= 1) {
+            left_send_configs = get_neighbour_core_send_configs(
+                input_padded_shard_start_stick,
+                input_padded_shard_start_stick + padded_input_shard_nsticks - 1,
+                req_input_shard_start_end[core_i-1].first,
+                req_input_shard_start_end[core_i-1].second);
+        }
+        if (core_i < num_cores-2) {
+            right_right_send_configs = get_neighbour_core_send_configs(
+                input_padded_shard_start_stick,
+                input_padded_shard_start_stick + padded_input_shard_nsticks - 1,
+                req_input_shard_start_end[core_i+2].first,
+                req_input_shard_start_end[core_i+2].second);
+        }
+        if (core_i < num_cores-1) {
+            right_send_configs = get_neighbour_core_send_configs(
+                input_padded_shard_start_stick,
+                input_padded_shard_start_stick + padded_input_shard_nsticks - 1,
+                req_input_shard_start_end[core_i+1].first,
+                req_input_shard_start_end[core_i+1].second);
+        }
+        uint16_t req_input_shard_start_stick = req_input_shard_start_end[core_i].first;
+        uint16_t req_input_shard_end_stick = req_input_shard_start_end[core_i].first;
+        // Determine local data configs
+
+        // Determine pad data configs
+
+        untilize_with_halo_reader_configs.push_back(UntilizeWithHaloReaderConfigs{local_data_start_size, local_data_write_offset, pad_start_size,
+                                                left_left_send_configs, left_send_configs, right_send_configs, right_right_send_configs});
+        input_padded_shard_start_stick += padded_input_shard_nsticks;
+    }
+    return untilize_with_halo_reader_configs;
+}
+
 // The case of stride = 2
 operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& input, Tensor& output, uint32_t pad_val, uint32_t in_b, uint32_t in_h, uint32_t in_w, uint32_t max_out_nsticks_per_core, const PoolConfig& pc) {
     Program program = Program();

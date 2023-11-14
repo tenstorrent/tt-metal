@@ -74,6 +74,27 @@ struct UntilizeWithHalo {
 };
 Tensor untilize_with_halo(const Tensor &a, const uint32_t pad_val, const uint32_t &in_b, const uint32_t &in_h, const uint32_t &in_w, const uint32_t stride = 1, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+struct UntilizeWithHaloReaderConfigs{
+    std::vector<uint16_t> local_data_start_size;
+    uint16_t local_data_write_offset;
+    std::vector<uint16_t> pad_start_size;
+    std::vector<uint32_t> left_left_send_configs;
+    std::vector<uint32_t> left_send_configs;
+    std::vector<uint32_t> right_send_configs;
+    std::vector<uint32_t> right_right_send_configs;
+};
+std::vector<UntilizeWithHaloReaderConfigs> get_untilize_with_halo_reader_configs(std::vector<uint16_t> data_indices_full,
+                                                                                const uint32_t &num_cores,
+                                                                                // TODO: put below in a struct
+                                                                                const uint32_t &in_b,
+                                                                                const uint32_t &in_h,
+                                                                                const uint32_t &in_w,
+                                                                                const uint32_t& pad_h,
+                                                                                const uint32_t& pad_w,
+                                                                                const uint32_t& window_h,
+                                                                                const uint32_t& window_w,
+                                                                                const uint32_t& stride_h,
+                                                                                const uint32_t& stride_w);
 namespace untilize_helpers {
 uint32_t get_num_cores(CoreCoord grid_size, uint32_t nblocks);
 }
