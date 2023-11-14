@@ -8,6 +8,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/llrt/rtoptions.hpp"
 
 using namespace tt::tt_metal;
 class CommandQueueFixture : public ::testing::Test {
@@ -33,4 +34,53 @@ class CommandQueueFixture : public ::testing::Test {
     void TearDown() override {
         tt::tt_metal::CloseDevice(this->device_);
     }
+};
+
+
+// A version of CommandQueueFixture with DPrint enabled on the first core.
+class CommandQueueWithDPrintFixture: public CommandQueueFixture {
+public:
+    inline static const string dprint_file_name = "gtest_dprint_log.txt";
+protected:
+    void SetUp() override {
+        // Set DPrint options: For now print from the first core only, and send
+        // output to a file to the test can check after the program is run.
+        tt::llrt::OptionsG.set_dprint_core_range({{1, 1}});
+        tt::llrt::OptionsG.set_dprint_file_name(dprint_file_name);
+
+        // DPrint currently not supported for N300, so skip these tests for
+        // now. Seeing some hanging in device setup with DPrint enabled on N300
+        // so skip before creating the device.
+        // TODO: remove this once N300 DPrint is working.
+        auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        auto num_devices = tt::tt_metal::Device::detect_num_available_devices();
+        auto num_pci_devices = tt::tt_metal::Device::detect_num_pci_devices();
+        if (arch == tt::ARCH::WORMHOLE_B0 and
+            num_devices == 2 and
+            num_pci_devices == 1) {
+            tt::log_info(tt::LogTest, "DPrint tests skipped on N300 for now.");
+            test_skipped = true;
+            GTEST_SKIP();
+        }
+
+        // Parent call, sets up the device
+        this->CommandQueueFixture::SetUp();
+
+    }
+
+    void TearDown() override {
+        if (!test_skipped) {
+            this->CommandQueueFixture::TearDown();
+            // Remove the DPrint output file after the test is finished.
+            std::remove(dprint_file_name.c_str());
+        }
+
+        // Reset DPrint settings
+        tt::llrt::OptionsG.set_dprint_core_range({});
+        tt::llrt::OptionsG.set_dprint_file_name("");
+    }
+
+    // A flag to mark if the test is skipped or not. Since we skip before
+    // device setup, we need to skip device teardown if the test is skipped.
+    bool test_skipped = false;
 };
