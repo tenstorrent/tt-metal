@@ -29,6 +29,12 @@ def test_moreh_adam(shape, device):
     H = shape[2]
     W = shape[3]
 
+    lr = 0.01
+    betas = (0.8, 0.888)
+    eps = 1e-06
+    weight_decay = 0.1
+    amsgrad=False
+
     x_data = torch.rand((N, C, H, W)).to(torch.bfloat16)
     y_data = torch.rand((N, C, H, W)).to(torch.bfloat16)
 
@@ -74,7 +80,7 @@ def test_moreh_adam(shape, device):
     ).to(ttl.tensor.Layout.TILE).to(device)
 
     criterion = nn.L1Loss()
-    optimizer = optim.Adam({model.weight}, lr=0.01, betas=(0.8, 0.888), eps=1e-06, weight_decay=0.1, amsgrad=True)
+    optimizer = optim.Adam({model.weight}, lr=lr, betas=betas, eps=eps, weight_decay=weight_decay, amsgrad=amsgrad)
     optimizer.zero_grad()
     optimizer_state_dict = optimizer.state_dict()
     outputs = model(x_data)
@@ -94,17 +100,23 @@ def test_moreh_adam(shape, device):
 
     cpu_exp_avg_result = optimizer_state_dict['state'][0]['exp_avg']
     cpu_exp_avg_sq_result = optimizer_state_dict['state'][0]['exp_avg_sq']
-    cpu_max_exp_avg_sq_result = optimizer_state_dict['state'][0]['max_exp_avg_sq']
+    if 'max_exp_avg_sq' in optimizer_state_dict['state'][0]:
+        cpu_max_exp_avg_sq_result = optimizer_state_dict['state'][0]['max_exp_avg_sq']
+    else:
+        cpu_max_exp_avg_sq_result = None
 
     ret_list_ = ttl.operations.primary.moreh_adam(dev_param, dev_grad, dev_exp_avg, dev_exp_avg_sq
-        , 0.01, 0.8, 0.888, 1e-06, 0.1, 1, True, dev_max_exp_avg_sq)
+        , lr, betas[0], betas[1], eps, weight_decay, 1, amsgrad, dev_max_exp_avg_sq)
 
     assert dev_param.shape() == list(model.weight.shape)
 
     param_result = dev_param.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
     exp_avg_result = dev_exp_avg.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
     exp_avg_sq_result = dev_exp_avg_sq.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
-    max_exp_avg_sq_result = dev_max_exp_avg_sq.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    if 'max_exp_avg_sq' in optimizer_state_dict['state'][0]:
+        max_exp_avg_sq_result = dev_max_exp_avg_sq.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    else:
+        max_exp_avg_sq_result = None
 
     passing, out = comp_pcc(model.weight, param_result)
     logger.info(f"Out passing (param)={passing}")
@@ -118,7 +130,8 @@ def test_moreh_adam(shape, device):
     logger.info(f"Out passing (exp_avg_sq)={passing}")
     logger.info(f"Output pcc={out}")
 
-    passing, out = comp_pcc(cpu_max_exp_avg_sq_result, max_exp_avg_sq_result)
-    logger.info(f"Out passing (max_exp_avg_sq)={passing}")
-    logger.info(f"Output pcc={out}")
+    if 'max_exp_avg_sq' in optimizer_state_dict['state'][0]:
+        passing, out = comp_pcc(cpu_max_exp_avg_sq_result, max_exp_avg_sq_result)
+        logger.info(f"Out passing (max_exp_avg_sq)={passing}")
+        logger.info(f"Output pcc={out}")
     assert passing
