@@ -83,7 +83,7 @@ struct CoreRange {
             "Invalid core range for start: {}, end: {}", start.str(), end.str());
     }
 
-    std::optional<CoreRange> intersects ( const CoreRange & other ) const
+    inline std::optional<CoreRange> intersects ( const CoreRange & other ) const
     {
         std::size_t x1 = std::max(this->start.x, other.start.x);
         std::size_t y1 = std::max(this->start.y, other.start.y);
@@ -95,7 +95,7 @@ struct CoreRange {
         return {};
     }
 
-    bool adjacent ( const CoreRange & other ) const
+    inline bool adjacent ( const CoreRange & other ) const
     {
         std::size_t x1 = std::max(this->start.x, other.start.x);
         std::size_t y1 = std::max(this->start.y, other.start.y);
@@ -104,7 +104,7 @@ struct CoreRange {
         return ( (x2 + 1 == x1 && y1 <= y2) || (y2 + 1 == y1 && x1 <= x2) );
     }
 
-    bool contains ( const CoreRange & other ) const
+    inline bool contains ( const CoreRange & other ) const
     {
         return (other.start.x >= this->start.x ) &&
                (other.end.x <= this->end.x) &&
@@ -319,7 +319,7 @@ class CoreRangeSet {
       return this->merge (s.ranges());
     }
 
-    bool core_coord_in_core_ranges(const CoreCoord &core_coord) const {
+    inline bool core_coord_in_core_ranges(const CoreCoord &core_coord) const {
       ZoneScoped;
       for (const auto & cr : this->ranges_) {
         bool in_x_range = (core_coord.x >= cr.start.x) and (core_coord.x <= cr.end.x);
@@ -331,7 +331,7 @@ class CoreRangeSet {
       return false;
     }
 
-    bool intersects ( const CoreRange & cr) const{
+    inline bool intersects ( const CoreRange & cr) const{
       for (const auto & local_cr : this->ranges_) {
         if ( local_cr.intersects(cr) ) return true;
       }
