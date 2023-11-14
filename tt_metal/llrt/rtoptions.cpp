@@ -9,6 +9,9 @@
 #include <cstring>
 
 #include "rtoptions.hpp"
+#include "tt_debug_print_server.hpp"
+
+using std::vector;
 
 namespace tt {
 
@@ -36,6 +39,113 @@ RunTimeOptions::RunTimeOptions() : watcher_interval_ms(0), watcher_dump_all(fals
     if (watcher_dump_all_str != nullptr) {
         watcher_dump_all = true;
     }
+
+
+    ParseDPrintEnv();
+}
+
+void RunTimeOptions::ParseDPrintEnv() {
+    ParseDPrintCoreRange("TT_METAL_DPRINT_CORES");
+    ParseDPrintChipIds("TT_METAL_DPRINT_CHIPS");
+    ParseDPrintRiscvMask("TT_METAL_DPRINT_RISCVS");
+    ParseDPrintFileName("TT_METAL_DPRINT_FILE");
+};
+
+void RunTimeOptions::ParseDPrintCoreRange(const char* env_var) {
+    char *str = std::getenv(env_var);
+    vector<CoreCoord> cores;
+    if (str != nullptr) {
+        if (isdigit(str[0])) {
+            // Assume this is a single core
+            uint32_t x, y;
+            if (sscanf(str, "%d,%d", &x, &y) != 2) {
+                TT_THROW("Invalid {}", env_var);
+            }
+            cores.push_back({x, y});
+        } else if (str[0] == '(') {
+            if (strchr(str, '-')) {
+                // Assume this is a range
+                CoreCoord start, end;
+                if (sscanf(str, "(%zu,%zu)", &start.x, &start.y) != 2) {
+                    TT_THROW("Invalid {}", env_var);
+                }
+                str = strchr(str, '-');
+                if (sscanf(str, "-(%zu,%zu)", &end.x, &end.y) != 2) {
+                    TT_THROW("Invalid {}", env_var);
+                }
+                for (uint32_t x = start.x; x <= end.x; x++) {
+                    for (uint32_t y = start.y; y <= end.y; y++) {
+                        cores.push_back({x, y});
+                    }
+                }
+            } else {
+                // Assume this is a list of coordinates (maybe just one)
+                while (str != nullptr) {
+                    uint32_t x, y;
+                    if (sscanf(str, "(%d,%d)", &x, &y) != 2) {
+                        TT_THROW("Invalid {}", env_var);
+                    }
+                    cores.push_back({x, y});
+                    str = strchr(str, ',');
+                    str = strchr(str+1, ',');
+                    if (str != nullptr) str++;
+                }
+            }
+        } else {
+            TT_THROW("Invalid {}", env_var);
+        }
+    }
+
+    // Set the core range, whether or not dprint is enabled depends on whether this is empty.
+    dprint_core_range = cores;
+}
+
+void RunTimeOptions::ParseDPrintChipIds(const char* env_var) {
+    vector<int> chips;
+    char *env_var_str = std::getenv(env_var);
+
+    // If the environment variable is not empty, parse it.
+    while (env_var_str != nullptr) {
+        uint32_t chip;
+        if (sscanf(env_var_str, "%d", &chip) != 1) {
+            TT_THROW("Invalid {}", env_var_str);
+        }
+        chips.push_back(chip);
+        env_var_str = strchr(env_var_str, ',');
+        if (env_var_str != nullptr) env_var_str++;
+    }
+
+    // Default is no chips are specified is chip 0.
+    if (chips.size() == 0)
+        chips.push_back(0);
+    dprint_chip_ids = chips;
+}
+
+void RunTimeOptions::ParseDPrintRiscvMask(const char* env_var) {
+    // Default is all RISCVs enabled for printing.
+    uint32_t riscv_mask = DPRINT_RISCV_BR | DPRINT_RISCV_TR0 | DPRINT_RISCV_TR1 | DPRINT_RISCV_TR2 | DPRINT_RISCV_NC;
+    char *env_var_str = std::getenv(env_var);
+    if (env_var_str != nullptr) {
+        if (strcmp(env_var_str, "BR") == 0) {
+            riscv_mask = DPRINT_RISCV_BR;
+        } else if (strcmp(env_var_str, "NC") == 0) {
+            riscv_mask = DPRINT_RISCV_NC;
+        } else if (strcmp(env_var_str, "TR0") == 0) {
+            riscv_mask = DPRINT_RISCV_TR0;
+        } else if (strcmp(env_var_str, "TR1") == 0) {
+            riscv_mask = DPRINT_RISCV_TR1;
+        } else if (strcmp(env_var_str, "TR2") == 0) {
+            riscv_mask = DPRINT_RISCV_TR2;
+        } else {
+            TT_THROW("Invalid TT_DEBUG_PRINT_RISCV");
+        }
+    }
+    dprint_riscv_mask = riscv_mask;
+}
+
+void RunTimeOptions::ParseDPrintFileName(const char* env_var) {
+    char *env_var_str = std::getenv(env_var);
+    dprint_file_name = (env_var_str != nullptr)? std::string(env_var_str) : "";
 }
 
 } // namespace llrt

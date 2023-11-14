@@ -14,12 +14,14 @@
 
 #include "tt_debug_print_server.hpp"
 #include "tt_cluster.hpp"
+#include "rtoptions.hpp"
 
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/debug_print_common.h"
 
 using std::uint32_t;
 using std::int32_t;
+using std::string;
 using std::cout;
 using std::endl;
 using std::setw;
@@ -72,7 +74,11 @@ struct DebugPrintServerContext {
     static DebugPrintServerContext* inst;
     static bool ProfilerIsRunning;
 
-    DebugPrintServerContext(vector<int> chip_ids, const vector<CoreCoord>& cores, uint32_t hart_mask, const char* filename
+    DebugPrintServerContext(
+        vector<int> chip_ids,
+        const vector<CoreCoord>& cores,
+        uint32_t hart_mask,
+        string file_name
     ) {
         TT_ASSERT(inst == nullptr);
         inst = this;
@@ -82,8 +88,8 @@ struct DebugPrintServerContext {
         hart_mask_ = hart_mask;
 
         // the stream is shared between threads
-        if (filename != nullptr) {
-            outfile_ = new std::ofstream(filename);
+        if (file_name != "") {
+            outfile_ = new std::ofstream(file_name);
         }
         stream_ = outfile_ ? outfile_ : &cout;
 
@@ -456,100 +462,10 @@ bool tt_is_print_server_running()
     return DebugPrintServerContext::inst != nullptr;
 }
 
-static vector<CoreCoord> parse_core_range_env(const char* envvar)
-{
-    char *str = std::getenv(envvar);
-    vector<CoreCoord> cores;
-    if (str != nullptr) {
-        if (isdigit(str[0])) {
-            // Assume this is a single core
-            uint32_t x, y;
-            if (sscanf(str, "%d,%d", &x, &y) != 2) {
-                TT_THROW("Invalid {}", envvar);
-            }
-            cores.push_back({x, y});
-        } else if (str[0] == '(') {
-            if (strchr(str, '-')) {
-                // Assume this is a range
-                CoreCoord start, end;
-                if (sscanf(str, "(%zu,%zu)", &start.x, &start.y) != 2) {
-                    TT_THROW("Invalid {}", envvar);
-                }
-                str = strchr(str, '-');
-                if (sscanf(str, "-(%zu,%zu)", &end.x, &end.y) != 2) {
-                    TT_THROW("Invalid {}", envvar);
-                }
-                for (uint32_t x = start.x; x <= end.x; x++) {
-                    for (uint32_t y = start.y; y <= end.y; y++) {
-                        cores.push_back({x, y});
-                    }
-                }
-            } else {
-                // Assume this is a list of coordinates (maybe just one)
-                while (str != nullptr) {
-                    uint32_t x, y;
-                    if (sscanf(str, "(%d,%d)", &x, &y) != 2) {
-                        TT_THROW("Invalid {}", envvar);
-                    }
-                    cores.push_back({x, y});
-                    str = strchr(str, ',');
-                    str = strchr(str+1, ',');
-                    if (str != nullptr) str++;
-                }
-            }
-        } else {
-            TT_THROW("Invalid {}", envvar);
-        }
-    }
-
-    return cores;
-}
-
-static vector<int> parse_chip_list_env(const char* envvar)
-{
-    vector<int> chips;
-    char *str = std::getenv(envvar);
-    while (str != nullptr) {
-        uint32_t chip;
-        if (sscanf(str, "%d", &chip) != 1) {
-            TT_THROW("Invalid {}", envvar);
-        }
-        chips.push_back(chip);
-        str = strchr(str, ',');
-        if (str != nullptr) str++;
-    }
-
-    return chips;
-}
-
 // The print server is not valid without alive Cluster and tt_device
 void tt_start_debug_print_server()
 {
-    if (getenv("TT_METAL_DPRINT_CORES") != nullptr) {
-        vector<CoreCoord> cores = parse_core_range_env("TT_METAL_DPRINT_CORES");
-        vector<int> chip_ids = parse_chip_list_env("TT_METAL_DPRINT_CHIPS");
-        if (chip_ids.size() == 0) {
-            chip_ids.push_back(0);
-        }
-        auto riscv_mask = DPRINT_RISCV_BR | DPRINT_RISCV_TR0 | DPRINT_RISCV_TR1 | DPRINT_RISCV_TR2 | DPRINT_RISCV_NC;
-        char *dbg_riscvs = std::getenv("TT_METAL_DPRINT_RISCVS");
-        if (dbg_riscvs != nullptr) {
-            if (strcmp(dbg_riscvs, "BR") == 0) {
-                riscv_mask = DPRINT_RISCV_BR;
-            } else if (strcmp(dbg_riscvs, "NC") == 0) {
-                riscv_mask = DPRINT_RISCV_NC;
-            } else if (strcmp(dbg_riscvs, "TR0") == 0) {
-                riscv_mask = DPRINT_RISCV_TR0;
-            } else if (strcmp(dbg_riscvs, "TR1") == 0) {
-                riscv_mask = DPRINT_RISCV_TR1;
-            } else if (strcmp(dbg_riscvs, "TR2") == 0) {
-                riscv_mask = DPRINT_RISCV_TR2;
-            } else {
-                TT_THROW("Invalid TT_DEBUG_PRINT_RISCV");
-            }
-        }
-        char *db_file = std::getenv("TT_METAL_DPRINT_FILE");
-
+    if (tt::llrt::OptionsG.get_dprint_enabled()) {
         TT_FATAL(DebugPrintServerContext::inst == nullptr, "Multiple print servers not allowed");
         TT_FATAL(DebugPrintServerContext::ProfilerIsRunning == false, "Device side profiler is running, cannot start print server");
 
@@ -558,6 +474,11 @@ void tt_start_debug_print_server()
         // Using an invalid core can hang the chip, sanitize
         // TODO(PGK)
 
-        DebugPrintServerContext* ctx = new DebugPrintServerContext(chip_ids, cores, riscv_mask, db_file);
+        DebugPrintServerContext* ctx = new DebugPrintServerContext(
+            tt::llrt::OptionsG.get_dprint_chip_ids(),
+            tt::llrt::OptionsG.get_dprint_core_range(),
+            tt::llrt::OptionsG.get_dprint_riscv_mask(),
+            tt::llrt::OptionsG.get_dprint_file_name()
+        );
     }
 }

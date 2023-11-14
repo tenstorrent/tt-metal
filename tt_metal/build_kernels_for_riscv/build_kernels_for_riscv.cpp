@@ -14,6 +14,7 @@
 #include "dev_mem_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "tools/profiler/profiler_state.hpp"
+#include "llrt/rtoptions.hpp"
 
 #include "noc/noc_parameters.h"
 
@@ -308,7 +309,7 @@ struct CompileState {
         if (std::getenv("TT_METAL_WATCHER") != nullptr) {
             result += " -DWATCHER_ENABLED";
         }
-        if (std::getenv("TT_METAL_DPRINT_CORES") != nullptr) {
+        if (tt::llrt::OptionsG.get_dprint_enabled()) {
             if (profile_kernel) {
                 TT_THROW("Cannot enable debug printing and profiling");
             }
