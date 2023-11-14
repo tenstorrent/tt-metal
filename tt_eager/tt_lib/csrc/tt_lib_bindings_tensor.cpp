@@ -444,6 +444,18 @@ void TensorModule(py::module &m_tensor) {
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
 
     )doc");
+
+    m_tensor.def("split_dim_two_chunks_tiled", &split_dim_two_chunks_tiled, py::arg("input").noconvert(), py::arg("dim").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        Splits a tensor's last or penultimate dimension in two equal sized chunks. This assumes the last dim is tile sized and penultimate dimension is also tile sized.
+
+        .. csv-table::
+            :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+            "input", "Input tensor", "Tensor", "Tensor of shape [W0, Z0, Y0, X0]", "Yes"
+            "dim", "Dimension", "integer", "Dimension to split over can only be 2 or 3", "Yes"
+            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+    )doc");
+
     m_tensor.def("convert_conv_weight_tensor_to_tiled_layout", &convert_conv_weight_tensor_to_tiled_layout,
         py::arg("conv_weight_tensor").noconvert(), py::arg("in1_block_h"), py::arg("in1_block_w"), py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
         Converts convolution weights to 2d matrix tiled layout on host
