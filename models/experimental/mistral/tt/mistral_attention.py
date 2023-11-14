@@ -143,11 +143,13 @@ class TtAttention(nn.Module):
 
         xq = torch_to_tt_tensor_rm(xq, self.device)
         query = tt_lib.tensor.transpose(xq, 1, -2)
+        xq.deallocate()
         key = tt_lib.tensor.transpose(key, 1, -2)
         value = tt_lib.tensor.transpose(value, 1, -2)
 
         key = tt_lib.tensor.transpose(key, -2, -1)
         scores = tt_lib.tensor.bmm(query, key)
+        key.deallocate()
         scores = tt_lib.tensor.mul_unary(scores, self.scale)
 
         scores = tt_to_torch_tensor(scores)
@@ -166,6 +168,8 @@ class TtAttention(nn.Module):
 
         output = tt_lib.tensor.bmm(scores, value)  # (bs, n_local_heads, slen, head_dim)
 
+        value.deallocate()
+        scores.deallocate()
         output = tt_lib.tensor.transpose(output, 1, -2)
 
         output = fallback_ops.reshape(output, 1, bsz, seqlen, -1)
@@ -288,23 +292,31 @@ def apply_rotary_emb_type2(
     t_one = tt_lib.tensor.ones_like(xq.real)
     bcast_freq_re = tt_lib.tensor.bcast(t_one, freqs_cis.real, BCMUL, BCH)
     bcast_freq_im = tt_lib.tensor.bcast(t_one, freqs_cis.imag, BCMUL, BCH)
+    t_one.deallocate()
     bcast_freq = tt_lib.tensor.complex_tensor(bcast_freq_re, bcast_freq_im)
+    bcast_freq_re.deallocate()
+    bcast_freq_im.deallocate()
     xq_out = tt_lib.tensor.complex_mul(
         xq,
         bcast_freq,
         tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
     )
-
+    bcast_freq.deallocate()
     t_one = tt_lib.tensor.ones_like(xk.real)
     bcast_freq_re = tt_lib.tensor.bcast(t_one, freqs_cis.real, BCMUL, BCH)
     bcast_freq_im = tt_lib.tensor.bcast(t_one, freqs_cis.imag, BCMUL, BCH)
+    t_one.deallocate()
     bcast_freq = tt_lib.tensor.complex_tensor(bcast_freq_re, bcast_freq_im)
+    bcast_freq_re.deallocate()
+    bcast_freq_im.deallocate()
+    freqs_cis.deallocate()
     xk_out = tt_lib.tensor.complex_mul(
         xk,
         bcast_freq,
         tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
     )
 
+    bcast_freq.deallocate()
     xq_out = tt_lib.tensor.concat([xq_out.real, xq_out.imag], -1)
     xk_out = tt_lib.tensor.concat([xk_out.real, xk_out.imag], -1)
     xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
