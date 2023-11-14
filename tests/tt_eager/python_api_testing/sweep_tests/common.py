@@ -493,6 +493,7 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
         else:
             raise NotImplementedError("Method {method} is not a valid choice")
 
+
 def set_dispatch_mode(set_var):
     if set_var:
         dispatch = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)

@@ -164,6 +164,8 @@ Tensor lerp(const Tensor& input_a, const Tensor& input_b, const Tensor& input_c,
 //hypot(a,b) = sqrt[ a^2 + b^2 ]
 Tensor hypot(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor scatter(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 //threshold(a,t,v) = (a < t)*v + (a > t)*a
 Tensor threshold(const Tensor &input_a,float threshold, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
@@ -247,12 +249,6 @@ Tensor acosh(const Tensor& input_a, const MemoryConfig& output_mem_config = oper
 
 //nextafter
 Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-//binary assign
-Tensor assign(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-//unary assign
-Tensor assign(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //atanh[x] = 0.5 * ln((1 + x) / (1 - x))
 Tensor atanh(const Tensor& input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);

@@ -97,6 +97,11 @@ def hypot(x, y, *args, **kwargs):
     return torch.hypot(x, y)
 
 
+def scatter(x, y, *args, **kwargs):
+    y[:, :, : x.shape[-2], : x.shape[-1]] = x
+    return y
+
+
 def cbrt(x, *args, **kwargs):
     result = x.sign() * x.abs().pow(1.0 / 3.0)
     return result

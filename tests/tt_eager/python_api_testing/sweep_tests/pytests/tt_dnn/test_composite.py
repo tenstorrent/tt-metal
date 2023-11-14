@@ -111,6 +111,7 @@ if is_wormhole_b0():
                 "multigammaln",
                 "polygamma",
                 "nextafter",
+                "scatter",
             ),
             shapes,
         )
@@ -173,6 +174,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
         num_inputs = 3
     elif fn in [
         "hypot",
+        "scatter",
         "min",
         "max",
         "lerp_binary",
