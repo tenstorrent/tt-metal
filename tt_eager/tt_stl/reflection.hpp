@@ -47,19 +47,115 @@ namespace reflection {
 
 using AttributeName = std::variant<const char*, std::string>;
 
-struct Attribute {
-    const std::function<std::string()> to_string;
-    const std::function<hash::hash_t()> to_hash;
+struct Attribute final {
+    static constexpr std::size_t ALIGNMENT = 32;
+    using storage_t = std::array<std::byte, 256>;
 
-    template <typename T>
-    Attribute(const T& value) :
-        to_string([value] { return fmt::format("{}", value); }),
-        to_hash([value] { return hash::hash_object(value); }) {}
+    const std::string to_string() const { return this->implementations.to_string_impl_(this->type_erased_storage); }
+    const std::size_t to_hash() const { return this->implementations.to_hash_impl_(this->type_erased_storage); }
+
+    template <typename Type, typename BaseType = std::decay_t<Type>>
+    Attribute(Type&& object) :
+        pointer{new(&type_erased_storage) BaseType{std::forward<Type>(object)}},
+        delete_storage{[](storage_t& self) { reinterpret_cast<BaseType*>(&self)->~BaseType(); }},
+        copy_storage{[](storage_t& self, const void* other) -> void* {
+            if constexpr (std::is_copy_constructible_v<BaseType>) {
+                return new (&self) BaseType{*reinterpret_cast<const BaseType*>(other)};
+            } else {
+                static_assert(tt::stl::concepts::always_false_v<BaseType>);
+            }
+        }},
+        move_storage{[](storage_t& self, void* other) -> void* {
+            if constexpr (std::is_move_constructible_v<BaseType>) {
+                return new (&self) BaseType{*reinterpret_cast<BaseType*>(other)};
+            } else {
+                static_assert(tt::stl::concepts::always_false_v<BaseType>);
+            }
+        }},
+
+        implementations{
+            .to_string_impl_ = [](const storage_t& storage) -> const std::string {
+                const auto& object = *reinterpret_cast<const BaseType*>(&storage);
+                return fmt::format("{}", object);
+            },
+            .to_hash_impl_ = [](const storage_t& storage) -> const std::size_t {
+                const auto& object = *reinterpret_cast<const BaseType*>(&storage);
+                return hash::hash_object(object);
+            }} {
+        static_assert(sizeof(BaseType) <= sizeof(storage_t));
+        static_assert(ALIGNMENT % alignof(BaseType) == 0);
+    }
+
+    void destruct() noexcept {
+        if (this->pointer) {
+            this->delete_storage(this->type_erased_storage);
+        }
+        this->pointer = nullptr;
+    }
+
+    Attribute(const Attribute& other) :
+        pointer{other.pointer ? other.copy_storage(this->type_erased_storage, other.pointer) : nullptr},
+        delete_storage{other.delete_storage},
+        copy_storage{other.copy_storage},
+        move_storage{other.move_storage},
+        implementations{other.implementations} {}
+
+    Attribute& operator=(const Attribute& other) {
+        if (other.pointer != this->pointer) {
+            this->destruct();
+            this->pointer = nullptr;
+            if (other.pointer) {
+                this->pointer = other.copy_storage(this->type_erased_storage, other.pointer);
+            }
+            this->delete_storage = other.delete_storage;
+            this->copy_storage = other.copy_storage;
+            this->move_storage = other.move_storage;
+            this->implementations = implementations;
+        }
+        return *this;
+    }
+
+    Attribute(Attribute&& other) :
+        pointer{other.pointer ? other.move_storage(this->type_erased_storage, other.pointer) : nullptr},
+        delete_storage{other.delete_storage},
+        copy_storage{other.copy_storage},
+        move_storage{other.move_storage},
+        implementations{other.implementations} {}
+
+    Attribute& operator=(Attribute&& other) {
+        if (other.pointer != this->pointer) {
+            this->destruct();
+            this->pointer = nullptr;
+            if (other.pointer) {
+                this->pointer = other.move_storage(this->type_erased_storage, other.pointer);
+            }
+            this->delete_storage = other.delete_storage;
+            this->copy_storage = other.copy_storage;
+            this->move_storage = other.move_storage;
+            this->implementations = implementations;
+        }
+        return *this;
+    }
+
+    ~Attribute() { this->destruct(); }
+
+   private:
+    alignas(ALIGNMENT) void* pointer = nullptr;
+    alignas(ALIGNMENT) storage_t type_erased_storage;
+
+    void (*delete_storage)(storage_t&) = nullptr;
+    void* (*copy_storage)(storage_t& storage, const void*) = nullptr;
+    void* (*move_storage)(storage_t& storage, void*) = nullptr;
+
+    struct implementations_t {
+        const std::string (*to_string_impl_)(const storage_t&) = nullptr;
+        const std::size_t (*to_hash_impl_)(const storage_t&) = nullptr;
+    };
+
+    implementations_t implementations;
 };
 
 using Attributes = std::vector<std::tuple<AttributeName, Attribute>>;
-
-
 
 namespace detail {
 template <typename T>
@@ -83,7 +179,7 @@ constexpr bool supports_compile_time_attributes_v = std::experimental::is_detect
                                                     std::experimental::is_detected_v<has_attribute_values_t, T>;
 }  // namespace detail
 
-template<typename T>
+template <typename T>
 Attributes get_attributes(const T& object) {
     if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_v<std::decay_t<T>>) {
         constexpr auto num_attributes = tt::stl::reflection::detail::get_num_attributes<std::decay_t<T>>();
@@ -102,11 +198,9 @@ Attributes get_attributes(const T& object) {
         return object.attributes();
     } else {
         static_assert(
-            tt::stl::concepts::always_false_v<T>,
-            "Object doesn't support compile-time or run-time attributes!");
+            tt::stl::concepts::always_false_v<T>, "Object doesn't support compile-time or run-time attributes!");
     }
 }
-
 
 static std::ostream& operator<<(std::ostream& os, const Attribute& attribute) {
     os << attribute.to_string();
