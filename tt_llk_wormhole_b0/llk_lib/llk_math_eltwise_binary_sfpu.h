@@ -6,7 +6,6 @@
 
 #include "cmath_common.h"
 #include "llk_math_common.h"
-#include "llk_format_conversions.h"
 #include "ckernel_globals.h"
 #include "ckernel_sfpu.h"
 
