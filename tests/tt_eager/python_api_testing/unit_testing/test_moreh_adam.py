@@ -41,7 +41,6 @@ def test_moreh_adam(shape, device):
             return torch.mul(x, self.weight)
 
     model = SimpleModel()
-    print("x_data:", x_data)
     cpu_exp_avg = torch.zeros_like(model.weight)
     cpu_exp_avg_sq = torch.zeros_like(model.weight)
     cpu_max_exp_avg_sq = torch.zeros_like(model.weight)
@@ -49,37 +48,6 @@ def test_moreh_adam(shape, device):
     dev_param = ttl.tensor.Tensor(
         model.weight.reshape(-1).tolist(),
         model.weight.shape,
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-    ).to(ttl.tensor.Layout.TILE).to(device)
-
-    print("weigth:", model.weight)
-    print("dev_param:", dev_param)
-
-    criterion = nn.L1Loss()
-
-    optimizer = optim.Adam({model.weight}, lr=0.01, betas=(0.8, 0.888), eps=1e-06, weight_decay=0.1, amsgrad=True)
-
-    optimizer.zero_grad()
-
-    optimizer_state_dict = optimizer.state_dict()
-
-    outputs = model(x_data)
-
-    loss = criterion(outputs, y_data)
-
-    loss.backward()
-
-    print("grad = ", model.weight.grad)
-    cpu_grad = model.weight.grad.clone()
-
-    print("before optimizer_state_dict:", optimizer_state_dict)
-
-    print("cpu_grad:", cpu_grad)
-
-    dev_grad = ttl.tensor.Tensor(
-        cpu_grad.reshape(-1).tolist(),
-        model.weight.grad.shape,
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(ttl.tensor.Layout.TILE).to(device)
@@ -105,26 +73,28 @@ def test_moreh_adam(shape, device):
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(ttl.tensor.Layout.TILE).to(device)
 
-    optimizer.step()
-
+    criterion = nn.L1Loss()
+    optimizer = optim.Adam({model.weight}, lr=0.01, betas=(0.8, 0.888), eps=1e-06, weight_decay=0.1, amsgrad=True)
+    optimizer.zero_grad()
     optimizer_state_dict = optimizer.state_dict()
+    outputs = model(x_data)
+    loss = criterion(outputs, y_data)
+    loss.backward()
 
-
-    print("")
-    print("")
-    print("after optimizer_state_dict:", optimizer_state_dict)
-    print("Updated weigth:", model.weight)
-    print("")
-    print("", optimizer_state_dict['state'][0]['max_exp_avg_sq'])
-
-    cpu_max_exp_avg_sq_result = optimizer_state_dict['state'][0]['max_exp_avg_sq']
-    dev_max_exp_avg_sq_result = ttl.tensor.Tensor(
-        cpu_max_exp_avg_sq_result.reshape(-1).tolist(),
-        cpu_max_exp_avg_sq_result.shape,
+    cpu_grad = model.weight.grad.clone()
+    dev_grad = ttl.tensor.Tensor(
+        cpu_grad.reshape(-1).tolist(),
+        model.weight.grad.shape,
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.ROW_MAJOR,
     ).to(ttl.tensor.Layout.TILE).to(device)
-    print("dev_max_exp_avg_sq_result:", dev_max_exp_avg_sq_result)
+
+    optimizer.step()
+    optimizer_state_dict = optimizer.state_dict()
+
+    cpu_exp_avg_result = optimizer_state_dict['state'][0]['exp_avg']
+    cpu_exp_avg_sq_result = optimizer_state_dict['state'][0]['exp_avg_sq']
+    cpu_max_exp_avg_sq_result = optimizer_state_dict['state'][0]['max_exp_avg_sq']
 
     ret_list_ = ttl.operations.primary.moreh_adam(dev_param, dev_grad, dev_exp_avg, dev_exp_avg_sq
         , 0.01, 0.8, 0.888, 1e-06, 0.1, 1, True, dev_max_exp_avg_sq)
@@ -132,14 +102,23 @@ def test_moreh_adam(shape, device):
     assert dev_param.shape() == list(model.weight.shape)
 
     param_result = dev_param.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    exp_avg_result = dev_exp_avg.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    exp_avg_sq_result = dev_exp_avg_sq.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
     max_exp_avg_sq_result = dev_max_exp_avg_sq.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
-    print("param_result:", param_result.shape)
-    print("param_result:", param_result)
-
-    print("max_exp_avg_sq_result:", max_exp_avg_sq_result.shape)
-    print("max_exp_avg_sq_result:", max_exp_avg_sq_result)
 
     passing, out = comp_pcc(model.weight, param_result)
-    logger.info(f"Out passing={passing}")
+    logger.info(f"Out passing (param)={passing}")
+    logger.info(f"Output pcc={out}")
+
+    passing, out = comp_pcc(cpu_exp_avg_result, exp_avg_result)
+    logger.info(f"Out passing (exp_avg)={passing}")
+    logger.info(f"Output pcc={out}")
+
+    passing, out = comp_pcc(cpu_exp_avg_sq_result, exp_avg_sq_result)
+    logger.info(f"Out passing (exp_avg_sq)={passing}")
+    logger.info(f"Output pcc={out}")
+
+    passing, out = comp_pcc(cpu_max_exp_avg_sq_result, max_exp_avg_sq_result)
+    logger.info(f"Out passing (max_exp_avg_sq)={passing}")
     logger.info(f"Output pcc={out}")
     assert passing

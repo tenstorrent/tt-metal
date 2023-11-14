@@ -11,8 +11,6 @@
 #include "compute_kernel_api/eltwise_unary/sqrt.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
-#include "debug_print.h"
-
 ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
 ALWI void REL() { release_dst(tt::DstMode::Half); }
 
@@ -267,15 +265,8 @@ void MAIN {
         pack_tile(dst0, cb_max_exp_avg_sq_out);
         cb_push_back(cb_max_exp_avg_sq_out, onetile);
         REL();
-        UNPACK(DPRINT << "=========================================================" << ENDL());
-        UNPACK(DPRINT << "tmp_cb_max_exp_avg_sq" << ENDL());
-        UNPACK(({
-             DPRINT << TSLICE(tmp_cb_max_exp_avg_sq, 0, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}) <<
-             ENDL();
-        }));
-        UNPACK(DPRINT << "=========================================================" << ENDL());
-
 #endif
+
         // cb_tmp1 = sqrt(exp_avg_sq / cb_tmp1);
         ACQ();
         cb_wait_front(cb_tmp1, onetile);
@@ -355,7 +346,7 @@ void MAIN {
         pack_tile(dst0, cb_tmp2);
         cb_pop_front(cb_tmp2, onetile);
         cb_push_back(cb_tmp2, onetile);
-        cb_pop_front(tmp_cb_exp_avg, onetile)
+        cb_pop_front(tmp_cb_exp_avg, onetile);
         REL();
 
         // cb_tmp1 = cb_tmp1 * cb_tmp2;

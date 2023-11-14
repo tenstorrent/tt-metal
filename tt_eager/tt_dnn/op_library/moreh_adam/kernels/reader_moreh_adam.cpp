@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "debug_print.h"
 
 void fill_cb_with_value(uint32_t cb_id, uint32_t value) {
     cb_reserve_back(cb_id, 1);
