@@ -393,6 +393,87 @@ const inline bool operator==(const CoreRangeSet &a, const CoreRangeSet &b) {
   return false;
 }
 
+inline std::vector<CoreCoord> grid_to_cores(uint32_t num_cores, uint32_t grid_size_x, uint32_t grid_size_y, bool row_wise=false) {
+    std::vector<CoreCoord> cores;
+    cores.reserve(num_cores);
+    TT_ASSERT(num_cores <= grid_size_x * grid_size_y);
+    if (row_wise) {
+        for(uint32_t i = 0; i < num_cores; ++i) {
+            cores.push_back({i % grid_size_x, i / grid_size_x});
+        }
+    } else {
+        for(uint32_t i = 0; i < num_cores; ++i) {
+            cores.push_back({i / grid_size_y, i % grid_size_y});
+        }
+    }
+    return cores;
+}
+
+
+// Noop cores are appended at the end with no guarantees on ordering
+inline std::vector<CoreCoord> grid_to_cores_with_noop(const uint32_t bbox_x, const uint32_t bbox_y, const uint32_t grid_size_x, const uint32_t grid_size_y, const bool row_wise=false) {
+    ZoneScoped;
+    std::vector<CoreCoord> cores;
+    cores.reserve(grid_size_x * grid_size_y);
+    TT_ASSERT(bbox_x < grid_size_x);
+    TT_ASSERT(bbox_y < grid_size_y);
+    const uint32_t box_size_x = bbox_x + 1;
+    const uint32_t box_size_y = bbox_y + 1;
+
+    if (row_wise) {
+        for(uint32_t i = 0; i < box_size_x * box_size_y; ++i) {
+            cores.push_back({i % box_size_x, i / box_size_x});
+        }
+    } else {
+        for(uint32_t i = 0; i < box_size_x * box_size_y; ++i) {
+            cores.push_back({i / box_size_y, i % box_size_y});
+        }
+    }
+
+    // Right rectangle noops
+    for(uint32_t x = box_size_x; x < grid_size_x; ++x) {
+        for (uint32_t y = 0; y < grid_size_y; ++y) {
+            cores.push_back({x, y});
+        }
+    }
+
+    // Bottom rectangle noops
+    for(uint32_t y = box_size_y; y < grid_size_y; ++y) {
+        for (uint32_t x = 0; x < box_size_x; ++x) {
+            cores.push_back({x, y});
+        }
+    }
+
+    return cores;
+}
+
+
+
+inline std::vector<CoreCoord> corerange_to_cores(const CoreRangeSet crs, std::optional<uint32_t> max_cores = std::nullopt, bool row_wise = false){
+
+  uint32_t num_total_cores = 0;
+  std::vector <CoreCoord> all_cores;
+  for(auto core_range : crs.ranges()){
+      auto start_coord = core_range.start;
+      auto end_coord = core_range.end;
+      auto num_cores_x = (end_coord.x+1) - start_coord.x;
+      auto num_cores_y = (end_coord.y+1) - start_coord.y;
+
+      uint32_t num_curr_cores = num_cores_x * num_cores_y;
+      if(max_cores.has_value()){
+        num_curr_cores = std::min(max_cores.value() - num_total_cores,
+                          (uint32_t)num_cores_x * (uint32_t)num_cores_y);
+
+      }
+      auto cores = grid_to_cores(num_curr_cores, num_cores_x, num_cores_y, row_wise);
+      num_total_cores += num_curr_cores;
+      all_cores.insert(all_cores.end(), cores.begin(), cores.end());
+  }
+
+  return all_cores;
+
+}
+
 const inline bool operator!=(const CoreRangeSet &a, const CoreRangeSet &b) { return !(a == b); }
 
 template <>

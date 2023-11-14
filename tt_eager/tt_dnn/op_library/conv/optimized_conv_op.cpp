@@ -10,7 +10,7 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/common/constants.hpp"
 
-#include "tt_stl/reflection.hpp"
+#include "tt_metal/tt_stl/reflection.hpp"
 
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/sharding_utilities.hpp"

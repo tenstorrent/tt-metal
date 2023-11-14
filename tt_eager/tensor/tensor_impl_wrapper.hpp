@@ -21,6 +21,8 @@ Tensor to_host_wrapper(const Tensor &tensor);
 
 Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const MemoryConfig &mem_config);
 
+Tensor to_device_wrapper_sharded(const Tensor &tensor, Device *target_device, const MemoryConfig &mem_config, const ShardSpec &shard_spec);
+
 Tensor to_layout_wrapper(const Tensor &tensor, Layout target_layout);
 
 Tensor pad_wrapper(const Tensor &tensor, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value);

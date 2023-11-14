@@ -137,6 +137,29 @@ static Tensor arange(int64_t start, int64_t stop, int64_t step, const Layout lay
     return output;
 }
 
+template<typename T>
+static Tensor arange(const int64_t & start, const int64_t & step, const Shape & shape,  const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = MemoryConfig{.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
+    constexpr DataType data_type = detail::get_data_type<T>();
+    // Current implementation restrictions
+    TT_ASSERT(step > 0, "Step must be greater than 0");
+    auto owned_buffer = tt_metal::owned_buffer::create<T>(tt_metal::compute_volume(shape));
+
+    auto value = start;
+    for (auto index = 0; index < owned_buffer.size(); index++) {
+        if constexpr (std::is_same_v<T, bfloat16>) {
+         owned_buffer[index++] = static_cast<T>(static_cast<float>(value));
+        } else {
+         owned_buffer[index++] = static_cast<T>(value);
+        }
+        value += step;
+    }
+    auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
+    if (device != nullptr) {
+        output = output.to(device, output_mem_config);
+    }
+    return output;
+}
+
 template<typename T,bool IS_UPPER>
 static Tensor index_trilu(const Shape& shape, const int32_t diag, DataType data_type,
 			  const Layout layout = Layout::ROW_MAJOR, Device * device = nullptr,

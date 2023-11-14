@@ -15,17 +15,175 @@ namespace tt {
 
 namespace tt_metal {
 
-void validate_buffer_size_and_page_size(uint64_t size, uint64_t page_size, const BufferType &buffer_type) {
+bool is_sharded(const TensorMemoryLayout & layout){
+    return (
+        layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+        layout == TensorMemoryLayout::WIDTH_SHARDED ||
+        layout == TensorMemoryLayout::BLOCK_SHARDED );
+}
+
+
+void validate_buffer_size_and_page_size(uint64_t size, uint64_t page_size, const BufferType &buffer_type, const TensorMemoryLayout &buffer_layout, std::optional<ShardSpec > shard_parameters) {
     TT_FATAL(size != 0 and page_size != 0, "Buffer size and page size should be larger than 0 bytes!");
     bool valid_page_size = (size % page_size == 0);
     TT_FATAL(valid_page_size, "For valid non-interleaved buffers page size {} must equal buffer size {}. For interleaved-buffers page size should be divisible by buffer size", page_size, size);
     TT_FATAL(page_size % sizeof(uint32_t) == 0, "Page size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values");
+    if(buffer_layout == TensorMemoryLayout::SINGLE_BANK){
+        TT_ASSERT(page_size == size , "Continguous buffer must be one contiguous page");
+    }
+    else if(is_sharded(buffer_layout)){
+        TT_ASSERT(shard_parameters != std::nullopt , "Sharded buffers must have a core grid assigned");
+        TT_ASSERT(shard_parameters.value().element_size != std::nullopt, "Sharded buffers must specifiy element size");
+        TT_ASSERT(shard_parameters.value().tensor2d_size != std::nullopt, "Sharded buffers must specifiy tensor size in pages");
+
+    }
 }
 
-Buffer::Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferType buffer_type)
-    : device_(device), size_(size), page_size_(page_size), buffer_type_(buffer_type) {
+
+inline std::vector< std::vector<uint32_t> > core_to_host_pages(
+                                                    const int & pages_per_shard,
+                                                    const int & num_shards,
+                                                    const TensorMemoryLayout & layout,
+                                                    const std::array<uint32_t, 2> & page_shape,
+                                                    const std::array<uint32_t, 2> &shard_shape,
+                                                    const std::array<uint32_t, 2> & tensor2d_size)
+{
+
+
+    auto total_pages = pages_per_shard * num_shards;
+    std::vector < std::vector<uint32_t> > ret_vec(num_shards, std::vector<uint32_t>(pages_per_shard));
+
+
+    if( layout == TensorMemoryLayout::WIDTH_SHARDED){
+        for(int i =0 ; i<num_shards; i++){
+            for(int j=0; j<pages_per_shard; j++){
+                ret_vec[i][j]= j*num_shards + i;
+            }
+        }
+    }
+    else if( layout == TensorMemoryLayout:: HEIGHT_SHARDED){
+        for(int i =0 ; i<num_shards; i++){
+            for(int j=0; j<pages_per_shard; j++){
+                ret_vec[i][j]= i*pages_per_shard + j;
+            }
+        }
+    }
+    else if(layout == TensorMemoryLayout::BLOCK_SHARDED){
+        int i_offset = 0;
+        int j_offset = 0;
+        std::array<uint32_t, 2> shard_in_pages = {shard_shape[0]/page_shape[0], shard_shape[1]/page_shape[1]};
+
+
+        for(int shard_idx=0; shard_idx<num_shards; shard_idx++){
+            int host_idx = 0;
+            for(int i=i_offset; i<(shard_in_pages[1] + i_offset); i++){
+                //Shard reached end of row
+                for(int j=j_offset; j<(shard_in_pages[0] + j_offset); j++){
+                    auto host_page = i*tensor2d_size[0] + j;
+                    ret_vec[shard_idx][host_idx] = host_page;
+                    host_idx++;
+                }
+            }
+            if(((shard_idx + 1) % (tensor2d_size[0]/shard_in_pages[0])) == 0){
+                j_offset = 0;
+                i_offset += shard_in_pages[1];
+            }
+            else{
+                j_offset += shard_in_pages[0];
+            }
+        }
+
+
+    }
+    return ret_vec;
+}
+
+//#define DEBUG_SHARD_PRINT
+std::string Buffer::get_shard_info() const {
+    std::string ret_str = "Shard info for buffer \n";
+
+    ret_str += "Page Size " + std::to_string(page_size_) + "\n";
+
+    auto t2d_size = tensor2d_size();
+    ret_str += "Tensor2D Size: ("  + std::to_string(t2d_size[0]) + ", " + std::to_string(t2d_size[1]) + ")\n";
+    auto s_shape = shard_shape();
+    ret_str += "Shard Shape: ("  + std::to_string(s_shape[0]) +  ", " + std::to_string(s_shape[1]) + ")\n"; ;
+
+    auto p_shape = page_shape();
+    ret_str += "Page Shape: ("  + std::to_string(p_shape[0]) +  ", " + std::to_string(p_shape[1]) + ")\n"; ;
+
+
+    uint32_t core_index = 0;
+    ret_str += "Core info:\n";
+    for(auto core: all_cores_){
+        ret_str += "Core " + core.str()  + "\n";
+        ret_str += "Host pages on core: ";
+        for(auto host_page_id: core_host_page_indices_[core_index]){
+            ret_str+= host_page_id + " ";
+        }
+        ret_str += "\n";
+        ret_str += "Bank id for core: " + std::to_string(core_bank_indices_[core_index]) +  "\n";
+        core_index++;
+    }
+    ret_str += "Dev page mappings:\n";;
+    uint32_t num_pages = all_cores_.size() * shard_size();
+    for(uint32_t dev_page_id = 0; dev_page_id < num_pages; dev_page_id ++){
+        ret_str += "Dev page: " + std::to_string(dev_page_id) +
+            " mapped to core " + all_cores_[dev_page_to_core_mapping_[dev_page_id]].str() +
+            " and host page " + std::to_string(dev_page_to_host_page_mapping_[dev_page_id]) + "\n";
+    }
+    return ret_str;
+
+}
+
+void Buffer::print_shard_info() const {
+    std::cout << get_shard_info() << std::endl;
+}
+
+void Buffer::log_shard_info() const {
+
+    auto shard_str = get_shard_info();
+    log_info(LogTest, shard_str.c_str());
+
+}
+
+
+Buffer::Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferType buffer_type,
+                const TensorMemoryLayout buffer_layout,
+                std::optional< ShardSpec> shard_parameters
+                )
+    : device_(device), size_(size), page_size_(page_size), buffer_type_(buffer_type), buffer_layout_(buffer_layout), shard_parameters_(shard_parameters) {
     TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr);
-    validate_buffer_size_and_page_size(size, page_size, buffer_type);
+    validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
+    if(is_sharded(buffer_layout)){
+        auto row_major = shard_parameters.value().shard_orientation == ShardOrientation::ROW_MAJOR;
+        all_cores_ = corerange_to_cores(shard_parameters.value().shard_grid, this->num_cores(), row_major);
+        TT_ASSERT(this->num_cores() == all_cores_.size());
+        core_host_page_indices_ = core_to_host_pages(shard_size(), this->num_cores(), buffer_layout, page_shape(), shard_shape(), tensor2d_size());
+        core_bank_indices_.reserve(this->num_cores());
+
+        auto total_dev_pages = this->num_cores() * shard_size();
+        dev_page_to_host_page_mapping_ = std::vector<uint32_t>(total_dev_pages);
+        dev_page_to_core_mapping_ = std::vector<uint32_t>(total_dev_pages);
+        for(auto core : all_cores_){
+            core_bank_indices_.push_back(device->bank_ids_from_logical_core(core)[0]);
+        }
+        int dev_page_index = 0;
+        for(int core_index = 0; core_index < core_host_page_indices_.size() ; core_index++){
+            for(int host_page_index = 0; host_page_index < core_host_page_indices_[core_index].size() ; host_page_index++){
+                dev_page_to_core_mapping_[dev_page_index] = core_index;
+                dev_page_to_host_page_mapping_[dev_page_index] = core_host_page_indices_[core_index][host_page_index];
+                dev_page_index++;
+            }
+        }
+    }
+
+    #ifdef DEBUG_SHARD_PRINT
+        if(shard_parameters.has_value()){
+            this->print_shard_info();
+            //this->log_shard_info();
+        }
+    #endif
     this->allocate();
 }
 
@@ -40,6 +198,8 @@ Buffer &Buffer::operator=(const Buffer &other) {
         this->size_ = other.size_;
         this->page_size_ = other.page_size_;
         this->buffer_type_ = other.buffer_type_;
+        this->buffer_layout_ = other.buffer_layout_;
+        this->shard_parameters_ = other.shard_parameters_;
         this->allocate();
     }
     return *this;
@@ -57,6 +217,8 @@ Buffer &Buffer::operator=(Buffer &&other) {
         this->address_ = other.address_;
         this->page_size_ = other.page_size_;
         this->buffer_type_ = other.buffer_type_;
+        this->buffer_layout_ = other.buffer_layout_;
+        this->shard_parameters_ = other.shard_parameters_;
         // Set `other.device_` to be nullptr so destroying other does not deallocate reserved address space that is transferred to `this`
         other.device_ = nullptr;
     }
@@ -67,7 +229,16 @@ void Buffer::allocate() {
     TT_ASSERT(this->device_ != nullptr);
     // L1 buffers are allocated top down!
     bool bottom_up = this->buffer_type_ == BufferType::DRAM;
-    this->address_ = allocator::allocate_buffer(*this->device_->allocator_, this->size_, this->page_size_, this->buffer_type_, bottom_up);
+    if(is_sharded(this->buffer_layout_)){
+        this->address_ = allocator::allocate_buffer(*this->device_->allocator_, this->size_,
+                                                this->page_size_, this->buffer_type_, bottom_up,
+                                                this->num_cores());
+        //this->address_ = allocator::allocate_buffer(*this->device_->allocator_, this->page_size_ * this->shard_size(), this->page_size_, this->buffer_type_, bottom_up);
+    }
+    else{
+        this->address_ = allocator::allocate_buffer(*this->device_->allocator_, this->size_, this->page_size_, this->buffer_type_, bottom_up, std::nullopt);
+    }
+
 }
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
@@ -114,8 +285,11 @@ uint64_t Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
         this->address_ :
         this->address_ + this->device_->l1_bank_offset_from_bank_id(bank_id);
 
-    int pages_handled_in_bank = (int)page_index / num_banks;
-    auto offset = (round_up(this->page_size_, ADDRESS_ALIGNMENT) * pages_handled_in_bank);
+    int pages_offset_within_bank = (int)page_index / num_banks;
+    if( is_sharded(this->buffer_layout_)){
+        pages_offset_within_bank = page_index % shard_size();
+    }
+    auto offset = (round_up(this->page_size_, ADDRESS_ALIGNMENT) * pages_offset_within_bank);
     return base_page_address + offset;
 }
 
@@ -130,6 +304,28 @@ void Buffer::deallocate() {
 
 Buffer::~Buffer() {
     this->deallocate();
+}
+
+tt::stl::reflection::Attributes ShardSpec::attributes() const {
+    return {
+        {"shard_grid", this->shard_grid.str()},
+        {"shard_shape", this->shard_shape},
+        {"shard_orientation", this->shard_orientation},
+        {"halo", this->halo},
+    };
+}
+
+bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b) {
+    if (spec_a.shard_shape != spec_b.shard_shape) {
+        return false;
+    }
+    if (spec_a.shard_grid != spec_b.shard_grid) {
+        return false;
+    }
+    if (spec_a.shard_orientation != spec_b.shard_orientation) {
+        return false;
+    }
+    return true;
 }
 
 }  // namespace tt_metal

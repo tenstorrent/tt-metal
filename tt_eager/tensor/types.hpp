@@ -10,8 +10,8 @@
 #include "common/bfloat16.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 
-#include "tt_stl/concepts.hpp"
-#include "tt_stl/reflection.hpp"
+#include "tt_metal/tt_stl/concepts.hpp"
+#include "tt_metal/tt_stl/reflection.hpp"
 
 #include <memory>
 #include <variant>
@@ -41,18 +41,6 @@ enum class StorageType {
     BORROWED,  // for storing torch/numpy/etc tensors
 };
 
-enum class TensorMemoryLayout {
-    INTERLEAVED,
-    SINGLE_BANK,
-    HEIGHT_SHARDED,
-    WIDTH_SHARDED,
-    BLOCK_SHARDED,
-};
-
-enum class ShardOrientation {
-    ROW_MAJOR,
-    COL_MAJOR,
-};
 
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
@@ -230,23 +218,6 @@ constexpr void raise_unsupported_storage() {
     static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported Storage");
 }
 
-struct ShardSpec {
-    CoreRangeSet shard_grid;
-    std::array<uint32_t, 2> shard_shape;
-    ShardOrientation shard_orientation;
-    bool halo = false;
-    const uint32_t num_cores() const { return this->shard_grid.num_cores(); }
-    const uint32_t numel() const { return this->shard_shape[0] * this->shard_shape[1]; }
-
-    static constexpr auto attribute_names = std::make_tuple("shard_grid", "shard_shape", "shard_orientation", "halo");
-    const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->shard_grid),
-            std::cref(this->shard_shape),
-            std::cref(this->shard_orientation),
-            std::cref(this->halo));
-    }
-};
 
 bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b);
 bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b);

@@ -75,8 +75,11 @@ void BankManager::validate_bank_id(uint32_t bank_id) const {
     TT_FATAL(this->bank_id_to_bank_offset_.find(bank_id) != this->bank_id_to_bank_offset_.end(), "Expected bank {} to be tracked!", bank_id);
 }
 
-uint64_t BankManager::allocate_buffer(uint32_t size, uint32_t page_size, bool bottom_up) {
+uint64_t BankManager::allocate_buffer(uint32_t size, uint32_t page_size, bool bottom_up, std::optional<uint32_t> num_shards) {
     uint32_t num_banks = this->num_banks();
+    if(num_shards.has_value()){
+        num_banks = num_shards.value();
+    }
     // Each page needs to be at a 32B aligned address
     uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks);
 
@@ -237,15 +240,15 @@ std::optional<uint64_t> lowest_occupied_l1_address(const Allocator &allocator, u
     return allocator.l1_manager.lowest_occupied_address(bank_id);
 }
 
-uint64_t base_alloc(const AllocatorConfig &config, BankManager &bank_manager, uint64_t size, uint64_t page_size, bool bottom_up) {
-    return bank_manager.allocate_buffer(size, page_size, bottom_up);
+uint64_t base_alloc(const AllocatorConfig &config, BankManager &bank_manager, uint64_t size, uint64_t page_size, bool bottom_up, std::optional<uint32_t> num_shards) {
+    return bank_manager.allocate_buffer(size, page_size, bottom_up, num_shards);
 }
 
-uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size, const BufferType &buffer_type, bool bottom_up) {
+uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size, const BufferType &buffer_type, bool bottom_up, std::optional<uint32_t> num_shards) {
     uint64_t address = 0;
     switch (buffer_type) {
-        case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, size, page_size, bottom_up);
-        case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, size, page_size, bottom_up);
+        case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, size, page_size, bottom_up, std::nullopt);
+        case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, size, page_size, bottom_up, num_shards);
         default: {
             TT_THROW("Unsupported buffer type!");
         }

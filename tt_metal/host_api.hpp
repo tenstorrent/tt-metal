@@ -175,14 +175,16 @@ uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRang
 *
 *  Return value: Buffer
 *
-*  | Argument    | Description                             | Type       | Valid Range | Required |
-*  |-------------|---------------------------------------- |------------|-------------|----------|
-*  | device      | The device that the buffer will reside  | Device     |             | Yes      |
-*  | size        | size of buffer                          | uint64_t   |             | Yes      |
-*  | page_size   | buffer page size                        | uint64_t   |             | Yes      |
-*  | buffer_type | type of buffer (L1 or DRAM)             | BufferType |             | Yes      |
+*  | Argument        | Description                             | Type                     | Valid Range | Required |
+*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
+*  | device          | The device that the buffer will reside  | Device                   |             | Yes      |
+*  | size            | size of buffer                          | uint64_t                 |             | Yes      |
+*  | page_size       | buffer page size                        | uint64_t                 |             | Yes      |
+*  | buffer_type     | type of buffer (L1 or DRAM)             | BufferType               |             | Yes      |
+*  | buffer_layout   | layout, default is INTERLEAVED          | TensorMemoryLayout       |             | No       |
+*  | shard_parameter | parameters required for sharding        | std::optional<ShardSpec> |             | No       |
 */
-Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size, const BufferType buffer_type);
+Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size, const BufferType buffer_type, const TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED, std::optional<ShardSpec> shard_parameter= std::nullopt);
 
 /**
 *  Deallocates buffer from device by marking its memory as free.

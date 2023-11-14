@@ -141,18 +141,7 @@ bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
 
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) { return not(config_a == config_b); }
 
-bool operator==(const ShardSpec& spec_a, const ShardSpec& spec_b) {
-    if (spec_a.shard_shape != spec_b.shard_shape) {
-        return false;
-    }
-    if (spec_a.shard_grid != spec_b.shard_grid) {
-        return false;
-    }
-    if (spec_a.shard_orientation != spec_b.shard_orientation) {
-        return false;
-    }
-    return true;
-}
+
 
 bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b) {
     return !(spec_a == spec_b);

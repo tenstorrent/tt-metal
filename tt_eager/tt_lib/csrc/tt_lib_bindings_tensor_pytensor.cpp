@@ -429,15 +429,50 @@ Tensor convert_torch_tensor_to_tt_tensor(
                         )
                 )doc")
             .def(
-                py::init<>([](std::vector<float> &&data,
-                              const std::array<uint32_t, 4> &shape,
-                              DataType data_type,
-                              Layout layout,
-                              Device *device) {
-                    auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
-                    auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
-                    return tensor.to(device, MemoryConfig{});
-                }),
+                py::init<>(
+                    [](std::vector<float>&& data, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout, ShardSpec shard_spec) {
+                        auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
+                        return Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout, shard_spec);
+                    }
+                ),
+                py::return_value_policy::move,
+                R"doc(
+                    +---------------+---------------+
+                    | Argument      | Name          |
+                    +===============+===============+
+                    | arg0          | data          |
+                    +---------------+---------------+
+                    | arg1          | shape         |
+                    +---------------+---------------+
+                    | arg2          | data_type     |
+                    +---------------+---------------+
+                    | arg3          | layout        |
+                    +---------------+---------------+
+                    | arg4          | shard_spec    |
+                    +---------------+---------------+
+
+                    Example of creating a TT Tensor on host:
+
+                    .. code-block:: python
+
+                        py_tensor = torch.randn((1, 1, 32, 32))
+                        tt_lib.tensor.Tensor(
+                            py_tensor.reshape(-1).tolist(),
+                            py_tensor.size(),
+                            tt_lib.tensor.DataType.BFLOAT16,
+                            tt_lib.tensor.Layout.ROW_MAJOR,
+                            ShardSpec
+                        )
+                )doc"
+            )
+            .def(
+                py::init<>(
+                    [](std::vector<float>&& data, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout, Device *device) {
+                        auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
+                        auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
+                        return tensor.to(device, MemoryConfig{});
+                    }
+                ),
                 py::keep_alive<1, 6>(),
                 py::return_value_policy::move,
                 R"doc(
@@ -577,6 +612,31 @@ Tensor convert_torch_tensor_to_tt_tensor(
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
                 | arg1      | MemoryConfig of tensor of TT accelerator device | tt_lib.tensor.MemoryConfig |                       | No       |
                 +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+
+                .. code-block:: python
+
+                    tt_tensor = tt_tensor.to(tt_device)
+            )doc")
+            .def("to", [](const Tensor &self, Device *device, const MemoryConfig &mem_config, const ShardSpec & shard_spec) {
+                return self.to(device, mem_config, shard_spec);
+            }, py::arg().noconvert(), py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout=TensorMemoryLayout::HEIGHT_SHARDED},  py::arg("shard_spec").noconvert(),
+                py::keep_alive<0, 2>(), R"doc(
+                Move TT Tensor from host device to TT accelerator device.
+
+                Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
+
+                If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
+
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+                | Argument  | Description                                     | Data type                  | Valid range           | Required |
+                +===========+=================================================+============================+=======================+==========+
+                | arg0      | Device to which tensor will be moved            | tt_lib.device.Device       | TT accelerator device | Yes      |
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+                | arg1      | MemoryConfig of tensor of TT accelerator device | tt_lib.tensor.MemoryConfig |                       | No       |
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+                | arg2      | ShardSpec of sharded tensor                     | ShardSpec                  |                       | No       |
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+
 
                 .. code-block:: python
 

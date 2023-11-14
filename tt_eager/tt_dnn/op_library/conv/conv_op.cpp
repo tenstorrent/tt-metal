@@ -9,7 +9,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/common/constants.hpp"
 
-#include "tt_stl/reflection.hpp"
+#include "tt_metal/tt_stl/reflection.hpp"
 
 #include "tt_dnn/op_library/auto_format.hpp"
 using namespace tt::constants;
