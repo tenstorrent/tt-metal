@@ -1,6 +1,4 @@
 #pragma once
-#include "llk_param_structs.h"
-
 #include "ckernel_include.h"
 #include "ckernel_template.h"
 
@@ -14,14 +12,13 @@
 using namespace ckernel;
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t kt_dim, const std::uint32_t in0_id, const std::uint32_t in1_id) {
+inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t kt_dim, const std::uint32_t in0_tile_r_dim = TILE_R_DIM, const std::uint32_t in0_tile_c_dim = TILE_C_DIM, const std::uint32_t in1_tile_r_dim = TILE_R_DIM, const std::uint32_t in1_tile_c_dim = TILE_C_DIM, const bool partial_face = false) {
 
     constexpr bool high_fidelity = (NUM_FIDELITY_PHASES > 0);
 
-    const bool is_in0_16x32 = (math_tile_dims[in0_id][ckernel::TileDim::R_IDX]<=FACE_R_DIM) && (math_tile_dims[in0_id][ckernel::TileDim::C_IDX]> FACE_C_DIM);
-    const bool is_in0_32x16 = (math_tile_dims[in0_id][ckernel::TileDim::R_IDX]> FACE_R_DIM) && (math_tile_dims[in0_id][ckernel::TileDim::C_IDX]<=FACE_C_DIM);
-    const bool is_in1_32x16 = (math_tile_dims[in1_id][ckernel::TileDim::R_IDX]> FACE_R_DIM) && (math_tile_dims[in1_id][ckernel::TileDim::C_IDX]<=FACE_C_DIM);
-    const bool partial_face = get_partial_face(in0_id);
+    const bool is_in0_16x32 = (in0_tile_r_dim <=FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
+    const bool is_in0_32x16 = (in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim <= FACE_C_DIM);
+    const bool is_in1_32x16 = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
 
     static_assert(FaceLayout == DstTileFaceLayout::RowMajor, "FaceLayout must be RowMajor");
 
@@ -237,7 +234,7 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
 }
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t kt_dim, const std::uint32_t in0_id, const std::uint32_t in1_id) {
+inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t kt_dim, const std::uint32_t in0_tile_r_dim = TILE_R_DIM, const std::uint32_t in0_tile_c_dim = TILE_C_DIM, const std::uint32_t in1_tile_r_dim = TILE_R_DIM, const std::uint32_t in1_tile_c_dim = TILE_C_DIM, const bool partial_face = false) {
 
     // in0 - loaded to SrcB
     // in1 - loaded to SrcA
@@ -252,12 +249,11 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
     const bool reuse_a = ct_dim>=rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
 
-    const bool is_in0_16x32 = (math_tile_dims[in0_id][ckernel::TileDim::R_IDX]<=FACE_R_DIM) && (math_tile_dims[in0_id][ckernel::TileDim::C_IDX]> FACE_C_DIM);
-    const bool is_in1_32x16 = (math_tile_dims[in1_id][ckernel::TileDim::R_IDX]> FACE_R_DIM) && (math_tile_dims[in1_id][ckernel::TileDim::C_IDX]<=FACE_C_DIM);
-    const bool is_in0_32x16 = (math_tile_dims[in0_id][ckernel::TileDim::R_IDX]> FACE_R_DIM) && (math_tile_dims[in0_id][ckernel::TileDim::C_IDX]<=FACE_C_DIM);
-    const bool is_in0_16x16 = (math_tile_dims[in0_id][ckernel::TileDim::R_IDX]<=FACE_R_DIM) && (math_tile_dims[in0_id][ckernel::TileDim::C_IDX]<=FACE_C_DIM);
-    const bool is_in1_16x16 = (math_tile_dims[in1_id][ckernel::TileDim::R_IDX]<=FACE_R_DIM) && (math_tile_dims[in1_id][ckernel::TileDim::C_IDX]<=FACE_C_DIM);
-    const bool partial_face = get_partial_face(in0_id);
+    const bool is_in0_16x32 = (in0_tile_r_dim <=FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
+    const bool is_in1_32x16 = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
+    const bool is_in0_32x16 = (in0_tile_r_dim > FACE_R_DIM) && (in0_tile_c_dim <= FACE_C_DIM);
+    const bool is_in0_16x16 = (in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim <= FACE_C_DIM);
+    const bool is_in1_16x16 = (in1_tile_r_dim <= FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
 
     const std::uint32_t replay_buf_len = (is_in0_16x16 || is_in1_16x16) ? (partial_face ? 2 : 4) :
                                          ((is_in0_16x32 || is_in1_32x16 || is_in0_32x16) ? (partial_face ? 4 : 8) : 16);
@@ -361,13 +357,9 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
 }
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul_init(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t transpose=0, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
-    TT_LLK_DUMP("llk_math_matmul_init<{}, {}>({}, {}, {}, {}, {}, {})", NUM_FIDELITY_PHASES, FaceLayout, operandA, operandB, transpose, ct_dim, rt_dim, kt_dim);
-
-    const std::uint32_t operandA_id = get_operand_id(operandA);
-    const std::uint32_t operandB_id = get_operand_id(operandB);
+inline void _llk_math_matmul_init_(const std::uint32_t in0_tile_r_dim = TILE_R_DIM, const std::uint32_t in0_tile_c_dim = TILE_C_DIM, const std::uint32_t in1_tile_r_dim = TILE_R_DIM, const std::uint32_t in1_tile_c_dim = TILE_C_DIM, const bool partial_face = false, const std::uint32_t transpose=0, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
     
-    matmul_configure_addrmod<NUM_FIDELITY_PHASES, FaceLayout>(transpose, ct_dim, rt_dim, kt_dim, operandA_id, operandB_id);
+    matmul_configure_addrmod<NUM_FIDELITY_PHASES, FaceLayout>(transpose, ct_dim, rt_dim, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     const bool reuse_a = ct_dim>=rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
     if (t_dim>1) {
@@ -380,13 +372,12 @@ inline void llk_math_matmul_init(const std::uint32_t operandA, const std::uint32
         TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0); 
     }
 
-    matmul_configure_mop<NUM_FIDELITY_PHASES, FaceLayout>(transpose>0, ct_dim, rt_dim, kt_dim, operandA_id, operandB_id);
+    matmul_configure_mop<NUM_FIDELITY_PHASES, FaceLayout>(transpose>0, ct_dim, rt_dim, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul(uint dst_index, const bool transpose=false, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
-    TT_LLK_DUMP("llk_math_matmul<{}, {}>({}, {}, {}, {}, {})", NUM_FIDELITY_PHASES, FaceLayout, dst_index, transpose, ct_dim, rt_dim, kt_dim);
+inline void _llk_math_matmul_(uint dst_index, const bool transpose=false, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
     const bool reuse_a = ct_dim>=rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; //reuse-dim

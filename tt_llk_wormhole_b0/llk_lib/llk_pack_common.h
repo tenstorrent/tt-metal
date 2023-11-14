@@ -5,7 +5,6 @@
 #include "fw_debug.h"
 #include "cpack_common.h"
 #include "llk_defs.h"
-#include "llk_param_structs.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;

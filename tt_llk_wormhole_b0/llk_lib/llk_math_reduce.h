@@ -1,6 +1,4 @@
-
-#include "llk_param_structs.h"
-
+#pragma once
 #include "ckernel_include.h"
 #include "ckernel_template.h"
 
@@ -17,8 +15,7 @@ template <ReduceDim dim, int num_fidelity_phases>
 inline void reduce_configure_mop();
 
 template <PoolType type, ReduceDim dim, int num_fidelity_phases = 0, bool is_fp32_dest_acc_en = false, bool is_int_fpu_en = false>
-inline void llk_math_reduce(const uint dst_index) {
-    TT_LLK_DUMP("llk_math_reduce<{}, {}, {}, {}, {}>({})", type, dim, num_fidelity_phases, is_fp32_dest_acc_en, is_int_fpu_en, dst_index);
+inline void _llk_math_reduce_(const uint dst_index) {
     constexpr bool high_fidelity = num_fidelity_phases > 0 && num_fidelity_phases <= 4;
     math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
     if constexpr (dim == ReduceDim::REDUCE_ROW) {
@@ -293,8 +290,7 @@ inline void reduce_configure_mop() {
 }
 
 template <PoolType type, ReduceDim dim, int num_fidelity_phases = 0>
-inline void llk_math_reduce_init(const std::uint32_t within_face_16x16_transpose=0) { //within_face_16x16_transpose used for unpack, ignored by math
-    TT_LLK_DUMP("llk_math_reduce_init<{}, {}, {}>({})", type, dim, num_fidelity_phases, within_face_16x16_transpose);
+inline void _llk_math_reduce_init_(const std::uint32_t within_face_16x16_transpose=0) { //within_face_16x16_transpose used for unpack, ignored by math
 
     constexpr bool high_fidelity = num_fidelity_phases > 0 && num_fidelity_phases <= 4;
     
