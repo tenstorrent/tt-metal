@@ -564,8 +564,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
         if (src_sharded) {
-            auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
-            src0_cb_config.set_globally_allocated_address(*src_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
         } else {
             auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
             for (uint32_t i = 0; i < cores.size(); i++){
@@ -579,8 +578,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         }
 
         if (out_sharded) {
-            auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
-            output_cb_config.set_globally_allocated_address(*dst_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
         } else {
             auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
             for (uint32_t i = 0; i < cores.size(); i++){
@@ -850,12 +848,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
         bool src_sharded = input_tensors.at(0).memory_config().is_sharded();
         bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
-        auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
-        src0_cb_config.set_globally_allocated_address(*src_buffer);
+        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
 
         if (out_sharded) {
-            auto& sharded_output_cb_config = GetCircularBufferConfig(program, cb_sharded_output);
-            sharded_output_cb_config.set_globally_allocated_address(*dst_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_sharded_output, *dst_buffer);
         } else {
             auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
             for (uint32_t i = 0; i < cores.size(); i++){

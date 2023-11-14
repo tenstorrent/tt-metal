@@ -795,10 +795,8 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
-        auto& input_cb_config = GetCircularBufferConfig(program, input_cb);
-        input_cb_config.set_globally_allocated_address(*src_buffer);
-        auto& final_tilize_output_cb_config = GetCircularBufferConfig(program, final_tilize_output_cb);
-        final_tilize_output_cb_config.set_globally_allocated_address(*dst_buffer);
+        UpdateDynamicCircularBufferAddress(program, input_cb, *src_buffer);
+        UpdateDynamicCircularBufferAddress(program, final_tilize_output_cb, *dst_buffer);
         for (uint32_t i = 0; i < num_cores; i++) {
             CoreCoord core = {i % num_cores_x, i / num_cores_x};
             auto &runtime_args = GetRuntimeArgs(program, downsample_writer_kernel_id, core);

@@ -333,7 +333,7 @@ void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t s
 
 CircularBufferID Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
     this->invalidate_compile();
-    std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(core_range_set, config, [&, this]() { return this->invalidate_circular_buffer_allocation(); });
+    std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(core_range_set, config);
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory allocator
     if (not circular_buffer->globally_allocated()) {
         this->invalidate_circular_buffer_allocation();

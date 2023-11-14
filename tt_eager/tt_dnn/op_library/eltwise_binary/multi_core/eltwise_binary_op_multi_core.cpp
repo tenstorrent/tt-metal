@@ -437,19 +437,16 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
             num_tiles_read += num_tiles_per_core;
         }
         if (src0_sharded) {
-            auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
-            src0_cb_config.set_globally_allocated_address(*src_buffer_a);
-            src0_cb_config.set_total_size(num_tiles_per_core_group_1 * src0_single_tile_size);
+            UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
+            UpdateCircularBufferTotalSize(program, cb_src0, num_tiles_per_core_group_1 * src0_single_tile_size);
         }
         if (src1_sharded) {
-            auto& src1_cb_config = GetCircularBufferConfig(program, cb_src1);
-            src1_cb_config.set_globally_allocated_address(*src_buffer_b);
-            src1_cb_config.set_total_size(num_tiles_per_core_group_1 * src1_single_tile_size);
+            UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
+            UpdateCircularBufferTotalSize(program, cb_src1, num_tiles_per_core_group_1 * src1_single_tile_size);
         }
         if (out_sharded) {
-            auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
-            output_cb_config.set_globally_allocated_address(*dst_buffer);
-            output_cb_config.set_total_size(num_tiles_per_core_group_1 * dst_single_tile_size);
+            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+            UpdateCircularBufferTotalSize(program, cb_output, num_tiles_per_core_group_1 * dst_single_tile_size);
         }
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

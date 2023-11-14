@@ -22,7 +22,7 @@
  *
  * If you want to contribute to the documentation and are looking for a good
  * resource for generating Markdown tables, refer to
- * https://www.tablesgenerator.com/markdown_tables.
+ * https://www.tablesgenerator.com/markdown_tables
  * */
 
 namespace tt {
@@ -94,6 +94,9 @@ KernelID CreateKernel(Program &program, const std::string &file_name, const std:
  * Circular buffers hold data and have an associated config which indicates usage of the address space.
  * If the config is specified for multiple buffer indices, the circular buffer address space is shared and each buffer index can potentially have a unique view of the shared space.
  *
+ * Circular buffers can be dynamically allocated or program-local allocated. If the config is created with an L1 buffer or sets a globally allocated address it is dynamic and shares the same address space as the L1 buffer.
+ * Otherwise, the circular buffer address space is managed by the program. Address space for program-local circular buffers does not persist across programs.
+ *
  * Return value: Circular Buffer ID (uintptr_t)
  *
  * | Argument  | Description                                                                                                                                       | Type                                                     | Valid Range | Required |
@@ -105,17 +108,56 @@ KernelID CreateKernel(Program &program, const std::string &file_name, const std:
 CircularBufferID CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
 
 /**
- * Gets a reference to the config owned by circular buffer at the given circular buffer ID. This should be used to update the circular buffer config.
- * This API will invalidate circular buffer address allocation for all circular buffers in the program. Circular buffers will be allocated when the program is run.
+ * Gets a reference to the config owned by circular buffer at the given circular buffer ID.
  *
- * Return value: CircularBufferConfig &
+ * Return value: const CircularBufferConfig &
  *
- * | Argument           | Description                                                    | Type                         | Valid Range | Required |
- * |--------------------|----------------------------------------------------------------|------------------------------|-------------|----------|
- * | program            | The program containing the circular buffer                     | Program &                    |             | Yes      |
- * | circular_buffer_id | ID of the circular buffer, returned by `CreateCircularBuffer`  | CircularBufferID (uintptr_t) |             | Yes      |
+ * | Argument  | Description                                                    | Type                         | Valid Range | Required |
+ * |-----------|----------------------------------------------------------------|------------------------------|-------------|----------|
+ * | program   | The program containing the circular buffer                     | Program &                    |             | Yes      |
+ * | cb_handle | ID of the circular buffer, returned by `CreateCircularBuffers` | CircularBufferID (uintptr_t) |             | Yes      |
 */
-CircularBufferConfig &GetCircularBufferConfig(Program &program, CircularBufferID circular_buffer_id);
+const CircularBufferConfig &GetCircularBufferConfig(Program &program, CircularBufferID cb_handle);
+
+/**
+ * Update the total size of the circular buffer at the given circular buffer handle. Updating a program-local circular buffer requires all circular buffers in the program to be reallocated.
+ *
+ * Return value: void
+ *
+ * | Argument   | Description                                                    | Type                         | Valid Range | Required |
+ * |------------|----------------------------------------------------------------|------------------------------|-------------|----------|
+ * | program    | The program containing the circular buffer                     | Program &                    |             | Yes      |
+ * | cb_handle  | ID of the circular buffer, returned by `CreateCircularBuffers` | CircularBufferID (uintptr_t) |             | Yes      |
+ * | total_size | New size of the circular buffer in bytes                       | uint32_t                     |             | Yes      |
+*/
+void UpdateCircularBufferTotalSize(Program &program, CircularBufferID cb_handle, uint32_t total_size);
+
+/**
+ * Update the page size at specified `buffer_index` of the circular buffer at the given circular buffer handle.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                                                                                | Type                         | Valid Range                   | Required |
+ * |--------------|----------------------------------------------------------------------------------------------------------------------------|------------------------------|-------------------------------|----------|
+ * | program      | The program containing the circular buffer                                                                                 | Program &                    |                               | Yes      |
+ * | cb_handle    | ID of the circular buffer, returned by `CreateCircularBuffers`                                                             | CircularBufferID (uintptr_t) |                               | Yes      |
+ * | buffer_index | Circular buffer index to update page size. `cb_handle` must be a circular buffer that had previously programmed this index | uint8_t                      | 0 to NUM_CIRCULAR_BUFFERS - 1 | Yes      |
+ * | page_size    | Updated page size in bytes                                                                                                 | uint32_t                     |                               | Yes      |
+*/
+void UpdateCircularBufferPageSize(Program &program, CircularBufferID cb_handle, uint8_t buffer_index, uint32_t page_size);
+
+/**
+ * Update the address of a dynamic circular buffer. Dynamic circular buffers share the same address space as L1 buffers.
+ *
+ * Return value: void
+ *
+ * | Argument  | Description                                                                              | Type                         | Valid Range | Required |
+ * |-----------|------------------------------------------------------------------------------------------|------------------------------|-------------|----------|
+ * | program   | The program containing the circular buffer                                               | Program &                    |             | Yes      |
+ * | cb_handle | ID of the circular buffer, returned by `CreateCircularBuffers`                           | CircularBufferID (uintptr_t) |             | Yes      |
+ * | buffer    | Dynamically allocated L1 buffer that shares address space of circular buffer `cb_handle` | const Buffer &               | L1 buffer   | Yes      |
+ */
+void UpdateDynamicCircularBufferAddress(Program &program, CircularBufferID cb_handle, const Buffer &buffer);
 
 /**
  * Initializes semaphore on all cores within core range (inclusive). Each core can have up to four 32B semaphores.

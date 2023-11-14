@@ -534,13 +534,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             }
         }
         if (src0_sharded) {
-            auto& src2_cb_config = GetCircularBufferConfig(program, cb_src2);
-            src2_cb_config.set_globally_allocated_address(*src_buffer_a);
+            UpdateDynamicCircularBufferAddress(program, cb_src2, *src_buffer_a);
         }
 
         if (out_sharded) {
-            auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
-            output_cb_config.set_globally_allocated_address(*dst_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
         }
     };
 
@@ -1034,13 +1032,11 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         }
 
         if (src0_sharded) {
-            auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
-            src0_cb_config.set_globally_allocated_address(*src_buffer_a);
+            UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
         }
 
         if (out_sharded) {
-            auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
-            output_cb_config.set_globally_allocated_address(*dst_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
         }
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

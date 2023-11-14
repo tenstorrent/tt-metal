@@ -476,11 +476,9 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor &input, T
 
         auto dst_buffer = output_tensors.at(0).buffer();
 
-        auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
-        src0_cb_config.set_globally_allocated_address(*src_buffer);
+        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
 
-        auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
-        output_cb_config.set_globally_allocated_address(*dst_buffer);
+        UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
@@ -655,11 +653,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
         bool src_sharded = input_tensors.at(0).memory_config().is_sharded();
         bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
-        auto& src0_cb_config = GetCircularBufferConfig(program, cb_src0);
-        src0_cb_config.set_globally_allocated_address(*src_buffer);
-        auto& out_cb_config = GetCircularBufferConfig(program, cb_output);
-        out_cb_config.set_globally_allocated_address(*dst_buffer);
-
+        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+        UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

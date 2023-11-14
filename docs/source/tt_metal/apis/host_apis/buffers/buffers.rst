@@ -3,6 +3,6 @@ Buffers
 
 .. toctree::
   CreateBuffer
-  CreateCircularBuffer
+  CircularBuffers
   CreateSemaphore
   DeallocateBuffer

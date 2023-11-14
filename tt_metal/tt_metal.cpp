@@ -382,8 +382,27 @@ CircularBufferID CreateCircularBuffer(Program &program, const std::variant<CoreC
     return program.add_circular_buffer(core_ranges, config);
 }
 
-CircularBufferConfig &GetCircularBufferConfig(Program &program, CircularBufferID circular_buffer_id) {
-    return detail::GetCircularBuffer(program, circular_buffer_id)->config();
+const CircularBufferConfig &GetCircularBufferConfig(Program &program, CircularBufferID cb_handle) {
+    return detail::GetCircularBuffer(program, cb_handle)->config();
+}
+
+void UpdateCircularBufferTotalSize(Program &program, CircularBufferID cb_handle, uint32_t total_size) {
+    std::shared_ptr<CircularBuffer> circular_buffer = detail::GetCircularBuffer(program, cb_handle);
+    if (not circular_buffer->globally_allocated()) {
+        program.invalidate_circular_buffer_allocation();
+    }
+    circular_buffer->config().set_total_size(total_size);
+}
+
+void UpdateCircularBufferPageSize(Program &program, CircularBufferID cb_handle, uint8_t buffer_index, uint32_t page_size) {
+    detail::GetCircularBuffer(program, cb_handle)->config().set_page_size(buffer_index, page_size);
+}
+
+void UpdateDynamicCircularBufferAddress(Program &program, CircularBufferID cb_handle, const Buffer &buffer) {
+    if (buffer.buffer_type() != BufferType::L1) {
+        tt::log_fatal(tt::LogMetal, "Only L1 buffers can have an associated circular buffer!");
+    }
+    detail::GetCircularBuffer(program, cb_handle)->config().set_globally_allocated_address(buffer);
 }
 
 uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value) {

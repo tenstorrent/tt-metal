@@ -13,16 +13,11 @@ namespace tt_metal {
 
 // Dynamic CBs will be created with address_ initialized to globally allocated address
 // Static CBs will not have address set until their owning Program allocates them
-CircularBuffer::CircularBuffer(
-    const CoreRangeSet &core_ranges,
-    const CircularBufferConfig &config,
-    std::function<void()> cb_allocation_invalidator) :
+CircularBuffer::CircularBuffer(const CoreRangeSet &core_ranges, const CircularBufferConfig &config) :
     id_(reinterpret_cast<uintptr_t>(this)),
     core_ranges_(core_ranges),
     config_(config),
-    locally_allocated_address_(std::nullopt),
-    cb_allocation_invalidator_(cb_allocation_invalidator),
-    size_locally_allocated_(config.total_size()) {
+    locally_allocated_address_(std::nullopt) {
     if (this->config_.total_size() == 0) {
         TT_THROW("Circular Buffer Config Error: Circular buffer size cannot be 0 B");
     }
@@ -43,8 +38,6 @@ CircularBuffer::CircularBuffer(
             this->buffer_indices_.insert(buffer_index);
         }
     }
-
-    config_.add_local_circular_buffer_addr_invalidator([&, this]() { return this->invalidate_locally_allocated_address(); });
 }
 
 bool CircularBuffer::is_on_logical_corerange(const CoreRange &logical_cr) const {
@@ -92,11 +85,6 @@ uint32_t CircularBuffer::address() const {
 
     return this->globally_allocated() ? config_.globally_allocated_address().value()
                                       : locally_allocated_address_.value();
-}
-
-void CircularBuffer::invalidate_locally_allocated_address() {
-    this->cb_allocation_invalidator_();
-    this->locally_allocated_address_ = std::nullopt;
 }
 
 }  // namespace tt_metal

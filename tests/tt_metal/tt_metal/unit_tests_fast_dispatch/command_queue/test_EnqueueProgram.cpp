@@ -138,7 +138,7 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
         cb_config.num_pages *=2;
     for (uint32_t buffer_id = 0; buffer_id < program_config.cb_config_vector.size(); buffer_id++) {
         auto cb_size = program_config_2.cb_config_vector[buffer_id].num_pages * program_config_2.cb_config_vector[buffer_id].page_size;
-        GetCircularBufferConfig(program, cb_ids[buffer_id]).set_total_size(cb_size);
+        UpdateCircularBufferTotalSize(program, cb_ids[buffer_id], cb_size);
     }
 
 

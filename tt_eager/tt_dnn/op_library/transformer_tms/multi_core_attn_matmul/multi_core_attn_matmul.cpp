@@ -253,7 +253,8 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         uint32_t in1_KtNt_stride = transpose_hw_bool ? bshape[2]/TILE_HEIGHT * in1_Kt : in1_Kt * Nt;
         uint32_t in1_KtNt_skip = transpose_hw_bool ? (bshape[2]/TILE_HEIGHT - 1) * in1_Kt : (in1_Kt - Kt) * Nt;
 
-        GetCircularBufferConfig(program, cb_src0).set_total_size(Kt * in0_single_tile_size).set_page_size(src0_cb_index, in0_single_tile_size);
+        UpdateCircularBufferTotalSize(program, cb_src0, Kt * in0_single_tile_size);
+        UpdateCircularBufferPageSize(program, cb_src0, src0_cb_index, in0_single_tile_size);
 
         auto num_output_blocks_total = ashape[1]; // ashape[1] is Q num_heads; only parallelize on this
         auto [num_cores, all_cores, core_group_1, core_group_2, num_output_blocks_per_core_group_1, num_output_blocks_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total);

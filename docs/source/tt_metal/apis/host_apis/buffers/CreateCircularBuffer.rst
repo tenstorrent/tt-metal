@@ -1,4 +1,0 @@
-CreateCircularBuffer
-======================
-
-.. doxygenfunction:: CreateCircularBuffer

@@ -669,8 +669,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
             raw_in_cb_config.set_globally_allocated_address(*src_buffer);
         }
         if (out_sharded) {
-            auto& output_cb_config = GetCircularBufferConfig(program, cb_sharded_out);
-            output_cb_config.set_globally_allocated_address(*dst_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_sharded_out, *dst_buffer);
         }
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
@@ -1601,8 +1600,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
             raw_in_cb_config.set_globally_allocated_address(*src_buffer);
         }
         if (out_sharded) {
-            auto& output_cb_config = GetCircularBufferConfig(program, cb_sharded_out);
-            output_cb_config.set_globally_allocated_address(*dst_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_sharded_out, *dst_buffer);
         }
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

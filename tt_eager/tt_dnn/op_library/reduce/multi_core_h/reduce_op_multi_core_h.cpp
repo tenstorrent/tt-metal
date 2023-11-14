@@ -276,10 +276,8 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
         if (src_sharded && out_sharded) {
-            auto& src1_cb_config = GetCircularBufferConfig(program, cb_src1);
-            src1_cb_config.set_globally_allocated_address(*src_buffer);
-            auto& out_cb_config = GetCircularBufferConfig(program, cb_output);
-            out_cb_config.set_globally_allocated_address(*dst_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
         } else {
             for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++){
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
