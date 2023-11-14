@@ -16,6 +16,7 @@
 #include "common/assert.hpp"
 #include "common/logger.hpp"
 #include "third_party/umd/device/tt_xy_pair.h"
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 using std::pair;
 
@@ -219,6 +220,7 @@ struct hash<CoreRange> {
 class CoreRangeSet {
   public:
     CoreRangeSet(const std::set<CoreRange> &core_ranges) : ranges_(core_ranges) {
+      ZoneScoped;
       for (auto outer_it = this->ranges_.begin(); outer_it != this->ranges_.end(); outer_it++) {
         for (auto inner_it = this->ranges_.begin(); inner_it != this->ranges_.end(); inner_it++) {
           if (outer_it == inner_it) {
@@ -318,9 +320,10 @@ class CoreRangeSet {
     }
 
     bool core_coord_in_core_ranges(const CoreCoord &core_coord) const {
-      for (auto core_range : this->ranges_) {
-        bool in_x_range = (core_coord.x >= core_range.start.x) and (core_coord.x <= core_range.end.x);
-        bool in_y_range = (core_coord.y >= core_range.start.y) and (core_coord.y <= core_range.end.y);
+      ZoneScoped;
+      for (const auto & cr : this->ranges_) {
+        bool in_x_range = (core_coord.x >= cr.start.x) and (core_coord.x <= cr.end.x);
+        bool in_y_range = (core_coord.y >= cr.start.y) and (core_coord.y <= cr.end.y);
         if (in_x_range and in_y_range) {
           return true;
         }
@@ -329,7 +332,7 @@ class CoreRangeSet {
     }
 
     bool intersects ( const CoreRange & cr) const{
-      for (auto local_cr : this->ranges_) {
+      for (const auto & local_cr : this->ranges_) {
         if ( local_cr.intersects(cr) ) return true;
       }
       return false;
@@ -340,7 +343,7 @@ class CoreRangeSet {
     std::string str() const {
       if (this->ranges().size() > 0) {
         std::string core_range_set_str = "{";
-        for (auto core_range : this->ranges_) {
+        for (const auto &core_range : this->ranges_) {
           core_range_set_str += core_range.str() + ", ";
         }
         core_range_set_str[core_range_set_str.length() - 2] = '}';
