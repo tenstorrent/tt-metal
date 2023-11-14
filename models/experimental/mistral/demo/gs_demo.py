@@ -14,11 +14,15 @@ from models.experimental.mistral.reference.tokenizer import Tokenizer
 
 @pytest.mark.parametrize(
     "batch_size",
-    ((1),),
+    (
+        (1),
+        (8),
+        (32),
+    ),
 )
 def test_gs_demo_single_input_inference(batch_size, model_location_generator, device):
     prompts = batch_size * [
-        "This is a sample text for single layer execution ",
+        "A man is sitting on a roof ",
     ]
 
     mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
