@@ -136,6 +136,7 @@ void MAIN {
     // CB indices
     constexpr uint32_t in0_cb_id                                = tt::CB::c_in0;
     constexpr uint32_t in1_cb_id                                = tt::CB::c_in1;
+    constexpr uint32_t in0_pretilize_cb_id                      = tt::CB::c_in6;
     constexpr uint32_t matmul_partials_cb                       = tt::CB::c_intermed0;
     constexpr uint32_t tilized_in0_cb_id                        = tt::CB::c_intermed1;
     constexpr uint32_t untilize_mode_reblock_cb                 = tt::CB::c_intermed2;
@@ -158,6 +159,15 @@ void MAIN {
     #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
     #endif
+
+    #ifdef PRE_TILIZE
+    unpack_reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
+    tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
+    mm_init_short();
+    // TODO: unpack_reconfig_data_format_srca(in0_pretilize_cb_id, in1_cb_id) doesn't work if in0 is BFLOATB_B and in1 is BFLOAT16
+    unpack_reconfig_data_format_srca(in1_cb_id);
+    #endif
+
 
     // in1 num blocks w is the outer loop. Output blocks are computed in col major order.
     for(uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
