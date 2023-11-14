@@ -194,6 +194,53 @@ void TensorModule(py::module &m_tensor) {
         py::class_<owned_buffer::Buffer<uint16_t>>(m_tensor, "owned_buffer_for_uint16_t", py::buffer_protocol());
     detail::implement_buffer_protocol<owned_buffer::Buffer<uint16_t>, uint16_t>(py_owned_buffer_for_uint16_t);
 
+    auto pyCoreRange = py::class_<CoreRange>(m_tensor, "CoreRange",  R"doc(
+        Class defining a range of cores)doc"
+    );
+    pyCoreRange
+        .def(
+            py::init<>(
+                [](const CoreCoord &start, const CoreCoord & end ) {
+                    return CoreRange{.start=start, .end=end};
+                }
+            )
+        )
+        .def("__repr__", [](const CoreRange &core_range) -> std::string {
+            return fmt::format("{}", core_range);
+        }
+        );
+
+    auto pyCoreRangeSet = py::class_<CoreRangeSet>(m_tensor, "CoreRangeSet",  R"doc(
+        Class defining a set of CoreRanges required for sharding)doc"
+    );
+    pyCoreRangeSet
+        .def(
+            py::init<>(
+                [](const std::set<CoreRange> &core_ranges ) {
+                    return CoreRangeSet(core_ranges);
+                }
+            )
+        );
+
+
+    auto pyShardSpec = py::class_<ShardSpec>(m_tensor, "ShardSpec", R"doc(
+        Class defining the specs required for sharding.
+    )doc");
+
+    pyShardSpec
+        .def(
+            py::init<>(
+                [](const CoreRangeSet & core_sets,
+                    const std::array<uint32_t,2> & shard_shape,
+                    const ShardOrientation & shard_orientation,
+                    const bool & halo
+                     ) {
+                    return ShardSpec(core_sets, shard_shape, shard_orientation, halo);
+                }
+            )
+        );
+
+
     auto py_owned_buffer_for_uint32_t = py::class_<owned_buffer::Buffer<uint32_t>>(m_tensor, "owned_buffer_for_uint32_t", py::buffer_protocol());
     detail::implement_buffer_protocol<owned_buffer::Buffer<uint32_t>, uint32_t>(py_owned_buffer_for_uint32_t);
 

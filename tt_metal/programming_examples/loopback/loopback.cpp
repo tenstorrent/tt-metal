@@ -50,12 +50,25 @@ int main(int argc, char **argv) {
         constexpr uint32_t num_tiles = 50;
         constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-        Buffer l1_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferType::L1);
+        tt::tt_metal::InterleavedBufferConfig dram_config{
+                    .device= device,
+                    .size = dram_buffer_size,
+                    .page_size = dram_buffer_size,
+                    .buffer_type = tt::tt_metal::BufferType::DRAM
+        };
+        tt::tt_metal::InterleavedBufferConfig l1_config{
+                    .device= device,
+                    .size = dram_buffer_size,
+                    .page_size = dram_buffer_size,
+                    .buffer_type = tt::tt_metal::BufferType::L1
+        };
 
-        Buffer input_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferType::DRAM);
+        Buffer l1_buffer = CreateBuffer(l1_config);
+
+        Buffer input_dram_buffer = CreateBuffer(dram_config);
         const uint32_t input_dram_buffer_addr = input_dram_buffer.address();
 
-        Buffer output_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferType::DRAM);
+        Buffer output_dram_buffer = CreateBuffer(dram_config);
         const uint32_t output_dram_buffer_addr = output_dram_buffer.address();
 
         /*

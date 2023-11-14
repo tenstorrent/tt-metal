@@ -81,11 +81,17 @@ bool run_sfpu_test(string sfpu_name,int tile_factor=1,bool use_DRAM=true) {
             page_size = dram_buffer_size;
         }
 
-        auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, page_size,
-                                            (use_DRAM) ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1);
+        BufferType buffType = (use_DRAM) ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1;
+        tt_metal::InterleavedBufferConfig buff_config{
+                                        .device=device,
+                                        .size = dram_buffer_size,
+                                        .page_size = page_size,
+                                        .buffer_type = buffType
+                                        };
+
+        auto src_dram_buffer = CreateBuffer(buff_config);
         uint32_t dram_buffer_src_addr = src_dram_buffer.address();
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size, page_size,
-                                            (use_DRAM) ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1);
+        auto dst_dram_buffer = CreateBuffer(buff_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();

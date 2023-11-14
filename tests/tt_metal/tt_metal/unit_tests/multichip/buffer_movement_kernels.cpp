@@ -31,13 +31,28 @@ bool chip_to_chip_dram_transfer(
     const size_t& byte_size) {
     bool pass = true;
 
+
+    tt::tt_metal::InterleavedBufferConfig sender_dram_config{
+                    .device= sender_device,
+                    .size = byte_size,
+                    .page_size = byte_size,
+                    .buffer_type = tt::tt_metal::BufferType::DRAM
+        };
+    tt::tt_metal::InterleavedBufferConfig receiver_dram_config{
+                    .device= receiver_device,
+                    .size = byte_size,
+                    .page_size = byte_size,
+                    .buffer_type = tt::tt_metal::BufferType::DRAM
+        };
+
+
     // Create source buffer on sender device
-    auto input_dram_buffer = CreateBuffer(sender_device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto input_dram_buffer = CreateBuffer(sender_dram_config);
     uint32_t input_dram_byte_address = input_dram_buffer.address();
     auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();
 
     // Create dest buffer on receiver device
-    auto output_dram_buffer = CreateBuffer(receiver_device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    auto output_dram_buffer = CreateBuffer(receiver_dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer.address();
     auto output_dram_noc_xy = output_dram_buffer.noc_coordinates();
 

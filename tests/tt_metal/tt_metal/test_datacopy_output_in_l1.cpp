@@ -53,9 +53,25 @@ int main(int argc, char **argv) {
         uint32_t num_tiles = 32;
         uint32_t buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        auto src_dram_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
+        tt_metal::InterleavedBufferConfig dram_config{
+                                        .device=device,
+                                        .size = buffer_size,
+                                        .page_size = buffer_size,
+                                        .buffer_type = tt_metal::BufferType::DRAM
+                                        };
 
-        auto dst_l1_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::L1);
+        tt_metal::InterleavedBufferConfig l1_config{
+                                        .device=device,
+                                        .size = buffer_size,
+                                        .page_size = buffer_size,
+                                        .buffer_type = tt_metal::BufferType::L1
+                                        };
+
+
+
+        auto src_dram_buffer = CreateBuffer(dram_config);
+
+        auto dst_l1_buffer = CreateBuffer(l1_config);
 
         auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
         auto l1_dst_noc_xy = dst_l1_buffer.noc_coordinates();

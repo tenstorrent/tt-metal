@@ -115,9 +115,16 @@ int main(int argc, char **argv) {
             page_size = dram_buffer_bytes;
         }
 
-        auto src0_dram_buffer = CreateBuffer(device, dram_buffer_bytes, page_size, tt_metal::BufferType::DRAM);
+        tt_metal::InterleavedBufferConfig buff_config{
+                                        .device=device,
+                                        .size = dram_buffer_bytes,
+                                        .page_size = page_size,
+                                        .buffer_type = tt_metal::BufferType::DRAM
+                                        };
+
+        auto src0_dram_buffer = CreateBuffer(buff_config);
         uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_bytes, page_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = CreateBuffer(buff_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
@@ -197,7 +204,15 @@ int main(int argc, char **argv) {
         if (not multibank) {
             src1_page_size = bcast_vals_nbytes;
         }
-        auto src1_dram_buffer = CreateBuffer(device, bcast_vals_nbytes, src1_page_size, tt_metal::BufferType::DRAM);
+
+        tt_metal::InterleavedBufferConfig src1_config{
+                                        .device=device,
+                                        .size = bcast_vals_nbytes,
+                                        .page_size = src1_page_size,
+                                        .buffer_type = tt_metal::BufferType::DRAM
+                                        };
+
+        auto src1_dram_buffer = CreateBuffer(src1_config);
         uint32_t dram_buffer_src1_addr = src1_dram_buffer.address();
         auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
         tt_metal::detail::WriteToBuffer(src1_dram_buffer, bcast_tiled_u32);

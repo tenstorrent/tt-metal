@@ -54,7 +54,14 @@ bool reader_kernel_no_send(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::Program();
 
-    auto input_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    tt::tt_metal::InterleavedBufferConfig dram_config{
+                    .device=device,
+                    .size = byte_size,
+                    .page_size = byte_size,
+                    .buffer_type = tt::tt_metal::BufferType::DRAM
+        };
+
+    auto input_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = input_dram_buffer.address();
     auto dram_noc_xy = input_dram_buffer.noc_coordinates();
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_reader_core);
@@ -118,7 +125,14 @@ bool writer_kernel_no_receive(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::Program();
 
-    auto output_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    tt::tt_metal::InterleavedBufferConfig dram_config{
+                    .device=device,
+                    .size = byte_size,
+                    .page_size = byte_size,
+                    .buffer_type = tt::tt_metal::BufferType::DRAM
+        };
+
+    auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = output_dram_buffer.address();
     auto dram_noc_xy = output_dram_buffer.noc_coordinates();
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_writer_core);

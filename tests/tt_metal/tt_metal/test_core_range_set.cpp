@@ -73,7 +73,15 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
     uint32_t num_tiles = 4;
     uint32_t buffer_size = single_tile_size * num_tiles;
 
-    auto src_dram_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::DRAM);
+
+    tt_metal::InterleavedBufferConfig dram_config{
+                                        .device=device,
+                                        .size = buffer_size,
+                                        .page_size = buffer_size,
+                                        .buffer_type = tt_metal::BufferType::DRAM
+                                        };
+
+    auto src_dram_buffer = CreateBuffer(dram_config);
     auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
 
     std::map<CoreCoord, tt_metal::Buffer> core_to_l1_buffer;
@@ -83,7 +91,13 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
         for (auto x = start.x; x <= end.x; x++) {
             for (auto y = start.y; y <= end.y; y++) {
                 CoreCoord logical_core({.x=x, .y=y});
-                auto dst_l1_buffer = CreateBuffer(device, buffer_size, buffer_size, tt_metal::BufferType::L1);
+                tt_metal::InterleavedBufferConfig l1_config{
+                                        .device=device,
+                                        .size = buffer_size,
+                                        .page_size = buffer_size,
+                                        .buffer_type = tt_metal::BufferType::L1
+                                        };
+                auto dst_l1_buffer = CreateBuffer(l1_config);
                 core_to_l1_buffer.emplace(logical_core, dst_l1_buffer);
             }
         }

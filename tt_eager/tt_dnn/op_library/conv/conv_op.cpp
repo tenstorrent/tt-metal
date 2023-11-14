@@ -9,7 +9,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/common/constants.hpp"
 
-#include "tt_stl/reflection.hpp"
+#include "tt_metal/tt_stl/reflection.hpp"
 
 #include "tt_dnn/op_library/auto_format.hpp"
 using namespace tt::constants;
@@ -1053,9 +1053,24 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
 
     uint32_t dram_bank_id = 0;
     auto act_address_map_buffer_size_in_dram = act_address_map.size() * sizeof(uint32_t);
-    auto act_address_map_dram_buffer = CreateBuffer(device, act_address_map_buffer_size_in_dram, act_address_map_buffer_size_in_dram, tt_metal::BufferType::DRAM);
+    tt_metal::InterleavedBufferConfig act_config{
+                    .device= device,
+                    .size = act_address_map_buffer_size_in_dram,
+                    .page_size = act_address_map_buffer_size_in_dram,
+                    .buffer_type = tt_metal::BufferType::DRAM
+        };
+
     auto weight_address_map_buffer_size_in_dram = weight_address_map.size() * sizeof(uint32_t);
-    auto weight_address_map_dram_buffer = CreateBuffer(device, weight_address_map_buffer_size_in_dram, weight_address_map_buffer_size_in_dram, tt_metal::BufferType::DRAM);
+    tt_metal::InterleavedBufferConfig weight_config{
+                    .device= device,
+                    .size = weight_address_map_buffer_size_in_dram,
+                    .page_size = weight_address_map_buffer_size_in_dram,
+                    .buffer_type = tt_metal::BufferType::DRAM
+        };
+
+
+    auto act_address_map_dram_buffer = CreateBuffer(act_config);
+    auto weight_address_map_dram_buffer = CreateBuffer(weight_config);
     uint32_t act_address_map_dram_addr = act_address_map_dram_buffer.address();
     // DRAM to L1 writes should 32B aligned
     assert(act_address_map_dram_addr%32 == 0);
@@ -1093,17 +1108,41 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     auto scratch_pad_for_address_map_in_l1_b0_size_bytes = 32;
     // Scratchpad buffer size must also be a multiple of address map fields per transfer. We need all address map fields for a transfer in scratchpad.
     assert(scratch_pad_for_address_map_in_l1_b0_size_bytes % (num_address_map_fields_per_transfer*sizeof(uint32_t)) == 0);
-    auto scratch_pad_for_address_map_l1_buffer = CreateBuffer(device, scratch_pad_for_address_map_in_l1_b0_size_bytes, scratch_pad_for_address_map_in_l1_b0_size_bytes, tt_metal::BufferType::L1);
+
+    tt_metal::InterleavedBufferConfig scratchpad_l1_config{
+                    .device= device,
+                    .size = (uint64_t)scratch_pad_for_address_map_in_l1_b0_size_bytes,
+                    .page_size = (uint64_t)scratch_pad_for_address_map_in_l1_b0_size_bytes,
+                    .buffer_type = tt_metal::BufferType::L1
+        };
+
+    auto scratch_pad_for_address_map_l1_buffer = CreateBuffer(scratchpad_l1_config);
     uint32_t scratch_pad_for_address_map_l1_address = scratch_pad_for_address_map_l1_buffer.address();
     // DRAM to L1 writes should 32B aligned
     assert(scratch_pad_for_address_map_l1_address%32 == 0);
     // Create address map metadata buffers in L1
     // Metadata vectors are copied to L1 buffers from host before calling detail::LaunchProgram
     auto act_address_map_metadata_l1_b0_size = act_address_map_metadata.size() * sizeof(uint32_t);
-    auto act_address_map_metadata_l1_buffer = CreateBuffer(device, act_address_map_metadata_l1_b0_size, act_address_map_metadata_l1_b0_size, tt_metal::BufferType::L1);
+
+    tt_metal::InterleavedBufferConfig act_l1_config{
+                    .device= device,
+                    .size = (uint64_t)act_address_map_metadata_l1_b0_size,
+                    .page_size = (uint64_t)act_address_map_metadata_l1_b0_size,
+                    .buffer_type = tt_metal::BufferType::L1
+        };
+    auto act_address_map_metadata_l1_buffer = CreateBuffer(act_l1_config);
     uint32_t act_address_map_metadata_l1_address = act_address_map_metadata_l1_buffer.address();
     auto weight_address_map_metadata_l1_b0_size = weight_address_map_metadata.size() * sizeof(uint32_t);
-    auto weight_address_map_metadata_l1_buffer = CreateBuffer(device, weight_address_map_metadata_l1_b0_size, weight_address_map_metadata_l1_b0_size, tt_metal::BufferType::L1);
+
+    tt_metal::InterleavedBufferConfig weight_l1_config{
+                    .device= device,
+                    .size = (uint64_t)weight_address_map_metadata_l1_b0_size,
+                    .page_size = (uint64_t)weight_address_map_metadata_l1_b0_size,
+                    .buffer_type = tt_metal::BufferType::L1
+        };
+
+
+    auto weight_address_map_metadata_l1_buffer = CreateBuffer(weight_l1_config);
     uint32_t weight_address_map_metadata_l1_address = weight_address_map_metadata_l1_buffer.address();
 
     // out

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <array>
+#include <vector>
 
 #include "dev_mem_map.h"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
@@ -15,6 +16,8 @@ class DeviceCommand {
 
     // Constants
     static constexpr uint32_t HUGE_PAGE_SIZE = 1024 * 1024 * 1024;
+    //TODO: investigate other num_cores
+    static constexpr uint32_t NUM_MAX_CORES = 108; //12 x 9
     static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = 20;
     static constexpr uint32_t NUM_ENTRIES_IN_DEVICE_COMMAND = 5632;
     static constexpr uint32_t NUM_BYTES_IN_DEVICE_COMMAND = NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t);
@@ -24,7 +27,7 @@ class DeviceCommand {
         (MEM_L1_SIZE - (NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t)) - L1_UNRESERVED_BASE);
     static constexpr uint32_t CONSUMER_DATA_BUFFER_SIZE = (PRODUCER_DATA_BUFFER_SIZE - NUM_BYTES_IN_DEVICE_COMMAND) / 2;
     static constexpr uint32_t DEVICE_COMMAND_DATA_ADDR = L1_UNRESERVED_BASE + NUM_BYTES_IN_DEVICE_COMMAND;
-    static constexpr uint32_t NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION = 6;
+    static constexpr uint32_t NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION = COMMAND_PTR_SHARD_IDX + NUM_MAX_CORES*NUM_ENTRIES_PER_SHARD;
     static constexpr uint32_t NUM_POSSIBLE_BUFFER_TRANSFERS = 2;
 
     // Ensure any changes to this device command have asserts modified/extended
@@ -50,6 +53,7 @@ class DeviceCommand {
     static constexpr uint32_t num_go_signal_pages_idx = 15;
     static constexpr uint32_t data_size_idx = 16;
     static constexpr uint32_t producer_consumer_transfer_num_pages_idx = 17;
+    static constexpr uint32_t sharded_buffer_num_cores_idx = 18;
 
     void wrap();
 
@@ -73,6 +77,8 @@ class DeviceCommand {
 
     void set_num_pages(const uint32_t num_pages);
 
+    void set_sharded_buffer_num_cores(uint32_t num_cores);
+
     void set_num_pages(const DeviceCommand::TransferType transfer_type, const uint32_t num_pages);
 
     void set_data_size(const uint32_t data_size);
@@ -87,7 +93,20 @@ class DeviceCommand {
         const uint32_t num_pages,
         const uint32_t padded_page_size,
         const uint32_t src_buf_type,
-        const uint32_t dst_buf_type);
+        const uint32_t dst_buf_type
+        );
+
+    void add_buffer_transfer_instruction_sharded(
+        const uint32_t src,
+        const uint32_t dst,
+        const uint32_t num_pages,
+        const uint32_t padded_page_size,
+        const uint32_t src_buf_type,
+        const uint32_t dst_buf_type,
+        const std::vector<uint32_t> num_pages_in_shard,
+        const std::vector<uint32_t> core_id_x,
+        const std::vector<uint32_t> core_id_y
+    );
 
     void write_program_entry(const uint32_t val);
 

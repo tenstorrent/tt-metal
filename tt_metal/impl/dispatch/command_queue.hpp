@@ -20,7 +20,6 @@
 #include "tt_metal/impl/program/program.hpp"
 #include "noc/noc_parameters.h"
 
-
 namespace tt::tt_metal {
 
 using std::pair;
@@ -99,7 +98,6 @@ class EnqueueWriteBufferCommand : public Command {
     SystemMemoryWriter& writer;
     const void* src;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_WRITE_BUFFER;
-
    public:
     EnqueueWriteBufferCommand(Device* device, Buffer& buffer, const void* src, SystemMemoryWriter& writer);
 

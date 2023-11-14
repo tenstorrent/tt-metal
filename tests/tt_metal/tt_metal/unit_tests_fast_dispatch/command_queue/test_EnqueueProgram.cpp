@@ -249,7 +249,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
     return pass;
 }
 
-bool test_EnqueueWrap_on_EnqueueWriteBuffer(Device* device, CommandQueue& cq, const BufferConfig& config) {
+bool test_EnqueueWrap_on_EnqueueWriteBuffer(Device* device, CommandQueue& cq, const TestBufferConfig& config) {
     EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 
     /*
@@ -269,14 +269,14 @@ bool test_EnqueueWrap_on_EnqueueWriteBuffer(Device* device, CommandQueue& cq, co
     return true;
 }
 
-bool test_EnqueueWrap_on_Finish(Device* device, CommandQueue& cq, const BufferConfig& config) {
+bool test_EnqueueWrap_on_Finish(Device* device, CommandQueue& cq, const TestBufferConfig& config) {
     bool pass = true;
     EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 
     return pass;
 }
 
-bool test_EnqueueWrap_on_EnqueueProgram(Device* device, CommandQueue& cq, const BufferConfig& config) {
+bool test_EnqueueWrap_on_EnqueueProgram(Device* device, CommandQueue& cq, const TestBufferConfig& config) {
     bool pass = true;
     EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 

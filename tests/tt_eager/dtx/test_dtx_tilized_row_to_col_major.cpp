@@ -74,11 +74,23 @@ int main(int argc, char **argv) {
 
         uint32_t dram_buffer_size = 2 * 64 * 64;
         uint32_t address_map_l1_addr = 500 * 1024;
-
-        auto input_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        tt_metal::InterleavedBufferConfig dram_config{
+                                        .device=device,
+                                        .size = dram_buffer_size,
+                                        .page_size = dram_buffer_size,
+                                        .buffer_type = tt_metal::BufferType::DRAM
+                                        };
+        auto input_dram_buffer = CreateBuffer(dram_config);
         uint32_t input_dram_buffer_addr = input_dram_buffer.address();
 
-        auto l1_b0 = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::L1);
+        tt_metal::InterleavedBufferConfig l1_config{
+                                        .device=device,
+                                        .size = dram_buffer_size,
+                                        .page_size = dram_buffer_size,
+                                        .buffer_type = tt_metal::BufferType::L1
+                                        };
+
+        auto l1_b0 = CreateBuffer(l1_config);
         uint32_t l1_buffer_addr = l1_b0.address();
 
         auto input_dram_noc_xy = input_dram_buffer.noc_coordinates();

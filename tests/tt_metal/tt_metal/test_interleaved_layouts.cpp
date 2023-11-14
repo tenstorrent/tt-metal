@@ -47,7 +47,16 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
         std::vector<uint32_t> src_vec = create_arange_vector_of_bfloat16(
             dram_buffer_size, false);
 
-        auto sticks_buffer = CreateBuffer(device, dram_buffer_size, stick_size, tt_metal::BufferType::DRAM);
+
+        tt_metal::InterleavedBufferConfig sticks_config{
+                    .device=device,
+                    .size = dram_buffer_size,
+                    .page_size = (uint64_t)stick_size,
+                    .buffer_type = tt_metal::BufferType::DRAM
+                    };
+
+
+        auto sticks_buffer = CreateBuffer(sticks_config);
         uint32_t dram_buffer_src_addr = sticks_buffer.address();
 
         tt_metal::detail::WriteToBuffer(sticks_buffer, src_vec);
@@ -102,11 +111,24 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         int num_output_tiles = (num_sticks * num_elements_in_stick) / 1024;
 
         uint32_t dram_buffer_size =  num_sticks * stick_size; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+        tt_metal::InterleavedBufferConfig src_config{
+                    .device=device,
+                    .size = dram_buffer_size,
+                    .page_size = (uint64_t)stick_size,
+                    .buffer_type = tt_metal::BufferType::DRAM
+                    };
 
-        auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, stick_size, tt_metal::BufferType::DRAM);
+        tt_metal::InterleavedBufferConfig dst_config{
+                    .device=device,
+                    .size = dram_buffer_size,
+                    .page_size = dram_buffer_size,
+                    .buffer_type = tt_metal::BufferType::DRAM
+                    };
+
+        auto src_dram_buffer = CreateBuffer(src_config);
         uint32_t dram_buffer_src_addr = src_dram_buffer.address();
 
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = CreateBuffer(dst_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
@@ -269,10 +291,17 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
 
         uint32_t dram_buffer_size =  num_sticks * stick_size; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, stick_size, tt_metal::BufferType::DRAM);
+
+        tt_metal::InterleavedBufferConfig dram_config{
+                    .device=device,
+                    .size = dram_buffer_size,
+                    .page_size = (uint64_t)stick_size,
+                    .buffer_type = tt_metal::BufferType::DRAM
+                    };
+        auto src_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_src_addr = src_dram_buffer.address();
 
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size, stick_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
@@ -432,13 +461,28 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
     std::vector<uint32_t> host_buffer = create_random_vector_of_bfloat16(
         buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+    tt_metal::InterleavedBufferConfig l1_config{
+                    .device=device,
+                    .size = buffer_size,
+                    .page_size = num_bytes_per_page,
+                    .buffer_type = tt_metal::BufferType::L1
+                    };
+    tt_metal::InterleavedBufferConfig dram_config{
+                    .device=device,
+                    .size = buffer_size,
+                    .page_size = num_bytes_per_page,
+                    .buffer_type = tt_metal::BufferType::DRAM
+                    };
+
 
     tt_metal::Buffer src;
     tt_metal::Buffer dst;
     if constexpr (src_is_in_l1) {
         TT_FATAL((buffer_size % num_l1_banks) == 0);
 
-        src = CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::L1);
+
+
+        src = CreateBuffer(l1_config);
         tt_metal::detail::WriteToBuffer(src, host_buffer);
 
         tt_metal::SetRuntimeArgs(
@@ -450,7 +494,9 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     } else {
         TT_FATAL((buffer_size % num_dram_banks) == 0);
 
-        src = CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::DRAM);
+
+
+        src = CreateBuffer(dram_config);
         tt_metal::detail::WriteToBuffer(src, host_buffer);
 
         tt_metal::SetRuntimeArgs(
@@ -462,7 +508,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
     std::vector<uint32_t> readback_buffer;
     if constexpr (dst_is_in_l1) {
-        dst = CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::L1);
+        dst = CreateBuffer(l1_config);
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -479,7 +525,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
         tt_metal::detail::ReadFromBuffer(dst, readback_buffer);
 
     } else {
-         dst = CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::DRAM);
+         dst = CreateBuffer(dram_config);
 
         tt_metal::SetRuntimeArgs(
             program,

@@ -12,7 +12,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"
 
-#include "tt_stl/reflection.hpp"
+#include "tt_metal/tt_stl/reflection.hpp"
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
@@ -48,7 +48,6 @@ Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layou
     );
 }
 
-Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layout layout) : Tensor(storage, shape, dtype, layout, std::nullopt) {}
 
 Tensor::~Tensor() {
     this->deallocate();
@@ -78,6 +77,19 @@ void Tensor::deallocate(bool force) {
         this->storage_);
 }
 
+
+
+
+Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config, const ShardSpec & shard_spec) const {
+    ZoneScoped;
+    if (storage_type() == StorageType::DEVICE) {
+        TT_ASSERT(this->device() == target_device && "Currently do not support moving between devices");
+        return *this;
+    }
+    tensor_impl::validate_on_device_dtype_and_layout(target_device, this->dtype(), this->layout());
+    return tensor_impl::to_device_wrapper_sharded(*this, target_device, mem_config, shard_spec);
+}
+
 Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
     ZoneScoped;
 
@@ -85,6 +97,20 @@ Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
         TT_ASSERT(this->device() == target_device && "Currently do not support moving between devices");
         return *this;
     }
+    TT_ASSERT(!mem_config.is_sharded() &&
+                " Cannot be sharded, if sharded use to(Device *target_device, const MemoryConfig &mem_config, const ShardSpec & shard_spec)  instead");
+    std::string mem_config_str;
+    if(mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED)
+        mem_config_str = "INTERLEAVED ";
+    else if(mem_config.memory_layout == TensorMemoryLayout::SINGLE_BANK)
+        mem_config_str = "SINGLE_BANK ";
+    else if(mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED)
+        mem_config_str = "BLOCK_SHARDED ";
+    else if(mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED)
+        mem_config_str = "HEIGHT_SHARDED ";
+    else if(mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED)
+        mem_config_str = "HEIGHT_SHARDED ";
+
     tensor_impl::validate_on_device_dtype_and_layout(target_device, this->dtype(), this->layout());
     return tensor_impl::to_device_wrapper(*this, target_device, mem_config);
 }
@@ -95,6 +121,25 @@ Tensor Tensor::cpu() const {
         return *this;
     }
     return tensor_impl::to_host_wrapper(*this);
+}
+
+Tensor Tensor::cpu_sharded() const {
+    ZoneScoped;
+    return tensor_impl::to_host_wrapper_sharded(*this);
+}
+
+
+Tensor Tensor::extract_shard(const CoreCoord & core) const{
+
+    auto buffer= this->buffer();
+    uint32_t core_id = buffer->core_to_core_id().at(core);
+    return this->extract_shard(core_id);
+}
+
+Tensor Tensor::extract_shard(const uint32_t & core_id) const{
+
+    return tensor_impl::to_extract_shard_wrapper(*this, core_id);
+
 }
 
 Tensor Tensor::to(Layout target_layout) const {
@@ -204,6 +249,19 @@ bool Tensor::is_allocated() const {
     );
 }
 
+std::vector<uint32_t> Tensor::host_page_ordering(){
+    auto cores = buffer()->all_cores();
+    auto shard_size = buffer()->shard_size();
+    auto num_pages = cores.size() * shard_size;
+    auto dp_map = buffer()->dev_page_to_host_page_mapping();
+
+    std::vector<uint32_t> ret_vec;
+    ret_vec.reserve(num_pages);
+    for(int page_id = 0; page_id <num_pages ; page_id++){
+        ret_vec.push_back(dp_map[page_id]);
+    }
+    return ret_vec;
+}
 
 StorageType Tensor::storage_type() const {
     return std::visit(
@@ -291,10 +349,21 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
         TT_ASSERT(shard_shape[1] * tensor_impl::element_size_bytes_wrapper(data_type) % 32 == 0);
     }
 
+    auto element_size = tensor_impl::element_size_bytes_wrapper(data_type);
+    auto page_shape = tensor_impl::get_sharded_page_shape(layout, shape, data_type, shard_spec.num_cores(), shard_spec.shard_shape);
+    std::array<uint32_t,2> tensor2d_size = {shape[0]*shape[1] * shape[2]/page_shape[0],
+                                                shape[3]/page_shape[1]
+                                            };
 
-    uint32_t shard_size = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(Shape({shard_shape[0], shard_shape[1]}), data_type));
+    ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
+    uint32_t shard_size = shard_shape[0] * shard_shape[1] * element_size;
+    if(layout == Layout::TILE)
+        shard_size = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(Shape({shard_shape[0], shard_shape[1]}), data_type));
     uint32_t packed_size_in_bytes = shard_size * num_cores;
-    auto device_buffer = tensor_impl::allocate_sharded_buffer_on_device(packed_size_in_bytes, device, shard_size, memory_config);
+    auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape,
+                                                            data_type, layout, memory_config,
+                                                            std::make_optional<ShardSpecBuffer>(shard_spec_buffer)
+                                                            );
     return Tensor(DeviceStorage{device_buffer, device, memory_config}, shape, data_type, layout, shard_spec);
 }
 

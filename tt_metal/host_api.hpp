@@ -189,14 +189,11 @@ uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRang
 *
 *  Return value: Buffer
 *
-*  | Argument    | Description                             | Type       | Valid Range | Required |
-*  |-------------|---------------------------------------- |------------|-------------|----------|
-*  | device      | The device that the buffer will reside  | Device     |             | Yes      |
-*  | size        | size of buffer                          | uint64_t   |             | Yes      |
-*  | page_size   | buffer page size                        | uint64_t   |             | Yes      |
-*  | buffer_type | type of buffer (L1 or DRAM)             | BufferType |             | Yes      |
+*  | Argument        | Description                             | Type                     | Valid Range | Required |
+*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
+*  | config          | config for buffer                       | BufferConfig             |             | Yes      |
 */
-Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size, const BufferType buffer_type);
+Buffer CreateBuffer(const std::variant<InterleavedBufferConfig, ShardedBufferConfig> & config);
 
 /**
 *  Deallocates buffer from device by marking its memory as free.

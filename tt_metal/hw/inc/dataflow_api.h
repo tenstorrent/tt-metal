@@ -1536,12 +1536,92 @@ enum class BufferType: uint8_t {
     SYSTEM_MEMORY = 2
 };
 
+FORCE_INLINE
+uint32_t min(uint32_t a, uint32_t b) { return (a < b) ? a: b; }
+
+
+template<bool READ>
+FORCE_INLINE void noc_async_sharded_read_write_helper(
+                                    const uint32_t num_cores,
+                                    const uint32_t page_size,
+                                    const uint32_t bank_base_address,
+                                    volatile tt_l1_ptr uint32_t* base_command_addr,
+                                    const uint32_t addr,
+                                    const uint32_t num_pages,
+                                    const uint32_t page_id
+                                    ){
+
+    uint32_t pages_start = 0;
+    uint32_t pages_end = 0;
+
+
+    //first get to correct core
+    uint32_t core_word_id = 0;
+    while (not (page_id >= pages_start and page_id < pages_end)) {
+        uint32_t num_pages_core = base_command_addr[core_word_id];
+        pages_end = pages_start + num_pages_core;
+        uint32_t core_id_x = base_command_addr[core_word_id + 1];
+        uint32_t core_id_y = base_command_addr[core_word_id + 2];
+        if (not (page_id >= pages_start and page_id < pages_end)) {
+            pages_start = pages_end;
+        }
+        core_word_id+=NUM_ENTRIES_PER_SHARD;
+    }
+
+    core_word_id-= NUM_ENTRIES_PER_SHARD;
+
+    uint32_t flattened_page_id = page_id;
+
+    uint32_t host_page_id = 0;
+    uint32_t host_offset = 0;
+    uint32_t core_page_id = (flattened_page_id - pages_start);
+    uint32_t core_offset = core_page_id * page_size;
+
+    uint32_t num_pages_left = num_pages;
+
+    while (num_pages_left > 0) {
+        uint32_t num_pages_core = base_command_addr[core_word_id];
+        pages_end = pages_start + num_pages_core;
+        uint32_t core_id_x = base_command_addr[core_word_id + 1];
+        uint32_t core_id_y = base_command_addr[core_word_id + 2];
+
+
+        //now curr_page_id pointing to beginning of section we want in this core
+        uint32_t num_pages_write_core = min(pages_end - flattened_page_id, num_pages_left);
+
+        uint32_t size_in_bytes_written = num_pages_write_core *page_size;
+
+        //Writing at beginning of core
+        uint64_t noc_address = get_noc_addr(core_id_x, core_id_y,
+                                        bank_base_address + core_offset);
+
+        if constexpr (READ) {
+            noc_async_read(noc_address, addr + host_offset, size_in_bytes_written);
+        }
+        else{
+            noc_async_write(addr + host_offset, noc_address, size_in_bytes_written);
+        }
+
+        num_pages_left-= num_pages_write_core;
+        host_offset += size_in_bytes_written;
+        core_offset = 0;
+        pages_start = pages_end;
+        flattened_page_id = pages_start;
+        core_word_id += NUM_ENTRIES_PER_SHARD;
+    }
+}
+
 class Buffer {
    private:
     uint32_t bank_base_address;
     uint32_t page_size_;
     uint64_t (*get_noc_addr_helper)(const uint32_t, const uint32_t, const uint32_t, const uint32_t);
     BufferType type;
+    bool sharded;
+
+    //sharding
+    volatile tt_l1_ptr uint32_t* base_command_addr_;
+    uint32_t num_cores_;
 
     void set_type(const BufferType type) {
         this->type = type;
@@ -1551,40 +1631,79 @@ class Buffer {
             case BufferType::SYSTEM_MEMORY: this->get_noc_addr_helper = get_system_memory_noc_addr; break;
         }
     }
-    uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0) {
+    uint64_t get_noc_addr_(const uint32_t id, const uint32_t offset = 0) {
+        uint64_t noc_addr = this->get_noc_addr_helper(id, this->page_size_, this->bank_base_address, offset);
         return this->get_noc_addr_helper(id, this->page_size_, this->bank_base_address, offset);
     }
 
    public:
 
+    Buffer(){;}
+
     Buffer(const BufferType type, const uint32_t bank_base_address, const uint32_t page_size) {
+        this->init(type, bank_base_address, page_size);
+    }
+
+    Buffer(uint32_t page_size, uint32_t num_cores,  uint32_t addr, volatile tt_l1_ptr uint32_t* command_ptr) {
+        this->init_sharded(page_size, num_cores, addr, command_ptr);
+    }
+
+    void init(const BufferType type, const uint32_t bank_base_address, const uint32_t page_size) {
         this->set_type(type);
         this->bank_base_address = bank_base_address;
         this->page_size_ = page_size;
+        this->sharded = false;
     }
 
+    void init_sharded(uint32_t page_size, uint32_t num_cores,  uint32_t addr, volatile tt_l1_ptr uint32_t* command_ptr){
+        this->type = BufferType::L1;
+        this->bank_base_address = addr;
+        this->page_size_ = page_size;
+        this->base_command_addr_ = command_ptr;
+        this->num_cores_ = num_cores;
+        this->sharded = true;
+
+    }
     uint32_t page_size() { return this->page_size_; }
 
-    void noc_async_write_buffer(uint32_t src, const uint32_t id, const uint32_t num_pages, const uint32_t offset) {
-        if (this->type == BufferType::SYSTEM_MEMORY) {
-            noc_async_write(src, this->get_noc_addr(id, offset), this->page_size_ * num_pages);
-        } else {
-            for (uint32_t i = 0; i < num_pages; i++) {
-                uint64_t address = this->get_noc_addr(id + i, offset);
-                noc_async_write(src, address, this->page_size_);
-                src += this->page_size_;
+
+    void noc_async_write_buffer(uint32_t src, const uint32_t id, const uint32_t num_pages, const uint32_t offset=0) {
+        if (this->sharded) {
+            noc_async_sharded_read_write_helper<false>(this->num_cores_, this->page_size_,
+                                                this->bank_base_address, this->base_command_addr_,
+                                                src,  num_pages, id);
+        }
+        else {
+            if (this->type == BufferType::SYSTEM_MEMORY) {
+                noc_async_write(src, this->get_noc_addr_(id, offset), this->page_size_ * num_pages);
+            }
+            else {
+                for (uint32_t i = 0; i < num_pages; i++) {
+                    uint64_t address = this->get_noc_addr_(id + i, offset);
+                    noc_async_write(src, address, this->page_size_);
+                    src += this->page_size_;
+                }
             }
         }
+
     }
 
-    void noc_async_read_buffer(uint32_t dst, const uint32_t id, const uint32_t num_pages, const uint32_t offset) {
-        if (this->type == BufferType::SYSTEM_MEMORY) {
-            noc_async_read(this->get_noc_addr(id, offset), dst, this->page_size_ * num_pages);
-        } else {
-            for (uint32_t i = 0; i < num_pages; i++) {
-                uint64_t address = this->get_noc_addr(id + i, offset);
-                noc_async_read(address, dst, this->page_size_);
-                dst += this->page_size_;
+    void noc_async_read_buffer(uint32_t dst, const uint32_t id, const uint32_t num_pages, const uint32_t offset=0) {
+        if (this->sharded) {
+            noc_async_sharded_read_write_helper<true>(this->num_cores_, this->page_size_,
+                                            this->bank_base_address, this->base_command_addr_,
+                                            dst,  num_pages, id);
+        }
+        else {
+            if (this->type == BufferType::SYSTEM_MEMORY) {
+                noc_async_read(this->get_noc_addr_(id, offset), dst, this->page_size_ * num_pages);
+            }
+            else {
+                for (uint32_t i = 0; i < num_pages; i++) {
+                    uint64_t address = this->get_noc_addr_(id + i, offset);
+                    noc_async_read(address, dst, this->page_size_);
+                    dst += this->page_size_;
+                }
             }
         }
     }

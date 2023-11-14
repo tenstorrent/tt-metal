@@ -46,11 +46,33 @@ int main(int argc, char **argv) {
         uint32_t bytesB = single_tile_size * num_tilesB;
         uint32_t bytesC = single_tile_size * num_tilesC;
 
-        auto src0_dram_buffer = CreateBuffer(device, bytesA, single_tile_size, tt_metal::BufferType::DRAM);
+        tt_metal::InterleavedBufferConfig src0_config{
+                                        .device=device,
+                                        .size = bytesA,
+                                        .page_size = single_tile_size,
+                                        .buffer_type = tt_metal::BufferType::DRAM
+                                        };
+
+        auto src0_dram_buffer = CreateBuffer(src0_config);
         uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
-        auto src1_dram_buffer = CreateBuffer(device, bytesB, single_tile_size, tt_metal::BufferType::DRAM);
+
+        tt_metal::InterleavedBufferConfig src1_config{
+                                        .device=device,
+                                        .size = bytesB,
+                                        .page_size = single_tile_size,
+                                        .buffer_type = tt_metal::BufferType::DRAM
+                                        };
+
+        auto src1_dram_buffer = CreateBuffer(src1_config);
         uint32_t dram_buffer_src1_addr = src1_dram_buffer.address();
-        auto dst_dram_buffer = CreateBuffer(device, bytesC, single_tile_size, tt_metal::BufferType::DRAM);
+
+        tt_metal::InterleavedBufferConfig dst_config{
+                                        .device=device,
+                                        .size = bytesC,
+                                        .page_size = single_tile_size,
+                                        .buffer_type = tt_metal::BufferType::DRAM
+                                        };
+        auto dst_dram_buffer = CreateBuffer(dst_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         uint32_t src0_cb_index = 0;

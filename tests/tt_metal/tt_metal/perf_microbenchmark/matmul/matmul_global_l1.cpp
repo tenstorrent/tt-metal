@@ -1140,12 +1140,29 @@ int main(int argc, char** argv) {
         (l1_in1 == 0) ? (BufferType::DRAM) : (BufferType::L1);
     BufferType out_buffer_type =
         (l1_out == 0) ? (BufferType::DRAM) : (BufferType::L1);
-    auto in0_buffer = CreateBuffer(device, in0_buffer_size,
-                                       single_tile_size, in0_buffer_type);
-    auto in1_buffer = CreateBuffer(device, in1_buffer_size,
-                                       single_tile_size, in1_buffer_type);
-    auto out_buffer = CreateBuffer(device, out_buffer_size,
-                                       single_tile_size, out_buffer_type);
+
+    tt_metal::InterleavedBufferConfig in0_config{
+                    .device=device,
+                    .size = in0_buffer_size,
+                    .page_size = single_tile_size,
+                    .buffer_type = in0_buffer_type
+    };
+    tt_metal::InterleavedBufferConfig in1_config{
+                    .device=device,
+                    .size = in1_buffer_size,
+                    .page_size = single_tile_size,
+                    .buffer_type = in1_buffer_type
+    };
+    tt_metal::InterleavedBufferConfig out_config{
+                    .device=device,
+                    .size = out_buffer_size,
+                    .page_size = single_tile_size,
+                    .buffer_type = out_buffer_type
+    };
+
+    auto in0_buffer = CreateBuffer(in0_config);
+    auto in1_buffer = CreateBuffer(in1_config);
+    auto out_buffer = CreateBuffer(out_config);
 
     SHAPE in0_shape = {1, 1, Mt * 32, Kt * 32};
     tt::deprecated::Tensor<bfloat16> tensor =

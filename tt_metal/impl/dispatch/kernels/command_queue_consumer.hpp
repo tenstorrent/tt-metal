@@ -73,32 +73,41 @@ uint32_t get_read_ptr(bool db_buf_switch) {
     return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_rd_ptr_addr(db_buf_switch)) << 4;
 }
 
-inline uint32_t min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
-
 FORCE_INLINE void write_buffers(
     volatile tt_l1_ptr uint32_t* command_ptr,
     uint32_t num_destinations,
+    uint32_t sharded_buffer_num_cores,
     uint32_t consumer_cb_size,
     uint32_t consumer_cb_num_pages,
     uint64_t producer_noc_encoding,
     uint32_t producer_consumer_transfer_num_pages,
     bool db_buf_switch) {
+
+    bool sharded = sharded_buffer_num_cores > 1;
+
     for (uint32_t i = 0; i < num_destinations; i++) {
         const uint32_t bank_base_address = command_ptr[1];
         const uint32_t num_pages = command_ptr[2];
         const uint32_t page_size = command_ptr[3];
         const uint32_t dst_buf_type = command_ptr[5];
-        Buffer buffer((BufferType)dst_buf_type, bank_base_address, page_size);
 
         uint32_t num_to_write;
         uint32_t src_addr = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_rd_ptr_addr(db_buf_switch)) << 4;
         uint32_t l1_consumer_fifo_limit = src_addr + consumer_cb_size - 1;
 
+        Buffer buffer;
+        if ((BufferType)dst_buf_type == BufferType::SYSTEM_MEMORY or not(sharded)) {
+            buffer.init((BufferType)dst_buf_type, bank_base_address, page_size);
+        }
+        else {
+            buffer.init_sharded(page_size, sharded_buffer_num_cores, bank_base_address,
+                            command_ptr + COMMAND_PTR_SHARD_IDX);
+        }
         for (uint32_t id = 0; id < num_pages;) {
             num_to_write = min(num_pages - id, producer_consumer_transfer_num_pages);
             multicore_cb_wait_front(db_buf_switch, num_to_write);
             uint32_t src_addr = get_read_ptr(db_buf_switch);
-            buffer.noc_async_write_buffer(src_addr, id, num_to_write, 0);
+            buffer.noc_async_write_buffer(src_addr, id, num_to_write);
             noc_async_writes_flushed();
             multicore_cb_pop_front(
                 producer_noc_encoding,
