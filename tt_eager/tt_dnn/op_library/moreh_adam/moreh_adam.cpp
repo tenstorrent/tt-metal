@@ -47,8 +47,6 @@ operation::ProgramWithCallbacks moreh_adam_(
     // uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] = tt_metal::split_work_to_cores(core_grid_coord, num_tiles);
 
-    tt::log_info("num_tiles = {} num_cores_y={} num_cores = {}",
-                num_tiles, num_cores_y, num_cores);
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -172,10 +170,6 @@ operation::ProgramWithCallbacks moreh_adam_(
         } else {
             TT_ASSERT(false, "Core not in specified core ranges.");
         }
-        tt::log_info("i = {} -> {}.{}", i, core.x, core.y);
-        tt::log_info("param_addr={}, grad_addr={}, exp_avg_addr={}, exp_avg_sq_addr={} max_exp_avg_sq_addr={}, num_tiles_per_core={}, tile_offset={}",
-            param_addr, grad_addr, exp_avg_addr, exp_avg_sq_addr, max_exp_avg_sq_addr,
-            num_tiles_per_core, tile_offset);
 
         const std::vector<uint32_t> reader_runtime_args{
             param_addr, grad_addr, exp_avg_addr, exp_avg_sq_addr, max_exp_avg_sq_addr,
@@ -189,10 +183,8 @@ operation::ProgramWithCallbacks moreh_adam_(
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         if (core_group_1.core_coord_in_core_ranges(core)) {
-            tt::log_info("core_group_1={}, step={}", i, step);
             tt_metal::SetRuntimeArgs(program, compute_kernel_1_id, core, {step});
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
-            tt::log_info("core_group_2={}, step={}", i, step);
             tt_metal::SetRuntimeArgs(program, compute_kernel_2_id, core, {step});
         } else {
             TT_ASSERT(false, "Core not in specified core ranges.");

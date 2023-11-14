@@ -102,7 +102,6 @@ operation::ProgramWithCallbacks MorehAdam::create_program(
 
     std::vector<std::variant<Tensor, char*>> outputs{nullptr, nullptr, nullptr, nullptr, nullptr};
 
-    tt::log_info("operation::run start");
     operation::run(
         MorehAdam{
             .inplace = true,
@@ -111,7 +110,6 @@ operation::ProgramWithCallbacks MorehAdam::create_program(
         {param, grad, exp_avg, exp_avg_sq},
         {max_exp_avg_sq});
 
-    tt::log_info("operation::run end");
     outputs[0] = param;
     outputs[1] = grad;
     outputs[2] = exp_avg;

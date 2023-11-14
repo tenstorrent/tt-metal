@@ -378,10 +378,8 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, *device_buffer, device_data, true);
-        log_info("TT_METAL_SLOW_DISPATCH_MODE is null");
     } else {
         ReadFromBuffer(*device_buffer, device_data);
-        log_info("TT_METAL_SLOW_DISPATCH_MODE is not null");
     }
 }
 
