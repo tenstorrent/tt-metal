@@ -30,7 +30,7 @@ const uint32_t bias_cb                                = CB::c_in2;
 const uint32_t sharded_act_cb                         = CB::c_in3;
 const uint32_t cb_for_reader_indices                  = CB::c_in4;
 const uint32_t cb_for_reader_offsets                  = CB::c_in5;
-const uint32_t sharded_act_mcast_receiver_cb          = CB::c_in6;
+const uint32_t act_cb_row_major_bfloat16              = CB::c_in6;
 const uint32_t matmul_partials_cb                     = CB::c_intermed0;
 const uint32_t tilize_mode_tilized_act_cb             = CB::c_intermed1;
 const uint32_t untilize_mode_reblock_cb               = CB::c_intermed2;
@@ -64,13 +64,7 @@ tuple<CircularBufferID, CircularBufferID> create_CBs_for_sharded_input(
     uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
     uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
 
-    // Invariants
-    CircularBufferConfig cb_act_config = CircularBufferConfig(num_cb0_tiles * act_tile_size, {{act_cb, act_df}})
-		.set_page_size(act_cb, act_tile_size);
-    auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
-
     auto cb_sharded_act = 0;
-    auto cb_sharded_act_mcast_receiver = 0;
     if (input.memory_config().is_sharded()) {
         uint32_t num_bytes_for_df = datum_size(act_df);
         auto shard_shape = input.shard_spec().value().shard_shape;
@@ -82,13 +76,31 @@ tuple<CircularBufferID, CircularBufferID> create_CBs_for_sharded_input(
         cb_sharded_act_config.set_globally_allocated_address(*input.buffer());
         cb_sharded_act = tt_metal::CreateCircularBuffer(program, core, cb_sharded_act_config);
 
-        // For 2D convs, we need a separate cb to receive mcasted input shards
         if (weight_width_sliced) {
-          CircularBufferConfig cb_sharded_act_mcast_receiver_config = CircularBufferConfig(shard_shape[0] * shard_shape[1] * num_bytes_for_df, {{sharded_act_mcast_receiver_cb, tt::DataFormat::Float16_b}})
-		      .set_page_size(sharded_act_mcast_receiver_cb, shard_shape[1] * num_bytes_for_df);
-          cb_sharded_act_mcast_receiver = tt_metal::CreateCircularBuffer(program, core, cb_sharded_act_mcast_receiver_config);
+            // For 2D convs, each core creates and tilizes full input matrix then mcasts round robin style
+            // Each core receives input into act_cb, so won't need a separate cb to receive
+            // However, we need a separate cb to push ROW_MAJOR BFLOAT16 data for tilizing and configure act cb to be output df
+
+            // num_cb0_tiles is double buffered
+            CircularBufferConfig cb_act_config = CircularBufferConfig(num_cb0_tiles * tilized_act_tile_size, {{act_cb, tilized_act_df}})
+            .set_page_size(act_cb, tilized_act_tile_size);
+            auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
+
+            // num_cb0_tilized_tiles is single buffered
+            CircularBufferConfig cb_act_row_major_bfloat16_config = CircularBufferConfig(num_cb0_tilized_tiles * act_tile_size, {{act_cb_row_major_bfloat16, act_df}})
+            .set_page_size(act_cb_row_major_bfloat16, act_tile_size);
+            auto cb_act_row_major_bfloat16 = tt_metal::CreateCircularBuffer(program, core, cb_act_row_major_bfloat16_config);
+        } else {
+            // For 1D convs, locally create act matrix in act_cb, which is always ROW_MAJOR BFLOAT16
+            // Then, tilize input in compute
+            CircularBufferConfig cb_act_config = CircularBufferConfig(num_cb0_tiles * act_tile_size, {{act_cb, act_df}})
+            .set_page_size(act_cb, act_tile_size);
+            auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
         }
+    } else {
+        TT_ASSERT(false, "Input must be sharded!");
     }
+
 
     CircularBufferConfig cb_weight_config = CircularBufferConfig(num_cb1_tiles * weight_tile_size, {{weight_cb, weight_df}})
 		.set_page_size(weight_cb, weight_tile_size);
@@ -599,6 +611,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
     string compute_kernel;
     string writer_mcast_sender_kernel;
     string writer_mcast_receiver_kernel;
+    bool tilize_in0 = true;
     bool reader_with_indices = false;
     if (rn50_first_conv) {
         // TODO: Add support for sharded rn50_first_conv
@@ -622,6 +635,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
                 for(uint32_t core_idx_y = 0; core_idx_y < num_cores_y; ++core_idx_y) {
                     act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
                 }
+
+                // For 2D convs, pre-tilize input and round robin self-mcast tilized act matrix to other cores
+                tilize_in0 = false;
             }
             // 1D conv
             else {
@@ -696,6 +712,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
         compute_defines["PACK_RELU"] = "1";
     }
 
+    if (!tilize_in0) {
+        compute_defines["PRE_TILIZE"] = "1";
+    }
+
     writer_compile_time_args = {
         (uint32_t) (dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         out0_cb,
@@ -736,7 +756,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
         out_subblock_w_ntiles,
         out_subblock_num_tiles,
 
-        true,
+        tilize_in0,
         untilize_out,
 
         bias_ntiles_per_core
@@ -881,7 +901,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
 
             if (weight_width_sliced) {
                 auto shard_shape = a.shard_spec().value().shard_shape;
-                uint32_t shard_size_bytes = shard_shape[0] * shard_shape[1] * a.element_size();
+                uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
                 CoreCoord bottom_core = {(std::size_t) core_x_i, (std::size_t) num_cores_y - 1};
                 auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
 
@@ -925,7 +945,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
                     num_cores_y - 1,
                     act_mcast_sender_semaphore,
                     act_mcast_receiver_semaphore,
-                    shard_size_bytes,
+                    in0_block_num_tiles * tilized_act_tile_size, // act_mcast_sender_size_bytes
                     core_y_i, // act_mcast_sender_id (goes down the column)
                     (uint32_t) bottom_core_physical.x, // act_mcast_sender_noc_x
                 };

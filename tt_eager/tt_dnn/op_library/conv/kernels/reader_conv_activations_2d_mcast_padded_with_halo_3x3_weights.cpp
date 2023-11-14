@@ -78,9 +78,10 @@ void kernel_main() {
     constexpr uint32_t window_inner                        = get_compile_time_arg_val(11);
     constexpr uint32_t act_block_h_datums                  = get_compile_time_arg_val(12);
 
-    constexpr uint32_t cb_id_act = 0;
-    constexpr uint32_t cb_id_sharded_act = 3;
-    constexpr uint32_t cb_id_sharded_act_mcast_receiver = 6;
+    constexpr uint32_t cb_id_act = tt::CB::c_in0;
+    constexpr uint32_t tilized_in0_cb_id = tt::CB::c_intermed1;
+    constexpr uint32_t cb_id_sharded_act = tt::CB::c_in3;
+    constexpr uint32_t cb_id_act_row_major_bfloat16 = tt::CB::c_in6;
 
     // Assumptions. Must be true. Validate on host.
     // assert(act_block_w_datums == C * weight_size_w)
@@ -161,23 +162,55 @@ void kernel_main() {
     constexpr uint32_t num_coalesced_reads = 3;
     constexpr uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
 
-    uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act_mcast_receiver);
-
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
+
+    // Fully create act matrix and tilize it before mcast
+    // set_state uses just x/y from the get_noc_addr, addr is ignored
+    uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
+    noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
+
+    // Reset reader_idx to finish act_block_h_datums
+    reader_idx = 0;
+    cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
+    uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
+
+    constexpr uint32_t stride_h_bytes = (conv_act_size_w+2) << log_base_2_of_conv_act_size_c_bytes;
+    static_assert(act_block_h_datums % 2 == 0); // need to be even to read 2 in the body, due to packing of 2 indices in 1 uint32_t word
+    // #pragma GCC unroll 4 // didn't seem to help (neutral), manual unroll 2x perf drop
+    for (uint32_t bh = 0; bh < act_block_h_datums/2; bh++) {
+        uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+        read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, log_base_2_of_conv_act_size_c_bytes, coalesced_read_bytes, stride_h_bytes);
+        read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , log_base_2_of_conv_act_size_c_bytes, coalesced_read_bytes, stride_h_bytes);
+
+        reader_idx++;
+    }
+    // incrementing num issued in one shot is actually slower
+    // noc_async_read_inc_num_issued(num_issued_reads_per_block); // "false" on read
+    noc_async_read_barrier();
+    cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
+
+    // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
+    cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
+
+
+    // Round robin self-mcast and receive tilized act matrix in cb_id_act
+    // Compute should function like regular mm
     for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
         if (act_w_outer_i == act_mcast_sender_id) {
-            // MCAST SENDER: send entire sharded input to other cores in column
+            // MCAST SENDER: send entire tilized input to other cores in column
+            cb_reserve_back(cb_id_act, act_block_num_tiles);
+
             // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e. its value should be act_mcast_num_dests), then reset
             // the semaphore_addr value back to zero for the next block
             noc_semaphore_wait(act_mcast_sender_semaphore_addr_ptr, act_mcast_num_dests);
             noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
 
             // Now we have the block in the CB address, we can mcast to dests!
-            uint32_t sharded_act_start_address = get_read_ptr(cb_id_sharded_act);
-            uint64_t act_multicast_data_addr = act_multicast_noc_addr | act_l1_read_addr;
+            uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
+            uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
             // num_dests will source, since we are copying to a different local CB as well
-            noc_async_write_multicast_loopback_src(sharded_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, act_mcast_num_cores + 1);
+            noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, act_mcast_num_cores + 1);
 
             // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
             // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
@@ -187,7 +220,9 @@ void kernel_main() {
 
             noc_async_write_barrier();
         } else {
-            // MCAST RECEIVER: receive entire sharded input from sender core
+            // MCAST RECEIVER: receive entire tilized input from sender core
+            cb_reserve_back(cb_id_act, act_block_num_tiles);
+
             // Set act semaphore value to INVALID
             noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
 
@@ -198,30 +233,6 @@ void kernel_main() {
             // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
             noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
         }
-
-        // set_state uses just x/y from the get_noc_addr, addr is ignored
-        noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
-
-        for (uint32_t outer = 0; outer < window_outer; outer++) {
-            // Reset reader_idx to finish act_block_h_datums
-            reader_idx = 0;
-            cb_reserve_back(cb_id_act, act_block_num_tiles);
-            uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
-
-            constexpr uint32_t stride_h_bytes = (conv_act_size_w+2) << log_base_2_of_conv_act_size_c_bytes;
-            static_assert(act_block_h_datums % 2 == 0); // need to be even to read 2 in the body, due to packing of 2 indices in 1 uint32_t word
-            // #pragma GCC unroll 4 // didn't seem to help (neutral), manual unroll 2x perf drop
-            for (uint32_t bh = 0; bh < act_block_h_datums/2; bh++) {
-                uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-                read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, log_base_2_of_conv_act_size_c_bytes, coalesced_read_bytes, stride_h_bytes);
-                read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , log_base_2_of_conv_act_size_c_bytes, coalesced_read_bytes, stride_h_bytes);
-
-                reader_idx++;
-            }
-            // incrementing num issued in one shot is actually slower
-            // noc_async_read_inc_num_issued(num_issued_reads_per_block); // "false" on read
-            noc_async_read_barrier();
-            cb_push_back(cb_id_act, act_block_num_tiles);
-        }
+        cb_push_back(cb_id_act, act_block_num_tiles);
     }
 }
