@@ -115,7 +115,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
     );
 
     uint32_t curr_idx_h = 0, curr_idx_w = 0;
-    for (uint32_t i = 0; i < num_cores; i++){
+    for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = rm_orientation ? CoreCoord(i % num_cores_x, i / num_cores_x) : CoreCoord(i / num_cores_y, i % num_cores_y);
 
         if (!all_cores.core_coord_in_core_ranges(core)) {
@@ -187,7 +187,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
         auto shard_spec = output_tensors.at(0).shard_spec().value();
         auto all_cores = shard_spec.shard_grid;
 
-        for (uint32_t i = 0; i < num_cores; i++){
+        for (uint32_t i = 0; i < num_cores; ++i){
             CoreCoord core = rm_orientation ? CoreCoord(i % num_cores_x, i / num_cores_x) : CoreCoord(i / num_cores_y, i % num_cores_y);
             {
                 if (!all_cores.core_coord_in_core_ranges(core)) {
@@ -215,6 +215,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     auto shard_spec = input.shard_spec().value();
+    auto shard_strategy = input.memory_config().memory_layout;
 
     bool rm_orientation = shard_spec.shard_orientation == ShardOrientation::ROW_MAJOR;
     CoreCoord end_core = (*shard_spec.shard_grid.ranges().begin()).end;
@@ -311,7 +312,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
     );
 
     uint32_t curr_idx_h = 0, curr_idx_w = 0;
-    for (uint32_t i = 0; i < num_cores; i++){
+    for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = rm_orientation ? CoreCoord(i % num_cores_x, i / num_cores_x) : CoreCoord(i / num_cores_y, i % num_cores_y);
 
         if (!all_cores.core_coord_in_core_ranges(core)) {
@@ -321,19 +322,29 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
         if (input.layout() == Layout::TILE) {
             uint32_t shard_height = num_units_per_shard_height;
             uint32_t shard_width = num_units_per_shard_width;
-            if (rm_orientation) {
-                if (core.x == end_core.x) {
-                    shard_width = num_units_per_shard_width_last;
-                }
-                if (core.y == end_core.y) {
+            if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
+                if (core.x == end_core.x && core.y == end_core.y) {
                     shard_height = num_units_per_shard_height_last;
                 }
-            } else {
-                if (core.y == end_core.y) {
+            } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
+                if (core.x == end_core.x && core.y == end_core.y) {
                     shard_width = num_units_per_shard_width_last;
                 }
-                if (core.x == end_core.x) {
-                    shard_height = num_units_per_shard_height_last;
+            } else if (shard_strategy == TensorMemoryLayout::BLOCK_SHARDED) {
+                if (rm_orientation) {
+                    if (core.x == end_core.x) {
+                        shard_width = num_units_per_shard_width_last;
+                    }
+                    if (core.y == end_core.y) {
+                        shard_height = num_units_per_shard_height_last;
+                    }
+                } else {
+                    if (core.y == end_core.y) {
+                        shard_width = num_units_per_shard_width_last;
+                    }
+                    if (core.x == end_core.x) {
+                        shard_height = num_units_per_shard_height_last;
+                    }
                 }
             }
             tt_metal::SetRuntimeArgs(
@@ -359,19 +370,29 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
         } else {
             uint32_t shard_height = num_units_per_shard_height;
             uint32_t shard_width = unit_size;
-            if (rm_orientation) {
-                if (core.x == end_core.x) {
-                    shard_width = num_units_per_shard_width_last;
-                }
-                if (core.y == end_core.y) {
+            if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
+                if (core.x == end_core.x && core.y == end_core.y) {
                     shard_height = num_units_per_shard_height_last;
                 }
-            } else {
-                if (core.y == end_core.y) {
+            } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
+                if (core.x == end_core.x && core.y == end_core.y) {
                     shard_width = num_units_per_shard_width_last;
                 }
-                if (core.x == end_core.x) {
-                    shard_height = num_units_per_shard_height_last;
+            } else if (shard_strategy == TensorMemoryLayout::BLOCK_SHARDED) {
+                if (rm_orientation) {
+                    if (core.x == end_core.x) {
+                        shard_width = num_units_per_shard_width_last;
+                    }
+                    if (core.y == end_core.y) {
+                        shard_height = num_units_per_shard_height_last;
+                    }
+                } else {
+                    if (core.y == end_core.y) {
+                        shard_width = num_units_per_shard_width_last;
+                    }
+                    if (core.x == end_core.x) {
+                        shard_height = num_units_per_shard_height_last;
+                    }
                 }
             }
 
@@ -419,7 +440,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
         auto shard_spec = input_tensors.at(0).shard_spec().value();
         auto all_cores = shard_spec.shard_grid;
 
-        for (uint32_t i = 0; i < num_cores; i++){
+        for (uint32_t i = 0; i < num_cores; ++i){
             CoreCoord core = rm_orientation ? CoreCoord(i % num_cores_x, i / num_cores_x) : CoreCoord(i / num_cores_y, i % num_cores_y);
             {
                 if (!all_cores.core_coord_in_core_ranges(core)) {
