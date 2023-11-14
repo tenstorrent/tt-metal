@@ -133,9 +133,14 @@ void tt_assert(char const* file, int line, const std::string& assert_type, bool 
 
 // Adding do while around TT_ASSERT to allow flexible usage of the macro. More details can be found in Stack Overflow post:
 // https://stackoverflow.com/questions/55933541/else-without-previous-if-error-when-defining-macro-with-arguments/55933720#55933720
+#ifdef DEBUG
 #ifndef TT_ASSERT
 #define TT_ASSERT(condition, ...) do{ if (not (condition)) ::tt::assert::tt_assert(__FILE__, __LINE__, "TT_ASSERT", (condition), #condition,      ##__VA_ARGS__); }while(0)
 #endif
+#else
+#define TT_ASSERT(condition, ...)
+#endif
+
 #ifndef TT_THROW
 #define TT_THROW(...)             ::tt::assert::tt_throw(__FILE__, __LINE__, "TT_THROW",     "tt::exception", ##__VA_ARGS__)
 #endif

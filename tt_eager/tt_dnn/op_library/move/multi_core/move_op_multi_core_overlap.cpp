@@ -125,7 +125,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
     uint32_t total_num_pages = 0;
     for (uint32_t i = 0, pages_handled_per_core = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_pages_per_core;
+        uint32_t num_pages_per_core = 0;
         if (core_group_1.core_coord_in_core_ranges(core)) {
             num_pages_per_core = num_pages_per_core_group_1;
         } else if (core_group_2.core_coord_in_core_ranges(core)) {

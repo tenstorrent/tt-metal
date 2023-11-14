@@ -54,7 +54,7 @@ struct Sharded {
 };
 
 inline Tensor interleaved_to_sharded(const Tensor &input_tensor, CoreCoord grid_size, std::array<uint32_t, 2> shard_shape, TensorMemoryLayout shard_scheme, ShardOrientation shard_orientation) {
-    uint32_t num_cores;
+    uint32_t num_cores = 0;
     uint32_t total_height = input_tensor.volume() / input_tensor.shape()[-1];
     uint32_t total_width = input_tensor.shape()[-1];
     switch (shard_scheme) {

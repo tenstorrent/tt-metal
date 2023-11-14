@@ -177,7 +177,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
             SetRuntimeArgs(program, writer_kernels_id, core, { 0, 0, 0, 0 });
             continue;
         }
-        uint32_t num_tile_rows_per_core;
+        uint32_t num_tile_rows_per_core = 0;
         if (core_group_1.core_coord_in_core_ranges(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_1;
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
@@ -290,7 +290,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
                 continue;
             }
 
-            uint32_t num_tile_rows_per_core;
+            uint32_t num_tile_rows_per_core = 0;
             if (core_group_1.core_coord_in_core_ranges(core)) {
                 num_tile_rows_per_core = num_tile_rows_per_core_group_1;
             } else if (core_group_2.core_coord_in_core_ranges(core)) {
