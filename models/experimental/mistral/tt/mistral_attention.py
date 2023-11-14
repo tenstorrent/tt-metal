@@ -314,37 +314,48 @@ def apply_rotary_emb_type2(
     xk_real.deallocate()
     xk_img.deallocate()
 
-    BCH = tt_lib.tensor.BcastOpDim.H
+    BCH = tt_lib.tensor.BcastOpDim.HW
     BCMUL = tt_lib.tensor.BcastOpMath.MUL
 
-    t_one = tt_lib.tensor.ones_like(xq.real)
-    bcast_freq_re = tt_lib.tensor.bcast(t_one, freqs_cis.real, BCMUL, BCH)
-    bcast_freq_im = tt_lib.tensor.bcast(t_one, freqs_cis.imag, BCMUL, BCH)
-    t_one.deallocate()
-    bcast_freq = tt_lib.tensor.complex_tensor(bcast_freq_re, bcast_freq_im)
-    bcast_freq_re.deallocate()
-    bcast_freq_im.deallocate()
+    t_one_xq = tt_lib.tensor.ones_like(xq.real)
+    t_one_xq = tt_lib.tensor.permute(t_one_xq, (3, 1, 2, 0))
+    freqs_real = tt_lib.tensor.permute(freqs_cis.real, (3, 1, 2, 0))
+    freqs_imag = tt_lib.tensor.permute(freqs_cis.imag, (3, 1, 2, 0))
+    bcast_freq_re_xq = tt_lib.tensor.bcast(t_one_xq, freqs_real, BCMUL, BCH)
+    bcast_freq_im_xq = tt_lib.tensor.bcast(t_one_xq, freqs_imag, BCMUL, BCH)
+    bcast_freq_re_xq = tt_lib.tensor.permute(bcast_freq_re_xq, (3, 1, 2, 0))
+    bcast_freq_im_xq = tt_lib.tensor.permute(bcast_freq_im_xq, (3, 1, 2, 0))
+    t_one_xq.deallocate()
+    bcast_freq_xq = tt_lib.tensor.complex_tensor(bcast_freq_re_xq, bcast_freq_im_xq)
+    bcast_freq_re_xq.deallocate()
+    bcast_freq_im_xq.deallocate()
     xq_out = tt_lib.tensor.complex_mul(
         xq,
-        bcast_freq,
+        bcast_freq_xq,
         tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
     )
-    bcast_freq.deallocate()
-    t_one = tt_lib.tensor.ones_like(xk.real)
-    bcast_freq_re = tt_lib.tensor.bcast(t_one, freqs_cis.real, BCMUL, BCH)
-    bcast_freq_im = tt_lib.tensor.bcast(t_one, freqs_cis.imag, BCMUL, BCH)
-    t_one.deallocate()
-    bcast_freq = tt_lib.tensor.complex_tensor(bcast_freq_re, bcast_freq_im)
-    bcast_freq_re.deallocate()
-    bcast_freq_im.deallocate()
+    bcast_freq_xq.deallocate()
+
+    t_one_xk = tt_lib.tensor.ones_like(xk.real)
+    t_one_xk = tt_lib.tensor.permute(t_one_xk, (3, 1, 2, 0))
+    bcast_freq_re_xk = tt_lib.tensor.bcast(t_one_xk, freqs_real, BCMUL, BCH)
+    bcast_freq_im_xk = tt_lib.tensor.bcast(t_one_xk, freqs_imag, BCMUL, BCH)
+    bcast_freq_re_xk = tt_lib.tensor.permute(bcast_freq_re_xk, (3, 1, 2, 0))
+    bcast_freq_im_xk = tt_lib.tensor.permute(bcast_freq_im_xk, (3, 1, 2, 0))
+    bcast_freq_xk = tt_lib.tensor.complex_tensor(bcast_freq_re_xk, bcast_freq_im_xk)
+    t_one_xk.deallocate()
+    bcast_freq_re_xk.deallocate()
+    bcast_freq_im_xk.deallocate()
     freqs_cis.deallocate()
+    freqs_real.deallocate()
+    freqs_imag.deallocate()
     xk_out = tt_lib.tensor.complex_mul(
         xk,
-        bcast_freq,
+        bcast_freq_xk,
         tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
     )
 
-    bcast_freq.deallocate()
+    bcast_freq_xk.deallocate()
     xq_out = tt_lib.tensor.concat([xq_out.real, xq_out.imag], -1)
     xk_out = tt_lib.tensor.concat([xk_out.real, xk_out.imag], -1)
     xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
