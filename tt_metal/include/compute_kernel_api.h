@@ -11,7 +11,7 @@
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
 #include "hostdevcommon/kernel_structs.h"
-#include "src/firmware/riscv/common/risc_attribs.h"
+#include "risc_attribs.h"
 
 #define SYNC SyncHalf
 

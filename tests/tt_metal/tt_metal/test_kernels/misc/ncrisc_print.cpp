@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug_print.h"
+#include "debug/dprint.h"
 
 /*
  * Test printing from a kernel running on NCRISC.

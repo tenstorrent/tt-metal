@@ -99,66 +99,49 @@ struct CompileState {
             includes = move(vector<string>({
                 "",
                 "tt_metal/include",
-                "tt_metal/src/ckernels/" + get_string_lowercase(arch) + "/llk_lib/",
-                "tt_metal/src/ckernels/" + get_string_lowercase(arch) + "/common/inc",
+                "tt_metal/hw/ckernels/" + get_string_lowercase(arch) + "/inc",
+                "tt_metal/hw/ckernels/" + get_string_lowercase(arch) + "/llk_lib",
+                "tt_metal/hw/ckernels/" + get_string_lowercase(arch) + "/common/inc",
                 "tt_metal/third_party/sfpi/include",
-                "tt_metal/src/firmware/riscv/common",
-                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/noc",
-                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch),
-                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
+                "tt_metal/hw/inc",
+                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/noc",
+                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch),
+                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
                 "tt_metal",
                 "tt_metal/third_party/umd/device/" + get_string_aliased_arch_lowercase(arch),
-                "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/noc", // TODO(AP): this looks wrong, but nonetheless matches the old makefile for TRISCS
-                "build/src/ckernels/gen/out", // TODO(AP): same as above - point into build where there's no src/
-                "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch),
-                "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
             }));
             includes_abs.push_back(kernel_subdir_);
-        } else if (is_brisc()) {
+        } else if (is_brisc() || is_ncrisc()) {
             includes = move(vector<string>({
                 "",
                 "tt_metal/include",
-                "tt_metal/src/ckernels/" + get_string_lowercase(arch) + "/common/inc",
-                "tt_metal/src/firmware/riscv/common",
-                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch),
-                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
-                "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch),
-                "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
-                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/noc",
-                "tt_metal/src/firmware/riscv/targets/brisc",
+                "tt_metal/hw/ckernels/" + get_string_lowercase(arch) + "/common/inc", // XXXX TODO(PGK) remove this dependency
+                "tt_metal/hw/inc",
+                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch),
+                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
+                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/noc",
+                "tt_metal/hw/firmware/src",
                 "tt_metal",
                 "tt_metal/third_party/umd/device/" + get_string_aliased_arch_lowercase(arch)}
             ));
-            includes_abs.push_back(kernel_subdir_ + "/brisc");
+            if (is_brisc()) {
+                includes_abs.push_back(kernel_subdir_ + "/brisc");
+            } else {
+                includes_abs.push_back(kernel_subdir_ + "/ncrisc");
+            }
         } else if (is_erisc()) {
             includes = move(vector<string>({
                 "",
                 "tt_metal/include",
-                "tt_metal/src/firmware/riscv/common",
-                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch),
-                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
-                "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch),
-                "build/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
-                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/noc",
+                "tt_metal/hw/inc",
+                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch),
+                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
+                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/noc",
+                "tt_metal/hw/firmware/src",
                 "tt_metal",
-                "tt_metal/src/firmware/riscv/targets/erisc/",
                 "tt_metal/third_party/umd/device/" + get_string_aliased_arch_lowercase(arch)}
             ));
             includes_abs.push_back(kernel_subdir_ + "/erisc");
-        } else {
-            includes = move(vector<string>({
-                "",
-                "tt_metal/include",
-                "tt_metal/src/ckernels/" + get_string_lowercase(arch) + "/common/inc",
-                "tt_metal/src/firmware/riscv/common",
-                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch),
-                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
-                "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/noc",
-                "tt_metal/src/firmware/riscv/targets/ncrisc",
-                "tt_metal",
-                "tt_metal/third_party/umd/device/" + get_string_aliased_arch_lowercase(arch)}
-            ));
-            includes_abs.push_back(kernel_subdir_ + "/ncrisc");
         }
 
         string result = "";
@@ -173,18 +156,18 @@ struct CompileState {
         // but it looks like a lot of the include paths in the original Makefile were intermixed in unintended ways
         vector<string> iquote_includes_abs;
         if (is_brisc() || is_ncrisc()) {
-            iquote_includes_abs.push_back("/tt_metal/src/firmware/riscv/common/");
-            iquote_includes_abs.push_back("/tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/");
-            iquote_includes_abs.push_back("/tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines/");
+            iquote_includes_abs.push_back("/tt_metal/hw/inc");
+            iquote_includes_abs.push_back("/tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/");
+            iquote_includes_abs.push_back("/tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines/");
             if (!is_ncrisc()) // TODO(AP): cleanup, looks like some quirk of original Makefile
-                iquote_includes_abs.push_back("/tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(arch) + "/noc/");
+                iquote_includes_abs.push_back("/tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/noc/");
         }
         for (auto s: iquote_includes_abs)
             result += " -iquote " + home_ + s;
 
         vector<string> iquote_includes;
         if (is_trisc()) {
-            iquote_includes.push_back("tt_metal/src/");
+            iquote_includes.push_back("tt_metal/hw/");
             iquote_includes.push_back(".");
         } else if (is_brisc() || is_ncrisc()) {
             iquote_includes.push_back(".");
@@ -342,7 +325,7 @@ struct CompileState {
         string result = objcopy_ + " -O verilog " + hk + elfname + ".elf " + hk + elfname + ".hex.tmp";
         vector<string> results;
         results.push_back(result);
-        result = string("python3 ") + home_ + "tt_metal/src/firmware/riscv/toolchain/hex8tohex32.py " + hk+elfname+".hex.tmp" + " " + hk+elfname + ".hex";
+        result = string("python3 ") + home_ + "tt_metal/hw/toolchain/hex8tohex32.py " + hk+elfname+".hex.tmp" + " " + hk+elfname + ".hex";
         results.push_back(result);
         return results;
     }
@@ -419,29 +402,29 @@ struct CompileState {
 
         string hk = string(" ") + kernel_subdir_;
         string link_str = gpp_;
-        link_str += " -L" + home_ + "/tt_metal/src/firmware/riscv/toolchain ";
         link_str += linkopts;
         switch  (hwthread) {
             case RISCID::NC:
             link_str += " -Os";
-            link_str += " -T" + home_ + "build/src/firmware/riscv/targets/ncrisc/out/ncrisc.ld "; break;
+            link_str += " -T" + home_ + "build/hw/toolchain/ncrisc.ld "; break;
             case RISCID::TR0:
             link_str += " -O3";
-            link_str += " -T" + home_ + "build/src/ckernels/out/trisc0.ld "; break;
+            link_str += " -T" + home_ + "build/hw/toolchain/trisc0.ld "; break;
             case RISCID::TR1:
             link_str += " -O3";
-            link_str += " -T" + home_ + "build/src/ckernels/out/trisc1.ld "; break;
+            link_str += " -T" + home_ + "build/hw/toolchain/trisc1.ld "; break;
             case RISCID::TR2:
             link_str += " -O3";
-            link_str += " -T" + home_ + "build/src/ckernels/out/trisc2.ld "; break;
+            link_str += " -T" + home_ + "build/hw/toolchain/trisc2.ld "; break;
             case RISCID::ER:
             link_str += " -Os";
             // TODO: change to build ld
-            link_str += " -T" + home_ + "tt_metal/src/firmware/riscv/toolchain/erisc-b0-app.ld "; break;
+            link_str += " -L" + home_ + "/tt_metal/hw/toolchain ";
+            link_str += " -T" + home_ + "tt_metal/hw/toolchain/erisc-b0-app.ld "; break;
             default:
             TT_ASSERT(hwthread == RISCID::BR);
             link_str += " -Os";
-            link_str += " -T" + home_ + "build/src/firmware/riscv/targets/brisc/out/brisc.ld "; break;
+            link_str += " -T" + home_ + "build/hw/toolchain/brisc.ld "; break;
         }
         for (auto oname: obj_names)
             link_str += hk + thread_bin_subdir + oname;
@@ -548,18 +531,18 @@ static void compile_for_risc(
         },
         {   // trisc
             {   // kernel
-                {"src/ckernel_template.cc", "src/ckernel_main.cc", "substitutes.cpp", "tmu-crt0k.S" },
-                {"ckernel_template.o",      "ckernel_main.o",      "substitutes.o",   "tmu-crt0k.o" },
+                {"src/ckernel_template.cc", "trisck.cc",           "substitutes.cpp", "tmu-crt0k.S" },
+                {"ckernel_template.o",      "trisck.o",            "substitutes.o",   "tmu-crt0k.o" },
             },
             {   // firmware
-                {"src/ckernel.cc", "substitutes.cpp", "tmu-crt0.S" },
-                {"ckernel.o",      "substitutes.o",   "tmu-crt0.o" },
+                {"trisc.cc",       "substitutes.cpp", "tmu-crt0.S" },
+                {"trisc.o",        "substitutes.o",   "tmu-crt0.o" },
             },
         },
         {   // brisc
             {   // kernel
                 {"brisck.cc", "risc_common.cc", "tdma_xmov.c", "noc.c", "substitutes.cpp", "tmu-crt0k.S"},
-                {"brisck.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o",     "tmu-crt0k.o"},
+                {"brisck.o",  "risc_common.o",  "tdma_xmov.o", "noc.o", "substitutes.o",   "tmu-crt0k.o"},
             },
             {   // firmware
                 {"brisc.cc", "risc_common.cc", "tdma_xmov.c", "noc.c", "substitutes.cpp", "tmu-crt0.S"},
@@ -583,19 +566,19 @@ static void compile_for_risc(
     switch (risc_id) {
         case RISCID::NC:
             cwds.resize(5);
-            cwds[0] = "tt_metal/src/firmware/riscv/targets/ncrisc";
-            cwds[1] = "tt_metal/src/firmware/riscv/common";
-            cwds[2] = "tt_metal/src/firmware/riscv/toolchain";
-            cwds[3] = "tt_metal/src/firmware/riscv/toolchain";
+            cwds[0] = "tt_metal/hw/firmware/src";
+            cwds[1] = "tt_metal/hw/firmware/src";
+            cwds[2] = "tt_metal/hw/toolchain";
+            cwds[3] = "tt_metal/hw/toolchain";
             risc_type = 0;
         break;
         case RISCID::BR:
             cwds.resize(6);
-            cwds[0] = "tt_metal/src/firmware/riscv/targets/brisc";
-            cwds[1] = "tt_metal/src/firmware/riscv/common";
-            cwds[2] = "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(ctx.arch) + "";
-            cwds[3] = "tt_metal/src/firmware/riscv/" + get_string_aliased_arch_lowercase(ctx.arch) + "/noc";
-            cwds[4] = "tt_metal/src/firmware/riscv/toolchain";
+            cwds[0] = "tt_metal/hw/firmware/src";
+            cwds[1] = "tt_metal/hw/firmware/src";
+            cwds[2] = "tt_metal/hw/firmware/src";
+            cwds[3] = "tt_metal/hw/firmware/src/" + get_string_aliased_arch_lowercase(ctx.arch);
+            cwds[4] = "tt_metal/hw/toolchain";
             risc_type = 2;
         break;
         case RISCID::TR0:
@@ -603,20 +586,21 @@ static void compile_for_risc(
         case RISCID::TR2:
             if (build_opts->fw_build_) {
                 cwds.resize(3);
-                cwds[0] = "tt_metal/src/ckernels/" + get_string_lowercase(ctx.arch) + "/common";
-                cwds[1] = "tt_metal/src/firmware/riscv/toolchain"; // TODO(AP): refactor
+                cwds[0] = "tt_metal/hw/firmware/src";
+                cwds[1] = "tt_metal/hw/toolchain"; // TODO(AP): refactor
             } else {
                 cwds.resize(4);
-                cwds[0] = "tt_metal/src/ckernels/" + get_string_lowercase(ctx.arch) + "/common";
-                cwds[2] = "tt_metal/src/firmware/riscv/toolchain"; // TODO(AP): refactor
+                cwds[0] = "tt_metal/hw/ckernels/" + get_string_lowercase(ctx.arch) + "/common";
+                cwds[1] = "tt_metal/hw/firmware/src";
+                cwds[2] = "tt_metal/hw/toolchain"; // TODO(AP): refactor
             }
             risc_type = 1;
         break;
         case RISCID::ER:
             cwds.resize(4);
-            cwds[0] = "tt_metal/src/firmware/riscv/targets/erisc";
-            cwds[1] = "tt_metal/src/firmware/riscv/targets/erisc";
-            cwds[2] = "tt_metal/src/firmware/riscv/toolchain";
+            cwds[0] = "tt_metal/hw/firmware/src";
+            cwds[1] = "tt_metal/hw/firmware/src";
+            cwds[2] = "tt_metal/hw/toolchain";
             risc_type = 3;
         break;
     }
@@ -648,18 +632,18 @@ void link_for_risc(RISCID risc_id,
                    const CompileState& ctx) {
     ZoneScoped;
 
-    string pushd_cmd = string("cd ") + ctx.home_ + "tt_metal/src/ckernels && "; // TODO(AP): Optimize
+    string pushd_cmd = string("cd ") + ctx.home_ + "tt_metal/hw/ckernels && "; // TODO(AP): Optimize
 
     vector<string> bobjl, nobjl, tobjl, eobjl;
 
     if (!build_opts->fw_build_) {
         bobjl = {"brisck.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o", "tmu-crt0k.o"};
         nobjl = {"ncrisck.o", "risc_common.o", "substitutes.o", "tmu-crt0k.o"};
-        tobjl = {"ckernel_main.o", "substitutes.o", "ckernel_template.o", "tmu-crt0k.o" };
+        tobjl = {"trisck.o", "substitutes.o", "ckernel_template.o", "tmu-crt0k.o" };
     } else {
         bobjl = {"brisc.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o", "tmu-crt0.o"};
         nobjl = {"ncrisc.o", "risc_common.o", "substitutes.o", "ncrisc-halt.o", "tmu-crt0.o"};
-        tobjl = {"substitutes.o", "ckernel.o", "tmu-crt0.o" };
+        tobjl = {"substitutes.o", "trisc.o", "tmu-crt0.o" };
     }
     eobjl = {"erisc.o", "tt_eth_api.o"}; // TODO: add tmu-crtok
 

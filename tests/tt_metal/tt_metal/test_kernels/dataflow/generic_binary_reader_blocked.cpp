@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug_print.h"
+#include "debug/dprint.h"
 
 // This kernel is used to read untilized src0 data from DRAM and copy it to L1 in tilized layout.
 // For layout transformation, it uses a list of source addresses (a vector in L1 written by the host) to perform scattered and multiple reads from DRAM.

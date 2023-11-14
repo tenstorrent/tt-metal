@@ -12,7 +12,7 @@
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
+#include "dev_msgs.h"
 
 namespace tt {
 

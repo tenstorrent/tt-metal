@@ -19,14 +19,13 @@
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 
 // XXXX
-// TODO: including wormhole in grayskull build is dangerous
+// TODO(PGK): including wormhole in grayskull build is dangerous
 // Include noc/noc_parameters.h here so that including it from wormhole
 // doesn't pull in the wrong file!
 #include "dev_mem_map.h"
 #include "noc/noc_parameters.h"
 #include "tt_metal/third_party/umd/src/firmware/riscv/wormhole/eth_interface.h"
-// XXXX TODO(PGK): fix include paths so device can export interfaces
-#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
+#include "dev_msgs.h"
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 

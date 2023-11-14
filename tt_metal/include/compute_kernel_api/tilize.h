@@ -15,7 +15,7 @@
 #include "llk_unpack_tilize.h"
 #endif
 
-#include "debug_print.h"
+#include "debug/dprint.h"
 
 
 namespace ckernel {

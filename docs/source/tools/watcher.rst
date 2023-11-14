@@ -41,7 +41,7 @@ below:
 
 .. code-block::
 
-    #include "debug_status.h"
+    #include "debug/status.h"
 
     void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
         DEBUG_STATUS('N', 'S', 'W');

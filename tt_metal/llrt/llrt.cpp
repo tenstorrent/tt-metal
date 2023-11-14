@@ -13,8 +13,7 @@
 #include <fmt/ranges.h>
 
 #include "tools/cpuprof/cpuprof.h"
-// XXXX TODO(PGK): fix include paths so device can export interfaces
-#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
+#include "dev_msgs.h"
 
 namespace tt {
 

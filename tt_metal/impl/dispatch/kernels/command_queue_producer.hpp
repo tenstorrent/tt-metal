@@ -1,6 +1,6 @@
 #include "tt_metal/impl/dispatch/kernels/command_queue_common.hpp"
 #include "tt_metal/hostdevcommon/common_values.hpp"
-#include "tt_metal/src/firmware/riscv/common/risc_attribs.h"
+#include "risc_attribs.h"
 
 /*
  * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.

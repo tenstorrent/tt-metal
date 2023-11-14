@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-#include "debug_print.h"
+#include "debug/dprint.h"
 
 
 template <bool bias_in_dram>

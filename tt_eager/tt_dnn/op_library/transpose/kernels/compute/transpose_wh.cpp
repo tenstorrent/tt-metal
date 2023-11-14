@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api/transpose_wh.h"
-//#include "debug_print.h"
+//#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {

@@ -48,7 +48,6 @@ pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape
 
 } // optimized_conv_op_utils
 
-
 namespace tt {
 
 namespace tt_metal {

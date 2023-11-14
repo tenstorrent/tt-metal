@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "debug_print.h"
+#include "debug/dprint.h"
 
 #include "compute_kernel_api/reduce.h"
 

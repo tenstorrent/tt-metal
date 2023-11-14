@@ -17,9 +17,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/kernels/kernel_types.hpp"
-
-// XXXX TODO(PGK): fix include paths so device can export interfaces
-#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
+#include "dev_msgs.h"
 
 namespace tt {
 

@@ -22,8 +22,10 @@ if __name__ == "__main__":
     if not tt_metal_home_str:
         raise Exception("TT_METAL_HOME must be set before you run this script")
 
-    set_up_kernels_cmd = f"make -f {tt_metal_home_str}/tt_metal/src/Makefile-runtime -C {tt_metal_home_str}/tt_metal/src {action}".split(
-        " "
+    set_up_kernels_cmd = (
+        f"make -f {tt_metal_home_str}/tt_metal/hw/Makefile-runtime -C {tt_metal_home_str}/tt_metal/hw {action}".split(
+            " "
+        )
     )
 
     if short:

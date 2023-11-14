@@ -64,11 +64,9 @@ UMD_USER_ROOT = $(TT_METAL_HOME)
 # Top level flags, compiler, defines etc.
 
 ifeq ("$(ARCH_NAME)", "wormhole_b0")
-	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/wormhole -Itt_metal/src/firmware/riscv/wormhole/wormhole_b0_defines -I$(UMD_HOME)/src/firmware/riscv/wormhole
-else ifeq ("$(ARCH_NAME)", "wormhole")
-	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/wormhole -Itt_metal/src/firmware/riscv/wormhole/wormhole_a0_defines -I$(UMD_HOME)/src/firmware/riscv/wormhole
+	BASE_INCLUDES=-Itt_metal/hw/inc -Itt_metal/hw/inc/wormhole -Itt_metal/hw/inc/wormhole/wormhole_b0_defines -I$(UMD_HOME)/src/firmware/riscv/wormhole
 else
-	BASE_INCLUDES=-Itt_metal/src/firmware/riscv/$(ARCH_NAME) -I$(UMD_HOME)/src/firmware/riscv/$(ARCH_NAME)
+	BASE_INCLUDES=-Itt_metal/hw/inc -Itt_metal/hw/inc/$(ARCH_NAME) -I$(UMD_HOME)/src/firmware/riscv/$(ARCH_NAME)
 endif
 
 # TODO: rk reduce this to one later
@@ -157,7 +155,7 @@ endif
 build: $(LIBS_TO_BUILD)
 
 clean: set_up_kernels/clean eager_package/clean
-	find build ! -path "build/python_env" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+	test -d build && find build  -mindepth 1 -maxdepth 1 ! -path "build/python_env" -exec rm -rf {} + || true
 	rm -rf dist/
 
 nuke: clean python_env/clean

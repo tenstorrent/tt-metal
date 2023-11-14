@@ -20,8 +20,7 @@
 #include "llrt/tt_memory.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
-// XXXX TODO(PGK): fix include paths so device can export interfaces
-#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
+#include "dev_msgs.h"
 
 namespace tt {
 

@@ -1,6 +1,0 @@
-include $(TT_METAL_HOME)/tt_metal/src/firmware/module.mk
-include $(TT_METAL_HOME)/tt_metal/src/ckernels/module.mk
-
-prepare: src/ckernels src/firmware
-
-clean: src/ckernels/clean src/firmware/clean
