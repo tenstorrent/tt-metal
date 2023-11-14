@@ -47,7 +47,13 @@ int main(int argc, char **argv) {
 
         uint32_t dest_buffer_addr = 500 * 1024;
 
-        auto dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        tt_metal::InterleavedBufferConfig dram_config{
+                                .device=device,
+                                .size = dram_buffer_size,
+                                .page_size = dram_buffer_size,
+                                .buffer_type = tt_metal::BufferType::DRAM
+                                };
+        auto dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_addr = dram_buffer.address();
         auto dram_noc_xy = dram_buffer.noc_coordinates();
 

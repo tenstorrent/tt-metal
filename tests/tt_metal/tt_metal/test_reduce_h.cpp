@@ -76,10 +76,23 @@ int main(int argc, char **argv) {
             src_page_size = dram_buffer_bytes;
             dst_page_size = dram_buffer_bytes/Ht;
         }
+        tt_metal::InterleavedBufferConfig src_config{
+                    .device=device,
+                    .size = dram_buffer_bytes,
+                    .page_size = src_page_size,
+                    .buffer_type = tt_metal::BufferType::DRAM
+        };
+        tt_metal::InterleavedBufferConfig dst_config{
+                    .device=device,
+                    .size = dram_buffer_bytes/Ht,
+                    .page_size = dst_page_size,
+                    .buffer_type = tt_metal::BufferType::DRAM
+        };
 
-        auto src0_dram_buffer = CreateBuffer(device, dram_buffer_bytes, src_page_size, tt_metal::BufferType::DRAM);
+
+        auto src0_dram_buffer = CreateBuffer(src_config);
         uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_bytes/Ht, dst_page_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = CreateBuffer(dst_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();

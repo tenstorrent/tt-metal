@@ -185,9 +185,29 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_size_weights = single_tile_size * K * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t dram_buffer_size_out = single_tile_size * M * N; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        auto src0_dram_buffer = CreateBuffer(device, dram_buffer_size_act, dram_buffer_size_act, tt_metal::BufferType::DRAM);
-        auto src1_dram_buffer = CreateBuffer(device, dram_buffer_size_weights, dram_buffer_size_weights, tt_metal::BufferType::DRAM);
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size_out, dram_buffer_size_out, tt_metal::BufferType::DRAM);
+        tt_metal::InterleavedBufferConfig act_config{
+                    .device=device,
+                    .size = dram_buffer_size_act,
+                    .page_size = dram_buffer_size_act,
+                    .buffer_type = tt_metal::BufferType::DRAM
+        };
+        tt_metal::InterleavedBufferConfig weights_config{
+                    .device=device,
+                    .size = dram_buffer_size_weights,
+                    .page_size = dram_buffer_size_weights,
+                    .buffer_type = tt_metal::BufferType::DRAM
+        };
+        tt_metal::InterleavedBufferConfig dst_config{
+                    .device=device,
+                    .size = dram_buffer_size_out,
+                    .page_size = dram_buffer_size_out,
+                    .buffer_type = tt_metal::BufferType::DRAM
+        };
+
+
+        auto src0_dram_buffer = CreateBuffer(act_config);
+        auto src1_dram_buffer = CreateBuffer(weights_config);
+        auto dst_dram_buffer = CreateBuffer(dst_config);
 
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
         auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();

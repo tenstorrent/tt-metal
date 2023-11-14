@@ -89,10 +89,17 @@ int main(int argc, char **argv) {
         int dram_src_channel_id = 0;
         int dram_dst_channel_id = 0;
 
-        auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        tt_metal::InterleavedBufferConfig dram_config{
+                    .device=device,
+                    .size = dram_buffer_size,
+                    .page_size = dram_buffer_size,
+                    .buffer_type = tt_metal::BufferType::DRAM
+        };
+
+        auto src_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_src_addr = src_dram_buffer.address();
 
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();

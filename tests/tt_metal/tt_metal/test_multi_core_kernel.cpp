@@ -191,10 +191,16 @@ bool test_multi_core_kernel_same_runtime_args(tt_metal::Device *device) {
     uint32_t single_tile_size = 2 * 1024;
     int32_t num_tiles = 2048;
     uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+    tt_metal::InterleavedBufferConfig dram_config{
+                    .device=device,
+                    .size = dram_buffer_size,
+                    .page_size = dram_buffer_size,
+                    .buffer_type = tt_metal::BufferType::DRAM
+        };
 
-    auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto src_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_src_addr = src_dram_buffer.address();
-    auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -251,13 +257,20 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::Device *device) {
     int32_t num_tiles = 2048;
     uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    tt_metal::InterleavedBufferConfig dram_config{
+                    .device=device,
+                    .size = dram_buffer_size,
+                    .page_size = dram_buffer_size,
+                    .buffer_type = tt_metal::BufferType::DRAM
+        };
+
+    auto src_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_src_addr = src_dram_buffer.address();
-    auto dst_dram_buffer_1 = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer_1 = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr_1 = dst_dram_buffer_1.address();
-    auto dst_dram_buffer_2 = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer_2 = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr_2 = dst_dram_buffer_2.address();
-    auto dst_dram_buffer_3 = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+    auto dst_dram_buffer_3 = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr_3 = dst_dram_buffer_3.address();
 
 

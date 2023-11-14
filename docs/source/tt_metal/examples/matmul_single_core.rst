@@ -118,9 +118,28 @@ In terms of DRAM buffers, we need two source buffers and one destination buffer.
 
     /* DRAM buffer size == input full size */
     /* limiting page_size == single tile size; to allow DRAM channels interleaving */
-    Buffer src0_dram_buffer = CreateBuffer(device, dram_buffer_A_size, single_tile_size, BufferType::DRAM);
-    Buffer src1_dram_buffer = CreateBuffer(device, dram_buffer_B_size, single_tile_size, BufferType::DRAM);
-    Buffer dst_dram_buffer = CreateBuffer(device, dram_buffer_C_size, single_tile_size, BufferType::DRAM);
+
+    tt_metal::InterleavedBufferConfig buff_A_config{
+                                        .device=device,
+                                        .size = dram_buffer_A_size,
+                                        .page_size = single_tile_size,
+                                        .buffer_type = tt_metal::BufferType::DRAM
+                                        };
+    tt_metal::InterleavedBufferConfig buff_B_config{
+                                        .device=device,
+                                        .size = dram_buffer_B_size,
+                                        .page_size = single_tile_size,
+                                        .buffer_type = tt_metal::BufferType::DRAM
+                                        };
+    tt_metal::InterleavedBufferConfig buff_C_config{
+                                        .device=device,
+                                        .size = dram_buffer_C_size,
+                                        .page_size = single_tile_size,
+                                        .buffer_type = tt_metal::BufferType::DRAM
+                                        };
+    Buffer src0_dram_buffer = CreateBuffer(buff_A_config);
+    Buffer src1_dram_buffer = CreateBuffer(buff_B_config);
+    Buffer dst_dram_buffer = CreateBuffer(buff_C_config);
     uint32_t src0_addr = src0_dram_buffer.address();
     uint32_t src1_addr = src1_dram_buffer.address();
     uint32_t dst_addr = dst_dram_buffer.address();

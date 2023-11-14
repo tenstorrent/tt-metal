@@ -506,9 +506,9 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     +---------------+---------------+
                     | arg3          | layout        |
                     +---------------+---------------+
-                    | arg3          | device        |
+                    | arg4          | device        |
                     +---------------+---------------+
-                    | arg3          | mem_config    |
+                    | arg5          | mem_config    |
                     +---------------+---------------+
 
                     Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
@@ -563,6 +563,51 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     Dellocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
                 )doc")
             .def(
+                py::init<>(
+                    [](const py::object& torch_tensor,
+                    std::optional<DataType> data_type,
+                    Device *device,
+                    Layout layout,
+                    const MemoryConfig& mem_config,
+                    ShardSpec shard_spec) {
+                        auto tensor = detail::convert_torch_tensor_to_tt_tensor(torch_tensor, data_type);
+                        auto layout_tensor = tensor.to(layout);
+                        return layout_tensor.to(device, mem_config, shard_spec);
+                    }
+                ),
+                py::arg("torch_tensor"),
+                py::arg("data_type") = std::nullopt,
+                py::arg("device").noconvert(),
+                py::arg("layout").noconvert(),
+                py::arg("mem_config").noconvert(),
+                py::arg("shard_spec").noconvert(),
+                py::return_value_policy::move,
+                R"doc(
+                    +--------------+---------------------+
+                    | Argument     | Description         |
+                    +==============+=====================+
+                    | torch_tensor | Pytorch Tensor      |
+                    +--------------+---------------------+
+                    | data_type    | TT Tensor data type |
+                    +--------------+---------------------+
+                    | device       | TT device ptr       |
+                    +--------------+---------------------+
+                    | layout       | TT layout           |
+                    +--------------+---------------------+
+                    | mem_config   | TT memory_config    |
+                    +--------------+---------------------+
+                    | shard_spec   | Shard Spec          |
+                    +--------------+---------------------+
+
+                    Example of creating a TT Tensor that uses torch.Tensor's storage as its own storage:
+
+                    .. code-block:: python
+
+                        py_tensor = torch.randn((1, 1, 32, 32))
+                        tt_lib.tensor.Tensor(py_tensor)
+                )doc"
+            )
+            .def(
                 "to",
                 [](const Tensor &self, Device *device, const MemoryConfig &mem_config) {
                     return self.to(device, mem_config);
@@ -589,12 +634,86 @@ Tensor convert_torch_tensor_to_tt_tensor(
 
                     tt_tensor = tt_tensor.to(tt_device)
             )doc")
+            .def("to", [](const Tensor &self, Device *device, const MemoryConfig &mem_config, const ShardSpec & shard_spec) {
+                return self.to(device, mem_config, shard_spec);
+            }, py::arg().noconvert(), py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout=TensorMemoryLayout::HEIGHT_SHARDED},  py::arg("shard_spec").noconvert(),
+                py::keep_alive<0, 2>(), R"doc(
+                Move TT Tensor from host device to TT accelerator device.
+
+                Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
+
+                If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
+
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+                | Argument  | Description                                     | Data type                  | Valid range           | Required |
+                +===========+=================================================+============================+=======================+==========+
+                | arg0      | Device to which tensor will be moved            | tt_lib.device.Device       | TT accelerator device | Yes      |
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+                | arg1      | MemoryConfig of tensor of TT accelerator device | tt_lib.tensor.MemoryConfig |                       | No       |
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+                | arg2      | ShardSpec of sharded tensor                     | ShardSpec                  |                       | No       |
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+
+
+                .. code-block:: python
+
+                    tt_tensor = tt_tensor.to(tt_device)
+            )doc")
+            .def("extract_shard", [](const Tensor &self, CoreCoord core) {
+                return self.extract_shard(core);
+            }, py::arg("core").noconvert(),
+                py::keep_alive<0, 2>(), R"doc(
+                Move TT Tensor from host device to TT accelerator device.
+
+                Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
+
+                If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
+
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+                | Argument  | Description                                     | Data type                  | Valid range           | Required |
+                +===========+=================================================+============================+=======================+==========+
+                | arg0      | Core who's shard we want                        | tt_lib.tensor.CoreCoord    | TT accelerator device | Yes      |
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+
+
+                .. code-block:: python
+
+                    tt_tensor = tt_tensor.to(tt_device)
+            )doc")
+            .def("extract_shard", [](const Tensor &self, const uint32_t & core_id) {
+                return self.extract_shard(core_id);
+            }, py::arg("core_id").noconvert(),
+                py::keep_alive<0, 2>(), R"doc(
+                Move TT Tensor from host device to TT accelerator device.
+
+                Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
+
+                If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
+
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+                | Argument  | Description                                     | Data type                  | Valid range           | Required |
+                +===========+=================================================+============================+=======================+==========+
+                | arg0      | Core who's shard we want                        | uint32_t                   | TT accelerator device | Yes      |
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+
+
+                .. code-block:: python
+
+                    tt_tensor = tt_tensor.to(tt_device)
+            )doc")
             .def("cpu", &Tensor::cpu, R"doc(
                 Move TT Tensor from TT accelerator device to host device.
 
                 .. code-block:: python
 
                     tt_tensor = tt_tensor.cpu()
+            )doc")
+            .def("cpu_sharded", &Tensor::cpu_sharded, R"doc(
+                Move TT Tensor from TT accelerator device to host device in sharded orientation.
+
+                .. code-block:: python
+
+                    tt_tensor = tt_tensor.cpu_sharded()
             )doc")
             .def("to", py::overload_cast<Layout>(&Tensor::to, py::const_), R"doc(
                 Convert TT Tensor to provided memory layout. Available layouts conversions are:

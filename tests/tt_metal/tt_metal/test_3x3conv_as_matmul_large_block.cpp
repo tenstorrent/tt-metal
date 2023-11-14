@@ -141,11 +141,29 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_src1_size = weights_tilized.size() * sizeof(bfloat16);
         uint32_t dram_buffer_dst_size = M * N * single_tile_size;
 
-        auto src0_dram_buffer = CreateBuffer(device, dram_buffer_src0_size, dram_buffer_src0_size, tt_metal::BufferType::DRAM);
+        tt_metal::InterleavedBufferConfig src0_config{
+                                        .device=device,
+                                        .size = dram_buffer_src0_size,
+                                        .page_size = dram_buffer_src0_size,
+                                        .buffer_type = tt_metal::BufferType::DRAM
+                                        };
+        tt_metal::InterleavedBufferConfig src1_config{
+                                        .device=device,
+                                        .size = dram_buffer_src1_size,
+                                        .page_size = dram_buffer_src1_size,
+                                        .buffer_type = tt_metal::BufferType::DRAM
+                                        };
+        tt_metal::InterleavedBufferConfig dst_config{
+                                        .device=device,
+                                        .size = dram_buffer_dst_size,
+                                        .page_size = dram_buffer_dst_size,
+                                        .buffer_type = tt_metal::BufferType::DRAM
+                                        };
+        auto src0_dram_buffer = CreateBuffer(src0_config);
         uint32_t dram_buffer_src0_addr = src0_dram_buffer.address();
-        auto src1_dram_buffer = CreateBuffer(device, dram_buffer_src1_size, dram_buffer_src1_size, tt_metal::BufferType::DRAM);
+        auto src1_dram_buffer = CreateBuffer(src1_config);
         uint32_t dram_buffer_src1_addr = src1_dram_buffer.address();
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_dst_size, dram_buffer_dst_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = CreateBuffer(dst_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();

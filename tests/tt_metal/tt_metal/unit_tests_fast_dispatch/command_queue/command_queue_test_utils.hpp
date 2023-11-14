@@ -5,13 +5,13 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/bfloat16.hpp"
 
-struct BufferConfig {
+struct TestBufferConfig {
     uint32_t num_pages;
     uint32_t page_size;
     BufferType buftype;
 };
 
-inline pair<Buffer, vector<uint32_t>> EnqueueWriteBuffer_prior_to_wrap(Device* device, CommandQueue& cq, const BufferConfig& config) {
+inline pair<Buffer, vector<uint32_t>> EnqueueWriteBuffer_prior_to_wrap(Device* device, CommandQueue& cq, const TestBufferConfig& config) {
     // This function just enqueues a buffer (which should be large in the config)
     // write as a precursor to testing the wrap mechanism
     size_t buf_size = config.num_pages * config.page_size;

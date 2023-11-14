@@ -14,11 +14,16 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_stl/concepts.hpp"
+
+#include <optional>
+#include "tensor/tensor_impl_wrapper.hpp"
 namespace tt {
 
 namespace tt_metal {
 
 namespace tensor_impl {
+
+std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, const Shape& shape, DataType dtype, uint32_t num_shards, std::array<uint32_t, 2> shard_shape);
 
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
@@ -402,15 +407,14 @@ void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout 
 // ======================================================================================
 //                           Data reader, writer, and initializers
 // ======================================================================================
-DeviceBuffer allocate_sharded_buffer_on_device(uint32_t buffer_size_bytes, Device *device, uint32_t shard_size, const MemoryConfig& memory_config);
-
 DeviceBuffer allocate_buffer_on_device(
     uint32_t buffer_size_bytes,
     Device *device,
     const Shape& shape,
     DataType data_type,
     Layout layout,
-    const MemoryConfig& memory_config
+    const MemoryConfig& memory_config,
+    std::optional<ShardSpecBuffer> shard_spec = std::nullopt
 );
 
 template <typename T>
@@ -447,20 +451,36 @@ inline void write_data_to_device_buffer(const BufferType<T>& data_to_write, Devi
 }
 
 template <typename T, template<typename> typename BufferType>
-inline DeviceBuffer initialize_data_on_device(const BufferType<T>& data_to_write, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+inline DeviceBuffer initialize_data_on_device(const BufferType<T>& data_to_write, Device* device, const Shape& shape,
+            DataType data_type, Layout layout, const MemoryConfig& memory_config, std::optional<ShardSpec> shard_spec) {
     ZoneScoped;
     TT_ASSERT(device != nullptr);
     auto packed_size_in_bytes = packed_buffer_size_bytes<T>(data_to_write.size());
-    auto device_buffer = allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
+
+    std::optional<ShardSpecBuffer> shard_spec_buffer = std::nullopt;
+    if(shard_spec.has_value()){
+        auto page_shape = get_sharded_page_shape(layout, shape, data_type, shard_spec.value().num_cores(), shard_spec.value().shard_shape);
+        std::array<uint32_t, 2> tensor2d_size = {shape[0]*shape[1] * shape[2]/ page_shape[0],
+                                                shape[3]/page_shape[1]
+                                            };
+        shard_spec_buffer = ShardSpecBuffer(shard_spec.value(), page_shape, tensor2d_size);
+    }
+
+    auto device_buffer = allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec_buffer);
     write_data_to_device_buffer<T>(data_to_write, device_buffer, shape, data_type, layout, memory_config);
     return device_buffer;
 }
 
 template <typename T>
-inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config, std::optional<ShardSpec> shard_spec) {
+
     return std::visit(
-        [&device, &shape, &data_type, &layout, memory_config] (auto&& storage) -> DeviceBuffer {
+        [&device, &shape, &data_type, &layout, memory_config, shard_spec] (auto&& storage) -> DeviceBuffer {
+
             using StorageType = std::decay_t<decltype(storage)>;
+            if(memory_config.is_sharded()){
+                TT_ASSERT(shard_spec.has_value(), "If sharded must provide shard_spec");
+            }
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 auto data_to_write = owned_buffer::get_as<T>(storage.buffer);
                 TT_ASSERT(
@@ -472,7 +492,7 @@ inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, con
                         (shape[-2] % tt::constants::TILE_HEIGHT == 0 && shape[-1] % tt::constants::TILE_WIDTH == 0),
                         "Tensor shape incompatible for specified layout");
                 }
-                return initialize_data_on_device<T>(data_to_write, device, shape, data_type, layout, memory_config);
+                return initialize_data_on_device<T>(data_to_write, device, shape, data_type, layout, memory_config,  shard_spec);
             }
             else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage doesn't support to_device_buffer");
@@ -489,7 +509,7 @@ inline DeviceBuffer to_device_buffer(const Storage& storage, Device* device, con
                             (shape[-2] % tt::constants::TILE_HEIGHT == 0 && shape[-1] % tt::constants::TILE_WIDTH == 0),
                             "Tensor shape incompatible for specified layout");
                     }
-                    return initialize_data_on_device<T>(data_to_write, device, shape, data_type, layout, memory_config);
+                    return initialize_data_on_device<T>(data_to_write, device, shape, data_type, layout, memory_config,  shard_spec);
                 }
                 else {
                     TT_THROW("Borrowed storage doesn't support this data type");
@@ -515,12 +535,26 @@ inline Tensor to_host(const Tensor &tensor) {
     auto device_buffer = tensor.buffer();
     auto device = tensor.device();
     TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
-    TT_ASSERT(!tensor.memory_config().is_sharded(), "Sharded tensors cannot be directly read from device");
     uint32_t size_in_bytes = device_buffer->size();
     auto data_vec = read_data_from_device<T>(tensor, size_in_bytes);
     auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
     return Tensor(OwnedStorage{output_buffer}, tensor.shape(), tensor.dtype(), tensor.layout());
 }
+
+template <typename T>
+inline Tensor to_host_sharded(const Tensor &tensor) {
+    TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
+    auto device_buffer = tensor.buffer();
+    auto device = tensor.device();
+    TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
+    uint32_t size_in_bytes = device_buffer->size();
+    std::vector<uint32_t> device_data;
+    ::detail::ReadFromBuffer(*device_buffer, device_data, true);
+    auto data_vec = unpack_uint32_vec<T>(device_data);
+    auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
+    return Tensor(OwnedStorage{output_buffer}, tensor.shape(), tensor.dtype(), tensor.layout());
+}
+
 
 template <typename T>
 inline Tensor to_device(const Tensor &tensor, Device *target_device, const MemoryConfig &memory_config) {
@@ -530,14 +564,37 @@ inline Tensor to_device(const Tensor &tensor, Device *target_device, const Memor
     }
     TT_ASSERT(target_device != nullptr && "Need target device in order to move tensor to device!");
     TT_ASSERT(tensor.is_allocated() && "Need data to exist in order to move it to device");
-    TT_ASSERT(!memory_config.is_sharded(), "Sharded tensors cannot be directly written from device");
 
     auto shape = tensor.shape();
     auto data_type = tensor.dtype();
     auto layout = tensor.layout();
 
     auto device_buffer = tensor_impl::to_device_buffer<T>(
-        tensor.storage(), target_device, shape, data_type, layout, memory_config
+        tensor.storage(), target_device, shape,
+        data_type, layout, memory_config,
+        std::nullopt
+    );
+    return Tensor(DeviceStorage{device_buffer, target_device, memory_config}, shape, data_type, layout);
+}
+
+
+template <typename T>
+inline Tensor to_device_sharded(const Tensor &tensor, Device *target_device, const MemoryConfig &memory_config, const ShardSpec &shard_spec) {
+    TT_ASSERT(tensor.storage_type() != StorageType::DEVICE);
+    if (tensor.storage_type() ==  StorageType::OWNED) {
+        TT_ASSERT(tensor.is_allocated(), "Need host buffer on device to exist to copy data to device!");
+    }
+    TT_ASSERT(target_device != nullptr && "Need target device in order to move tensor to device!");
+    TT_ASSERT(tensor.is_allocated() && "Need data to exist in order to move it to device");
+
+    auto shape = tensor.shape();
+    auto data_type = tensor.dtype();
+    auto layout = tensor.layout();
+
+    auto device_buffer = tensor_impl::to_device_buffer<T>(
+        tensor.storage(), target_device, shape, data_type,
+        layout, memory_config,
+        std::make_optional<ShardSpec>(shard_spec)
     );
     return Tensor(DeviceStorage{device_buffer, target_device, memory_config}, shape, data_type, layout);
 }
@@ -810,6 +867,25 @@ inline std::string to_string(const Tensor &tensor, Layout print_layout, bool pre
         tensor.storage()
     );
 }
+
+
+template <typename T>
+Tensor extract_shard(const Tensor & tensor, const uint32_t & core_id){
+
+    auto buffer= tensor.buffer();
+    auto buffer_shard_shape = buffer->shard_shape();
+    std::array <uint32_t, 4> shard_shape_array = {1,1,buffer_shard_shape[0],buffer_shard_shape[1]};
+    Shape shard_shape(shard_shape_array);
+    std::vector<uint32_t> device_data;
+    ::detail::ReadShard(*buffer, device_data, core_id);
+
+
+    auto unpacked_data = tensor_impl::unpack_uint32_vec<T>(device_data);
+    auto output_buffer = owned_buffer::create<T>(std::move(unpacked_data));
+    return Tensor(OwnedStorage{output_buffer}, shard_shape, tensor.dtype(), tensor.layout());
+
+}
+
 
 }  // namespace tensor_impl
 

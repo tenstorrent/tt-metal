@@ -62,9 +62,15 @@ int main(int argc, char** argv) {
     // Application Setup
     uint32_t single_tile_size = 2 * 1024;
     auto page_size = single_tile_size;
-    auto buffer = CreateBuffer(device, buffer_size, page_size,
-                                   buffer_type == 0 ? tt_metal::BufferType::DRAM
-                                                    : tt_metal::BufferType::L1);
+    BufferType buff_type = buffer_type == 0 ? tt_metal::BufferType::DRAM
+                                              : tt_metal::BufferType::L1;
+    tt_metal::InterleavedBufferConfig buff_config{
+                    .device=device,
+                    .size = buffer_size,
+                    .page_size = page_size,
+                    .buffer_type = buff_type
+        };
+    auto buffer = CreateBuffer(buff_config);
 
     // Execute Application
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(

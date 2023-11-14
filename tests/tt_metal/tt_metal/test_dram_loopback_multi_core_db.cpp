@@ -78,7 +78,15 @@ int main(int argc, char **argv) {
 
         TT_FATAL(num_output_tiles % transient_buffer_size_tiles == 0);
 
-        auto input_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        tt_metal::InterleavedBufferConfig buff_config{
+                                .device=device,
+                                .size = dram_buffer_size,
+                                .page_size = dram_buffer_size,
+                                .buffer_type = tt_metal::BufferType::DRAM
+                                };
+
+
+        auto input_dram_buffer = CreateBuffer(buff_config);
         uint32_t dram_buffer_src_addr = input_dram_buffer.address();
 
         // auto l1_b0_a = tt_metal::CreateL1Buffer(

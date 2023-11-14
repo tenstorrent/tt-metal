@@ -27,8 +27,8 @@ bool cb_producer_space_available(int32_t num_pages) {
     return free_space_pages >= num_pages;
 }
 
-FORCE_INLINE
-uint32_t min(uint32_t a, uint32_t b) { return (a < b) ? a: b; }
+//FORCE_INLINE
+//uint32_t min(uint32_t a, uint32_t b) { return (a < b) ? a: b; }
 
 FORCE_INLINE
 bool cb_consumer_space_available(bool db_buf_switch, int32_t num_pages) {
@@ -75,7 +75,7 @@ void relay_command(bool db_buf_switch, uint64_t consumer_noc_encoding) {
 }
 
 void produce(
-    volatile tt_l1_ptr uint32_t* command_ptr, uint32_t num_srcs, uint32_t page_size, uint32_t producer_cb_size, uint32_t producer_cb_num_pages,
+    volatile tt_l1_ptr uint32_t* command_ptr, uint32_t num_srcs, uint32_t sharded_buffer_num_cores, uint32_t page_size, uint32_t producer_cb_size, uint32_t producer_cb_num_pages,
     uint32_t consumer_cb_size, uint32_t consumer_cb_num_pages, uint64_t consumer_noc_encoding, uint32_t producer_consumer_transfer_num_pages, bool db_buf_switch) {
     /*
         This API prefetches data from host memory and writes data to the consumer core. On the consumer,
@@ -87,15 +87,15 @@ void produce(
     command_ptr += DeviceCommand::NUM_ENTRIES_IN_COMMAND_HEADER;
     uint32_t l1_consumer_fifo_limit = get_db_buf_addr(db_buf_switch) + consumer_cb_size;
 
+    bool sharded = sharded_buffer_num_cores > 1;
+
     for (uint32_t i = 0; i < num_srcs; i++) {
         const uint32_t bank_base_address = command_ptr[0];
         const uint32_t num_pages = command_ptr[2];
         const uint32_t page_size = command_ptr[3];
         const uint32_t src_buf_type = command_ptr[4];
 
-        command_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
 
-        Buffer src_buffer((BufferType)src_buf_type, bank_base_address, page_size);
         uint32_t fraction_of_producer_cb_num_pages = consumer_cb_num_pages / 2;
 
         uint32_t num_to_read = min(num_pages, fraction_of_producer_cb_num_pages);
@@ -104,12 +104,21 @@ void produce(
         uint32_t num_reads_completed = 0;
         uint32_t num_writes_completed = 0;
 
+        Buffer buffer;
+        if ((BufferType)src_buf_type == BufferType::SYSTEM_MEMORY or not(sharded)) {
+            buffer.init((BufferType)src_buf_type, bank_base_address, page_size);
+        }
+        else{
+            buffer.init_sharded(page_size, sharded_buffer_num_cores, bank_base_address,
+                            command_ptr + COMMAND_PTR_SHARD_IDX);
+        }
+
         while (num_writes_completed != num_pages) {
             // Context switch between reading in pages and sending them to the consumer.
             // These APIs are non-blocking to allow for context switching.
             if (cb_producer_space_available(num_to_read) and num_reads_issued < num_pages) {
                 uint32_t l1_write_ptr = get_write_ptr(0);
-                src_buffer.noc_async_read_buffer(l1_write_ptr, num_reads_issued, num_to_read, 0);
+                buffer.noc_async_read_buffer(l1_write_ptr, num_reads_issued, num_to_read);
                 cb_push_back(0, num_to_read);
                 num_reads_issued += num_to_read;
 
@@ -134,5 +143,6 @@ void produce(
                 num_to_write = min(num_pages - num_writes_completed, producer_consumer_transfer_num_pages);
             }
         }
+        command_ptr += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
     }
 }

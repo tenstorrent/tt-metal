@@ -44,11 +44,12 @@ BankManager::BankManager(const BufferType &buffer_type, const std::vector<int64_
         this->bank_id_to_bank_offset_.insert({bank_id, bank_offset});
         bank_id++;
     }
+    this->interleaved_address_limit_ = 0;
     validate_num_banks(this->bank_id_to_bank_offset_.size(), this->buffer_type_);
     this->init_allocator(size_bytes, alloc_offset);
 }
 
-BankManager::BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_bank_offset, uint64_t size_bytes, uint64_t alloc_offset) : buffer_type_(buffer_type), bank_id_to_bank_offset_(bank_id_to_bank_offset) {
+BankManager::BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_bank_offset, uint64_t size_bytes, uint64_t interleaved_address_limit, uint64_t alloc_offset) : buffer_type_(buffer_type), bank_id_to_bank_offset_(bank_id_to_bank_offset), interleaved_address_limit_(interleaved_address_limit) {
     validate_num_banks(this->bank_id_to_bank_offset_.size(), this->buffer_type_);
     this->init_allocator(size_bytes, alloc_offset);
 }
@@ -75,12 +76,22 @@ void BankManager::validate_bank_id(uint32_t bank_id) const {
     TT_FATAL(this->bank_id_to_bank_offset_.find(bank_id) != this->bank_id_to_bank_offset_.end(), "Expected bank {} to be tracked!", bank_id);
 }
 
-uint64_t BankManager::allocate_buffer(uint32_t size, uint32_t page_size, bool bottom_up) {
+uint64_t BankManager::allocate_buffer(uint32_t size, uint32_t page_size, bool bottom_up, std::optional<uint32_t> num_shards) {
     uint32_t num_banks = this->num_banks();
+    bool is_sharded = false;
+    if(num_shards.has_value()){
+        is_sharded = true;
+        TT_FATAL(num_shards.value() < num_banks, "Expected number of shards to be less than total number of L1 banks");
+        num_banks = num_shards.value();
+    }
     // Each page needs to be at a 32B aligned address
     uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks);
-
-    auto address = this->allocator_->allocate(size_per_bank, bottom_up);
+    uint64_t address_limit = 0;
+    if(!is_sharded and this->buffer_type_ == BufferType::L1) {
+        address_limit = this->interleaved_address_limit_;
+        TT_FATAL(address_limit > 0);
+    }
+    auto address = this->allocator_->allocate(size_per_bank, bottom_up, address_limit);
     if (not address.has_value()) {
         TT_THROW("Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to store {} B", size, magic_enum::enum_name(this->buffer_type_), num_banks, size_per_bank);
     }
@@ -237,15 +248,15 @@ std::optional<uint64_t> lowest_occupied_l1_address(const Allocator &allocator, u
     return allocator.l1_manager.lowest_occupied_address(bank_id);
 }
 
-uint64_t base_alloc(const AllocatorConfig &config, BankManager &bank_manager, uint64_t size, uint64_t page_size, bool bottom_up) {
-    return bank_manager.allocate_buffer(size, page_size, bottom_up);
+uint64_t base_alloc(const AllocatorConfig &config, BankManager &bank_manager, uint64_t size, uint64_t page_size, bool bottom_up, std::optional<uint32_t> num_shards) {
+    return bank_manager.allocate_buffer(size, page_size, bottom_up, num_shards);
 }
 
-uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size, const BufferType &buffer_type, bool bottom_up) {
+uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size, const BufferType &buffer_type, bool bottom_up, std::optional<uint32_t> num_shards) {
     uint64_t address = 0;
     switch (buffer_type) {
-        case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, size, page_size, bottom_up);
-        case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, size, page_size, bottom_up);
+        case BufferType::DRAM: return allocator.descriptor.dram.alloc(allocator.config, allocator.dram_manager, size, page_size, bottom_up, std::nullopt);
+        case BufferType::L1: return allocator.descriptor.l1.alloc(allocator.config, allocator.l1_manager, size, page_size, bottom_up, num_shards);
         default: {
             TT_THROW("Unsupported buffer type!");
         }

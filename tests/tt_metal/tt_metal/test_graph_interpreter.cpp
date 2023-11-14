@@ -118,9 +118,17 @@ bool run_chained_sfpu_test(int chain_length) {
         uint32_t num_tiles = 1;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+
+        tt_metal::InterleavedBufferConfig dram_config{
+                    .device=device,
+                    .size = dram_buffer_size,
+                    .page_size = dram_buffer_size,
+                    .buffer_type = tt_metal::BufferType::DRAM
+                    };
+
+        auto src_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_src_addr = src_dram_buffer.address();
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
@@ -319,9 +327,16 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         uint32_t num_tiles = 1;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-        auto src0_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
-        auto src1_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+
+        tt_metal::InterleavedBufferConfig dram_config{
+                    .device=device,
+                    .size = dram_buffer_size,
+                    .page_size = dram_buffer_size,
+                    .buffer_type = tt_metal::BufferType::DRAM
+                    };
+        auto src0_dram_buffer = CreateBuffer(dram_config);
+        auto src1_dram_buffer = CreateBuffer(dram_config);
+        auto dst_dram_buffer = CreateBuffer(dram_config);
 
         auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
         auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
@@ -556,7 +571,14 @@ bool run_forked_binary_test() {
 
         uint32_t num_dram_channels = 5;
 
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+        tt_metal::InterleavedBufferConfig dram_config{
+                    .device=device,
+                    .size = dram_buffer_size,
+                    .page_size = dram_buffer_size,
+                    .buffer_type = tt_metal::BufferType::DRAM
+                    };
+
+        auto dst_dram_buffer = CreateBuffer(dram_config);
 
         auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
@@ -565,7 +587,7 @@ bool run_forked_binary_test() {
         std::vector<uint32_t> src_cb_buffer_indices;
         uint32_t src_cb_index = 0;
         for (uint32_t i = 0; i < num_dram_channels; i++){
-            auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, tt_metal::BufferType::DRAM);
+            auto src_dram_buffer = CreateBuffer(dram_config);
             src_dram_buffers.push_back(std::move(src_dram_buffer));
             tt_metal::CircularBufferConfig src_cb_config = tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{src_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src_cb_index, single_tile_size);

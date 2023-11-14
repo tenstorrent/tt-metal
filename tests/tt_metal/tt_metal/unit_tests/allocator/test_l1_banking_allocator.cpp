@@ -40,8 +40,15 @@ TEST_F(BasicFixture, TestL1BuffersDoNotGrowBeyondBankSize) {
     tt::tt_metal::Device *device = tt::tt_metal::CreateDevice(0);
     uint32_t alloc_limit = device->bank_size(tt::tt_metal::BufferType::L1);
 
+    tt::tt_metal::InterleavedBufferConfig l1_config{
+                    .device=device,
+                    .size = alloc_limit + 64,
+                    .page_size = alloc_limit + 64,
+                    .buffer_type = tt::tt_metal::BufferType::L1
+        };
+
     EXPECT_ANY_THROW(
-        tt::tt_metal::Buffer buffer = tt::tt_metal::CreateBuffer(device, alloc_limit + 64, alloc_limit + 64, tt::tt_metal::BufferType::L1);
+        tt::tt_metal::Buffer buffer = tt::tt_metal::CreateBuffer(l1_config);
     );
 
     tt::tt_metal::CloseDevice(device);

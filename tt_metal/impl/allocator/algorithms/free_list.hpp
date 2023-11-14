@@ -30,7 +30,7 @@ class FreeList : public Algorithm {
 
     std::vector<std::pair<uint64_t, uint64_t>> available_addresses(uint64_t size_bytes) const;
 
-    std::optional<uint64_t> allocate(uint64_t size_bytes, bool bottom_up=true);
+    std::optional<uint64_t> allocate(uint64_t size_bytes, bool bottom_up=true, uint64_t address_limit=0);
 
     std::optional<uint64_t> allocate_at_address(uint64_t absolute_start_address, uint64_t size_bytes);
 

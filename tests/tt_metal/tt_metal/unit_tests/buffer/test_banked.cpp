@@ -64,9 +64,24 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
         output_page_size_bytes = cfg.size_bytes;
     }
 
-    Buffer input_buffer = CreateBuffer(device, cfg.size_bytes, input_page_size_bytes, cfg.input_buffer_type);
+    tt::tt_metal::InterleavedBufferConfig in_config{
+                    .device=device,
+                    .size = cfg.size_bytes,
+                    .page_size = input_page_size_bytes,
+                    .buffer_type = cfg.input_buffer_type
+        };
 
-    Buffer output_buffer = CreateBuffer(device, cfg.size_bytes, output_page_size_bytes, cfg.output_buffer_type);
+    tt::tt_metal::InterleavedBufferConfig out_config{
+                    .device=device,
+                    .size = cfg.size_bytes,
+                    .page_size = output_page_size_bytes,
+                    .buffer_type = cfg.output_buffer_type
+        };
+
+
+    Buffer input_buffer = CreateBuffer(in_config);
+
+    Buffer output_buffer = CreateBuffer(out_config);
 
     tt::log_debug(tt::LogTest, "Input buffer: [address: {} B, size: {} B] at noc coord {}", input_buffer.address(), input_buffer.size(), input_buffer.noc_coordinates().str());
     tt::log_debug(tt::LogTest, "Output buffer: [address: {} B, size: {} B] at noc coord {}", output_buffer.address(), output_buffer.size(), output_buffer.noc_coordinates().str());
@@ -150,8 +165,23 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     Program program = CreateProgram();
-    auto input_buffer = CreateBuffer(device, cfg.size_bytes, cfg.page_size_bytes, cfg.input_buffer_type);
-    auto output_buffer = CreateBuffer(device, cfg.size_bytes, cfg.page_size_bytes, cfg.output_buffer_type);
+
+    tt::tt_metal::InterleavedBufferConfig in_config{
+                    .device=device,
+                    .size = cfg.size_bytes,
+                    .page_size = cfg.page_size_bytes,
+                    .buffer_type = cfg.input_buffer_type
+        };
+
+    tt::tt_metal::InterleavedBufferConfig out_config{
+                    .device=device,
+                    .size = cfg.size_bytes,
+                    .page_size = cfg.page_size_bytes,
+                    .buffer_type = cfg.output_buffer_type
+        };
+
+    auto input_buffer = CreateBuffer(in_config);
+    auto output_buffer = CreateBuffer(out_config);
 
     TT_FATAL(cfg.num_tiles * cfg.page_size_bytes == cfg.size_bytes);
     constexpr uint32_t num_pages_cb = 1;

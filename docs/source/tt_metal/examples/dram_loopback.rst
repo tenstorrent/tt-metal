@@ -85,19 +85,31 @@ need
   constexpr uint32_t single_tile_size = 2 * (32 * 32);
   constexpr uint32_t num_tiles = 50;
   constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
+  tt_metal::InterleavedBufferConfig l1_config{
+                                        .device=device,
+                                        .size = dram_buffer_size,
+                                        .page_size = dram_buffer_size,
+                                        .buffer_type = tt_metal::BufferType::L1
+                                        };
 
-  Buffer l1_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferType::L1);
+  Buffer l1_buffer = CreateBuffer(l1_config);
 
 For simplicity, let's make the size of all our buffers 50 tiles.
 
 Let's make the input and output DRAM buffers.
 
 .. code-block:: cpp
+  tt_metal::InterleavedBufferConfig dram_config{
+                                        .device=device,
+                                        .size = dram_buffer_size,
+                                        .page_size = dram_buffer_size,
+                                        .buffer_type = tt_metal::BufferType::DRAM
+                                        };
 
-  Buffer input_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferType::DRAM);
+  Buffer input_dram_buffer = CreateBuffer(dram_config);
   const uint32_t input_dram_buffer_addr = input_dram_buffer.address();
 
-  Buffer output_dram_buffer = CreateBuffer(device, dram_buffer_size, dram_buffer_size, BufferType::DRAM);
+  Buffer output_dram_buffer = CreateBuffer(dram_config);
   const uint32_t output_dram_buffer_addr = output_dram_buffer.address();
 
 Sending real data into DRAM

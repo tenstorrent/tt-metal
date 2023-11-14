@@ -88,8 +88,16 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
     uint32_t dst_address;
     CoreCoord dst_noc_xy;
 
-    src_buffer = CreateBuffer(device, buffer_size, buffer_size, test_config.IO_data_in_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1);
-    dst_buffer = CreateBuffer(device, buffer_size, buffer_size, test_config.IO_data_in_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1);
+    tt_metal::BufferType buff_type = test_config.IO_data_in_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1;
+    tt_metal::InterleavedBufferConfig buff_config{
+                    .device= device,
+                    .size = buffer_size,
+                    .page_size = buffer_size,
+                    .buffer_type = buff_type
+        };
+
+    src_buffer = CreateBuffer(buff_config);
+    dst_buffer = CreateBuffer(buff_config);
 
     src_address = src_buffer.address();
     src_noc_xy = src_buffer.noc_coordinates();

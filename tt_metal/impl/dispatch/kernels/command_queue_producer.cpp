@@ -102,6 +102,7 @@ void kernel_main() {
         uint32_t num_pages = command_ptr[DeviceCommand::num_pages_idx];
         uint32_t wrap = command_ptr[DeviceCommand::wrap_idx];
         uint32_t producer_consumer_transfer_num_pages = command_ptr[DeviceCommand::producer_consumer_transfer_num_pages_idx];
+        uint32_t sharded_buffer_num_cores = command_ptr[DeviceCommand::sharded_buffer_num_cores_idx];
 
         if (wrap) {
             // Basically popfront without the extra conditional
@@ -128,10 +129,13 @@ void kernel_main() {
         noc_semaphore_inc(consumer_noc_encoding | get_semaphore(0), 1);
         noc_async_write_barrier();  // Barrier for now
 
+
         // Fetch data and send to the consumer
+
         produce(
             command_ptr,
             num_buffer_transfers,
+            sharded_buffer_num_cores,
             page_size,
             producer_cb_size,
             producer_cb_num_pages,
@@ -140,6 +144,7 @@ void kernel_main() {
             consumer_noc_encoding,
             producer_consumer_transfer_num_pages,
             db_buf_switch);
+
         cq_pop_front(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size);
 
         db_buf_switch = not db_buf_switch;
