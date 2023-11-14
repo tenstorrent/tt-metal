@@ -24,6 +24,8 @@ void setup_kernel();
 #include "chlkc_math_approx_mode.h"
 #include "chlkc_math_data_format.h"
 #include "chlkc_math_tile_dims.h"
+#include "chlkc_pack_data_format.h"
+#include "chlkc_pack_tile_dims.h"
 #include "loop_count.h"
 #include "hlk_compile_time_constants.h"
 #include "hlk.cpp"
@@ -46,7 +48,9 @@ void setup_kernel();
 
 #ifdef UCK_CHLKC_UNPACK
 #include "chlkc_unpack_data_format.h"
+#include "chlkc_pack_data_format.h"
 #include "chlkc_unpack_tile_dims.h"
+#include "chlkc_pack_tile_dims.h"
 #include "loop_count.h"
 #include "hlk_compile_time_constants.h"
 #include "hlk.cpp"

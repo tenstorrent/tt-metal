@@ -222,40 +222,11 @@ inline void set_dest_section_base()
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
 }
 
-inline uint32_t get_operand_id(uint32_t operand) 
-{
-    const int INTERMEDIATE_BASE_ID = 24;
-    const int OPERAND_BASE_ID = 0;
-    return (operand>=INTERMEDIATE_BASE_ID) ? operand - 8 : operand - OPERAND_BASE_ID;
-}
-
 inline constexpr bool is_32bit_input(const std::uint32_t src_format, const std::uint32_t dst_format) {
     const uint input_df = src_format;
     const uint output_df = dst_format;
     return ((input_df == (uint)DataFormat::Int32)  || (input_df == (uint)DataFormat::Float32)) &&
            ((output_df == (uint)DataFormat::Int32) || (output_df == (uint)DataFormat::Float32));
 }
-
-inline constexpr uint32_t get_num_faces(const std::uint32_t operand_id)
-{
-   return math_tile_num_faces[operand_id];
-}
-
-inline constexpr uint32_t get_partial_face(const std::uint32_t operand_id)
-{
-   return math_partial_face[operand_id];
-}
-
-inline constexpr uint32_t get_face_r_dim(const std::uint32_t operand_id)
-{
-   return math_tile_face_r_dim[operand_id];
-}
-
-inline constexpr uint32_t get_narrow_tile(const std::uint32_t operand_id)
-{
-   return math_narrow_tile[operand_id];
-}
-
-
 
 } // namespace ckernel::math

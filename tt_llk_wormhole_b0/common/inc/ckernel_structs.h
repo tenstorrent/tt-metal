@@ -40,9 +40,6 @@ enum firmware_msg_e
     SET_PERF_SCRATCH = 4
 };
 
-constexpr uint8_t OPERAND_BASE_REG = 16; // base register used for operand storage
-constexpr uint8_t OUTPUT_BASE_REG = 16; // base register used for output storage
-
 typedef struct {
    uint32_t fifo_rd_ptr;
    uint32_t fifo_limit;

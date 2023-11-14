@@ -8,8 +8,6 @@
 
 namespace ckernel::packer
 {
-   constexpr uint32_t OUTPUT_BASE    = 16; 
-   constexpr uint32_t OUTPUT_BASE_ID = 0; 
    constexpr uint32_t PACK_CNT       = 4; 
    
    
@@ -132,32 +130,6 @@ namespace ckernel::packer
       uint32_t val;
       pack_counters_t f;
    } pack_counters_u;
-
-   
-   inline constexpr uint32_t get_num_faces(const std::uint32_t output_id)
-   {
-      return pack_tile_num_faces[output_id];
-   }
-
-   inline constexpr uint32_t get_face_r_dim(const std::uint32_t output_id)
-   {
-      return pack_tile_face_r_dim[output_id];
-   }
-
-   inline constexpr uint32_t get_tile_c_dim(const std::uint32_t output_id)
-   {
-      return pack_tile_dims[output_id][TileDim::C_IDX];
-   }
-
-   inline constexpr uint32_t get_partial_face(const std::uint32_t output_id)
-   {
-      return pack_partial_face[output_id];
-   }
-
-   inline constexpr uint32_t get_narrow_tile(const std::uint32_t output_id)
-   {
-      return pack_narrow_tile[output_id];
-   }
 
    // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
    inline void packer_addr_counter_init()
@@ -578,16 +550,6 @@ namespace ckernel::packer
    inline void write_tile_header()
    {
       TTI_STOREIND (1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR);
-   }
-
-   inline uint32_t get_output_id(uint32_t output) 
-   {
-      return ((output) - OUTPUT_BASE);
-   }
-
-   inline constexpr uint32_t get_output_base_id() 
-   {
-      return (OUTPUT_BASE_ID);
    }
 
 }

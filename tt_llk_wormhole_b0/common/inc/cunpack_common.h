@@ -10,8 +10,6 @@
 
 namespace ckernel::unpacker
 {
-   constexpr uint32_t OPERAND_BASE_ID = 0; 
-   constexpr uint32_t INTERMEDIATE_BASE_ID = 24; 
    constexpr uint32_t TILE_DESC_SIZE = 2; //Unpacker descriptor size in dwords
    constexpr uint32_t CONFIG_SIZE = 2; //Unpacker configuration size in dwords
 
@@ -177,26 +175,6 @@ namespace ckernel::unpacker
    inline void wait_for_idle()
    {
        while (semaphore_read(semaphore::UNPACK_SYNC) > 0) {}
-   }
-
-   inline constexpr uint32_t get_num_faces(const std::uint32_t operand_id)
-   {
-      return unpack_tile_num_faces[operand_id];
-   }
-
-   inline constexpr uint32_t get_face_r_dim(const std::uint32_t operand_id)
-   {
-      return unpack_tile_face_r_dim[operand_id];
-   }
-
-   inline constexpr uint32_t get_partial_face(const std::uint32_t operand_id)
-   {
-      return unpack_partial_face[operand_id];
-   }
-
-   inline constexpr uint32_t get_narrow_tile(const std::uint32_t operand_id)
-   {
-      return unpack_narrow_tile[operand_id];
    }
 
    inline void enalbe_int8_fpu_math() {
@@ -397,11 +375,6 @@ namespace ckernel::unpacker
          TTI_DMANOP; // Insert fence if reg2flop is followed by an unpack
       }
    }   
-
-   inline uint32_t get_operand_id(uint32_t operand) 
-   {
-      return (operand>=INTERMEDIATE_BASE_ID) ? operand - 8 : operand - OPERAND_BASE_ID;
-   }
 
    inline constexpr bool is_32bit_input(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format) {
        const uint input_df = unpack_src_format;
