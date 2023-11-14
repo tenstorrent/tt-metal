@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks moreh_dot_single_core(const Tensor &a, const Ten
 
     CreateCircularBuffer(
         program,
-        std::set<CoreRange>{CoreRange{.start = core, .end = core}},
+        core,
         cb_data_format,
         {
             {CB::c_in0, in0_t},
@@ -82,14 +82,12 @@ operation::ProgramWithCallbacks moreh_dot_single_core(const Tensor &a, const Ten
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    vector<uint32_t> compute_kernel_args = {};
     std::map<string, string> compute_defines;
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     const auto compute_kernel_file = "tt_eager/tt_dnn/op_library/moreh_dot/single_core/kernels/moreh_dot.cpp";
-    const auto compute_kernel_id =
-        CreateComputeKernel(program, compute_kernel_file, {core, core_num, compute_kernel_args}, compute_defines);
+    const auto compute_kernel_id = CreateComputeKernel(program, compute_kernel_file, {core, core_num}, compute_defines);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp

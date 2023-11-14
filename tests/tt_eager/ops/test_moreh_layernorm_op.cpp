@@ -5,12 +5,12 @@
 #include <limits>
 #include <optional>
 #include <string>
-#include <tt_numpy/functions.hpp>
 #include <vector>
 
 #include "tt_eager/tensor/tensor.hpp"
 #include "tt_eager/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_numpy/functions.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

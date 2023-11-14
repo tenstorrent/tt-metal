@@ -57,21 +57,21 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 KernelID CreateReadKernel(
     Program &program,
     const std::string &file_name,
-    const CoreRangeSet &core,
-    const std::vector<uint32_t> &compile_args,
-    std::map<string, string> defines);
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const std::vector<uint32_t> &compile_args = {},
+    std::map<string, string> defines = {});
 
 KernelID CreateWriteKernel(
     Program &program,
     const std::string &file_name,
-    const CoreRangeSet &core,
-    const std::vector<uint32_t> &compile_args,
-    std::map<string, string> defines);
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const std::vector<uint32_t> &compile_args = {},
+    std::map<string, string> defines = {});
 
 struct ComputeKernelArg {
     CoreRangeSet core_range;
     uint32_t num_tile_per_core_group;
-    const std::vector<uint32_t> &compile_args;
+    const std::vector<uint32_t> &compile_args = {};
 };
 
 void CreateComputeKernel(
@@ -86,24 +86,25 @@ void CreateComputeKernel(
 struct CircularBufferArg {
     uint32_t buffer_index;
     uint32_t num_tiles;
-    // TODO: change to CoreRangeSet.
-    // currently using pointer because there is no default constructor for
-    // CoreRangeSet
-    CoreRangeSet *core_range;
     tt::DataFormat data_format;
+    std::optional<std::variant<CoreCoord, CoreRange, CoreRangeSet>> core_range = std::nullopt;
 
     CircularBufferArg(uint32_t buffer_index, uint32_t num_tiles) : buffer_index(buffer_index), num_tiles(num_tiles) {
-        core_range = nullptr;
         data_format = tt::DataFormat::Invalid;
     }
 };
 
-void CreateCircularBuffers(
+[[maybe_unused]] std::vector<CircularBufferID> CreateCircularBuffer(
     Program &program,
-    const CoreRangeSet &core_range,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
     tt::DataFormat data_format,
-    std::vector<CircularBufferArg> args,
-    std::optional<uint32_t> l1_address = std::nullopt);
+    std::vector<CircularBufferArg> args);
+
+[[maybe_unused]] CircularBufferID CreateCircularBuffer(
+    Program &program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
+    tt::DataFormat data_format,
+    CircularBufferArg arg);
 
 }  // namespace primary
 }  // namespace operations
