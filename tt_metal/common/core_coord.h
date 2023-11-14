@@ -112,6 +112,14 @@ struct CoreRange {
                (other.end.y <= this->end.y);
     }
 
+    inline bool contains ( const CoreCoord & other ) const
+    {
+        return (other.x >= this->start.x ) &&
+               (other.x <= this->end.x) &&
+               (other.y >= this->start.y)  &&
+               (other.y <= this->end.y);
+    }
+
     // Merge lined-up (in x or y dimension) intersecting/adjacent rectangles
     std::optional<CoreRange> merge ( const CoreRange & cr) const
     {
@@ -322,11 +330,7 @@ class CoreRangeSet {
     inline bool core_coord_in_core_ranges(const CoreCoord &core_coord) const {
       ZoneScoped;
       for (const auto & cr : this->ranges_) {
-        bool in_x_range = (core_coord.x >= cr.start.x) and (core_coord.x <= cr.end.x);
-        bool in_y_range = (core_coord.y >= cr.start.y) and (core_coord.y <= cr.end.y);
-        if (in_x_range and in_y_range) {
-          return true;
-        }
+        if (cr.contains(core_coord)) return true;
       }
       return false;
     }
