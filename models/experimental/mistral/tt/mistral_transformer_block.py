@@ -46,6 +46,8 @@ class TtTransformerBlock(nn.Module):
     ) -> tt_lib.tensor.Tensor:
         r = self.attention.forward(self.attention_norm(x), freqs_cis, positions, mask)
         h = tt_lib.tensor.add(x, r)
+        x.deallocate()
         r = self.feed_forward.forward(self.ffn_norm(h))
         out = tt_lib.tensor.add(h, r)
+        h.deallocate()
         return out
