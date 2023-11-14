@@ -8,6 +8,94 @@ from ..utils import _nearest_32, _nearest_y
 import torch
 
 
+def compute_conv_output_shape(conv_params, x_shape):
+    H = x_shape[1]
+    W = x_shape[2]
+    K, C, R, S, U, V, P_H, P_W, dilation, groups = [conv_params[i] for i in range(10)]
+    OH = ((int)((H - R + 2 * P_H) / U)) + 1
+    OW = ((int)((W - S + 2 * P_W) / V)) + 1
+    return [x_shape[0], OH, OW, K]
+
+
+def conv_op_trace(conv_params, input_nhwc_shape):
+    assert len(conv_params) == 10
+    output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups = [
+        conv_params[i] for i in range(10)
+    ]
+    assert dilation == 1 and groups == 1
+    assert len(input_nhwc_shape) == 4
+    input_n, input_h, input_w, input_c = [input_nhwc_shape[i] for i in range(4)]
+    # indices in the following arrays are channel/stick indices
+    # data indices array contains the input indices corresponding to the top left corner of filter window
+    data_indices = []
+
+    # 2 lists -
+    # data_start_size holds start stick index and size for contigious sticks in tensor
+    # pad_start_size holds start stick index and size for contingous padding sticks
+    # stick indices in data_start_size are after pad insertion
+    # Example for 8x8 and pad = 1
+    # 0 0  0  0  0  0  0  0  0 0
+    # 0 1  2  3  4  5  6  7  8 0
+    # 0 9 10 11 12 13 14 15 16 0
+    # 0 ...
+    # =>
+    # pad_start_size: (0, 11), (20, 2), ...
+    # data_start_size: (11, 8), (22, 8), ...
+
+    data_start_size = []
+    pad_start_size = []
+
+    # image padding
+    padded_input_h = input_h + (2 * pad_h)
+    padded_input_w = input_w + (2 * pad_w)
+
+    def update_start_size_list_and_coalesce(start_size_list, new_start, new_size):
+        if len(start_size_list) > 1 and start_size_list[-2] == new_start - 1:
+            start_size_list[-1] += new_size
+        else:
+            start_size_list.append(new_start)
+            start_size_list.append(new_size)
+
+    # trace the image and collect padding and data start and sizes
+    channel_idx = 0
+    for n in range(input_n):
+        # top padding
+        if pad_h > 0:
+            if n == 0:
+                # add top padding only for first image
+                pad_start_size.append(channel_idx)
+                pad_start_size.append(pad_h * padded_input_w)
+            channel_idx += pad_h * padded_input_w
+        for ih in range(pad_h, input_h + pad_h):
+            if pad_w > 0:
+                # left padding
+                update_start_size_list_and_coalesce(pad_start_size, channel_idx, pad_w)
+                channel_idx += pad_w
+            update_start_size_list_and_coalesce(data_start_size, channel_idx, input_w)
+            channel_idx += input_w
+            if pad_w > 0:
+                # right padding
+                update_start_size_list_and_coalesce(pad_start_size, channel_idx, pad_w)
+                channel_idx += pad_w
+        # bottom padding
+        if pad_h > 0:
+            update_start_size_list_and_coalesce(pad_start_size, channel_idx, pad_h * padded_input_w)
+
+    # output image size
+    [output_n, output_h, output_w, output_c] = compute_conv_output_shape(conv_params, input_nhwc_shape)
+    assert input_n == output_n
+
+    # trace the output
+    for n in range(input_n):
+        for oh in range(output_h):
+            for ow in range(output_w):
+                ih = oh * stride_h
+                iw = ow * stride_w
+                channel_idx = (n * padded_input_h * padded_input_w) + (ih * padded_input_w) + iw
+                data_indices.append(channel_idx)
+    return data_indices, data_start_size, pad_start_size
+
+
 def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
     """
     Returns a function that performs a Convolution.
