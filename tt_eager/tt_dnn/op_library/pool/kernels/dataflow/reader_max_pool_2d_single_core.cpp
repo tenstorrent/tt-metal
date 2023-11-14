@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-// #include "debug_print.h"
+// #include "debug/dprint.h"
 // SliceRange srr = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 };
 // SliceRange srt = SliceRange{ .h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 4 };
 

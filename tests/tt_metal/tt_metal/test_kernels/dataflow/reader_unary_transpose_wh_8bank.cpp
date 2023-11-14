@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-//#include "debug_print.h"
+//#include "debug/dprint.h"
 
 void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);

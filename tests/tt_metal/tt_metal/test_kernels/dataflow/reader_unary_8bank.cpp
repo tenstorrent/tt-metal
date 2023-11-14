@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-//#include "debug_print.h"
+//#include "debug/dprint.h"
 
 void generate_bcast_scaler() {
     constexpr uint32_t cb_in_2 = 2;

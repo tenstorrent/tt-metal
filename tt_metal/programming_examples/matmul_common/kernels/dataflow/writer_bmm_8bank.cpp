@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 
-//#include "debug_print.h"
+//#include "debug/dprint.h"
 
 void kernel_main() {
     // same arg indices as in reader_bmm_8bank for reuse

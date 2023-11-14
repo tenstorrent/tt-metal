@@ -11,8 +11,7 @@
 
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
-// XXXX TODO(PGK): fix include paths so device can export interfaces
-#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
+#include "dev_msgs.h"
 
 namespace tt {
 

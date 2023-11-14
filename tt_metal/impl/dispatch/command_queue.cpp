@@ -12,8 +12,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
-// XXXX TODO(PGK): fix include paths so device can export interfaces
-#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
+#include "dev_msgs.h"
 #include <algorithm> // for copy() and assign()
 #include <iterator> // for back_inserter
 

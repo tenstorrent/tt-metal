@@ -16,11 +16,11 @@
 #endif
 
 #ifdef PROFILE_KERNEL
-#include "debug_print_buffer.h" // only needed because the address is shared
+#include "debug/dprint_buffer.h" // only needed because the address is shared
 #endif
 
 #include "hostdevcommon/profiler_common.h"
-#include "src/firmware/riscv/common/risc_attribs.h"
+#include "risc_attribs.h"
 
 namespace kernel_profiler{
 

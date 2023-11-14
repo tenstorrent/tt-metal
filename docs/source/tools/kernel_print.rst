@@ -14,7 +14,7 @@ To generate kernel debug prints on the device:
 
 .. code-block::
 
-    #include "debug_print.h"
+    #include "debug/dprint.h"
 
     void kernel_main() {
         DPRINT << 5 << ENDL();

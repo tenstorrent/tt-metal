@@ -10,8 +10,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "llrt/tt_debug_print_server.hpp"
-// XXXX TODO(PGK): fix include paths so device can export interfaces
-#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
+#include "dev_msgs.h"
 
 #include "tools/profiler/profiler.hpp"
 #include "tools/cpuprof/cpuprof.h"

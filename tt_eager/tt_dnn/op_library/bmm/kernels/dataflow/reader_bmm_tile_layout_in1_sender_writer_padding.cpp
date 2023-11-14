@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "debug_print.h"
+#include "debug/dprint.h"
 void kernel_main() {
     // READER
     // in1 tensor args

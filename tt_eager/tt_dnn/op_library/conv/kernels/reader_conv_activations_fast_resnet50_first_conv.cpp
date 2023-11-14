@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug_print.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     uint32_t i = 0;

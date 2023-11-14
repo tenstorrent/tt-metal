@@ -13,13 +13,12 @@
 #include "watcher.hpp"
 #include "rtoptions.hpp"
 #include "dev_mem_map.h"
-
-// XXXX TODO(PGK): fix include paths so device can export interfaces
-#include "tt_metal/src/firmware/riscv/common/debug_sanitize.h"
-#include "tt_metal/src/firmware/riscv/common/dev_msgs.h"
+#include "dev_msgs.h"
 
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
+
+#include "debug/sanitize_noc.h"
 
 namespace tt {
 namespace llrt {
