@@ -734,7 +734,7 @@ hardcoded_conv_blocking_and_parallelization_config = {
 }
 
 
-class Bottleneck:
+class Bottleneck(nn.Module):
     # Bottleneck in torchvision places the stride for downsampling at 3x3 convolution(self.conv2)
     # while original implementation places the stride at the first 1x1 convolution(self.conv1)
     # according to "Deep residual learning for image recognition" https://arxiv.org/abs/1512.03385.
@@ -973,7 +973,7 @@ class Bottleneck:
 
                 self.downsample_or_noop = downsample_conv_op_wrapper(self.downsample_conv_on_tt)
 
-    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         # logger.info("This module input shape - ", self.module_input_shape)
         # conv1 is 1x1 conv
         # logger.info("Running conv1")
