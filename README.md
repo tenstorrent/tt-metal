@@ -110,9 +110,9 @@ sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py 
 sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc
 ```
 
-2. Download and install [Doxygen](https://www.doxygen.nl/download.html).
+2. Download and install [Doxygen](https://www.doxygen.nl/download.html), version 1.9 or higher, but less than 1.10.
 
-3. Download and install [gtest](https://github.com/google/googletest) from source.
+3. Download and install [gtest](https://github.com/google/googletest) from source, version 1.13, and no higher.
 
 ### Installing accelerator-level dependencies
 
