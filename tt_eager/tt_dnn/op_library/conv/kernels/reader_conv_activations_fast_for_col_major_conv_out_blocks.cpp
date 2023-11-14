@@ -180,7 +180,7 @@ void kernel_main() {
                         noc_async_read_barrier();
                         //DPRINT << "done on read barrier" << ENDL();
 
-                        if (act_w_outer_i == 0) {
+                        //if (act_w_outer_i == 0) {
                         // Print all 9 windows, full 5 tiles
                         if (1) { //(channel_stick_h == 1 and channel_stick_w == 1) or (channel_stick_h == 1 and channel_stick_w == 2)) {
                             DPRINT << "-------> Window: " << channel_stick_h * 3 + channel_stick_w << ENDL();
@@ -189,7 +189,7 @@ void kernel_main() {
                                 DPRINT << TileSlice(cb_id_act, height, s1, true, false);
                             }
                         }
-                        }
+                        //}
                         cb_push_back(cb_id_act, act_block_num_tiles);
                     } // for filter window width
                     in_h_offset_within_kernel_window += 1;

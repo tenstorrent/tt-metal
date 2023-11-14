@@ -146,7 +146,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     auto shard_shape = input.shard_spec().value().shard_shape;
 
     if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        ntiles = input_shape[0] * input_shape[1] * shard_shape[0] * shard_shape[1];
+        std::cout << input_shape[0] << ", " << input_shape[1] << ", " << input_shape[2] << ", " << input_shape[3] << std::endl;
+        std::cout << shard_shape[0] << ", " << shard_shape[1] << std::endl;
+        ntiles = shard_shape[0] * shard_shape[1] / TILE_HW;
         ntiles_per_block = shard_shape[1] / TILE_WIDTH;
         nblocks = ceil((float) ntiles / ntiles_per_block);
         block_size_nbytes = shard_shape[1] * output.element_size();
@@ -249,6 +251,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     // output of untilize from compute kernel goes into this CB
     uint32_t untilize_out_cb_id = CB::c_out0;
     uint32_t num_output_tiles = ntiles_per_block * nblocks_per_core;
+    std::cout << "src cb size: " << num_output_tiles * out_tile_size << std::endl;
     auto untilize_out_cb_config = CircularBufferConfig(num_output_tiles * out_tile_size, {{untilize_out_cb_id, out_df}})
                                     .set_page_size(untilize_out_cb_id, out_tile_size);
     auto untilize_out_cb = CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
@@ -257,6 +260,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
     uint32_t out_cb_id = CB::c_out1;
     uint32_t out_cb_pagesize = out_nbytes * in_c;
     uint32_t out_cb_npages = max_out_nsticks_per_core;
+    std::cout << "out cb npages: " << out_cb_npages << std::endl;
+    std::cout << "out cb size: " << out_cb_npages * out_cb_pagesize << std::endl;
     auto out_cb_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
                             .set_page_size(out_cb_id, out_cb_pagesize)
                             .set_globally_allocated_address(output.buffer()->address());
@@ -1440,7 +1445,10 @@ Tensor untilize_with_halo(const Tensor &input_tensor_a, const uint32_t pad_val, 
         TT_ASSERT(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::COL_MAJOR);
         TT_ASSERT(all_cores.ranges().size() == 1);
         auto core_range = *(all_cores.ranges().begin());
-        ncores = core_range.end.x - core_range.start.x + 1;
+        ncores = core_range.end.x - core_range.start.x + 1; // 10, 7
+        uint32_t ncores2 = core_range.end.y - core_range.start.y + 1; // 8, 8
+        std::cout << "untilize ncores: " << ncores << std::endl;
+        std::cout << "untilize ncores2: " << ncores2 << std::endl;
         in_nsticks_per_core = input_tensor_a.shard_spec().value().shard_shape[0];
     }
 
@@ -1514,8 +1522,10 @@ Tensor untilize_with_halo(const Tensor &input_tensor_a, const uint32_t pad_val, 
                 int32_t r_halo_end = in_range[1] + halo_in_nsticks;
                 r_halo_end = r_halo_end >= in_nhw ? in_nhw : r_halo_end;
                 max_out_nsticks_per_core = std::max(max_out_nsticks_per_core, (r_halo_end - l_halo_start));
+                std::cout << "max nsticks: " << r_halo_end - l_halo_start << std::endl;
                 out_stick_start += pool_out_nsticks_per_core;
             }
+            max_out_nsticks_per_core = 778;
             break;
 
         default:

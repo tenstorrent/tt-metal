@@ -251,23 +251,23 @@ void kernel_main() {
                 reader_idx++;
             }
             noc_async_read_barrier();
-            if (act_w_outer_i == 0) {
+            //if (act_w_outer_i == 0) {
             if (outer == 0) {
                 // Print all 9 windows, full 5 tiles
                 for (int window = 0; window < 9; window++) {
-                    DPRINT << "-------> Window: " << window << ENDL();
+                    //DPRINT << "-------> Window: " << window << ENDL();
                 for (int height = 0; height < 5; height++) {
-                    DPRINT << "------------> TILE: " << height << ENDL();
+                    //DPRINT << "------------> TILE: " << height << ENDL();
                     for (int i = 0; i < 9; i++) {
                         auto offset = (9 - (32 * i) % 9 + window) % 9;
 
                         auto s2_p = SliceRange{ .h0 = offset, .h1 = 32, .hs = 9, .w0 = 0, .w1 = 1, .ws = 1 };
-                        DPRINT << TileSlice(cb_id_act, height*9 + i, s2_p, true, false);
+                        //DPRINT << TileSlice(cb_id_act, height*9 + i, s2_p, true, false);
                     }
                 }
                 }
             }
-            }
+            //}
             cb_push_back(cb_id_act, act_block_num_tiles);
         }
     }

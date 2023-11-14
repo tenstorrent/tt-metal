@@ -154,6 +154,8 @@ void kernel_main() {
 
     uint32_t in_l1_addr = get_read_ptr(in_cb_id);
     uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
+    DPRINT << "in addr start: " << in_l1_addr << ENDL();
+    DPRINT << "out addr start: " << out_base_l1_addr << ENDL();
 
     // DPRINT << "==== INPUT:" << ENDL();
     // print_sticks(in_l1_addr, 0, 128, 64);
@@ -339,9 +341,13 @@ void kernel_main() {
     if (has_left) {
         uint32_t to_l1_addr = out_base_l1_addr + l_send_to_offset;
         uint32_t from_l1_addr = out_base_l1_addr + l_send_from_offset;
+        DPRINT << "out_base_l1_addr: " << out_base_l1_addr << ENDL();
+        DPRINT << "l_send_to_offset: " << l_send_to_offset << ENDL();
+        DPRINT << "l_send_from_offset: " << l_send_from_offset << ENDL();
+        DPRINT << "l_send_count: " << l_send_count << ENDL();
         for (uint32_t i = 0; i < l_send_count; ++ i) {
             uint64_t noc_addr = get_noc_addr(left_noc_x, left_noc_y, to_l1_addr);
-            noc_async_write_one_packet(from_l1_addr, noc_addr, stick_nbytes);
+            //noc_async_write_one_packet(from_l1_addr, noc_addr, stick_nbytes);
             to_l1_addr += stick_nbytes;
             from_l1_addr += stick_nbytes;
         }

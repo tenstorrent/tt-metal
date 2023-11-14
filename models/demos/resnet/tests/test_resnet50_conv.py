@@ -474,8 +474,8 @@ def test_resnet50_conv(
         conv_input_shape = [N, C, H, W]
         conv_weight_shape = [K, C, R, S]
         conv_bias_shape = [1, 1, 1, K]
-        # conv_input_pyt = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
-        conv_input_pyt = torch.arange(N * C * H * W, dtype=torch.bfloat16).reshape(conv_input_shape).float()
+        conv_input_pyt = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+        # conv_input_pyt = torch.arange(N * C * H * W, dtype=torch.bfloat16).reshape(conv_input_shape).float()
         conv_input_pyt_nhwc = torch.permute(conv_input_pyt, (0, 2, 3, 1))
         conv_input_shape_nhwc = conv_input_pyt_nhwc.shape
         conv_weight_pyt = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
