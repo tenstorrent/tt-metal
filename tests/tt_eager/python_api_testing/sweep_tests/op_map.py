@@ -581,6 +581,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_hypot,
         "pytorch_op": pytorch_ops.hypot,
     },
+    "eltwise-scatter": {
+        "tt_lib_op": tt_lib_ops.eltwise_scatter,
+        "pytorch_op": pytorch_ops.scatter,
+    },
     "eltwise-threshold": {
         "tt_lib_op": tt_lib_ops.eltwise_threshold,
         "pytorch_op": pytorch_ops.threshold,

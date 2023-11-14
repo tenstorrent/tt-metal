@@ -12,6 +12,7 @@
 #include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_dnn/op_library/math.hpp"
+#include "tt_dnn/op_library/copy/copy_op.hpp"
 
 namespace tt {
 
@@ -947,6 +948,17 @@ Tensor _hypot(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& 
 Tensor hypot(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _hypot)(input_a, input_b, output_mem_config);
+}
+
+Tensor _scatter(const Tensor &input_a, const Tensor &input_b, const MemoryConfig& output_mem_config) {
+    Tensor temp = assign(input_b, output_mem_config);
+    Tensor pre = assign(input_a,temp, output_mem_config);
+    Tensor result = where(eqz(temp, output_mem_config), input_b, temp, output_mem_config);
+    return result;
+}
+Tensor scatter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _scatter)(input_a, input_b, output_mem_config);
 }
 
 //threshold(a,t,v) = (a <= t)*v + (a > t)*a
