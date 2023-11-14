@@ -160,7 +160,10 @@ KernelID CreateWriteKernel(
 }
 
 [[maybe_unused]] std::vector<CircularBufferID> CreateCircularBuffer(
-    Program &program, const CoreRangeSet &core_range, tt::DataFormat data_format, std::vector<CircularBufferArg> args) {
+    Program &program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
+    tt::DataFormat data_format,
+    std::vector<CircularBufferArg> args) {
     std::vector<CircularBufferID> cb_ids{};
     CircularBufferID cb_id{};
     for (auto arg : args) {
@@ -171,20 +174,23 @@ KernelID CreateWriteKernel(
 }
 
 [[maybe_unused]] CircularBufferID CreateCircularBuffer(
-    Program &program, const CoreRangeSet &core_range, tt::DataFormat data_format, CircularBufferArg arg) {
+    Program &program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,
+    tt::DataFormat data_format,
+    CircularBufferArg arg) {
     CircularBufferID cb_id{0};
     if (arg.num_tiles > 0) {
         auto _buffer_index = arg.buffer_index;
         auto _num_tiles = arg.num_tiles;
         auto _data_format = (arg.data_format != tt::DataFormat::Invalid) ? arg.data_format : data_format;
-        auto _core_range = (arg.core_range != nullptr) ? *arg.core_range : core_range;
+        auto _core_range = (arg.core_range != std::nullopt) ? arg.core_range : core_range;
 
         tt_metal::CircularBufferConfig cb_config =
             tt_metal::CircularBufferConfig(
                 _num_tiles * tt_metal::detail::TileSize(_data_format), {{_buffer_index, _data_format}})
                 .set_page_size(_buffer_index, tt_metal::detail::TileSize(_data_format));
 
-        cb_id = tt_metal::CreateCircularBuffer(program, CoreRangeSet({_core_range}), cb_config);
+        cb_id = tt_metal::CreateCircularBuffer(program, _core_range.value(), cb_config);
     }
     return cb_id;
 }
