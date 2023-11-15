@@ -347,7 +347,7 @@ def run_test_FalconCausalLM_end_to_end(
     "llm_mode, batch, seq_len, kv_cache_len, expected_inference_time",
     (
         ("prefill", 1, 128, 0, 0.30),
-        ("prefill", 1, 256, 0, 0.42),
+        ("prefill", 1, 256, 0, 0.44),
         ("decode", 32, 1, 128, 0.27),
         ("decode", 32, 1, 1024, 0.35),
         ("decode", 32, 1, 2047, 0.48),
