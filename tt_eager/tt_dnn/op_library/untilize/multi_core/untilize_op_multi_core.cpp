@@ -175,6 +175,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     bool src_block_sharded = false;
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0, num_output_rows_unpadded = 0;
     CoreCoord end_core;
+    std::vector<CoreCoord> cores_with_rtargs;
     if (src_sharded) {
         auto shard_spec = a.shard_spec().value();
         src_block_sharded = a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
@@ -440,7 +441,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             core,
             writer_rt_args
         );
-
+        cores_with_rtargs.push_back(core);
         tile_start_id += ntiles_per_block * nblocks_per_core;
         row_start_id += TILE_HEIGHT * nblocks_per_core;
     }
@@ -536,18 +537,14 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             core,
             writer_rt_args
         );
+        cores_with_rtargs.push_back(core);
     }
-
     auto override_runtime_arguments_callback = [
             reader_kernel_id=unary_reader_kernel_id,
             writer_kernel_id=unary_writer_kernel_id,
             cb_src0=cb_src0,
             cb_output=cb_output,
-            all_cores=all_cores,
-            ncores=ncores,
-            ncores_x=ncores_x,
-            ncores_y=ncores_y,
-            row_major=row_major
+            cores_with_rtargs
         ]
     (
         const void* operation,
@@ -566,12 +563,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         if (src_sharded) {
             UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
         } else {
-            auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
-            for (uint32_t i = 0; i < cores.size(); i++){
-                CoreCoord core = cores[i];
-                if (!all_cores.core_coord_in_core_ranges(core)) {
-                    continue;
-                }
+            for (const CoreCoord& core : cores_with_rtargs){
                 auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
             }
@@ -580,12 +572,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         if (out_sharded) {
             UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
         } else {
-            auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
-            for (uint32_t i = 0; i < cores.size(); i++){
-                CoreCoord core = cores[i];
-                if (!all_cores.core_coord_in_core_ranges(core)) {
-                    continue;
-                }
+            for (const CoreCoord& core : cores_with_rtargs){
                 auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
             }
@@ -823,6 +810,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
     }
 
 
+
     auto override_runtime_arguments_callback = [
             reader_kernel_id=unary_reader_kernel_id,
             writer_kernel_id=unary_writer_kernel_id,
@@ -853,12 +841,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
         if (out_sharded) {
             UpdateDynamicCircularBufferAddress(program, cb_sharded_output, *dst_buffer);
         } else {
-            auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
-            for (uint32_t i = 0; i < cores.size(); i++){
-                CoreCoord core = cores[i];
-                if (!all_cores.core_coord_in_core_ranges(core)) {
-                    continue;
-                }
+            auto cores = grid_to_cores(ncores, ncores_x, ncores_y, row_major);
+            for (const CoreCoord& core : cores){
                 auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
             }
