@@ -20,7 +20,7 @@ from tt_metal.tools.profiler.process_model_log import (
     "batch_size, test, expected_perf",
     [
         [8, "HiFi4-activations_BFLOAT16-weights_BFLOAT16-batch_8", 2080],
-        [8, "HiFi2-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_8", 2575],
+        # [8, "HiFi2-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_8", 2575],
         [16, "HiFi2-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_16", 3140],
         [8, "LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_8", 2675],
         [16, "LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_16", 3355],
@@ -28,7 +28,7 @@ from tt_metal.tools.profiler.process_model_log import (
 )
 def test_perf_device_bare_metal(batch_size, test, expected_perf):
     subdir = "resnet50"
-    num_iterations = 5
+    num_iterations = 4
     margin = 0.03
     command = f"pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference[{test}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

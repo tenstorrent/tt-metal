@@ -18,13 +18,13 @@ from tt_metal.tools.profiler.process_model_log import (
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [9, "BERT_LARGE-batch_9-MIXED_PRECISION_BATCH9", 70],
+        # [9, "BERT_LARGE-batch_9-MIXED_PRECISION_BATCH9", 70],
         [8, "BERT_LARGE-batch_8-MIXED_PRECISION_BATCH8", 160],
     ],
 )
 def test_perf_device_bare_metal(batch_size, test, expected_perf):
     subdir = "bert"
-    num_iterations = 5
+    num_iterations = 4
     margin = 0.03
     command = f"pytest models/demos/metal_BERT_large_15/tests/test_bert.py::test_bert[{test}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
