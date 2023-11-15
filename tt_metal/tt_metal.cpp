@@ -174,7 +174,7 @@ namespace detail {
             switch (buffer.buffer_type()) {
                 case BufferType::DRAM: {
                     auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
-                    tt::Cluster::instance().read_dram_vec(page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address, page_size);
+                    tt::Cluster::instance().read_dram_vec(page, page_size, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
                 } break;
                 case BufferType::L1: {
                     auto noc_coordinates = buffer.noc_coordinates(bank_index);

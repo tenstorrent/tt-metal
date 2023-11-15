@@ -739,6 +739,7 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<uint32_t>& dst, bo
     uint32_t padded_page_size = align(buffer.page_size(), 32);
     uint32_t data_size_in_bytes = padded_page_size * num_pages;
 
+    dst.resize(data_size_in_bytes / sizeof(uint32_t));
     tt::Cluster::instance().read_sysmem(dst.data(), data_size_in_bytes, command.read_buffer_addr, 0);
 
     // This vector is potentially padded due to alignment constraints, so need to now remove the padding
