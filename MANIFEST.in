@@ -17,11 +17,10 @@ recursive-include tt_metal/tools requirements-*.txt *.h *.cpp *.cc module.mk *.p
 recursive-include tt_metal/kernels *.h *.cpp *.cc module.mk *.py
 
 # Sources for FW, LLK, SFPI etc
-recursive-include tt_metal/src/ckernels *.h *.cpp *.cc *.py
-graft tt_metal/src/ckernels/gen
-graft tt_metal/src/ckernels/sfpi
-graft tt_metal/src/meta
-recursive-include tt_metal/src/firmware module.mk riscv/*
+recursive-include tt_metal/hw/ckernels *.h *.cpp *.cc *.py
+graft tt_metal/hw/ckernels/gen
+graft tt_metal/hw/meta
+recursive-include tt_metal/hw/firmware module.mk riscv/*
 
 # Third-party sources
 graft tt_metal/third_party
