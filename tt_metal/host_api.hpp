@@ -216,6 +216,20 @@ void DeallocateBuffer(Buffer &buffer);
  */
 void SetRuntimeArgs(const Program &program, KernelID kernel, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::vector<uint32_t> &runtime_args);
 
+/**
+ * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
+ * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                            | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelID (uint64_t)                                    |                                                                            | Yes      |
+ * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::vector<CoreCoord> &                         | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
+ * | runtime_args | The runtime args to be written                                         | const std::vector< vector<uint32_t> > &                | outer vector size must be equal to size of core_spec vector                | Yes      |
+ */
+void SetRuntimeArgs(const Program &program, KernelID kernel, const std::vector< CoreCoord > & core_spec, const std::vector< std::vector<uint32_t> > &runtime_args);
+
 
 /**
  * Update a single runtime arg of a kernel, yielding performance benefits in certain situations. This API can only be called after SetRuntimeArgs has been called on a kernel.

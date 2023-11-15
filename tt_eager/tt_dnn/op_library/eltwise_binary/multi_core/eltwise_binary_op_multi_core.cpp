@@ -358,6 +358,15 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
         }
 
         auto cores = grid_to_cores(num_cores_x * num_cores_y, num_cores_x, num_cores_y, row_major);
+        std::vector< std::vector<uint32_t> > binary_reader_args = { cores.size(), std::vector<uint32_t>(4)  };
+        std::vector< std::vector<uint32_t> > eltwise_binary_args = { cores.size(), std::vector<uint32_t>(2)  };
+        std::vector< std::vector<uint32_t> > unary_writer_args;
+
+        if (block_sharded and not out_sharded)
+            unary_writer_args = { cores.size(), std::vector<uint32_t>(7)  };
+        else
+            unary_writer_args = { cores.size(), std::vector<uint32_t>(3) };
+
         for (uint32_t i = 0, num_tiles_read = 0; i < cores.size(); i++){
             CoreCoord core = cores[i];
             uint32_t num_tiles_per_core = 0;
@@ -372,70 +381,52 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
                 block_cnt_per_core = block_cnt_per_core_group_2;
                 block_size_per_core = block_size_per_core_group_2;
             } else {
-                SetRuntimeArgs(program, binary_reader_kernel_id, core, {0, 0, 0, 0});
-                SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {0, 0});
-                if (block_sharded and not out_sharded) {
-                    SetRuntimeArgs(program, unary_writer_kernel_id, core, {0, 0, 0, 0, 0, 0, 0});
-                } else {
-                    SetRuntimeArgs(program, unary_writer_kernel_id, core, {0, 0, 0});
-                }
                 continue;
             }
-            SetRuntimeArgs(program, binary_reader_kernel_id, core, {src_buffer_a->address(), src_buffer_b->address(), num_tiles_per_core, num_tiles_read});
-            SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {block_cnt_per_core, block_size_per_core});
+            binary_reader_args[i] =  {src_buffer_a->address(), src_buffer_b->address(), num_tiles_per_core, num_tiles_read};
+            eltwise_binary_args[i] = {block_cnt_per_core, block_size_per_core};
             if (block_sharded and not out_sharded) {
-            uint32_t block_start_width_offset;
-            uint32_t block_start_height_offset;
-            uint32_t unpadded_block_height = block_height;
-            uint32_t unpadded_block_width = block_width;
-            if (row_major) {
-                block_start_width_offset = core.x * block_width;
-                block_start_height_offset = core.y * block_height;
-                if (core.x == end_core.x) {
-                    unpadded_block_width = last_unpadded_block_width;
+                uint32_t block_start_width_offset;
+                uint32_t block_start_height_offset;
+                uint32_t unpadded_block_height = block_height;
+                uint32_t unpadded_block_width = block_width;
+                if (row_major) {
+                    block_start_width_offset = core.x * block_width;
+                    block_start_height_offset = core.y * block_height;
+                    if (core.x == end_core.x) {
+                        unpadded_block_width = last_unpadded_block_width;
+                    }
+                    if (core.y == end_core.y) {
+                        unpadded_block_height = last_unpadded_block_height;
+                    }
+                } else {
+                    block_start_width_offset = core.y * block_width;
+                    block_start_height_offset = core.x * block_height;
+                    if (core.y == end_core.y) {
+                        unpadded_block_width = last_unpadded_block_width;
+                    }
+                    if (core.x == end_core.x) {
+                        unpadded_block_height = last_unpadded_block_height;
+                    }
                 }
-                if (core.y == end_core.y) {
-                    unpadded_block_height = last_unpadded_block_height;
-                }
+                unary_writer_args[i] =  {   dst_buffer->address(),
+                                            block_height,
+                                            block_width,
+                                            unpadded_block_height,
+                                            unpadded_block_width,
+                                            output_width,
+                                            block_size,
+                                            block_start_height_offset * output_width + block_start_width_offset };
             } else {
-                block_start_width_offset = core.y * block_width;
-                block_start_height_offset = core.x * block_height;
-                if (core.y == end_core.y) {
-                    unpadded_block_width = last_unpadded_block_width;
-                }
-                if (core.x == end_core.x) {
-                    unpadded_block_height = last_unpadded_block_height;
-                }
+                unary_writer_args[i] = { dst_buffer->address(), num_tiles_per_core, num_tiles_read };
             }
-            tt_metal::SetRuntimeArgs(
-                program,
-                unary_writer_kernel_id,
-                core,
-                {
-                    dst_buffer->address(),
-                    block_height,
-                    block_width,
-                    unpadded_block_height,
-                    unpadded_block_width,
-                    output_width,
-                    block_size,
-                    block_start_height_offset * output_width + block_start_width_offset
-                }
-            );
-        } else {
-            tt_metal::SetRuntimeArgs(
-                program,
-                unary_writer_kernel_id,
-                core,
-                {
-                    dst_buffer->address(),
-                    num_tiles_per_core,
-                    num_tiles_read
-                }
-            );
-        }
             num_tiles_read += num_tiles_per_core;
         }
+
+        SetRuntimeArgs(program, binary_reader_kernel_id, cores, binary_reader_args);
+        SetRuntimeArgs(program, eltwise_binary_kernel_id, cores, eltwise_binary_args);
+        SetRuntimeArgs(program, unary_writer_kernel_id, cores, unary_writer_args);
+
         if (src0_sharded) {
             UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
             UpdateCircularBufferTotalSize(program, cb_src0, num_tiles_per_core_group_1 * src0_single_tile_size);
