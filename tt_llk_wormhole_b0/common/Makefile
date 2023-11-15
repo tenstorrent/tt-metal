@@ -73,7 +73,10 @@ RISCV_TOOLCHAIN_DIR = $(BUDA_HOME)/src/firmware/riscv/toolchain
 
 SOURCES ?= 
 
-SOURCES += src/ckernel_unity.cc
+SOURCES += src/ckernel_unity.cc 
+
+# Sw stack io
+SOURCES += $(CKERNEL_DIR)/$(ARCH_NAME)/buda/llk_io/llk_io.cc
 
 OUTPUT_DIR ?= out
 
@@ -88,7 +91,7 @@ include $(FIRMWARE_RISCV_DIR)/toolchain/riscv.mk
 
 # instead of building each file separately, we build them all together in ckernel_unity.cc
 # if you need to add new cc file, add it to ckernel_unity.cc
-ck_common_prereqs: $(OUTPUT_DIR) $(OUTPUT_DIR)/ckernel_unity.o $(EXTRA_OBJECTS)
+ck_common_prereqs: $(OUTPUT_DIR) $(OUTPUT_DIR)/ckernel_unity.o  $(OUTPUT_DIR)/llk_io.o $(EXTRA_OBJECTS)
 
 clean:
 	rm -rf out
