@@ -413,9 +413,10 @@ void Program::allocate_circular_buffers() {
         uint64_t computed_addr = L1_UNRESERVED_BASE;
         for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
             // Need the max available address across all cores circular buffer is placed on
-            for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
-                if (cb_allocator.core_range.intersects(core_range)) {
+            for (const CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
+                if (cb_allocator.core_range == core_range) {
                     computed_addr = std::max(computed_addr, cb_allocator.get_cb_region_end());
+                    break;
                 }
             }
         }
@@ -423,6 +424,11 @@ void Program::allocate_circular_buffers() {
         for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
             for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
                 if (cb_allocator.core_range.intersects(core_range)) {
+                    if (cb_allocator.core_range != core_range and computed_addr < cb_allocator.get_cb_region_end()) {
+                        // Intersecting core range has already been marked to have allocation at this address. This could have been marked by a circular buffer on a core range disjoint from
+                        // current `core_range` but also intersecting `cb_allocator.core_range`
+                        continue;
+                    }
                     cb_allocator.mark_address(computed_addr, circular_buffer->size());
                 }
             }
