@@ -228,6 +228,21 @@ def resnet50_optimized_conv(
     )
     bias_on_device = bias_.to(device)
 
+    opt_conv_parall_conf = tensor.OptimizedConvParallelizationConfig(
+        grid_size=grid_size,
+        per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
+        per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
+    )
+    opt_conv_block_conf = tensor.OptimizedConvBlockConfig(
+        act_block_h_ntiles=act_block_h,
+        act_block_w_ntiles=act_block_w,
+        act_c_num_blocks=act_c_num_blocks,
+        weight_block_w_ntiles=weight_block_w,
+        out_block_h_ntiles=out_block_h,
+        out_subblock_h_ntiles=out_subblock_h,
+        out_subblock_w_ntiles=out_subblock_w,
+    )
+
     def conv_(activation):
         # assert(activation.layout() == tensor.Layout.ROW_MAJOR)
         output = tensor.optimized_conv(
@@ -240,20 +255,8 @@ def resnet50_optimized_conv(
             True,
             fuse_relu,
             math_fidelity,
-            tensor.OptimizedConvParallelizationConfig(
-                grid_size=grid_size,
-                per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
-                per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
-            ),
-            tensor.OptimizedConvBlockConfig(
-                act_block_h_ntiles=act_block_h,
-                act_block_w_ntiles=act_block_w,
-                act_c_num_blocks=act_c_num_blocks,
-                weight_block_w_ntiles=weight_block_w,
-                out_block_h_ntiles=out_block_h,
-                out_subblock_h_ntiles=out_subblock_h,
-                out_subblock_w_ntiles=out_subblock_w,
-            ),
+            opt_conv_parall_conf,
+            opt_conv_block_conf,
             0,
             output_mem_config=activation.memory_config() if output_mem_config is None else output_mem_config,
             output_dtype=output_dtype,
@@ -344,6 +347,20 @@ def resnet50_first_conv(
     P_H = 0
     P_W = 0
 
+    opt_conv_parall_conf = tensor.OptimizedConvParallelizationConfig(
+        grid_size=grid_size,
+        per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
+        per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
+    )
+    opt_conv_block_conf = tensor.OptimizedConvBlockConfig(
+        act_block_h_ntiles=act_block_h,
+        act_block_w_ntiles=act_block_w,
+        weight_block_w_ntiles=weight_block_w,
+        out_block_h_ntiles=out_block_h,
+        out_subblock_h_ntiles=out_subblock_h,
+        out_subblock_w_ntiles=out_subblock_w,
+    )
+
     def conv_(activation):
         # assert(activation.layout() == tensor.Layout.ROW_MAJOR)
         output_plus_bias = tensor.optimized_conv(
@@ -356,19 +373,8 @@ def resnet50_first_conv(
             True,
             fuse_relu,
             math_fidelity,
-            tensor.OptimizedConvParallelizationConfig(
-                grid_size=grid_size,
-                per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
-                per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
-            ),
-            tensor.OptimizedConvBlockConfig(
-                act_block_h_ntiles=act_block_h,
-                act_block_w_ntiles=act_block_w,
-                weight_block_w_ntiles=weight_block_w,
-                out_block_h_ntiles=out_block_h,
-                out_subblock_h_ntiles=out_subblock_h,
-                out_subblock_w_ntiles=out_subblock_w,
-            ),
+            opt_conv_parall_conf,
+            opt_conv_block_conf,
             extra_padding_for_32B_alignment,
             out_mem_config,
             output_dtype,
