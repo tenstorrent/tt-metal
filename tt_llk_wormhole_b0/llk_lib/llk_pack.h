@@ -46,7 +46,7 @@ inline void _llk_pack_configure_addrmod_() {
 
 }
 
-template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
+template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor, bool write_tile_header = true>
 inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const bool partial_face = false, const bool narrow_tile = false) {
     static_assert(FaceLayout == DstTileFaceLayout::RowMajor, "FaceLayout must be RowMajor");
 
@@ -66,8 +66,10 @@ inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std
             tmp.set_loop_op1(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1)); // Close the tile
         }
         // Write header to l1
-        tmp.set_end_op(TT_OP_STOREIND(
-            1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
+        if constexpr (write_tile_header) {
+            tmp.set_end_op(TT_OP_STOREIND(
+                1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
+        }        
 
         tmp.program(instrn_buffer);
     } else {
@@ -86,7 +88,7 @@ inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std
     }
 }
 
-template <bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor> 
+template <bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor, bool write_tile_header = true> 
 inline void _llk_pack_reconfig_data_format_(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const bool partial_face = false, const bool narrow_tile = false) {
 
     reconfig_packer_data_format<is_fp32_dest_acc_en>(
@@ -97,7 +99,7 @@ inline void _llk_pack_reconfig_data_format_(const std::uint32_t pack_src_format,
     );
 
     if constexpr (is_tile_dim_reconfig_en) {
-        _llk_pack_mop_config_<false, false, FaceLayout>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile);
+        _llk_pack_mop_config_<false, false, FaceLayout, write_tile_header>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile);
     }
 }
 
@@ -167,12 +169,12 @@ inline void _llk_pack_reduce_hw_configure_(const std::uint32_t pack_src_format, 
     }
 }
 
-template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
+template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor, bool write_tile_header = true>
 inline void _llk_pack_init_(const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const bool partial_face = false, const bool narrow_tile = false) {
 
     _llk_pack_configure_addrmod_<untilize>();
 
-    _llk_pack_mop_config_<untilize, zero_output, FaceLayout>(
+    _llk_pack_mop_config_<untilize, zero_output, FaceLayout, write_tile_header>(
         pack_dst_format,
         face_r_dim, 
         num_faces, 
