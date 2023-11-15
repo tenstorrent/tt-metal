@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+*/
 
 #pragma once
 
@@ -55,9 +60,9 @@
 #include <cstdint>
 
 #include "ckernel_include.h"
-#include "fw_debug.h"
 #include "tt_log.h"
 #include "tensix.h"
+#include "fw_debug.h"
 #include <l1_address_map.h>
 // #include <cstring>
 #include "perf_lib/scratch_api.h"

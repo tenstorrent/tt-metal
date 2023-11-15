@@ -1,9 +1,15 @@
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+*/
+
 #pragma once
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
-#include "fw_debug.h"
+#include "llk_defs.h"
 
 
 namespace ckernel::packer

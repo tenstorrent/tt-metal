@@ -1,13 +1,17 @@
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+*/
+
 #pragma once
 
 //#include "kernel_types.h"
 #include "ckernel.h"
-#include "ckernel_noc.h"
 #include "ckernel_template.h"
 #include "ckernel_sfpu.h"
 #include "ckernel_globals.h"
-
-#include "fw_debug.h"
+#include "llk_defs.h"
 
 #ifndef SFPU_OP_PARAM
 #define SFPU_OP_PARAM 0
