@@ -44,7 +44,7 @@ To display the kernel debug prints on the host:
 
 .. code-block::
 
-    export TT_METAL_DPRINT_CORES=1,1     # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2)
+    export TT_METAL_DPRINT_CORES=1,1     # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all
     export TT_METAL_DPRINT_CHIPS=0       # optional, comma separated list of chip
     export TT_METAL_DPRINT_RISCVS=BR     # optional, default is all RISCs.  Use a subset of BR,NC,TR0,TR1,TR2
     export TT_METAL_DPRINT_FILE=log.txt  # optional, default is to print to the screen

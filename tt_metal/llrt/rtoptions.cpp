@@ -54,6 +54,12 @@ void RunTimeOptions::ParseDPrintEnv() {
 void RunTimeOptions::ParseDPrintCoreRange(const char* env_var) {
     char *str = std::getenv(env_var);
     vector<CoreCoord> cores;
+
+    // Check if "all" is specified, rather than a range of cores.
+    if (str == "all") {
+        dprint_all_cores = true;
+        return;
+    }
     if (str != nullptr) {
         if (isdigit(str[0])) {
             // Assume this is a single core
