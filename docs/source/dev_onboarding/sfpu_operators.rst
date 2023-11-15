@@ -78,11 +78,11 @@ Code Organization
    * - tt_eager/tt_dnn/op_library/composite/
      - tt_eager/tt_dnn/op_library/composite/\*.cpp, \*.hpp
      - TT DNN implementation of composite ops based on SFPU
-   * - tt_metal/src/ckernels/grayskull/
-     - tt_metal/src/ckernels/grayskull/common/inc/ckernel_sfpu.h,
+   * - tt_metal/hw/ckernels/grayskull/
+     - tt_metal/hw/ckernels/grayskull/common/inc/ckernel_sfpu.h,
      - GraySkull SFPU Kernel implementation programming registers of SFPU
-   * - tt_metal/src/ckernels/wormhole_b0/
-     - tt_metal/src/ckernels/wormhole_b0/common/inc/ckernel_sfpu.h,
+   * - tt_metal/hw/ckernels/wormhole_b0/
+     - tt_metal/hw/ckernels/wormhole_b0/common/inc/ckernel_sfpu.h,
      - *Wormhole B0* SFPU Kernel implementation programming registers of SFPU
 
 Composite Operators

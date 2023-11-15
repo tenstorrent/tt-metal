@@ -568,10 +568,10 @@ vector to memory will result in an error similar to the following:
 
 .. code-block:: c++
 
-    tt-metal/tt_metal/src/ckernels/sfpi/include/sfpi.h:792:7: error: cannot write sfpu vector to memory
+    tt-metal/tt_metal/hw/ckernels/sfpi/include/sfpi.h:792:7: error: cannot write sfpu vector to memory
       792 |     v = (initialized) ? __builtin_rvtt_sfpassign_lv(v, in) : in;
           |       ^
-    /tt-metal/tt_metal/src/ckernels/sfpi/include/sfpi.h:792:7: error: cannot write sfpu vector to memory
+    /tt-metal/tt_metal/hw/ckernels/sfpi/include/sfpi.h:792:7: error: cannot write sfpu vector to memory
 
 
 Function Calls

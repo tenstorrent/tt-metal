@@ -45,16 +45,16 @@ tt_metal/kernels/dataflow/dispatch/ @DrJessop @davorchap
 docs/source/frameworks/tt_dispatch.rst @DrJessop @davorchap
 
 # metal - fw, llks, risc-v
-# tt_metal/src/ckernels/ @davorchap @kkwong10
-# tt_metal/src/ckernels/**/module.mk @tt-rkim @davorchap @kkwong10
-# tt_metal/src/ckernels/**/Makefile @tt-rkim @davorchap @kkwong10
-# tt_metal/src/firmware/ @davorchap @pgkeller @DrJessop
-tt_metal/src/firmware/**/module.mk @tt-rkim
-tt_metal/src/firmware/**/Makefile @tt-rkim
-# tt_metal/src/meta/ @davorchap @pgkeller @DrJessop @tt-rkim
+# tt_metal/hw/ckernels/ @davorchap @kkwong10
+# tt_metal/hw/ckernels/**/module.mk @tt-rkim @davorchap @kkwong10
+# tt_metal/hw/ckernels/**/Makefile @tt-rkim @davorchap @kkwong10
+# tt_metal/hw/firmware/ @davorchap @pgkeller @DrJessop
+tt_metal/hw/firmware/**/module.mk @tt-rkim
+tt_metal/hw/firmware/**/Makefile @tt-rkim
+# tt_metal/hw/meta/ @davorchap @pgkeller @DrJessop @tt-rkim
 tt_metal/include/compute_kernel_api.h @davorchap @kkwong10 @muthutt @mywoodstock
 tt_metal/include/dataflow_kernel_api.h @davorchap @DrJessop @mywoodstock
-tt_metal/src/firmware/riscv/common/dataflow_internals.h @davorchap @DrJessop @mywoodstock
+tt_metal/hw/firmware/riscv/common/dataflow_internals.h @davorchap @DrJessop @mywoodstock
 
 # metal - profiler
 # tt_metal/**/profiler/ @mo-tenstorrent @TT-billteng
