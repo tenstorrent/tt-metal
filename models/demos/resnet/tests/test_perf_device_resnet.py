@@ -15,7 +15,7 @@ from tt_metal.tools.profiler.process_model_log import (
 )
 
 
-@pytest.mark.models_device_performance_virtual_machine
+@pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
@@ -26,7 +26,7 @@ from tt_metal.tools.profiler.process_model_log import (
         [16, "LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_16", 3355],
     ],
 )
-def test_perf_device_virtual_machine(batch_size, test, expected_perf):
+def test_perf_device_bare_metal(batch_size, test, expected_perf):
     subdir = "resnet50"
     num_iterations = 5
     margin = 0.03

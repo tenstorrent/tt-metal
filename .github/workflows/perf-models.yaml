@@ -58,9 +58,8 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        # TODO: Switch to specific BM machine with no reset
         runner-info: [
-          {arch: grayskull, runs-on: ["model-runner-grayskull"], machine-type: "virtual_machine"},
+          {arch: grayskull, runs-on: ["perf-no-reset-grayskull", "self-reset"], machine-type: "bare_metal"},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
