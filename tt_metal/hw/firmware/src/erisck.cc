@@ -27,20 +27,6 @@ CQReadInterface cq_read_interface;
 
 void ApplicationHandler(void) __attribute__((__section__(".init")));
 
-volatile uint32_t tt_l1_ptr *test_mailbox_ptr =
-    (volatile uint32_t tt_l1_ptr *)(eth_l1_mem::address_map::FIRMWARE_BASE + 0x4);
-
-volatile uint32_t noc_read_scratch_buf[32] __attribute__((aligned(32)));
-uint64_t my_q_table_offset;
-uint32_t my_q_rd_ptr;
-uint32_t my_q_wr_ptr;
-uint8_t my_x[NUM_NOCS];
-uint8_t my_y[NUM_NOCS];
-uint8_t my_logical_x[NUM_NOCS];
-uint8_t my_logical_y[NUM_NOCS];
-uint8_t loading_noc;
-uint8_t noc_trans_table_en;
-
 uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_acked[NUM_NOCS];
@@ -49,11 +35,6 @@ uint32_t noc_xy_local_addr[NUM_NOCS];
 uint8_t noc_index = NOC_INDEX;
 
 void __attribute__((section("code_l1"))) risc_init();
-
-inline void set_noc_trans_table(
-    uint32_t noc, uint8_t &noc_trans_table_en, uint8_t &my_logical_x, uint8_t &my_logical_y) {
-    noc_trans_table_en = false;
-}
 
 void __attribute__((__section__("erisc_l1_code"))) kernel_launch() {
     RISC_POST_STATUS(0x12345678);

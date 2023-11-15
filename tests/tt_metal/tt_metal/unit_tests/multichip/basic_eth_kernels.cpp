@@ -24,7 +24,18 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
+constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
+constexpr std::int32_t MAX_NUM_WORDS =
+    (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE) / WORD_SIZE;
+
 namespace unit_tests::erisc::kernels {
+
+const size_t get_rand_32_byte_aligned_address(const size_t& base, const size_t& max) {
+    TT_ASSERT(!(base & 0x1F) and !(max & 0x1F));
+    size_t word_size = (max >> 5) - (base >> 5);
+    return (((rand() % word_size) << 5) + base);
+}
+
 // Read from chip's worker core or dram L1 to ethernet L1 and check correctness
 // Ethernet does not send
 bool reader_kernel_no_send(
@@ -41,7 +52,7 @@ bool reader_kernel_no_send(
     auto input_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
     uint32_t dram_byte_address = input_dram_buffer.address();
     auto dram_noc_xy = input_dram_buffer.noc_coordinates();
-    log_info(
+    log_debug(
         tt::LogTest,
         "Reading from noc {} addr {} to ethernet core {} addr {}",
         dram_noc_xy.str(),
@@ -96,7 +107,8 @@ bool eth_direct_sender_receiver_kernels(
     tt_metal::Device* sender_device,
     tt_metal::Device* receiver_device,
     const size_t& byte_size,
-    const size_t& eth_l1_byte_address,
+    const size_t& src_eth_l1_byte_address,
+    const size_t& dst_eth_l1_byte_address,
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core) {
     bool pass = true;
@@ -106,18 +118,17 @@ bool eth_direct_sender_receiver_kernels(
         byte_size,
         sender_device->id(),
         eth_sender_core.str(),
-        eth_l1_byte_address,
+        src_eth_l1_byte_address,
         receiver_device->id(),
         eth_receiver_core.str(),
-        eth_l1_byte_address);
-
+        dst_eth_l1_byte_address);
     // Generate inputs
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     llrt::write_hex_vec_to_core(
         sender_device->id(),
         sender_device->ethernet_core_from_logical_core(eth_sender_core),
         inputs,
-        eth_l1_byte_address);
+        src_eth_l1_byte_address);
 
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
@@ -125,7 +136,7 @@ bool eth_direct_sender_receiver_kernels(
         receiver_device->id(),
         receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
         all_zeros,
-        eth_l1_byte_address);
+        dst_eth_l1_byte_address);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
@@ -143,8 +154,8 @@ bool eth_direct_sender_receiver_kernels(
         eth_sender_kernel,
         eth_sender_core,
         {
-            (uint32_t)eth_l1_byte_address,
-            (uint32_t)eth_l1_byte_address,
+            (uint32_t)src_eth_l1_byte_address,
+            (uint32_t)dst_eth_l1_byte_address,
             (uint32_t)byte_size,
         });
 
@@ -193,7 +204,7 @@ bool eth_direct_sender_receiver_kernels(
     auto readback_vec = llrt::read_hex_vec_from_core(
         receiver_device->id(),
         receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
-        eth_l1_byte_address,
+        dst_eth_l1_byte_address,
         byte_size);
     pass &= (readback_vec == inputs);
     if (not pass) {
@@ -387,95 +398,219 @@ bool eth_hung_kernels(
 TEST_F(N300DeviceFixture, EthKernelsDirectSendChip0ToChip1) {
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
-    CoreCoord sender_core_0 = {.x = 0, .y = 8};
-    CoreCoord sender_core_1 = {.x = 0, .y = 9};
 
-    CoreCoord receiver_core_0 = {.x = 0, .y = 0};
-    CoreCoord receiver_core_1 = {.x = 0, .y = 1};
+    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_0, device_1, 16, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, sender_core_0, receiver_core_0));
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_0, device_1, 4 * 16, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, sender_core_0, receiver_core_0));
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_0,
-        device_1,
-        256 * 16,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-        sender_core_0,
-        receiver_core_0));
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_0,
-        device_1,
-        1000 * 16,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-        sender_core_0,
-        receiver_core_0));
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_0, device_1, 16, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, sender_core_1, receiver_core_1));
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_0, device_1, 4 * 16, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, sender_core_1, receiver_core_1));
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_0,
-        device_1,
-        256 * 16,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-        sender_core_1,
-        receiver_core_1));
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_0,
-        device_1,
-        1000 * 16,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-        sender_core_1,
-        receiver_core_1));
+    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+        CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_0,
+            device_1,
+            WORD_SIZE,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            sender_core,
+            receiver_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_0,
+            device_1,
+            4 * WORD_SIZE,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            sender_core,
+            receiver_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_0,
+            device_1,
+            256 * WORD_SIZE,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            sender_core,
+            receiver_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_0,
+            device_1,
+            1000 * WORD_SIZE,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            sender_core,
+            receiver_core));
+    }
 }
 
 TEST_F(N300DeviceFixture, EthKernelsDirectSendChip1ToChip0) {
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
-    CoreCoord sender_core_0 = {.x = 0, .y = 0};
-    CoreCoord sender_core_1 = {.x = 0, .y = 1};
 
-    CoreCoord receiver_core_0 = {.x = 0, .y = 8};
-    CoreCoord receiver_core_1 = {.x = 0, .y = 9};
+    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_1, device_0, 16, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, sender_core_0, receiver_core_0));
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_1, device_0, 4 * 16, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, sender_core_0, receiver_core_0));
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_1,
-        device_0,
-        256 * 16,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-        sender_core_0,
-        receiver_core_0));
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_1,
-        device_0,
-        1000 * 16,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-        sender_core_0,
-        receiver_core_0));
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_1, device_0, 16, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, sender_core_1, receiver_core_1));
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_1, device_0, 4 * 16, eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, sender_core_1, receiver_core_1));
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_1,
-        device_0,
-        256 * 16,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-        sender_core_1,
-        receiver_core_1));
-    ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
-        device_1,
-        device_0,
-        1000 * 16,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-        sender_core_1,
-        receiver_core_1));
+    for (const auto& sender_core : device_1->get_active_ethernet_cores()) {
+        CoreCoord receiver_core = std::get<1>(device_1->get_connected_ethernet_core(sender_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_1,
+            device_0,
+            WORD_SIZE,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            sender_core,
+            receiver_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_1,
+            device_0,
+            4 * WORD_SIZE,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            sender_core,
+            receiver_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_1,
+            device_0,
+            256 * WORD_SIZE,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            sender_core,
+            receiver_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_1,
+            device_0,
+            1000 * WORD_SIZE,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            sender_core,
+            receiver_core));
+    }
+}
+
+TEST_F(N300DeviceFixture, EthKernelsBidirectionalDirectSend) {
+    const auto& device_0 = devices_.at(0);
+    const auto& device_1 = devices_.at(1);
+
+    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+
+    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+        CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_0,
+            device_1,
+            WORD_SIZE,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            sender_core,
+            receiver_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_1,
+            device_0,
+            WORD_SIZE,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            receiver_core,
+            sender_core));
+    }
+    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+        CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_0,
+            device_1,
+            WORD_SIZE * 256,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            sender_core,
+            receiver_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_1,
+            device_0,
+            WORD_SIZE * 256,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            receiver_core,
+            sender_core));
+    }
+    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+        CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_0,
+            device_1,
+            WORD_SIZE * 1024,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            sender_core,
+            receiver_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_1,
+            device_0,
+            WORD_SIZE * 1024,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            receiver_core,
+            sender_core));
+    }
+    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+        CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_0,
+            device_1,
+            WORD_SIZE * MAX_NUM_WORDS,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            sender_core,
+            receiver_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            device_1,
+            device_0,
+            WORD_SIZE * MAX_NUM_WORDS,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            receiver_core,
+            sender_core));
+    }
+}
+
+TEST_F(N300DeviceFixture, EthKernelsRandomDirectSendTests) {
+    GTEST_SKIP();
+    srand(0);
+    const auto& device_0 = devices_.at(0);
+    const auto& device_1 = devices_.at(1);
+
+    std::map<std::tuple<int, CoreCoord>, std::tuple<int, CoreCoord>> connectivity = {};
+    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+        const auto& receiver_core = device_0->get_connected_ethernet_core(sender_core);
+        connectivity.insert({{0, sender_core}, receiver_core});
+    }
+    for (const auto& sender_core : device_1->get_active_ethernet_cores()) {
+        const auto& receiver_core = device_1->get_connected_ethernet_core(sender_core);
+        connectivity.insert({{1, sender_core}, receiver_core});
+    }
+    for (int i = 0; i < 1000; i++) {
+        auto it = connectivity.begin();
+        std::advance(it, rand() % (connectivity.size()));
+
+        const auto& send_chip = devices_.at(std::get<0>(it->first));
+        CoreCoord sender_core = std::get<1>(it->first);
+        const auto& receiver_chip = devices_.at(std::get<0>(it->second));
+        CoreCoord receiver_core = std::get<1>(it->second);
+
+        const size_t src_eth_l1_byte_address = unit_tests::erisc::kernels::get_rand_32_byte_aligned_address(
+            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, eth_l1_mem::address_map::MAX_L1_LOADING_SIZE);
+        const size_t dst_eth_l1_byte_address = unit_tests::erisc::kernels::get_rand_32_byte_aligned_address(
+            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE, eth_l1_mem::address_map::MAX_L1_LOADING_SIZE);
+
+        int max_words = (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE -
+                         std::max(src_eth_l1_byte_address, dst_eth_l1_byte_address)) /
+                        WORD_SIZE;
+        int num_words = rand() % max_words + 1;
+
+        ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+            send_chip,
+            receiver_chip,
+            WORD_SIZE * num_words,
+            src_eth_l1_byte_address,
+            dst_eth_l1_byte_address,
+            sender_core,
+            receiver_core));
+    }
 }
 
 TEST_F(N300DeviceFixture, EthKernelsScatterSend) {
@@ -491,17 +626,17 @@ TEST_F(N300DeviceFixture, EthKernelsScatterSend) {
     std::size_t src_addr = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     std::vector<size_t> dst_addrs = {
         eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 2500 * 16,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 2500 * 16 * 2,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 2500 * 16 * 3};
+        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 2500 * WORD_SIZE,
+        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 2500 * WORD_SIZE * 2,
+        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + 2500 * WORD_SIZE * 3};
 
     // ASSERT_TRUE(
-    //    unit_tests::erisc::kernels::eth_scatter_sender_receiver_kernels(device_1, device_0, 1 * 16, src_addr,
+    //    unit_tests::erisc::kernels::eth_scatter_sender_receiver_kernels(device_1, device_0, 1 * WORD_SIZE, src_addr,
     //    dst_addrs, receiver_core_0, sender_core_0));
     ASSERT_TRUE(unit_tests::erisc::kernels::eth_scatter_sender_receiver_kernels(
-        device_0, device_1, 1 * 16, src_addr, dst_addrs, sender_core_0, receiver_core_0));
+        device_0, device_1, 1 * WORD_SIZE, src_addr, dst_addrs, sender_core_0, receiver_core_0));
     // ASSERT_TRUE(
-    //   unit_tests::erisc::kernels::eth_scatter_sender_receiver_kernels(device_0, device_1, 2000 * 16, src_addr,
+    //   unit_tests::erisc::kernels::eth_scatter_sender_receiver_kernels(device_0, device_1, 2000 * WORD_SIZE, src_addr,
     //   dst_addrs, sender_core_0, receiver_core_0));
 }
 
