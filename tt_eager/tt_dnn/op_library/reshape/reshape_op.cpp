@@ -281,7 +281,7 @@ void Reshape::validate(const std::vector<Tensor> &input_tensors) const {
         TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
         TT_FATAL(output_shape[2] % TILE_HEIGHT == 0 && output_shape[3] % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) for reshape!");
     } else if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
-        TT_FATAL(input_tensor_a.shape()[3] % TILE_WIDTH == 0 && W % TILE_WIDTH == 0, "Operand/target width must be a multiple of 32");
+        TT_FATAL(input_tensor_a.shape()[3] % TILE_WIDTH == 0 && output_shape[3] % TILE_WIDTH == 0, "Operand/target width must be a multiple of 32");
         uint32_t num_old_sticks = input_tensor_a.shape()[0] * input_tensor_a.shape()[1] * input_tensor_a.shape()[2];
         uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
         TT_FATAL(num_old_sticks % TILE_HEIGHT == 0 && num_new_sticks % TILE_HEIGHT == 0, "Operand/target number of rows must be a multiple of 32");
@@ -324,11 +324,6 @@ tt::stl::reflection::Attributes Reshape::attributes() const {
 }
 
 Tensor reshape (const Tensor &input_tensor_a, int N, int C, int H, int W, const MemoryConfig& output_mem_config) {
-    if (input_tensor_a.layout() == Layout::ROW_MAJOR && (H % TILE_HEIGHT != 0 || W % TILE_WIDTH != 0 || input_tensor_a.shape()[-1] % TILE_WIDTH != 0 || (input_tensor_a.volume() / input_tensor_a.shape()[-1]) % TILE_HEIGHT != 0)) {
-        TT_ASSERT(input_tensor_a.dtype()==DataType::BFLOAT16);
-        auto output_shape_a = infer_dims_for_reshape_RM(N, C, H, W, input_tensor_a.volume());
-        return tt::numpy::manual_insertion<bfloat16>(input_tensor_a, output_shape_a, DataType::BFLOAT16, Layout::ROW_MAJOR, input_tensor_a.device(), output_mem_config);
-    }
     // No-op (Will do a tensor copy)
     auto output_shape = infer_dims_for_reshape(N, C, H, W, input_tensor_a.volume());
     if (
@@ -344,6 +339,10 @@ Tensor reshape (const Tensor &input_tensor_a, int N, int C, int H, int W, const 
         } else {
             return input_tensor_a;
         }
+    }
+    if (input_tensor_a.layout() == Layout::ROW_MAJOR && ((compute_volume(output_shape) / output_shape[-1]) % TILE_HEIGHT != 0 || output_shape[-1] % TILE_WIDTH != 0 || input_tensor_a.shape()[-1] % TILE_WIDTH != 0 || (input_tensor_a.volume() / input_tensor_a.shape()[-1]) % TILE_HEIGHT != 0)) {
+        TT_ASSERT(input_tensor_a.dtype()==DataType::BFLOAT16);
+        return tt::numpy::manual_insertion<bfloat16>(input_tensor_a, output_shape, DataType::BFLOAT16, Layout::ROW_MAJOR, input_tensor_a.device(), output_mem_config);
     }
     return operation::run_without_autoformat(Reshape{N, C, H, W, output_mem_config}, {input_tensor_a}).at(0);
 }
