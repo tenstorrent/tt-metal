@@ -463,8 +463,10 @@ bool tt_is_print_server_running()
 }
 
 // The print server is not valid without alive Cluster and tt_device
-void tt_start_debug_print_server()
-{
+void tt_start_debug_print_server(
+    std::function<CoreCoord ()>get_grid_size,
+    std::function<CoreCoord (CoreCoord)>worker_from_logical
+) {
     if (tt::llrt::OptionsG.get_dprint_enabled()) {
         TT_FATAL(DebugPrintServerContext::inst == nullptr, "Multiple print servers not allowed");
         TT_FATAL(DebugPrintServerContext::ProfilerIsRunning == false, "Device side profiler is running, cannot start print server");
@@ -474,9 +476,24 @@ void tt_start_debug_print_server()
         // Using an invalid core can hang the chip, sanitize
         // TODO(PGK)
 
+        // Core range depends on whether dprint_all_cores flag is set.
+        vector<CoreCoord> cores;
+        if (tt::llrt::OptionsG.get_dprint_all_cores()) {
+            CoreCoord logical_grid_size = get_grid_size();
+            for (uint32_t x = 0; x < logical_grid_size.x; x++) {
+                for (uint32_t y = 0; y < logical_grid_size.y; y++) {
+                    CoreCoord logical_coord(x, y);
+                    CoreCoord worker_core = worker_from_logical(logical_coord);
+                    cores.push_back(worker_core);
+                }
+            }
+        } else {
+            cores = tt::llrt::OptionsG.get_dprint_cores();
+        }
+
         DebugPrintServerContext* ctx = new DebugPrintServerContext(
             tt::llrt::OptionsG.get_dprint_chip_ids(),
-            tt::llrt::OptionsG.get_dprint_cores(),
+            cores,
             tt::llrt::OptionsG.get_dprint_riscv_mask(),
             tt::llrt::OptionsG.get_dprint_file_name()
         );

@@ -41,7 +41,10 @@ Note that this call only works correctly after open_device and start_device call
 This call is not thread safe, and there is only one instance of print server supported at a time.
 
 */
-void tt_start_debug_print_server();
+void tt_start_debug_print_server(
+    std::function<CoreCoord ()>get_grid_size,
+    std::function<CoreCoord (CoreCoord)>worker_from_logical
+);
 
 /*
 @brief Stops the print server thread. This call is optional.

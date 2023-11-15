@@ -46,7 +46,7 @@ protected:
         // The core range (physical) needs to be set >= the set of all cores
         // used by all tests using this fixture. TODO: update with a way to
         // just set all physical cores to have printing enabled.
-        tt::llrt::OptionsG.set_dprint_core_range({1, 1}, {5, 5});
+        tt::llrt::OptionsG.set_dprint_all_cores(true);
         // Send output to a file so the test can check after program is run.
         tt::llrt::OptionsG.set_dprint_file_name(dprint_file_name);
 
@@ -79,6 +79,7 @@ protected:
 
         // Reset DPrint settings
         tt::llrt::OptionsG.set_dprint_cores({});
+        tt::llrt::OptionsG.set_dprint_all_cores(false);
         tt::llrt::OptionsG.set_dprint_file_name("");
     }
 
