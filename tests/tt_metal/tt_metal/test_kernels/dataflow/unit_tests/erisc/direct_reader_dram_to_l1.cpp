@@ -25,6 +25,4 @@ void kernel_main() {
     noc_async_read(dram_buffer_src_noc_addr, local_eth_l1_addr_base, dram_buffer_size);
     noc_async_read_barrier();
 
-    //    eth_send_bytes(local_eth_l1_addr_base, remote_eth_l1_addr_base, num_bytes);
-    //   eth_wait_for_receiver_ack(num_bytes);
 }
