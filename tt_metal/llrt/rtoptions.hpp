@@ -24,7 +24,7 @@ class RunTimeOptions {
     int watcher_interval_ms;
     bool watcher_dump_all;
 
-    std::vector<CoreCoord> dprint_core_range;
+    std::vector<CoreCoord> dprint_cores;
     std::vector<int> dprint_chip_ids;
     uint32_t dprint_riscv_mask;
     std::string dprint_file_name;
@@ -38,12 +38,22 @@ public:
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
-    inline bool get_dprint_enabled() { return dprint_core_range.size() != 0; }
-    inline std::vector<CoreCoord>& get_dprint_core_range() {
-        return dprint_core_range;
+    inline bool get_dprint_enabled() { return dprint_cores.size() != 0; }
+    // Note: dprint cores are physical
+    inline std::vector<CoreCoord>& get_dprint_cores() {
+        return dprint_cores;
     }
-    inline void set_dprint_core_range(std::vector<CoreCoord> core_range) {
-        dprint_core_range = core_range;
+    inline void set_dprint_cores(std::vector<CoreCoord> cores) {
+        dprint_cores = cores;
+    }
+    // Note: core range is inclusive
+    inline void set_dprint_core_range(CoreCoord start, CoreCoord end) {
+        dprint_cores.clear();
+        for (uint32_t x = start.x; x <= end.x; x++) {
+            for (uint32_t y = start.y; y <= end.y; y++) {
+                dprint_cores.push_back({x, y});
+            }
+        }
     }
     inline std::vector<int>& get_dprint_chip_ids() { return dprint_chip_ids; }
     inline void set_dprint_chip_ids(std::vector<int> chip_ids) {

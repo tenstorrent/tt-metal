@@ -476,7 +476,7 @@ void tt_start_debug_print_server()
 
         DebugPrintServerContext* ctx = new DebugPrintServerContext(
             tt::llrt::OptionsG.get_dprint_chip_ids(),
-            tt::llrt::OptionsG.get_dprint_core_range(),
+            tt::llrt::OptionsG.get_dprint_cores(),
             tt::llrt::OptionsG.get_dprint_riscv_mask(),
             tt::llrt::OptionsG.get_dprint_file_name()
         );
