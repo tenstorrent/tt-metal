@@ -97,7 +97,7 @@ void RunTimeOptions::ParseDPrintCoreRange(const char* env_var) {
     }
 
     // Set the core range, whether or not dprint is enabled depends on whether this is empty.
-    dprint_core_range = cores;
+    dprint_cores = cores;
 }
 
 void RunTimeOptions::ParseDPrintChipIds(const char* env_var) {

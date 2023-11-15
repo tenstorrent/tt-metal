@@ -43,9 +43,11 @@ public:
     inline static const string dprint_file_name = "gtest_dprint_log.txt";
 protected:
     void SetUp() override {
-        // Set DPrint options: For now print from the first core only, and send
-        // output to a file to the test can check after the program is run.
-        tt::llrt::OptionsG.set_dprint_core_range({{1, 1}});
+        // The core range (physical) needs to be set >= the set of all cores
+        // used by all tests using this fixture. TODO: update with a way to
+        // just set all physical cores to have printing enabled.
+        tt::llrt::OptionsG.set_dprint_core_range({1, 1}, {5, 5});
+        // Send output to a file so the test can check after program is run.
         tt::llrt::OptionsG.set_dprint_file_name(dprint_file_name);
 
         // DPrint currently not supported for N300, so skip these tests for
@@ -76,7 +78,7 @@ protected:
         }
 
         // Reset DPrint settings
-        tt::llrt::OptionsG.set_dprint_core_range({});
+        tt::llrt::OptionsG.set_dprint_cores({});
         tt::llrt::OptionsG.set_dprint_file_name("");
     }
 
