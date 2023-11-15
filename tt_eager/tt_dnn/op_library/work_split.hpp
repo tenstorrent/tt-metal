@@ -155,6 +155,7 @@ inline std::set<CoreRange> num_cores_to_corerange_set(uint32_t target_num_cores,
 // If it can be evenly divided, the second CoreRangeSet is the same as the first, and the last is empty
 // The last 2 args are the units of work for the two core grids
 inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(CoreCoord grid_size, uint32_t units_to_divide, bool row_wise = false) {
+    ZoneScoped;
 	uint32_t num_cores_x = grid_size.x, num_cores_y = grid_size.y;
 	auto target_num_cores = std::min(units_to_divide, num_cores_x * num_cores_y);
 	CoreRangeSet all_cores(num_cores_to_corerange_set(target_num_cores, grid_size, row_wise));
@@ -233,6 +234,7 @@ inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, 
 }
 
 inline std::vector<CoreCoord> grid_to_cores(uint32_t num_cores, uint32_t grid_size_x, uint32_t grid_size_y, bool row_wise=false) {
+    ZoneScoped;
     std::vector<CoreCoord> cores;
     cores.reserve(num_cores);
     TT_ASSERT(num_cores <= grid_size_x * grid_size_y);
