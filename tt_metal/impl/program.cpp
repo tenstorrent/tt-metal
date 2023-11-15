@@ -270,11 +270,11 @@ void Program::update_kernel_groups() {
                     for (auto x = range.start.x; x <= range.end.x; x++) {
                         core_to_kernel_group_index_table_[y * grid_extent_.x + x] = index;
 
-                        auto val = per_core_cb_allocator_.find(CoreCoord({x, y}));
-                        if (val != per_core_cb_allocator_.end()) {
+                        auto val = per_core_cb_indices_.find(CoreCoord({x, y}));
+                        if (val != per_core_cb_indices_.end()) {
                             int i;
                             for (i = NUM_CIRCULAR_BUFFERS - 1; i >= 0; i--) {
-                                if (val->second.indices[i]) {
+                                if (val->second[i]) {
                                     break;
                                 }
                             }
@@ -309,16 +309,6 @@ std::vector<std::string> Program::cores_to_ops() const {
     return ops;
 }
 
-void Program::CircularBufferAllocator::add_index(uint32_t index) {
-    if (index > NUM_CIRCULAR_BUFFERS) {
-        TT_THROW("Invalid circular buffer index: {} should be between 0 and {}", index, NUM_CIRCULAR_BUFFERS);
-    }
-    if (this->indices.to_ulong() & (1 << index)) {
-        TT_THROW("Invalid circular buffer index: Cannot add circular buffer at index {}, another circular buffer already exists", index);
-    }
-    this->indices[index] = 1;
-}
-
 void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t size) {
     auto &last_region = this->l1_regions.back();
     if (address < last_region.second) {
@@ -340,17 +330,31 @@ CircularBufferID Program::add_circular_buffer(const CoreRangeSet &core_range_set
     }
 
     // Mark which buffer indices are being used on each core the circular buffer is used on
-    for (const auto &core_range : core_range_set.ranges()) {
+    for (const CoreRange &core_range : core_range_set.ranges()) {
         for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
                 CoreCoord logical_core(x, y);
-                auto &cb_config = this->per_core_cb_allocator_[logical_core];
+                std::bitset<NUM_CIRCULAR_BUFFERS> &cb_indices = this->per_core_cb_indices_[logical_core];
 
-                for (auto buffer_index : circular_buffer->buffer_indices()) {
-                    cb_config.add_index(buffer_index);
+                for (uint32_t buffer_index : circular_buffer->buffer_indices()) {
+                    if (buffer_index > NUM_CIRCULAR_BUFFERS) {
+                        TT_THROW("Invalid circular buffer index: {} should be between 0 and {}", buffer_index, NUM_CIRCULAR_BUFFERS);
+                    }
+                    if (cb_indices.to_ulong() & (1 << buffer_index)) {
+                        TT_THROW("Invalid circular buffer index: Cannot add circular buffer at index {}, another circular buffer already exists", buffer_index);
+                    }
+                    cb_indices[buffer_index] = 1;
                 }
             }
-    }
+        }
+
+        // There is one CircularBufferAllocator per unique core range, create one if it does not already exist for current core range
+        auto val = std::find_if(cb_allocators_.begin(), cb_allocators_.end(), [&core_range](const CircularBufferAllocator &cb_allocator) {
+            return cb_allocator.core_range == core_range;
+        });
+        if (val == cb_allocators_.end()) {
+            this->cb_allocators_.emplace_back(core_range);
+        }
     }
 
     this->circular_buffers_.push_back(circular_buffer);
@@ -389,7 +393,7 @@ void Program::invalidate_circular_buffer_allocation() {
     if (this->local_circular_buffer_allocation_needed_) {
         return;
     }
-    for (auto &[logical_core, cb_allocator] : this->per_core_cb_allocator_) {
+    for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
         cb_allocator.reset_available_addresses();
     }
     this->local_circular_buffer_allocation_needed_ = true;
@@ -407,21 +411,14 @@ void Program::allocate_circular_buffers() {
         }
 
         uint64_t computed_addr = L1_UNRESERVED_BASE;
-        std::vector<std::reference_wrapper<CircularBufferAllocator>> cb_allocators;
-        cb_allocators.reserve(circular_buffer->core_ranges().num_cores());
         {
             ZoneScopedN("Allocate Circular Buffers - Find Max Per Core");
             for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
-                for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
-                    for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
-                        CoreCoord logical_core(x, y);
-                        auto &cb_allocator = this->per_core_cb_allocator_.at(logical_core);
 
-                        // Need the max available address across all cores circular buffer is placed on
-                        uint64_t candidate_addr = cb_allocator.get_address_candidate();
-                        computed_addr = std::max(computed_addr, candidate_addr);
-
-                        cb_allocators.push_back(cb_allocator);
+                // Need the max available address across all cores circular buffer is placed on
+                for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
+                    if (cb_allocator.core_range.intersects(core_range)) {
+                        computed_addr = std::max(computed_addr, cb_allocator.get_cb_region_end());
                     }
                 }
             }
@@ -429,8 +426,12 @@ void Program::allocate_circular_buffers() {
 
         {
             ZoneScopedN("Allocate Circular Buffers - Mark Per Core Address");
-            for (auto &cb_allocator : cb_allocators) {
-                cb_allocator.get().mark_address(computed_addr, circular_buffer->size());
+            for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
+                for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
+                    if (cb_allocator.core_range.intersects(core_range)) {
+                        cb_allocator.mark_address(computed_addr, circular_buffer->size());
+                    }
+                }
             }
         }
 
@@ -452,13 +453,13 @@ void Program::validate_circular_buffer_region(const Device *device) const {
     }
     uint32_t max_l1_size = device->l1_size_per_core();
 
-    for (const auto &[core, cb_config] : this->per_core_cb_allocator_) {
-            uint64_t cb_region_end = cb_config.get_cb_region_end();
+    for (const CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
+        uint64_t cb_region_end = cb_allocator.get_cb_region_end();
         if (cb_region_end > max_l1_size) {
-            TT_THROW("Statically allocated circular buffers on core {} grow to {} B which is beyond max L1 size of {} B", core.str(), cb_region_end, max_l1_size);
+            TT_THROW("Statically allocated circular buffers on core range {} grow to {} B which is beyond max L1 size of {} B", cb_allocator.core_range.str(), cb_region_end, max_l1_size);
         }
         if (lowest_address.value() < cb_region_end) {
-            TT_THROW("Statically allocated circular buffers in program {} clash with L1 buffers on core {}. L1 buffer allocated at {} and static circular buffer region ends at {}", this->id, core.str(), lowest_address.value(), cb_region_end);
+            TT_THROW("Statically allocated circular buffers in program {} clash with L1 buffers on core range {}. L1 buffer allocated at {} and static circular buffer region ends at {}", this->id, cb_allocator.core_range.str(), lowest_address.value(), cb_region_end);
         }
     }
 }

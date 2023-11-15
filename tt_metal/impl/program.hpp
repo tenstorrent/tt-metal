@@ -103,8 +103,10 @@ class Program {
 
    private:
     struct CircularBufferAllocator {
-        // Tracks which circular buffer indices are being used
-        std::bitset<NUM_CIRCULAR_BUFFERS> indices;
+        CircularBufferAllocator(const CoreRange &core_range_) : core_range(core_range_) {}
+
+        // Circular buffers are created and allocated at core range granularity
+        CoreRange core_range;
 
         // Holds vector of addresses where circular buffers are allocated [start, end)
         // There are multiple ranges because per core L1 regions are not in lockstep but circular buffers spanning multiple cores must share the same address
@@ -112,22 +114,15 @@ class Program {
         // This vector is sorted from lower to higher address spaces
         std::vector<std::pair<uint64_t, uint64_t>> l1_regions = {{L1_UNRESERVED_BASE, L1_UNRESERVED_BASE}};
 
-        // Sets `indices` at position index
-        void add_index(uint32_t index);
-
         // Returns address for next circular buffer
         // Circular buffers are placed sequentially on a core so the next available address gets appended to the last L1 region
-        uint64_t get_address_candidate() const {
+        uint64_t get_cb_region_end() const {
             return this->l1_regions.back().second;
         }
 
         // If address is the end of the last L1 region, the last region is extended by size bytes,
         //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
         void mark_address(uint64_t address, uint64_t size);
-
-        uint64_t get_cb_region_end() const {
-            return this->l1_regions.back().second;
-        }
 
         // Reset when circular buffer allocation is invalidated
         void reset_available_addresses() { this->l1_regions = {{L1_UNRESERVED_BASE, L1_UNRESERVED_BASE}}; }
@@ -140,7 +135,10 @@ class Program {
 
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_;
     std::unordered_map<CircularBufferID,  std::shared_ptr<CircularBuffer>> circular_buffer_by_id_;
-    std::unordered_map<CoreCoord, CircularBufferAllocator> per_core_cb_allocator_;
+    // Tracks which circular buffer indices are being used
+    std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_cb_indices_;
+    // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
+    std::vector<CircularBufferAllocator> cb_allocators_;
 
     std::vector<Semaphore> semaphores_;
 
