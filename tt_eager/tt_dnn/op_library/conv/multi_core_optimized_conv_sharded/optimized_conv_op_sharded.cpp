@@ -1124,13 +1124,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
             CoreCoord core = {core_x_i, core_y_i};
 
             if (!src_a_is_sharded) {
-                auto runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_i], core);
+                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_i], core);
                 runtime_args[0] = src_buffer_a->address();
-                SetRuntimeArgs(program, reader_kernel_ids[core_i], core, runtime_args);
             }
 
             {
-                auto runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_i], core);
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_i], core);
                 runtime_args[0] = dst_buffer->address();
                 runtime_args[1] = src_buffer_b->address();
                 if (has_bias) {
@@ -1138,7 +1137,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
                     TT_ASSERT(src_buffer_c != nullptr);
                     runtime_args[2] = src_buffer_c->address();
                 }
-                SetRuntimeArgs(program, writer_kernel_ids[core_i], core, runtime_args);
             }
         }
 
