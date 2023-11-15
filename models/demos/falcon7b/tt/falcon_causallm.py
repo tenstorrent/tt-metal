@@ -42,10 +42,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         lm_head_str = f"lm_head.weight"
         if tt_cache_path is not None:
             self.lm_head_weights = tt_lib.tensor.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{lm_head_str}_{self.model_config['LM_HEAD_MM_WEIGHTS_DTYPE'].name}.bin"
-                )
+                str(tt_cache_path / f"{lm_head_str}_{self.model_config['LM_HEAD_MM_WEIGHTS_DTYPE'].name}.bin")
             ).to(device, self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"])
         else:
             self.lm_head_weights = torch2tt_tensor(
@@ -78,6 +75,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         lm_logits = tt_lib.tensor.falcon_lm_head_matmul(
             hidden_states,
             self.lm_head_weights,
+            bias=None,
             output_mem_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
             output_dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
         )

@@ -11,6 +11,7 @@ from functools import partial
 from itertools import chain
 from operator import contains, eq, getitem
 from pathlib import Path
+import json
 
 from loguru import logger
 
@@ -37,9 +38,7 @@ def model_location_generator():
         model_folder = Path("tt_dnn-models") / model_subdir
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
-        internal_cache_path = (
-            Path("/opt/tt-metal-models") / model_folder / model_version
-        )
+        internal_cache_path = Path("/opt/tt-metal-models") / model_folder / model_version
         has_internal_cache = internal_cache_path.exists()
         if has_internal_weka:
             return internal_weka_path
@@ -73,11 +72,19 @@ def pytest_addoption(parser):
         help="Target device id",
     )
     parser.addoption(
+        "--input-method",
+        action="store",
+        choices=["json", "cli"],
+        default=None,
+        help="Choose input method: 1) json or 2) cli",
+    )
+    parser.addoption(
         "--input-path",
         action="store",
         default="",
-        help="Path to file with inputs",
+        help="Path to json file with inputs",
     )
+    parser.addoption("--cli-input", action="store", default=None, help="Enter prompt if --input-method=cli")
 
 
 def pytest_generate_tests(metafunc):
@@ -147,18 +154,12 @@ def pytest_generate_tests(metafunc):
         ),
     }
 
-    check_uses_silicon_arch_specific_fixture = partial(
-        contains, silicon_arch_specific_fixture_name_to_avail_archs
-    )
+    check_uses_silicon_arch_specific_fixture = partial(contains, silicon_arch_specific_fixture_name_to_avail_archs)
     test_requested_silicon_arch_fixtures = tuple(
         filter(check_uses_silicon_arch_specific_fixture, metafunc.fixturenames)
     )
-    is_test_requesting_specific_silicon_archs = (
-        len(test_requested_silicon_arch_fixtures) > 0
-    )
-    get_archs_for_silicon_arch_specific_fixture = partial(
-        getitem, silicon_arch_specific_fixture_name_to_avail_archs
-    )
+    is_test_requesting_specific_silicon_archs = len(test_requested_silicon_arch_fixtures) > 0
+    get_archs_for_silicon_arch_specific_fixture = partial(getitem, silicon_arch_specific_fixture_name_to_avail_archs)
     test_requested_silicon_archs = ALL_ARCHS.intersection(
         *map(
             get_archs_for_silicon_arch_specific_fixture,
@@ -166,15 +167,9 @@ def pytest_generate_tests(metafunc):
         )
     )
 
-    available_archs = (
-        test_requested_silicon_archs
-        if is_test_requesting_specific_silicon_archs
-        else ALL_ARCHS
-    )
+    available_archs = test_requested_silicon_archs if is_test_requesting_specific_silicon_archs else ALL_ARCHS
     matches_user_requested_silicon_arch = partial(eq, tt_arch)
-    available_archs = tuple(
-        filter(matches_user_requested_silicon_arch, available_archs)
-    )
+    available_archs = tuple(filter(matches_user_requested_silicon_arch, available_archs))
 
     uses_silicon_arch = "silicon_arch_name" in metafunc.fixturenames
 
@@ -190,6 +185,20 @@ def pytest_generate_tests(metafunc):
             # The values of these arch-specific fixtures should not be used in
             # the test function, so use any parameters, like [True]
             metafunc.parametrize(test_requested_silicon_arch_fixture, [True])
+
+    input_method = metafunc.config.getoption("--input-method")
+    if input_method == "json":
+        json_path = metafunc.config.getoption("--input-path")
+        if not json_path:
+            raise ValueError("Please provide a valid JSON path using --input-path option.")
+        with open(json_path, "r") as f:
+            data = json.load(f)
+        metafunc.parametrize("user_input", [data])
+    elif input_method == "cli":
+        cli_input = metafunc.config.getoption("--cli-input")
+        if not cli_input:
+            raise ValueError("Please provide input using --cli-input option.")
+        metafunc.parametrize("user_input", [[cli_input]])
 
 
 # Report stashing to get outcomes etc
@@ -242,9 +251,11 @@ def device_init_destroy(request):
 
     ttl.device.CloseDevice(device)
 
+
 @pytest.fixture(scope="function")
 def device(device_init_destroy):
     import tt_lib as ttl
+
     device = ttl.device.GetDefaultDevice()
     yield device
     ttl.device.ClearCommandQueueProgramCache()
@@ -283,14 +294,17 @@ def use_program_cache(clear_program_cache):
     ttl.program_cache.enable()
     yield
 
+
 @pytest.fixture(scope="function")
 def tracy_profile():
     from tracy import Profiler
+
     profiler = Profiler()
 
     profiler.enable()
     yield
     profiler.disable()
+
 
 @pytest.fixture
 def input_path(request):

@@ -31,14 +31,15 @@ SPACE = 204
 
 
 # load from jason, return as a list
-def load_inputs(input_path, batch):
-    with open(input_path) as f:
-        input_data = json.load(f)
-        assert len(input_data) >= batch, f"Number of users (batch) must be {batch}!"
-        in_prompt = []
-        for i in range(batch):
-            in_prompt.append(input_data[i]["question"])
-        return in_prompt
+def load_inputs(user_input, batch):
+    if isinstance(user_input, str):
+        with open(user_input, "r") as f:
+            user_input = json.load(f)
+    assert len(user_input) >= batch, f"Number of users (batch) must be {batch}!"
+    in_prompt = []
+    for i in range(batch):
+        in_prompt.append(user_input[i]["question"])
+    return in_prompt
 
 
 def post_process(logits, index):
@@ -88,7 +89,7 @@ def print_output_prompts(generated_ids, tokenizer, num_users_to_display=None):
 
 
 def run_falcon_demo_kv(
-    input_path, model_version, batch_size, num_layers, max_seq_len, model_config, model_location_generator, device
+    user_input, model_version, batch_size, num_layers, max_seq_len, model_config, model_location_generator, device
 ):
     torch.manual_seed(0)
 
@@ -99,7 +100,11 @@ def run_falcon_demo_kv(
     configuration = FalconConfig(**model_config_entries)
 
     profiler.start(f"loading_inputs")
-    input_prompts = load_inputs(input_path, batch_size)
+    if len(user_input) == 1:
+        input_prompts = user_input
+    else:
+        input_prompts = load_inputs(user_input, batch_size)
+
     profiler.end(f"loading_inputs")
 
     # State dict is needed for embeddings
@@ -119,6 +124,7 @@ def run_falcon_demo_kv(
         model_config,
         tt_cache_path,
     )
+
     tt_lib.device.Synchronize()
     logger.info("Loaded TT model weights")
     profiler.end(f"loading_weights")
@@ -128,6 +134,7 @@ def run_falcon_demo_kv(
 
     tokenizer = AutoTokenizer.from_pretrained(model_version)
     prefill_ids, num_users, num_input_tokens = preprocess_and_validate_inputs(input_prompts, tokenizer, max_seq_len)
+
     profiler.end(f"tokenizing_inputs")
 
     logger.info("Initializing KV cache")
@@ -364,7 +371,7 @@ def run_falcon_demo_kv(
         "inference_prefill": profiler.get("second_run_prefill_stage"),
         "inference_decode": profiler.get("second_run_decode_stage"),
         "inference_total": profiler.get("second_run_prefill_stage") + profiler.get("second_run_decode_stage"),
-        "inference_throughput": output_token_index
+        "inference_throughput": (batch_size * output_token_index)
         / (profiler.get("second_run_prefill_stage") + profiler.get("second_run_decode_stage")),
     }
 
@@ -382,21 +389,21 @@ def run_falcon_demo_kv(
 
 
 def test_demo(
-    input_path,
+    user_input,
     model_location_generator,
     device,
     use_program_cache,
 ):
     disable_persistent_kernel_cache()
     disable_compilation_reports()
-    tt_lib.profiler.set_profiler_location(f"falcon7b")
+    tt_lib.profiler.set_profiler_location(f"tt_metal/tools/profiler/logs/falcon7b")
 
     return run_falcon_demo_kv(
-        input_path=input_path,
+        user_input=user_input,
         model_version="tiiuae/falcon-7b-instruct",
         batch_size=32,
         num_layers=32,
-        max_seq_len=256,
+        max_seq_len=1024,
         model_config=get_model_config("BFLOAT16-DRAM"),
         model_location_generator=model_location_generator,
         device=device,
