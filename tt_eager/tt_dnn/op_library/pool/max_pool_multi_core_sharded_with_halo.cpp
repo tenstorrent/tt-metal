@@ -673,8 +673,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
             }
         }
         if (input_sharded) {
-            auto& raw_in_cb_config = GetCircularBufferConfig(program, raw_in_cb);
-            raw_in_cb_config.set_globally_allocated_address(src_buffer->address());
+            UpdateDynamicCircularBufferAddress(program, raw_in_cb, *src_buffer);
         }
         if (out_sharded) {
             UpdateDynamicCircularBufferAddress(program, cb_sharded_out, *dst_buffer);

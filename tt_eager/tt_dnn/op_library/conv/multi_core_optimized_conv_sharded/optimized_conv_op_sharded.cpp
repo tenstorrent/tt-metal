@@ -1141,13 +1141,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
         }
 
         if (src_a_is_sharded) {
-            auto& sharded_act_cb_config = GetCircularBufferConfig(program, cb_sharded_act);
-            sharded_act_cb_config.set_globally_allocated_address(*src_buffer_a);
+            UpdateDynamicCircularBufferAddress(program, cb_sharded_act, *src_buffer_a);
         }
 
         if (out_sharded) {
-            auto& output_cb_config = GetCircularBufferConfig(program, cb_output);
-            output_cb_config.set_globally_allocated_address(*dst_buffer);
+            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
         }
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

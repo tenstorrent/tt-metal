@@ -400,7 +400,7 @@ void Program::invalidate_circular_buffer_allocation() {
 }
 
 void Program::allocate_circular_buffers() {
-    ZoneScopedN("Allocate Circular Buffers");
+    ZoneScoped;
     if (not this->local_circular_buffer_allocation_needed_) {
         return;
     }
@@ -411,29 +411,23 @@ void Program::allocate_circular_buffers() {
         }
 
         uint64_t computed_addr = L1_UNRESERVED_BASE;
-        {
-            ZoneScopedN("Allocate Circular Buffers - Find Max Per Core");
-            for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
-
-                // Need the max available address across all cores circular buffer is placed on
-                for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
-                    if (cb_allocator.core_range.intersects(core_range)) {
-                        computed_addr = std::max(computed_addr, cb_allocator.get_cb_region_end());
-                    }
+        for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
+            // Need the max available address across all cores circular buffer is placed on
+            for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
+                if (cb_allocator.core_range.intersects(core_range)) {
+                    computed_addr = std::max(computed_addr, cb_allocator.get_cb_region_end());
                 }
             }
         }
 
-        {
-            ZoneScopedN("Allocate Circular Buffers - Mark Per Core Address");
-            for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
-                for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
-                    if (cb_allocator.core_range.intersects(core_range)) {
-                        cb_allocator.mark_address(computed_addr, circular_buffer->size());
-                    }
+        for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
+            for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
+                if (cb_allocator.core_range.intersects(core_range)) {
+                    cb_allocator.mark_address(computed_addr, circular_buffer->size());
                 }
             }
         }
+
 
         circular_buffer->set_locally_allocated_address(computed_addr);
     }

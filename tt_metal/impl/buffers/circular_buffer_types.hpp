@@ -98,7 +98,7 @@ class CircularBufferConfig {
 
     CircularBufferConfig set_globally_allocated_address(const Buffer &buffer) {
         if (buffer.buffer_type() != BufferType::L1) {
-            tt::log_fatal(tt::LogMetal, "Only L1 buffers can have an associated circular buffer!");
+            TT_THROW("Only L1 buffers can have an associated circular buffer!");
         }
         this->globally_allocated_address_ = buffer.address();
         this->dynamic_cb_ = true;
