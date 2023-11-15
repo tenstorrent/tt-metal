@@ -475,8 +475,17 @@ void SetRuntimeArgs(const Program &program, KernelID kernel_id, const std::varia
         },
         core_spec
     );
-
 }
+
+void SetRuntimeArgs(const Program &program, KernelID kernel, const std::vector< CoreCoord > & core_spec, const std::vector< std::vector<uint32_t> > &runtime_args)
+{
+    ZoneScoped;
+    TT_FATAL( core_spec.size() == runtime_args.size(), "Mistmatch between number of cores {} and number of runtime args {} getting updated", core_spec.size(), runtime_args.size());
+    Kernel * k = detail::GetKernel(program, kernel);
+    for (size_t i = 0; i < core_spec.size(); i++)
+        k->set_runtime_args(core_spec[i], runtime_args[i]);
+}
+
 
 void UpdateRuntimeArg(const Program &program, KernelID kernel_id, const std::variant<CoreCoord,CoreRange,CoreRangeSet> &core_spec, size_t offset, uint32_t value) {
     ZoneScoped;
