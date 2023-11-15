@@ -10,6 +10,7 @@ CONTRIBUTING.md @tt-rkim
 CODEOWNERS @tt-rkim
 
 third_party/ @tt-rkim @TT-billteng @kkwong10
+sfpi/ @pgkeller
 
 # Build stuff
 
