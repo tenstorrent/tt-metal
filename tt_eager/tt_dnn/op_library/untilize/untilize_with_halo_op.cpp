@@ -133,6 +133,7 @@ std::vector<uint16_t> get_neighbour_core_send_configs(uint16_t curr_in_start_sti
 }
 
 // helper function to increment b,h,w coordinates of tensor
+// NOT Needed. Will remove
 std::tuple<uint32_t, uint32_t, uint32_t> increment_coordinates(uint32_t b, uint32_t h, uint32_t w, uint32_t in_h, uint32_t in_w) {
     if (w < in_w - 1) {
         w++;
@@ -202,7 +203,9 @@ std::vector<UntilizeWithHaloReaderConfigs> get_untilize_with_halo_reader_configs
     for(uint32_t core_i = 0; core_i < num_cores; core_i++) {
         // determine # of padded sticks
         // TODO: move code to determine pad to op tracing
+        if (padded_input_stick >= pad_start_size[pad_start_size_array_idx] && padded_input_stick < pad_start_size[pad_start_size_array_idx+1]) {
 
+        }
         uint16_t input_shard_local_nsticks = 0;
         uint16_t pad_nsticks = 0;
         while (input_shard_local_nsticks < input_shard_height) {
@@ -217,14 +220,14 @@ std::vector<UntilizeWithHaloReaderConfigs> get_untilize_with_halo_reader_configs
 
         // TODO
         std::vector<uint16_t> local_data_start_size;
-        uint16_t local_data_write_offset;
+        uint16_t local_data_write_offset = 0;
         std::vector<uint16_t> pad_start_size;
 
         // Done
-        std::vector<uint32_t> left_left_send_configs;
-        std::vector<uint32_t> left_send_configs;
-        std::vector<uint32_t> right_send_configs;
-        std::vector<uint32_t> right_right_send_configs;
+        std::vector<uint16_t> left_left_send_configs;
+        std::vector<uint16_t> left_send_configs;
+        std::vector<uint16_t> right_send_configs;
+        std::vector<uint16_t> right_right_send_configs;
         if (core_i >= 2) {
             left_left_send_configs = get_neighbour_core_send_configs(
                 input_padded_shard_start_stick,

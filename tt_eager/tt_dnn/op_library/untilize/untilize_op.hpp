@@ -102,14 +102,16 @@ struct UntilizeWithHaloReaderConfigs{
     std::vector<uint16_t> local_data_start_size;
     uint16_t local_data_write_offset;
     std::vector<uint16_t> pad_start_size;
-    std::vector<uint32_t> left_left_send_configs;
-    std::vector<uint32_t> left_send_configs;
-    std::vector<uint32_t> right_send_configs;
-    std::vector<uint32_t> right_right_send_configs;
+    std::vector<uint16_t> left_left_send_configs;
+    std::vector<uint16_t> left_send_configs;
+    std::vector<uint16_t> right_send_configs;
+    std::vector<uint16_t> right_right_send_configs;
 };
-std::vector<UntilizeWithHaloReaderConfigs> get_untilize_with_halo_reader_configs(std::vector<uint16_t> data_indices_full,
+std::vector<UntilizeWithHaloReaderConfigs> get_untilize_with_halo_reader_configs(std::vector<uint16_t> data_indices,
+                                                                                std::vector<uint16_t> data_start_size,
+                                                                                std::vector<uint16_t> pad_start_size,
                                                                                 const uint32_t &num_cores,
-                                                                                // TODO: put below in a struct
+
                                                                                 const uint32_t &in_b,
                                                                                 const uint32_t &in_h,
                                                                                 const uint32_t &in_w,
