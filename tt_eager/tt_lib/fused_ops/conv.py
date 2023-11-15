@@ -33,14 +33,37 @@ def conv_op_trace(conv_params, input_nhwc_shape):
     # data_start_size holds start stick index and size for contigious sticks in tensor
     # pad_start_size holds start stick index and size for contingous padding sticks
     # stick indices in data_start_size are after pad insertion
-    # Example for 8x8 and pad = 1
-    # 0 0  0  0  0  0  0  0  0 0
-    # 0 1  2  3  4  5  6  7  8 0
-    # 0 9 10 11 12 13 14 15 16 0
-    # 0 ...
-    # =>
-    # pad_start_size: (0, 11), (20, 2), ...
-    # data_start_size: (11, 8), (22, 8), ...
+    # Example for input of 4x8 and pad = 1
+
+    # image 1 data (example sequential integer data)
+    # 1  2  3  4  5  6  7  8
+    # 9  10 11 12 13 14 15 16
+    # 17 18 19 20 21 22 23 24
+    # 25 26 27 28 29 30 31 32
+
+    # image 2 data (example sequential integer data)
+    # 33 34 35 36 37 38 39 40
+    # 41 42 43 44 45 46 47 48
+    # 49 50 51 52 53 54 55 56
+    # 57 58 59 60 61 62 63 64
+
+    # Concatenated image data (example sequential integer data from above)
+    # Inserted padding above and between and on the sides of the images (pad = 1)
+    # 0  0  0  0  0  0  0  0  0 0
+    # 0  1  2  3  4  5  6  7  8 0
+    # 0  9 10 11 12 13 14 15 16 0
+    # 0 17 18 19 20 21 22 23 24 0
+    # 0 25 26 27 28 29 30 31 32 0
+    # 0  0  0  0  0  0  0  0  0 0
+    # 0 33 34 35 36 37 38 39 40 0
+    # 0 41 42 43 44 45 46 47 48 0
+    # 0 49 50 51 52 53 54 55 56 0
+    # 0 57 58 59 60 61 62 63 64 0
+    # 0  0  0  0  0  0  0  0  0 0
+
+    # We encode the above shown padded tensor via 2 lists -
+    # pad_start_size: [(0, 11), (20, 2), ... ]
+    # data_start_size: [(11, 8), (22, 8), ... ]
 
     data_start_size = []
     pad_start_size = []
@@ -85,7 +108,7 @@ def conv_op_trace(conv_params, input_nhwc_shape):
     [output_n, output_h, output_w, output_c] = compute_conv_output_shape(conv_params, input_nhwc_shape)
     assert input_n == output_n
 
-    # trace the output
+    # trace index of the top-left position of sliding window in the padded output tensor == channel_idx
     for n in range(input_n):
         for oh in range(output_h):
             for ow in range(output_w):
@@ -94,6 +117,14 @@ def conv_op_trace(conv_params, input_nhwc_shape):
                 channel_idx = (n * padded_input_h * padded_input_w) + (ih * padded_input_w) + iw
                 data_indices.append(channel_idx)
     return data_indices, data_start_size, pad_start_size
+
+
+def traced_conv_reference(data_indices, data_start_size, pad_start_size):
+    # reconstruct the padded tensor from the 2 lists
+    # run the traced conv op on the padded tensor
+
+    # compare to pytorch
+    return
 
 
 def conv(weight: List[Union[int, float]], conv_params, device, bias=None):
