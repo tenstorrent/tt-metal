@@ -342,6 +342,12 @@ inline NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick,
         skip_after_first_partial_image_row = pc.pad_h * (pc.in_w + 2 * pc.pad_w);
     }
 
+    // Case where the end index matches the last stick in an image. This needs to be followed by full padding row
+    if ((end_stick / pc.in_w) % pc.in_h == 0) {
+        first_partial_image_num_rows = pc.in_h - image_start_height_after_partial_right_aligned_row;
+        skip_after_first_partial_image_row = pc.pad_h * (pc.in_w + 2 * pc.pad_w);
+    }
+
     // Full images
     int32_t image_rows_after_first_partial_image = sticks_after_first_partial_row / pc.in_w - first_partial_image_num_rows;
     if (to_print) log_debug("image_rows_after_first_partial_image: {}", image_rows_after_first_partial_image);
