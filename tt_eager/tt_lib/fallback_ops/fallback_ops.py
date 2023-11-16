@@ -777,6 +777,20 @@ def floor(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
 
 
 @convert_tt_tensors_wrapper
+def trunc(input: ttl_tensor.Tensor) -> ttl_tensor.Tensor:
+    """
+    Returns a new tensor with the truncated integer values of the elements of ``input``.
+
+    +------------+-----------------------------------------+-------------+-----------------+----------+
+    | Argument   | Description                             | Data type   | Valid range     | Required |
+    +============+=========================================+=============+=================+==========+
+    | input      | Input tensor for trunc                  | Tensor      |                 | Yes      |
+    +------------+-----------------------------------------+-------------+-----------------+----------+
+    """
+    return torch.trunc(input)
+
+
+@convert_tt_tensors_wrapper
 def unary_fmod(input: ttl_tensor.Tensor, other: float) -> ttl_tensor.Tensor:
     """
     Applies mod operations and the result has the same sign as the dividend ``input`` and
