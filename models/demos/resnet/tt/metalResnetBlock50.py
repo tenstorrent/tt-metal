@@ -699,7 +699,7 @@ hardcoded_matmul_config_conv = {
 hardcoded_conv_blocking_and_parallelization_config = {
     1: {
         (3136, 64): [64 * 3, 64, 64, 64, 64, 64, (7, 7), 64, 64],
-        (800, 128): [128, 32, 128, 32, 64, 32, (5, 5), 32, 128],
+        (800, 128): [128 * 3, 32, 128, 32, 64, 32, (5, 5), 32, 128],
         (224, 256): [256, 32, 128, 32, 128, 32, (1, 7), 32, 256],
         (64, 512): [512, 32, 64, 32, 64, 32, (1, 2), 32, 512],
         # bypass convs
@@ -710,7 +710,7 @@ hardcoded_conv_blocking_and_parallelization_config = {
     },
     2: {
         (6272, 64): [64 * 3, 128, 64, 128, 64, 128, (7, 7), 128, 64],
-        (1568, 128): [128, 32, 128, 32, 64, 32, (7, 7), 32, 128],
+        (1568, 128): [128 * 3, 32, 128, 32, 64, 32, (7, 7), 32, 128],
         (416, 256): [256, 64, 128, 64, 128, 64, (7, 1), 64, 256],
         (128, 512): [512, 32, 64, 32, 64, 32, (1, 4), 32, 512],
         # bypass convs
@@ -721,13 +721,13 @@ hardcoded_conv_blocking_and_parallelization_config = {
     },
     8: {
         (25088, 64): [64 * 3, 256, 64, 128, 64, 256, (12, 9), 256, 64],
-        (6272, 128): [128, 64, 128, 64, 128, 64, (12, 9), 64, 128],
+        (6272, 128): [128 * 3, 64, 128, 64, 128, 64, (12, 9), 64, 128],
         (1568, 256): [256, 160, 32, 160, 32, 160, (10, 8), 160, 32],
         (416, 512): [512, 64, 64, 64, 64, 64, (7, 8), 64, 64],
     },
     16: {
         (50176, 64): [64 * 3, 512, 64, 128, 64, 512, (12, 9), 512, 64],
-        (12544, 128): [128, 128, 128, 64, 128, 128, (12, 9), 128, 128],
+        (12544, 128): [128 * 3, 128, 128, 64, 128, 128, (12, 9), 128, 128],
         (3136, 256): [256, 288, 32, 96, 32, 288, (11, 8), 288, 32],
         (800, 512): [512, 96, 64, 96, 64, 96, (9, 8), 96, 64],
     },
@@ -765,7 +765,6 @@ class Bottleneck:
         batch_size=1,
         sharded=None,
         out_sharded=False,
-        act_block_w_equals_input_channels_x_filter_width=False,
         use_downsample_op_and_mm_for_conv1x1_s2=False,
         model_config=None,
         conv_halo=False,
@@ -897,10 +896,6 @@ class Bottleneck:
         assert per_core_act_h % 32 == 0
         per_core_act_h_ntiles = (int)(per_core_act_h / 32)
         per_core_weight_w_ntiles = (int)(per_core_weight_w / 32)
-        if act_block_w_equals_input_channels_x_filter_width:
-            assert act_block_w_datums == width * 3
-        else:
-            assert act_block_w_datums == width
         self.conv2 = resnet50_optimized_conv(
             conv2_weight.reshape(-1).tolist(),
             self.conv2_params,
@@ -1192,7 +1187,6 @@ class ResNet(nn.Module):
             batch_size=batch_size,
             sharded=tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED if sharded else None,
             out_sharded=True,
-            act_block_w_equals_input_channels_x_filter_width=True,
             conv_halo=True if sharded else False,
             model_config=model_config,
         )
@@ -1309,7 +1303,6 @@ class ResNet(nn.Module):
         batch_size=1,
         sharded=None,
         out_sharded=False,
-        act_block_w_equals_input_channels_x_filter_width=False,
         use_downsample_op_and_mm_for_conv1x1_s2=False,
         model_config=None,
         conv_halo=False,
@@ -1496,7 +1489,6 @@ class ResNet(nn.Module):
                 batch_size=batch_size,
                 sharded=sharded,
                 out_sharded=sharded is not None,
-                act_block_w_equals_input_channels_x_filter_width=act_block_w_equals_input_channels_x_filter_width,
                 use_downsample_op_and_mm_for_conv1x1_s2=use_downsample_op_and_mm_for_conv1x1_s2,
                 model_config=model_config,
                 conv_halo=conv_halo if stride == 1 else False,
@@ -1523,7 +1515,6 @@ class ResNet(nn.Module):
                     batch_size=batch_size,
                     sharded=sharded,
                     out_sharded=True if block_num != blocks - 1 else out_sharded,
-                    act_block_w_equals_input_channels_x_filter_width=act_block_w_equals_input_channels_x_filter_width,
                     model_config=model_config,
                     conv_halo=conv_halo,
                     conv_2d=conv_2d,
