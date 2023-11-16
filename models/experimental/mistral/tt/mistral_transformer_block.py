@@ -6,7 +6,7 @@ import torch.nn as nn
 import tt_lib
 from typing import Optional
 from models.experimental.mistral.tt.mistral_attention import TtAttention
-from models.experimental.mistral.tt.mistral_feed_forward import TtFeedForward
+from models.experimental.mistral.tt.mistral_feed_forward import TtFeedForward, TtFeedForwardSiluFolded
 from models.experimental.mistral.tt.mistral_rms_norm import TtRMSNorm
 from models.experimental.mistral.tt.mistral_configuration import TtModelArgs
 
@@ -24,7 +24,12 @@ class TtTransformerBlock(nn.Module):
         self.dim = args.dim
         self.device = device
         self.attention = TtAttention(args, f"{base_address}attention.", device, state_dict)
-        self.feed_forward = TtFeedForward(args, f"{base_address}feed_forward.", device, state_dict)
+
+        if args.SILU_FOLDED_FEEDFORWARD:
+            self.feed_forward = TtFeedForwardSiluFolded(args, f"{base_address}feed_forward.", device, state_dict)
+        else:
+            self.feed_forward = TtFeedForward(args, f"{base_address}feed_forward.", device, state_dict)
+
         self.attention_norm = TtRMSNorm(
             args.dim,
             base_address=f"{base_address}attention_norm.",

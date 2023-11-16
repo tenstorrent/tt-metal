@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import json
 from models.experimental.mistral.tt.mistral_configuration import TtModelArgs
-from models.experimental.mistral.tt.mistral_feed_forward import TtFeedForward
+from models.experimental.mistral.tt.mistral_feed_forward import TtFeedForward, TtFeedForwardSiluFolded
 from models.experimental.mistral.reference.model import FeedForward
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.utility_functions import (
@@ -15,11 +15,12 @@ from models.utility_functions import (
 )
 
 
+@pytest.mark.parametrize("silufolded", ((False, True)))
 @pytest.mark.parametrize(
     "pcc",
     ((0.99),),
 )
-def test_mistral_feed_forward_inference(pcc, model_location_generator, device, reset_seeds):
+def test_mistral_feed_forward_inference(silufolded, pcc, model_location_generator, device, reset_seeds):
     mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
     state_dict = torch.load(mistral_path / "consolidated.00.pth")
     base_address = f""
@@ -31,12 +32,20 @@ def test_mistral_feed_forward_inference(pcc, model_location_generator, device, r
     reference_model = FeedForward(args=model_args)
     reference_model.load_state_dict(state_dict)
 
-    tt_model = TtFeedForward(
-        args=model_args,
-        state_dict=state_dict,
-        device=device,
-        base_address=base_address,
-    )
+    if silufolded:
+        tt_model = TtFeedForwardSiluFolded(
+            args=model_args,
+            state_dict=state_dict,
+            device=device,
+            base_address=base_address,
+        )
+    else:
+        tt_model = TtFeedForward(
+            args=model_args,
+            state_dict=state_dict,
+            device=device,
+            base_address=base_address,
+        )
     input = torch.rand(1, 11, 4096)
     reference_output = reference_model(input)
 

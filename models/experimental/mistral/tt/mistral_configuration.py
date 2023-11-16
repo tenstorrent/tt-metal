@@ -17,6 +17,7 @@ class TtModelArgs:
     vocab_size: int
 
     max_batch_size: int = 0
+    SILU_FOLDED_FEEDFORWARD: bool = True
     FALLBACK_SOFTMAX: bool = False
     FALLBACK_ROTARY_EMBEDDING: bool = False
     FALLBACK_EMPTY: bool = False
