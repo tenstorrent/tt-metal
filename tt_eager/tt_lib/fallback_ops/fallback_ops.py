@@ -320,6 +320,7 @@ def repeat_interleave(
 ) -> ttl_tensor.Tensor:
     r"""
     Returns a tensor with repeated elements of input tensor ``input``.
+
     +------------------+-------------------------------------------------------------+------------------+--------------+----------+
     | Argument         | Description                                                 | Data type        | Valid range  | Required |
     +==================+=============================================================+==================+==============+==========+
