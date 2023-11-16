@@ -229,24 +229,15 @@ void Kernel::set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&bin
 void DataMovementKernel::read_binaries(chip_id_t device_id) {
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
-    uint32_t riscv_id;
-    std::string binary_path_suffix;
-    switch (this->config_.processor) {
-        case (DataMovementProcessor::RISCV_0): {
-            riscv_id = 0;
-            binary_path_suffix = "/brisc/brisc.hex";
-        }
-        break;
-        case (DataMovementProcessor::RISCV_1): {
-            riscv_id = 1;
-            binary_path_suffix = "/ncrisc/ncrisc.hex";
-        }
-        break;
-        default:
-            TT_THROW("Unsupported data movement processor!");
-    }
 
-    ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, device_id, false);
+    static_assert(static_cast<std::underlying_type<DataMovementProcessor>::type>(DataMovementProcessor::RISCV_0) == 0 &&
+                  static_cast<std::underlying_type<DataMovementProcessor>::type>(DataMovementProcessor::RISCV_1) == 1);
+    static const char *binary_path_suffix[] = {
+        "/brisc/brisc.hex",
+        "/ncrisc/ncrisc.hex"};
+    uint32_t riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
+
+    ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix[riscv_id], device_id, false);
     this->binary_size16_ = llrt::get_binary_code_size16(binary_mem, riscv_id);
     log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", riscv_id, this->binary_size16_ * 16);
 
@@ -258,8 +249,7 @@ void EthernetKernel::read_binaries(int device_id) {
    // untested
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
-    uint32_t riscv_id;
-    std::string binary_path_suffix = "/erisc/erisc_app.hex";
+    static const char binary_path_suffix[] = "/erisc/erisc_app.hex";
     ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, device_id, true);
     binaries.push_back(binary_mem);
     this->set_binaries(device_id, std::move(binaries));
@@ -269,8 +259,12 @@ void ComputeKernel::read_binaries(int device_id) {
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
-        std::string trisc_id_str = std::to_string(trisc_id);
-        std::string hex_path = binary_path_ + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
+        static const char *binary_path_suffix[] = {
+            "/tensix_thread0/tensix_thread0.hex",
+            "/tensix_thread1/tensix_thread1.hex",
+            "/tensix_thread2/tensix_thread2.hex"
+        };
+        std::string hex_path = binary_path_ + binary_path_suffix[trisc_id];
         ll_api::memory binary_mem = llrt::get_risc_binary(hex_path, device_id, false);
         this->binary_size16_ = llrt::get_binary_code_size16(binary_mem, trisc_id + 2);
         log_debug("RISC {} kernel binary size: {} in bytes", trisc_id + 2, this->binary_size16_ * 16);
