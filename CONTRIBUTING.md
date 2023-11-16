@@ -188,7 +188,7 @@ If you are using a machine with bare metal machine specs, please use
   - In the same file, before launching your kernel : `    tt_start_debug_print_server(<device>, {<pci slot>}, {{<physical core coordinates>}});`
   - Note for core 0,0 it is 1,1
   - You can get the physical core given a logical core with the following call: `device->worker_core_from_logical_core(<logical_core>);`
-  - In the kernel: `#include "debug_print.h"`
+  - In the kernel: `#include "debug/dprint.h"`
   - To print in the kernel : `DPRINT << <variable to print> << ENDL();`
 - To use GDB to debug the C++ python binding itself:
   - Build with debug symbols `make build config=debug`

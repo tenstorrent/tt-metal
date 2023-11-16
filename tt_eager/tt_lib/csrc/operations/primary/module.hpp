@@ -295,6 +295,23 @@ void py_module(py::module& m_primary) {
                 "output_dtype",      "Output Data Type",                                       "DataType",                                   "By default it will be set to the data type of `input_tensor_a`", "No"
         )doc");
 
+    py::class_<LayerNormDefaultProgramConfig>(m_primary, "LayerNormDefaultProgramConfig")
+        .def(py::init<>());
+
+    py::class_<LayerNormShardedMultiCoreProgramConfig>(m_primary, "LayerNormShardedMultiCoreProgramConfig")
+        .def(
+            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, MathFidelity, DataType, DataType, bool>(),
+            py::kw_only(),
+            py::arg("compute_with_storage_grid_size"),
+            py::arg("subblock_w").noconvert(),
+            py::arg("block_h").noconvert(),
+            py::arg("block_w").noconvert(),
+            py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
+            py::arg("im_data_format").noconvert(),
+            py::arg("out_data_format").noconvert(),
+            py::arg("inplace").noconvert()
+        );
+
     m_primary.def(
         "layernorm",
         &layernorm,
@@ -303,6 +320,7 @@ void py_module(py::module& m_primary) {
         py::arg("gamma").noconvert() = std::nullopt,
         py::arg("beta").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("program_config").noconvert() = LayerNormDefaultProgramConfig{},
         R"doc(
             Performs a layernorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
         )doc");
@@ -316,6 +334,7 @@ void py_module(py::module& m_primary) {
         py::arg("gamma").noconvert() = std::nullopt,
         py::arg("beta").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("program_config").noconvert() = LayerNormDefaultProgramConfig{},
         R"doc(
             Performs a layernorm(a+b)*gamma + beta operation.
         )doc");
