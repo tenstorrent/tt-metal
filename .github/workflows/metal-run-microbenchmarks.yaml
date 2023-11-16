@@ -43,5 +43,5 @@ jobs:
       - name: Upload microbenchmark report csvs
         uses: actions/upload-artifact@v3
         with:
-          name: microbenchmark-report-csv-${{ matrix.arch }}
-          path: tt_metal/tools/profiler/logs
+          name: microbenchmark-report-csv-${{ matrix.runner-info.arch }}
+          path: generated/profiler/.logs
