@@ -7,3 +7,4 @@
 #include "ckernel_perf_unpack_pack.cc"
 #endif
 #include "ckernel_main.cc"
+#include "llk_io.cc" // sw stack specific io interface
