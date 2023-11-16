@@ -80,6 +80,8 @@ def conv_op_trace(conv_params, input_nhwc_shape):
             start_size_list.append([new_start, new_size])
 
     # trace the image and collect padding and data start and sizes
+    # also, populate pad_input - for every index in holistic padded tensor, specify pad is true or false
+    pad_input = []
     channel_idx = 0
     for n in range(input_n):
         # top padding
@@ -87,22 +89,28 @@ def conv_op_trace(conv_params, input_nhwc_shape):
             if n == 0:
                 # add top padding only for first image
                 pad_start_size.append([channel_idx, pad_h * padded_input_w])
+                pad_input.extend([True] * pad_h * padded_input_w)
                 channel_idx += pad_h * padded_input_w
         for ih in range(pad_h, input_h + pad_h):
             if pad_w > 0:
                 # left padding
                 update_start_size_list_and_coalesce(pad_start_size, channel_idx, pad_w)
+                pad_input.extend([True] * pad_w)
                 channel_idx += pad_w
             update_start_size_list_and_coalesce(data_start_size, channel_idx, input_w)
+            pad_input.extend([False] * input_w)
             channel_idx += input_w
             if pad_w > 0:
                 # right padding
                 update_start_size_list_and_coalesce(pad_start_size, channel_idx, pad_w)
+                pad_input.extend([True] * pad_w)
                 channel_idx += pad_w
         # bottom padding
         if pad_h > 0:
             update_start_size_list_and_coalesce(pad_start_size, channel_idx, pad_h * padded_input_w)
-
+            pad_input.extend([True] * pad_h * padded_input_w)
+            channel_idx += pad_h * padded_input_w
+    assert len(pad_input) == channel_idx
     # output image size
     [output_n, output_h, output_w, output_c] = compute_conv_output_shape(conv_params, input_nhwc_shape)
     assert input_n == output_n
@@ -115,7 +123,8 @@ def conv_op_trace(conv_params, input_nhwc_shape):
                 iw = ow * stride_w
                 channel_idx = (n * (input_h + pad_h) * padded_input_w) + (ih * padded_input_w) + iw
                 data_indices.append(channel_idx)
-    return data_indices, data_start_size, pad_start_size
+
+    return data_indices, pad_input, data_start_size, pad_start_size
 
 
 def conv(weight: List[Union[int, float]], conv_params, device, bias=None):

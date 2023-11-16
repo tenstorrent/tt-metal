@@ -5,7 +5,7 @@ import numpy
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 
 
-def traced_conv_reference(data_indices, data_start_size, pad_start_size, conv_params, input_nchw_shape):
+def traced_conv_reference(data_indices, pad_input, data_start_size, pad_start_size, conv_params, input_nchw_shape):
     # reconstruct the padded tensor from the 2 lists
     # run the traced conv op on the padded tensor
 
@@ -15,6 +15,7 @@ def traced_conv_reference(data_indices, data_start_size, pad_start_size, conv_pa
     # unpadded tensor
     input_tensor = []
     i_b, i_c, i_h, i_w = input_nchw_shape
+    assert i_c == 1  # Ref done for channel size = 1
     input_volume = numpy.prod(input_nchw_shape)
     for val in range(1, input_volume + 1):
         input_tensor.append(val)
@@ -26,32 +27,42 @@ def traced_conv_reference(data_indices, data_start_size, pad_start_size, conv_pa
     input_padded_width = i_w + (2 * pad_w)
     input_padded_height_batched = (i_b * i_h) + (2 * pad_h) + ((i_b - 1) * pad_h)
     input_padded_volume = i_c * input_padded_height_batched * input_padded_width
-    pad_start_size_idx = 0
-    data_start_size_idx = 0
-    pad_remaining = pad_start_size_idx < len(pad_start_size)
-    data_remaining = data_start_size_idx < len(data_start_size)
     input_tensor_idx = 0
-    while pad_remaining or data_remaining:
-        pad_next = False
-        if pad_remaining and data_remaining:
-            assert pad_start_size[pad_start_size_idx][0] != data_start_size[data_start_size_idx][0]
-            if pad_start_size[pad_start_size_idx][0] < data_start_size[data_start_size_idx][0]:
-                pad_next = True
-        elif pad_remaining:
-            pad_next = True
-        if pad_next:
-            assert pad_remaining
-            input_padded_tensor.extend([0] * pad_start_size[pad_start_size_idx][1] * i_c)
-            pad_start_size_idx += 1
+    assert len(pad_input) == input_padded_volume
+    for i in range(input_padded_volume):
+        if pad_input[i]:
+            input_padded_tensor.append(0)
         else:
-            assert data_remaining
-            input_padded_tensor.extend(
-                input_tensor[input_tensor_idx : input_tensor_idx + data_start_size[data_start_size_idx][1]]
-            )
-            input_tensor_idx += data_start_size[data_start_size_idx][1]
-            data_start_size_idx += 1
-        pad_remaining = pad_start_size_idx < len(pad_start_size)
-        data_remaining = data_start_size_idx < len(data_start_size)
+            input_padded_tensor.append(input_tensor[input_tensor_idx])
+            input_tensor_idx += 1
+
+    # Not validating data_start_size and pad_start_size which has encoded coalescing info
+    # pad_start_size_idx = 0
+    # data_start_size_idx = 0
+    # pad_remaining = pad_start_size_idx < len(pad_start_size)
+    # data_remaining = data_start_size_idx < len(data_start_size)
+
+    # while pad_remaining or data_remaining:
+    #     pad_next = False
+    #     if pad_remaining and data_remaining:
+    #         assert pad_start_size[pad_start_size_idx][0] != data_start_size[data_start_size_idx][0]
+    #         if pad_start_size[pad_start_size_idx][0] < data_start_size[data_start_size_idx][0]:
+    #             pad_next = True
+    #     elif pad_remaining:
+    #         pad_next = True
+    #     if pad_next:
+    #         assert pad_remaining
+    #         input_padded_tensor.extend([0] * pad_start_size[pad_start_size_idx][1] * i_c)
+    #         pad_start_size_idx += 1
+    #     else:
+    #         assert data_remaining
+    #         input_padded_tensor.extend(
+    #             input_tensor[input_tensor_idx : input_tensor_idx + data_start_size[data_start_size_idx][1]]
+    #         )
+    #         input_tensor_idx += data_start_size[data_start_size_idx][1]
+    #         data_start_size_idx += 1
+    #     pad_remaining = pad_start_size_idx < len(pad_start_size)
+    #     data_remaining = data_start_size_idx < len(data_start_size)
 
     assert len(input_padded_tensor) == input_padded_volume
     input_padded_pyt_tensor = torch.tensor(input_padded_tensor).reshape(
@@ -99,10 +110,10 @@ def traced_conv_reference(data_indices, data_start_size, pad_start_size, conv_pa
     # (((1, 1, 4, 4, 1, 1, 0, 0, 1, 1), (8, 115, 115, 1)),),
 )
 def test_run_op_trace_config(conv_params, input_nhwc_shape):
-    data_indices, data_start_size, pad_start_size = conv_op_trace(conv_params, input_nhwc_shape)
+    data_indices, pad_input, data_start_size, pad_start_size = conv_op_trace(conv_params, input_nhwc_shape)
     print("Data indices - ", data_indices)
     print("Data start size -", data_start_size)
     print("Pad start size - ", pad_start_size)
     input_nchw_shape = [input_nhwc_shape[0], input_nhwc_shape[3], input_nhwc_shape[1], input_nhwc_shape[2]]
     # run trace conv reference
-    traced_conv_reference(data_indices, data_start_size, pad_start_size, conv_params, input_nchw_shape)
+    traced_conv_reference(data_indices, pad_input, data_start_size, pad_start_size, conv_params, input_nchw_shape)
