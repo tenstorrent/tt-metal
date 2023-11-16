@@ -1147,7 +1147,7 @@ Tensor outer(Tensor& a, Tensor& b, const MemoryConfig& output_mem_config) {
 }
 
 // Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))
-Tensor glu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+Tensor _glu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
     TT_ASSERT( dim == -1 || dim == 3, "last dim GLU only supported at this time ");
     if ( dim == -1 ) dim = 3;
     std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
@@ -1155,9 +1155,12 @@ Tensor glu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& ou
     Tensor glu_result = mul(ab[0], sigmoid_b, std::nullopt, output_mem_config);
     return glu_result;
 }
+Tensor glu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+    return operation::decorate_as_composite(__func__, _glu)(input_a, dim, output_mem_config);
+}
 
 // ReLU Gated Linear Unit activation: matmul(split[0],relu(split[1]))
-Tensor reglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+Tensor _reglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
     TT_ASSERT( dim == -1 || dim == 3, "last dim REGLU only supported at this time ");
     if ( dim == -1 ) dim = 3;
     std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
@@ -1165,9 +1168,12 @@ Tensor reglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& 
     Tensor reglu_result = mul(ab[0], relu_b, std::nullopt, output_mem_config);
     return reglu_result;
 }
+Tensor reglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+    return operation::decorate_as_composite(__func__, _reglu)(input_a, dim, output_mem_config);
+}
 
 // Gaussian Error Gated Linear Unit activation: matmul(split[0],gelu(split[1]))
-Tensor geglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+Tensor _geglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
     TT_ASSERT( dim == -1 || dim == 3, "last dim GEGLU only supported at this time ");
     if ( dim == -1 ) dim = 3;
     std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
@@ -1176,9 +1182,12 @@ Tensor geglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& 
     Tensor geglu_result = mul(ab[0], gelu_b, std::nullopt, output_mem_config);
     return geglu_result;
 }
+Tensor geglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+    return operation::decorate_as_composite(__func__, _geglu)(input_a, dim, output_mem_config);
+}
 
 // Swish Gated Linear Unit activation: matmul(split[0],swish(split[1]))
-Tensor swiglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+Tensor _swiglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
     TT_ASSERT( dim == -1 || dim == 3, "last dim SWIGLU only supported at this time ");
     if ( dim == -1 ) dim = 3;
     std::vector<Tensor> ab = split_last_dim_two_chunks_tiled(input_a,output_mem_config);
@@ -1186,23 +1195,35 @@ Tensor swiglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig&
     Tensor swiglu_result = mul(ab[0], swish_b, std::nullopt, output_mem_config);
     return swiglu_result;
 }
+Tensor swiglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+    return operation::decorate_as_composite(__func__, _swiglu)(input_a, dim, output_mem_config);
+}
 
 //on-device tensor creation with shape and filled with value
+Tensor _sfpu_eps(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
+    float value = device->sfpu_eps();
+    return tt::numpy::full(shape, value, DataType::BFLOAT16, layout, device, output_mem_config);
+}
 Tensor sfpu_eps(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
-  float value = device->sfpu_eps();
-  return tt::numpy::full(shape, value, DataType::BFLOAT16, layout, device, output_mem_config);
+    return operation::decorate_as_composite(__func__, _sfpu_eps)(shape,layout,device, output_mem_config);
 }
 
 //tril : select lower triangular region of input matrix
-Tensor tril(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_config) {
+Tensor _tril(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_config) {
   Tensor index_l = tt::numpy::index_tril<bfloat16>(input_a.shape(), diag, DataType::BFLOAT16);
   return mul(input_a,index_l,std::nullopt,output_mem_config);
 }
+Tensor tril(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+    return operation::decorate_as_composite(__func__, _tril)(input_a, dim, output_mem_config);
+}
 
 //triu : select upper triangular region of input matrix
-Tensor triu(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_config) {
+Tensor _triu(const Tensor& input_a, int32_t diag, const MemoryConfig& output_mem_config) {
   Tensor index_u = tt::numpy::index_triu<bfloat16>(input_a.shape(), diag, DataType::BFLOAT16);
   return mul(input_a,index_u,std::nullopt,output_mem_config);
+}
+Tensor triu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+    return operation::decorate_as_composite(__func__, _triu)(input_a, dim, output_mem_config);
 }
 
 }//namespace tt_metal
