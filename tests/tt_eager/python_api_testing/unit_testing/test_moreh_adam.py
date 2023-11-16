@@ -9,19 +9,27 @@ import torch.optim as optim
 import tt_lib as ttl
 import pytest
 from tests.tt_eager.python_api_testing.sweep_tests.common import skip_for_wormhole_b0
-from models.utility_functions import comp_pcc
+from models.utility_functions import (
+    comp_allclose_and_pcc,
+    comp_pcc,
+)
 from loguru import logger
 
 
 @pytest.mark.parametrize(
     "shape",
     (
-        (1, 1, 32, 32),   # singl
+        (1, 1, 32, 32),   # single
         (12, 6, 64, 64),   # multi tile
-    ),
+    )
 )
+@pytest.mark.parametrize("lr", [1e-3, 1e-2, 1e-1])
+@pytest.mark.parametrize("betas", ((0.9, 0.999), (0.5, 0.555)))
+@pytest.mark.parametrize("eps", [1e-06, 1e-08])
+@pytest.mark.parametrize("weight_decay", [0.0, 0.1, 0.3])
+@pytest.mark.parametrize("amsgrad", [False])
 @skip_for_wormhole_b0
-def test_moreh_adam(shape, device):
+def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, device):
     torch.manual_seed(0)
 
     N = shape[0]
@@ -29,19 +37,13 @@ def test_moreh_adam(shape, device):
     H = shape[2]
     W = shape[3]
 
-    lr = 0.01
-    betas = (0.8, 0.888)
-    eps = 1e-06
-    weight_decay = 0.1
-    amsgrad=False
-
     x_data = torch.rand((N, C, H, W)).to(torch.bfloat16)
     y_data = torch.rand((N, C, H, W)).to(torch.bfloat16)
 
     class SimpleModel(nn.Module):
         def __init__(self):
             super(SimpleModel, self).__init__()
-            self.weight = nn.Parameter(torch.randn(N, C, H, W))
+            self.weight = nn.Parameter(torch.randn(N, C, H, W).to(torch.bfloat16)).to(torch.bfloat16)
 
         def forward(self, x):
             return torch.mul(x, self.weight)
@@ -118,20 +120,25 @@ def test_moreh_adam(shape, device):
     else:
         max_exp_avg_sq_result = None
 
-    passing, out = comp_pcc(model.weight, param_result)
+    rtol = atol = 0.01
+    passing, out = comp_allclose_and_pcc(model.weight, param_result,
+                                        pcc=0.999, rtol=rtol, atol=atol)
     logger.info(f"Out passing (param)={passing}")
     logger.info(f"Output pcc={out}")
 
-    passing, out = comp_pcc(cpu_exp_avg_result, exp_avg_result)
+    passing, out = comp_allclose_and_pcc(cpu_exp_avg_result, exp_avg_result,
+                                        pcc=0.999, rtol=rtol, atol=atol)
     logger.info(f"Out passing (exp_avg)={passing}")
     logger.info(f"Output pcc={out}")
 
-    passing, out = comp_pcc(cpu_exp_avg_sq_result, exp_avg_sq_result)
+    passing, out = comp_allclose_and_pcc(cpu_exp_avg_sq_result, exp_avg_sq_result,
+                                        pcc=0.999, rtol=rtol, atol=atol)
     logger.info(f"Out passing (exp_avg_sq)={passing}")
     logger.info(f"Output pcc={out}")
 
     if 'max_exp_avg_sq' in optimizer_state_dict['state'][0]:
-        passing, out = comp_pcc(cpu_max_exp_avg_sq_result, max_exp_avg_sq_result)
+        passing, out = comp_allclose_and_pcc(cpu_max_exp_avg_sq_result, max_exp_avg_sq_result,
+                                        pcc=0.999, rtol=rtol, atol=atol)
         logger.info(f"Out passing (max_exp_avg_sq)={passing}")
         logger.info(f"Output pcc={out}")
     assert passing
