@@ -558,6 +558,8 @@ These operations are currently not supported on TT accelerator device and will e
 
 .. autoclass:: tt_lib.fallback_ops.floor
 
+.. autoclass:: tt_lib.fallback_ops.trunc
+
 .. autoclass:: tt_lib.fallback_ops.unary_fmod
 
 .. autoclass:: tt_lib.fallback_ops.binary_fmod
