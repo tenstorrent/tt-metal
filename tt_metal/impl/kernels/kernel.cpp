@@ -108,7 +108,7 @@ void Kernel::update_runtime_arg( const CoreCoord &logical_core, size_t idx, uint
 
 std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord &logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
-    // TT_ASSERT(this->is_on_logical_core(logical_core), "Cannot get runtime args for kernel {} that is not placed on core {}", this->name(), logical_core.str());
+    TT_FATAL( logical_core.x < this->core_to_runtime_args_.size() && logical_core.y < this->core_to_runtime_args_[logical_core.x].size(), "Cannot get runtime args for kernel {} that is not placed on core {}", this->name(), logical_core.str());
     return this->core_to_runtime_args_[logical_core.x][logical_core.y];
 }
 
