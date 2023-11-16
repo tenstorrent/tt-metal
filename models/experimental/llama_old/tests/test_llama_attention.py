@@ -12,12 +12,7 @@ from torch import nn
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from models.experimental.llama_old.llama_utils import *
-from models.utility_functions import (
-    comp_allclose,
-    comp_pcc,
-    torch_to_tt_tensor_rm,
-    tt_to_torch_tensor
-)
+from models.utility_functions import comp_allclose, comp_pcc, torch_to_tt_tensor_rm, tt_to_torch_tensor
 
 from models.experimental.llama_old.tt.llama_attention import TtLlamaAttention
 
@@ -35,16 +30,12 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         return result
 
 
-def run_test_LlamaAttention_inference(
-    device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
-):
+def run_test_LlamaAttention_inference(device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc):
     model_name = model_version
     tokenizer_name = tokenizer_version
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=torch.float32
-    )
+    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32)
     hugging_face_reference_model.eval()
 
     configuration = hugging_face_reference_model.config
@@ -72,9 +63,7 @@ def run_test_LlamaAttention_inference(
     position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
 
     # PyTorch output =======================================================================
-    pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(
-        hugging_face_reference_model, layer_num
-    )
+    pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, layer_num)
     pytorch_out = pytorch_LlamaAttention_model(x=attention_input, y=position_ids)
 
     # TT hardware execution =================================================================
@@ -114,7 +103,7 @@ def run_test_LlamaAttention_inference(
     "model_version, tokenizer_version, batch, seq_len, on_weka, pcc",
     (
         pytest.param(
-            "decapoda-research/llama-7b-hf",
+            "baffo32/decapoda-research-llama-7B-hf",
             "hf-internal-testing/llama-tokenizer",
             1,
             128,
@@ -123,9 +112,5 @@ def run_test_LlamaAttention_inference(
         ),
     ),
 )
-def test_LlamaAttention_inference(
-    device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
-):
-    run_test_LlamaAttention_inference(
-        device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
-    )
+def test_LlamaAttention_inference(device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc):
+    run_test_LlamaAttention_inference(device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc)
