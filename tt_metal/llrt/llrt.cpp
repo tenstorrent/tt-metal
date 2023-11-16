@@ -141,22 +141,22 @@ uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 
-void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, std::vector<uint32_t> hex_vec, uint64_t addr, bool small_access) {
-    // the API is named "write_dram_vec", and its overloaded variant is taking (chip, core) pair, ie. it can write to
+void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, const std::vector<uint32_t>& hex_vec, uint64_t addr, bool small_access) {
+    // the API is named "write_core", and its overloaded variant is taking (chip, core) pair, ie. it can write to
     // core's L1
-    tt::Cluster::instance().write_dram_vec(hex_vec, tt_cxy_pair(chip, core), addr, small_access);
+    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(uint32_t), tt_cxy_pair(chip, core), addr, small_access);
 }
 
-std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t size) {
+std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {
     vector<std::uint32_t> read_hex_vec;
-    tt::Cluster::instance().read_dram_vec(read_hex_vec, size, tt_cxy_pair(chip, core), addr);
+    tt::Cluster::instance().read_core(read_hex_vec, sz_bytes, tt_cxy_pair(chip, core), addr);
     return read_hex_vec;
 }
 
 void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg) {
     msg->mode = DISPATCH_MODE_HOST;
     TT_ASSERT(sizeof(launch_msg_t) % sizeof(uint32_t) == 0);
-    tt::Cluster::instance().write_dram_vec((void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
+    tt::Cluster::instance().write_core((void *)msg, sizeof(launch_msg_t), tt_cxy_pair(chip, core), GET_MAILBOX_ADDRESS_HOST(launch));
 }
 
 void print_worker_cores(chip_id_t chip_id) {
@@ -217,7 +217,7 @@ ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const l
     ll_api::memory read_mem;
     read_mem.fill_from_mem_template(mem, [&](std::vector<uint32_t>::iterator mem_ptr, uint64_t addr, uint32_t len) {
         uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
-        tt::Cluster::instance().read_dram_vec(&*mem_ptr, len * sizeof(uint32_t), tt_cxy_pair(chip, core), relo_addr);
+        tt::Cluster::instance().read_core(&*mem_ptr, len * sizeof(uint32_t), tt_cxy_pair(chip, core), relo_addr);
     });
     return read_mem;
 }
@@ -265,7 +265,7 @@ bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, co
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
         uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
 
-        tt::Cluster::instance().write_dram_vec(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
+        tt::Cluster::instance().write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
     });
 
     log_debug(tt::LogLLRuntime, "wrote hex to core {}", core.str().c_str());
