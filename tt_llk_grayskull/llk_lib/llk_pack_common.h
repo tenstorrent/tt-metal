@@ -14,8 +14,7 @@ using namespace ckernel;
 using namespace ckernel::packer;
 
 // wait until math is done and has produced something to pack
-inline void llk_packer_wait_for_math_done() {
-    TT_LLK_DUMP("llk_packer_wait_for_math_done()");
+inline void _llk_packer_wait_for_math_done_() {
 #ifdef PERF_DUMP
     if constexpr (MATH_PACK_DECOUPLE == 0) {
         TTI_SEMWAIT(p_stall::STALL_TDMA, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
@@ -26,7 +25,7 @@ inline void llk_packer_wait_for_math_done() {
 }
 
 // Tell math that it can write again
-inline void llk_packer_set_math_semaphore() {
+inline void _llk_packer_set_math_semaphore_() {
     t6_semaphore_get(semaphore::MATH_PACK);  // Indicate that packer is done and header is written into L1
 }
 
@@ -34,19 +33,18 @@ inline void llk_packer_set_math_semaphore() {
 // Tell math it can write again
 // Clear dest
 template <DstSync Dst, bool is_fp32_dest_acc_en = false /* unused */>
-inline void llk_pack_dest_section_done() {
-    TT_LLK_DUMP("llk_pack_dest_section_done<{}, {}>()", Dst, is_fp32_dest_acc_en);
+inline void _llk_pack_dest_section_done_() {
 #ifdef PERF_DUMP
     if constexpr (MATH_PACK_DECOUPLE) {
         return;
     }
 #endif
     if constexpr ((Dst == DstSync::SyncTile16)) {
-        llk_packer_set_math_semaphore();
+        _llk_packer_set_math_semaphore_();
     } else if constexpr (Dst == DstSync::SyncTile2) {
         // Tell math that it can write again
         TTI_STALLWAIT(p_stall::STALL_SYNC, p_stall::PACK);  // stall sem update until pack is done
-        llk_packer_set_math_semaphore();
+        _llk_packer_set_math_semaphore_();
     } else {
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK);  // wait for pack to finish
 
@@ -57,7 +55,7 @@ inline void llk_pack_dest_section_done() {
         }
 
         // Tell math that it can write again
-        llk_packer_set_math_semaphore();
+        _llk_packer_set_math_semaphore_();
 
         if constexpr (Dst == DstSync::SyncHalf) {
             flip_packer_dest_offset_id();
@@ -67,8 +65,7 @@ inline void llk_pack_dest_section_done() {
 }
 
 template <DstSync Dst, DstTileFaceLayout FaceLayout, bool untilize = false>
-inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output /*not used*/) {
-    TT_LLK_DUMP("llk_init_packer_dest_offset_registers<{}, {}, {}>({})", Dst, FaceLayout, untilize, pack_output);
+inline void _llk_init_packer_dest_offset_registers_() {
     // Todo: get tile dims based on pack_output
     TTI_STALLWAIT(p_stall::STALL_TDMA, p_stall::PACK);  // wait for pack to finish
     if constexpr (untilize) {
@@ -124,68 +121,55 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
 }
 
 template <DstSync Dst, DstTileFaceLayout FaceLayout = RowMajor, bool untilize = false, bool is_fp32_dest_acc_en = false /* unused */>
-inline void llk_pack_dest_init(const std::uint32_t pack_output = 0 /*not used*/) {
-    TT_LLK_DUMP("llk_pack_dest_init<{}, {}, {}, {}>({})", Dst, FaceLayout, untilize, is_fp32_dest_acc_en, pack_output);
+inline void _llk_pack_dest_init_() {
     tensix_sync();
     reset_dest_offset_id();
-    llk_init_packer_dest_offset_registers<Dst,FaceLayout,untilize>(pack_output);
+    _llk_init_packer_dest_offset_registers_<Dst,FaceLayout,untilize>();
     packer_addr_counter_init();
     pack_sync_tile_dst_ptr = 0;
 }
 
 template <bool mail2math=true, bool mail2pack=true>
-inline void llk_pack_get_tile(std::uint32_t operand, std::uint32_t tile_index, uint32_t *p_tile) {
-    TT_LLK_DUMP("llk_pack_get_tile<{}, {}>({}, {}, tile_pointer)", mail2math, mail2pack, operand, tile_index);
+inline void _llk_pack_get_tile_(std::uint32_t tile_index, uint32_t *p_tile) {
     if constexpr (mail2pack) {
        *p_tile =  mailbox_read(ThreadId::UnpackThreadId);
     } else {
        *p_tile = 0;
     }
-
 }
 
 template <bool mail2math=true, bool mail2pack=true>
-inline void llk_pack_release_tile(std::uint32_t operand) {
-    TT_LLK_DUMP("llk_pack_release_tile<{}, {}>({})", mail2math, mail2pack, operand);
+inline void _llk_pack_release_tile_() {
     if constexpr (mail2pack) {
        semaphore_get(semaphore::UNPACK_OPERAND_SYNC);
     }   
 }
 
-inline void llk_pack_debug_dump(std::uint8_t *data, std::uint32_t byte_size) {
-    TT_LLK_DUMP("llk_pack_debug_dump(ptr, {})", byte_size);
+inline void _llk_pack_debug_dump_(std::uint8_t *data, std::uint32_t byte_size) {
     debug_dump(data, byte_size);
 }
 
-inline void llk_pack_debug_dump_seek(std::uint8_t offset) {
+inline void _llk_pack_debug_dump_seek_(std::uint8_t offset) {
     debug_dump_seek(offset);
 }
 
 template<bool is_fp32_dest_acc_en = false /* unused */, bool is_tile_dim_reconfig_en = false /* unused */, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor /* unused */>
-inline void llk_pack_reconfig_data_format(const std::uint32_t new_operand) {
-    TT_LLK_DUMP("llk_pack_reconfig_data_format<{}, {}, {}>({})", is_fp32_dest_acc_en, is_tile_dim_reconfig_en, FaceLayout, new_operand);
-    std::uint32_t new_operand_id = get_output_id(new_operand);
-
-    if(pack_dst_format[new_operand_id] != (uint)DataFormat::Invalid) {
-        reconfig_packer_data_format(new_operand_id);
+inline void _llk_pack_reconfig_data_format_(const std::uint32_t pack_dst_format) {
+    if(pack_dst_format != (uint)DataFormat::Invalid) {
+        reconfig_packer_data_format(pack_dst_format);
     }
 }
 
 template<bool is_fp32_dest_acc_en = false /* unused */, bool is_tile_dim_reconfig_en = false /* unused */, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor /* unused */>
-inline void llk_pack_reconfig_data_format(const std::uint32_t old_operand, const std::uint32_t new_operand) {
-    TT_LLK_DUMP("llk_pack_reconfig_data_format<{}, {}, {}>({}, {})", is_fp32_dest_acc_en, is_tile_dim_reconfig_en, FaceLayout, old_operand, new_operand);
-    std::uint32_t old_operand_id = get_output_id(old_operand);
-    std::uint32_t new_operand_id = get_output_id(new_operand);
-
-    if((pack_dst_format[old_operand_id] != pack_dst_format[new_operand_id])
-       && (pack_dst_format[old_operand_id] != (uint)DataFormat::Invalid) 
-       && (pack_dst_format[new_operand_id] != (uint)DataFormat::Invalid)) {
-        reconfig_packer_data_format(new_operand_id);
+inline void _llk_pack_reconfig_data_format_(const std::uint32_t old_pack_dst_format, const std::uint32_t new_pack_dst_format) {
+    if((old_pack_dst_format != new_pack_dst_format)
+       && (old_pack_dst_format != (uint)DataFormat::Invalid) 
+       && (new_pack_dst_format != (uint)DataFormat::Invalid)) {
+        reconfig_packer_data_format(new_pack_dst_format);
     }
 }
 
-TT_ALWAYS_INLINE void llk_pack_relu_config(std::uint32_t config) {
-    TT_LLK_DUMP("llk_pack_relu_config({})", config);
+TT_ALWAYS_INLINE void _llk_pack_relu_config_(std::uint32_t config) {
     ReluType mode = (config&0xf) == 0 ? ReluType::NO_RELU : ((config&0xf) == 3 ? ReluType::MAX_THRESHOLD_RELU : ReluType::MIN_THRESHOLD_RELU);
     uint32_t threshold = (config>>16) << STACC_RELU_ReluThreshold_SHAMT;
     TTI_SETDMAREG(0, 0, 0, LO_16(p_gpr_pack::TMP0));
@@ -198,14 +182,12 @@ TT_ALWAYS_INLINE void llk_pack_relu_config(std::uint32_t config) {
     TTI_NOP; TTI_NOP;
 }
 
-inline void llk_pack_reconfig_l1_acc(const std::uint32_t enable)
-{
+inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable) {
     TT_LLK_DUMP("llk_pack_reconfig_l1_acc({})", enable);
 }
 
 template <bool untilize = false, ReduceDim dim>
-inline void llk_pack_reduce_mask_config() {
-    TT_LLK_DUMP("llk_pack_reduce_mask_config<{}, {}>()", untilize, dim);
+inline void _llk_pack_reduce_mask_config_() {
     // More information about the configuration can be read in B0 llk_pack_common.h
     // The only difference is that on GS we cannot configure which packer uses which 
     // TILE_ROW_SET_MAPPING[0:3] register; the mapping is 1:1  
@@ -253,8 +235,7 @@ inline void llk_pack_reduce_mask_config() {
     TTI_NOP; TTI_NOP;
 }
 
-inline void llk_pack_reduce_mask_clear() {
-    TT_LLK_DUMP("llk_pack_reduce_mask_clear()");
+inline void _llk_pack_reduce_mask_clear_() {
     // Set masks to default value to pass through all the datums
     uint32_t edge_offset_sec0_mask = 0xffff;
 
