@@ -1226,6 +1226,27 @@ Tensor triu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig& o
     return operation::decorate_as_composite(__func__, _triu)(input_a, dim, output_mem_config);
 }
 
+Tensor _power_fp(const Tensor& input_a, float exponent, const MemoryConfig& output_mem_config) {
+    TT_FATAL( exponent >= 0.0f, "works for positive exponents only");
+    const uint32_t exponent_floor = static_cast<uint32_t>( floor(exponent) );
+    if ( static_cast<float>( exponent_floor ) == exponent ) {
+        return power( input_a, exponent_floor );
+    }
+
+
+    const float exponent_trunc = exponent - static_cast<float>(exponent_floor);
+    Tensor  pow_trunc_log = mul_unary( log(input_a,output_mem_config),
+                                       exponent_trunc, output_mem_config );
+    Tensor pow_frac = exp( pow_trunc_log, output_mem_config );
+    pow_trunc_log.deallocate();
+
+    return mul( power(input_a, exponent_floor, output_mem_config),
+		pow_frac, {}, output_mem_config );
+}
+Tensor power_fp(const Tensor& input_a, float exponent, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+    return operation::decorate_as_composite(__func__, _power_fp)(input_a, exponent, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
