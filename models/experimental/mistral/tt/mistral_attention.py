@@ -7,6 +7,7 @@ import copy
 from typing import Optional, Tuple
 import tt_lib
 from tt_lib import fallback_ops
+import numpy as np
 from tt_lib.fused_ops.softmax import softmax as Ttsoftmax
 from models.experimental.mistral.tt.mistral_configuration import TtModelArgs
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
@@ -300,19 +301,30 @@ def apply_rotary_emb_type2(
     freq_real.deallocate()
     freq_img.deallocate()
 
-    xq_real = torch_to_tt_tensor_rm(t_xq[..., :, :, ::2], device)
-    xq_img = torch_to_tt_tensor_rm(t_xq[..., :, :, 1::2], device)
+    xq_in = torch_to_tt_tensor_rm(t_xq, device)
+    xq_reshape_1 = tt_lib.tensor.reshape(xq_in, 1, 1, 1, -1)
+    xq_reshape_2 = tt_lib.tensor.reshape(
+        xq_reshape_1, 1, 1, ((xq_in.shape()[1] * xq_in.shape()[2] * xq_in.shape()[3]) // 2), 2
+    )
+    xq_reshape_1.deallocate()
+
+    xq_transpose = tt_lib.tensor.transpose(xq_reshape_2, -2, -1)
+    xq_reshape_2.deallocate()
+
+    xq_reshape_3 = tt_lib.tensor.reshape(xq_transpose, 1, 1, 1, xq_in.shape()[1] * xq_in.shape()[2] * xq_in.shape()[3])
+    xq_transpose.deallocate()
+
+    xq_real, xq_img = tt_lib.tensor.split_last_dim_two_chunks_tiled(xq_reshape_3)
+    xq_reshape_3.deallocate()
+
+    xq_real = tt_lib.tensor.reshape(
+        xq_real, xq_in.shape()[0], xq_in.shape()[1], xq_in.shape()[2], xq_in.shape()[3] // 2
+    )
+    xq_img = tt_lib.tensor.reshape(xq_img, xq_in.shape()[0], xq_in.shape()[1], xq_in.shape()[2], xq_in.shape()[3] // 2)
     xq = tt_lib.tensor.complex_tensor(xq_real, xq_img)
 
     xq_real.deallocate()
     xq_img.deallocate()
-
-    xk_real = torch_to_tt_tensor_rm(t_xk[..., :, :, ::2], device)
-    xk_img = torch_to_tt_tensor_rm(t_xk[..., :, :, 1::2], device)
-    xk = tt_lib.tensor.complex_tensor(xk_real, xk_img)
-
-    xk_real.deallocate()
-    xk_img.deallocate()
 
     BCH = tt_lib.tensor.BcastOpDim.H
     BCMUL = tt_lib.tensor.BcastOpMath.MUL
@@ -330,6 +342,52 @@ def apply_rotary_emb_type2(
         tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
     )
     bcast_freq.deallocate()
+
+    xq_out_real = fallback_ops.reshape(xq_out.real, 1, 1, 1, -1)
+    xq_out_imag = fallback_ops.reshape(xq_out.imag, 1, 1, 1, -1)
+    xq_concat = tt_lib.tensor.concat([xq_out_real, xq_out_imag], -1)
+    xq_out_real.deallocate()
+    xq_out_imag.deallocate()
+
+    xq_reshape = tt_lib.tensor.reshape(xq_concat, 1, 1, 2, -1)
+    xq_concat.deallocate()
+
+    xq_transpose = tt_lib.tensor.transpose(xq_reshape, 2, 3)
+    xq_reshape.deallocate()
+
+    xq_final_reshape = tt_lib.tensor.reshape(xq_transpose, 1, 1, 1, -1)
+    xq_transpose.deallocate()
+
+    xq_out = tt_lib.tensor.reshape(
+        xq_final_reshape, 1, xq_out.real.shape()[1], xq_out.real.shape()[2], xq_out.real.shape()[3] * 2
+    )
+    xq_final_reshape.deallocate()
+
+    xk_in = torch_to_tt_tensor_rm(t_xk, device)
+    xk_reshape_1 = tt_lib.tensor.reshape(xk_in, 1, 1, 1, xk_in.shape()[1] * xk_in.shape()[2] * xk_in.shape()[3])
+    xk_reshape_2 = tt_lib.tensor.reshape(
+        xk_reshape_1, 1, 1, ((xk_in.shape()[1] * xk_in.shape()[2] * xk_in.shape()[3]) // 2), 2
+    )
+    xk_reshape_1.deallocate()
+
+    xk_transpose = tt_lib.tensor.transpose(xk_reshape_2, 2, 3)
+    xk_reshape_2.deallocate()
+
+    xk_reshape_3 = tt_lib.tensor.reshape(xk_transpose, 1, 1, 1, -1)
+    xk_transpose.deallocate()
+
+    xk_real, xk_img = tt_lib.tensor.split_last_dim_two_chunks_tiled(xk_reshape_3)
+    xk_reshape_3.deallocate()
+
+    xk_real = tt_lib.tensor.reshape(
+        xk_real, xk_in.shape()[0], xk_in.shape()[1], xk_in.shape()[2], xk_in.shape()[3] // 2
+    )
+    xk_img = tt_lib.tensor.reshape(xk_img, xk_in.shape()[0], xk_in.shape()[1], xk_in.shape()[2], xk_in.shape()[3] // 2)
+    xk = tt_lib.tensor.complex_tensor(xk_real, xk_img)
+
+    xk_real.deallocate()
+    xk_img.deallocate()
+
     t_one = tt_lib.tensor.ones_like(xk.real)
     bcast_freq_re = tt_lib.tensor.bcast(t_one, freqs_cis.real, BCMUL, BCH)
     bcast_freq_im = tt_lib.tensor.bcast(t_one, freqs_cis.imag, BCMUL, BCH)
@@ -345,25 +403,28 @@ def apply_rotary_emb_type2(
     )
 
     bcast_freq.deallocate()
-    xq_out = tt_lib.tensor.concat([xq_out.real, xq_out.imag], -1)
-    xk_out = tt_lib.tensor.concat([xk_out.real, xk_out.imag], -1)
+
+    xk_out_real = tt_lib.tensor.reshape(xk_out.real, 1, 1, 1, -1)
+    xk_out_imag = tt_lib.tensor.reshape(xk_out.imag, 1, 1, 1, -1)
+    xk_concat = tt_lib.tensor.concat([xk_out_real, xk_out_imag], -1)
+    xk_out_real.deallocate()
+    xk_out_imag.deallocate()
+
+    xk_reshape = tt_lib.tensor.reshape(
+        xk_concat, 1, 1, 2, xk_out.real.shape()[1] * xk_out.real.shape()[2] * xk_out.real.shape()[3]
+    )
+    xk_concat.deallocate()
+
+    xk_transpose = tt_lib.tensor.transpose(xk_reshape, 2, 3)
+    xk_reshape.deallocate()
+
+    xk_final_reshape = tt_lib.tensor.reshape(xk_transpose, 1, 1, 1, -1)
+    xk_transpose.deallocate()
+
+    xk_out = tt_lib.tensor.reshape(
+        xk_final_reshape, 1, xk_out.real.shape()[1], xk_out.real.shape()[2], xk_out.real.shape()[3] * 2
+    )
+    xk_final_reshape.deallocate()
+
     xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
-
-    xq_out.deallocate()
-    xk_out.deallocate()
-    # FIXME: move this operation to on-device - should be easy.
-    shapes = xq.shape
-    dindex = shapes[3] // 2
-    xq_out = torch.empty(xq.shape)
-    # for col in range(dindex):
-    #    xq_out[:,:,:,2*col] = xq[:,:,:,col]
-    #    xq_out[:,:,:,2*col+1] = xq[:,:,:,col+dindex]
-    xq_out[:, :, :, ::2] = xq[:, :, :, :dindex]
-    xq_out[:, :, :, 1::2] = xq[:, :, :, dindex:]
-
-    shapes = xk.shape
-    dindex = shapes[3] // 2
-    xk_out = torch.empty(xk.shape)
-    xk_out[:, :, :, ::2] = xk[:, :, :, :dindex]
-    xk_out[:, :, :, 1::2] = xk[:, :, :, dindex:]
-    return xq_out, xk_out
+    return xq, xk
