@@ -7,7 +7,6 @@ import torch
 import pytest
 
 
-
 from models.experimental.llama.llama_utils import *
 
 from transformers import (
@@ -38,9 +37,7 @@ def run_test_Llama_inference(
     tokenizer_name = tokenizer_version
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=torch.float32
-    )
+    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -98,7 +95,7 @@ def run_test_Llama_inference(
     "model_version, tokenizer_version, batch, seq_len, num_decoders, max_position_embeddings, on_weka, pcc",
     (
         (
-            "decapoda-research/llama-7b-hf",
+            "baffo32/decapoda-research-llama-7B-hf",
             "hf-internal-testing/llama-tokenizer",
             1,
             64,

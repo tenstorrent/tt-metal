@@ -25,7 +25,7 @@ BATCH_SIZE = 1
 
 
 def run_perf_llama(expected_inference_time, expected_compile_time, device):
-    model_version = "decapoda-research/llama-7b-hf"
+    model_version = "baffo32/decapoda-research-llama-7B-hf"
     tokenizer_version = "hf-internal-testing/llama-tokenizer"
     batch = 1
     seq_len = 64

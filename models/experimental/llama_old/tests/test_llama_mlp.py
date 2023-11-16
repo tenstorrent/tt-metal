@@ -8,7 +8,6 @@ import numpy as np
 from torch import nn
 
 
-
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
@@ -35,16 +34,12 @@ class PytorchLlamaMLPModel(torch.nn.Module):
         return result
 
 
-def run_test_LlamaMLP_inference(
-    device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
-):
+def run_test_LlamaMLP_inference(device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc):
     model_name = model_version
     tokenizer_name = tokenizer_version
 
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=torch.float32
-    )
+    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
@@ -56,9 +51,7 @@ def run_test_LlamaMLP_inference(
     base_url = "model.layers"
 
     # PyTorch output --------------------------------------------------------------------
-    pytorch_LlamaMLP_model = PytorchLlamaMLPModel(
-        hugging_face_reference_model, layer_num
-    )
+    pytorch_LlamaMLP_model = PytorchLlamaMLPModel(hugging_face_reference_model, layer_num)
     pytorch_out = pytorch_LlamaMLP_model(llama_mlp_input)  # .unsqueeze(1)
 
     # TT hardware execution -------------------------------------------------------------
@@ -94,7 +87,7 @@ def run_test_LlamaMLP_inference(
     "model_version, tokenizer_version, batch, seq_len, on_weka, pcc",
     (
         (
-            "decapoda-research/llama-7b-hf",
+            "baffo32/decapoda-research-llama-7B-hf",
             "hf-internal-testing/llama-tokenizer",
             1,
             2048,
@@ -103,9 +96,5 @@ def run_test_LlamaMLP_inference(
         ),
     ),
 )
-def test_LlamaMLP_inference(
-    device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
-):
-    run_test_LlamaMLP_inference(
-        device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc
-    )
+def test_LlamaMLP_inference(device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc):
+    run_test_LlamaMLP_inference(device, model_version, tokenizer_version, batch, seq_len, on_weka, pcc)

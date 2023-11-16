@@ -4,13 +4,13 @@ In order to use HuggingFace Llama model we need a development version of Transfo
 
 # Use pretrained weights
 
-The weights used in the tests are downloaded from: https://huggingface.co/decapoda-research/llama-7b-hf
+The weights used in the tests are downloaded from: https://huggingface.co/baffo32/decapoda-research-llama-7B-hf
 
 How to use the weights:
     ```
     from transformers import AutoTokenizer, AutoModelForCausalLM
-    tokenizer = AutoTokenizer.from_pretrained("decapoda-research/llama-7b-hf")
-    model = AutoModelForCausalLM.from_pretrained("decapoda-research/llama-7b-hf")
+    tokenizer = AutoTokenizer.from_pretrained(hf-internal-testing/llama-tokenizer)
+    model = AutoModelForCausalLM.from_pretrained("baffo32/decapoda-research-llama-7B-hf)
     ```
 
 An issue which probably will appear is:
