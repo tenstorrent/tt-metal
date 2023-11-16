@@ -102,5 +102,5 @@ inline void _llk_unpack_dbg_feature_disable_(){
 }
 
 inline void _llk_enable_int8_fpu_math_() {
-    enalbe_int8_fpu_math();
+    enable_int8_fpu_math();
 }
