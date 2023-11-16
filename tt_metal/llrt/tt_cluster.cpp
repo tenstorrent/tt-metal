@@ -294,7 +294,7 @@ void Cluster::verify_eth_fw() const {
         std::vector<uint32_t> fw_versions;
         for (const CoreCoord &eth_core : get_soc_desc(chip).ethernet_cores) {
             uint32_t val;
-            read_dram_vec(&val, sizeof(uint32_t), tt_cxy_pair(chip, eth_core), eth_l1_mem::address_map::FW_VERSION_ADDR);
+            read_core(&val, sizeof(uint32_t), tt_cxy_pair(chip, eth_core), eth_l1_mem::address_map::FW_VERSION_ADDR);
             fw_versions.push_back(val);
         }
         verify_sw_fw_versions(chip, SW_VERSION, fw_versions);
@@ -329,7 +329,7 @@ void Cluster::reset_debug_print_server_buffers() const {
                 // from hanging in a stall waiting for the host to flush the buffer
                 // and removes the requirement that the host must listen on device's buffer.
                 vector<uint32_t> initbuf = {uint32_t(DEBUG_PRINT_SERVER_DISABLED_MAGIC)};
-                write_dram_vec(initbuf, {uint32_t(device_id), core}, base_addr);
+                write_core(initbuf.data(), initbuf.size() * sizeof(uint32_t), {uint32_t(device_id), core}, base_addr);
             }
     }
 }
@@ -381,7 +381,7 @@ void Cluster::write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
     tt_cxy_pair dram_core = tt_cxy_pair(chip_id, desc_to_use.get_core_for_dram_channel(d_chan, d_subchannel));
     size_t offset = desc_to_use.get_address_offset(d_chan);
-        write_dram_vec(vec, dram_core, addr + offset, small_access);
+        write_core(vec.data(), vec.size() * sizeof(uint32_t), dram_core, addr + offset, small_access);
 }
 
 void Cluster::read_dram_vec(
@@ -399,41 +399,43 @@ void Cluster::read_dram_vec(
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
     tt_cxy_pair dram_core = tt_cxy_pair(chip_id, desc_to_use.get_core_for_dram_channel(d_chan, d_subchannel));
     size_t offset = desc_to_use.get_address_offset(d_chan);
-    read_dram_vec(vec, sz_in_bytes, dram_core, addr + offset, small_access);
+    read_core(vec, sz_in_bytes, dram_core, addr + offset, small_access);
 }
 
-void Cluster::write_dram_vec(
-    const void *mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair dram_core, uint64_t addr, bool small_access) const {
-    int chip_id = dram_core.chip;
+void Cluster::write_core(
+    const void *mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
+    int chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         tt::llrt::watcher_sanitize_host_noc_write(
-            soc_desc, {dram_core.x, dram_core.y}, addr, sz_in_bytes);
+            soc_desc, {core.x, core.y}, addr, sz_in_bytes);
     }
-    tt_cxy_pair virtual_dram_core = soc_desc.convert_to_umd_coordinates(dram_core);
-    this->device_->write_to_device(mem_ptr, sz_in_bytes, virtual_dram_core, addr, "LARGE_WRITE_TLB");
-    if (this->device_->get_target_remote_device_ids().find(virtual_dram_core.chip) !=
+    tt_cxy_pair virtual_core = soc_desc.convert_to_umd_coordinates(core);
+    this->device_->write_to_device(mem_ptr, sz_in_bytes, virtual_core, addr, "LARGE_WRITE_TLB");
+    if (this->device_->get_target_remote_device_ids().find(virtual_core.chip) !=
         this->device_->get_target_remote_device_ids().end()) {
             this->device_->wait_for_non_mmio_flush();
         }
 }
 
-void Cluster::write_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uint64_t addr, bool small_access) const {
-    write_dram_vec(&vec[0], vec.size() * sizeof(uint32_t), dram_core, addr, small_access);
-}
-
-void Cluster::read_dram_vec(
-    void *mem_ptr, uint32_t size_in_bytes, tt_cxy_pair dram_core, uint64_t addr, bool small_access) const {
-    int chip_id = dram_core.chip;
+void Cluster::read_core(
+    void *mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
+    int chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (tt::llrt::OptionsG.get_watcher_enabled()) {
         tt::llrt::watcher_sanitize_host_noc_read(
-            soc_desc, {dram_core.x, dram_core.y}, addr, size_in_bytes);
+            soc_desc, {core.x, core.y}, addr, size_in_bytes);
     }
 
-    tt_cxy_pair virtual_dram_core = soc_desc.convert_to_umd_coordinates(dram_core);
-    this->device_->read_from_device(mem_ptr, virtual_dram_core, addr, size_in_bytes, "LARGE_READ_TLB");
+    tt_cxy_pair virtual_core = soc_desc.convert_to_umd_coordinates(core);
+    this->device_->read_from_device(mem_ptr, virtual_core, addr, size_in_bytes, "LARGE_READ_TLB");
+}
+
+void Cluster::read_core(
+    vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
+    data.resize(size_in_bytes / sizeof(uint32_t));
+    read_core(data.data(), size_in_bytes, core, addr, small_access);
 }
 
 void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const {
@@ -462,12 +464,6 @@ void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr
     }
     tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);
     this->device_->read_from_device(mem_ptr, virtual_target, addr, size_in_bytes, "REG_TLB");
-}
-
-void Cluster::read_dram_vec(
-    vector<uint32_t> &vec, uint32_t size_in_bytes, tt_cxy_pair dram_core, uint64_t addr, bool small_access) const {
-    vec.resize(size_in_bytes / sizeof(uint32_t));
-    read_dram_vec(&vec[0], size_in_bytes, dram_core, addr, small_access);
 }
 
 void Cluster::write_sysmem(const void* vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const {

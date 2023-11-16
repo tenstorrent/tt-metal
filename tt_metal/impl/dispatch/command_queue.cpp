@@ -329,9 +329,9 @@ void EnqueueReadBufferCommand::process() {
     uint32_t data_size_in_bytes = cmd.get_data_size();
     uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
 
-    this->writer.cq_reserve_back(this->device, cmd_size);
-    this->writer.cq_write(this->device, cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
-    this->writer.cq_push_back(this->device, cmd_size);
+    this->writer.cq_reserve_back(cmd_size);
+    this->writer.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
+    this->writer.cq_push_back(cmd_size);
 }
 
 EnqueueCommandType EnqueueReadBufferCommand::type() { return this->type_; }
@@ -397,8 +397,8 @@ void EnqueueWriteBufferCommand::process() {
     uint32_t data_size_in_bytes = cmd.get_data_size();
 
     uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
-    this->writer.cq_reserve_back(this->device, cmd_size);
-    this->writer.cq_write(this->device, cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
+    this->writer.cq_reserve_back(cmd_size);
+    this->writer.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
 
     // Need to deal with the edge case where our page
     // size is not 32B aligned
@@ -409,15 +409,15 @@ void EnqueueWriteBufferCommand::process() {
         uint32_t dst = system_memory_temporary_storage_address;
         for (uint32_t i = 0; i < num_pages; i++) {
             vector<uint32_t> src_page(src_iterator, src_iterator + num_u32s_in_page);
-            this->writer.cq_write(this->device, src_page.data(), src_page.size() * sizeof(uint32_t), dst);
+            this->writer.cq_write(src_page.data(), src_page.size() * sizeof(uint32_t), dst);
             src_iterator += num_u32s_in_page;
             dst = align(dst + this->buffer.page_size(), 32);
         }
     } else {
-        this->writer.cq_write(this->device, this->src.data(), this->src.size() * sizeof(uint32_t), system_memory_temporary_storage_address);
+        this->writer.cq_write(this->src.data(), this->src.size() * sizeof(uint32_t), system_memory_temporary_storage_address);
     }
 
-    this->writer.cq_push_back(this->device, cmd_size);
+    this->writer.cq_push_back(cmd_size);
 }
 
 EnqueueCommandType EnqueueWriteBufferCommand::type() { return this->type_; }
@@ -549,8 +549,8 @@ void EnqueueProgramCommand::process() {
 
     uint32_t data_size_in_bytes = cmd.get_data_size();
     const uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
-    this->writer.cq_reserve_back(this->device, cmd_size);
-    this->writer.cq_write(this->device, cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
+    this->writer.cq_reserve_back(cmd_size);
+    this->writer.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
 
     uint32_t start_addr = system_memory_temporary_storage_address;
     constexpr static uint32_t padding_alignment = 16;
@@ -558,7 +558,7 @@ void EnqueueProgramCommand::process() {
         Kernel* kernel = detail::GetKernel(program, kernel_id);
         for (const auto& c: kernel->cores_with_runtime_args()) {
             const auto & core_runtime_args = kernel->runtime_args(c);
-            this->writer.cq_write(this->device, core_runtime_args.data(), core_runtime_args.size() * sizeof(uint32_t), system_memory_temporary_storage_address);
+            this->writer.cq_write(core_runtime_args.data(), core_runtime_args.size() * sizeof(uint32_t), system_memory_temporary_storage_address);
             system_memory_temporary_storage_address = align(system_memory_temporary_storage_address + core_runtime_args.size() * sizeof(uint32_t), padding_alignment);
         }
     }
@@ -569,12 +569,12 @@ void EnqueueProgramCommand::process() {
     for (const shared_ptr<CircularBuffer>& cb : program.circular_buffers()) {
         for (const auto buffer_index : cb->buffer_indices()) {
             cb_data = {cb->address() >> 4, cb->size() >> 4, cb->num_pages(buffer_index), cb->size() / cb->num_pages(buffer_index) >> 4};
-            this->writer.cq_write(this->device, cb_data.data(), padding_alignment, system_memory_temporary_storage_address);
+            this->writer.cq_write(cb_data.data(), padding_alignment, system_memory_temporary_storage_address);
             system_memory_temporary_storage_address += padding_alignment;
         }
     }
 
-    this->writer.cq_push_back(this->device, cmd_size);
+    this->writer.cq_push_back(cmd_size);
 }
 
 EnqueueCommandType EnqueueProgramCommand::type() { return this->type_; }
@@ -593,9 +593,9 @@ void FinishCommand::process() {
     const auto cmd = this->assemble_device_command(0);
     uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
-    this->writer.cq_reserve_back(this->device, cmd_size);
-    this->writer.cq_write(this->device, cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
-    this->writer.cq_push_back(this->device, cmd_size);
+    this->writer.cq_reserve_back(cmd_size);
+    this->writer.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
+    this->writer.cq_push_back(cmd_size);
 }
 
 EnqueueCommandType FinishCommand::type() { return this->type_; }
@@ -619,9 +619,9 @@ void EnqueueWrapCommand::process() {
     vector<uint32_t> command_vector(space_left / sizeof(uint32_t), 0);
     command_vector[0] = 1;  // wrap
 
-    this->writer.cq_reserve_back(this->device, space_left);
-    this->writer.cq_write(this->device, command_vector.data(), command_vector.size() * sizeof(uint32_t), write_ptr);
-    this->writer.cq_push_back(this->device, space_left);
+    this->writer.cq_reserve_back(space_left);
+    this->writer.cq_write(command_vector.data(), command_vector.size() * sizeof(uint32_t), write_ptr);
+    this->writer.cq_push_back(space_left);
 }
 
 EnqueueCommandType EnqueueWrapCommand::type() { return this->type_; }
@@ -683,6 +683,11 @@ void send_dispatch_kernel_to_device(Device* device) {
 
     tt::Cluster::instance().l1_barrier(device->id());
 
+    const std::tuple<uint32_t, uint32_t> tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(device->id(), device->worker_core_from_logical_core(*device->dispatch_cores().begin()))).value();
+    auto [tlb_offset, tlb_size] = tlb_data;
+    // std::cout << "CORE: " << device->worker_core_from_logical_core(*device->dispatch_cores().begin()).str() << std::endl;
+    // std::cout << "after sending pointers to device. my tlb_offset: " << tlb_offset << ", my tlb_size: " << tlb_size << std::endl;
+
     launch_msg_t msg = dispatch_program.kernels_on_core(producer_logical_core)->launch_msg;
 
     // TODO(pkeller): Should use detail::LaunchProgram once we have a mechanism to avoid running all RISCs
@@ -691,7 +696,7 @@ void send_dispatch_kernel_to_device(Device* device) {
 }
 
 // CommandQueue section
-CommandQueue::CommandQueue(Device* device) {
+CommandQueue::CommandQueue(Device* device): sysmem_writer(device) {
     vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
     pointers[0] = CQ_START >> 4;
 
@@ -699,8 +704,6 @@ CommandQueue::CommandQueue(Device* device) {
 
     send_dispatch_kernel_to_device(device);
     this->device = device;
-    this->sysmem_writer.hugepage_start = (char*) tt::Cluster::instance().host_dma_address(0, device->id(), 0);
-
 }
 
 CommandQueue::~CommandQueue() {}

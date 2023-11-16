@@ -7,6 +7,7 @@
 #pragma once
 
 #include <chrono>
+#include <functional>
 
 #include "common/base.hpp"
 #include "common/metal_soc_descriptor.h"
@@ -63,23 +64,38 @@ class Cluster {
     void deassert_risc_reset(const chip_id_t &target_device_id, bool start_stagger = false) const;
 
     void write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access = false) const;
-    void write_dram_vec(vector<uint32_t> &vec, tt_cxy_pair dram_core, uint64_t addr, bool small_access = false) const;
     void read_dram_vec(
         vector<uint32_t> &vec,  uint32_t size_in_bytes, tt_target_dram dram, uint64_t addr,bool small_access = false) const;
-    void read_dram_vec(
-        vector<uint32_t> &vec, uint32_t size_in_bytes, tt_cxy_pair dram_core, uint64_t addr,  bool small_access = false) const;
 
     // Accepts physical noc coordinates
-    void write_dram_vec(
-        const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair dram_core, uint64_t addr, bool small_access = false) const;
-    void read_dram_vec(
-        void *mem_ptr, uint32_t size_in_bytes, tt_cxy_pair dram_core, uint64_t addr, bool small_access = false) const;
+    void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
+    void read_core(
+        void *mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
+    void read_core(
+        vector<uint32_t>& data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
+
+    std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
+        tt_SiliconDevice* device = dynamic_cast<tt_SiliconDevice*>(this->device_.get());
+        const metal_SocDescriptor &soc_desc = this->get_soc_desc(target.chip);
+        tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(target);
+        return device->get_tlb_data_from_target(virtual_chip_coord);
+    }
+
+    uint32_t get_m_dma_buf_size() const {
+        tt_SiliconDevice* device = dynamic_cast<tt_SiliconDevice*>(this->device_.get());
+        return device->get_m_dma_buf_size();
+    }
+
+    std::function<void(uint32_t, uint32_t, const uint8_t*, uint32_t)> get_fast_pcie_static_tlb_write_callable(int chip_id) const {
+        tt_SiliconDevice* device = dynamic_cast<tt_SiliconDevice*>(this->device_.get());
+        return device->get_fast_pcie_static_tlb_write_callable(chip_id);
+    }
 
     void write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
     void read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
 
-    void write_sysmem(const void* vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const;
-    void read_sysmem(void *vec, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const;
+    void write_sysmem(const void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const;
+    void read_sysmem(void *mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const;
 
     int get_device_aiclk(const chip_id_t &chip_id) const;
 
