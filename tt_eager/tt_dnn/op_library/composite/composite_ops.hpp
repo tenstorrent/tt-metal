@@ -295,6 +295,9 @@ Tensor tril(const Tensor& input_a, int32_t diag = 0, const MemoryConfig& output_
 //triu : select upper triangular region of input matrix
 Tensor triu(const Tensor& input_a, int32_t diag = 0, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+//power_fp : power with floating point exponent
+Tensor power_fp(const Tensor& input_a, float exponent, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 } //namespace tt_metal
 
 } //namespace tt
