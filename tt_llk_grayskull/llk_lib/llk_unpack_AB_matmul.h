@@ -11,7 +11,7 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-inline void llk_unpack_AB_matmul_mop_config(const bool transpose) {
+inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose) {
     /*
     static constexpr uint unpack_srcb_top  = TT_OP_UNPACR(SrcB, 0b01000001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0,
     0, 0, 0, 1); static constexpr uint unpack_srcb_bot =  TT_OP_UNPACR(SrcB, 0b01000001, 0, 0, 0, 1, 1,
@@ -61,49 +61,36 @@ inline void llk_unpack_AB_matmul_mop_config(const bool transpose) {
     tmp.program(instrn_buffer);
 }
 
-inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_t *unpack_AB_params) {
+inline void _llk_unpack_AB_matmul_hw_configure_(const std::uint32_t unpA_src_format, const std::uint32_t unpB_src_format, const std::uint32_t unpA_dst_format, const std::uint32_t unpB_dst_format) {
     configure_unpack_AB(
-        get_operand_id(unpack_AB_params->unpB_operand), get_operand_id(unpack_AB_params->unpA_operand), 16, 16);
+        unpA_src_format,
+        unpB_src_format,
+        unpA_dst_format,
+        unpB_dst_format,
+        16, 16
+    );
 }
 
-template<bool is_fp32_dest_acc_en = false /* unused */, StochRndMode stoch_rnd_mode = StochRndMode::None /* unused */>
-inline void llk_unpack_AB_matmul_hw_configure_disaggregated(
-    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose_xy_srca = 0) {
-    TT_LLK_DUMP("llk_unpack_AB_matmul_hw_configure_disaggregated<{}, {}>({}, {}, {})", is_fp32_dest_acc_en, (uint8_t)stoch_rnd_mode, unpA_operand, unpB_operand, transpose_xy_srca);
-
-    const llk_unpack_AB_matmul_params_t unpack_AB_matmul_params = {
-        .unpA_operand = unpA_operand, .unpB_operand = unpB_operand, .transpose_xy_srca = transpose_xy_srca};
-    llk_unpack_AB_matmul_hw_configure(&unpack_AB_matmul_params);
+inline void _llk_unpack_AB_matmul_init_(
+    const std::uint32_t transpose=0, const std::uint32_t ct_dim=0 /* unused */, const std::uint32_t rt_dim=0 /* unused */, const std::uint32_t kt_dim=0 /* unused */) {
+    _llk_unpack_AB_matmul_mop_config_(transpose>0);
 }
 
-inline void llk_unpack_AB_matmul_init(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose=0, const std::uint32_t ct_dim=0, const std::uint32_t rt_dim=0, const std::uint32_t kt_dim=0) {
-    TT_LLK_DUMP("llk_unpack_AB_matmul_init({}, {}, {}, {}, {}, {})", unpA_operand, unpB_operand, transpose, ct_dim, rt_dim, kt_dim);
-    // TODO: figure out tile dims based on unpA and unpB operands
-    llk_unpack_AB_matmul_mop_config(transpose>0);
-}
-
-inline void llk_unpack_AB_matmul(
-    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t tile_index_a,
-    const std::uint32_t tile_index_b, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
-    TT_LLK_DUMP("llk_unpack_AB_matmul({}, {}, {}, {}, {}, {}, {})", operandA, operandB, tile_index_a, tile_index_b, ct_dim, rt_dim, kt_dim);
+inline void _llk_unpack_AB_matmul_(
+    const std::uint32_t inputA, const std::uint32_t inputB, const std::uint32_t base_address_a, const std::uint32_t base_address_b,
+    const std::uint32_t unpA_src_format, const std::uint32_t unpB_src_format, const std::uint32_t tile_index_a, const std::uint32_t tile_index_b,
+    const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
 
     // Todo: do something with tile dim flags
-
-    std::uint32_t inputA = get_operand_id(operandA);
-    std::uint32_t inputB = get_operand_id(operandB);
-
-    std::uint32_t base_address_a = operands[inputA].f.fifo_rd_ptr;
-    std::uint32_t base_address_b = operands[inputB].f.fifo_rd_ptr;
-
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
     for (std::uint32_t rt=0; rt<rt_dim; rt++) {
-        std::uint32_t offset_address_a = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputA], (tile_index_a + rt*kt_dim));
+        std::uint32_t offset_address_a = MUL_TILE_SIZE_AND_INDEX(unpA_src_format, (tile_index_a + rt*kt_dim));
         std::uint32_t address_a = base_address_a + offset_address_a;
 
         for (std::uint32_t ct=0; ct<ct_dim; ct++) {
 
-            std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[inputB], (tile_index_b+ct));
+            std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX(unpB_src_format, (tile_index_b+ct));
             std::uint32_t address_b = base_address_b + offset_address_b;
 
             // Clear z/w start counters
@@ -140,5 +127,4 @@ inline void llk_unpack_AB_matmul(
             #endif
         }    
     }    
-
 }
