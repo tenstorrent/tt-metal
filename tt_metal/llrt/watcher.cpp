@@ -111,10 +111,10 @@ static FILE * create_file(const string& log_path) {
 }
 
 static void log_running_kernels(const launch_msg_t *launch_msg) {
-    log_info(LogLLRuntime, "While running kernels:");
-    log_info(LogLLRuntime, " - {}", kernel_names[launch_msg->brisc_watcher_kernel_id]);
-    log_info(LogLLRuntime, " - {}", kernel_names[launch_msg->ncrisc_watcher_kernel_id]);
-    log_info(LogLLRuntime, " - {}", kernel_names[launch_msg->triscs_watcher_kernel_id]);
+    log_info("While running kernels:");
+    log_info(" brisc : {}", kernel_names[launch_msg->brisc_watcher_kernel_id]);
+    log_info(" ncrisc: {}", kernel_names[launch_msg->ncrisc_watcher_kernel_id]);
+    log_info(" triscs: {}", kernel_names[launch_msg->triscs_watcher_kernel_id]);
 }
 
 static void dump_l1_status(FILE *f, WatcherDevice *wdev, CoreCoord core, const launch_msg_t *launch_msg) {
@@ -151,6 +151,8 @@ static const char * get_sanity_riscv_name(CoreCoord core, const launch_msg_t *la
 
 static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *launch_msg, int noc, const debug_sanitize_noc_addr_msg_t* san) {
 
+    char buf[256];
+
     switch (san->invalid) {
     case DebugSanitizeNocInvalidOK:
         if (san->addr != DEBUG_SANITIZE_NOC_SENTINEL_OK_64 ||
@@ -165,7 +167,10 @@ static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *
         fprintf(f, "noc%d:%s{0x%08lx, %d}", noc, get_sanity_riscv_name(core, launch_msg, san->which), san->addr, san->len);
         fflush(f);
         log_running_kernels(launch_msg);
-        TT_THROW("Watcher stopped the device due to bad NOC L1/reg address, see log");
+        log_info("Watcher stopped the device due to bad NOC L1/reg address");
+        snprintf(buf, sizeof(buf), "On core %s: noc%d:%s{0x%08lx, %d}",
+                 core.str().c_str(), noc, get_sanity_riscv_name(core, launch_msg, san->which), san->addr, san->len);
+        TT_THROW(buf);
         break;
     case DebugSanitizeNocInvalidUnicast:
         fprintf(f, "noc%d:%s{(%02ld,%02ld) 0x%08lx, %d}",
@@ -175,8 +180,16 @@ static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *
                 NOC_UNICAST_ADDR_Y(san->addr),
                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
         fflush(f);
+        log_info("Watcher stopped the device due to bad NOC unicast transaction");
         log_running_kernels(launch_msg);
-        TT_THROW("Watcher stopped the device due to bad NOC unicast transaction, see log");
+        snprintf(buf, sizeof(buf), "On core %s: noc%d:%s{(%02ld,%02ld) 0x%08lx, %d}",
+                 core.str().c_str(),
+                 noc,
+                 get_sanity_riscv_name(core, launch_msg, san->which),
+                 NOC_UNICAST_ADDR_X(san->addr),
+                 NOC_UNICAST_ADDR_Y(san->addr),
+                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
+        TT_THROW(buf);
         break;
     case DebugSanitizeNocInvalidMulticast:
         fprintf(f, "noc%d:%s{(%02ld,%02ld)-(%02ld,%02ld) 0x%08lx, %d}",
@@ -188,8 +201,18 @@ static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *
                 NOC_MCAST_ADDR_END_Y(san->addr),
                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
         fflush(f);
+        log_info("Watcher stopped the device due to bad NOC multicast transaction");
         log_running_kernels(launch_msg);
-        TT_THROW("Watcher stopped the device due to bad NOC multicast transaction, see log");
+        snprintf(buf, sizeof(buf), "On core %s: noc%d:%s{(%02ld,%02ld)-(%02ld,%02ld) 0x%08lx, %d}",
+                 core.str().c_str(),
+                 noc,
+                 get_sanity_riscv_name(core, launch_msg, san->which),
+                 NOC_MCAST_ADDR_START_X(san->addr),
+                 NOC_MCAST_ADDR_START_Y(san->addr),
+                 NOC_MCAST_ADDR_END_X(san->addr),
+                 NOC_MCAST_ADDR_END_Y(san->addr),
+                 NOC_LOCAL_ADDR_OFFSET(san->addr), san->len);
+        TT_THROW(buf);
         break;
     default:
         log_running_kernels(launch_msg);
