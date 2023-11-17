@@ -157,6 +157,18 @@ using Attributes = std::vector<std::tuple<AttributeName, Attribute>>;
 
 namespace detail {
 template <typename T>
+using has_to_hash_t = decltype(std::declval<const T>().to_hash());
+
+template <typename T>
+constexpr bool supports_to_hash_v = std::experimental::is_detected_v<has_to_hash_t, T>;
+
+template <typename T>
+using has_to_string_t = decltype(std::declval<const T>().to_string());
+
+template <typename T>
+constexpr bool supports_to_string_v = std::experimental::is_detected_v<has_to_string_t, T>;
+
+template <typename T>
 using has_attributes_t = decltype(std::declval<T>().attributes());
 
 template <typename T>
@@ -175,6 +187,11 @@ using has_attribute_values_t = decltype(std::declval<T>().attribute_values());
 template <typename T>
 constexpr bool supports_compile_time_attributes_v = std::experimental::is_detected_v<has_attribute_names_t, T> and
                                                     std::experimental::is_detected_v<has_attribute_values_t, T>;
+
+template <typename T>
+constexpr bool supports_conversion_to_string_v =
+    detail::supports_to_string_v<T> or detail::supports_compile_time_attributes_v<T> or
+    detail::supports_runtime_time_attributes_v<T>;
 }  // namespace detail
 
 template <typename T>
@@ -209,7 +226,9 @@ static std::ostream& operator<<(std::ostream& os, const Attributes& attributes) 
     os << "(";
     for (auto index = 0; index < attributes.size(); index++) {
         auto&& [key, value] = attributes[index];
-        os << key << "=" << value;
+        os << key;
+        os << "=";
+        os << value;
         if (index != attributes.size() - 1) {
             os << ", ";
         }
@@ -219,41 +238,42 @@ static std::ostream& operator<<(std::ostream& os, const Attributes& attributes) 
 }
 
 template <typename T>
-typename std::enable_if_t<detail::supports_runtime_time_attributes_v<T>, std::ostream>& operator<<(
+typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostream>& operator<<(
     std::ostream& os, const T& object) {
-    static_assert(std::is_same_v<decltype(object.attributes()), Attributes>);
-    os << boost::core::demangle(typeid(T).name());
-    os << object.attributes();
-    return os;
-}
+    if constexpr (detail::supports_to_string_v<T>) {
+        os << object.to_string();
+    } else if constexpr (detail::supports_compile_time_attributes_v<T>) {
+        constexpr auto num_attributes = detail::get_num_attributes<T>();
+        os << boost::core::demangle(typeid(T).name());
+        os << "(";
 
-template <typename T>
-typename std::enable_if_t<detail::supports_compile_time_attributes_v<T>, std::ostream>& operator<<(
-    std::ostream& os, const T& object) {
-    constexpr auto num_attributes = detail::get_num_attributes<T>();
-    os << boost::core::demangle(typeid(T).name());
-    os << "(";
+        if constexpr (num_attributes > 0) {
+            [&os, &object]<std::size_t... Ns>(std::index_sequence<Ns...>) {
+                (
+                    [&os, &object] {
+                        const auto& attribute = std::get<Ns>(object.attribute_values());
+                        os << std::get<Ns>(object.attribute_names);
+                        os << "=";
+                        os << attribute;
+                        os << ",";
+                    }(),
+                    ...);
+            }(std::make_index_sequence<num_attributes - 1>{});
 
-    if constexpr (num_attributes > 0) {
-        [&os, &object]<std::size_t... Ns>(std::index_sequence<Ns...>) {
-            (
-                [&os, &object] {
-                    const auto& attribute = std::get<Ns>(object.attribute_values());
-                    os << std::get<Ns>(object.attribute_names);
-                    os << "=";
-                    os << attribute;
-                    os << ",";
-                }(),
-                ...);
-        }(std::make_index_sequence<num_attributes - 1>{});
+            const auto& attribute = std::get<num_attributes - 1>(object.attribute_values());
+            os << std::get<num_attributes - 1>(object.attribute_names);
+            os << "=";
+            os << attribute;
+        }
 
-        const auto& attribute = std::get<num_attributes - 1>(object.attribute_values());
-        os << std::get<num_attributes - 1>(object.attribute_names);
-        os << "=";
-        os << attribute;
+        os << ")";
+    } else if constexpr (detail::supports_runtime_time_attributes_v<T>) {
+        static_assert(std::is_same_v<decltype(object.attributes()), Attributes>);
+        os << boost::core::demangle(typeid(T).name());
+        os << object.attributes();
+    } else {
+        static_assert(tt::stl::concepts::always_false_v<T>, "Type cannot be converted to string");
     }
-
-    os << ")";
     return os;
 }
 
@@ -325,22 +345,8 @@ struct fmt::formatter<tt::stl::reflection::Attributes> {
 };
 
 template <typename T>
-struct fmt::formatter<T, char, std::enable_if_t<tt::stl::reflection::detail::supports_compile_time_attributes_v<T>>> {
+struct fmt::formatter<T, char, std::enable_if_t<tt::stl::reflection::detail::supports_conversion_to_string_v<T>>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const T& object, format_context& ctx) const -> format_context::iterator {
-        using tt::stl::reflection::operator<<;
-        std::stringstream ss;
-        ss << object;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<T, char, std::enable_if_t<tt::stl::reflection::detail::supports_runtime_time_attributes_v<T>>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
-        return ctx.end();
-    }
 
     auto format(const T& object, format_context& ctx) const -> format_context::iterator {
         using tt::stl::reflection::operator<<;
@@ -486,11 +492,6 @@ inline hash_t hash_object(const T& object) noexcept {
             fmt::print("Hashing {} using std::hash\n", boost::core::demangle(typeid(T).name()));
         }
         return std::hash<T>{}(object);
-    } else if constexpr (std::is_same_v<T, tt::stl::reflection::Attribute>) {
-        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
-            fmt::print("Hashing tt::stl::reflection::Attribute\n");
-        }
-        return object.to_hash();
     } else if constexpr (std::is_same_v<T, tt::stl::reflection::Attributes>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing tt::stl::reflection::Attributes\n");
@@ -500,6 +501,11 @@ inline hash_t hash_object(const T& object) noexcept {
             hash = hash_objects(hash, attribute);
         }
         return hash;
+    } else if constexpr (tt::stl::reflection::detail::supports_to_hash_v<T>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing struct {} using to_hash method\n", boost::core::demangle(typeid(T).name()));
+        }
+        return object.to_hash();
     } else if constexpr (tt::stl::reflection::detail::supports_compile_time_attributes_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using compile-time attributes\n", boost::core::demangle(typeid(T).name()));
@@ -540,7 +546,6 @@ inline hash_t hash_object(const T& object) noexcept {
         }
     } else {
         static_assert(tt::stl::concepts::always_false_v<T>, "Type doesn't support std::hash");
-        return 0;
     }
 }
 
