@@ -30,7 +30,11 @@ from tt_lib.utils import _nearest_y
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), (8, 1, 28, 28), 98),  # layer2 b8 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), (8, 1, 14, 14), 10),  # layer3 b8 - 10 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), (8, 1, 7, 7), 7),  # layer4 b8 - 7 cores for height slicing
-        # ((1, 1, 4, 4, 1, 1, 0, 0, 1, 1), (8, 1, 115, 115)),
+        ((1, 1, 4, 4, 1, 1, 1, 1, 1, 1), (16, 1, 115, 115), 98),  # first conv b16 - 98 cores for height slicing
+        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), (16, 1, 56, 56), 98),  # layer1 b16 - 98 cores for height slicing
+        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), (16, 1, 28, 28), 98),  # layer2 b16 - 98 cores for height slicing
+        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), (16, 1, 14, 14), 11),  # layer3 b16 - 11 cores for height slicing
+        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), (16, 1, 7, 7), 9),  # layer4 b16 - 9 cores for height slicing
     ),
 )
 def test_generate_all_configs_and_references(conv_params, input_nchw_shape, num_cores):
