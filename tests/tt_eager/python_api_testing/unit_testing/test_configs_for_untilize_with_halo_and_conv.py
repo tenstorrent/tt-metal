@@ -25,6 +25,7 @@ from tt_lib.utils import _nearest_y
         ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), (8, 1, 8, 8), 1),
         ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), (8, 1, 8, 8), 2),
         # resnet50 convs
+        ((1, 1, 4, 4, 1, 1, 1, 1, 1, 1), (8, 1, 115, 115), 98),  # first conv b8 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), (8, 1, 56, 56), 98),  # layer1 b8 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), (8, 1, 28, 28), 98),  # layer2 b8 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), (8, 1, 14, 14), 10),  # layer3 b8 - 10 cores for height slicing
@@ -52,7 +53,7 @@ def test_generate_all_configs_and_references(conv_params, input_nchw_shape, num_
 
     input_size_to_shard_evenly = _nearest_y(input_volume, num_cores * 32)
     untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores)
-    output_size_to_shard_evenly = _nearest_y(conv_output_volume, num_cores * 32)
+    output_size_to_shard_evenly = _nearest_y(conv_output_volume, num_cores)
     conv_output_shard_height = (int)(output_size_to_shard_evenly / num_cores)
 
     print("untilize with halo input shard height=", untilize_with_halo_input_shard_height)
