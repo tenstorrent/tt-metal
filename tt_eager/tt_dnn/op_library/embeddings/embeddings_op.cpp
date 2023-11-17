@@ -585,6 +585,8 @@ operation::ProgramWithCallbacks Embeddings::create_program(
 tt::stl::reflection::Attributes Embeddings::attributes() const {
     return {
         {"output_mem_config", this->output_mem_config},
+        {"split_weights", this->split_weights},
+        {"tilized", this->tilized},
     };
 }
 

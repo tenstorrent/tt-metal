@@ -56,7 +56,7 @@ class Tensor {
 
         Tensor unpad_from_tile(const Shape &output_tensor_shape) const;
 
-        std::string to_string(Layout print_layout=Layout::ROW_MAJOR, bool pretty_print=false) const;
+        const std::string write_to_string(Layout print_layout = Layout::ROW_MAJOR, bool pretty_print = false) const;
         void print(Layout print_layout=Layout::ROW_MAJOR, bool pretty_print=false) const;
 
         // ======================================================================================
