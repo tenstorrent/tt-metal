@@ -3,7 +3,7 @@ import torch
 import numpy
 from tests.tt_eager.python_api_testing.conv.conv_op_trace_config import (
     trace_conv_to_generate_data_top_left_indices_and_pad_metadata,
-    traced_conv_reference,
+    validate_data_top_left_indices_and_pad_medata,
 )
 from tests.tt_eager.python_api_testing.conv.decompose_conv_into_shards import (
     decompose_conv_into_shards_and_generate_tensor_metadata,
@@ -17,9 +17,10 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 @pytest.mark.parametrize(
     "conv_params, input_nchw_shape, unpadded_input_shard_height, conv_output_shard_height, num_cores",
     (
-        ((1, 1, 2, 2, 1, 1, 0, 0, 1, 1), (8, 1, 8, 8), 512, 392, 1),  # fails
-        # ((1, 1, 2, 2, 1, 1, 0, 0, 1, 1), (8, 1, 8, 8), 256, 196, 2),
-        # ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), (8, 1, 8, 8), 512, 648, 1),
+        ((1, 1, 2, 2, 1, 1, 0, 0, 1, 1), (8, 1, 8, 8), 512, 392, 1),
+        ((1, 1, 2, 2, 1, 1, 0, 0, 1, 1), (8, 1, 8, 8), 256, 196, 2),
+        ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), (8, 1, 8, 8), 512, 648, 1),
+        ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), (8, 1, 8, 8), 256, 324, 2),
         # ((1, 1, 4, 4, 1, 1, 0, 0, 1, 1), (8, 1, 115, 115)),
     ),
 )
@@ -62,7 +63,7 @@ def test_generate_all_configs_and_references(
 
     # run trace conv reference to validate pad_metadata and data_top_left_indices
     print("Validate pad_metadata and data_top_left_indices.")
-    input_padded_tensor = traced_conv_reference(
+    input_padded_tensor = validate_data_top_left_indices_and_pad_medata(
         input_pyt_tensor, filter_pyt_tensor, out_golden_pyt_tensor, pad_metadata, data_top_left_indices, conv_params
     )
 
@@ -80,7 +81,8 @@ def test_generate_all_configs_and_references(
         filter_h,
         filter_w,
     )
-    print("req_conv_input_shard_start_end-", req_conv_input_shard_start_end)
+    # print("req_conv_input_shard_start_end-", req_conv_input_shard_start_end)
+    # print("tensor_metadata-", tensor_metadata)
     print("Validate required conv input shard start/end stick indices")
     golden_conv_input_shards = validate_required_conv_input_sharded_start_end(
         input_padded_tensor,

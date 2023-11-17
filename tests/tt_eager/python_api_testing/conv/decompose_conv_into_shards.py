@@ -76,8 +76,7 @@ def validate_required_conv_input_sharded_start_end(
         conv_input_shards.append(input_padded_tensor[req_conv_input_shard_start : req_conv_input_shard_end + 1])
     # Perform conv on input shards one at a time, and compare against output. Use data_top_left_indices (global) to perform the conv operation.
     output_stick = 0
-    input_shard_idx = 0
-    for item in req_conv_input_shard_start_end:
+    for input_shard_idx, item in enumerate(req_conv_input_shard_start_end):
         assert input_shard_idx < len(conv_input_shards)
         conv_output_shard_start, conv_output_shard_end = item[0]
         req_conv_input_shard_start, req_conv_input_shard_end = item[1]
@@ -108,6 +107,8 @@ def validate_required_conv_input_sharded_start_end(
             output_pyt_shard.size()
             == out_golden_pyt_tensor.reshape(-1)[conv_output_shard_start : conv_output_shard_end + 1].size()
         )
+        # print("out_golden_shard=", out_golden_pyt_tensor.reshape(-1)[conv_output_shard_start : conv_output_shard_end + 1])
+        # print("out_shard=", output_pyt_shard)
         passing_pcc, output_pcc = comp_equal(
             out_golden_pyt_tensor.reshape(-1)[conv_output_shard_start : conv_output_shard_end + 1], output_pyt_shard
         )
@@ -135,6 +136,7 @@ def validate_tensor_metadata(
         unpadded_input_tensor_shards.append(
             input_tensor[unpadded_input_tensor_shard_start:unpadded_input_tensor_shard_end]
         )
+        unpadded_input_tensor_shard_start += input_shard_size
 
     # Validate tensor_metadata
     # Construct conv input shard using tensor_metadata and req_conv_input_shard_start_end indices. Then, compare against golden conv input shards
@@ -155,4 +157,6 @@ def validate_tensor_metadata(
                 assert core_id < len(unpadded_input_tensor_shards)
                 assert core_local_idx < len(unpadded_input_tensor_shards[core_id])
                 conv_input_shard.append(unpadded_input_tensor_shards[core_id][core_local_idx])
+        # print("golden_conv_input_shard=", golden_conv_input_shards[shard_idx])
+        # print("conv_input_shard=", conv_input_shard)
         assert conv_input_shard == golden_conv_input_shards[shard_idx]

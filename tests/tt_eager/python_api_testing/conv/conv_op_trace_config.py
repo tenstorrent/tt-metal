@@ -83,7 +83,7 @@ def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(conv_params, i
     return pad_metadata, data_top_left_indices
 
 
-def traced_conv_reference(
+def validate_data_top_left_indices_and_pad_medata(
     input_pyt_tensor, filter_pyt_tensor, out_golden_pyt_tensor, pad_metadata, data_top_left_indices, conv_params
 ):
     assert len(conv_params) == 10
