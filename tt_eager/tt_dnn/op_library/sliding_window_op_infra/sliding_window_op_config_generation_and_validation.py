@@ -8,7 +8,7 @@ def generate_sliding_window_op_sharded_input_top_left_indices(data_top_left_indi
     # conv_shard_start_end has the start and end index (inclusive) for each shard in the global input tensor
     # generate local indices (top left position in the sliding window) in the conv sharded input
     conv_sharded_input_top_left_indices = []
-    for shard_idx, item in conv_shard_start_end:
+    for item in conv_shard_start_end:
         conv_output_shard_start, conv_output_shard_end = item[0]
         conv_input_shard_start, conv_input_shard_end = item[1]
         local_top_left_indices = []
@@ -24,7 +24,11 @@ def generate_sliding_window_op_sharded_input_top_left_indices(data_top_left_indi
 
 
 def validate_conv_sharded_input_top_left_indices(
-    conv_input_shards, filter_pyt_tensor, output_golden_pyt_tensor, conv_sharded_input_top_left_indices
+    conv_input_shards,
+    input_padded_width,
+    filter_pyt_tensor,
+    output_golden_pyt_tensor,
+    conv_sharded_input_top_left_indices,
 ):
     filter_k = filter_pyt_tensor.size()[0]
     filter_c = filter_pyt_tensor.size()[1]
@@ -36,13 +40,14 @@ def validate_conv_sharded_input_top_left_indices(
     for shard_idx, local_top_left_indices in enumerate(conv_sharded_input_top_left_indices):
         assert shard_idx < len(conv_input_shards)
         conv_input_shard = conv_input_shards[shard_idx]
-        out_val = 0
         for local_output_idx, local_input_top_left_idx in enumerate(local_top_left_indices):
             start_window_row_idx = local_input_top_left_idx
-            for fh in filter_h:
-                for fw in filter_w:
+            out_val = 0
+            for fh in range(filter_h):
+                for fw in range(filter_w):
                     assert start_window_row_idx + fw < len(conv_input_shard)
                     out_val += conv_input_shard[start_window_row_idx + fw] * filter_pyt_tensor[0][0][fh][fw]
+                start_window_row_idx += input_padded_width
             conv_output.append(out_val)
 
     output_pyt_tensor = torch.tensor(conv_output)

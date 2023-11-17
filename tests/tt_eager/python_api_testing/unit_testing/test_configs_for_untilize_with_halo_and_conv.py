@@ -8,6 +8,10 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_confi
     validate_required_conv_input_sharded_start_end,
     validate_tensor_metadata,
 )
+from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_config_generation_and_validation import (
+    generate_sliding_window_op_sharded_input_top_left_indices,
+    validate_conv_sharded_input_top_left_indices,
+)
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 from tt_lib.utils import _nearest_y
 
@@ -109,4 +113,20 @@ def test_generate_all_configs_and_references(conv_params, input_nchw_shape, num_
         tensor_metadata,
         req_conv_input_shard_start_end,
         golden_conv_input_shards,
+    )
+
+    # Generate and validate the final untilize with halo configs here (TODO Abhinav)
+
+    # Generate conv op config -
+    print("Generate conv op configs - top left positioned indices for conv input shards")
+    conv_sharded_input_top_left_indices = generate_sliding_window_op_sharded_input_top_left_indices(
+        data_top_left_indices, req_conv_input_shard_start_end
+    )
+    print("Validate conv_sharded_input_top_left_indices")
+    validate_conv_sharded_input_top_left_indices(
+        golden_conv_input_shards,
+        input_padded_width,
+        filter_pyt_tensor,
+        out_golden_pyt_tensor,
+        conv_sharded_input_top_left_indices,
     )
