@@ -14,10 +14,6 @@
 #include "tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-#include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
-
 namespace py = pybind11;
 
 namespace tt {
@@ -327,6 +323,7 @@ void py_module(py::module& m_primary) {
         py::arg("input_tensor").noconvert(),
         py::arg("other_tensor").noconvert(),
         py::kw_only(),
+        py::arg("output_tensor").noconvert() = std::nullopt,
         py::arg("transpose_input").noconvert() = false,
         py::arg("transpose_other").noconvert() = false,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,

@@ -5,6 +5,7 @@
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 
 #include "tt_dnn/op_library/moreh_dot/moreh_dot_op.hpp"
+#include "tt_eager/tt_dnn/op_library/moreh_helper_functions.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -81,12 +82,6 @@ stl::reflection::Attributes MorehMatmul::attributes() const {
         {"transpose_input", this->transpose_input},
         {"transpose_other", this->transpose_other},
     };
-}
-
-inline bool is_1d_tensor(const Tensor& tensor) {
-    const auto& shape = tensor.shape().without_padding();
-    // because TT Tensor only support 4d shape, so if the first 3 dims are 1, assume it's 1d.
-    return shape[0] == 1 && shape[1] == 1 && shape[2] == 1;
 }
 
 inline void moreh_matmul_validate(
@@ -171,13 +166,9 @@ Tensor moreh_matmul(
     bool transpose_input,
     bool transpose_other,
     const MemoryConfig& mem_config) {
-    // 1d x 1d
-    if (is_1d_tensor(input_tensor) && is_1d_tensor(other_tensor)) {
-        TT_ASSERT(transpose_input == false);
-        TT_ASSERT(transpose_other == false);
+    if (is_dot_forward(input_tensor, other_tensor) && (!transpose_input && !transpose_other)) {
         return moreh_dot(input_tensor, other_tensor, mem_config);
     }
-
     return moreh_matmul_(input_tensor, other_tensor, output_tensor, transpose_input, transpose_other, mem_config);
 }
 
