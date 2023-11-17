@@ -151,7 +151,7 @@ def validate_tensor_metadata(
                 conv_input_shard.append(0)
             else:
                 core_id = tensor_metadata[idx][1]
-                core_local_idx = tensor_metadata[idx][1]
+                core_local_idx = tensor_metadata[idx][2]
                 assert core_id < len(unpadded_input_tensor_shards)
                 assert core_local_idx < len(unpadded_input_tensor_shards[core_id])
                 conv_input_shard.append(unpadded_input_tensor_shards[core_id][core_local_idx])
