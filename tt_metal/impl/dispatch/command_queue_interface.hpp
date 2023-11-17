@@ -81,7 +81,7 @@ class SystemMemoryWriter {
     }
 
     // Ideally, data should be an array or pointer, but vector for time-being
-    void cq_write(const uint32_t* data, uint32_t size_in_bytes, uint32_t write_ptr) const {
+    void cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr) const {
         // There is a 50% overhead if hugepage_start is not made static.
         // Eventually when we want to have multiple hugepages, we may need to template
         // the sysmem writer to get this optimization.

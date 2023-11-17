@@ -273,7 +273,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
 
 // EnqueueReadBufferCommandSection
 EnqueueReadBufferCommand::EnqueueReadBufferCommand(
-    Device* device, Buffer& buffer, vector<uint32_t>& dst, SystemMemoryWriter& writer) :
+    Device* device, Buffer& buffer, void* dst, SystemMemoryWriter& writer) :
     dst(dst), writer(writer), buffer(buffer) {
     this->device = device;
 }
@@ -338,7 +338,7 @@ EnqueueCommandType EnqueueReadBufferCommand::type() { return this->type_; }
 
 // EnqueueWriteBufferCommand section
 EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
-    Device* device, Buffer& buffer, vector<uint32_t>& src, SystemMemoryWriter& writer) :
+    Device* device, Buffer& buffer, const void* src, SystemMemoryWriter& writer) :
     writer(writer), src(src), buffer(buffer) {
     TT_ASSERT(
         buffer.buffer_type() == BufferType::DRAM or buffer.buffer_type() == BufferType::L1,
@@ -400,21 +400,16 @@ void EnqueueWriteBufferCommand::process() {
     this->writer.cq_reserve_back(cmd_size);
     this->writer.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
 
-    // Need to deal with the edge case where our page
-    // size is not 32B aligned
     if (this->buffer.page_size() % 32 != 0 and this->buffer.page_size() != this->buffer.size()) {
-        vector<uint32_t>::const_iterator src_iterator = this->src.begin();
-        uint32_t num_u32s_in_page = this->buffer.page_size() / sizeof(uint32_t);
-        uint32_t num_pages = this->buffer.num_pages();
-        uint32_t dst = system_memory_temporary_storage_address;
-        for (uint32_t i = 0; i < num_pages; i++) {
-            vector<uint32_t> src_page(src_iterator, src_iterator + num_u32s_in_page);
-            this->writer.cq_write(src_page.data(), src_page.size() * sizeof(uint32_t), dst);
-            src_iterator += num_u32s_in_page;
-            dst = align(dst + this->buffer.page_size(), 32);
+        // If page size is not 32B-aligned, we cannot do a contiguous write
+        uint32_t src_address_offset = 0;
+        uint32_t padded_page_size = align(this->buffer.page_size(), 32);
+        for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_in_bytes; sysmem_address_offset += padded_page_size) {
+            this->writer.cq_write((char*)this->src + src_address_offset, this->buffer.page_size(), system_memory_temporary_storage_address + sysmem_address_offset);
+            src_address_offset += this->buffer.page_size();
         }
     } else {
-        this->writer.cq_write(this->src.data(), this->src.size() * sizeof(uint32_t), system_memory_temporary_storage_address);
+        this->writer.cq_write(this->src, data_size_in_bytes, system_memory_temporary_storage_address);
     }
 
     this->writer.cq_push_back(cmd_size);
@@ -719,8 +714,9 @@ void CommandQueue::enqueue_command(Command& command, bool blocking) {
     }
 }
 
-void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<uint32_t>& dst, bool blocking) {
+void CommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking) {
     ZoneScopedN("CommandQueue_read_buffer");
+    TT_FATAL(blocking, "EnqueueReadBuffer only has support for blocking mode currently");
     uint32_t read_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + buffer.size();
     if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + read_buffer_command_size >= DeviceCommand::HUGE_PAGE_SIZE) {
         TT_ASSERT(read_buffer_command_size <= DeviceCommand::HUGE_PAGE_SIZE - CQ_START, "EnqueueReadBuffer command is too large");
@@ -735,40 +731,29 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, vector<uint32_t>& dst, bo
     // device moves data into the buffer we want to read out
     // of, we then need to consume it into a vector. This
     // is easiest way to bring this up
-    TT_FATAL(blocking, "EnqueueReadBuffer only has support for blocking mode currently");
     this->enqueue_command(command, blocking);
 
     uint32_t num_pages = buffer.size() / buffer.page_size();
     uint32_t padded_page_size = align(buffer.page_size(), 32);
     uint32_t data_size_in_bytes = padded_page_size * num_pages;
 
-    dst.resize(data_size_in_bytes / sizeof(uint32_t));
-    tt::Cluster::instance().read_sysmem(dst.data(), data_size_in_bytes, command.read_buffer_addr, 0);
-
-    // This vector is potentially padded due to alignment constraints, so need to now remove the padding
     if ((buffer.page_size() % 32) != 0) {
-        vector<uint32_t> new_dst(buffer.size() / sizeof(uint32_t), 0);
-        uint32_t padded_page_size_in_u32s = align(buffer.page_size(), 32) / sizeof(uint32_t);
-        uint32_t new_dst_counter = 0;
-        for (uint32_t i = 0; i < dst.size(); i += padded_page_size_in_u32s) {
-            for (uint32_t j = 0; j < buffer.page_size() / sizeof(uint32_t); j++) {
-                new_dst[new_dst_counter] = dst[i + j];
-                new_dst_counter++;
-            }
+        // If page size is not 32B-aligned, we cannot do a contiguous copy
+        uint32_t dst_address_offset = 0;
+        for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_in_bytes; sysmem_address_offset += padded_page_size) {
+            tt::Cluster::instance().read_sysmem((char*)dst + dst_address_offset, buffer.page_size(), command.read_buffer_addr + sysmem_address_offset, 0);
+            dst_address_offset += buffer.page_size();
         }
-        dst = new_dst;
+    } else {
+        tt::Cluster::instance().read_sysmem(dst, data_size_in_bytes, command.read_buffer_addr, 0);
     }
 }
 
-void CommandQueue::enqueue_write_buffer(Buffer& buffer, vector<uint32_t>& src, bool blocking) {
+void CommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool blocking) {
     ZoneScopedN("CommandQueue_write_buffer");
     TT_FATAL(not blocking, "EnqueueWriteBuffer only has support for non-blocking mode currently");
-    uint32_t src_size_bytes = src.size() * sizeof(uint32_t);
-    TT_ASSERT(
-        src_size_bytes <= buffer.size(),
-        "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
-        src_size_bytes,
-        buffer.size());
+
+    // TODO(agrebenisan): Fix these asserts after implementing multi-core CQ
     TT_ASSERT(
         buffer.page_size() < MEM_L1_SIZE - DeviceCommand::DATA_SECTION_ADDRESS,
         "Buffer pages must fit within the command queue data section");
@@ -815,7 +800,7 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
             std::make_unique<Buffer>(
                 this->device, program_data_size_in_bytes, DeviceCommand::PROGRAM_PAGE_SIZE, BufferType::DRAM));
 
-        this->enqueue_write_buffer(*this->program_to_buffer.at(program_id), program_pages, blocking);
+        this->enqueue_write_buffer(*this->program_to_buffer.at(program_id), program_pages.data(), blocking);
         this->program_to_dev_map.emplace(program_id, std::move(program_to_device_map));
     }
 
@@ -874,12 +859,28 @@ void CommandQueue::wrap() {
 
 // OpenCL-like APIs
 void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& dst, bool blocking) {
+    // TODO(agrebenisan): Move to deprecated
     detail::DispatchStateCheck(true);
     TT_FATAL(blocking, "Non-blocking EnqueueReadBuffer not yet supported");
-    cq.enqueue_read_buffer(buffer, dst, blocking);
+
+    // Only resizing here to keep with the original implementation. Notice how in the void*
+    // version of this API, I assume the user mallocs themselves
+    dst.resize(buffer.page_size() * buffer.num_pages() / sizeof(uint32_t));
+    cq.enqueue_read_buffer(buffer, dst.data(), blocking);
 }
 
 void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& src, bool blocking) {
+    // TODO(agrebenisan): Move to deprecated
+    detail::DispatchStateCheck(true);
+    cq.enqueue_write_buffer(buffer, src.data(), blocking);
+}
+
+void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, void* dst, bool blocking) {
+    detail::DispatchStateCheck(true);
+    cq.enqueue_read_buffer(buffer, dst, blocking);
+}
+
+void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, const void* src, bool blocking) {
     detail::DispatchStateCheck(true);
     cq.enqueue_write_buffer(buffer, src, blocking);
 }
