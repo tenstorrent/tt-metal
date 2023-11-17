@@ -39,16 +39,30 @@ vector<uint32_t> generate_arange_vector(uint32_t size_bytes) {
 }
 
 bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device* device, CommandQueue& cq, const BufferConfig& config) {
-    size_t buf_size = config.num_pages * config.page_size;
-    Buffer bufa(device, buf_size, config.page_size, config.buftype);
+    bool pass = true;
+    for (const bool use_void_star_api: {true, false}) {
 
-    vector<uint32_t> src = generate_arange_vector(bufa.size());
+        size_t buf_size = config.num_pages * config.page_size;
+        Buffer bufa(device, buf_size, config.page_size, config.buftype);
 
-    EnqueueWriteBuffer(cq, bufa, src, false);
-    vector<uint32_t> result;
-    EnqueueReadBuffer(cq, bufa, result, true);
+        vector<uint32_t> src = generate_arange_vector(bufa.size());
 
-    return src == result;
+        if (use_void_star_api) {
+            EnqueueWriteBuffer(cq, bufa, src.data(), false);
+        } else {
+            EnqueueWriteBuffer(cq, bufa, src, false);
+        }
+        vector<uint32_t> result;
+        if (use_void_star_api) {
+            result.resize(buf_size / sizeof(uint32_t));
+            EnqueueReadBuffer(cq, bufa, result.data(), true);
+        } else {
+            EnqueueReadBuffer(cq, bufa, result, true);
+        }
+        pass &= (src == result);
+    }
+
+    return pass;
 }
 
 bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
