@@ -67,8 +67,8 @@ def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(conv_params, i
                     pad_metadata.append(False)
 
     # TODO: add support for dilation > 1
-    output_h = ((int)(padded_input_h - filter_h / stride_h)) + 1
-    output_w = ((int)(padded_input_w - filter_w / stride_w)) + 1
+    output_h = ((int)((padded_input_h - filter_h) / stride_h)) + 1
+    output_w = ((int)((padded_input_w - filter_w) / stride_w)) + 1
     # generate a list of input indices corresponding to the top left position of sliding window
     # the index refers to the location in the padded tensor
     data_top_left_indices = []
