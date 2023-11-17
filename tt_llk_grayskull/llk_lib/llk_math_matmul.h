@@ -1,6 +1,10 @@
-#pragma once
-#include "llk_param_structs.h"
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+*/
 
+#pragma once
 #include "ckernel_include.h"
 #include "ckernel_template.h"
 

@@ -1,4 +1,8 @@
-
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+*/
 
 // Temp address map in bytes
 #define TRISC0_PARAMS_BASE_ADDRESS 32*1024

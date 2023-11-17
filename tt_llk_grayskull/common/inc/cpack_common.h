@@ -1,9 +1,16 @@
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+*/
+
 #pragma once
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
 #include "fw_debug.h"
+#include "llk_defs.h"
 
 #define TT_OP_SETDMAREG_SHFT(Payload_SigSelSize, Payload_SigSelShft, SetSignalsMode, RegIndex16b) \
   TT_OP(0x45, (((Payload_SigSelSize) << 22) + ((Payload_SigSelShft)) + ((SetSignalsMode) << 7) + ((RegIndex16b) << 0)))

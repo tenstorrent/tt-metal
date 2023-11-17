@@ -1,10 +1,15 @@
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+*/
+
 #pragma once
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "fw_debug.h"
 #include "cunpack_common.h"
-#include "llk_param_structs.h"
 
 #ifdef PERF_DUMP
 #include "ckernel_perf_api.h"
