@@ -279,7 +279,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     auto output_tensors = function(*args, **kwargs);
                     const auto end{std::chrono::steady_clock::now()};
                     const std::chrono::duration<double> elapsed_seconds{end - start};
-                    tt::log_info(
+                    tt::log_debug(
                         tt::LogOp,
                         "Operation {:50} finished in {:15} seconds",
                         op.get_type_name(),

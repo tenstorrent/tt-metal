@@ -197,7 +197,7 @@ constexpr auto decorate_operation(const Function& function) {
 
         const auto end{std::chrono::steady_clock::now()};
         const std::chrono::duration<double> elapsed_seconds{end - start};
-        tt::log_info(
+        tt::log_debug(
             tt::LogOp, "Operation {:50} finished in {:15} seconds", operation.get_type_name(), elapsed_seconds.count());
 
         return output_tensors;
