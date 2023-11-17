@@ -7,13 +7,13 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_confi
     decompose_conv_into_shards_and_generate_tensor_metadata,
     validate_required_conv_input_sharded_start_end,
     validate_tensor_metadata,
+    generate_untilize_with_halo_kernel_configs,
 )
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_config_generation_and_validation import (
     generate_sliding_window_op_sharded_input_top_left_indices,
     validate_conv_sharded_input_top_left_indices,
     validate_max_pool_sharded_input_top_left_indices,
 )
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.generate_kernel_configs import generate_kernel_configs
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 from tt_lib.utils import _nearest_y
@@ -152,7 +152,7 @@ def test_generate_all_configs_and_references(conv_params, batch_size, input_chw_
     print(f"Generate untilize with halo kernel configs")
     # print(f'tensor metadata: {tensor_metadata}')
     print(f"req shards start and end: {req_conv_input_shard_start_end}")
-    local_data, local_pad, ll_data, l_data, r_data, rr_data = generate_kernel_configs(
+    local_data, local_pad, ll_data, l_data, r_data, rr_data = generate_untilize_with_halo_kernel_configs(
         tensor_metadata, req_conv_input_shard_start_end
     )
     print(f"local data:     {local_data}")

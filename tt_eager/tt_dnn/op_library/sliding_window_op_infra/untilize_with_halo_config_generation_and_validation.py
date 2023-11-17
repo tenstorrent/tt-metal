@@ -1,5 +1,6 @@
 import torch
-import numpy
+import numpy as np
+
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 
 
@@ -116,7 +117,7 @@ def validate_data_top_left_indices_and_pad_medata(
         )
 
     output_pyt_tensor = torch.tensor(output_tensor)
-    assert numpy.prod(output_pyt_tensor.size()) == numpy.prod(out_golden_pyt_tensor.size())
+    assert np.prod(output_pyt_tensor.size()) == np.prod(out_golden_pyt_tensor.size())
     output_pyt_tensor = torch.reshape(output_pyt_tensor, out_golden_pyt_tensor.size())
 
     # compare to pytorch
@@ -192,7 +193,7 @@ def validate_required_conv_input_sharded_start_end(
     filter_h = filter_pyt_tensor.size()[2]
     filter_w = filter_pyt_tensor.size()[3]
     assert filter_pyt_tensor.size()[0] == 1 and filter_pyt_tensor.size()[1] == 1
-    assert len(data_top_left_indices) == numpy.prod(list(out_golden_pyt_tensor.size()))
+    assert len(data_top_left_indices) == np.prod(list(out_golden_pyt_tensor.size()))
 
     # Validate req_conv_input_shard_start_end. First, generate conv input shards
     conv_input_shards = []
@@ -223,7 +224,7 @@ def validate_required_conv_input_sharded_start_end(
                     assert input_shard_stick_local_idx + fw < len(conv_input_shards[input_shard_idx])
                     conv_input_window.append(conv_input_shards[input_shard_idx][input_shard_stick_local_idx + fw])
                 input_shard_stick_local_idx += input_padded_width
-            output_val = numpy.dot(conv_input_window, filter_pyt_tensor.reshape(-1).tolist())
+            output_val = np.dot(conv_input_window, filter_pyt_tensor.reshape(-1).tolist())
             output_shard.append(output_val)
             output_stick += 1
         # compare output shard with golden output pytorch tensor
@@ -285,3 +286,162 @@ def validate_tensor_metadata(
         # print("golden_conv_input_shard=", golden_conv_input_shards[shard_idx])
         # print("conv_input_shard=", conv_input_shard)
         assert conv_input_shard == golden_conv_input_shards[shard_idx]
+
+
+NEIGHBORHOOD_DIST = 2  ## ll, l, r, rr
+
+
+## Function to generate the untilize with halo writer kernel config using the tensor metadata and required shard start/end information.
+##
+## Inputs:  1. tensor_metadata:             [(is_pad, src_core_id, src_local_idx), ...], size = padded tensor size
+##                                              NOTE: (src_core_id, src_local_idx) == src_global_idx
+##          2. resharded_start_and_end:     [(req_shard_start, req_shard_end), ...], size = num cores
+##
+## Outputs: 1. local_data_start_and_size:   [[(dst_start, size), ...], ...], size = num cores
+##          2. local_pad_start_and_size:    [[(dst_start, size), ...], ...], size = num cores
+##          3. neighbor data config:            NOTE: currently NEIGHBORHOOD_DIST = 2. Can be generalized.
+##              1. ll_send_start_and_size:  [[(dst_start, size), ...], ...], size = num cores
+##              2. l_send_start_and_size:   [[(dst_start, size), ...], ...], size = num cores
+##              3. r_send_start_and_size:   [[(dst_start, size), ...], ...], size = num cores
+##              4. rr_send_start_and_size:  [[(dst_start, size), ...], ...], size = num cores
+def generate_untilize_with_halo_kernel_configs(tensor_metadata: list, resharded_start_and_end: list):
+    ncores = len(resharded_start_and_end)
+
+    ## data :: { core -> [
+    ##              [],    ## ll
+    ##              [],    ## l
+    ##              [],    ## local
+    ##              [],    ## r
+    ##              [],    ## rr
+    ##          ]}
+    core_neighbor_data = {}
+    core_pad_start_and_size = {}
+    core_src_local_start_idx = {}  ## {core -> [ ll, l, local, r, rr ]}
+
+    ## NOTE: assuming the core_id's are contiguous
+    for dst_core_id in np.arange(ncores):
+        ## generate the config for dst_core_id using the input metadata
+
+        dst_global_start_idx, dst_global_end_idx = resharded_start_and_end[dst_core_id][1]
+
+        core_pad_start_and_size[dst_core_id] = []
+
+        curr_segment_size = 0
+        is_curr_segment_pad = None
+        curr_segment_src_core_id = None
+        curr_segment_dst_start_idx = None
+        curr_segment_neighbor_idx = None
+
+        for dst_global_idx in np.arange(dst_global_start_idx, dst_global_end_idx + 1):
+            dst_local_idx = dst_global_idx - dst_global_start_idx
+            is_pad, src_core_id, src_local_idx = tensor_metadata[dst_global_idx]
+
+            if is_pad:  ## pad stick
+                if curr_segment_size > 0 and is_curr_segment_pad:
+                    ## current segment is padding
+                    curr_segment_size += 1
+                else:
+                    if curr_segment_size > 0:
+                        ## current segment is data, a new pad segment starts here
+                        ## finish off the data seg first
+                        if curr_segment_src_core_id not in core_neighbor_data:
+                            core_neighbor_data[curr_segment_src_core_id] = []
+                            for i in np.arange(2 * NEIGHBORHOOD_DIST + 1):
+                                core_neighbor_data[curr_segment_src_core_id].append([])
+                        core_neighbor_data[curr_segment_src_core_id][curr_segment_neighbor_idx].append(
+                            (curr_segment_dst_start_idx, curr_segment_size)
+                        )
+                    else:
+                        ## there is no current segment
+                        pass
+                    ## start new pad segment
+                    is_curr_segment_pad = True
+                    curr_segment_size = 1
+                    curr_segment_dst_start_idx = dst_local_idx
+
+            else:  ## data stick
+                ## the neighbor core of dst_core_id this data stick is coming from (src_core_id): ll, l, local, r or rr
+                neighbor_idx = NEIGHBORHOOD_DIST + (dst_core_id - src_core_id)
+
+                if curr_segment_size > 0:
+                    if curr_segment_src_core_id == src_core_id:
+                        ## this data stick belong to the same src core as current segment
+                        ## if the curr segment is also data, then it is contiguous
+                        ## else, this is new data segment after a pad break
+                        if not is_curr_segment_pad:
+                            ## contiguous data stick
+                            curr_segment_size += 1
+                        else:
+                            ## curr segment is padding, and a new data segment starts here
+                            ## finish off the pad segment first (always local only)
+                            core_pad_start_and_size[dst_core_id].append((curr_segment_dst_start_idx, curr_segment_size))
+                            ## start the new data segment
+                            is_curr_segment_pad = False
+                            curr_segment_size = 1
+                            curr_segment_dst_start_idx = dst_local_idx
+                            curr_segment_src_core_id = src_core_id
+                            curr_segment_neighbor_idx = neighbor_idx
+                    else:
+                        if not is_curr_segment_pad:
+                            ## this data stick belongs to a different src core than the current data segment
+                            ## first finish the current data segment
+                            if curr_segment_src_core_id not in core_neighbor_data:
+                                core_neighbor_data[curr_segment_src_core_id] = []
+                                for i in np.arange(2 * NEIGHBORHOOD_DIST + 1):
+                                    core_neighbor_data[curr_segment_src_core_id].append([])
+                            core_neighbor_data[curr_segment_src_core_id][curr_segment_neighbor_idx].append(
+                                (curr_segment_dst_start_idx, curr_segment_size)
+                            )
+                        else:
+                            ## current segment is padding, finish it off
+                            core_pad_start_and_size[dst_core_id].append((curr_segment_dst_start_idx, curr_segment_size))
+                        ## start the new data segment
+                        is_curr_segment_pad = False
+                        curr_segment_size = 1
+                        curr_segment_dst_start_idx = dst_local_idx
+                        curr_segment_src_core_id = src_core_id
+                        curr_segment_neighbor_idx = neighbor_idx
+                else:
+                    ## there is no current segment, create new data segment
+                    is_curr_segment_pad = False
+                    curr_segment_size = 1
+                    curr_segment_dst_start_idx = dst_local_idx
+                    curr_segment_src_core_id = src_core_id
+                    curr_segment_neighbor_idx = neighbor_idx
+
+        ## finish off the remaining last segment, if any
+        if curr_segment_size > 0:
+            if is_curr_segment_pad:
+                ## padding segment
+                core_pad_start_and_size[dst_core_id].append((curr_segment_dst_start_idx, curr_segment_size))
+            else:
+                ## data segment
+                if curr_segment_src_core_id not in core_neighbor_data:
+                    core_neighbor_data[curr_segment_src_core_id] = []
+                    for i in np.arange(2 * NEIGHBORHOOD_DIST + 1):
+                        core_neighbor_data[curr_segment_src_core_id].append([])
+                core_neighbor_data[curr_segment_src_core_id][curr_segment_neighbor_idx].append(
+                    (curr_segment_dst_start_idx, curr_segment_size)
+                )
+    ll_data_start_and_size = []
+    l_data_start_and_size = []
+    local_data_start_and_size = []
+    r_data_start_and_size = []
+    rr_data_start_and_size = []
+    local_pad_start_and_size = []
+    for i in range(ncores):
+        ll_data_start_and_size.append(core_neighbor_data[i][NEIGHBORHOOD_DIST - 2])
+        l_data_start_and_size.append(core_neighbor_data[i][NEIGHBORHOOD_DIST - 1])
+        local_data_start_and_size.append(core_neighbor_data[i][NEIGHBORHOOD_DIST])
+        r_data_start_and_size.append(core_neighbor_data[i][NEIGHBORHOOD_DIST + 1])
+        rr_data_start_and_size.append(core_neighbor_data[i][NEIGHBORHOOD_DIST + 2])
+        local_pad_start_and_size.append(core_pad_start_and_size[i])
+
+    return (
+        local_data_start_and_size,
+        local_pad_start_and_size,
+        ll_data_start_and_size,
+        l_data_start_and_size,
+        r_data_start_and_size,
+        rr_data_start_and_size,
+    )
