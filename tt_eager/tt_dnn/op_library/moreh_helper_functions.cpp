@@ -89,7 +89,7 @@ KernelID CreateReadKernel(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::vector<uint32_t> &compile_args,
     std::map<string, string> defines) {
-    return tt_metal::CreateDataMovementKernel(
+    return tt_metal::CreateKernel(
         program,
         file_name,
         core_spec,
@@ -106,7 +106,7 @@ KernelID CreateWriteKernel(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::vector<uint32_t> &compile_args,
     std::map<string, string> defines) {
-    return tt_metal::CreateDataMovementKernel(
+    return tt_metal::CreateKernel(
         program,
         file_name,
         core_spec,
@@ -145,7 +145,7 @@ KernelID CreateWriteKernel(
     bool math_approx_mode) {
     KernelID compute_kernel_id{0};
     if (arg.num_tile_per_core_group > 0) {
-        compute_kernel_id = CreateComputeKernel(
+        compute_kernel_id = CreateKernel(
             program,
             file_name,
             arg.core_spec,

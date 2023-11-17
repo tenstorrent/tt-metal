@@ -6,7 +6,6 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "debug_print.h"
 
 void mask_tile(uint32_t l1_addr, uint32_t mask_w = 32, uint32_t mask_h = 32) {
     union {

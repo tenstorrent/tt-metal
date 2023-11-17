@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_api/bcast.h"
-#include "debug_print.h"
 
 ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
 ALWI void REL() { release_dst(tt::DstMode::Half); }
