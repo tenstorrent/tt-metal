@@ -39,7 +39,7 @@ if __name__ == "__main__":
         (True, -1, 0),
         (True, -1, 0),
     ]
-    resharding = [(0, 15), (8, 23)]  ## global idx (inclusive)
+    resharding = [((0, 0), (0, 15)), ((0, 0), (8, 23))]  ## global idx (inclusive)
 
     ## corresponding reference output
     ref_local_data = [[(5, 2), (9, 2)], [(5, 2), (9, 2)]]
@@ -48,8 +48,9 @@ if __name__ == "__main__":
     ref_l_data = [[], [(13, 2)]]
     ref_r_data = [[(1, 2)], []]
     ref_rr_data = [[], []]
+    ref_src_start_idx = [[-1, -1, 0, 2, -1], [-1, 0, 0, -1, -1]]
 
-    local_data, local_pad, ll_data, l_data, r_data, rr_data = generate_untilize_with_halo_kernel_configs(
+    local_data, local_pad, ll_data, l_data, r_data, rr_data, src_start_idx = generate_untilize_with_halo_kernel_configs(
         tensor_metadata, resharding
     )
 
@@ -65,3 +66,5 @@ if __name__ == "__main__":
     print(f"r data:         {r_data}\n")
     print(f"ref rr data:    {ref_rr_data}")
     print(f"rr data:        {rr_data}\n")
+    print(f"ref_src_start_idx:  {ref_src_start_idx}")
+    print(f"src_start_idx:      {src_start_idx}\n")

@@ -152,7 +152,7 @@ def test_generate_all_configs_and_references(conv_params, batch_size, input_chw_
     print(f"Generate untilize with halo kernel configs")
     # print(f'tensor metadata: {tensor_metadata}')
     print(f"req shards start and end: {req_conv_input_shard_start_end}")
-    local_data, local_pad, ll_data, l_data, r_data, rr_data = generate_untilize_with_halo_kernel_configs(
+    local_data, local_pad, ll_data, l_data, r_data, rr_data, src_start_idx = generate_untilize_with_halo_kernel_configs(
         tensor_metadata, req_conv_input_shard_start_end
     )
     print(f"local data:     {local_data}")
@@ -161,6 +161,7 @@ def test_generate_all_configs_and_references(conv_params, batch_size, input_chw_
     print(f"l data:         {l_data}")
     print(f"r data:         {r_data}")
     print(f"rr data:        {rr_data}")
+    print(f"src start idx:  {src_start_idx}")
 
     # Generate sliding window op config -
     print("Generate sliding window op configs - top left positioned indices for input shards")

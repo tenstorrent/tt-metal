@@ -381,6 +381,10 @@ def generate_untilize_with_halo_kernel_configs(tensor_metadata: list, resharded_
                             curr_segment_dst_start_idx = dst_local_idx
                             curr_segment_src_core_id = src_core_id
                             curr_segment_neighbor_idx = neighbor_idx
+                            if curr_segment_src_core_id not in core_src_local_start_idx:
+                                core_src_local_start_idx[curr_segment_src_core_id] = [-1] * (2 * NEIGHBORHOOD_DIST + 1)
+                            if core_src_local_start_idx[curr_segment_src_core_id][neighbor_idx] < 0:
+                                core_src_local_start_idx[curr_segment_src_core_id][neighbor_idx] = src_local_idx
                     else:
                         if not is_curr_segment_pad:
                             ## this data stick belongs to a different src core than the current data segment
@@ -401,6 +405,10 @@ def generate_untilize_with_halo_kernel_configs(tensor_metadata: list, resharded_
                         curr_segment_dst_start_idx = dst_local_idx
                         curr_segment_src_core_id = src_core_id
                         curr_segment_neighbor_idx = neighbor_idx
+                        if curr_segment_src_core_id not in core_src_local_start_idx:
+                            core_src_local_start_idx[curr_segment_src_core_id] = [-1] * (2 * NEIGHBORHOOD_DIST + 1)
+                        if core_src_local_start_idx[curr_segment_src_core_id][neighbor_idx] < 0:
+                            core_src_local_start_idx[curr_segment_src_core_id][neighbor_idx] = src_local_idx
                 else:
                     ## there is no current segment, create new data segment
                     is_curr_segment_pad = False
@@ -408,6 +416,10 @@ def generate_untilize_with_halo_kernel_configs(tensor_metadata: list, resharded_
                     curr_segment_dst_start_idx = dst_local_idx
                     curr_segment_src_core_id = src_core_id
                     curr_segment_neighbor_idx = neighbor_idx
+                    if curr_segment_src_core_id not in core_src_local_start_idx:
+                        core_src_local_start_idx[curr_segment_src_core_id] = [-1] * (2 * NEIGHBORHOOD_DIST + 1)
+                    if core_src_local_start_idx[curr_segment_src_core_id][neighbor_idx] < 0:
+                        core_src_local_start_idx[curr_segment_src_core_id][neighbor_idx] = src_local_idx
 
         ## finish off the remaining last segment, if any
         if curr_segment_size > 0:
@@ -429,6 +441,7 @@ def generate_untilize_with_halo_kernel_configs(tensor_metadata: list, resharded_
     r_data_start_and_size = []
     rr_data_start_and_size = []
     local_pad_start_and_size = []
+    src_local_start_idx = []
     for i in range(ncores):
         ll_data_start_and_size.append(core_neighbor_data[i][NEIGHBORHOOD_DIST - 2])
         l_data_start_and_size.append(core_neighbor_data[i][NEIGHBORHOOD_DIST - 1])
@@ -436,6 +449,7 @@ def generate_untilize_with_halo_kernel_configs(tensor_metadata: list, resharded_
         r_data_start_and_size.append(core_neighbor_data[i][NEIGHBORHOOD_DIST + 1])
         rr_data_start_and_size.append(core_neighbor_data[i][NEIGHBORHOOD_DIST + 2])
         local_pad_start_and_size.append(core_pad_start_and_size[i])
+        src_local_start_idx.append(core_src_local_start_idx[i])
 
     return (
         local_data_start_and_size,
@@ -444,4 +458,9 @@ def generate_untilize_with_halo_kernel_configs(tensor_metadata: list, resharded_
         l_data_start_and_size,
         r_data_start_and_size,
         rr_data_start_and_size,
+        src_local_start_idx,
     )
+
+
+# def validate_untilize_with_halo_kernel_configs(local_data_start_and_size, local_pad_start_and_size, ll_send_start_and_size, l_send_start_and_size, r_send_start_and_size, rr_send_start_and_size):
+#     ## using the kernel configs, construct the resulting resharding for each core
