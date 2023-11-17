@@ -10,8 +10,6 @@
 
 namespace ckernel::unpacker
 {
-   constexpr uint32_t OPERAND_BASE_ID = 0; 
-   constexpr uint32_t INTERMEDIATE_BASE_ID = 24; 
    constexpr uint32_t TILE_DESC_SIZE = 2; //Unpacker descriptor size in dwords
    constexpr uint32_t CONFIG_SIZE = 2; //Unpacker configuration size in dwords
 
@@ -319,10 +317,5 @@ namespace ckernel::unpacker
       // Clear context ID
       //reset_config_context();
     }
-    
-   inline uint32_t get_operand_id(uint32_t operand) 
-   {
-      return (operand>=INTERMEDIATE_BASE_ID) ? operand - 8 : operand - OPERAND_BASE_ID;
-   }
 }
 

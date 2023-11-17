@@ -12,9 +12,7 @@
 
 namespace ckernel::packer
 {
-   constexpr uint32_t OUTPUT_BASE    = 16; 
-   constexpr uint32_t OUTPUT_BASE_ID = 0; 
-   constexpr uint32_t PACK_CNT       = 4;
+   constexpr uint32_t PACK_CNT = 4;
 
    //Pack src format, save src format to make reconfig writes only
    uint32_t tile_desc_pack_src_format;
@@ -379,16 +377,6 @@ namespace ckernel::packer
    inline void write_tile_header()
    {
       TTI_STOREIND (1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR);
-   }
-
-   inline uint32_t get_output_id(uint32_t output) 
-   {
-      return ((output) - OUTPUT_BASE);
-   }
-
-   inline constexpr uint32_t get_output_base_id() 
-   {
-      return (OUTPUT_BASE_ID);
    }
 }
 
