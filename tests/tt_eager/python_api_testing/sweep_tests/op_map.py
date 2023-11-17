@@ -557,6 +557,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_mul,
         "pytorch_op": pytorch_ops.mul,
     },
+    "eltwise-mul_out": {
+        "tt_lib_op": tt_lib_ops.eltwise_mul_out,
+        "pytorch_op": pytorch_ops.mul_out,
+    },
     "eltwise-min": {
         "tt_lib_op": tt_lib_ops.eltwise_min,
         "pytorch_op": pytorch_ops.min,

@@ -811,6 +811,10 @@ def mul(x, y, *args, **kwargs):
     return torch.mul(x, y)
 
 
+def mul_out(x, y, z, *args, **kwargs):
+    return torch.mul(x, y, out=z)
+
+
 def matmul(x, y, *args, **kwargs):
     return torch.matmul(x, y)
 

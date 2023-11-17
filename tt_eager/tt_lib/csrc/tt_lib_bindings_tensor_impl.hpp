@@ -95,6 +95,47 @@ void bind_binary_op(py::module_ &module, std::string op_name, Func &&f, std::str
     }
 }
 
+template <bool fused_activations = true, bool mem_config_arg = false, typename Func>
+void bind_binary_op_out(py::module_ &module, std::string op_name, Func &&f, std::string op_desc) {
+    std::vector<std::string> arg_name = {"input", "other", "output"};
+    op_desc = fmt::format(op_desc, arg_name[0], arg_name[1], arg_name[2]);
+
+    std::string docstring = fmt::format(R"doc(
+        {0}
+
+        Both input tensors must be of equal shape.
+
+        .. csv-table::
+            :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+            "{2}", "First tensor to {1}", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+            "{3}", "Second tensor to {1}", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+            "{4}", "Output tensor to {1}", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes")doc",
+        op_desc, op_name, arg_name[0], arg_name[1], arg_name[2]
+    );
+    if constexpr (fused_activations) {
+        const std::string fused_activations_name = "fused_activations";
+        const std::optional<std::vector<UnaryWithParam>> default_fused_activations = std::nullopt;
+        docstring += fmt::format(R"doc(
+            "{0}", "Fused activations after binary computation", "List of FusibleActivation with optional param", "Default is None", "No")doc",
+            fused_activations_name
+        );
+        bind_op_with_mem_config<mem_config_arg>(module, op_name, f, docstring,
+            py::arg(arg_name[0].c_str()).noconvert(),
+            py::arg(arg_name[1].c_str()).noconvert(),
+            py::arg(arg_name[2].c_str()).noconvert(),
+            py::arg(fused_activations_name.c_str()) = default_fused_activations
+        );
+
+    } else {
+        bind_op_with_mem_config<mem_config_arg>(module, op_name, f, docstring,
+            py::arg(arg_name[0].c_str()).noconvert(),
+            py::arg(arg_name[1].c_str()).noconvert(),
+            py::arg(arg_name[2].c_str()).noconvert()
+        );
+    }
+}
+
 //TODO @tt-aho: Update to handle variable number of params
 template <bool mem_config_arg = true, typename Func>
 void bind_unary_op(py::module_ &module, std::string op_name, Func &&f, std::string op_desc) {
