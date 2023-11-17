@@ -55,6 +55,6 @@ def validate_conv_sharded_input_top_left_indices(
     # print("out_golden_shard=", out_golden_pyt_tensor.reshape(-1)[conv_output_shard_start : conv_output_shard_end + 1])
     # print("out_shard=", output_pyt_shard)
     passing_pcc, output_pcc = comp_equal(output_golden_pyt_tensor.reshape(-1), output_pyt_tensor)
-    print("Passing=", passing_pcc)
+    # print("Passing=", passing_pcc)
     print("Output pcc=", output_pcc)
     assert passing_pcc

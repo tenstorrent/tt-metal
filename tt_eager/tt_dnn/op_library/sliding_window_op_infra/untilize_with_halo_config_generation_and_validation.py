@@ -236,8 +236,8 @@ def validate_required_conv_input_sharded_start_end(
         passing_pcc, output_pcc = comp_equal(
             out_golden_pyt_tensor.reshape(-1)[conv_output_shard_start : conv_output_shard_end + 1], output_pyt_shard
         )
-        print("Passing=", passing_pcc)
-        print("Output pcc=", output_pcc)
+        # print("Passing=", passing_pcc)
+        # print("Output pcc=", output_pcc)
         assert passing_pcc
 
     # We have validated conv_input_shards, return it so it can be used for supsequent references as golden reference
