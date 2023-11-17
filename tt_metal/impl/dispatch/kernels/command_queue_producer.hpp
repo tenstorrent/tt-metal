@@ -1,13 +1,10 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "tt_metal/impl/dispatch/kernels/command_queue_common.hpp"
 #include "tt_metal/hostdevcommon/common_values.hpp"
 #include "risc_attribs.h"
-
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
- */
-
 
 FORCE_INLINE
 bool cb_producer_space_available(int32_t num_pages) {

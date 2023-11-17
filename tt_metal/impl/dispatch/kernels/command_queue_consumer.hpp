@@ -1,10 +1,8 @@
-#include "dataflow_api.h"
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
- */
+#include "dataflow_api.h"
 
 static constexpr uint32_t PROGRAM_CB_ID = 0;
 

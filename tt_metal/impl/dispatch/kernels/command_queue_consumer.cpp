@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
- */
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/dispatch/kernels/command_queue_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/command_queue_consumer.hpp"
