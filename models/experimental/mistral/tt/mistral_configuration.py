@@ -22,4 +22,14 @@ class TtModelArgs:
     FALLBACK_ROTARY_EMBEDDING: bool = False
     FALLBACK_EMPTY: bool = False
     FALLBACK_SCATTER: bool = False
+    FALLBACK_DRAM: bool = True
     WEIGHTS_DTYPE = tt_lib.tensor.DataType.BFLOAT16
+
+    if FALLBACK_DRAM:
+        out_mem_config = tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+        )
+    else:
+        out_mem_config = tt_lib.tensor.MemoryConfig(
+            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        )
