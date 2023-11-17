@@ -1,11 +1,9 @@
 import pytest
 import torch
 import numpy
-from tests.tt_eager.python_api_testing.conv.conv_op_trace_config import (
+from tests.tt_eager.python_api_testing.conv.untilize_with_halo_config_generation_and_validation import (
     trace_conv_to_generate_data_top_left_indices_and_pad_metadata,
     validate_data_top_left_indices_and_pad_medata,
-)
-from tests.tt_eager.python_api_testing.conv.decompose_conv_into_shards import (
     decompose_conv_into_shards_and_generate_tensor_metadata,
     validate_required_conv_input_sharded_start_end,
     validate_tensor_metadata,
