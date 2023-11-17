@@ -44,6 +44,8 @@ void kernel_main() {
     uint32_t weight_next_block_stride_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_next_block_stride_w = get_arg_val<uint32_t>(i); i+=1;
 
+    uint32_t total_weight_num_tiles = weight_block_height_num_outer * num_blocks_weight_h * weight_block_num_tiles;
+
     // Bias arg. Unused if bias fusion is not enabled.
     const uint32_t bias_ntiles = get_arg_val<uint32_t>(i); i += 1;
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i); i += 1;
@@ -124,14 +126,34 @@ void kernel_main() {
     for (uint32_t bw = 0; bw < out_num_blocks_w; bw++) {
         uint32_t out_block_h_start_tile_id = out_block_w_start_tile_id;
         uint32_t out_block_h_start_tile_id_h = out_start_tile_id_h;
+        bool read_weights = true;
         for(uint32_t bh = 0; bh < out_num_blocks_h; bh++) {
-            // MCAST RECEIVE WEIGHTS
-            // read weight blocks inner dim
-            // read weight slice - 1 block of weights in width dim and full weight matrix height
-            // read slice only once for all activation blocks
-            for(uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer; weight_tile_h_outer_i++) {
-                for(uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h; block_weight_h++) {
-                    cb_reserve_back(cb_id_weight, weight_block_num_tiles);
+            if (read_weights) {
+                // MCAST RECEIVE WEIGHTS
+                // read weight blocks inner dim
+                // read weight slice - 1 block of weights in width dim and full weight matrix height
+                // read slice only once for all activation blocks
+                for(uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer; weight_tile_h_outer_i++) {
+                    for(uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h; block_weight_h++) {
+                        cb_reserve_back(cb_id_weight, weight_block_num_tiles);
+                        // Set weights semaphore value to INVALID
+                        noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
+
+                        // Atomic increment source core counter
+                        uint64_t weights_mcast_sender_semaphore_noc_addr = get_noc_addr(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
+                        noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
+
+                        // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
+                        noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
+
+                        cb_push_back(cb_id_weight, weight_block_num_tiles);
+                    } // for num_blocks_weight_h
+                } // for weight_block_height_num_outer
+
+                #ifdef FUSE_BIAS
+                if (load_bias) {
+                    cb_reserve_back(bias_cb_id, bias_ntiles);
+
                     // Set weights semaphore value to INVALID
                     noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
 
@@ -142,29 +164,15 @@ void kernel_main() {
                     // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
 
-                    cb_push_back(cb_id_weight, weight_block_num_tiles);
-                } // for num_blocks_weight_h
-            } // for weight_block_height_num_outer
-
-            #ifdef FUSE_BIAS
-            if (load_bias) {
-                cb_reserve_back(bias_cb_id, bias_ntiles);
-
-                // Set weights semaphore value to INVALID
-                noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
-
-                // Atomic increment source core counter
-                uint64_t weights_mcast_sender_semaphore_noc_addr = get_noc_addr(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, weights_mcast_sender_semaphore_addr);
-                noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
-
-                // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
-                noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
-
-                cb_push_back(bias_cb_id, bias_ntiles);
-                load_bias = false;
+                    cb_push_back(bias_cb_id, bias_ntiles);
+                    load_bias = false;
+                }
+                #endif
+                read_weights = false;
+            } else {
+                cb_reserve_back(cb_id_weight, total_weight_num_tiles);
+                cb_push_back(cb_id_weight, total_weight_num_tiles);
             }
-            #endif
-
             #ifndef SHARDED_OUT
             uint32_t out_sbh_start_tile_id = out_block_h_start_tile_id;
             uint32_t out_sbh_start_tile_id_h = out_block_h_start_tile_id_h; //
