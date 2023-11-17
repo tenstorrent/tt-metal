@@ -219,22 +219,17 @@ Tensor convert_torch_tensor_to_tt_tensor(
                 auto tensor = detail::convert_torch_tensor_to_tt_tensor(value);
                 input_tensors.push_back(tensor);
             } else {
-                struct PythonObject {
-                    PythonObject(const py::handle &value) : to_string([value] { return fmt::format("{}", value); }) {}
-                    const std::function<std::string()> to_string;
-                    tt::stl::reflection::Attributes attributes() const { return {{"value", this->to_string()}}; }
-                };
-                attributes.push_back({name, PythonObject(value)});
+                attributes.push_back({name, fmt::format("{}", value)});
             }
         };
 
         auto arg_index = 0;
-        for (const auto &&value : args) {
+        for (const auto &value : args) {
             auto name = fmt::format("arg_{}", arg_index++);
             process_name_and_value(name, value);
         }
 
-        for (const auto &&[name, value] : kwargs) {
+        for (const auto &[name, value] : kwargs) {
             process_name_and_value(py::cast<std::string>(name), value);
         }
 
@@ -343,12 +338,13 @@ Tensor convert_torch_tensor_to_tt_tensor(
 
         pyTensor
             .def(
-                py::init<>(
-                    [](std::vector<float>&& data, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout) {
-                        auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
-                        return Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
-                    }
-                ),
+                py::init<>([](std::vector<float> &&data,
+                              const std::array<uint32_t, 4> &shape,
+                              DataType data_type,
+                              Layout layout) {
+                    auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
+                    return Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
+                }),
                 py::return_value_policy::move,
                 R"doc(
                     +---------------+---------------+
@@ -374,16 +370,17 @@ Tensor convert_torch_tensor_to_tt_tensor(
                             tt_lib.tensor.DataType.BFLOAT16,
                             tt_lib.tensor.Layout.ROW_MAJOR,
                         )
-                )doc"
-            )
+                )doc")
             .def(
-                py::init<>(
-                    [](std::vector<float>&& data, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout, Device *device) {
-                        auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
-                        auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
-                        return tensor.to(device, MemoryConfig{});
-                    }
-                ),
+                py::init<>([](std::vector<float> &&data,
+                              const std::array<uint32_t, 4> &shape,
+                              DataType data_type,
+                              Layout layout,
+                              Device *device) {
+                    auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
+                    auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
+                    return tensor.to(device, MemoryConfig{});
+                }),
                 py::keep_alive<1, 6>(),
                 py::return_value_policy::move,
                 R"doc(
@@ -419,16 +416,18 @@ Tensor convert_torch_tensor_to_tt_tensor(
                             tt_lib.tensor.Layout.ROW_MAJOR,
                             tt_device
                         )
-                )doc"
-            )
+                )doc")
             .def(
-                py::init<>(
-                    [](std::vector<float>&& data, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
-                        auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
-                        auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
-                        return tensor.to(device, memory_config);
-                    }
-                ),
+                py::init<>([](std::vector<float> &&data,
+                              const std::array<uint32_t, 4> &shape,
+                              DataType data_type,
+                              Layout layout,
+                              Device *device,
+                              const MemoryConfig &memory_config) {
+                    auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
+                    auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
+                    return tensor.to(device, memory_config);
+                }),
                 py::keep_alive<1, 6>(),
                 py::return_value_policy::move,
                 R"doc(
@@ -468,14 +467,11 @@ Tensor convert_torch_tensor_to_tt_tensor(
                             tt_device,
                             mem_config
                         )
-                )doc"
-            )
+                )doc")
             .def(
-                py::init<>(
-                    [](const py::object& torch_tensor, std::optional<DataType> data_type) {
-                        return detail::convert_torch_tensor_to_tt_tensor(torch_tensor, data_type);
-                    }
-                ),
+                py::init<>([](const py::object &torch_tensor, std::optional<DataType> data_type) {
+                    return detail::convert_torch_tensor_to_tt_tensor(torch_tensor, data_type);
+                }),
                 py::arg("torch_tensor"),
                 py::arg("data_type") = std::nullopt,
                 py::return_value_policy::move,
@@ -494,19 +490,23 @@ Tensor convert_torch_tensor_to_tt_tensor(
 
                         py_tensor = torch.randn((1, 1, 32, 32))
                         tt_lib.tensor.Tensor(py_tensor)
-                )doc"
-            )
-            .def("deallocate", [](Tensor &self, bool force) {
-                    return self.deallocate(force);
-                },
+                )doc")
+            .def(
+                "deallocate",
+                [](Tensor &self, bool force) { return self.deallocate(force); },
                 py::arg("force") = false,
                 R"doc(
                     Dellocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
-                )doc"
-            )
-            .def("to", [](const Tensor &self, Device *device, const MemoryConfig &mem_config) {
-                return self.to(device, mem_config);
-            }, py::arg().noconvert(), py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout=TensorMemoryLayout::INTERLEAVED}, py::keep_alive<0, 2>(), R"doc(
+                )doc")
+            .def(
+                "to",
+                [](const Tensor &self, Device *device, const MemoryConfig &mem_config) {
+                    return self.to(device, mem_config);
+                },
+                py::arg().noconvert(),
+                py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
+                py::keep_alive<0, 2>(),
+                R"doc(
                 Move TT Tensor from host device to TT accelerator device.
 
                 Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
@@ -548,10 +548,12 @@ Tensor convert_torch_tensor_to_tt_tensor(
 
                     tt_tensor = tt_tensor.to(tt_lib.tensor.Layout.TILE)
             )doc")
-            .def("pad",
-                [] (const Tensor &self, const std::array<uint32_t, 4> &output_tensor_shape, const std::array<uint32_t, 4> &input_tensor_start, float pad_value) {
-                    return self.pad(output_tensor_shape, input_tensor_start, pad_value);
-                },
+            .def(
+                "pad",
+                [](const Tensor &self,
+                   const std::array<uint32_t, 4> &output_tensor_shape,
+                   const std::array<uint32_t, 4> &input_tensor_start,
+                   float pad_value) { return self.pad(output_tensor_shape, input_tensor_start, pad_value); },
                 R"doc(
                 Pad TT Tensor with given pad value ``arg2``.
 
@@ -618,9 +620,14 @@ Tensor convert_torch_tensor_to_tt_tensor(
                         [0, 7, 8, 9, 0],
                         [0, 0, 0, 0, 0]]] dtype=bfloat16 ]
             )doc")
-            .def("unpad", [](const Tensor &self, const std::array<uint32_t, 4> &output_tensor_start, const std::array<uint32_t, 4> &output_tensor_end) {
-                return self.unpad(output_tensor_start, output_tensor_end);
-            }, R"doc(
+            .def(
+                "unpad",
+                [](const Tensor &self,
+                   const std::array<uint32_t, 4> &output_tensor_start,
+                   const std::array<uint32_t, 4> &output_tensor_end) {
+                    return self.unpad(output_tensor_start, output_tensor_end);
+                },
+                R"doc(
                 Unpad this TT Tensor.
 
                 This tensor must be on host and in ROW_MAJOR layout.
@@ -681,9 +688,8 @@ Tensor convert_torch_tensor_to_tt_tensor(
                         [4, 5, 6],
                         [7, 8, 9]]] dtype=bfloat16 ]
             )doc")
-            .def("pad_to_tile", [](const Tensor &self, float pad_value) {
-                return self.pad_to_tile(pad_value);
-            }, R"doc(
+            .def(
+                "pad_to_tile", [](const Tensor &self, float pad_value) { return self.pad_to_tile(pad_value); }, R"doc(
                 Pads TT Tensor with given pad value ``arg0``.
 
                 The input tensor must be on host and in ROW_MAJOR layout.
@@ -738,9 +744,12 @@ Tensor convert_torch_tensor_to_tt_tensor(
                         ...,
                         [0, 0, 0, 0, ..., 0]]] dtype=bfloat16 ]
             )doc")
-            .def("unpad_from_tile", [](const Tensor &self, const std::array<uint32_t, 4> &output_tensor_shape) {
-                return self.unpad_from_tile(output_tensor_shape);
-            }, R"doc(
+            .def(
+                "unpad_from_tile",
+                [](const Tensor &self, const std::array<uint32_t, 4> &output_tensor_shape) {
+                    return self.unpad_from_tile(output_tensor_shape);
+                },
+                R"doc(
                 Unpads TT Tensor from given input tensor ``arg0``.
 
                 The input tensor must be on host and in ROW_MAJOR layout.
@@ -799,9 +808,11 @@ Tensor convert_torch_tensor_to_tt_tensor(
                         [4, 5, 6],
                         [7, 8, 9]]] dtype=bfloat16 ]
             )doc")
-            .def("print", [](const Tensor &self, Layout print_layout) {
-                std::cout << self.to_string(print_layout);
-            }, py::arg("print_layout") = Layout::ROW_MAJOR, R"doc(
+            .def(
+                "print",
+                [](const Tensor &self, Layout print_layout) { std::cout << self.write_to_string(print_layout); },
+                py::arg("print_layout") = Layout::ROW_MAJOR,
+                R"doc(
                 Prints the tensor as a flat list of numbers. By default, the tensor will be printed in row major order.
 
                 .. code-block:: python
@@ -814,9 +825,8 @@ Tensor convert_torch_tensor_to_tt_tensor(
 
                     [ 0.722656, 0.0332031, 0.109375, ..., 0.333984, 0.396484, 0.851562 dtype=bfloat16 ]
             )doc")
-            .def("__str__", [](const Tensor &self) {
-                return self.to_string(Layout::ROW_MAJOR, true);
-            }, R"doc(
+            .def(
+                "__str__", [](const Tensor &self) { return self.write_to_string(Layout::ROW_MAJOR, true); }, R"doc(
                 Prints the tensor as list of nested lists. Number of levels of nesting is equal to tensor rank.
 
                 .. code-block:: python
@@ -833,10 +843,13 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     [0.433594, 0.165039, 0.980469, ..., , 0.349609]]] dtype=bfloat16 ]
 
             )doc")
-            .def("shape", [](const Tensor &self) {
-                const auto& shape = self.shape();
-                return std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
-            }, R"doc(
+            .def(
+                "shape",
+                [](const Tensor &self) {
+                    const auto &shape = self.shape();
+                    return std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
+                },
+                R"doc(
                 Get the shape of the tensor as list of integers.
 
                 .. code-block:: python
@@ -844,9 +857,8 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     shape = tt_tensor.shape()
 
             )doc")
-            .def("volume", [](const Tensor &self) {
-                return self.volume();
-            }, R"doc(
+            .def(
+                "volume", [](const Tensor &self) { return self.volume(); }, R"doc(
                 Get the volume of the tensor.
 
                 .. code-block:: python
@@ -854,9 +866,8 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     volume = tt_tensor.volume()
 
             )doc")
-            .def("storage_type", [](const Tensor &self) {
-                return self.storage_type();
-            }, R"doc(
+            .def(
+                "storage_type", [](const Tensor &self) { return self.storage_type(); }, R"doc(
                 Check if the tensor is on host
 
                 .. code-block:: python
@@ -864,9 +875,8 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     storage_type = tt_tensor.storage_type()
 
             )doc")
-            .def("device", [](const Tensor &self) {
-                return self.device();
-            }, R"doc(
+            .def(
+                "device", [](const Tensor &self) { return self.device(); }, R"doc(
                 Get the device of the tensor.
 
                 .. code-block:: python
@@ -874,9 +884,10 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     device = tt_tensor.device()
 
             )doc")
-            .def("to_torch", [](const Tensor& self) -> py::object {
-                return detail::convert_tt_tensor_to_torch_tensor(self);
-            }, R"doc(
+            .def(
+                "to_torch",
+                [](const Tensor &self) -> py::object { return detail::convert_tt_tensor_to_torch_tensor(self); },
+                R"doc(
                 Convert tensor to torch tensor.
 
                 The tensor must be on host when calling this function.
@@ -886,26 +897,25 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     data = tt_tensor.cpu().to_torch() # move TT Tensor to host and convert it to torch tensor
 
             )doc")
-            .def("buffer", [](const Tensor &self) -> std::variant<OwnedBuffer, BorrowedBuffer> {
-                return std::visit(
-                    [] (auto&& storage) -> std::variant<OwnedBuffer, BorrowedBuffer> {
-                        using T = std::decay_t<decltype(storage)>;
-                        if constexpr (std::is_same_v<T, OwnedStorage>) {
-                            return storage.buffer;
-                        }
-                        else if constexpr (std::is_same_v<T, DeviceStorage>) {
-                            TT_THROW("Device storage doesn't support buffer method");
-                        }
-                        else if constexpr (std::is_same_v<T, BorrowedStorage>) {
-                            return storage.buffer;
-                        }
-                        else {
-                            raise_unsupported_storage<T>();
-                        }
-                    },
-                    self.storage()
-                );
-            }, R"doc(
+            .def(
+                "buffer",
+                [](const Tensor &self) -> std::variant<OwnedBuffer, BorrowedBuffer> {
+                    return std::visit(
+                        [](auto &&storage) -> std::variant<OwnedBuffer, BorrowedBuffer> {
+                            using T = std::decay_t<decltype(storage)>;
+                            if constexpr (std::is_same_v<T, OwnedStorage>) {
+                                return storage.buffer;
+                            } else if constexpr (std::is_same_v<T, DeviceStorage>) {
+                                TT_THROW("Device storage doesn't support buffer method");
+                            } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
+                                return storage.buffer;
+                            } else {
+                                raise_unsupported_storage<T>();
+                            }
+                        },
+                        self.storage());
+                },
+                R"doc(
                 Get the underlying buffer.
 
                 The tensor must be on the cpu when calling this function.
@@ -915,9 +925,8 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     buffer = tt_tensor.cpu().buffer() # move TT Tensor to host and get the buffer
 
             )doc")
-            .def("layout", [](const Tensor &self) {
-                return self.layout();
-            }, R"doc(
+            .def(
+                "layout", [](const Tensor &self) { return self.layout(); }, R"doc(
                 Get memory layout of TT Tensor.
 
                 .. code-block:: python
@@ -925,9 +934,8 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     layout = tt_tensor.layout()
 
             )doc")
-            .def("memory_config", [](const Tensor &self) {
-                return self.memory_config();
-            }, R"doc(
+            .def(
+                "memory_config", [](const Tensor &self) { return self.memory_config(); }, R"doc(
                 Get buffer type of TT Tensor.
 
                 .. code-block:: python
@@ -935,50 +943,46 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     memory_config = tt_tensor.memory_config()
 
             )doc")
-            .def("dtype", [](const Tensor &self) {
-                return self.dtype();
-            }, R"doc(
+            .def(
+                "dtype", [](const Tensor &self) { return self.dtype(); }, R"doc(
                 Get dtype of TT Tensor.
 
                 .. code-block:: python
 
                     dtype = tt_tensor.dtype()
             )doc")
-            .def("shape_without_padding", [](const Tensor &self) {
-                Shape shape_without_padding = self.shape().without_padding();
-                std::vector<uint32_t> unpadded_shape;
-                for (auto value : shape_without_padding) {
-                    unpadded_shape.push_back(value);
-                }
-                return unpadded_shape;
-            }, R"doc(
+            .def(
+                "shape_without_padding",
+                [](const Tensor &self) {
+                    Shape shape_without_padding = self.shape().without_padding();
+                    std::vector<uint32_t> unpadded_shape;
+                    for (auto value : shape_without_padding) {
+                        unpadded_shape.push_back(value);
+                    }
+                    return unpadded_shape;
+                },
+                R"doc(
                 Get shape without padding of TT Tensor.
 
                 .. code-block:: python
 
                     dtype = tt_tensor.shape_without_padding()
             )doc")
-            .def("reshape",
-                [](Tensor &self, int N, int C, int H, int W) {
-                    return self.reshape(N, C, H, W);
-                }, R"doc(
+            .def(
+                "reshape", [](Tensor &self, int N, int C, int H, int W) { return self.reshape(N, C, H, W); }, R"doc(
                     Reshapes TT tensor
 
                     .. code-block:: python
 
                         reshaped_tensor = tt_tensor.reshape(N, C, H, W)
-                )doc"
-            )
-            .def("reshape",
-                [](Tensor &self, const std::vector<uint32_t>& shape) {
-                    return self.reshape(shape);
-                }, R"doc(
+                )doc")
+            .def(
+                "reshape", [](Tensor &self, const std::vector<uint32_t> &shape) { return self.reshape(shape); }, R"doc(
                     Reshapes TT tensor
 
                     .. code-block:: python
 
                         reshaped_tensor = tt_tensor.reshape((4, 3, 32))
-                )doc"
-            );
+                )doc");
     }
     }  // namespace tt::tt_metal::detail

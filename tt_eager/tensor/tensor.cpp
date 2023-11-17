@@ -58,29 +58,24 @@ void Tensor::deallocate(bool force) {
     ZoneScoped;
 
     std::visit(
-        [&force](auto&& storage)
-        {
+        [&force](auto&& storage) {
             using T = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<T, OwnedStorage>) {
                 std::visit([](auto&& buffer) { buffer.reset(); }, storage.buffer);
-            }
-            else if constexpr (std::is_same_v<T, DeviceStorage>) {
+            } else if constexpr (std::is_same_v<T, DeviceStorage>) {
                 if (storage.buffer.use_count() == 1 or force) {
-                     DeallocateBuffer(*storage.buffer);
+                    DeallocateBuffer(*storage.buffer);
                 }
                 storage.buffer.reset();
-            }
-            else if constexpr (std::is_same_v<T, BorrowedStorage>) {
+            } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
                 if (force) {
                     TT_THROW("Cannot deallocate tensor with borrowed storage!");
                 }
-            }
-            else {
+            } else {
                 raise_unsupported_storage<T>();
             }
         },
-        this->storage_
-    );
+        this->storage_);
 }
 
 Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
@@ -108,12 +103,12 @@ Tensor Tensor::to(Layout target_layout) const {
     return tensor_impl::to_layout_wrapper(*this, target_layout);
 }
 
-std::string Tensor::to_string(Layout print_layout, bool pretty_print) const {
+const std::string Tensor::write_to_string(Layout print_layout, bool pretty_print) const {
     return tensor_impl::to_string_wrapper(*this, print_layout, pretty_print);
 }
 
 void Tensor::print(Layout print_layout, bool pretty_print) const {
-    std::cout << to_string(print_layout, pretty_print);
+    std::cout << write_to_string(print_layout, pretty_print);
 }
 
 Tensor Tensor::pad(const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) const {
