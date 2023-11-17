@@ -1898,10 +1898,34 @@ def make_binary_op(ttl_tensor_binop):
 
     return binary_op
 
+def make_binary_op_out(ttl_tensor_binop):
+    @setup_host_and_device
+    def binary_op(
+        x,
+        y,
+        z,
+        *args,
+        device,
+        dtype,
+        layout,
+        input_mem_config,
+        output_mem_config,
+        **kwargs,
+    ):
+        t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+        t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
+        t2 = setup_tt_tensor(z, device, layout[2], output_mem_config, dtype[2])
+        ttl_tensor_binop(t0, t1, t2)
+
+        return tt2torch_tensor(t2)
+
+    return binary_op
+
 
 eltwise_add = make_binary_op(ttl.tensor.add)
 eltwise_sub = make_binary_op(ttl.tensor.sub)
 eltwise_mul = make_binary_op(ttl.tensor.mul)
+eltwise_mul_out = make_binary_op_out(ttl.tensor.mul_out)
 eltwise_bias_gelu = make_binary_op(ttl.tensor.bias_gelu)
 eltwise_squared_difference = make_binary_op(ttl.tensor.squared_difference)
 eltwise_hypot = make_binary_op(ttl.tensor.hypot)
