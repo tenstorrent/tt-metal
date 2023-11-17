@@ -61,6 +61,16 @@ struct make_eltwise_binary {
      }
  };
 
+template <BinaryOpType binary_op_type>
+struct make_eltwise_binary_out {
+     Tensor operator()(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor, std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt) const {
+         TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
+         TT_ASSERT(input_tensor_a.shape() == output_tensor.shape(), "Input and output shapes must be the same!");
+         return operation::run_with_autoformat(EltwiseBinary{binary_op_type, fused_activations, output_tensor.memory_config()}, {input_tensor_a, input_tensor_b, output_tensor}).at(0);
+     }
+ };
+
+
 inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
     return operation::run_without_autoformat(EltwiseBinary{BinaryOpType::ADD, fused_activations, output_mem_config}, {input_tensor_a, input_tensor_b}).at(0);
@@ -70,6 +80,7 @@ inline Tensor add_without_autoformat(const Tensor& input_tensor_a, const Tensor&
  constexpr auto add = make_eltwise_binary<BinaryOpType::ADD>{};
  constexpr auto sub = make_eltwise_binary<BinaryOpType::SUB>{};
  constexpr auto mul = make_eltwise_binary<BinaryOpType::MUL>{};
+ constexpr auto mul_out = make_eltwise_binary_out<BinaryOpType::MUL>{};
  constexpr auto squared_difference = make_eltwise_binary<BinaryOpType::SQUARED_DIFFERENCE>{};
  constexpr auto bias_gelu = make_eltwise_binary<BinaryOpType::BIAS_GELU>{};
  constexpr auto logaddexp = make_eltwise_binary<BinaryOpType::LOGADDEXP>{};

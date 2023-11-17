@@ -143,17 +143,26 @@ void EltwiseBinary::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<Shape> EltwiseBinary::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<Shape> EltwiseBinary::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    if (input_tensors.size() == 3) {
+        const auto& output_tensor = input_tensors.at(2);
+        return {output_tensor.shape()};
+    }
+
     const auto& input_tensor = input_tensors.at(0);
     return {input_tensor.shape()};
 }
 
-std::vector<Tensor> EltwiseBinary::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<Tensor> EltwiseBinary::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    if (input_tensors.size() == 3) {
+        const auto& output_tensor = input_tensors.at(2);
+        return {output_tensor};
+    }
+
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     if (this->output_mem_config.is_sharded()) {
+
         ShardSpec shard_spec{.shard_grid=CoreRangeSet({}), .shard_shape={0, 0}};
         if (input_tensor_a.memory_config().is_sharded()) {
             shard_spec = input_tensor_a.shard_spec().value();
