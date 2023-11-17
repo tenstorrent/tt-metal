@@ -48,6 +48,7 @@ class TtAttention(nn.Module):
             args.n_heads * args.head_dim,
             self.wq_weights,
             device=self.device,
+            output_mem_config=self.args.out_mem_config,
         )
 
         wk_weights = self.state_dict[f"{base_address}wk.weight"]
@@ -63,6 +64,7 @@ class TtAttention(nn.Module):
             args.n_kv_heads * args.head_dim,
             self.wk_weights,
             device=self.device,
+            output_mem_config=self.args.out_mem_config,
         )
 
         wv_weights = self.state_dict[f"{base_address}wv.weight"]
@@ -78,6 +80,7 @@ class TtAttention(nn.Module):
             args.n_kv_heads * args.head_dim,
             self.wv_weights,
             device=self.device,
+            output_mem_config=self.args.out_mem_config,
         )
 
         wo_weights = state_dict[f"{base_address}wo.weight"]
@@ -93,6 +96,7 @@ class TtAttention(nn.Module):
             args.dim,
             self.wo_weights,
             device=self.device,
+            output_mem_config=self.args.out_mem_config,
         )
 
         if self.args.FALLBACK_EMPTY:
@@ -108,18 +112,14 @@ class TtAttention(nn.Module):
                 [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],
                 layout=tt_lib.tensor.Layout.ROW_MAJOR,
                 device=self.device,
-                output_mem_config=tt_lib.tensor.MemoryConfig(
-                    tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-                ),
+                output_mem_config=self.args.out_mem_config,
             )
             self.cache_k = tt_to_torch_tensor(cache_k).to(torch.float32)
             cache_v = tt_lib.tensor.empty(
                 [args.max_batch_size, args.sliding_window, self.n_kv_heads, self.args.head_dim],
                 layout=tt_lib.tensor.Layout.ROW_MAJOR,
                 device=self.device,
-                output_mem_config=tt_lib.tensor.MemoryConfig(
-                    tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-                ),
+                output_mem_config=self.args.out_mem_config,
             )
             self.cache_v = tt_to_torch_tensor(cache_v).to(torch.float32)
 
@@ -127,8 +127,8 @@ class TtAttention(nn.Module):
         dim = 2
         keys = torch_to_tt_tensor_rm(keys, self.device)
         values = torch_to_tt_tensor_rm(values, self.device)
-        keys = tt_lib.tensor.repeat_interleave(keys, repeats, dim)
-        values = tt_lib.tensor.repeat_interleave(values, repeats, dim)
+        keys = tt_lib.tensor.repeat_interleave(keys, repeats, dim, output_mem_config=self.args.out_mem_config)
+        values = tt_lib.tensor.repeat_interleave(values, repeats, dim, output_mem_config=self.args.out_mem_config)
         return keys, values
 
     def forward(
@@ -154,7 +154,9 @@ class TtAttention(nn.Module):
         if self.args.FALLBACK_ROTARY_EMBEDDING:
             xq, xk = fallback_apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
         else:
-            xq, xk = apply_rotary_emb_type2(xq, xk, freqs_cis=freqs_cis, device=self.device)
+            xq, xk = apply_rotary_emb_type2(
+                xq, xk, freqs_cis=freqs_cis, device=self.device, mem_config=self.args.out_mem_config
+            )
 
         # The cache is a rotating buffer
         positions = tt_to_torch_tensor(positions).squeeze(0).squeeze(0).squeeze(0)
@@ -186,16 +188,15 @@ class TtAttention(nn.Module):
             )
 
         xq = torch_to_tt_tensor_rm(xq, self.device)
-        query = tt_lib.tensor.transpose(xq, 1, -2)
+        query = tt_lib.tensor.transpose(xq, 1, -2, output_mem_config=self.args.out_mem_config)
         xq.deallocate()
-        key = tt_lib.tensor.transpose(key, 1, -2)
-        value = tt_lib.tensor.transpose(value, 1, -2)
+        key = tt_lib.tensor.transpose(key, 1, -2, output_mem_config=self.args.out_mem_config)
+        value = tt_lib.tensor.transpose(value, 1, -2, output_mem_config=self.args.out_mem_config)
 
-        key = tt_lib.tensor.transpose(key, -2, -1)
-        scores = tt_lib.tensor.bmm(query, key)
+        key = tt_lib.tensor.transpose(key, -2, -1, output_mem_config=self.args.out_mem_config)
+        scores = tt_lib.tensor.bmm(query, key, output_mem_config=self.args.out_mem_config)
         key.deallocate()
-        scores = tt_lib.tensor.mul_unary(scores, self.scale)
-
+        scores = tt_lib.tensor.mul_unary(scores, self.scale, output_mem_config=self.args.out_mem_config)
         scores = tt_to_torch_tensor(scores)
         if mask is not None:
             if mask.dim() == 4:
@@ -208,13 +209,15 @@ class TtAttention(nn.Module):
         if self.args.FALLBACK_SOFTMAX:
             scores = fallback_ops.softmax(scores, dim=-1)
         else:
-            scores = tt_lib.tensor.softmax(scores)
+            scores = tt_lib.tensor.softmax(scores, output_mem_config=self.args.out_mem_config)
 
-        output = tt_lib.tensor.bmm(scores, value)  # (bs, n_local_heads, slen, head_dim)
+        output = tt_lib.tensor.bmm(
+            scores, value, output_mem_config=self.args.out_mem_config
+        )  # (bs, n_local_heads, slen, head_dim)
 
         value.deallocate()
         scores.deallocate()
-        output = tt_lib.tensor.transpose(output, 1, -2)
+        output = tt_lib.tensor.transpose(output, 1, -2, output_mem_config=self.args.out_mem_config)
 
         output = fallback_ops.reshape(output, 1, bsz, seqlen, -1)
         return self.wo(output)
@@ -249,7 +252,7 @@ def fallback_apply_rotary_emb(
 
 
 def apply_rotary_emb_type1(
-    t_xq: torch.Tensor, t_xk: torch.Tensor, freqs_cis: torch.Tensor, device
+    t_xq: torch.Tensor, t_xk: torch.Tensor, freqs_cis: torch.Tensor, device, mem_config
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     xq_shape = list(copy.deepcopy(t_xq.shape))
     xq_shape[-1] = xq_shape[-1] // 2
@@ -272,19 +275,11 @@ def apply_rotary_emb_type1(
 
     t_one = tt_lib.tensor.ones_like(xq)
     bcast_freq = tt_lib.tensor.bcast(t_one, freqs_cis, BCMUL, BCH)
-    xq_out = tt_lib.tensor.complex_mul(
-        xq,
-        bcast_freq,
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-    )
+    xq_out = tt_lib.tensor.complex_mul(xq, bcast_freq, mem_config)
 
     t_one = tt_lib.tensor.ones_like(xk)
     bcast_freq = tt_lib.tensor.bcast(t_one, freqs_cis, BCMUL, BCH)
-    xk_out = tt_lib.tensor.complex_mul(
-        xk,
-        bcast_freq,
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-    )
+    xk_out = tt_lib.tensor.complex_mul(xk, bcast_freq, mem_config)
 
     xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
 
@@ -303,7 +298,7 @@ def apply_rotary_emb_type1(
 
 
 def apply_rotary_emb_type2(
-    t_xq: torch.Tensor, t_xk: torch.Tensor, freqs_cis: torch.Tensor, device
+    t_xq: torch.Tensor, t_xk: torch.Tensor, freqs_cis: torch.Tensor, device, mem_config
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     xq_shape = list(copy.deepcopy(t_xq.shape))
     xq_shape[-1] = xq_shape[-1] // 2
@@ -333,31 +328,27 @@ def apply_rotary_emb_type2(
     BCH = tt_lib.tensor.BcastOpDim.HW
     BCMUL = tt_lib.tensor.BcastOpMath.MUL
 
-    t_one_xq = tt_lib.tensor.ones_like(xq.real)
-    t_one_xq = tt_lib.tensor.permute(t_one_xq, (3, 1, 2, 0))
-    freqs_real = tt_lib.tensor.permute(freqs_cis.real, (3, 1, 2, 0))
-    freqs_imag = tt_lib.tensor.permute(freqs_cis.imag, (3, 1, 2, 0))
-    bcast_freq_re_xq = tt_lib.tensor.bcast(t_one_xq, freqs_real, BCMUL, BCH)
-    bcast_freq_im_xq = tt_lib.tensor.bcast(t_one_xq, freqs_imag, BCMUL, BCH)
-    bcast_freq_re_xq = tt_lib.tensor.permute(bcast_freq_re_xq, (3, 1, 2, 0))
-    bcast_freq_im_xq = tt_lib.tensor.permute(bcast_freq_im_xq, (3, 1, 2, 0))
+    t_one_xq = tt_lib.tensor.ones_like(xq.real, output_mem_config=mem_config)
+    t_one_xq = tt_lib.tensor.permute(t_one_xq, (3, 1, 2, 0), output_mem_config=mem_config)
+    freqs_real = tt_lib.tensor.permute(freqs_cis.real, (3, 1, 2, 0), output_mem_config=mem_config)
+    freqs_imag = tt_lib.tensor.permute(freqs_cis.imag, (3, 1, 2, 0), output_mem_config=mem_config)
+    bcast_freq_re_xq = tt_lib.tensor.bcast(t_one_xq, freqs_real, BCMUL, BCH, output_mem_config=mem_config)
+    bcast_freq_im_xq = tt_lib.tensor.bcast(t_one_xq, freqs_imag, BCMUL, BCH, output_mem_config=mem_config)
+    bcast_freq_re_xq = tt_lib.tensor.permute(bcast_freq_re_xq, (3, 1, 2, 0), output_mem_config=mem_config)
+    bcast_freq_im_xq = tt_lib.tensor.permute(bcast_freq_im_xq, (3, 1, 2, 0), output_mem_config=mem_config)
     t_one_xq.deallocate()
     bcast_freq_xq = tt_lib.tensor.complex_tensor(bcast_freq_re_xq, bcast_freq_im_xq)
     bcast_freq_re_xq.deallocate()
     bcast_freq_im_xq.deallocate()
-    xq_out = tt_lib.tensor.complex_mul(
-        xq,
-        bcast_freq_xq,
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-    )
+    xq_out = tt_lib.tensor.complex_mul(xq, bcast_freq_xq, output_mem_config=mem_config)
     bcast_freq_xq.deallocate()
 
-    t_one_xk = tt_lib.tensor.ones_like(xk.real)
-    t_one_xk = tt_lib.tensor.permute(t_one_xk, (3, 1, 2, 0))
-    bcast_freq_re_xk = tt_lib.tensor.bcast(t_one_xk, freqs_real, BCMUL, BCH)
-    bcast_freq_im_xk = tt_lib.tensor.bcast(t_one_xk, freqs_imag, BCMUL, BCH)
-    bcast_freq_re_xk = tt_lib.tensor.permute(bcast_freq_re_xk, (3, 1, 2, 0))
-    bcast_freq_im_xk = tt_lib.tensor.permute(bcast_freq_im_xk, (3, 1, 2, 0))
+    t_one_xk = tt_lib.tensor.ones_like(xk.real, output_mem_config=mem_config)
+    t_one_xk = tt_lib.tensor.permute(t_one_xk, (3, 1, 2, 0), output_mem_config=mem_config)
+    bcast_freq_re_xk = tt_lib.tensor.bcast(t_one_xk, freqs_real, BCMUL, BCH, output_mem_config=mem_config)
+    bcast_freq_im_xk = tt_lib.tensor.bcast(t_one_xk, freqs_imag, BCMUL, BCH, output_mem_config=mem_config)
+    bcast_freq_re_xk = tt_lib.tensor.permute(bcast_freq_re_xk, (3, 1, 2, 0), output_mem_config=mem_config)
+    bcast_freq_im_xk = tt_lib.tensor.permute(bcast_freq_im_xk, (3, 1, 2, 0), output_mem_config=mem_config)
     bcast_freq_xk = tt_lib.tensor.complex_tensor(bcast_freq_re_xk, bcast_freq_im_xk)
     t_one_xk.deallocate()
     bcast_freq_re_xk.deallocate()
@@ -365,15 +356,11 @@ def apply_rotary_emb_type2(
     freqs_cis.deallocate()
     freqs_real.deallocate()
     freqs_imag.deallocate()
-    xk_out = tt_lib.tensor.complex_mul(
-        xk,
-        bcast_freq_xk,
-        tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM),
-    )
+    xk_out = tt_lib.tensor.complex_mul(xk, bcast_freq_xk, output_mem_config=mem_config)
 
     bcast_freq_xk.deallocate()
-    xq_out = tt_lib.tensor.concat([xq_out.real, xq_out.imag], -1)
-    xk_out = tt_lib.tensor.concat([xk_out.real, xk_out.imag], -1)
+    xq_out = tt_lib.tensor.concat([xq_out.real, xq_out.imag], -1, mem_config)
+    xk_out = tt_lib.tensor.concat([xk_out.real, xk_out.imag], -1, mem_config)
     xq, xk = tt_to_torch_tensor(xq_out).to(torch.float32), tt_to_torch_tensor(xk_out).to(torch.float32)
 
     xq_out.deallocate()
