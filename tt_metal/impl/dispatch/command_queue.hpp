@@ -77,13 +77,13 @@ class EnqueueReadBufferCommand : public Command {
    private:
     Device* device;
     SystemMemoryWriter& writer;
-    vector<uint32_t>& dst;
+    void* dst;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_READ_BUFFER;
 
    public:
     Buffer& buffer;
     uint32_t read_buffer_addr;
-    EnqueueReadBufferCommand(Device* device, Buffer& buffer, vector<uint32_t>& dst, SystemMemoryWriter& writer);
+    EnqueueReadBufferCommand(Device* device, Buffer& buffer, void* dst, SystemMemoryWriter& writer);
 
     const DeviceCommand assemble_device_command(uint32_t dst);
 
@@ -98,11 +98,11 @@ class EnqueueWriteBufferCommand : public Command {
     Buffer& buffer;
 
     SystemMemoryWriter& writer;
-    vector<uint32_t>& src;
+    const void* src;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_WRITE_BUFFER;
 
    public:
-    EnqueueWriteBufferCommand(Device* device, Buffer& buffer, vector<uint32_t>& src, SystemMemoryWriter& writer);
+    EnqueueWriteBufferCommand(Device* device, Buffer& buffer, const void* src, SystemMemoryWriter& writer);
 
     const DeviceCommand assemble_device_command(uint32_t src_address);
 
@@ -185,9 +185,9 @@ class CommandQueue {
 
     void enqueue_command(Command& command, bool blocking);
 
-    void enqueue_read_buffer(Buffer& buffer, vector<uint32_t>& dst, bool blocking);
+    void enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking);
 
-    void enqueue_write_buffer(Buffer& buffer, vector<uint32_t>& src, bool blocking);
+    void enqueue_write_buffer(Buffer& buffer, const void* src, bool blocking);
 
     void enqueue_program(Program& program, bool blocking);
 
@@ -197,6 +197,8 @@ class CommandQueue {
 
     friend void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& dst, bool blocking);
     friend void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& src, bool blocking);
+    friend void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, void* dst, bool blocking);
+    friend void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, const void* src, bool blocking);
     friend void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
     friend void Finish(CommandQueue& cq);
     friend void ClearProgramCache(CommandQueue& cq);
