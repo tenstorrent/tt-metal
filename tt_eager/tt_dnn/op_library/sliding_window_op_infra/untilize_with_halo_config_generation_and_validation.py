@@ -191,6 +191,7 @@ def validate_required_conv_input_sharded_start_end(
 ):
     filter_h = filter_pyt_tensor.size()[2]
     filter_w = filter_pyt_tensor.size()[3]
+    assert filter_pyt_tensor.size()[0] == 1 and filter_pyt_tensor.size()[1] == 1
     assert len(data_top_left_indices) == numpy.prod(list(out_golden_pyt_tensor.size()))
 
     # Validate req_conv_input_shard_start_end. First, generate conv input shards
@@ -212,17 +213,15 @@ def validate_required_conv_input_sharded_start_end(
         for o in range(output_shard_size):
             assert output_stick < len(data_top_left_indices)
             input_top_left_position_stick = data_top_left_indices[output_stick]
-            output_val = 0
             assert input_top_left_position_stick >= req_conv_input_shard_start
             input_shard_stick_local_idx = input_top_left_position_stick - req_conv_input_shard_start
+            conv_input_window = []
             for fh in range(filter_h):
                 for fw in range(filter_w):
                     assert input_shard_stick_local_idx + fw < len(conv_input_shards[input_shard_idx])
-                    output_val += (
-                        conv_input_shards[input_shard_idx][input_shard_stick_local_idx + fw]
-                        * filter_pyt_tensor[0][0][fh][fw]
-                    )
+                    conv_input_window.append(conv_input_shards[input_shard_idx][input_shard_stick_local_idx + fw])
                 input_shard_stick_local_idx += input_padded_width
+            output_val = numpy.dot(conv_input_window, filter_pyt_tensor.reshape(-1).tolist())
             output_shard.append(output_val)
             output_stick += 1
         # compare output shard with golden output pytorch tensor

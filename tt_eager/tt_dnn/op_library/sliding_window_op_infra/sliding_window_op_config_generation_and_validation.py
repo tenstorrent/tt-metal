@@ -42,13 +42,14 @@ def validate_conv_sharded_input_top_left_indices(
         conv_input_shard = conv_input_shards[shard_idx]
         for local_output_idx, local_input_top_left_idx in enumerate(local_top_left_indices):
             start_window_row_idx = local_input_top_left_idx
-            out_val = 0
+            conv_input_window = []
             for fh in range(filter_h):
                 for fw in range(filter_w):
                     assert start_window_row_idx + fw < len(conv_input_shard)
-                    out_val += conv_input_shard[start_window_row_idx + fw] * filter_pyt_tensor[0][0][fh][fw]
+                    conv_input_window.append(conv_input_shard[start_window_row_idx + fw])
                 start_window_row_idx += input_padded_width
-            conv_output.append(out_val)
+            output_val = numpy.dot(conv_input_window, filter_pyt_tensor.reshape(-1).tolist())
+            conv_output.append(output_val)
 
     output_pyt_tensor = torch.tensor(conv_output)
     assert output_pyt_tensor.size() == output_golden_pyt_tensor.reshape(-1).size()
