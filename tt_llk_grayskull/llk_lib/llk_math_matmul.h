@@ -1,4 +1,4 @@
-
+#pragma once
 #include "llk_param_structs.h"
 
 #include "ckernel_include.h"
@@ -18,8 +18,7 @@ inline void matmul_configure_addrmod();
 inline void matmul_configure_mop();
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul(uint dst_index, bool transpose = false, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
-    TT_LLK_DUMP("llk_math_matmul<{}, {}>({}, {}, {}, {}, {})", NUM_FIDELITY_PHASES, FaceLayout, dst_index, transpose, ct_dim, rt_dim, kt_dim);
+inline void _llk_math_matmul_(uint dst_index, bool transpose = false, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
     for (std::uint32_t rt=0; rt<rt_dim; rt++) {
         for (std::uint32_t ct=0; ct<ct_dim; ct++) {
             math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index+rt*ct_dim+ct);
@@ -217,10 +216,7 @@ inline void matmul_configure_mop(bool transpose) {
 }
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void llk_math_matmul_init(const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t transpose=0, const std::uint32_t ct_dim=0, const std::uint32_t rt_dim=0, const std::uint32_t kt_dim=0) {
-    TT_LLK_DUMP("llk_math_matmul_init<{}, {}>({}, {}, {}, {}, {}, {})", NUM_FIDELITY_PHASES, FaceLayout, operandA, operandB, transpose, ct_dim, rt_dim, kt_dim);
-    // Todo: figure out tile dims based on operandA and operandB
-
+inline void _llk_math_matmul_init_(const std::uint32_t transpose=0, const std::uint32_t ct_dim=0, const std::uint32_t rt_dim=0, const std::uint32_t kt_dim=0) {
     matmul_configure_addrmod<NUM_FIDELITY_PHASES, FaceLayout>();
     matmul_configure_mop<NUM_FIDELITY_PHASES, FaceLayout>(transpose>0);
     math::reset_counters(p_setrwc::SET_ABD_F);
