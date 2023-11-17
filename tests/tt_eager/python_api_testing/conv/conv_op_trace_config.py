@@ -3,6 +3,21 @@ import numpy
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 
 
+def construct_2d_padded_tensor_list(input_tensor, pad_metadata):
+    # Construct the padded tensor using pad_metadata
+    input_padded_tensor = []
+    input_tensor_idx = 0
+
+    for i in range(len(pad_metadata)):
+        if pad_metadata[i]:
+            input_padded_tensor.append(0)
+        else:
+            assert input_tensor_idx < len(input_tensor)
+            input_padded_tensor.append(input_tensor[input_tensor_idx])
+            input_tensor_idx += 1
+    return input_padded_tensor
+
+
 def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(conv_params, input_nchw_shape):
     assert len(conv_params) == 10
     output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups = [
@@ -68,47 +83,26 @@ def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(conv_params, i
     return pad_metadata, data_top_left_indices
 
 
-def traced_conv_reference(pad_metadata, data_top_left_indices, conv_params, input_nchw_shape):
+def traced_conv_reference(
+    input_pyt_tensor, filter_pyt_tensor, out_golden_pyt_tensor, pad_metadata, data_top_left_indices, conv_params
+):
     assert len(conv_params) == 10
     output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups = [
         conv_params[i] for i in range(10)
     ]
-    # unpadded tensor
-    input_tensor = []
-    assert len(input_nchw_shape) == 4
-    input_n, input_c, input_h, input_w = input_nchw_shape
+    input_n, input_c, input_h, input_w = list(input_pyt_tensor.size())
+    # TODO: add sanity checks to validata filter_pyt_tensor shape
     assert input_c == 1  # Ref done for channel size = 1
-    input_volume = numpy.prod(input_nchw_shape)
 
-    # Initialize tensor with data
-    # Inserting sequential integer data
-    for val in range(1, input_volume + 1):
-        input_tensor.append(val)
-    input_pyt_tensor = torch.tensor(input_tensor)
-    input_pyt_tensor = torch.reshape(input_pyt_tensor, input_nchw_shape)
-
-    # Construct the padded tensor using pad_metadata
-    input_padded_tensor = []
     input_padded_width = input_w + (2 * pad_w)
     input_padded_height = input_h + (2 * pad_h)
     input_padded_volume = input_n * input_padded_height * input_padded_width
-    input_tensor_idx = 0
     assert len(pad_metadata) == input_padded_volume
-    for i in range(input_padded_volume):
-        if pad_metadata[i]:
-            input_padded_tensor.append(0)
-        else:
-            input_padded_tensor.append(input_tensor[input_tensor_idx])
-            input_tensor_idx += 1
-
+    input_padded_tensor = construct_2d_padded_tensor_list(input_pyt_tensor.reshape(-1).tolist(), pad_metadata)
     assert len(input_padded_tensor) == input_padded_volume
     input_padded_pyt_tensor = torch.tensor(input_padded_tensor).reshape(
         [1, input_n * input_padded_height, input_padded_width]
     )
-    filter_volume = filter_h * filter_w
-    # Initializing filters with all 1s
-    filter_pyt_tensor = torch.full((1, 1, filter_h, filter_w), 1)
-
     output_tensor = []
     # run conv over padded tensor using data_top_left_indices
     for i in data_top_left_indices:
@@ -122,10 +116,6 @@ def traced_conv_reference(pad_metadata, data_top_left_indices, conv_params, inpu
         )
 
     output_pyt_tensor = torch.tensor(output_tensor)
-    # run conv pytorch
-    out_golden_pyt_tensor = torch.nn.functional.conv2d(
-        input_pyt_tensor, filter_pyt_tensor, stride=(stride_h, stride_w), padding=(pad_h, pad_w)
-    )
     assert numpy.prod(output_pyt_tensor.size()) == numpy.prod(out_golden_pyt_tensor.size())
     output_pyt_tensor = torch.reshape(output_pyt_tensor, out_golden_pyt_tensor.size())
 
@@ -135,4 +125,4 @@ def traced_conv_reference(pad_metadata, data_top_left_indices, conv_params, inpu
     print("Output pcc=", output_pcc)
     assert passing_pcc
 
-    return
+    return input_padded_tensor
