@@ -26,6 +26,7 @@ using std::cout;
 using std::endl;
 using std::setw;
 using std::flush;
+using std::tuple;
 
 #define CAST_U8P(p) reinterpret_cast<uint8_t*>(p)
 
@@ -34,25 +35,6 @@ namespace {
 static inline float bfloat16_to_float(uint16_t bfloat_val) {
     uint32_t val = bfloat_val << 16;
     return *reinterpret_cast<float*>(&val);
-}
-
-
-// TODO(AP): this shouldn't be necessary as the API itself should be thread-safe but otherwise currently the test fails
-// with DMA mode (non-MMIO version of api enabled via export TT_PCI_DMA_BUF_SIZE=1048576)
-std::vector<std::uint32_t> my_read_hex_vec_from_core(int chip, const CoreCoord& core, uint64_t addr, uint32_t size) {
-    static std::mutex r_lock;
-    r_lock.lock();
-    auto result = tt::llrt::read_hex_vec_from_core(chip, core, addr, size);
-    r_lock.unlock();
-    return result;
-}
-
-// TODO(AP): this shouldn't be necessary as the API itself should be thread-safe
-void my_write_hex_vec_to_core(int chip, const CoreCoord& core, std::vector<uint32_t> hex_vec, uint64_t addr) {
-    static std::mutex w_lock;
-    w_lock.lock();
-    tt::llrt::write_hex_vec_to_core(chip, core, hex_vec, addr);
-    w_lock.unlock();
 }
 
 // Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
@@ -64,7 +46,7 @@ void write_init_magic(int chip_id, const CoreCoord& core, int hart_id, bool star
     // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
     // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
     vector<uint32_t> initbuf = { uint32_t(starting ? DEBUG_PRINT_SERVER_STARTING_MAGIC : DEBUG_PRINT_SERVER_DISABLED_MAGIC) };
-    my_write_hex_vec_to_core(chip_id, core, initbuf, base_addr);
+    tt::llrt::write_hex_vec_to_core(chip_id, core, initbuf, base_addr);
 } // write_init_magic
 
 
@@ -83,46 +65,29 @@ struct DebugPrintServerContext {
         TT_ASSERT(inst == nullptr);
         inst = this;
 
-        chip_ids_ = chip_ids;
-        cores_ = cores;
-        hart_mask_ = hart_mask;
-
         // the stream is shared between threads
         if (file_name != "") {
             outfile_ = new std::ofstream(file_name);
         }
         stream_ = outfile_ ? outfile_ : &cout;
 
-        exit_threads_condition_ = false;
-        for (auto chip: chip_ids) {
-            for (auto core: cores) {
-                for (int hart_index = 0; hart_index < DPRINT_NRISCVS; hart_index++) {
-                    if (hart_mask & (1<<hart_index)) {
-                        // Cannot do this magic write inside the thread because of a possible race condition
-                        // where the kernel subsequently both launches and terminates prior to magic write going through
-                        write_init_magic(chip, core, hart_index);
-
-                        auto print_thread = new std::thread(
-                            [this, chip, core, hart_index] { thread_poll(chip, core, hart_index); }
-                        );
-                        print_threads_.push_back(print_thread);
-                    }
-                }
-            }
-        }
+        stop_print_server_ = false;
+        print_server_thread_ = new std::thread(
+            [this, chip_ids, cores, hart_mask] { thread_poll(chip_ids, cores, hart_mask); }
+        );
     }
 
     ~DebugPrintServerContext() {
-        exit_threads_condition_ = true;
-        for (int i = 0; i < print_threads_.size(); i++) {
-            auto future = std::async(std::launch::async, &std::thread::join, print_threads_[i]);
-            if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
-                TT_FATAL(false && "Timed out waiting on debug print thread to terminate.");
-            }
-            delete print_threads_[i];
-            print_threads_[i] = nullptr;
+        // Signal the print server thread to finish
+        stop_print_server_ = true;
+
+        // Wait for the thread to end, with a timeout
+        auto future = std::async(std::launch::async, &std::thread::join, print_server_thread_);
+        if (future.wait_for(std::chrono::seconds(2)) == std::future_status::timeout) {
+            TT_FATAL(false && "Timed out waiting on debug print thread to terminate.");
         }
-        print_threads_.clear();
+        delete print_server_thread_;
+        print_server_thread_ = nullptr;
 
         if (outfile_) {
             outfile_->close();
@@ -133,51 +98,21 @@ struct DebugPrintServerContext {
 
 private:
 
-    std::atomic<bool> exit_threads_condition_;
-    std::vector<std::thread*> print_threads_;
-    std::unordered_map<uint32_t, int> raised_signals_; // signalID -> count
-    std::mutex signals_lock_;
+    // Flag for main thread to signal the print server thread to stop.
+    std::atomic<bool> stop_print_server_;
+    std::thread* print_server_thread_;
 
-    // we are sharing the same output file/cout between threads for multiple cores
-    // so we need a lock for it since it may not be cout
-    std::mutex output_lock_;
     std::ofstream* outfile_ = nullptr; // non-cout
     std::ostream* stream_ = nullptr; // either == outfile_ or is &cout
 
-    // configuration of cores/harts to listen for
-    vector<int> chip_ids_;
-    vector<CoreCoord> cores_;
-    uint32_t hart_mask_;
+    // A map to from {core coord x, y, hart index} to the signal code it's waiting for.
+    std::map<tuple<uint32_t, uint32_t, uint32_t>, uint32_t> hart_waiting_on_signal_;
+    // Keep a separate set of raised signal codes so that multiple harts can wait for the same
+    // signal.
+    std::set<uint32_t> raised_signals_;
 
-    void thread_poll(int chip_id, CoreCoord core, int hart_index);
+    void thread_poll(const vector<int>& chip_ids, const vector<CoreCoord>& cores, uint32_t hart_mask);
     void peek_flush_one_hart_nonblocking(int chip_id, const CoreCoord& core, int hart_index);
-
-    void lock_stream() {
-        if (outfile_ != &cout)
-            output_lock_.lock();
-    }
-    void unlock_stream() {
-        if (outfile_ != &cout)
-            output_lock_.unlock();
-    }
-
-    void raise_signal(uint32_t signal_code) {
-        signals_lock_.lock();
-        raised_signals_[signal_code] = 1;
-        signals_lock_.unlock();
-    }
-
-    bool check_clear_signal(uint32_t signal_code) {
-        signals_lock_.lock();
-        bool is_raised = false;
-        if (raised_signals_.find(signal_code) != raised_signals_.end()) {
-            int& val = raised_signals_[signal_code];
-            is_raised = (val > 0);
-            val = 0;
-        }
-        signals_lock_.unlock();
-        return is_raised;
-    }
 };
 
 static void print_tile_slice(ostream& stream, uint8_t* ptr) {
@@ -214,25 +149,9 @@ bool check_init_magic_cleared(int chip_id, const CoreCoord& core, int hart_id) {
     uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
 
     vector<uint32_t> initbuf = { DEBUG_PRINT_SERVER_STARTING_MAGIC };
-    auto result = my_read_hex_vec_from_core(chip_id, core, base_addr, 4);
+    auto result = tt::llrt::read_hex_vec_from_core(chip_id, core, base_addr, 4);
     return (result[0] != initbuf[0]);
 } // check_init_magic_cleared
-
-// rename the current thread so it's easier to distinguish in the debugger
-// TODO(AP): this renaming didn't show up in VSCODE thread list
-void rename_my_thread(int chip_id, const CoreCoord& core, int hart_id)
-{
-    std::string rn("DPRINT_C,X,Y,T{");
-    rn += std::to_string(chip_id);
-    rn += ",";
-    rn += std::to_string(core.x);
-    rn += ",";
-    rn += std::to_string(core.y);
-    rn += ",";
-    rn += std::to_string(hart_id);
-    rn += "}";
-    pthread_setname_np(pthread_self(), rn.c_str());
-}
 
 // peeks a specified hart for any debug prints present in the buffer and flushes it, printing the contents out to host-side stream
 void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const CoreCoord& core, int hart_id) {
@@ -246,7 +165,7 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
     // TODO(AP) - compare 8-bytes transfer and full buffer transfer latency
     // First probe only 8 bytes to see if there's anything to read
     constexpr int eightbytes = 8;
-    auto from_dev = my_read_hex_vec_from_core(chip_id, core, base_addr, eightbytes);
+    auto from_dev = tt::llrt::read_hex_vec_from_core(chip_id, core, base_addr, eightbytes);
     uint32_t wpos = from_dev[0], rpos = from_dev[1];
     uint32_t counter = 0;
     uint32_t sigval = 0;
@@ -255,7 +174,7 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
     ostream& stream = *stream_;
     if (rpos < wpos) {
         // Now read the entire buffer
-        from_dev = my_read_hex_vec_from_core(chip_id, core, base_addr, PRINT_BUFFER_SIZE);
+        from_dev = tt::llrt::read_hex_vec_from_core(chip_id, core, base_addr, PRINT_BUFFER_SIZE);
         // at this point rpos,wpos can be stale but not reset to 0 by the producer
         // it's ok for the consumer to be behind the latest wpos+rpos from producer
         // since the corresponding data in buffer for stale rpos+wpos will not be overwritten
@@ -274,6 +193,9 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
             uint8_t sz = l->data[rpos++]; TT_ASSERT(rpos <= bufsize);
             uint8_t* ptr = l->data + rpos;
 
+            // Possible to break before rpos == wpos due to waiting on another core's raise.
+            bool break_due_to_wait = false;
+
             // we are sharing the same output file between debug print threads for multiple cores
             switch(code) {
                 // TODO(AP): better code index sync with debug_print.h
@@ -281,115 +203,86 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                     // terminating zero was included in size and should be present in the buffer
                     cptr = reinterpret_cast<const char*>(ptr);
                     nlen = strnlen(cptr, 200);
-                    lock_stream();
                     if (nlen >= 200)
                         stream << "STRING BUFFER OVERFLOW DETECTED" << endl;
                     else
                         stream << cptr;
-                    unlock_stream();
                     TT_ASSERT(sz == strlen(cptr)+1);
                 break;
                 case DEBUG_PRINT_TYPEID_TILESLICE:
-                    lock_stream();
                     print_tile_slice(stream, ptr);
-                    unlock_stream();
                 break;
 
                 case DEBUG_PRINT_TYPEID_ENDL:
-                    lock_stream();
                     stream << endl;
-                    unlock_stream();
                     TT_ASSERT(sz == 1);
                 break;
                 case DEBUG_PRINT_TYPEID_SETW:
-                    lock_stream();
                     val = CAST_U8P(ptr)[0];
                     stream << setw(val & 0b01111111); // low 7 bits are setw value
                     sticky_setw  = (val & 0b10000000) ? (val&0b01111111) : 0; // top bit is sticky flag
-                    unlock_stream();
                     TT_ASSERT(sz == 1);
                 break;
                 case DEBUG_PRINT_TYPEID_SETP:
-                    lock_stream();
                     stream << std::setprecision(*ptr);
-                    unlock_stream();
                     TT_ASSERT(sz == 1);
                 break;
                 case DEBUG_PRINT_TYPEID_FIXP:
-                    lock_stream();
                     stream << std::fixed;
-                    unlock_stream();
                     TT_ASSERT(sz == 1);
                 break;
                 case DEBUG_PRINT_TYPEID_HEX:
-                    lock_stream();
                     stream << std::hex;
-                    unlock_stream();
                     TT_ASSERT(sz == 1);
                 break;
 
                 case DEBUG_PRINT_TYPEID_UINT32:
-                    lock_stream();
                     if (sticky_setw) stream << setw(sticky_setw);
                     stream << *reinterpret_cast<uint32_t*>(ptr);
-                    unlock_stream();
                     TT_ASSERT(sz == 4);
                 break;
                 case DEBUG_PRINT_TYPEID_FLOAT32:
-                    lock_stream();
                     if (sticky_setw) stream << setw(sticky_setw);
                     stream << *reinterpret_cast<float*>(ptr);
-                    unlock_stream();
                     TT_ASSERT(sz == 4);
                 break;
                 case DEBUG_PRINT_TYPEID_BFLOAT16:
-                    lock_stream();
                     if (sticky_setw) stream << setw(sticky_setw);
                     stream << bfloat16_to_float(*reinterpret_cast<uint16_t*>(ptr));
-                    unlock_stream();
                     TT_ASSERT(sz == 2);
                 break;
                 case DEBUG_PRINT_TYPEID_CHAR:
-                    lock_stream();
                     stream << *reinterpret_cast<char*>(ptr);
-                    unlock_stream();
                     TT_ASSERT(sz == 1);
                 break;
                 case DEBUG_PRINT_TYPEID_RAISE:
                     sigval = *reinterpret_cast<uint32_t*>(ptr);
+                    // Add this newly raised signals to the set of raised signals.
+                    raised_signals_.insert(sigval);
                     //stream << "\nRaised signal=" << sigval << endl;
-                    raise_signal(sigval);
                     TT_ASSERT(sz == 4);
                 break;
                 case DEBUG_PRINT_TYPEID_WAIT:
+                    {
                     sigval = *reinterpret_cast<uint32_t*>(ptr);
+                    // Given that we break immediately on a wait, this core should never be waiting
+                    // on multiple signals at the same time.
+                    tuple<uint32_t, uint32_t, uint32_t> hart_key {core.x, core.y, hart_id};
+                    TT_ASSERT(hart_waiting_on_signal_.count(hart_key) == 0);
+                    // Set that this hart is waiting on this signal, and then stop reading for now.
+                    hart_waiting_on_signal_[hart_key] = sigval;
+                    break_due_to_wait = true;
                     //stream << "\nWaiting on signal=" << *reinterpret_cast<uint32_t*>(ptr);
-                    counter = 0;
-                    while (!check_clear_signal(sigval)) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1)); // sleep for a few ms
-                        counter ++;
-                        if (counter == 20000) {
-                            lock_stream();
-                            stream << "\n*** Timed out waiting on signal " << sigval << " ***" << endl;
-                            unlock_stream();
-                            break;
-                        }
-                    }
-                    //cout << "SIG=" << *reinterpret_cast<uint32_t*>(ptr) << " " << std::flush;
-
                     TT_ASSERT(sz == 4);
+                    }
                 break;
                 case DEBUG_PRINT_TYPEID_INT32:
-                    lock_stream();
                     if (sticky_setw) stream << setw(sticky_setw);
                     stream << *reinterpret_cast<int32_t*>(ptr);
-                    unlock_stream();
                     TT_ASSERT(sz == 4);
                 break;
                 case DEBUG_PRINT_TYPEID_UINT64:
-                    lock_stream();
                     stream << *reinterpret_cast<uint64_t*>(ptr);
-                    unlock_stream();
                     TT_ASSERT(sz == 8);
                 break;
                 default:
@@ -397,44 +290,82 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
             }
 
             // TODO(AP): this is slow but leaving here for now for debugging the debug prints themselves
-            lock_stream();
             stream << flush;
-            unlock_stream();
 
             rpos += sz; // parse the payload size
             TT_ASSERT(rpos <= wpos);
+
+            // Break due to wait (we'll get the rest of the print buffer after the raise).
+            if (break_due_to_wait)
+                break;
         } // while (rpos < wpos)
 
         // writes by the producer should've been atomic w.r.t code+size+payload
         // i.e at this point we shouldn't have piecemeal reads on code+size+payload
         // with rpos not aligned to wpos
-        TT_ASSERT(rpos == wpos);
 
         // write back to device - update rpos only
         vector<uint32_t> rposbuf;
         rposbuf.push_back(rpos);
         uint32_t offs = DebugPrintMemLayout().rpos_offs();
-        my_write_hex_vec_to_core(chip_id, core, rposbuf, base_addr+offs);
+        tt::llrt::write_hex_vec_to_core(chip_id, core, rposbuf, base_addr+offs);
     } // if (rpos < wpos)
 } // peek_one_hart_once_nonblocking
 
-// TODO(AP): investigate if we can reduce the number of threads using coroutines
 void DebugPrintServerContext::thread_poll(
-    int chip_id, CoreCoord core, int hart_index) {
+    const vector<int>& chip_ids,
+    const vector<CoreCoord>& cores,
+    uint32_t hart_mask
+) {
+    // Give the print server thread a reasonable name.
+    pthread_setname_np(pthread_self(), "TT_DPRINT_SERVER");
 
-    rename_my_thread(chip_id, core, hart_index);
+    // First, go through all cores and write init magic to set up dprint.
+    for (auto chip: chip_ids) {
+        for (auto core: cores) {
+            for (int hart_index = 0; hart_index < DPRINT_NRISCVS; hart_index++) {
+                if (hart_mask & (1<<hart_index)) {
+                    write_init_magic(chip, core, hart_index);
+                }
+            }
+        }
+    }
 
-    // Main print loop - poll all the harts on the device as specified by mask for any data written
+    // Main print loop, go through all chips/cores/harts on the device and poll for any print data
+    // written.
     while (true) {
-        if (exit_threads_condition_ != false)
+        if (stop_print_server_)
             break;
+        for (auto chip: chip_ids) {
+            for (auto core: cores) {
+                for (int hart_index = 0; hart_index < DPRINT_NRISCVS; hart_index++) {
+                    if (hart_mask & (1<<hart_index)) {
+                        if (!check_init_magic_cleared(chip, core, hart_index))
+                            continue;
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(1)); // sleep for a few ms
+                        // Make sure that this core is not waiting on a raise signal to continue
+                        // printing.
+                        tuple<uint32_t, uint32_t, uint32_t> hart_key {core.x, core.y, hart_index};
+                        if (hart_waiting_on_signal_.count(hart_key) > 0) {
+                            uint32_t wait_signal = hart_waiting_on_signal_[hart_key];
+                            if (raised_signals_.count(wait_signal) > 0) {
+                                // The signal this hart is waiting for has been raised, it's not
+                                // waiting anymore.
+                                hart_waiting_on_signal_.erase(hart_key);
+                            } else {
+                                // Not raised yet, keep waiting.
+                                continue;
+                            }
+                        }
 
-        if (!check_init_magic_cleared(chip_id, core, hart_index))
-            continue;
+                        peek_flush_one_hart_nonblocking(chip, core, hart_index);
+                    }
+                }
+            }
+        }
 
-        peek_flush_one_hart_nonblocking(chip_id, core, hart_index);
+        // Sleep for a few ms.
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
 
