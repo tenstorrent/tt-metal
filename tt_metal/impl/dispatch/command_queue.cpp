@@ -51,7 +51,8 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
                                              uint32_t dst,
                                              vector<transfer_info>& transfers,
                                              vector<uint32_t>& num_transfers_per_page,
-                                             const vector<pair<uint32_t, uint32_t>>& dst_noc_transfer_info) -> uint32_t {
+                                             const vector<pair<uint32_t, uint32_t>>& dst_noc_transfer_info,
+                                             bool linked = false) -> uint32_t {
         while (num_bytes) {
             uint32_t num_bytes_left_in_page = DeviceCommand::PROGRAM_PAGE_SIZE - (src % DeviceCommand::PROGRAM_PAGE_SIZE);
             uint32_t num_bytes_in_transfer = std::min(num_bytes_left_in_page, num_bytes);
@@ -60,7 +61,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
             uint32_t transfer_instruction_idx = 1;
             for (const auto& [dst_noc_encoding, num_receivers] : dst_noc_transfer_info) {
                 bool last = transfer_instruction_idx == dst_noc_transfer_info.size();
-                transfer_info transfer_instruction = {.size_in_bytes = num_bytes_in_transfer, .dst = dst, .dst_noc_encoding = dst_noc_encoding, .num_receivers = num_receivers, .last_transfer_in_group = last};
+                transfer_info transfer_instruction = {.size_in_bytes = num_bytes_in_transfer, .dst = dst, .dst_noc_encoding = dst_noc_encoding, .num_receivers = num_receivers, .last_transfer_in_group = last, .linked = linked};
                 transfers.push_back(transfer_instruction);
                 num_transfers_within_page++;
                 transfer_instruction_idx++;
@@ -154,32 +155,54 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
 
     // Step 3: Determine the transfer information for each program binary
     src = 0; // Restart src since it begins in a new page
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        const Kernel* kernel = detail::GetKernel(program, kernel_id);
+    for (const KernelGroup &kg: program.get_kernel_groups()) {
+
         vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info =
-            extract_dst_noc_multicast_info(kernel->core_range_set().ranges());
+            extract_dst_noc_multicast_info(kg.core_ranges.ranges());
 
-        vector<RISCV> sub_kernels;
-        if (kernel->processor() == RISCV::COMPUTE) {
-            sub_kernels = {RISCV::TRISC0, RISCV::TRISC1, RISCV::TRISC2};
-        } else {
-            sub_kernels = {kernel->processor()};
-        }
+        // So far, we don't support linking optimizations for kernel groups
+        // which use multiple core ranges
+        bool linked = dst_noc_multicast_info.size() == 1;
 
-        uint32_t sub_kernel_index = 0;
-        for (const ll_api::memory& kernel_bin : kernel->binaries(device->id())) {
-            kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
-                uint32_t num_bytes = len * sizeof(uint32_t);
-                if ((dst & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
-                    dst = (dst & ~MEM_LOCAL_BASE) + processor_to_local_mem_addr.at(sub_kernels[sub_kernel_index]);
-                } else if ((dst & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
-                    dst = (dst & ~MEM_NCRISC_IRAM_BASE) + MEM_NCRISC_INIT_IRAM_L1_BASE;
-                }
+        vector<KernelID> kernel_ids;
+        if (kg.riscv0_id) kernel_ids.push_back(kg.riscv0_id.value());
+        if (kg.riscv1_id) kernel_ids.push_back(kg.riscv1_id.value());
+        if (kg.compute_id) kernel_ids.push_back(kg.compute_id.value());
 
-                src = update_program_page_transfers(
-                    src, num_bytes, dst, program_page_transfers, num_transfers_in_program_pages, dst_noc_multicast_info);
-            });
-            sub_kernel_index++;
+        uint32_t src_copy = src;
+        for (size_t i = 0; i < kernel_ids.size(); i++) {
+            KernelID kernel_id = kernel_ids[i];
+            vector<RISCV> sub_kernels;
+            const Kernel* kernel = detail::GetKernel(program, kernel_id);
+            if (kernel->processor() == RISCV::COMPUTE) {
+                sub_kernels = {RISCV::TRISC0, RISCV::TRISC1, RISCV::TRISC2};
+            } else {
+                sub_kernels = {kernel->processor()};
+            }
+
+            uint32_t sub_kernel_index = 0;
+            const auto& binaries = kernel->binaries(device->id());
+            for (size_t j = 0; j < binaries.size(); j++) {
+                const ll_api::memory& kernel_bin = binaries[j];
+
+                uint32_t k = 0;
+                uint32_t num_spans = kernel_bin.num_spans();
+                kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
+                    linked &= (i != kernel_ids.size() - 1) or (j != binaries.size() - 1) or (k != num_spans - 1);
+
+                    uint32_t num_bytes = len * sizeof(uint32_t);
+                    if ((dst & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
+                        dst = (dst & ~MEM_LOCAL_BASE) + processor_to_local_mem_addr.at(sub_kernels[sub_kernel_index]);
+                    } else if ((dst & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
+                        dst = (dst & ~MEM_NCRISC_IRAM_BASE) + MEM_NCRISC_INIT_IRAM_L1_BASE;
+                    }
+
+                    src = update_program_page_transfers(
+                        src, num_bytes, dst, program_page_transfers, num_transfers_in_program_pages, dst_noc_multicast_info, linked);
+                    k++;
+                });
+                sub_kernel_index++;
+            }
         }
     }
 
@@ -230,14 +253,20 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
 
     // Create a vector of all program binaries/cbs/semaphores
     uint32_t program_page_idx = 0;
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        const Kernel* kernel = detail::GetKernel(program, kernel_id);
+    for (const KernelGroup &kg: program.get_kernel_groups()) {
+        vector<KernelID> kernel_ids;
+        if (kg.riscv0_id) kernel_ids.push_back(kg.riscv0_id.value());
+        if (kg.riscv1_id) kernel_ids.push_back(kg.riscv1_id.value());
+        if (kg.compute_id) kernel_ids.push_back(kg.compute_id.value());
+        for (KernelID kernel_id: kernel_ids) {
+            const Kernel* kernel = detail::GetKernel(program, kernel_id);
 
-        for (const ll_api::memory& kernel_bin : kernel->binaries(device->id())) {
-            kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
-                std::copy(mem_ptr, mem_ptr + len, program_pages.begin() + program_page_idx);
-                program_page_idx = align(program_page_idx + len, noc_transfer_alignment_in_bytes / sizeof(uint32_t));
-            });
+            for (const ll_api::memory& kernel_bin : kernel->binaries(device->id())) {
+                kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
+                    std::copy(mem_ptr, mem_ptr + len, program_pages.begin() + program_page_idx);
+                    program_page_idx = align(program_page_idx + len, noc_transfer_alignment_in_bytes / sizeof(uint32_t));
+                });
+            }
         }
     }
 
@@ -440,8 +469,8 @@ const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host
                 uint32_t num_transfers_in_page = num_transfers_per_page[j];
                 command.write_program_entry(num_transfers_in_page);
                 for (uint32_t k = 0; k < num_transfers_in_page; k++) {
-                    const auto [num_bytes, dst, dst_noc, num_receivers, last_multicast_in_group] = transfers_in_pages[i];
-                    command.add_write_page_partial_instruction(num_bytes, dst, dst_noc, num_receivers, last_multicast_in_group);
+                    const auto [num_bytes, dst, dst_noc, num_receivers, last_multicast_in_group, linked] = transfers_in_pages[i];
+                    command.add_write_page_partial_instruction(num_bytes, dst, dst_noc, num_receivers, last_multicast_in_group, linked);
                     i++;
                 }
             }

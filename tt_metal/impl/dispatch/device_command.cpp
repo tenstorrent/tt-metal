@@ -94,19 +94,18 @@ void DeviceCommand::write_program_entry(const uint32_t value) {
 }
 
 void DeviceCommand::add_write_page_partial_instruction(
-    const uint32_t num_bytes, const uint32_t dst, const uint32_t dst_noc, const uint32_t num_receivers, const bool advance) {
+    const uint32_t num_bytes, const uint32_t dst, const uint32_t dst_noc, const uint32_t num_receivers, const bool advance, const bool linked) {
 
     // This 'at' does size checking
-    this->desc.at(this->program_transfer_idx + 4) = advance;
+    this->desc.at(this->program_transfer_idx + 5) = linked;
 
     this->desc[this->program_transfer_idx] = num_bytes;
     this->desc[this->program_transfer_idx + 1] = dst;
     this->desc[this->program_transfer_idx + 2] = dst_noc;
     this->desc[this->program_transfer_idx + 3] = num_receivers;
+    this->desc[this->program_transfer_idx + 4] = advance;
 
-    // std::cout << "WRITE PAGE PARTIAL AT " << this->program_transfer_idx << ": " << num_bytes << ", " << dst << ", " << dst_noc << std::endl;
-
-    this->program_transfer_idx += 5;
+    this->program_transfer_idx += 6;
 }
 
 const std::array<uint32_t, DeviceCommand::NUM_ENTRIES_IN_DEVICE_COMMAND>& DeviceCommand::get_desc() const {
