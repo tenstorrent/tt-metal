@@ -30,43 +30,32 @@ void Unpad::validate(const std::vector<Tensor> &input_tensors) const {
         "On device unpadding only supports unpadding at end of dims"
     );
 
-    TT_FATAL(this->output_tensor_start[0] < input_tensor_a.shape()[0]);
-    TT_FATAL(this->output_tensor_end[0] < input_tensor_a.shape()[0]);
-    TT_FATAL(this->output_tensor_start[1] < input_tensor_a.shape()[1]);
-    TT_FATAL(this->output_tensor_end[1] < input_tensor_a.shape()[1]);
-    TT_FATAL(this->output_tensor_start[2] < input_tensor_a.shape()[2]);
-    TT_FATAL(this->output_tensor_end[2] < input_tensor_a.shape()[2]);
-    TT_FATAL(this->output_tensor_start[3] < input_tensor_a.shape()[3]);
-    TT_FATAL(this->output_tensor_end[3] < input_tensor_a.shape()[3]);
+    for (uint32_t i = 0; i < input_tensor_a.shape().rank(); i++) {
+        TT_FATAL(this->output_tensor_start[i] < input_tensor_a.shape()[i]);
+        TT_FATAL(this->output_tensor_end[i] < input_tensor_a.shape()[i]);
 
-    // Check if start shape is <= end shape
-    TT_FATAL(this->output_tensor_start[0] <= this->output_tensor_end[0]);
-    TT_FATAL(this->output_tensor_start[1] <= this->output_tensor_end[1]);
-    TT_FATAL(this->output_tensor_start[2] <= this->output_tensor_end[2]);
-    TT_FATAL(this->output_tensor_start[3] <= this->output_tensor_end[3]);
+        // Check if start shape is <= end shape
+        TT_FATAL(this->output_tensor_start[i] <= this->output_tensor_end[i]);
+    }
 
-    Shape output_tensor_shape = {
-        this->output_tensor_end[0] - this->output_tensor_start[0] + 1,
-        this->output_tensor_end[1] - this->output_tensor_start[1] + 1,
-        this->output_tensor_end[2] - this->output_tensor_start[2] + 1,
-        this->output_tensor_end[3] - this->output_tensor_start[3] + 1,
-    };
+    Shape output_tensor_shape = this->compute_output_shapes(input_tensors)[0];
 
     if (input_tensor_a.layout() == Layout::TILE) {
         TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
-        TT_FATAL((output_tensor_shape[2] % TILE_HEIGHT == 0), "Can only unpad tilized tensor with full tiles");
-        TT_FATAL((output_tensor_shape[3] % TILE_WIDTH == 0), "Can only unpad tilized tensor with full tiles");
+        TT_FATAL((output_tensor_shape[-2] % TILE_HEIGHT == 0), "Can only unpad tilized tensor with full tiles");
+        TT_FATAL((output_tensor_shape[-1] % TILE_WIDTH == 0), "Can only unpad tilized tensor with full tiles");
     } else if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
-        TT_FATAL(output_tensor_shape[3] % 2 == 0, "RM unpadding requires output X dim to be a multiple of 2");
+        TT_FATAL(output_tensor_shape[-1] * input_tensor_a.element_size() % sizeof(uint32_t) == 0, "RM unpadding requires output X size to be packable");
     }
 }
 std::vector<Shape> Unpad::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    Shape output_tensor_shape = {
-        this->output_tensor_end[0] - this->output_tensor_start[0] + 1,
-        this->output_tensor_end[1] - this->output_tensor_start[1] + 1,
-        this->output_tensor_end[2] - this->output_tensor_start[2] + 1,
-        this->output_tensor_end[3] - this->output_tensor_start[3] + 1,
-    };
+    std::vector<uint32_t> out_shape;
+    auto rank = input_tensors[0].shape().rank();
+    out_shape.reserve(rank);
+    for (uint32_t i = 0; i < rank; i++) {
+        out_shape.push_back(this->output_tensor_end[i] - this->output_tensor_start[i] + 1);
+    }
+    Shape output_tensor_shape(out_shape);
     return {output_tensor_shape};
 }
 std::vector<Tensor> Unpad::create_output_tensors(const std::vector<Tensor> &input_tensors) const {

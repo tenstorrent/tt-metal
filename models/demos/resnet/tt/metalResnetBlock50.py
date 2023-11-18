@@ -1723,13 +1723,14 @@ class ResNet(nn.Module):
             )
 
         x = self.fc(x)
-        x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
-        x = x.reshape(self.batch_size, x.shape()[1], (int)(x.shape()[2] / self.batch_size), x.shape()[3])
-        x = x.cpu()
-        desired_shape = [x.shape()[0], x.shape()[1], 1, 1000]
-        x = x.unpad(
-            (0, 0, 0, 0), (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1)
+        desired_shape = x.shape_without_padding()
+        desired_shape[-1] = 1000
+        x = tt_lib.tensor.untilize_with_unpadding(
+            x,
+            [0, 0, 0, 0],
+            (desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
+            self.memory_config,
         )
+        x = x.reshape(self.batch_size, x.shape()[1], (int)(x.shape()[2] / self.batch_size), x.shape()[3])
 
-        # x = x.to_torch().to(torch.float)
         return x

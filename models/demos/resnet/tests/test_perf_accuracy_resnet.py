@@ -79,9 +79,7 @@ def run_perf_resnet(
         profiler.start(first_key)
         tt_inputs = tt_resnet50.preprocessing(inputs)
         tt_output = tt_resnet50(tt_inputs)
-        tt_output = tt_output.to_torch().to(torch.float)
-
-        tt_lib.device.Synchronize()
+        tt_output = tt_output.cpu().to_torch().to(torch.float)
         profiler.end(first_key)
         del tt_output
 
@@ -90,9 +88,7 @@ def run_perf_resnet(
         profiler.start(second_key)
         tt_inputs = tt_resnet50.preprocessing(inputs)
         tt_output = tt_resnet50(tt_inputs)
-        tt_output = tt_output.to_torch().to(torch.float)
-
-        tt_lib.device.Synchronize()
+        tt_output = tt_output.cpu().to_torch().to(torch.float)
         profiler.end(second_key)
         del tt_output
 
@@ -113,7 +109,7 @@ def run_perf_resnet(
             input = input["pixel_values"].repeat([batch_size, 1, 1, 1])
             tt_inputs = tt_resnet50.preprocessing(input)
             tt_output = tt_resnet50(tt_inputs)
-            tt_output = tt_output.to_torch().to(torch.float)
+            tt_output = tt_output.cpu().to_torch().to(torch.float)
             for j in range(batch_size):
                 prediction = tt_output[j][0][0].argmax()
                 prediction = prediction.item()
@@ -124,7 +120,6 @@ def run_perf_resnet(
         accuracy = np.mean(predicted_labels == reference_labels)
         logger.info("Accuracy")
         logger.info(accuracy)
-        tt_lib.device.Synchronize()
         profiler.end(third_key)
 
     first_iter_time = profiler.get(first_key)
