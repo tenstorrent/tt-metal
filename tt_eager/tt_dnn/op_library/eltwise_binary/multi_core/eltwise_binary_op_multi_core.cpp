@@ -332,6 +332,10 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
         bool row_major = true;
         uint32_t block_height = 0, block_width = 0, block_size = 0, output_width = 0, last_unpadded_block_height = 0, last_unpadded_block_width = 0;
         CoreCoord end_core;
+        vector<CoreCoord> cores;
+        uint32_t g1_numcores = core_group_1.num_cores();
+        uint32_t g2_numcores = core_group_2.num_cores();
+
         if (shard_spec.has_value()) {
             all_cores = shard_spec.value().shard_grid;
             num_cores = all_cores.num_cores();
@@ -355,9 +359,13 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
                 last_unpadded_block_height = block_height -  (round_up(output_height, block_height) - output_height);
                 last_unpadded_block_width = block_width -  (round_up(output_width, block_width) - output_width);
             }
+            auto bbox = core_group_1.bounding_box();
+            cores = grid_to_cores(g1_numcores, bbox.end.x, bbox.end.y, row_major);
+        } else{
+            cores = grid_to_cores(g1_numcores + g2_numcores, num_cores_x, num_cores_y, row_major);
+
         }
 
-        auto cores = grid_to_cores(num_cores_x * num_cores_y, num_cores_x, num_cores_y, row_major);
         std::vector< std::vector<uint32_t> > binary_reader_args = { cores.size(), std::vector<uint32_t>(4)  };
         std::vector< std::vector<uint32_t> > eltwise_binary_args = { cores.size(), std::vector<uint32_t>(2)  };
         std::vector< std::vector<uint32_t> > unary_writer_args;
@@ -368,20 +376,18 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
             unary_writer_args = { cores.size(), std::vector<uint32_t>(3) };
 
         for (uint32_t i = 0, num_tiles_read = 0; i < cores.size(); i++){
-            CoreCoord core = cores[i];
+            const CoreCoord &core = cores.at(i);
             uint32_t num_tiles_per_core = 0;
             uint32_t block_cnt_per_core = 0;
             uint32_t block_size_per_core = 0;
-            if (core_group_1.core_coord_in_core_ranges(core)) {
+            if (i < g1_numcores) {
                 num_tiles_per_core = num_tiles_per_core_group_1;
                 block_cnt_per_core = block_cnt_per_core_group_1;
                 block_size_per_core = block_size_per_core_group_1;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            } else {
                 num_tiles_per_core = num_tiles_per_core_group_2;
                 block_cnt_per_core = block_cnt_per_core_group_2;
                 block_size_per_core = block_size_per_core_group_2;
-            } else {
-                continue;
             }
             binary_reader_args[i] =  {src_buffer_a->address(), src_buffer_b->address(), num_tiles_per_core, num_tiles_read};
             eltwise_binary_args[i] = {block_cnt_per_core, block_size_per_core};

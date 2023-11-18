@@ -366,6 +366,17 @@ class CoreRangeSet {
       return num_cores;
     }
 
+    CoreRange bounding_box() const{
+      size_t min_x = UINT32_MAX, min_y = UINT32_MAX, max_x = 0, max_y = 0;
+      for (const auto & cr : this->ranges()){
+        min_x = std::min( min_x, cr.start.x);
+        max_x = std::max( max_x, cr.end.x );
+        min_y = std::min ( min_y, cr.start.y );
+        max_y = std::max ( max_y, cr.end.y);
+      }
+      return {.start = {.x = min_x, .y = min_y}, .end ={ .x = max_x, .y = max_y} };
+    }
+
   private:
     std::set<CoreRange> ranges_;
 };
