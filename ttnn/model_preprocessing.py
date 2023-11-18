@@ -9,7 +9,6 @@ from typing import Optional
 from loguru import logger
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 import ttnn
 
@@ -26,10 +25,8 @@ class ParametersConfig:
 
 
 def pad_tensor(tensor, height_multiple=TILE_HEIGHT, width_multiple=TILE_WIDTH):
-    import tt_lib as ttl
-
     if len(tensor.shape) > 1:
-        *original_batch_sizes, height, width = tensor.shape
+        *_, height, width = tensor.shape
         if height % height_multiple == 0 and width % width_multiple == 0:
             return tensor
 
