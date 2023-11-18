@@ -108,7 +108,7 @@ class Shape {
     Shape(const std::vector<uint32_t>&, const Padding&);
     Shape(const Shape&, const Padding&);
 
-    uint32_t rank() const;
+    std::size_t rank() const;
 
     uint32_t& operator[](const std::int64_t index);
     const uint32_t& operator[](const std::int64_t index) const;
