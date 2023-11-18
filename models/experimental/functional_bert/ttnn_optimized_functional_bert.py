@@ -264,12 +264,12 @@ def ttnn_optimized_bert(
     import tt_lib as ttl
 
     word_embeddings = ttnn.embedding(
-        input_ids, parameters["bert.embeddings.word_embeddings.weight"], layout=ttnn.TILE_LAYOUT
+        input_ids, parameters["bert.embeddings.word_embeddings.weight"], layout=ttnn.ROW_MAJOR_LAYOUT
     )
     ttnn.free(input_ids)
 
     token_type_embeddings = ttnn.embedding(
-        token_type_ids, parameters["bert.embeddings.token_type_embeddings.weight"], layout=ttnn.TILE_LAYOUT
+        token_type_ids, parameters["bert.embeddings.token_type_embeddings.weight"], layout=ttnn.ROW_MAJOR_LAYOUT
     )
     ttnn.free(token_type_ids)
 
