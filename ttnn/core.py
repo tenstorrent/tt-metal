@@ -6,6 +6,8 @@ import math
 import pathlib
 from typing import Optional, Tuple, Union
 
+from loguru import logger
+
 import tt_lib as ttl
 
 from ttnn.tensor import (
@@ -15,6 +17,7 @@ from ttnn.tensor import (
     to_device,
     from_device,
     to_layout,
+    DataType,
     MemoryConfig,
     DRAM_MEMORY_CONFIG,
     Layout,
@@ -91,7 +94,9 @@ def matmul(
     input_tensor_a: Tensor,
     input_tensor_b: Tensor,
     *,
+    bias: Optional[Tensor] = None,
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
+    dtype: Optional[DataType] = None,
     core_grid: Optional[Tuple[int, int]] = None,
 ) -> Tensor:
     """
@@ -165,6 +170,9 @@ def matmul(
         [10, 64, 128]
     """
 
+    if dtype is None:
+        dtype = input_tensor_a.dtype
+
     input_shape_a = input_tensor_a.shape
     input_shape_b = input_tensor_b.shape
     output_shape = tuple(input_shape_a[:-1] + input_shape_b[-1:])
@@ -210,49 +218,105 @@ def matmul(
     if width_a != height_b:
         raise RuntimeError("The width of the first tensor must be equal to the height of the second tensor")
 
+    m_size = height_a
+    k_size = width_a
+    n_size = width_b
+
     if core_grid != None:
-        if height_a % TILE_SIZE != 0 or width_a % TILE_SIZE != 0:
+        if m_size % TILE_SIZE != 0 or k_size % TILE_SIZE != 0:
             raise TypeError("The last two dimensions of the first tensor must be a multiple of 32")
 
-        if height_b % TILE_SIZE != 0 or width_b % TILE_SIZE != 0:
+        if k_size % TILE_SIZE != 0 or n_size % TILE_SIZE != 0:
             raise TypeError("The last two dimensions of the second tensor must be a multiple of 32")
 
-        per_core_M = int(math.ceil((height_a / TILE_SIZE) / core_grid[0]))
-        per_core_N = int(math.ceil(width_b / TILE_SIZE) / core_grid[1])
+        batch_size = math.prod(batch_shape_a)
+        is_batched = math.prod(batch_shape_b) > 1
 
-        in0_block_w = 1
-        out_subblock_h = 1
-        out_subblock_w = 1
+        if is_batched:
+            per_core_M = int(math.ceil((m_size / TILE_SIZE)))
+            per_core_N = int(math.ceil((n_size / TILE_SIZE)))
+            in0_block_w = 1  # TODO(arakhmati): Can it be more than 1 without running out of memory?
+        else:
+            per_core_M = int(math.ceil(((batch_size * m_size) / TILE_SIZE) / core_grid[0]))
+            per_core_N = int(math.ceil(n_size / TILE_SIZE / core_grid[1]))
+            in0_block_w = 4  # TODO(arakhmati): What is a good starting point?
+            while (k_size // TILE_SIZE) % in0_block_w != 0:
+                in0_block_w -= 1
 
-        if per_core_M % out_subblock_h != 0:
-            raise RuntimeError("Invalid matmul")
+        subblocks = [
+            (2, 4),
+            (4, 2),
+            (1, 8),
+            (8, 1),
+            (1, 7),
+            (7, 1),
+            (2, 3),
+            (3, 2),
+            (1, 6),
+            (6, 1),
+            (1, 5),
+            (5, 1),
+            (2, 2),
+            (1, 4),
+            (4, 1),
+            (1, 3),
+            (3, 1),
+            (1, 2),
+            (2, 1),
+            (1, 1),
+        ]
+        for out_subblock_h, out_subblock_w in subblocks:
+            if per_core_M % out_subblock_h == 0 and per_core_N % out_subblock_w == 0:
+                break
 
-        if per_core_N % out_subblock_w != 0:
-            raise RuntimeError("Invalid matmul")
-
-        if out_subblock_h * out_subblock_w > 8:
-            raise RuntimeError("Cannot have more than 8 output tiles")
+        # logger.info(
+        #     f"is_batched={is_batched}, per_core_M={per_core_M}, per_core_N={per_core_N}, in0_block_w={in0_block_w}, out_subblock_h={out_subblock_h}, out_subblock_w={out_subblock_w}"
+        # )
 
         ttl_input_tensor_a = input_tensor_a._tensor
         ttl_input_tensor_b = input_tensor_b._tensor
-        ttl_output_tensor = ttl.operations.primary.matmul(
-            ttl_input_tensor_a,
-            ttl_input_tensor_b,
-            program_config=ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
-                in0_block_w=in0_block_w,  # k
-                out_subblock_h=out_subblock_h,  # m
-                out_subblock_w=out_subblock_w,  # n
-                per_core_M=per_core_M,
-                per_core_N=per_core_N,
-                transpose_mcast=False,
-                fused_activation=None,
-            ),
-            output_mem_config=memory_config,
-        )
+        if is_batched:
+            if bias is not None:
+                raise RuntimeError("Bias must be None")
+            ttl_output_tensor = ttl.operations.primary.matmul(
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                program_config=ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+                    compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                    in0_block_w=in0_block_w,  # k
+                    out_subblock_h=out_subblock_h,  # m
+                    out_subblock_w=out_subblock_w,  # n
+                    per_core_M=per_core_M,
+                    per_core_N=per_core_N,
+                ),
+                output_mem_config=memory_config,
+                output_dtype=dtype,
+            )
+        else:
+            ttl_bias = bias._tensor if bias is not None else None
+            ttl_output_tensor = ttl.operations.primary.matmul(
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                bias=ttl_bias,
+                program_config=ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                    in0_block_w=in0_block_w,  # k
+                    out_subblock_h=out_subblock_h,  # m
+                    out_subblock_w=out_subblock_w,  # n
+                    per_core_M=per_core_M,
+                    per_core_N=per_core_N,
+                    transpose_mcast=False,
+                    fused_activation=None,
+                ),
+                output_mem_config=memory_config,
+                output_dtype=dtype,
+            )
+
         output_tensor = Tensor(ttl_output_tensor)
 
     elif height_a == 1 and width_b == 1:  # dot product
+        if bias is not None:
+            raise RuntimeError("Bias must be None")
         input_tensor_b = reshape(input_tensor_b, tuple(input_tensor_b.shape[:-2] + [width_b, height_b]))
 
         ttl_input_tensor_a = input_tensor_a._tensor
@@ -277,6 +341,9 @@ def matmul(
         output_shape = (32,)
 
     elif _shape_is_broadcastable(input_shape_a, input_shape_b):
+        if bias is not None:
+            raise RuntimeError("Bias must be None")
+
         if width_a != height_b:
             raise RuntimeError("The width of the first tensor must be equal to the height of the second tensor")
         if all(x == 1 for x in batch_shape_b):
@@ -572,10 +639,15 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
     if input_tensor.shape == shape:
         return input_tensor
 
+    def ttnn_reshape(ttl_input_tensor, shape):
+        return Tensor(ttl_input_tensor.reshape(shape))
+
     if input_tensor.layout == ROW_MAJOR_LAYOUT:
         # TODO(arakhmati): figure out how to make this work
-        if input_tensor.shape != [1, 64, 4, 32]:
-            return Tensor(ttl_input_tensor.reshape(shape))
+        if input_tensor.shape != [1, 64, 4, 32] and input_tensor.shape != [8, 384, 16, 64]:
+            return ttl.tensor.decorate_external_operation(ttnn_reshape, function_name="ttnn.reshape")(
+                ttl_input_tensor, shape
+            )
 
     if input_tensor.layout == TILE_LAYOUT:
         *_, old_height, old_width = input_tensor.shape
@@ -586,7 +658,9 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
             and new_height % TILE_SIZE == 0
             and new_width % TILE_SIZE == 0
         ):
-            return Tensor(ttl_input_tensor.reshape(shape))
+            return ttl.tensor.decorate_external_operation(ttnn_reshape, function_name="ttnn.reshape")(
+                ttl_input_tensor, shape
+            )
 
     try:
         w, z, y, x = shape
@@ -601,7 +675,7 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
         tensor = from_device(tensor)
         tensor = to_torch(tensor)
         tensor = torch_reshape(tensor, shape)
-        tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.shape")(tensor, shape)
+        tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.reshape")(tensor, shape)
         tensor = from_torch(tensor, input_tensor.dtype)
         tensor = to_device(tensor, device)
         return tensor

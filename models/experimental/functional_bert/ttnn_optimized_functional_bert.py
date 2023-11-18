@@ -14,127 +14,66 @@ def ttnn_optimized_multi_head_attention(
     self_output_bias,
     *,
     head_size,
+    num_cores_x=12,
 ):
-    import tt_lib as ttl
+    batch_size, *_ = hidden_states.shape
 
-    batch_size, sequence_size, hidden_size = hidden_states.shape
-
-    hidden_states = ttnn.reshape(hidden_states, (batch_size, 1, sequence_size, hidden_size))
-    fused_qkv_weight = ttnn.reshape(fused_qkv_weight, (1, 1, hidden_size, hidden_size * 3))
-    fused_qkv_bias = ttnn.reshape(fused_qkv_bias, (1, 1, 32, hidden_size * 3))
-    self_output_weight = ttnn.reshape(self_output_weight, (1, 1, hidden_size, hidden_size))
-    self_output_bias = ttnn.reshape(self_output_bias, (1, 1, 32, hidden_size))
-
-    hidden_states = hidden_states._tensor
-    if attention_mask is not None:
-        attention_mask = attention_mask._tensor
-    fused_qkv_weight = fused_qkv_weight._tensor
-    fused_qkv_bias = fused_qkv_bias._tensor
-    self_output_weight = self_output_weight._tensor
-    self_output_bias = self_output_bias._tensor
-
-    fused_qkv_output = ttl.operations.primary.matmul(
+    fused_qkv_output = ttnn.matmul(
         hidden_states,
         fused_qkv_weight,
         bias=fused_qkv_bias,
-        program_config=ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(12, batch_size),
-            in0_block_w=4,
-            out_subblock_h=4,
-            out_subblock_w=2,
-            per_core_M=12,
-            per_core_N=8,
-            transpose_mcast=False,
-            fused_activation=None,
-        ),
-        output_mem_config=ttnn.L1_MEMORY_CONFIG,
-        output_dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+        core_grid=(batch_size, num_cores_x),
     )
 
     (
         query,
         key,
         value,
-    ) = ttl.operations.primary.transformers.split_fused_qkv_and_split_heads(
+    ) = ttnn.nlp.split_fused_qkv_and_split_heads(
         fused_qkv_output,
-        ttl.tensor.CoreCoord(12, batch_size),
-        ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        core_grid=(batch_size, num_cores_x),
     )
-    fused_qkv_output.deallocate()
+    ttnn.free(fused_qkv_output)
 
-    attention_scores = ttl.operations.primary.matmul(
+    attention_scores = ttnn.matmul(
         query,
         key,
-        program_config=(
-            ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=(12, batch_size),
-                in0_block_w=1,
-                out_subblock_h=4,
-                out_subblock_w=2,
-                per_core_M=12,
-                per_core_N=12,
-            )
-        ),
-        output_mem_config=ttnn.L1_MEMORY_CONFIG,
-        output_dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        core_grid=(batch_size, num_cores_x),
     )
-    query.deallocate()
-    key.deallocate()
+    ttnn.free(query)
+    ttnn.free(key)
 
-    scaler = 1 / (head_size**0.5)
-    if attention_mask is not None:
-        attention_probs = ttl.operations.primary.transformers.scale_mask_softmax_in_place(
-            attention_scores, scaler, attention_mask
-        )
-    else:
-        attention_scores = attention_scores * scaler
-        attention_probs = ttl.tensor.softmax(attention_scores, dim=-1)
+    attention_probs = ttnn.nlp.attention_softmax(attention_scores, attention_mask=attention_mask, head_size=head_size)
 
-    context_layer = ttl.operations.primary.matmul(
+    context_layer = ttnn.matmul(
         attention_probs,
         value,
-        program_config=ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=(12, batch_size),
-            in0_block_w=2,
-            out_subblock_h=4,
-            out_subblock_w=2,
-            per_core_M=12,
-            per_core_N=2,
-        ),
-        output_mem_config=ttnn.L1_MEMORY_CONFIG,
-        output_dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+        core_grid=(batch_size, num_cores_x),
     )
-    attention_probs.deallocate()
+    ttnn.free(attention_probs)
 
-    context_layer = ttl.operations.primary.transformers.concatenate_heads(
+    context_layer = ttnn.nlp.concatenate_heads(
         context_layer,
-        ttl.tensor.CoreCoord(12, batch_size),
-        ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        core_grid=(batch_size, num_cores_x),
     )
 
-    self_output = ttl.operations.primary.matmul(
+    self_output = ttnn.matmul(
         context_layer,
         self_output_weight,
         bias=self_output_bias,
-        program_config=(
-            ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(12, batch_size),
-                in0_block_w=4,
-                out_subblock_h=6,
-                out_subblock_w=1,
-                per_core_M=12,
-                per_core_N=3,
-                transpose_mcast=False,
-                fused_activation=None,
-            )
-        ),
-        output_mem_config=ttnn.L1_MEMORY_CONFIG,
-        output_dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        core_grid=(batch_size, num_cores_x),
     )
-    context_layer.deallocate()
-
-    self_output = ttnn.Tensor(self_output)
-    self_output = ttnn.reshape(self_output, (batch_size, sequence_size, hidden_size))
+    ttnn.free(context_layer)
 
     return self_output
 
@@ -263,9 +202,19 @@ def ttnn_optimized_bert(
 ):
     import tt_lib as ttl
 
-    word_embeddings = ttnn.embedding(input_ids, parameters["bert.embeddings.word_embeddings.weight"])
-    token_type_embeddings = ttnn.embedding(token_type_ids, parameters["bert.embeddings.token_type_embeddings.weight"])
+    word_embeddings = ttnn.embedding(
+        input_ids, parameters["bert.embeddings.word_embeddings.weight"], layout=ttnn.TILE_LAYOUT
+    )
+    ttnn.free(input_ids)
+
+    token_type_embeddings = ttnn.embedding(
+        token_type_ids, parameters["bert.embeddings.token_type_embeddings.weight"], layout=ttnn.TILE_LAYOUT
+    )
+    ttnn.free(token_type_ids)
+
     embeddings = word_embeddings + token_type_embeddings
+    ttnn.free(word_embeddings)
+    ttnn.free(token_type_embeddings)
 
     encoder_input = ttnn.experimental.layer_norm(
         embeddings,
@@ -332,6 +281,6 @@ def ttnn_optimized_bert_for_question_answering(
     )
 
     qa_outputs = ttnn.Tensor(qa_outputs)
-    qa_outputs = ttnn.reshape(qa_outputs, (batch_size, 1, sequence_size, 32))
+    qa_outputs = ttnn.reshape(qa_outputs, (batch_size, sequence_size, 32))
 
     return qa_outputs

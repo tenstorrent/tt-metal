@@ -21,6 +21,11 @@ Tensor convert_torch_tensor_to_tt_tensor(
     auto torch_dtype = torch_tensor.attr("dtype");
     auto shape = py::cast<std::vector<uint32_t>>(torch_tensor.attr("shape"));
 
+    bool borrow_storage = true;
+    if (not torch_tensor.attr("is_contiguous")()) {
+        borrow_storage = false;
+    }
+
     auto contiguous_torch_tensor = torch_tensor.attr("contiguous")();
 
     // Override the data type if there is an user-provided one
@@ -31,16 +36,18 @@ Tensor convert_torch_tensor_to_tt_tensor(
     } else if (torch_dtype.equal(torch.attr("float32"))) {
         data_type = DataType::FLOAT32;
     } else if (torch_dtype.equal(torch.attr("float16"))) {
+        borrow_storage = false;
+        contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("bfloat16"));
         // TODO(arakhmati): add DataType::FLOAT16?
         data_type = DataType::BFLOAT16;
     } else if (torch_dtype.equal(torch.attr("bfloat16"))) {
         data_type = DataType::BFLOAT16;
     } else if (torch_dtype.equal(torch.attr("int64"))) {
+        borrow_storage = false;
         contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("int32"));
         // TODO(arakhmati): add DataType::INT64?
         data_type = DataType::UINT32;
     } else if (torch_dtype.equal(torch.attr("int32"))) {
-        contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("int32"));
         // TODO(arakhmati): add DataType::INT32?
         data_type = DataType::UINT32;
     } else {
@@ -49,19 +56,25 @@ Tensor convert_torch_tensor_to_tt_tensor(
 
     switch (data_type) {
         case DataType::UINT32: {
-            contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("int32"));
+            if (not torch_dtype.equal(torch.attr("int32"))) {
+                borrow_storage = false;
+                contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("int32"));
+            }
             break;
         }
+        case DataType::BFLOAT8_B:
         case DataType::FLOAT32: {
-            contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("float32"));
+            if (not torch_dtype.equal(torch.attr("float32"))) {
+                borrow_storage = false;
+                contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("float32"));
+            }
             break;
         }
         case DataType::BFLOAT16: {
-            contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("bfloat16"));
-            break;
-        }
-        case DataType::BFLOAT8_B: {
-            contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("float32"));
+            if (not torch_dtype.equal(torch.attr("bfloat16"))) {
+                borrow_storage = false;
+                contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("bfloat16"));
+            }
             break;
         }
         default: {
@@ -78,25 +91,46 @@ Tensor convert_torch_tensor_to_tt_tensor(
             auto data_ptr =
                 reinterpret_cast<uint32_t *>(py::cast<std::size_t>(contiguous_torch_tensor.attr("data_ptr")()));
             auto num_elements = py::cast<std::size_t>(contiguous_torch_tensor.attr("numel")());
-            auto storage = BorrowedStorage(
-                borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
-            return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+            if (borrow_storage) {
+                auto storage = BorrowedStorage(
+                    borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
+                return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+            } else {
+                std::vector<uint32_t> uint32_vector(data_ptr, data_ptr + num_elements);
+                auto buffer = owned_buffer::create<uint32_t>(std::move(uint32_vector));
+                auto storage = OwnedStorage{std::move(buffer)};
+                return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+            }
         }
         case DataType::FLOAT32: {
             auto data_ptr =
                 reinterpret_cast<float *>(py::cast<std::size_t>(contiguous_torch_tensor.attr("data_ptr")()));
             auto num_elements = py::cast<std::size_t>(contiguous_torch_tensor.attr("numel")());
-            auto storage = BorrowedStorage(
-                borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
-            return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+            if (borrow_storage) {
+                auto storage = BorrowedStorage(
+                    borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
+                return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+            } else {
+                std::vector<float> float32_vector(data_ptr, data_ptr + num_elements);
+                auto buffer = owned_buffer::create<float>(std::move(float32_vector));
+                auto storage = OwnedStorage{std::move(buffer)};
+                return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+            }
         }
         case DataType::BFLOAT16: {
             auto data_ptr =
                 reinterpret_cast<bfloat16 *>(py::cast<std::size_t>(contiguous_torch_tensor.attr("data_ptr")()));
             auto num_elements = py::cast<std::size_t>(contiguous_torch_tensor.attr("numel")());
-            auto storage = BorrowedStorage(
-                borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
-            return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+            if (borrow_storage) {
+                auto storage = BorrowedStorage(
+                    borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
+                return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+            } else {
+                std::vector<bfloat16> bfloat16_vector(data_ptr, data_ptr + num_elements);
+                auto buffer = owned_buffer::create<bfloat16>(std::move(bfloat16_vector));
+                auto storage = OwnedStorage{std::move(buffer)};
+                return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+            }
         }
         case DataType::BFLOAT8_B: {
             auto data_ptr =

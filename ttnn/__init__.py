@@ -49,3 +49,5 @@ from ttnn.core import (
 )
 
 import ttnn.experimental
+import ttnn.nlp
+import ttnn.model_preprocessing

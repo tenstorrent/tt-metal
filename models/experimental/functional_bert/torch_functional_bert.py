@@ -46,11 +46,11 @@ def torch_multi_head_attention(
     attention_probs = F.softmax(attention_scores, dim=-1)
 
     context_layer = attention_probs @ value
-
     context_layer = torch.permute(context_layer, (0, 2, 1, 3))
     context_layer = torch.reshape(context_layer, (batch_size, sequence_size, hidden_size))
 
-    self_output = context_layer @ output_weight
+    self_output = context_layer
+    self_output = self_output @ output_weight
     self_output = self_output + output_bias
 
     return self_output

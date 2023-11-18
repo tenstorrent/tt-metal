@@ -423,7 +423,7 @@ Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale
     if (mask.has_value()) {
         TT_ASSERT(input_tensor.shape()[-1] == mask.value().shape()[-1]);
         TT_ASSERT(input_tensor.shape()[0] == mask.value().shape()[0]);
-        TT_ASSERT(mask.value().shape()[-2] == 1);
+        TT_ASSERT(mask.value().shape()[-2] == 1 or mask.value().shape()[-2] == TILE_HEIGHT);
         for (uint32_t i = 1; i < input_tensor.shape().rank() - 2; i++) {
             TT_ASSERT(mask.value().shape()[i] == 1);
         }
