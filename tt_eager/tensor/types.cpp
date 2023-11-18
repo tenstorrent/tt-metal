@@ -75,7 +75,7 @@ Shape::Shape(const Shape& other, const Padding& padding) :
     TT_ASSERT(this->padding_.rank_ == this->rank_);
 }
 
-uint32_t Shape::rank() const { return this->rank_; }
+std::size_t Shape::rank() const { return this->rank_; }
 
 uint32_t& Shape::operator[](const std::int64_t index) {
     auto normalized_index = this->get_normalized_index(index);

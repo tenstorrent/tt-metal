@@ -38,7 +38,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
     uint32_t padded_row_size_bytes = input_shape[-1] * input_tensor.element_size();
     uint32_t unpadded_row_size_bytes = output_shape[-1] * input_tensor.element_size();
 
-    auto num_dims = input_shape.rank();
+    std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> num_unpadded_sticks_per_dim(num_dims);
     std::vector<uint32_t> num_padded_sticks_per_dim(num_dims);
     std::vector<uint32_t> id_per_dim(num_dims);
@@ -261,7 +261,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_unpad
     auto input_shape = input_tensor.shape();
     auto output_shape = output_tensor.shape();
 
-    auto num_dims = input_shape.rank();
+    std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> num_unpadded_tiles_per_dim(num_dims);
     std::vector<uint32_t> num_padded_tiles_per_dim(num_dims);
     std::vector<uint32_t> id_per_dim(num_dims);
