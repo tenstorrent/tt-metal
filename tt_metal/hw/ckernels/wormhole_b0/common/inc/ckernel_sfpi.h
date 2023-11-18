@@ -2874,25 +2874,6 @@ void test17()
     copy_result_to_dreg0(17);
 }
 
-inline void calculate_logical_not()
-{
-  vUInt v(dst_reg[0].get());
- const vUInt vZero(0), vOne(1);
- v_if(v == 0) {
-   dst_reg[0] = vOne;
- } v_else {
-   dst_reg[0] = vZero;
- }
- v_endif;
-}
-
-inline void calculate_bitwise_complement()
-{
-  vUInt v( dst_reg[0].get() );
-  vUInt v_comp = ~v;
-  dst_reg[0] = v_comp;
-}
-
 //////////////////////////////////////////////////////////////////////////////
 // These tests are designed to be incremental so that if a test fails the
 // earlier tests should be examined/fixed prior to the latter tests.
@@ -2934,12 +2915,7 @@ inline void calculate_sfpi(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
         test16();
     } else if constexpr (operation == SfpiTestType::test17) {
         test17();
-    } else if constexpr (operation == SfpiTestType::logical_not) {
-	calculate_logical_not();
-    } else if constexpr (operation == SfpiTestType::bitwise_complement) {
-	calculate_bitwise_complement();
     }
-
 }
 
 } // NAMESPACE

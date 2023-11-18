@@ -2,16 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#pragma once
-#include "llk_param_structs.h"
-
 #include "ckernel_include.h"
 #include "ckernel_template.h"
 #include <type_traits>
 
 #include "cmath_common.h"
 #include "llk_math_common.h"
-#include "llk_format_conversions.h"
 #include "ckernel_globals.h"
 #include "ckernel_sfpi.h"
 
@@ -158,25 +154,4 @@ inline void llk_math_eltwise_unary_sfpi_test18(uint dst_index) {
 template <DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpi_test19(uint dst_index) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test19, dst_sync>(dst_index);
-}
-
-//Logical Not
-template <DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpi_logical_not(uint dst_index) {
-    llk_math_eltwise_unary_sfpi<SfpiTestType::logical_not, dst_sync>(dst_index);
-}
-
-inline void llk_math_eltwise_unary_sfpi_logical_not_init() {
-  llk_math_eltwise_unary_sfpi_init();
-}
-
-//Bitwise Complement
-template <DstSync dst_sync = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpi_bitwise_complement(uint dst_index) {
-    llk_math_eltwise_unary_sfpi<SfpiTestType::bitwise_complement, dst_sync>(dst_index);
-}
-
-
-inline void llk_math_eltwise_unary_sfpi_bitwise_complement_init() {
-  llk_math_eltwise_unary_sfpi_init();
 }

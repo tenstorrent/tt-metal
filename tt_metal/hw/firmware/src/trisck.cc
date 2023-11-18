@@ -9,7 +9,7 @@
 //      Need to make sure no other file includes these lists since it also include global parameter definitions
 // 2) instantiate global variables
 
-#include "ckernel_globals.h"
+#include "metal_ckernel_globals.h"
 
 #include "chlkc_list.h"
 
@@ -23,9 +23,9 @@ uint32_t gl_alu_format_spec_reg = 0;
 
 namespace ckernel
 {
-volatile tt_reg_ptr uint * const regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
-volatile tt_reg_ptr uint * const instrn_buffer = reinterpret_cast<volatile uint *>(INSTRN_BUF_BASE);
-volatile tt_reg_ptr uint * const pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
+volatile tt_reg_ptr uint * regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
+volatile tt_reg_ptr uint * instrn_buffer = reinterpret_cast<volatile uint *>(INSTRN_BUF_BASE);
+volatile tt_reg_ptr uint * pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
 }
 
 void kernel_launch()

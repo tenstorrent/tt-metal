@@ -4,8 +4,6 @@
 
 #include <cstdint>
 
-#include "llk_3c.h"
-
 namespace NAMESPACE {
 void MAIN {
     // expands to hlk_relu_config(nullptr, 1); for relu only

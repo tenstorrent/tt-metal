@@ -6,6 +6,14 @@
 
 
 #include "compute_kernel_api/common_globals.h"
+#ifdef TRISC_PACK
+#include "llk_io_pack.h"
+#endif
+#ifdef TRISC_UNPACK
+#include "llk_io_unpack.h"
+#endif
+
+
 namespace ckernel {
 
 /**
