@@ -124,8 +124,12 @@ def ttnn_bert(
     num_encoders,
     head_size,
 ):
-    word_embeddings = ttnn.embedding(input_ids, parameters["bert.embeddings.word_embeddings.weight"])
-    token_type_embeddings = ttnn.embedding(token_type_ids, parameters["bert.embeddings.token_type_embeddings.weight"])
+    word_embeddings = ttnn.embedding(
+        input_ids, parameters["bert.embeddings.word_embeddings.weight"], layout=ttnn.TILE_LAYOUT
+    )
+    token_type_embeddings = ttnn.embedding(
+        token_type_ids, parameters["bert.embeddings.token_type_embeddings.weight"], layout=ttnn.TILE_LAYOUT
+    )
     encoder_input = word_embeddings + token_type_embeddings
 
     encoder_input = ttnn.experimental.layer_norm(

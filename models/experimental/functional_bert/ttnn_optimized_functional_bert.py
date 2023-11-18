@@ -263,9 +263,19 @@ def ttnn_optimized_bert(
 ):
     import tt_lib as ttl
 
-    word_embeddings = ttnn.embedding(input_ids, parameters["bert.embeddings.word_embeddings.weight"])
-    token_type_embeddings = ttnn.embedding(token_type_ids, parameters["bert.embeddings.token_type_embeddings.weight"])
+    word_embeddings = ttnn.embedding(
+        input_ids, parameters["bert.embeddings.word_embeddings.weight"], layout=ttnn.TILE_LAYOUT
+    )
+    ttnn.free(input_ids)
+
+    token_type_embeddings = ttnn.embedding(
+        token_type_ids, parameters["bert.embeddings.token_type_embeddings.weight"], layout=ttnn.TILE_LAYOUT
+    )
+    ttnn.free(token_type_ids)
+
     embeddings = word_embeddings + token_type_embeddings
+    ttnn.free(word_embeddings)
+    ttnn.free(token_type_embeddings)
 
     encoder_input = ttnn.experimental.layer_norm(
         embeddings,
@@ -332,6 +342,6 @@ def ttnn_optimized_bert_for_question_answering(
     )
 
     qa_outputs = ttnn.Tensor(qa_outputs)
-    qa_outputs = ttnn.reshape(qa_outputs, (batch_size, 1, sequence_size, 32))
+    qa_outputs = ttnn.reshape(qa_outputs, (batch_size, sequence_size, 32))
 
     return qa_outputs

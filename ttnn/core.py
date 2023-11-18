@@ -572,10 +572,15 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
     if input_tensor.shape == shape:
         return input_tensor
 
+    def ttnn_reshape(ttl_input_tensor, shape):
+        return Tensor(ttl_input_tensor.reshape(shape))
+
     if input_tensor.layout == ROW_MAJOR_LAYOUT:
         # TODO(arakhmati): figure out how to make this work
-        if input_tensor.shape != [1, 64, 4, 32]:
-            return Tensor(ttl_input_tensor.reshape(shape))
+        if input_tensor.shape != [1, 64, 4, 32] and input_tensor.shape != [8, 384, 16, 64]:
+            return ttl.tensor.decorate_external_operation(ttnn_reshape, function_name="ttnn.reshape")(
+                ttl_input_tensor, shape
+            )
 
     if input_tensor.layout == TILE_LAYOUT:
         *_, old_height, old_width = input_tensor.shape
@@ -586,7 +591,9 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
             and new_height % TILE_SIZE == 0
             and new_width % TILE_SIZE == 0
         ):
-            return Tensor(ttl_input_tensor.reshape(shape))
+            return ttl.tensor.decorate_external_operation(ttnn_reshape, function_name="ttnn.reshape")(
+                ttl_input_tensor, shape
+            )
 
     try:
         w, z, y, x = shape
@@ -601,7 +608,7 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
         tensor = from_device(tensor)
         tensor = to_torch(tensor)
         tensor = torch_reshape(tensor, shape)
-        tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.shape")(tensor, shape)
+        tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.reshape")(tensor, shape)
         tensor = from_torch(tensor, input_tensor.dtype)
         tensor = to_device(tensor, device)
         return tensor
