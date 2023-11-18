@@ -82,7 +82,8 @@ def default_preprocessor(parameters_config, torch_model, full_name):
     parameters = {}
     if isinstance(torch_model, torch.nn.Linear):
         parameters[f"{full_name}weight"] = preprocess_linear_weight(parameters_config, torch_model.weight)
-        parameters[f"{full_name}bias"] = preprocess_linear_bias(parameters_config, torch_model.bias)
+        if torch_model.bias is not None:
+            parameters[f"{full_name}bias"] = preprocess_linear_bias(parameters_config, torch_model.bias)
     elif isinstance(torch_model, torch.nn.LayerNorm):
         parameters[f"{full_name}weight"] = preprocess_layernorm_parameter(parameters_config, torch_model.weight)
         parameters[f"{full_name}bias"] = preprocess_layernorm_parameter(parameters_config, torch_model.bias)

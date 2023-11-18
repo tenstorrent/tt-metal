@@ -46,6 +46,7 @@ from ttnn.core import (
     embedding,
     # unary operations
     softmax,
+    tanh,
 )
 
 import ttnn.experimental

@@ -100,3 +100,59 @@ def test_add_4D(device, n, c, h, w):
     tt_output = ttnn.to_torch(tt_output)
 
     assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [2 * 32])
+@pytest.mark.parametrize("scalar", [0.42])
+def test_add_scalar(device, h, w, scalar):
+    torch_a = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_output = scalar + torch_a
+
+    a = ttnn.from_torch(torch_a)
+    a = ttnn.to_device(a, device)
+    tt_output = scalar + a
+    tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
+    tt_output = ttnn.from_device(tt_output)
+    tt_output = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [2 * 32])
+def test_add_4D(device, h, w):
+    torch_a = torch.rand((5, 64, h, w), dtype=torch.bfloat16)
+    torch_b = torch.rand((5, 64, h, w), dtype=torch.bfloat16)
+    torch_output = torch.add(torch_a, torch_b)
+
+    a = ttnn.from_torch(torch_a)
+    a = ttnn.to_device(a, device)
+    b = ttnn.from_torch(torch_b)
+    b = ttnn.to_device(b, device)
+    tt_output = ttnn.add(a, b)
+    tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
+    tt_output = ttnn.from_device(tt_output)
+    tt_output = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.skip(reason="add currently does not support broadcasting")
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [2 * 32])
+def test_add_broadcasts(device, h, w):
+    torch_a = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_b = torch.rand((5, 64, h, w), dtype=torch.bfloat16)
+    torch_output = torch.add(torch_a, torch_b)
+
+    a = ttnn.from_torch(torch_a)
+    a = ttnn.to_device(a, device)
+    b = ttnn.from_torch(torch_b)
+    b = ttnn.to_device(b, device)
+    tt_output = ttnn.add(a, b)
+    tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
+    tt_output = ttnn.from_device(tt_output)
+    tt_output = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_output, tt_output, 0.9999)
