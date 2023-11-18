@@ -17,8 +17,10 @@ namespace tt {
 
 namespace tt_metal {
 
+class Device;
+
 struct BasicAllocator : Allocator {
-    BasicAllocator(const AllocatorConfig &alloc_config);
+    BasicAllocator(const Device &device);
 };
 
 }  // namespace tt_metal

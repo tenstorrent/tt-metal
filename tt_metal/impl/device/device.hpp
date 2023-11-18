@@ -137,19 +137,18 @@ class Device {
     // core.y represents different channels along one <x>
     const std::set<CoreCoord> &ethernet_cores() const { return this->ethernet_cores_; }
 
-    void deallocate_buffers();
-
     // machine epsilon
     float sfpu_eps() const;
 
+    const std::vector<uint32_t>& l1_bank_remap() const { return this->l1_bank_remap_; }
+
    private:
-    void check_allocator_is_initialized() const;
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    bool initialize(const std::vector<uint32_t>& l1_bank_remap = {});
+    bool initialize();
     void initialize_cluster();
-    void initialize_allocator(const std::vector<uint32_t>& l1_bank_remap = {});
+    void initialize_grid();
     void initialize_build();
     void initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg);
     void initialize_and_launch_firmware();
@@ -162,10 +161,9 @@ class Device {
     friend class Buffer;
     friend class Program;
 
-    static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
     static ActiveDevices active_devices_;
     chip_id_t id_;
-    std::unique_ptr<Allocator> allocator_ = nullptr;
+    std::vector<uint32_t> l1_bank_remap_;
     bool initialized_ = false;
 
     std::set<CoreCoord> compute_cores;

@@ -8,7 +8,7 @@
 #include "tt_metal/common/math.hpp"
 #include "common/assert.hpp"
 #include "tt_metal/impl/device/device.hpp"
-
+#include "tt_metal/detail/tt_metal.hpp"
 #include "llrt/llrt.hpp"
 
 namespace tt {
@@ -24,7 +24,7 @@ void validate_buffer_size_and_page_size(uint64_t size, uint64_t page_size, const
 
 Buffer::Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferType buffer_type)
     : device_(device), size_(size), page_size_(page_size), buffer_type_(buffer_type) {
-    TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr);
+    TT_FATAL(this->device_ != nullptr, "Valid device required for Buffer construction!");
     validate_buffer_size_and_page_size(size, page_size, buffer_type);
     this->allocate();
 }
@@ -67,7 +67,7 @@ void Buffer::allocate() {
     TT_ASSERT(this->device_ != nullptr);
     // L1 buffers are allocated top down!
     bool bottom_up = this->buffer_type_ == BufferType::DRAM;
-    this->address_ = allocator::allocate_buffer(*this->device_->allocator_, this->size_, this->page_size_, this->buffer_type_, bottom_up);
+    this->address_ = allocator::allocate_buffer(detail::GetAllocator(this->device_), this->size_, this->page_size_, this->buffer_type_, bottom_up);
 }
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
@@ -124,8 +124,7 @@ void Buffer::deallocate() {
         return;
     }
     this->size_ = 0;
-    TT_ASSERT(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
-    allocator::deallocate_buffer(*this->device_->allocator_, this->address_, this->buffer_type_);
+    allocator::deallocate_buffer(detail::GetAllocator(this->device_), this->address_, this->buffer_type_);
 }
 
 Buffer::~Buffer() {

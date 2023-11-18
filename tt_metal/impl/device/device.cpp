@@ -51,10 +51,10 @@ void ActiveDevices::deactivate_device(chip_id_t id) {
     this->active_devices_[id] = ActiveState::INACTIVE;
 }
 
-Device::Device(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id)
+Device::Device(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id), l1_bank_remap_(l1_bank_remap)
 {
     ZoneScoped;
-    this->initialize(l1_bank_remap);
+    this->initialize();
 }
 
 size_t Device::detect_num_available_devices() {
@@ -83,56 +83,24 @@ void Device::initialize_cluster() {
     tt::Cluster::instance().assert_risc_reset(this->id_);
 }
 
-void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
+void Device::initialize_grid() {
     ZoneScoped;
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    // Construct allocator config from soc_desc
-    AllocatorConfig config({
-        .num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
-        .dram_bank_size = soc_desc.dram_bank_size,
-        .dram_bank_offsets = {},
-        .worker_grid_size = this->logical_grid_size(),
-        .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
-        .l1_bank_size = static_cast<size_t>(soc_desc.l1_bank_size),
-        .core_type_from_noc_coord_table = {}, // Populated later
-        .worker_log_to_physical_routing_x=soc_desc.worker_log_to_physical_routing_x,
-        .worker_log_to_physical_routing_y=soc_desc.worker_log_to_physical_routing_y,
-        .l1_bank_remap = l1_bank_remap,
-    });
-    // Initialize dram_offsets from soc_descriptor
-    for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
-        config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
-    }
-    // Initialize core_type_from_noc_coord_table table
-    for (const auto& core: soc_desc.physical_cores) {
-        config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
-    }
     for (const auto& core : soc_desc.compute_with_storage_cores) {
         const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
         this->compute_cores.insert(logical_coord);
-        const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
-        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
     }
     for (const auto& core : soc_desc.storage_cores) {
         const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
         this->storage_only_cores_.insert(logical_coord);
-        const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
-        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
     }
     for (const auto& core : soc_desc.dispatch_cores) {
         const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
         this->dispatch_cores_.insert(logical_coord);
-        const auto noc_coord = this->worker_core_from_logical_core(logical_coord);
-        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
     for (const auto &core : soc_desc.get_logical_ethernet_cores()) {
         this->ethernet_cores_.insert(core);
     }
-
-    // L1_BANKING scheme creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
-    // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
-    static_assert(this->allocator_scheme_ == MemoryAllocator::L1_BANKING);
-    this->allocator_ = std::make_unique<L1BankingAllocator>(config);
 }
 
 void Device::initialize_build() {
@@ -241,12 +209,12 @@ void Device::clear_l1_state() {
     }
 }
 
-bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
+bool Device::initialize() {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}", this->id_);
     bool already_initialized = this->active_devices_.activate_device(this->id_);
     this->initialize_cluster();
-    this->initialize_allocator(l1_bank_remap);
+    this->initialize_grid();
     if (!already_initialized) {
         this->initialize_build();
     }
@@ -278,13 +246,12 @@ bool Device::close() {
     if (not this->initialized_) {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
-    this->deallocate_buffers();
+    detail::DeallocateBuffers(this);
     llrt::watcher_detach(this);
     tt_stop_debug_print_server();
     tt::Cluster::instance().assert_risc_reset(id_);
     this->clear_l1_state();
     tt::Cluster::instance().l1_barrier(id_);
-    allocator::clear(*this->allocator_);
 
     this->active_devices_.deactivate_device(this->id_);
 
@@ -369,25 +336,16 @@ std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vect
     return ethernet_cores;
 }
 
-void Device::check_allocator_is_initialized() const {
-    if (this->allocator_ == nullptr) {
-        TT_THROW("No memory allocator! Device has not been initialized, did you forget to call InitializeDevice?");
-    }
-}
-
 uint32_t Device::num_banks(const BufferType &buffer_type) const {
-    this->check_allocator_is_initialized();
-    return allocator::num_banks(*this->allocator_, buffer_type);
+    return allocator::num_banks(detail::GetAllocator(this), buffer_type);
 }
 
 uint32_t Device::bank_size(const BufferType &buffer_type) const {
-    this->check_allocator_is_initialized();
-    return allocator::bank_size(*this->allocator_, buffer_type);
+    return allocator::bank_size(detail::GetAllocator(this), buffer_type);
 }
 
 uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id) const {
-    this->check_allocator_is_initialized();
-    return allocator::dram_channel_from_bank_id(*this->allocator_, bank_id);
+    return allocator::dram_channel_from_bank_id(detail::GetAllocator(this), bank_id);
 }
 
 CoreCoord Device::core_from_dram_channel(uint32_t dram_channel) const {
@@ -401,42 +359,31 @@ CoreCoord Device::core_from_dram_channel(uint32_t dram_channel) const {
 }
 
 int32_t Device::l1_bank_offset_from_bank_id(uint32_t bank_id) const {
-    this->check_allocator_is_initialized();
-    return allocator::l1_bank_offset_from_bank_id(*this->allocator_, bank_id);
+    return allocator::l1_bank_offset_from_bank_id(detail::GetAllocator(this), bank_id);
 }
 
 int32_t Device::dram_bank_offset_from_bank_id(uint32_t bank_id) const {
-    this->check_allocator_is_initialized();
-    return allocator::dram_bank_offset_from_bank_id(*this->allocator_, bank_id);
+    return allocator::dram_bank_offset_from_bank_id(detail::GetAllocator(this), bank_id);
 }
 
 CoreCoord Device::logical_core_from_bank_id(uint32_t bank_id) const {
-    this->check_allocator_is_initialized();
-    return allocator::logical_core_from_bank_id(*this->allocator_, bank_id);
+    return allocator::logical_core_from_bank_id(detail::GetAllocator(this), bank_id);
 }
 
 const std::vector<uint32_t> &Device::bank_ids_from_dram_channel(uint32_t dram_channel) const {
-    this->check_allocator_is_initialized();
-    return allocator::bank_ids_from_dram_channel(*this->allocator_, dram_channel);
+    return allocator::bank_ids_from_dram_channel(detail::GetAllocator(this), dram_channel);
 }
 
 const std::vector<uint32_t> &Device::bank_ids_from_logical_core(const CoreCoord &logical_core) const {
-    this->check_allocator_is_initialized();
-    return allocator::bank_ids_from_logical_core(*this->allocator_, logical_core);
+    return allocator::bank_ids_from_logical_core(detail::GetAllocator(this), logical_core);
 }
 
 allocator::Statistics Device::get_memory_allocation_statistics(const BufferType &buffer_type) const {
-    this->check_allocator_is_initialized();
-    return allocator::get_statistics(*this->allocator_, buffer_type);
+    return allocator::get_statistics(detail::GetAllocator(this), buffer_type);
 }
 
 void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const {
-    this->check_allocator_is_initialized();
-    return allocator::dump_memory_blocks(*this->allocator_, buffer_type, out);
-}
-
-void Device::deallocate_buffers(){
-    allocator::deallocate_buffers(*allocator_);
+    return allocator::dump_memory_blocks(detail::GetAllocator(this), buffer_type, out);
 }
 
 float Device::sfpu_eps() const {

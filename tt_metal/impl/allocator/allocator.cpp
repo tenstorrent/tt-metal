@@ -9,7 +9,7 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "third_party/magic_enum/magic_enum.hpp"
-
+#include "tt_metal/impl/device/device.hpp"
 namespace tt {
 
 namespace tt_metal {
@@ -97,11 +97,6 @@ void BankManager::deallocate_all(){
     {
         this->allocator_->deallocate(addr);
     }
-}
-
-
-void BankManager::clear() {
-    this->allocator_->clear();
 }
 
 std::optional<uint64_t> BankManager::lowest_occupied_address(uint32_t bank_id) const {
@@ -272,17 +267,51 @@ void deallocate_buffers(Allocator &allocator) {
     allocator.l1_manager.deallocate_all();
 }
 
-void clear(Allocator &allocator) {
-    allocator.dram_manager.clear();
-    allocator.l1_manager.clear();
-}
-
 }  // namespace allocator
 
-Allocator::Allocator(const AllocatorConfig &alloc_config, const allocator::AllocDescriptor &alloc_descriptor) : config(alloc_config), descriptor(alloc_descriptor) {
+Allocator::Allocator(const Device& device, const allocator::AllocDescriptor &alloc_descriptor) : descriptor(alloc_descriptor) {
+    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(device.id());
+
+    // Construct allocator config from soc_desc
+    AllocatorConfig config({
+        .num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
+        .dram_bank_size = soc_desc.dram_bank_size,
+        .dram_bank_offsets = {},
+        .worker_grid_size = device.logical_grid_size(),
+        .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
+        .l1_bank_size = static_cast<size_t>(soc_desc.l1_bank_size),
+        .core_type_from_noc_coord_table = {}, // Populated later
+        .worker_log_to_physical_routing_x=soc_desc.worker_log_to_physical_routing_x,
+        .worker_log_to_physical_routing_y=soc_desc.worker_log_to_physical_routing_y,
+        .l1_bank_remap = device.l1_bank_remap(),
+    });
+    // Initialize dram_offsets from soc_descriptor
+    for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
+        config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
+    }
+    // Initialize core_type_from_noc_coord_table table
+    for (const auto& core: soc_desc.physical_cores) {
+        config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
+    }
+    for (const auto& core : soc_desc.compute_with_storage_cores) {
+        const auto logical_coord = get_core_coord_from_relative(core, device.logical_grid_size());
+        const auto noc_coord = device.worker_core_from_logical_core(logical_coord);
+        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
+    }
+    for (const auto& core : soc_desc.storage_cores) {
+        const auto logical_coord = get_core_coord_from_relative(core, device.logical_grid_size());
+        const auto noc_coord = device.worker_core_from_logical_core(logical_coord);
+        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
+    }
+    for (const auto& core : soc_desc.dispatch_cores) {
+        const auto logical_coord = get_core_coord_from_relative(core, device.logical_grid_size());
+        const auto noc_coord = device.worker_core_from_logical_core(logical_coord);
+        config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
+    }
+
     // TODO: add validation for allocator_descriptor?
-    this->descriptor.dram.init(*this, alloc_config);
-    this->descriptor.l1.init(*this, alloc_config);
+    this->descriptor.dram.init(*this, config);
+    this->descriptor.l1.init(*this, config);
     // assert that bank managers have been initialized?
     TT_ASSERT(not bank_id_to_dram_channel.empty() and not dram_channel_to_bank_ids.empty());
     TT_ASSERT(not bank_id_to_logical_core.empty() and not bank_id_to_logical_core.empty());

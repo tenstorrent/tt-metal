@@ -5,6 +5,7 @@
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 #include <cmath>
 #include <algorithm>
@@ -127,9 +128,9 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
 
 }   // namespace allocator
 
-L1BankingAllocator::L1BankingAllocator(const AllocatorConfig &alloc_config)
+L1BankingAllocator::L1BankingAllocator(const Device & device)
     : Allocator(
-        alloc_config,
+        device,
         allocator::AllocDescriptor{
             .dram = {
                 .init=allocator::init_one_bank_per_channel,

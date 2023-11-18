@@ -23,6 +23,7 @@ namespace tt_metal {
 // Fwd declares
 enum class BufferType;
 struct Allocator;
+class Device;
 
 namespace allocator {
 
@@ -43,8 +44,6 @@ class BankManager {
 
     void deallocate_buffer(uint64_t address);
     void deallocate_all();
-
-    void clear();
 
     std::optional<uint64_t> lowest_occupied_address(uint32_t bank_id) const;
 
@@ -107,7 +106,13 @@ void clear(Allocator &allocatator);
 }  // namespace allocator
 
 struct Allocator {
-    Allocator(const AllocatorConfig &alloc_config, const allocator::AllocDescriptor &alloc_descriptor);
+    Allocator(const Device& device, const allocator::AllocDescriptor &alloc_descriptor);
+    virtual ~Allocator(){}
+
+    Allocator& operator=(const Allocator&) = delete;
+    Allocator& operator=(Allocator&& other) noexcept = delete;
+    Allocator(const Allocator&) = delete;
+    Allocator(Allocator&& other) noexcept = delete;
 
     allocator::BankManager dram_manager;
     allocator::BankManager l1_manager;
