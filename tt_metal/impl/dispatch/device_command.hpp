@@ -96,7 +96,8 @@ class DeviceCommand {
         const uint32_t dst,
         const uint32_t dst_noc,
         const uint32_t num_receivers,
-        const bool advance);
+        const bool advance,
+        const bool linked);
 
     const std::array<uint32_t, NUM_ENTRIES_IN_DEVICE_COMMAND>& get_desc() const;
 

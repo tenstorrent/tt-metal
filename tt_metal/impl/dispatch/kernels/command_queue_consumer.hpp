@@ -88,7 +88,7 @@ FORCE_INLINE void write_buffers(
 }
 
 template <bool multicast>
-FORCE_INLINE void write_program_page(uint32_t page_addr, volatile tt_l1_ptr uint32_t*& command_ptr) {
+FORCE_INLINE void write_program_page(uint32_t page_addr, volatile tt_l1_ptr uint32_t*& command_ptr, bool last_page) {
     uint32_t num_transfers = command_ptr[0];
     command_ptr++;
     uint32_t src = page_addr;
@@ -98,18 +98,18 @@ FORCE_INLINE void write_program_page(uint32_t page_addr, volatile tt_l1_ptr uint
         uint32_t dst = command_ptr[1];
         uint32_t dst_noc = command_ptr[2];
         uint32_t num_recv = command_ptr[3];
-
-        // advance is false if we are sending the same data to different rectangles of workers
         bool last_transfer_in_group = command_ptr[4];
+        bool linked = (not (last_page & last_transfer_in_group)) & command_ptr[5];
+
         uint64_t dst_noc_addr = (uint64_t(dst_noc) << 32) | dst;
 
         if constexpr (multicast) {
-            noc_async_write_multicast(src, dst_noc_addr, num_bytes, num_recv);
+            noc_async_write_multicast(src, dst_noc_addr, num_bytes, num_recv, linked);
         } else {
             noc_async_write_one_packet(src, dst_noc_addr, num_bytes);
         }
 
-        command_ptr += 5;
+        command_ptr += 6;
         if (last_transfer_in_group) {
             src = align(src + num_bytes, 16);
         }
@@ -132,7 +132,7 @@ FORCE_INLINE void program_page_transfer(
         multicore_cb_wait_front(db_buf_switch, num_to_write);
         uint32_t src_addr = get_read_ptr(db_buf_switch);
         for (uint32_t i = 0; i < num_to_write; i++) {
-            write_program_page<multicast>(src_addr, command_ptr);
+            write_program_page<multicast>(src_addr, command_ptr, i == num_to_write - 1);
             src_addr += DeviceCommand::PROGRAM_PAGE_SIZE;
         }
         page_idx += num_to_write;

@@ -1207,7 +1207,8 @@ void noc_async_write_multicast(
     std::uint32_t src_local_l1_addr,
     std::uint64_t dst_noc_addr_multicast,
     std::uint32_t size,
-    std::uint32_t num_dests) {
+    std::uint32_t num_dests,
+    bool linked = false) {
     DEBUG_STATUS('N', 'M', 'W', 'W');
     DEBUG_SANITIZE_NOC_MULTI_ADDR(dst_noc_addr_multicast, size);
     DEBUG_SANITIZE_WORKER_ADDR(src_local_l1_addr, size);
@@ -1219,7 +1220,7 @@ void noc_async_write_multicast(
         size,
         NOC_MULTICAST_WRITE_VC,
         true,
-        false,
+        linked,
         num_dests);
     DEBUG_STATUS('N', 'M', 'W', 'D');
 }

@@ -35,6 +35,7 @@ struct transfer_info {
     uint32_t dst_noc_encoding;
     uint32_t num_receivers;
     bool last_transfer_in_group;
+    bool linked;
 };
 
 struct ProgramMap {

@@ -47,6 +47,8 @@ class memory {
 
   size_t size() const { return data_.size(); }
 
+  size_t num_spans() const { return link_spans_.size(); }
+
   // Read from file
   void fill_from_discontiguous_hex(std::istream& is);
 
