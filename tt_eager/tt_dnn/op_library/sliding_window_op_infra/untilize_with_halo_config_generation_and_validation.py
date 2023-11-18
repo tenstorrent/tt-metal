@@ -462,5 +462,111 @@ def generate_untilize_with_halo_kernel_configs(tensor_metadata: list, resharded_
     )
 
 
-# def validate_untilize_with_halo_kernel_configs(local_data_start_and_size, local_pad_start_and_size, ll_send_start_and_size, l_send_start_and_size, r_send_start_and_size, rr_send_start_and_size):
-#     ## using the kernel configs, construct the resulting resharding for each core
+def validate_untilize_with_halo_kernel_configs(
+    golden,
+    input_tensor,
+    tensor_metadata,
+    resharded_start_and_end,
+    local_data_start_and_size,
+    local_pad_start_and_size,
+    ll_send_start_and_size,
+    l_send_start_and_size,
+    r_send_start_and_size,
+    rr_send_start_and_size,
+    src_local_start_idx,
+):
+    ## using the kernel configs, construct the resulting resharding for each core
+    ncores = len(resharded_start_and_end)
+
+    ## collect the src start idx from tensor metadata
+    src_global_start_idx = {}
+    curr_global_idx = 0
+    for is_pad, src_core, src_local_idx in tensor_metadata:
+        if not is_pad:
+            if src_core not in src_global_start_idx:
+                src_global_start_idx[src_core] = curr_global_idx
+            curr_global_idx += 1
+    # print(f'START IDX: {src_global_start_idx}')
+
+    max_size = 0
+    for _, dst in resharded_start_and_end:
+        start = dst[0]
+        end = dst[1]
+        size = end - start + 1
+        max_size = size if max_size < size else max_size
+    pad_val = 0
+
+    reshards = {}
+    for core in np.arange(ncores):
+        dst_range = resharded_start_and_end[core][1]
+        curr_size = dst_range[1] - dst_range[0] + 1
+        reshards[core] = torch.zeros([curr_size])
+
+    # print (f'RESHARD: {resharded_start_and_end}')
+    for core in np.arange(ncores):
+        # input_tensor_start_offset = resharded_start_and_end[core][0][0]
+        input_tensor_start_offset = src_global_start_idx[core]
+        local_data = local_data_start_and_size[core]
+        local_pad = local_pad_start_and_size[core]
+        ll_data = ll_send_start_and_size[core]
+        l_data = l_send_start_and_size[core]
+        r_data = r_send_start_and_size[core]
+        rr_data = rr_send_start_and_size[core]
+        src_start_idx = src_local_start_idx[core]
+
+        ## local pad
+        for dst_start, size in local_pad:
+            dst_idx = dst_start
+            while dst_idx < dst_start + size:
+                reshards[core][dst_idx] = pad_val
+                dst_idx += 1
+
+        ## local data
+        src_idx = src_start_idx[NEIGHBORHOOD_DIST]
+        for dst_start, size in local_data:
+            dst_idx = dst_start
+            while dst_idx < dst_start + size:
+                reshards[core][dst_idx] = input_tensor[src_idx + input_tensor_start_offset]  ## TODO: make global
+                src_idx += 1
+                dst_idx += 1
+
+        ## push ll_data
+        src_idx = src_start_idx[NEIGHBORHOOD_DIST - 2]
+        for dst_start, size in ll_data:
+            dst_idx = dst_start
+            while dst_idx < dst_start + size:
+                reshards[core - 2][dst_idx] = input_tensor[src_idx + input_tensor_start_offset]
+                src_idx += 1
+                dst_idx += 1
+
+        ## push l_data
+        src_idx = src_start_idx[NEIGHBORHOOD_DIST - 1]
+        for dst_start, size in l_data:
+            dst_idx = dst_start
+            while dst_idx < dst_start + size:
+                reshards[core - 1][dst_idx] = input_tensor[src_idx + input_tensor_start_offset]
+                src_idx += 1
+                dst_idx += 1
+
+        ## push r_data
+        src_idx = src_start_idx[NEIGHBORHOOD_DIST + 1]
+        for dst_start, size in r_data:
+            dst_idx = dst_start
+            while dst_idx < dst_start + size:
+                reshards[core + 1][dst_idx] = input_tensor[src_idx + input_tensor_start_offset]
+                src_idx += 1
+                dst_idx += 1
+
+        ## push rr_data
+        src_idx = src_start_idx[NEIGHBORHOOD_DIST + 2]
+        for dst_start, size in rr_data:
+            dst_idx = dst_start
+            while dst_idx < dst_start + size:
+                reshards[core + 2][dst_idx] = input_tensor[src_idx + input_tensor_start_offset]
+                src_idx += 1
+                dst_idx += 1
+
+    for core in np.arange(ncores):
+        # print(f'OUTPUT CORE {core}: {reshards[core]}')
+        # print(f'GOLDEN CORE {core}: {golden[core]}')
+        assert list(reshards[core]) == golden[core]

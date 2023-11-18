@@ -8,6 +8,7 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_confi
     validate_required_conv_input_sharded_start_end,
     validate_tensor_metadata,
     generate_untilize_with_halo_kernel_configs,
+    validate_untilize_with_halo_kernel_configs,
 )
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_config_generation_and_validation import (
     generate_sliding_window_op_sharded_input_top_left_indices,
@@ -151,17 +152,31 @@ def test_generate_all_configs_and_references(conv_params, batch_size, input_chw_
     # Generate and validate the final untilize with halo configs here (TODO Abhinav)
     print(f"Generate untilize with halo kernel configs")
     # print(f'tensor metadata: {tensor_metadata}')
-    print(f"req shards start and end: {req_conv_input_shard_start_end}")
+    # print(f"req shards start and end: {req_conv_input_shard_start_end}")
     local_data, local_pad, ll_data, l_data, r_data, rr_data, src_start_idx = generate_untilize_with_halo_kernel_configs(
         tensor_metadata, req_conv_input_shard_start_end
     )
-    print(f"local data:     {local_data}")
-    print(f"local pad:      {local_pad}")
-    print(f"ll data:        {ll_data}")
-    print(f"l data:         {l_data}")
-    print(f"r data:         {r_data}")
-    print(f"rr data:        {rr_data}")
-    print(f"src start idx:  {src_start_idx}")
+    # print(f"local data:     {local_data}")
+    # print(f"local pad:      {local_pad}")
+    # print(f"ll data:        {ll_data}")
+    # print(f"l data:         {l_data}")
+    # print(f"r data:         {r_data}")
+    # print(f"rr data:        {rr_data}")
+    # print(f"src start idx:  {src_start_idx}")
+    print("Validate reshards")
+    validate_untilize_with_halo_kernel_configs(
+        golden_conv_input_shards,
+        input_tensor,
+        tensor_metadata,
+        req_conv_input_shard_start_end,
+        local_data,
+        local_pad,
+        ll_data,
+        l_data,
+        r_data,
+        rr_data,
+        src_start_idx,
+    )
 
     # Generate sliding window op config -
     print("Generate sliding window op configs - top left positioned indices for input shards")
