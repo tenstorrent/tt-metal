@@ -377,15 +377,17 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
     auto device_buffer = tensor.buffer();
     TT_ASSERT(device_buffer->size() == size_in_bytes);
 
-    std::vector<uint32_t> device_data;
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, *device_buffer, device_data, true);
+        std::vector<T> device_data;
+        device_data.resize(size_in_bytes / sizeof(T));
+        EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, *device_buffer, device_data.data(), true);
+        return device_data;
     } else {
+        std::vector<uint32_t> device_data;
         ::detail::ReadFromBuffer(*device_buffer, device_data);
+        return unpack_uint32_vec<T>(device_data);
     }
-
-    return unpack_uint32_vec<T>(device_data);
 }
 
 template <typename T, template<typename> typename BufferType>
@@ -394,12 +396,11 @@ inline void write_data_to_device_buffer(const BufferType<T>& data_to_write, Devi
     // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
     // And effectively get rid of any additional allocation
 
-    auto uint32_data = pack_vec_into_uint32_vec<T>(data_to_write);
-
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        EnqueueWriteBuffer(*tt::tt_metal::detail::GLOBAL_CQ, *buffer, uint32_data, false);
+        EnqueueWriteBuffer(*tt::tt_metal::detail::GLOBAL_CQ, *buffer, std::begin(data_to_write), false);
     } else {
+        auto uint32_data = pack_vec_into_uint32_vec<T>(data_to_write);
         ::detail::WriteToBuffer(*buffer, uint32_data);
     }
 }
