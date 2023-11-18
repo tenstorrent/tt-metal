@@ -43,13 +43,19 @@ struct p_gpr_unpack
     constexpr static uint FACE_DIM_4x16     = 42;   // Holds face dimension (4x16)
     constexpr static uint FACE_DIM_2x16     = 43;   // Holds face dimension (2x16)
     constexpr static uint FACE_DIM_1x16     = 44;   // Holds face dimension (1x16)
+    constexpr static uint PERF_UNPACK_NUM_TILES_0 = 45;   // num tiles for input operands 0-1
+    constexpr static uint PERF_UNPACK_NUM_TILES_1 = 46;   // num tiles for input operands 2-3
+    constexpr static uint PERF_UNPACK_NUM_TILES_2 = 47;   // num tiles for input operands 4-5
+    constexpr static uint PERF_UNPACK_NUM_TILES_3 = 48;   // num tiles for input operands 6-7
+    constexpr static uint UNPACK_STRIDE     = 52;   // Used to save/restore unpack A stride (UNP0_ADDR_CTRL_ZW_REG_1_Zstride register)
+                                                    // before/after unpacking directly to dest
     constexpr static uint SR_UNPACK_TILIZER_STATE_0 = 54;  // Save unpack state before tilizer is enabled for quick restore
     constexpr static uint SR_UNPACK_TILIZER_STATE_1 = 55;
     constexpr static uint SR_UNPACK_UNTILIZER_STATE_0 = 56;  // Save unpack state before tilizer is enabled for quick restore
     constexpr static uint SR_UNPACK_UNTILIZER_STATE_1 = 57;
     constexpr static uint SR_UNPACK_UNTILIZER_STATE_2 = 58;
     constexpr static uint SR_UNPACK_UNTILIZER_STATE_3 = 59;
-    constexpr static uint SR_UNPACK_UNTILIZER_STATE_4 = 59;
+
 };
 
 // Math GPR thread

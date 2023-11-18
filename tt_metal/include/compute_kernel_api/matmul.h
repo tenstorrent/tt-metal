@@ -7,10 +7,10 @@
 
 #include "compute_kernel_api/common.h"
 #ifdef TRISC_MATH
-#include "llk_math_matmul.h"
+#include "llk_math_matmul_api.h"
 #endif
 #ifdef TRISC_UNPACK
-#include "llk_unpack_AB_matmul.h"
+#include "llk_unpack_AB_matmul_api.h"
 #endif
 
 namespace ckernel {
@@ -146,12 +146,21 @@ ALWI void mm_block_init(uint32_t in0_cb_id = 0, uint32_t in1_cb_id = 1, uint32_t
     #endif
     MATH(( llk_math_pack_sync_init<SYNC>()  ));
 
+    #ifdef ARCH_GRAYSKULL
     PACK(( llk_pack_init<false, false, DstTileFaceLayout::ColMajor>()  ));
     PACK(( llk_pack_hw_configure_disaggregated<false>(out_cb_id) ));
     PACK(( llk_setup_outputs()  ));
     PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::ColMajor, false>()  ));
     // TODO(AP): ZM-only kernel
     PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::ColMajor,false>()  ));
+    #else
+    PACK(( llk_pack_init<false, false, DstTileFaceLayout::RowMajor>()  ));
+    PACK(( llk_pack_hw_configure_disaggregated<false>(out_cb_id) ));
+    PACK(( llk_setup_outputs()  ));
+    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>()  ));
+    // TODO(AP): ZM-only kernel
+    PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::RowMajor,false>()  ));
+    #endif
 }
 
 /**

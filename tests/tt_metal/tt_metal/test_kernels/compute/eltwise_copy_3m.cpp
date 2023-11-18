@@ -14,7 +14,7 @@ namespace NAMESPACE {
 
 #ifdef TRISC_MATH
 #include "llk_math_common.h"
-#include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_unary_datacopy_api.h"
 
 void math_main()
 {

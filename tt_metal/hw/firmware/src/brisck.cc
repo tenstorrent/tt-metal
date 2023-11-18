@@ -15,7 +15,7 @@
 #include "c_tensix_core.h"
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
-#include "ckernel_globals.h"
+#include "metal_ckernel_globals.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dataflow_api.h"
 #include "noc_addr_ranges_gen.h"

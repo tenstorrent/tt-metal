@@ -49,11 +49,11 @@ constexpr uint PACK_FLUSH_COUNTERS = // counters flush
     (1 << PACK_COUNTERS_SEC2_pack_reads_per_xy_plane_SHAMT) |
     (1 << PACK_COUNTERS_SEC2_pack_xys_per_tile_SHAMT);
 
-extern volatile uint * const reg_base;
-extern volatile uint * const pc_buf_base;
-extern volatile uint * const regfile;
+extern volatile uint * reg_base;
+extern volatile uint * pc_buf_base;
+extern volatile uint * regfile;
 extern uint *regmem;
-extern volatile uint * const instrn_buffer;
+extern volatile uint * instrn_buffer;
 extern volatile uint *dbg_event_scratch;
 extern volatile uint local_mem_barrier;
 
