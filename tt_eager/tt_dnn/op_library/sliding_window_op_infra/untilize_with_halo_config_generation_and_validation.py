@@ -198,6 +198,8 @@ def validate_required_conv_input_sharded_start_end(
     conv_input_shards = []
     for item in req_conv_input_shard_start_end:
         req_conv_input_shard_start, req_conv_input_shard_end = item[1]
+        req_conv_input_shard_size = req_conv_input_shard_end - req_conv_input_shard_start + 1
+        assert req_conv_input_shard_size <= 65535  # max uint16 value
         conv_input_shards.append(input_padded_tensor[req_conv_input_shard_start : req_conv_input_shard_end + 1])
     # Perform conv on input shards one at a time, and compare against output. Use data_top_left_indices (global) to perform the conv operation.
     output_stick = 0
