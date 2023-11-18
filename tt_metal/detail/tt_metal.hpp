@@ -30,6 +30,18 @@ namespace tt::tt_metal{
             return fd;
         }
 
+        static Allocator &GetAllocator( const Device* device )
+        {
+            static std::vector<std::unique_ptr<Allocator>> allocators( Device::detect_num_available_devices() );
+            static vector<std::once_flag> vflags( Device::detect_num_available_devices() );
+            chip_id_t id = device->id();
+            TT_FATAL(id < allocators.size(), "Invalid device {} detected", id);
+            std::call_once(vflags[id], [&device](){
+                allocators[device->id()] = std::make_unique<L1BankingAllocator>(*device); });
+
+            return *(allocators[id]);
+        }
+
         /**
         * Copies data from a host buffer into the specified buffer
         *
@@ -267,7 +279,7 @@ namespace tt::tt_metal{
 
         inline void DeallocateBuffers(Device * device)
         {
-            device->deallocate_buffers();
+            allocator::deallocate_buffers(GetAllocator(device));
         }
 
         inline void ClearCommandQueueProgramCache()

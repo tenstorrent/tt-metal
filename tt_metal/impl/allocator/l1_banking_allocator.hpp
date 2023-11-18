@@ -18,6 +18,8 @@ namespace tt {
 
 namespace tt_metal {
 
+class Device;
+
 namespace allocator {
 
 void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const AllocatorConfig &alloc_config);
@@ -34,7 +36,7 @@ uint64_t alloc_at_addr_in_compute_and_storage(const AllocatorConfig &config, Ban
 // This gives a total of (108 + 1 bank) + (10 * 2 banks) = 128 banks of 512 KB for L1 buffers
 // DRAM allocation is the same as BasicAllocator
 struct L1BankingAllocator : Allocator {
-    L1BankingAllocator(const AllocatorConfig &alloc_config);
+    L1BankingAllocator(const Device& device);
 };
 
 }  // namespace tt_metal
