@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks eltwise_unary_single_core(const Tensor &a, Tenso
     uint32_t num_tiles = a.volume() / TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;

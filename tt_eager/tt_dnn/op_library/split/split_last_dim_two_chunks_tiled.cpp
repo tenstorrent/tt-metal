@@ -101,7 +101,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     auto input_shape = input_tensor.shape();
 
     Program program{};
-    tt_metal::Device *device = input_tensor.device();
+    const tt_metal::Device& device = input_tensor.device();
     op.boiler_plate_asserts(input_tensor);
     op.shape_asserts(input_tensor);
 
@@ -131,8 +131,8 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     uint32_t z = input_shape[1];
     uint32_t num_tiles_dim_2 = input_shape[2] / TILE_HEIGHT;
     uint32_t num_tiles_dim_3 = input_shape[3] / TILE_WIDTH;
-    uint32_t num_cores_x_limit = device->compute_with_storage_grid_size().x;
-    uint32_t num_cores_y_limit = device->compute_with_storage_grid_size().y;
+    uint32_t num_cores_x_limit = device.compute_with_storage_grid_size().x;
+    uint32_t num_cores_y_limit = device.compute_with_storage_grid_size().y;
 
     // parallelize z
     auto num_cores_z = z;
@@ -311,15 +311,7 @@ std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor &input_tensor, 
 std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor &input_tensor, const MemoryConfig &mem_config) {
     SplitLastDimTwoChunksTiled op(mem_config);
 
-    tt_metal::Device *device;
-
-    // Get the device
-    if (input_tensor.storage_type() == StorageType::OWNED) {
-        device = AutoFormat::GetDefaultDevice();
-        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else {
-        device = input_tensor.device();
-    }
+    const tt_metal::Device& device = (input_tensor.storage_type() == StorageType::OWNED) ? AutoFormat::GetDefaultDevice() : input_tensor.device();
 
     auto input_shape = input_tensor.shape();
     TT_ASSERT(input_shape[-1] % TILE_WIDTH == 0, "Split last dim currently only supported tile sized widths");

@@ -19,7 +19,7 @@ using namespace tt;
 using namespace tt_metal;
 
 operation::ProgramWithCallbacks create_program_mcast_in0_in1(
-    tt_metal::Device *device,
+    const tt_metal::Device& device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
     uint32_t single_tile_size,
@@ -200,12 +200,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             CoreCoord top_core_plus_one     = {(std::size_t) core.x, (std::size_t) start_core_y + 1};
             CoreCoord bottom_core  = {(std::size_t) core.x, (std::size_t) start_core_y + num_cores_r - 1};
 
-            auto left_core_physical = device->worker_core_from_logical_core(left_core);
-            auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-            auto right_core_physical = device->worker_core_from_logical_core(right_core);
-            auto top_core_physical = device->worker_core_from_logical_core(top_core);
-            auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-            auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+            auto left_core_physical = device.worker_core_from_logical_core(left_core);
+            auto left_core_plus_one_physical = device.worker_core_from_logical_core(left_core_plus_one);
+            auto right_core_physical = device.worker_core_from_logical_core(right_core);
+            auto top_core_physical = device.worker_core_from_logical_core(top_core);
+            auto top_core_plus_one_physical = device.worker_core_from_logical_core(top_core_plus_one);
+            auto bottom_core_physical = device.worker_core_from_logical_core(bottom_core);
             std::vector<uint32_t> mm_reader_args = {
                 (std::uint32_t)  in0_buffer->address(), // in0_tensor_addr
                 (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
@@ -343,7 +343,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 }
 
 operation::ProgramWithCallbacks create_program_mcast_in0(
-    tt_metal::Device *device,
+    const tt_metal::Device& device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
     uint32_t single_tile_size,
@@ -482,9 +482,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             CoreCoord mcast_sender = {(std::size_t) start_core_x, core.y};
             CoreCoord core_start = {(std::size_t) start_core_x + 1, core.y};
             CoreCoord core_end = {(std::size_t) start_core_x + (num_cores_c - 1), core.y};
-            auto mcast_sender_phyiscal = device->worker_core_from_logical_core(mcast_sender);
-            auto core_start_physical = device->worker_core_from_logical_core(core_start);
-            auto core_end_physical = device->worker_core_from_logical_core(core_end);
+            auto mcast_sender_phyiscal = device.worker_core_from_logical_core(mcast_sender);
+            auto core_start_physical = device.worker_core_from_logical_core(core_start);
+            auto core_end_physical = device.worker_core_from_logical_core(core_end);
 
             std::vector<uint32_t> mm_reader_args = {
                 (std::uint32_t)  in0_buffer->address(), // in0_tensor_addr
@@ -602,7 +602,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
 }
 
 operation::ProgramWithCallbacks create_program_mcast_in1(
-    tt_metal::Device *device,
+    const tt_metal::Device& device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
     uint32_t single_tile_size,
@@ -742,9 +742,9 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             CoreCoord mcast_sender = {core.x, (std::size_t) start_core_y};
             CoreCoord core_start = {core.x, (std::size_t) start_core_y + 1};
             CoreCoord core_end = {core.x, (std::size_t) start_core_y + (num_cores_r - 1)};
-            auto mcast_sender_physical = device->worker_core_from_logical_core(mcast_sender);
-            auto core_start_physical = device->worker_core_from_logical_core(core_start);
-            auto core_end_physical = device->worker_core_from_logical_core(core_end);
+            auto mcast_sender_physical = device.worker_core_from_logical_core(mcast_sender);
+            auto core_start_physical = device.worker_core_from_logical_core(core_start);
+            auto core_end_physical = device.worker_core_from_logical_core(core_end);
 
             std::vector<uint32_t> mm_reader_args = {
                 (std::uint32_t)  in0_buffer->address(), // in0_tensor_addr
@@ -889,8 +889,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_generalized(const 
     uint32_t in0_block_w = 2;
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const tt_metal::Device& device = a.device();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 

@@ -194,7 +194,7 @@ void test_bert() {
 
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
-    CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
+    CoreCoord compute_grid_size = device.compute_with_storage_grid_size();
 
     if (compute_grid_size.x * compute_grid_size.y == 88) {
         tt::log_info(tt::LogTest, "Skipping test_bert for E75");

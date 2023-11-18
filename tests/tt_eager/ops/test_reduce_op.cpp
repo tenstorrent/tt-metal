@@ -19,12 +19,12 @@ using tt::tt_metal::ReduceOpDim;
 using tt::tt_metal::Shape;
 
 template<ReduceOpMath op_math, ReduceOpDim op_dim>
-Tensor device_function(const Tensor& input_tensor, Device* device) {
+Tensor device_function(const Tensor& input_tensor, const Device& device) {
     return reduce(input_tensor.to(device), op_math, op_dim).cpu();
 }
 
 template<auto DeviceFunction, typename ... Args>
-void run_test(Device* device, Args ...  args) {
+void run_test(const Device& device, Args ...  args) {
     Shape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
     auto input_tensor = tt::numpy::random::random(shape, DataType::BFLOAT16).to(Layout::TILE);
     auto device_output = DeviceFunction(input_tensor, device);

@@ -156,7 +156,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
-    Device *device = a.device();
+    const Device& device = a.device();
 
     uint32_t ntiles = a.volume() / TILE_HW;
     uint32_t ntiles_per_block = a.shape()[-1] / TILE_WIDTH;
@@ -169,7 +169,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         log_debug(LogOp, "nblocks: {}", nblocks);
     }
 
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = device.compute_with_storage_grid_size();
     auto [ncores, ncores_x, ncores_x_cliff, ncores_y, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] = split_blocks_across_cores(grid_size, nblocks);
     bool row_major = true;
     bool src_block_sharded = false;
@@ -180,8 +180,8 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         auto shard_spec = a.shard_spec().value();
         src_block_sharded = a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
         row_major = shard_spec.shard_orientation == ShardOrientation::ROW_MAJOR;
-        ncores_x = device->compute_with_storage_grid_size().x;
-        ncores_y = device->compute_with_storage_grid_size().y;
+        ncores_x = device.compute_with_storage_grid_size().x;
+        ncores_y = device.compute_with_storage_grid_size().y;
         all_cores = shard_spec.shard_grid;
         uint32_t num_cores = all_cores.num_cores();
         ncores = num_cores;
@@ -595,14 +595,14 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
     DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
-    Device *device = a.device();
+    const Device& device = a.device();
 
     uint32_t ntiles = a.volume() / TILE_HW;
     uint32_t ntiles_per_block = a.shape()[3] / TILE_WIDTH;
     uint32_t nblocks = ceil((float) ntiles / ntiles_per_block);
     uint32_t block_size_nbytes = a.shape()[3] * output.element_size();
 
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = device.compute_with_storage_grid_size();
     bool row_major = true;
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0, num_output_rows_unpadded = 0;
     CoreCoord end_core;

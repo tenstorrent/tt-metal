@@ -11,7 +11,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 uint32_t NUM_TILES = 2048;
 
-tt_metal::Program generate_eltwise_unary_program(Device *device) {
+tt_metal::Program generate_eltwise_unary_program(const Device& device) {
     // TODO(agrebenisan): This is directly copy and pasted from test_eltwise_binary.
     // We need to think of a better way to generate test data, so this section needs to be heavily refactored.
 
@@ -73,11 +73,11 @@ tt_metal::Program generate_eltwise_unary_program(Device *device) {
     return program;
 }
 
-void test_enqueue_program(std::function<tt_metal::Program(tt_metal::Device *device)> create_program) {
+void test_enqueue_program(std::function<tt_metal::Program(const tt_metal::Device& device)> create_program) {
 
 
     int device_id = 0;
-    tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+    const tt_metal::Device& device = tt_metal::CreateDevice(device_id);
 
 
     tt_metal::Program program = create_program(device);

@@ -30,7 +30,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
     TT_ASSERT(unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
     // construct const buffer with the pad_value
-    Device *device = a.device();
+    const Device& device = a.device();
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
     uint32_t pad_value_const_buffer_nbytes = pad_value_const_buffer_size * a.element_size();
     auto pad_value_const_buffer = owned_buffer::create(std::vector<bfloat16>(pad_value_const_buffer_size, bfloat16(pad_value)));
@@ -183,7 +183,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
     uint32_t padded_row_size_nbytes = output_shape[3] * a.element_size();   // Assuming output is same datatype as input
     TT_ASSERT(unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
-    Device *device = a.device();
+    const Device& device = a.device();
     auto dst_buffer_l1 = Buffer(device, padded_row_size_nbytes, padded_row_size_nbytes, BufferType::L1);
 
     // construct const buffer with the pad_value
@@ -293,7 +293,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     auto output_shape = output_tensor_shape;
 
@@ -390,7 +390,7 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     auto output_shape = output_tensor_shape;
 

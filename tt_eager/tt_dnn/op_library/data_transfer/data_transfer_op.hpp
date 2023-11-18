@@ -23,7 +23,7 @@ struct DataTransferToHost {
 Tensor data_transfer_to_host (const Tensor &input_tensor);
 
 struct DataTransferToDevice {
-    Device* device;
+    const Device& device;
     const MemoryConfig mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
@@ -32,7 +32,7 @@ struct DataTransferToDevice {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-Tensor data_transfer_to_device (const Tensor &input_tensor, Device* device, const MemoryConfig &mem_config);
+Tensor data_transfer_to_device (const Tensor &input_tensor, const Device& device, const MemoryConfig &mem_config);
 
 }  // namespace tt_metal
 

@@ -45,7 +45,7 @@ void check_program_is_mapped_to_correct_cores(const tt_metal::Program &program, 
     }
 }
 
-void check_semaphores_are_initialized(tt_metal::Device *device, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &golden_sem_values) {
+void check_semaphores_are_initialized(const tt_metal::Device& device, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &golden_sem_values) {
     for (auto core_range : core_range_set.ranges()) {
         for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
             for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
@@ -63,7 +63,7 @@ void check_semaphores_are_initialized(tt_metal::Device *device, const CoreRangeS
     }
 }
 
-bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_metal::Program &program, const CoreRangeSet &core_range_set) {
+bool test_program_specified_with_core_range_set(const tt_metal::Device& device, tt_metal::Program &program, const CoreRangeSet &core_range_set) {
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
@@ -200,7 +200,7 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device =
+        const tt_metal::Device& device =
             tt_metal::CreateDevice(device_id);
 
 

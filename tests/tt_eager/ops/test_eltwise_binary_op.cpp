@@ -32,7 +32,7 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
 }
 
 template <auto HostFunction, typename DeviceFunction, typename... Args>
-bool run_test(const Shape& shape, const DeviceFunction& device_function, Device* device, Args... args) {
+bool run_test(const Shape& shape, const DeviceFunction& device_function, const Device& device, Args... args) {
     auto input_tensor_a = tt::numpy::random::random(shape, DataType::BFLOAT16);
     auto input_tensor_b = tt::numpy::random::random(shape, DataType::BFLOAT16);
 

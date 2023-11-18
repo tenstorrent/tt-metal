@@ -18,7 +18,7 @@ namespace tt_metal {
 
 operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &output, uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, float val_hi, float val_lo) {
 
-    tt_metal::Device *device = any.device();
+    const tt_metal::Device& device = any.device();
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 

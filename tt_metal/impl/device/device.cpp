@@ -88,7 +88,7 @@ void Device::initialize_grid() {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     for (const auto& core : soc_desc.compute_with_storage_cores) {
         const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
-        this->compute_cores.insert(logical_coord);
+        this->compute_cores_.insert(logical_coord);
     }
     for (const auto& core : soc_desc.storage_cores) {
         const auto logical_coord = get_core_coord_from_relative(core, this->logical_grid_size());
@@ -106,7 +106,7 @@ void Device::initialize_grid() {
 void Device::initialize_build() {
     ZoneScoped;
     build_kernel_for_riscv_options_t build_options(this->id());
-    detail::GenerateDeviceHeaders(this, &build_options, "");
+    detail::GenerateDeviceHeaders(*this, &build_options, "");
     tt::ARCH arch = this->arch();
     generate_binaries_params_t default_params;
     generate_binaries_all_riscs(&build_options,
@@ -204,7 +204,7 @@ void Device::clear_l1_state() {
     for (uint32_t x = 0; x < logical_grid_size.x; x++) {
         for (uint32_t y = 0; y < logical_grid_size.y; y++) {
             CoreCoord logical_core(x, y);
-            detail::WriteToDeviceL1(this, logical_core, start_address, zero_vec);
+            detail::WriteToDeviceL1(*this, logical_core, start_address, zero_vec);
         }
     }
 }
@@ -246,7 +246,7 @@ bool Device::close() {
     if (not this->initialized_) {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
-    detail::DeallocateBuffers(this);
+    detail::DeallocateBuffers(*this);
     llrt::watcher_detach(this);
     tt_stop_debug_print_server();
     tt::Cluster::instance().assert_risc_reset(id_);
@@ -337,15 +337,15 @@ std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vect
 }
 
 uint32_t Device::num_banks(const BufferType &buffer_type) const {
-    return allocator::num_banks(detail::GetAllocator(this), buffer_type);
+    return allocator::num_banks(detail::GetAllocator(*this), buffer_type);
 }
 
 uint32_t Device::bank_size(const BufferType &buffer_type) const {
-    return allocator::bank_size(detail::GetAllocator(this), buffer_type);
+    return allocator::bank_size(detail::GetAllocator(*this), buffer_type);
 }
 
 uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id) const {
-    return allocator::dram_channel_from_bank_id(detail::GetAllocator(this), bank_id);
+    return allocator::dram_channel_from_bank_id(detail::GetAllocator(*this), bank_id);
 }
 
 CoreCoord Device::core_from_dram_channel(uint32_t dram_channel) const {
@@ -359,31 +359,31 @@ CoreCoord Device::core_from_dram_channel(uint32_t dram_channel) const {
 }
 
 int32_t Device::l1_bank_offset_from_bank_id(uint32_t bank_id) const {
-    return allocator::l1_bank_offset_from_bank_id(detail::GetAllocator(this), bank_id);
+    return allocator::l1_bank_offset_from_bank_id(detail::GetAllocator(*this), bank_id);
 }
 
 int32_t Device::dram_bank_offset_from_bank_id(uint32_t bank_id) const {
-    return allocator::dram_bank_offset_from_bank_id(detail::GetAllocator(this), bank_id);
+    return allocator::dram_bank_offset_from_bank_id(detail::GetAllocator(*this), bank_id);
 }
 
 CoreCoord Device::logical_core_from_bank_id(uint32_t bank_id) const {
-    return allocator::logical_core_from_bank_id(detail::GetAllocator(this), bank_id);
+    return allocator::logical_core_from_bank_id(detail::GetAllocator(*this), bank_id);
 }
 
 const std::vector<uint32_t> &Device::bank_ids_from_dram_channel(uint32_t dram_channel) const {
-    return allocator::bank_ids_from_dram_channel(detail::GetAllocator(this), dram_channel);
+    return allocator::bank_ids_from_dram_channel(detail::GetAllocator(*this), dram_channel);
 }
 
 const std::vector<uint32_t> &Device::bank_ids_from_logical_core(const CoreCoord &logical_core) const {
-    return allocator::bank_ids_from_logical_core(detail::GetAllocator(this), logical_core);
+    return allocator::bank_ids_from_logical_core(detail::GetAllocator(*this), logical_core);
 }
 
 allocator::Statistics Device::get_memory_allocation_statistics(const BufferType &buffer_type) const {
-    return allocator::get_statistics(detail::GetAllocator(this), buffer_type);
+    return allocator::get_statistics(detail::GetAllocator(*this), buffer_type);
 }
 
 void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const {
-    return allocator::dump_memory_blocks(detail::GetAllocator(this), buffer_type, out);
+    return allocator::dump_memory_blocks(detail::GetAllocator(*this), buffer_type, out);
 }
 
 float Device::sfpu_eps() const {

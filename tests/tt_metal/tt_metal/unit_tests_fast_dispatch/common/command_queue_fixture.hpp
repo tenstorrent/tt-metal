@@ -14,7 +14,7 @@ using namespace tt::tt_metal;
 class CommandQueueFixture : public ::testing::Test {
    protected:
     tt::ARCH arch_;
-    Device* device_;
+    const Device& device_;
     uint32_t pcie_id;
 
     void SetUp() override {

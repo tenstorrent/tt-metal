@@ -46,7 +46,7 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
     tt_metal::Buffer *src0_buffer = a.buffer();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");

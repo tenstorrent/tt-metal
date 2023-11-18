@@ -115,11 +115,11 @@ tt::stl::reflection::Attributes Unpad::attributes() const {
 const operation::Hash Unpad::compute_program_hash (
     const std::vector<Tensor> &input_tensors) const {
     auto input_tensor = input_tensors.at(0);
-    tt_metal::Device *device = input_tensor.device();
+    const tt_metal::Device& device = input_tensor.device();
     auto input_mem_config = input_tensor.memory_config();
     auto output_mem_config = this->output_mem_config;
     auto dtype = input_tensor.dtype();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     auto num_dims = input_tensor.shape().rank();
 
 

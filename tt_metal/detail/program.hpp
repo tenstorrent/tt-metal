@@ -29,7 +29,7 @@ namespace tt::tt_metal::detail{
     }
 
     // Checks that circular buffers do not grow into L1 buffer space
-    inline void ValidateCircularBufferRegion(const Program &program, const Device *device) {
+    inline void ValidateCircularBufferRegion(const Program &program, const Device& device) {
         program.validate_circular_buffer_region(device);
     }
 

@@ -20,7 +20,7 @@ using namespace tt;
 using namespace tt_metal;
 
 operation::ProgramWithCallbacks create_program(
-    tt_metal::Device *device,
+    const tt_metal::Device& device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
     uint32_t single_tile_size,
@@ -91,7 +91,7 @@ operation::ProgramWithCallbacks create_program(
     uint32_t num_blocks_y = (M - 1) / per_core_M + 1; // Should always be 1
     uint32_t num_blocks_x = (N - 1) / per_core_N + 1; // SHould always be 1
 
-    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerange_set(num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
+    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerange_set(num_blocks_x * num_blocks_y, device.compute_with_storage_grid_size(), true));
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, cb_data_format}})
 		.set_page_size(src0_cb_index, single_tile_size);
@@ -291,8 +291,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_padding(const Tensor &a,
     TT_ASSERT(Kt % in0_block_w == 0);
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const tt_metal::Device& device = a.device();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 

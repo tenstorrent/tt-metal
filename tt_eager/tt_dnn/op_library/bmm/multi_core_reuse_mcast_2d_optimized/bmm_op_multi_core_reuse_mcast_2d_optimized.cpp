@@ -21,7 +21,7 @@ using namespace tt;
 using namespace tt_metal;
 
 operation::ProgramWithCallbacks create_program_mcast_in0_in1(
-    tt_metal::Device *device,
+    const tt_metal::Device& device,
     MathFidelity math_fidelity,
     CoreCoord core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
@@ -410,7 +410,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateKernel(
         program,
-        device->arch() == ARCH::GRAYSKULL ?  "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp" : "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation_matmul_tiles.cpp",
+        device.arch() == ARCH::GRAYSKULL ?  "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp" : "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation_matmul_tiles.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args, .defines = mm_kernel_defines}
     );
@@ -476,18 +476,18 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     std::vector<uint32_t> in0_mcast_noc_y;
     if (in0_is_sharded) {
         if (transpose_mcast) {
-            diff_start_coord = device->worker_core_from_logical_core({0, start_core_y}).y;
-            diff_end_coord = device->worker_core_from_logical_core({0, start_core_y + num_cores_r - 1}).y;
+            diff_start_coord = device.worker_core_from_logical_core({0, start_core_y}).y;
+            diff_end_coord = device.worker_core_from_logical_core({0, start_core_y + num_cores_r - 1}).y;
             in0_mcast_noc_y.reserve(num_cores_r);
             for(uint32_t core_idx_y = 0; core_idx_y < num_cores_r; ++core_idx_y) {
-                in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+                in0_mcast_noc_y.push_back(device.worker_core_from_logical_core({0, core_idx_y}).y);
             }
         } else {
-            diff_start_coord = device->worker_core_from_logical_core({start_core_x, 0}).x;
-            diff_end_coord = device->worker_core_from_logical_core({start_core_x + num_cores_c - 1, 0}).x;
+            diff_start_coord = device.worker_core_from_logical_core({start_core_x, 0}).x;
+            diff_end_coord = device.worker_core_from_logical_core({start_core_x + num_cores_c - 1, 0}).x;
             in0_mcast_noc_x.reserve(num_cores_c);
             for(uint32_t core_idx_x = 0; core_idx_x < num_cores_c; ++core_idx_x) {
-                in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+                in0_mcast_noc_x.push_back(device.worker_core_from_logical_core({core_idx_x, 0}).x);
             }
         }
     }
@@ -502,12 +502,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             CoreCoord top_core_plus_one     = {(std::size_t) core.x, (std::size_t) start_core_y + 1};
             CoreCoord bottom_core  = {(std::size_t) core.x, (std::size_t) start_core_y + num_cores_r - 1};
 
-            auto left_core_physical = device->worker_core_from_logical_core(left_core);
-            auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-            auto right_core_physical = device->worker_core_from_logical_core(right_core);
-            auto top_core_physical = device->worker_core_from_logical_core(top_core);
-            auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-            auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+            auto left_core_physical = device.worker_core_from_logical_core(left_core);
+            auto left_core_plus_one_physical = device.worker_core_from_logical_core(left_core_plus_one);
+            auto right_core_physical = device.worker_core_from_logical_core(right_core);
+            auto top_core_physical = device.worker_core_from_logical_core(top_core);
+            auto top_core_plus_one_physical = device.worker_core_from_logical_core(top_core_plus_one);
+            auto bottom_core_physical = device.worker_core_from_logical_core(bottom_core);
             uint32_t in0_idx = core_idx_y;
             uint32_t in1_idx = core_idx_x;
 
@@ -531,7 +531,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 uint32_t worker_shard_same_coord;
                 std::vector<uint32_t> mm_in0_sender_args;
                 if (transpose_mcast) {
-                    worker_shard_same_coord = device->worker_core_from_logical_core(core).x;
+                    worker_shard_same_coord = device.worker_core_from_logical_core(core).x;
                     mm_in0_sender_args.push_back(core_idx_y);
                     mm_in0_sender_args.push_back(worker_shard_same_coord);
                     mm_in0_sender_args.push_back(diff_start_coord);
@@ -540,7 +540,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in0_sender_args.push_back(worker_shard_same_coord);
                     mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
                 } else {
-                    worker_shard_same_coord = device->worker_core_from_logical_core(core).y;
+                    worker_shard_same_coord = device.worker_core_from_logical_core(core).y;
                     mm_in0_sender_args.push_back(core_idx_x);
                     mm_in0_sender_args.push_back(diff_start_coord);
                     mm_in0_sender_args.push_back(worker_shard_same_coord);
@@ -820,7 +820,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_(cons
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);

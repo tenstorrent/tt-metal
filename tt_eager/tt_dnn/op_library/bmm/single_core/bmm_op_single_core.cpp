@@ -27,7 +27,7 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
     tt_metal::Buffer *src1_buffer = b.buffer();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
     Shape cshape = output.shape(); // C=A*B, N1MK*11KN->N1MN
 
     tt_metal::Buffer *dst_buffer = output.buffer();

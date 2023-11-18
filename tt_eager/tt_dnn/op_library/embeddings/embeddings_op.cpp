@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    Device *device = a.device();
+    const Device& device = a.device();
     auto dst_addr = output.buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -89,7 +89,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
 
     uint32_t embedding_risc_cores_per_tensix = 1;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1,
@@ -312,7 +312,7 @@ operation::ProgramWithCallbacks embeddings_rm(
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    Device *device = a.device();
+    const Device& device = a.device();
     auto dst_addr = output.buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -362,7 +362,7 @@ operation::ProgramWithCallbacks embeddings_rm(
     // else both risc cores will be used for lookup of the embedding table
     uint32_t embedding_risc_cores_per_tensix = RISC_CORES_PER_TENSIX;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1,

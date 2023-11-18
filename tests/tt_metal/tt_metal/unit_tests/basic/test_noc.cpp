@@ -23,14 +23,14 @@ namespace unit_tests::basic::test_noc {
 
 const uint32_t init_value = 0x1234B33F;
 
-uint32_t read_reg (Device* device, CoreCoord logical_node, uint32_t reg_addr) {
+uint32_t read_reg (const Device& device, CoreCoord logical_node, uint32_t reg_addr) {
     // Read and return reg value form reading
     uint32_t reg_data = unit_tests::basic::test_noc::init_value;
     tt_metal::detail::ReadRegFromDevice(device, logical_node, reg_addr, reg_data);
     return reg_data;
 }
 
-void read_translation_table (Device* device, CoreCoord logical_node, std::vector<unsigned int>& x_remap, std::vector<unsigned int>& y_remap) {
+void read_translation_table (const Device& device, CoreCoord logical_node, std::vector<unsigned int>& x_remap, std::vector<unsigned int>& y_remap) {
 #ifdef NOC_X_ID_TRANSLATE_TABLE_0
     std::vector<uint32_t> x_reg_addrs = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
@@ -74,14 +74,14 @@ void read_translation_table (Device* device, CoreCoord logical_node, std::vector
 
 TEST_F(BasicFixture, VerifyNocNodeIDs) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
-    tt::tt_metal::Device* device;
+    const tt::tt_metal::Device& device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
     // Ping all the Noc Nodes
-    auto logical_grid_size = device->logical_grid_size();
+    auto logical_grid_size = device.logical_grid_size();
     for (size_t y = 0; y < logical_grid_size.y; y++) {
         for (size_t x = 0; x < logical_grid_size.x; x++) {
-            auto worker_core = device->worker_core_from_logical_core({.x=x, .y=y});
+            auto worker_core = device.worker_core_from_logical_core({.x=x, .y=y});
             // Read register from specific node
             uint32_t node_id_regval;
             node_id_regval = unit_tests::basic::test_noc::read_reg(device, {.x=x, .y=y}, NOC_NODE_ID);
@@ -101,11 +101,11 @@ TEST_F(BasicFixture, VerifyNocIdentityTranslationTable) {
     // If the translation tables are not defined, we should skip :)
     GTEST_SKIP();
 #endif
-    tt::tt_metal::Device* device;
+    const tt::tt_metal::Device& device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
     // Ping all the registers for NOC
-    auto logical_grid_size = device->logical_grid_size();
+    auto logical_grid_size = device.logical_grid_size();
     for (size_t y = 0; y < logical_grid_size.y; y++) {
         for (size_t x = 0; x < logical_grid_size.x; x++) {
             std::vector<unsigned int> x_remap = {};

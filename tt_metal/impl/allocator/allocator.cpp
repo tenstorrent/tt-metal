@@ -92,7 +92,7 @@ void BankManager::deallocate_buffer(uint64_t address) {
     this->allocator_->deallocate(address);
 }
 
-void BankManager::deallocate_all(){
+void BankManager::deallocate_all() const{
     for (uint64_t addr : this->allocated_buffers_)
     {
         this->allocator_->deallocate(addr);
@@ -262,7 +262,7 @@ void deallocate_buffer(Allocator &allocator, uint64_t address, const BufferType 
     }
 }
 
-void deallocate_buffers(Allocator &allocator) {
+void deallocate_buffers(const Allocator &allocator){
     allocator.dram_manager.deallocate_all();
     allocator.l1_manager.deallocate_all();
 }

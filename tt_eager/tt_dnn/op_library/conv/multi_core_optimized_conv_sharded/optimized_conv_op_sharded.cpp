@@ -148,7 +148,7 @@ tuple<CircularBufferID, CircularBufferID> create_CBs_for_sharded_input(
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output) {
     bool pass = true;
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_ASSERT(output_channels <= b.shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
@@ -509,9 +509,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
     CoreCoord top_left_core = {(std::size_t) 0, (std::size_t) 0};
     CoreCoord top_left_core_plus_one = {(std::size_t) 1, (std::size_t) 1};
     CoreCoord bottom_right_core = {(std::size_t) num_cores_x - 1, (std::size_t) num_cores_y - 1};
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto top_left_core_plus_one_physical = device->worker_core_from_logical_core(top_left_core_plus_one);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto top_left_core_plus_one_physical = device.worker_core_from_logical_core(top_left_core_plus_one);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     CoreRange mcast_sender_cores{.start=top_left_core, .end=top_left_core}; // If single core, this kernel doesn't do mcasting
     CoreRangeSet mcast_receiver_cores{{}};
@@ -620,7 +620,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
 
                 act_mcast_noc_y.reserve(num_cores_y);
                 for(uint32_t core_idx_y = 0; core_idx_y < num_cores_y; ++core_idx_y) {
-                    act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+                    act_mcast_noc_y.push_back(device.worker_core_from_logical_core({0, core_idx_y}).y);
                 }
             }
             // 1D conv
@@ -883,7 +883,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
                 auto shard_shape = a.shard_spec().value().shard_shape;
                 uint32_t shard_size_bytes = shard_shape[0] * shard_shape[1] * a.element_size();
                 CoreCoord bottom_core = {(std::size_t) core_x_i, (std::size_t) num_cores_y - 1};
-                auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+                auto bottom_core_physical = device.worker_core_from_logical_core(bottom_core);
 
                 bool reader_is_noc_0 = reader_noc == NOC::NOC_0;
                 uint32_t act_mcast_dest_noc_start_x = bottom_core_physical.x;
@@ -1010,7 +1010,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
         // 2D mcast
         if (weight_width_sliced) {
             CoreCoord right_core = {(std::size_t) num_cores_x - 1, (std::size_t) core_y_i};
-            auto right_core_physical = device->worker_core_from_logical_core(right_core);
+            auto right_core_physical = device.worker_core_from_logical_core(right_core);
             // sender
             if (core_x_i == 0) {
                 if (writer_mcast_noc == NOC::NOC_0) {

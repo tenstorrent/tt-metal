@@ -30,7 +30,7 @@ operation::ProgramWithCallbacks copy_single_core(const Tensor &input, const Tens
     uint32_t num_units = tilized ? output.volume() / TILE_HW : output.volume() / output.shape()[-1];
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = output.device();
+    const tt_metal::Device& device = output.device();
 
     uint32_t src0_cb_index = CB::c_in0;
     uint32_t num_input_units = 2;

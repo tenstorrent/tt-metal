@@ -55,14 +55,14 @@ std::unordered_map<std::string, std::string> get_last_program_binary_path(const 
 }
 
 // TODO: Replace this when we have debug/test hooks (GH: #964) to inspect inside CompileProgram
-KernelCacheStatus CompileProgramTestWrapper(Device *device, Program &program, bool profile_kernel=false) {
+KernelCacheStatus CompileProgramTestWrapper(const Device& device, Program &program, bool profile_kernel=false) {
     // Check
-    auto root_dir = get_kernel_compile_outpath(device->id());
-    std::unordered_map<std::string, std::string> pre_compile_kernel_to_hash_str = get_last_program_binary_path(program, device->id());
+    auto root_dir = get_kernel_compile_outpath(device.id());
+    std::unordered_map<std::string, std::string> pre_compile_kernel_to_hash_str = get_last_program_binary_path(program, device.id());
 
     detail::CompileProgram(device, program);
 
-    std::unordered_map<std::string, std::string> post_compile_kernel_to_hash_str = get_last_program_binary_path(program, device->id());
+    std::unordered_map<std::string, std::string> post_compile_kernel_to_hash_str = get_last_program_binary_path(program, device.id());
 
     KernelCacheStatus kernel_cache_status;
     for (const auto&[kernel_name, hash_str] : post_compile_kernel_to_hash_str) {
@@ -92,7 +92,7 @@ struct ProgramAttributes {
     uint32_t output_cb_index = 16;
 };
 
-Program create_program(Device *device, const ProgramAttributes &program_attributes) {
+Program create_program(const Device& device, const ProgramAttributes &program_attributes) {
 
     CoreCoord core = {0, 0};
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -169,10 +169,10 @@ void assert_kernel_hash_matches(const std::unordered_map<std::string, std::strin
     }
 }
 
-bool test_compile_program_in_loop(Device *device) {
+bool test_compile_program_in_loop(const Device& device) {
     bool pass = true;
 
-    ClearKernelCache(device->id());
+    ClearKernelCache(device.id());
     ProgramAttributes default_attributes;
     auto program = create_program(device, default_attributes);
 
@@ -181,7 +181,7 @@ bool test_compile_program_in_loop(Device *device) {
     for (int compile_idx = 0; compile_idx < num_compiles; compile_idx++) {
         auto kernel_cache_status = CompileProgramTestWrapper(device, program);
         if (compile_idx == 0) {
-            assert_kernel_binary_path_exists(program, device->id(), kernel_cache_status);
+            assert_kernel_binary_path_exists(program, device.id(), kernel_cache_status);
             assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
             kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
         } else {
@@ -193,21 +193,21 @@ bool test_compile_program_in_loop(Device *device) {
     return pass;
 }
 
-bool test_compile_program_after_clean_kernel_binary_directory(Device *device) {
+bool test_compile_program_after_clean_kernel_binary_directory(const Device& device) {
     bool pass = true;
 
-    ClearKernelCache(device->id());
+    ClearKernelCache(device.id());
 
     ProgramAttributes default_attributes;
     auto program = create_program(device, default_attributes);
 
     auto kernel_cache_status = CompileProgramTestWrapper(device, program);
 
-    assert_kernel_binary_path_exists(program, device->id(), kernel_cache_status);
+    assert_kernel_binary_path_exists(program, device.id(), kernel_cache_status);
     assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
     std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
 
-    ClearKernelCache(device->id());
+    ClearKernelCache(device.id());
     program.invalidate_compile();
     auto second_kernel_cache_status = CompileProgramTestWrapper(device, program);
     assert_program_cache_hit_status(program, /*hit_expected=*/false, second_kernel_cache_status);
@@ -247,21 +247,21 @@ void assert_cache_hit_status_for_kernel_type(const Program &program, const std::
 }
 
 std::unordered_map<std::string, std::string> compile_program_with_modified_kernel(
-    Device *device,
+    const Device& device,
     const ProgramAttributes &attributes,
     const std::unordered_map<std::string, std::string> &prev_kernel_name_to_hash,
     const std::unordered_map<tt::RISCV, bool> &kernel_type_to_cache_hit_status
 ) {
     auto program = create_program(device, attributes);
     auto kernel_cache_status = CompileProgramTestWrapper(device, program);
-    assert_kernel_binary_path_exists(program, device->id(), kernel_cache_status);
+    assert_kernel_binary_path_exists(program, device.id(), kernel_cache_status);
     assert_cache_hit_status_for_kernel_type(program, kernel_type_to_cache_hit_status, kernel_cache_status);
     assert_hash_comparison_for_kernel_type(program, prev_kernel_name_to_hash, kernel_type_to_cache_hit_status, kernel_cache_status);
     std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
     return kernel_name_to_hash;
 }
 
-bool test_compile_program_with_modified_program(Device *device) {
+bool test_compile_program_with_modified_program(const Device& device) {
     bool pass = true;
 
     const static std::unordered_map<tt::RISCV, bool> compute_miss_data_movement_hit = {
@@ -288,12 +288,12 @@ bool test_compile_program_with_modified_program(Device *device) {
         {tt::RISCV::NCRISC, false}
     };
 
-    ClearKernelCache(device->id());
+    ClearKernelCache(device.id());
 
     ProgramAttributes attributes;
     auto program = create_program(device, attributes);
     auto kernel_cache_status = CompileProgramTestWrapper(device, program);
-    assert_kernel_binary_path_exists(program, device->id(), kernel_cache_status);
+    assert_kernel_binary_path_exists(program, device.id(), kernel_cache_status);
     assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
     std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
 
@@ -307,7 +307,7 @@ bool test_compile_program_with_modified_program(Device *device) {
 
     // Modify compute kernel fp32_dest_acc_en - expect cache miss for compute kernel
     // Grayskull does not support fp32 accumulation
-    if (device->arch() != ARCH::GRAYSKULL) {
+    if (device.arch() != ARCH::GRAYSKULL) {
         attributes.fp32_dest_acc_en = true;
         kernel_name_to_hash = compile_program_with_modified_kernel(device, attributes, kernel_name_to_hash, compute_miss_data_movement_hit);
     }
@@ -343,7 +343,7 @@ int main(int argc, char **argv) {
 
     try {
         int device_id = 0;
-        Device *device = CreateDevice(device_id);
+        const Device& device = CreateDevice(device_id);
 
         constexpr bool profile_device = true;
 

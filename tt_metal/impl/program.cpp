@@ -24,12 +24,12 @@ namespace tt::tt_metal {
 namespace{
     std::atomic<bool> enable_persistent_kernel_cache = false;
 
-    void GenerateBinaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix, Kernel *kernel) {
+    void GenerateBinaries(const Device& device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix, Kernel *kernel) {
         ZoneScoped;
         const std::string tracyPrefix = "GenerateBinaries_";
         ZoneName( (tracyPrefix + op_path_suffix).c_str(), op_path_suffix.length() + tracyPrefix.length());
         try {
-            generate_descriptors(build_options, op_path_suffix, device->arch());
+            generate_descriptors(build_options, op_path_suffix, device.arch());
             kernel->generate_binaries(device, build_options, op_path_suffix);
         } catch (std::runtime_error &ex) {
             TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
@@ -440,18 +440,18 @@ void Program::allocate_circular_buffers() {
     this->local_circular_buffer_allocation_needed_ = false;
 }
 
-void Program::validate_circular_buffer_region(const Device *device) const {
+void Program::validate_circular_buffer_region(const Device& device) const {
     ZoneScoped;
 
     // Banks are in lockstep so we only need to get lowest L1 address of one compute and storage core
     // Only compute with storage cores can have CBs and all compute with storage cores will have the same bank offset
-    const std::vector<uint32_t> &bank_ids = device->bank_ids_from_logical_core(*device->compute_cores.begin());
+    const std::vector<uint32_t> &bank_ids = device.bank_ids_from_logical_core(*device.compute_cores().cbegin());
     std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(detail::GetAllocator(device), bank_ids[0]);
     if (not lowest_address.has_value()) {
         // No L1 buffers exist
         return;
     }
-    uint32_t max_l1_size = device->l1_size_per_core();
+    uint32_t max_l1_size = device.l1_size_per_core();
 
     for (const CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
         uint64_t cb_region_end = cb_allocator.get_cb_region_end();
@@ -513,7 +513,7 @@ void Program::construct_core_range_set_for_worker_cores() {
 }
 
 void Program::set_cb_data_fmt(
-    Device *device, Kernel *kernel, build_kernel_for_riscv_options_t &build_options) const {
+    const Device& device, Kernel *kernel, build_kernel_for_riscv_options_t &build_options) const {
     ZoneScoped;
     for (auto logical_cr : kernel->logical_coreranges()) {
         auto cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
@@ -531,15 +531,15 @@ void Program::invalidate_compile() {
     }
 }
 
-void Program::compile( Device * device )
+void Program::compile( const Device& device )
 {
-    bool first_compile_on_device = compile_needed_.find(device->id()) == compile_needed_.end();
-    if (not first_compile_on_device and (not compile_needed_.at(device->id()))) {
+    bool first_compile_on_device = compile_needed_.find(device.id()) == compile_needed_.end();
+    if (not first_compile_on_device and (not compile_needed_.at(device.id()))) {
         return;
     }
 
     TT_FATAL(
-        device->is_initialized(),
+        device.is_initialized(),
         "Device needs to be initialized before program {} compilation! Generating headers for banking information is "
         "dependent on information that is set during device initialization.",
         this->get_id());
@@ -554,13 +554,13 @@ void Program::compile( Device * device )
     // compile all kernels in parallel
     for (Kernel * kernel : kernels_) {
         events.emplace_back ( detail::async ( [kernel, device, this] {
-            build_kernel_for_riscv_options_t build_options(device->id(), kernel->name());
+            build_kernel_for_riscv_options_t build_options(device.id(), kernel->name());
             ZoneScoped;
 
             kernel->set_build_options(build_options);
             this->set_cb_data_fmt(device, kernel, build_options);
 
-            auto kernel_hash = KernelCompileHash(kernel, build_options, device->id());
+            auto kernel_hash = KernelCompileHash(kernel, build_options, device.id());
             std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash);
 
             bool cache_hit = true;
@@ -583,7 +583,7 @@ void Program::compile( Device * device )
         f.wait();
 
     for (Kernel * kernel : kernels_) {
-        events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device->id()); }));
+        events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device.id()); }));
     }
 
     for (auto & f : events)
@@ -597,7 +597,7 @@ void Program::compile( Device * device )
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(*this, device);
     }
-    compile_needed_[device->id()] = false;
+    compile_needed_[device.id()] = false;
 }
 
 Program::~Program() {

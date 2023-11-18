@@ -46,7 +46,7 @@ struct SingleCoreBinaryConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& test_config) {
+bool single_core_binary(const tt_metal::Device& device, const SingleCoreBinaryConfig& test_config) {
 
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////

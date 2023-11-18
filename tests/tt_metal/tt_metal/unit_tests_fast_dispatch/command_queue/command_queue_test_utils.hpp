@@ -13,7 +13,7 @@ struct BufferConfig {
     BufferType buftype;
 };
 
-inline pair<Buffer, vector<uint32_t>> EnqueueWriteBuffer_prior_to_wrap(Device* device, CommandQueue& cq, const BufferConfig& config) {
+inline pair<Buffer, vector<uint32_t>> EnqueueWriteBuffer_prior_to_wrap(const Device& device, CommandQueue& cq, const BufferConfig& config) {
     // This function just enqueues a buffer (which should be large in the config)
     // write as a precursor to testing the wrap mechanism
     size_t buf_size = config.num_pages * config.page_size;

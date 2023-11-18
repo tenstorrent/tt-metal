@@ -372,7 +372,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     TT_ASSERT(a.shape()[0] == 1 && a.shape()[1] == 1);
     TT_ASSERT(output.shape()[0] == 1 && output.shape()[1] == 1);
 
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -384,7 +384,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     TT_ASSERT(output.volume() >= unpadded_output_volume);
 
 
-    uint32_t ncores_x_full_grid = device->compute_with_storage_grid_size().x;
+    uint32_t ncores_x_full_grid = device.compute_with_storage_grid_size().x;
     auto [num_cores_height_sliced, num_cores_width_sliced] = get_num_cores_height_width_sliced(a.shard_spec().value().shard_grid,
                                         a.memory_config().memory_layout,
                                         a.shard_spec().value().shard_orientation);
@@ -617,7 +617,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
             halo_prev_start_addr = GetCircularBufferConfig(program, input_cb).globally_allocated_address().value();
 
             TT_ASSERT((halo_prev_start_addr + halo_prev_addr_offset) % 32 == 0); // read address should be 32 byte aligned
-            auto halo_noc_coords = device->worker_core_from_logical_core(prev_core);
+            auto halo_noc_coords = device.worker_core_from_logical_core(prev_core);
             halo_prev_noc_x = halo_noc_coords.x;
             halo_prev_noc_y = halo_noc_coords.y;
             TT_ASSERT(v.input_flat_h >= halo_prev_start_tile_id_h * TILE_HEIGHT);
@@ -670,7 +670,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
             halo_next_addr_offset = 0;
             halo_next_start_addr = GetCircularBufferConfig(program, input_cb).globally_allocated_address().value();
             TT_ASSERT((halo_next_start_addr + halo_next_addr_offset) % 32 == 0); // read address should be 32 byte aligned
-            auto halo_noc_coords = device->worker_core_from_logical_core(next_core);
+            auto halo_noc_coords = device.worker_core_from_logical_core(next_core);
             halo_next_noc_x = halo_noc_coords.x;
             halo_next_noc_y = halo_noc_coords.y;
             TT_ASSERT(halo_prev_input_num_rows_of_tiles == 0);

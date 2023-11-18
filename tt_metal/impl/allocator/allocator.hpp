@@ -43,7 +43,7 @@ class BankManager {
     uint64_t allocate_buffer(uint32_t size, uint32_t page_size, bool bottom_up);
 
     void deallocate_buffer(uint64_t address);
-    void deallocate_all();
+    void deallocate_all() const;
 
     std::optional<uint64_t> lowest_occupied_address(uint32_t bank_id) const;
 

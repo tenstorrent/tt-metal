@@ -24,19 +24,19 @@ enum class BufferType {
 
 class Buffer {
    public:
-    Buffer() : device_(nullptr) {}
+    Buffer() = delete;
 
-    Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferType buffer_type);
+    Buffer(const Device& device, uint64_t size, uint64_t page_size, const BufferType buffer_type);
 
     Buffer(const Buffer &other);
-    Buffer& operator=(const Buffer &other);
 
     Buffer(Buffer &&other);
-    Buffer& operator=(Buffer &&other);
+    Buffer& operator=(const Buffer &other) = delete;
+    Buffer& operator=(Buffer &&other) = delete;
 
     ~Buffer();
 
-    Device *device() const { return device_; }
+    const Device& device() const { return device_; }
 
     uint32_t size() const { return static_cast<uint32_t>(size_); }
 
@@ -66,7 +66,7 @@ class Buffer {
     void deallocate();
     friend void DeallocateBuffer(Buffer &buffer);
 
-    Device *device_;
+    const Device& device_;
     uint64_t size_;                 // Size in bytes
     uint64_t address_;              // Address of buffer
     uint64_t page_size_;            // Size of unit being interleaved. For non-interleaved buffers: size == page_size

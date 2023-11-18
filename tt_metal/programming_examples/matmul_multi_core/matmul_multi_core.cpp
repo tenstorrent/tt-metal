@@ -105,7 +105,7 @@ void golden_matmul(vector<bfloat16> a, vector<bfloat16> b, vector<uint32_t>& out
 }
 
 void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t>& output, bool bcast_batch,
-                        uint32_t M, uint32_t N, uint32_t K, uint32_t B, Device* device) {
+                        uint32_t M, uint32_t N, uint32_t K, uint32_t B, const Device& device) {
 
     /*
     * Setup program to execute along with its buffers and kernels to use
@@ -116,7 +116,7 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
     /*
     * Multi-Core prep
     */
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
@@ -301,7 +301,7 @@ int main(int argc, char **argv) {
     try {
         /* Silicon accelerator setup */
         constexpr int device_id = 0;
-        Device *device = CreateDevice(device_id);
+        const Device& device = CreateDevice(device_id);
 
         /* Create source data */
         constexpr uint32_t M = 640;  // user-defined

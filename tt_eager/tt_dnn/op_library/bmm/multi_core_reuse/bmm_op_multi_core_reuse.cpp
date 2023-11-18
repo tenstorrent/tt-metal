@@ -14,7 +14,7 @@ using namespace tt;
 using tt_metal::Buffer;
 
 tt_metal::operation::ProgramWithCallbacks create_program(
-    tt_metal::Device *device,
+    const tt_metal::Device& device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
     uint32_t single_tile_size,
@@ -74,7 +74,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t num_blocks_y = M / per_core_M;
     uint32_t num_blocks_x = N / per_core_N;
 
-    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerange_set(num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
+    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerange_set(num_blocks_x * num_blocks_y, device.compute_with_storage_grid_size(), true));
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;
@@ -267,8 +267,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse(const Tensor &a, const T
     TT_ASSERT(Kt % in0_block_w == 0);
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const tt_metal::Device& device = a.device();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 

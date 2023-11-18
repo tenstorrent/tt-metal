@@ -215,7 +215,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     TT_ASSERT(src0_dram_buffer->size() % in0_tile_nbytes == 0, "Buffer size of tensor in0 must be multiple of tile size");
     TT_ASSERT(src1_dram_buffer->size() % in1_tile_nbytes == 0, "Buffer size of tensor in1 must be multiple of tile size");
 
-    Device *device = in0.device();
+    const Device& device = in0.device();
     CoreCoord core = {0, 0};
 
     Program program{};

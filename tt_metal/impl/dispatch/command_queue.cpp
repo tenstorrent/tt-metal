@@ -29,7 +29,7 @@ uint32_t get_noc_unicast_encoding(CoreCoord coord) { return NOC_XY_ENCODING(NOC_
 uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
 
-ProgramMap ConstructProgramMap(const Device* device, Program& program) {
+ProgramMap ConstructProgramMap(const Device& device, Program& program) {
     /*
         TODO(agrebenisan): Move this logic to compile program
     */
@@ -82,8 +82,8 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
         vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info;
         for (const CoreRange& core_range : ranges) {
-            CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
-            CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
+            CoreCoord physical_start = device.worker_core_from_logical_core(core_range.start);
+            CoreCoord physical_end = device.worker_core_from_logical_core(core_range.end);
 
             uint32_t dst_noc_multicast_encoding = get_noc_multicast_encoding(physical_start, physical_end);
 
@@ -106,7 +106,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         Kernel* kernel = detail::GetKernel(program, kernel_id);
         uint32_t dst = processor_to_l1_arg_base_addr.at(kernel->processor());
         for (const auto &core_coord : kernel->cores_with_runtime_args()) {
-            CoreCoord physical_core = device->worker_core_from_logical_core(core_coord);
+            CoreCoord physical_core = device.worker_core_from_logical_core(core_coord);
             const auto & runtime_args = kernel->runtime_args(core_coord);
             uint32_t num_bytes = runtime_args.size() * sizeof(uint32_t);
             uint32_t dst_noc = get_noc_unicast_encoding(physical_core);
@@ -167,7 +167,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         }
 
         uint32_t sub_kernel_index = 0;
-        for (const ll_api::memory& kernel_bin : kernel->binaries(device->id())) {
+        for (const ll_api::memory& kernel_bin : kernel->binaries(device.id())) {
             kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
                 uint32_t num_bytes = len * sizeof(uint32_t);
                 if ((dst & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
@@ -233,7 +233,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         const Kernel* kernel = detail::GetKernel(program, kernel_id);
 
-        for (const ll_api::memory& kernel_bin : kernel->binaries(device->id())) {
+        for (const ll_api::memory& kernel_bin : kernel->binaries(device.id())) {
             kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
                 std::copy(mem_ptr, mem_ptr + len, program_pages.begin() + program_page_idx);
                 program_page_idx = align(program_page_idx + len, noc_transfer_alignment_in_bytes / sizeof(uint32_t));
@@ -273,9 +273,8 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
 
 // EnqueueReadBufferCommandSection
 EnqueueReadBufferCommand::EnqueueReadBufferCommand(
-    Device* device, Buffer& buffer, void* dst, SystemMemoryWriter& writer) :
-    dst(dst), writer(writer), buffer(buffer) {
-    this->device = device;
+    const Device& device, Buffer& buffer, void* dst, SystemMemoryWriter& writer) :
+    device(device), dst(dst), writer(writer), buffer(buffer) {
 }
 
 const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t dst_address) {
@@ -338,13 +337,11 @@ EnqueueCommandType EnqueueReadBufferCommand::type() { return this->type_; }
 
 // EnqueueWriteBufferCommand section
 EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
-    Device* device, Buffer& buffer, const void* src, SystemMemoryWriter& writer) :
-    writer(writer), src(src), buffer(buffer) {
+    const Device& device, Buffer& buffer, const void* src, SystemMemoryWriter& writer) :
+    device(device), writer(writer), src(src), buffer(buffer) {
     TT_ASSERT(
         buffer.buffer_type() == BufferType::DRAM or buffer.buffer_type() == BufferType::L1,
         "Trying to write to an invalid buffer");
-
-    this->device = device;
 }
 
 const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t src_address) {
@@ -418,15 +415,14 @@ void EnqueueWriteBufferCommand::process() {
 EnqueueCommandType EnqueueWriteBufferCommand::type() { return this->type_; }
 
 EnqueueProgramCommand::EnqueueProgramCommand(
-    Device* device,
+    const Device& device,
     Buffer& buffer,
     ProgramMap& program_to_dev_map,
     SystemMemoryWriter& writer,
     const Program& program,
     bool stall
     ) :
-    buffer(buffer), program_to_dev_map(program_to_dev_map), writer(writer), program(program), stall(stall) {
-    this->device = device;
+    device(device), buffer(buffer), program_to_dev_map(program_to_dev_map), writer(writer), program(program), stall(stall) {
 }
 
 const DeviceCommand EnqueueProgramCommand::assemble_device_command(uint32_t host_data_src) {
@@ -575,7 +571,7 @@ void EnqueueProgramCommand::process() {
 EnqueueCommandType EnqueueProgramCommand::type() { return this->type_; }
 
 // FinishCommand section
-FinishCommand::FinishCommand(Device* device, SystemMemoryWriter& writer) : writer(writer) { this->device = device; }
+FinishCommand::FinishCommand(const Device& device, SystemMemoryWriter& writer) : device(device), writer(writer) {}
 
 const DeviceCommand FinishCommand::assemble_device_command(uint32_t) {
     DeviceCommand command;
@@ -596,8 +592,7 @@ void FinishCommand::process() {
 EnqueueCommandType FinishCommand::type() { return this->type_; }
 
 // EnqueueWrapCommand section
-EnqueueWrapCommand::EnqueueWrapCommand(Device* device, SystemMemoryWriter& writer) : writer(writer) {
-    this->device = device;
+EnqueueWrapCommand::EnqueueWrapCommand(const Device& device, SystemMemoryWriter& writer) : device(device), writer(writer) {
 }
 
 const DeviceCommand EnqueueWrapCommand::assemble_device_command(uint32_t) {
@@ -622,18 +617,18 @@ void EnqueueWrapCommand::process() {
 EnqueueCommandType EnqueueWrapCommand::type() { return this->type_; }
 
 // Sending dispatch kernel. TODO(agrebenisan): Needs a refactor
-void send_dispatch_kernel_to_device(Device* device) {
+void send_dispatch_kernel_to_device(const Device& device) {
     ZoneScoped;
     // Ideally, this should be some separate API easily accessible in
     // TT-metal, don't like the fact that I'm writing this from scratch
 
     Program dispatch_program = CreateProgram();
-    auto dispatch_cores = device->dispatch_cores().begin();
+    auto dispatch_cores = device.dispatch_cores().begin();
     CoreCoord producer_logical_core = *dispatch_cores++;
     CoreCoord consumer_logical_core = *dispatch_cores;
 
-    CoreCoord producer_physical_core = device->worker_core_from_logical_core(producer_logical_core);
-    CoreCoord consumer_physical_core = device->worker_core_from_logical_core(consumer_logical_core);
+    CoreCoord producer_physical_core = device.worker_core_from_logical_core(producer_logical_core);
+    CoreCoord consumer_physical_core = device.worker_core_from_logical_core(consumer_logical_core);
 
     std::map<string, string> producer_defines = {
         {"IS_DISPATCH_KERNEL", ""},
@@ -676,29 +671,28 @@ void send_dispatch_kernel_to_device(Device* device) {
     tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_READ_PTR, fifo_addr_vector);
     tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_WRITE_PTR, fifo_addr_vector);
 
-    tt::Cluster::instance().l1_barrier(device->id());
+    tt::Cluster::instance().l1_barrier(device.id());
 
-    const std::tuple<uint32_t, uint32_t> tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(device->id(), device->worker_core_from_logical_core(*device->dispatch_cores().begin()))).value();
+    const std::tuple<uint32_t, uint32_t> tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(device.id(), device.worker_core_from_logical_core(*device.dispatch_cores().begin()))).value();
     auto [tlb_offset, tlb_size] = tlb_data;
-    // std::cout << "CORE: " << device->worker_core_from_logical_core(*device->dispatch_cores().begin()).str() << std::endl;
+    // std::cout << "CORE: " << device.worker_core_from_logical_core(*device.dispatch_cores().begin()).str() << std::endl;
     // std::cout << "after sending pointers to device. my tlb_offset: " << tlb_offset << ", my tlb_size: " << tlb_size << std::endl;
 
     launch_msg_t msg = dispatch_program.kernels_on_core(producer_logical_core)->launch_msg;
 
     // TODO(pkeller): Should use detail::LaunchProgram once we have a mechanism to avoid running all RISCs
-    tt::llrt::write_launch_msg_to_core(device->id(), producer_physical_core, &msg);
-    tt::llrt::write_launch_msg_to_core(device->id(), consumer_physical_core, &msg);
+    tt::llrt::write_launch_msg_to_core(device.id(), producer_physical_core, &msg);
+    tt::llrt::write_launch_msg_to_core(device.id(), consumer_physical_core, &msg);
 }
 
 // CommandQueue section
-CommandQueue::CommandQueue(Device* device): sysmem_writer(device) {
+CommandQueue::CommandQueue(const Device& device): device(device), sysmem_writer(device) {
     vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
     pointers[0] = CQ_START >> 4;
 
     tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), 0, 0);
 
     send_dispatch_kernel_to_device(device);
-    this->device = device;
 }
 
 CommandQueue::~CommandQueue() {}

@@ -34,7 +34,7 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id
-        tt_metal::Device *device =
+        const tt_metal::Device& device =
             tt_metal::CreateDevice(device_id);
 
 
@@ -57,8 +57,8 @@ int main(int argc, char **argv) {
 
         CoreCoord loader_logical_core = {0, 0};
         CoreCoord writer_logical_core = {0, 1};
-        auto loader_worker_core = device->worker_core_from_logical_core(loader_logical_core);
-        auto writer_worker_core = device->worker_core_from_logical_core(writer_logical_core);
+        auto loader_worker_core = device.worker_core_from_logical_core(loader_logical_core);
+        auto writer_worker_core = device.worker_core_from_logical_core(writer_logical_core);
 
         uint32_t single_tile_size = 2 * 1024;
         uint32_t num_input_tiles = 1024 * 1;

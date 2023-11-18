@@ -152,7 +152,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
     return result;
 }
 
-std::tuple<tt_metal::Program, tt_metal::KernelID , tt_metal::KernelID> create_program(tt_metal::Device *device, int num_cores_r, int num_cores_c, int per_core_M, int per_core_N, int K, int in0_block_w, int out_subblock_h, int out_subblock_w) {
+std::tuple<tt_metal::Program, tt_metal::KernelID , tt_metal::KernelID> create_program(const tt_metal::Device& device, int num_cores_r, int num_cores_c, int per_core_M, int per_core_N, int K, int in0_block_w, int out_subblock_h, int out_subblock_w) {
     tt_metal::Program program = tt_metal::CreateProgram();
     uint32_t single_tile_size = 2 * 1024;
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
@@ -282,10 +282,10 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device =
+        const tt_metal::Device& device =
             tt_metal::CreateDevice(device_id);
 
-        CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        CoreCoord compute_with_storage_grid_size = device.compute_with_storage_grid_size();
         int num_cores_r = compute_with_storage_grid_size.y;
         int num_cores_c = compute_with_storage_grid_size.x;
         log_info(LogTest, "Num cores r = {}, Num cores c = {}", num_cores_r, num_cores_c);
@@ -345,9 +345,9 @@ int main(int argc, char **argv) {
                 TT_FATAL(dram_buffer_src1_addr + dram_buffer_size_weights < 1024 * 1024 * 1024);
                 TT_FATAL(dram_buffer_dst_addr + dram_buffer_size_out < 1024 * 1024 * 1024);
 
-                auto dram_src0_noc_xy = device->core_from_dram_channel(dram_src0_channel_id);
-                auto dram_src1_noc_xy = device->core_from_dram_channel(dram_src1_channel_id);
-                auto dram_dst_noc_xy = device->core_from_dram_channel(dram_dst_channel_id);
+                auto dram_src0_noc_xy = device.core_from_dram_channel(dram_src0_channel_id);
+                auto dram_src1_noc_xy = device.core_from_dram_channel(dram_src1_channel_id);
+                auto dram_dst_noc_xy = device.core_from_dram_channel(dram_dst_channel_id);
 
                 auto activations_tilized = tilize(activation_slice, per_core_M * 32, K * 32);
                 auto activations_tile_layout = convert_to_tile_layout(activations_tilized);

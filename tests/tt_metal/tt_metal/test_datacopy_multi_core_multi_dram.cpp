@@ -85,7 +85,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> create_program(
-    tt_metal::Device *device,
+    const tt_metal::Device& device,
     int num_cores_r,
     int num_cores_c,
     int tensor_num_tiles,
@@ -167,7 +167,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> create_pro
 }
 
 bool write_runtime_args_to_device(
-    tt_metal::Device *device,
+    const tt_metal::Device& device,
     tt_metal::Program &program,
     int num_cores_r,
     int num_cores_c,
@@ -294,7 +294,7 @@ std::vector<bfloat16> get_col_slice(std::vector<bfloat16> data, int total_col_sl
     return result;
 }
 
-bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
+bool move_tiles_to_dram(const tt_metal::Device& device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
     bool pass = true;
     int tile_size = 512; // 32*32 packed into u32
     int tile_size_bytes = 32 * 32 * 2;
@@ -350,7 +350,7 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device =
+        const tt_metal::Device& device =
             tt_metal::CreateDevice(device_id);
 
 

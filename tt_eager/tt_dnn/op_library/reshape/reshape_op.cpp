@@ -35,7 +35,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
     uint32_t num_tiles = a.volume() / TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     Shape output_shape = output.shape();
 
@@ -121,7 +121,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
     Shape output_shape = output.shape();
     tt_metal::Buffer *src0_buffer = a.buffer();
     tt_metal::Buffer *dst_buffer = output.buffer();
@@ -139,7 +139,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
     uint32_t num_output_tiles = (output_shape[1] * output_shape[2] * output_shape[3] / TILE_HW);
 
     // Currently added to support Bert large, TODO: Make op more generic, parallelize
-    uint32_t available_l1 = device->l1_size_per_core() - L1_UNRESERVED_BASE;
+    uint32_t available_l1 = device.l1_size_per_core() - L1_UNRESERVED_BASE;
     if (num_input_tiles * single_tile_size + num_output_tiles * single_tile_size > available_l1) {
         if (old_stick_size >= new_stick_size) {
             if (old_stick_size % new_stick_size == 0) {

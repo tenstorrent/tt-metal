@@ -21,7 +21,7 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, int device_id) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Device *device =
+    const tt_metal::Device& device =
         tt_metal::CreateDevice(device_id);
 
 

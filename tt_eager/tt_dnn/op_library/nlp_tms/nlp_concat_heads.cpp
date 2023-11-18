@@ -19,7 +19,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
 
     const auto& ashape = a.shape();
 
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 

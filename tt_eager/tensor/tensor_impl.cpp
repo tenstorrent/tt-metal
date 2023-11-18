@@ -65,23 +65,23 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
 
 namespace detail {
 
-DeviceBuffer allocate_interleaved_buffer_on_device(uint32_t buffer_size_bytes, Device *device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+DeviceBuffer allocate_interleaved_buffer_on_device(uint32_t buffer_size_bytes, const Device& device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
     uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, shape);
     return std::make_shared<Buffer>(device, buffer_size_bytes, page_size, memory_config.buffer_type);
 }
 
-DeviceBuffer allocate_contiguous_buffer_on_device(uint32_t buffer_size_bytes, Device *device, const MemoryConfig& memory_config) {
+DeviceBuffer allocate_contiguous_buffer_on_device(uint32_t buffer_size_bytes, const Device& device, const MemoryConfig& memory_config) {
     return std::make_shared<Buffer>(device, buffer_size_bytes, buffer_size_bytes, memory_config.buffer_type);
 }
 
 }
 
-DeviceBuffer allocate_sharded_buffer_on_device(uint32_t buffer_size_bytes, Device *device, uint32_t shard_size, const MemoryConfig& memory_config) {
+DeviceBuffer allocate_sharded_buffer_on_device(uint32_t buffer_size_bytes, const Device& device, uint32_t shard_size, const MemoryConfig& memory_config) {
     return std::make_shared<Buffer>(device, buffer_size_bytes, shard_size, memory_config.buffer_type);
 }
 
 
-DeviceBuffer allocate_buffer_on_device(uint32_t buffer_size_bytes, Device *device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
+DeviceBuffer allocate_buffer_on_device(uint32_t buffer_size_bytes, const Device& device, const Shape& shape, DataType data_type, Layout layout, const MemoryConfig& memory_config) {
     if (memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         return detail::allocate_interleaved_buffer_on_device(buffer_size_bytes, device, shape, data_type, layout, memory_config);
     } else {
@@ -89,7 +89,7 @@ DeviceBuffer allocate_buffer_on_device(uint32_t buffer_size_bytes, Device *devic
     }
 }
 
-void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout layout) {
+void validate_on_device_dtype_and_layout(const Device& device, DataType dtype, Layout layout) {
     // TODO: Get supported layout and dtypes from device
     auto supported_dtype = [&dtype]() {
         TT_ASSERT(

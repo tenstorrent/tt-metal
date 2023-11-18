@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device =
+        const tt_metal::Device& device =
             tt_metal::CreateDevice(device_id);
 
 
@@ -118,7 +118,7 @@ int main(int argc, char **argv) {
         tt_metal::Kernel *riscv1_kernel = tt_metal::detail::GetKernel(program, kernel_group->riscv1_id.value());
         std::vector<string> kernel_names = {"reader_unary_push_4", "writer_unary", "eltwise_copy_3m"};
         for (auto kernel_name : kernel_names) {
-            std::filesystem::remove_all(get_kernel_compile_outpath(device->id()) + kernel_name);
+            std::filesystem::remove_all(get_kernel_compile_outpath(device.id()) + kernel_name);
         }
 
         int num_compiles = 3;
@@ -129,27 +129,27 @@ int main(int argc, char **argv) {
         for (int i = 0; i < num_compiles; i++) {
             tt_metal::detail::CompileProgram(device, program);
             if (i == 0) {
-                compute_binaries = compute_kernel->binaries(device->id());
+                compute_binaries = compute_kernel->binaries(device.id());
                 TT_FATAL(compute_binaries.size() == 3, "Expected 3 Compute binaries!");
-                brisc_binaries = riscv0_kernel->binaries(device->id());
+                brisc_binaries = riscv0_kernel->binaries(device.id());
                 TT_FATAL(brisc_binaries.size() == 1, "Expected 1 BRISC binary!");
-                ncrisc_binaries = riscv1_kernel->binaries(device->id());
+                ncrisc_binaries = riscv1_kernel->binaries(device.id());
                 TT_FATAL(ncrisc_binaries.size() == 1, "Expected 1 NCRISC binary!");
             } else {
-                TT_FATAL(compute_kernel->binaries(device->id()) == compute_binaries);
-                TT_FATAL(riscv0_kernel->binaries(device->id()) == brisc_binaries);
-                TT_FATAL(riscv1_kernel->binaries(device->id()) == ncrisc_binaries);
+                TT_FATAL(compute_kernel->binaries(device.id()) == compute_binaries);
+                TT_FATAL(riscv0_kernel->binaries(device.id()) == brisc_binaries);
+                TT_FATAL(riscv1_kernel->binaries(device.id()) == ncrisc_binaries);
             }
-            std::string brisc_hex_path = get_latest_kernel_binary_path(device->id(), riscv0_kernel) + "/brisc/brisc.hex";
-            ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path, device->id(), false);
+            std::string brisc_hex_path = get_latest_kernel_binary_path(device.id(), riscv0_kernel) + "/brisc/brisc.hex";
+            ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path, device.id(), false);
             TT_FATAL(brisc_binary == brisc_binaries.at(0), "Expected saved BRISC binary to be the same as binary in persistent cache");
-            std::string ncrisc_hex_path = get_latest_kernel_binary_path(device->id(), riscv1_kernel) + "/ncrisc/ncrisc.hex";
-            ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path, device->id(), false);
+            std::string ncrisc_hex_path = get_latest_kernel_binary_path(device.id(), riscv1_kernel) + "/ncrisc/ncrisc.hex";
+            ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path, device.id(), false);
             TT_FATAL(ncrisc_binary == ncrisc_binaries.at(0), "Expected saved NCRISC binary to be the same as binary in persistent cache");
             for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                 std::string trisc_id_str = std::to_string(trisc_id);
-                std::string trisc_hex_path = get_latest_kernel_binary_path(device->id(), compute_kernel) + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
-                ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path, device->id(), false);
+                std::string trisc_hex_path = get_latest_kernel_binary_path(device.id(), compute_kernel) + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
+                ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path, device.id(), false);
                 TT_FATAL(trisc_binary == compute_binaries.at(trisc_id), "Expected saved TRISC binary for " + trisc_id_str + " to be the same as binary in persistent cache");
             }
         }

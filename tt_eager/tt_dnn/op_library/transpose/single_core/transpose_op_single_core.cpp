@@ -56,7 +56,7 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
     int32_t num_tiles = a.volume()/TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     Shape output_shape = output.shape();
 
@@ -211,7 +211,7 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
 
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     Shape output_shape = output.shape();
 
@@ -330,7 +330,7 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
     tt_metal::Buffer *src0_buffer = a.buffer();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
 
     tt_metal::Buffer *dst_buffer = output.buffer();

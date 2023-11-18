@@ -33,7 +33,7 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device =
+        const tt_metal::Device& device =
             tt_metal::CreateDevice(device_id);
 
 
@@ -76,7 +76,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device =
+        const tt_metal::Device& device =
             tt_metal::CreateDevice(device_id);
 
 
@@ -242,7 +242,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device =
+        const tt_metal::Device& device =
             tt_metal::CreateDevice(device_id);
 
 
@@ -393,7 +393,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     bool pass = true;
 
     int device_id = 0;
-    tt_metal::Device *device =
+    const tt_metal::Device& device =
         tt_metal::CreateDevice(device_id);
 
 

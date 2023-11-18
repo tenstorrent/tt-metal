@@ -69,12 +69,12 @@ inline Tensor move(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config
     bool move_within_same_mem_space = input_mem_config.buffer_type == output_mem_config.buffer_type;
     // Input and output addresses won't overlap if they are in different memory substrates
     bool non_overlap = not move_within_same_mem_space;
-    const auto num_banks = input_tensor.device()->num_banks(output_tensor.buffer()->buffer_type());
+    const auto num_banks = input_tensor.device().num_banks(output_tensor.buffer()->buffer_type());
     uint32_t size_per_bank = tt_metal::detail::SizeBytesPerBank(output_tensor.buffer()->size(), output_tensor.buffer()->page_size(), num_banks);
 
     // If input and output buffers overlap, input has to be copied into circular buffer before writing to output
     // Only compute with storage cores allow CBs to be created
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = input_tensor.device().compute_with_storage_grid_size();
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     uint32_t size_per_l1_bank = tt_metal::detail::SizeBytesPerBank(output_tensor.buffer()->size(), output_tensor.buffer()->page_size(), num_l1_banks);
 
@@ -93,7 +93,7 @@ inline Tensor move(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config
         }
     }
 
-    bool fits_in_cb = (L1_UNRESERVED_BASE + size_per_l1_bank) <= (output_mem_config.buffer_type == tt_metal::BufferType::L1 ? output_tensor.buffer()->address() : output_tensor.device()->l1_size_per_core());
+    bool fits_in_cb = (L1_UNRESERVED_BASE + size_per_l1_bank) <= (output_mem_config.buffer_type == tt_metal::BufferType::L1 ? output_tensor.buffer()->address() : output_tensor.device().l1_size_per_core());
 
     MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::SINGLE_CORE;
     if (num_units > 1 and non_overlap) {

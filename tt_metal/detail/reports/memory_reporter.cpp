@@ -40,7 +40,7 @@ void write_headers(std::ofstream &memory_usage_summary_report, std::ofstream &l1
 }
 
 void write_detailed_report_info(
-    const Device *device,
+    const Device& device,
     const BufferType &buffer_type,
     std::ofstream &detailed_memory_usage_report,
     size_t total_allocatable, size_t total_allocated, size_t total_free,
@@ -56,19 +56,19 @@ void write_detailed_report_info(
                                         << ",,Total free (KB): " << stats.total_free_bytes / 1024 << "\n"
                                         << ",,Total allocated (KB): " << stats.total_allocated_bytes / 1024 << "\n"
                                         << ",,Largest free block (KB): " << stats.largest_free_block_bytes / 1024 << "\n";
-        device->dump_memory_blocks(buffer_type, detailed_memory_usage_report);
+        device.dump_memory_blocks(buffer_type, detailed_memory_usage_report);
     }
 }
 
 void write_memory_usage(
-    const Device *device,
+    const Device& device,
     const BufferType &buffer_type,
     std::ofstream &memory_usage_summary_report,
     std::ofstream &detailed_memory_usage_report,
     std::ofstream &l1_usage_summary_report
 ) {
-    auto num_banks = device->num_banks(buffer_type);
-    auto stats = device->get_memory_allocation_statistics(buffer_type);
+    auto num_banks = device.num_banks(buffer_type);
+    auto stats = device.get_memory_allocation_statistics(buffer_type);
     memory_usage_summary_report << ","
                                 << stats.total_allocatable_size_bytes / 1024 << ","
                                 << stats.total_allocated_bytes / 1024 << ","
@@ -80,7 +80,7 @@ void write_memory_usage(
     detailed_memory_usage_report << ",Total allocatable (KB):," << (stats.total_allocatable_size_bytes * num_banks) / 1024 << "\n"
                                  << ",Total allocated (KB):," << (stats.total_allocated_bytes * num_banks) / 1024 << "\n"
                                  << ",Total free (KB):," << (stats.total_free_bytes * num_banks) / 1024 << "\n";
-    device->dump_memory_blocks(buffer_type, detailed_memory_usage_report);
+    device.dump_memory_blocks(buffer_type, detailed_memory_usage_report);
 
     if (buffer_type == BufferType::L1) {
         l1_usage_summary_report << ","
@@ -89,14 +89,14 @@ void write_memory_usage(
     }
 }
 
-void populate_reports(const Device *device, std::ofstream &memory_usage_summary_report, std::ofstream &detailed_memory_usage_report, std::ofstream &l1_usage_summary_report) {
+void populate_reports(const Device& device, std::ofstream &memory_usage_summary_report, std::ofstream &detailed_memory_usage_report, std::ofstream &l1_usage_summary_report) {
 
     write_memory_usage(device, BufferType::DRAM, memory_usage_summary_report, detailed_memory_usage_report, l1_usage_summary_report);
 
     write_memory_usage(device, BufferType::L1, memory_usage_summary_report, detailed_memory_usage_report, l1_usage_summary_report);
 }
 
-void MemoryReporter::flush_program_memory_usage(const Program &program, const Device *device) {
+void MemoryReporter::flush_program_memory_usage(const Program &program, const Device& device) {
     if (not this->program_memory_usage_summary_report_.is_open()) {
         this->init_reports();
     }
@@ -108,7 +108,7 @@ void MemoryReporter::flush_program_memory_usage(const Program &program, const De
     populate_reports(device, this->program_memory_usage_summary_report_, this->program_detailed_memory_usage_report_, this->program_l1_usage_summary_report_);
 }
 
-void MemoryReporter::dump_memory_usage_state(const Device *device) const {
+void MemoryReporter::dump_memory_usage_state(const Device& device) const {
     std::ofstream memory_usage_summary_report, l1_usage_summary_report, detailed_memory_usage_report;
 
     fs::create_directories(metal_reports_dir());
@@ -131,7 +131,7 @@ void MemoryReporter::init_reports() {
     this->program_detailed_memory_usage_report_.open(metal_reports_dir() + "program_detailed_memory_usage.csv");
     write_headers(this->program_memory_usage_summary_report_, this->program_l1_usage_summary_report_, /*add_program_id=*/true);
 }
-void DumpDeviceMemoryState(const Device *device) {
+void DumpDeviceMemoryState(const Device& device) {
     MemoryReporter::inst().dump_memory_usage_state(device);
 }
 

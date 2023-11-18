@@ -74,7 +74,7 @@ inline Tensor interleaved_to_sharded(const Tensor &input_tensor, CoreCoord grid_
 inline Tensor sharded_to_interleaved(const Tensor &input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
     TT_ASSERT(input_tensor.memory_config().is_sharded());
     auto shard_spec = input_tensor.shard_spec().value();
-    return operation::run(Sharded{.grid_size=input_tensor.device()->compute_with_storage_grid_size(), .shard_spec=shard_spec, .sharded_op_type=ShardedOpType::ShardedToInterleaved, .output_mem_config=output_mem_config}, {input_tensor}).at(0);
+    return operation::run(Sharded{.grid_size=input_tensor.device().compute_with_storage_grid_size(), .shard_spec=shard_spec, .sharded_op_type=ShardedOpType::ShardedToInterleaved, .output_mem_config=output_mem_config}, {input_tensor}).at(0);
 }
 
 }  // namespace tt_metal

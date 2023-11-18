@@ -62,7 +62,7 @@ const uint32_t out0_cb                                = CB::c_out0;
 
 
 void create_CBs_for_fused_matmul_new_alloc(tt_metal::Program &program,
-                                tt_metal::Device* device,
+                                const tt_metal::Device& device,
                                 CoreRange core,
                                 uint32_t num_cb0_tiles,
                                 uint32_t num_cb1_tiles,
@@ -137,7 +137,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
                                        uint32_t act_block_h_ntiles, uint32_t act_block_w_ntiles, uint32_t weight_block_w_ntiles,
                                        uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool use_fast_reader, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, Tensor &output) {
     bool pass = true;
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     uint32_t act_batch_size = a.shape()[0];
     TT_ASSERT(act_batch_size == 1, "Only batch size 1 supported.");
@@ -923,7 +923,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
                                        uint32_t out_subblock_h_ntiles, uint32_t out_subblock_w_ntiles, uint32_t output_channels, bool untilize_out, Tensor &output) {
     bool pass = true;
     assert(untilize_out == true);
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_ASSERT(a.shape()[0] == 1, "Only batch size 1 supported.");
     TT_ASSERT(output_channels <= b.shape()[3], "Invalid weight shape. Incorrect weight tensor.");

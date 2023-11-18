@@ -22,7 +22,7 @@ using namespace tt;
 using namespace tt_metal;
 
 operation::ProgramWithCallbacks create_program_mcast_in0(
-    tt_metal::Device *device,
+    const tt_metal::Device& device,
     MathFidelity math_fidelity,
     CoreCoord core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
@@ -116,8 +116,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
 
     CoreCoord top_left_core = {(std::size_t) start_core_x, (std::size_t) start_core_y};
     CoreCoord bottom_right_core = {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1};
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -303,7 +303,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateKernel(
         program,
-        device->arch() == ARCH::GRAYSKULL ?  "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp" : "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation_matmul_tiles.cpp",
+        device.arch() == ARCH::GRAYSKULL ?  "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp" : "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation_matmul_tiles.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args, .defines = mm_kernel_defines}
     );
@@ -368,14 +368,14 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         in0_mcast_noc_x.reserve(num_cores_c);
         in0_mcast_noc_y.reserve(num_cores_r);
         for(uint32_t core_idx_x = 0; core_idx_x < num_cores_c; ++core_idx_x) {
-            in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+            in0_mcast_noc_x.push_back(device.worker_core_from_logical_core({core_idx_x, 0}).x);
         }
         for(uint32_t core_idx_y = 0; core_idx_y < num_cores_r; ++core_idx_y) {
-            in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+            in0_mcast_noc_y.push_back(device.worker_core_from_logical_core({0, core_idx_y}).y);
         }
     }
-    CoreCoord start_core_noc = device->worker_core_from_logical_core({start_core_x, start_core_y});
-    CoreCoord end_core_noc = device->worker_core_from_logical_core({start_core_x + num_cores_c - 1, start_core_y + num_cores_r - 1});
+    CoreCoord start_core_noc = device.worker_core_from_logical_core({start_core_x, start_core_y});
+    CoreCoord end_core_noc = device.worker_core_from_logical_core({start_core_x + num_cores_c - 1, start_core_y + num_cores_r - 1});
 
     for(uint32_t i = 0; i < num_cores; i++) {
         uint32_t core_idx_x = i % num_cores_c;
@@ -546,7 +546,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
 }
 
 operation::ProgramWithCallbacks create_program_mcast_in1(
-    tt_metal::Device *device,
+    const tt_metal::Device& device,
     MathFidelity math_fidelity,
     CoreCoord core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
@@ -633,8 +633,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 
     CoreCoord top_left_core = {(std::size_t) start_core_x, (std::size_t) start_core_y};
     CoreCoord bottom_right_core = {(std::size_t) start_core_x + num_cores_c - 1, (std::size_t) start_core_y + num_cores_r - 1};
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -822,7 +822,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     bool math_approx_mode = false;
     auto mm_kernel = tt_metal::CreateKernel(
         program,
-        device->arch() == ARCH::GRAYSKULL ?  "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp" : "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation_matmul_tiles.cpp",
+        device.arch() == ARCH::GRAYSKULL ?  "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp" : "tt_eager/tt_dnn/op_library/bmm/kernels/compute/bmm_large_block_zm_fused_bias_activation_matmul_tiles.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_kernel_args, .defines = mm_kernel_defines}
     );
@@ -1071,7 +1071,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(cons
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);

@@ -50,7 +50,7 @@ std::vector<Shape> DataTransferToDevice::compute_output_shapes(const std::vector
 }
 std::vector<Tensor> DataTransferToDevice::compute_output_tensors(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    if (input_tensor.storage_type() == StorageType::DEVICE && input_tensor.device() == this->device) {
+    if (input_tensor.storage_type() == StorageType::DEVICE && &input_tensor.device() == &this->device) {
         return {input_tensor};
     } else {
         return {input_tensor.to(this->device, this->mem_config)};
@@ -59,12 +59,12 @@ std::vector<Tensor> DataTransferToDevice::compute_output_tensors(const std::vect
 
 tt::stl::reflection::Attributes DataTransferToDevice::attributes() const {
     return {
-        {"device", this->device->id()},
+        {"device", this->device.id()},
         {"mem_config", this->mem_config},
     };
 }
 
-Tensor data_transfer_to_device(const Tensor &input_tensor, Device* device, const MemoryConfig &mem_config) {
+Tensor data_transfer_to_device(const Tensor &input_tensor, const Device& device, const MemoryConfig &mem_config) {
     return operation::run(DataTransferToDevice{device, mem_config}, {input_tensor}).at(0);
 }
 

@@ -19,7 +19,7 @@ using namespace tt::constants;
 using namespace tt;
 using namespace tt_metal;
 operation::ProgramWithCallbacks create_program(
-    tt_metal::Device *device,
+    const tt_metal::Device& device,
     MathFidelity math_fidelity,
     CoreCoord core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K,
@@ -415,7 +415,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor 
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype()); // in1
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output_dtype); // output
 
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);

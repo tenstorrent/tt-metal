@@ -41,8 +41,8 @@ Tensor to_host_wrapper(const Tensor &tensor) {
     return to_host_map.at(tensor.dtype())(tensor);
 }
 
-Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const MemoryConfig &mem_config) {
-    const static std::map<DataType, std::function<Tensor(const Tensor &, Device *, const MemoryConfig &)>> to_device_map = {
+Tensor to_device_wrapper(const Tensor &tensor, const Device & target_device, const MemoryConfig &mem_config) {
+    const static std::map<DataType, std::function<Tensor(const Tensor &, const Device &, const MemoryConfig &)>> to_device_map = {
         {DataType::BFLOAT16, &to_device<bfloat16>},
         {DataType::FLOAT32, &to_device<float>},
         {DataType::UINT32, &to_device<uint32_t>},

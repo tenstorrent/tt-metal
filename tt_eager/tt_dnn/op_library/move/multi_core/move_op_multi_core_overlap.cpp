@@ -18,7 +18,7 @@ namespace tt {
 
 namespace tt_metal {
 
-std::vector<CoreRange> get_multicast_regions(const Device *device, const CoreRangeSet &all_cores, const CoreCoord &logical_controller) {
+std::vector<CoreRange> get_multicast_regions(const Device& device, const CoreRangeSet &all_cores, const CoreCoord &logical_controller) {
     TT_ASSERT(0 < all_cores.ranges().size() <= 2);
     CoreCoord logical_zero = {.x = 0, .y = 0};
     TT_ASSERT(logical_controller == logical_zero);
@@ -68,12 +68,12 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
     uint32_t page_size = input.buffer()->page_size();
 
     uint32_t num_pages = tilized ? output.volume() / TILE_HW : output.volume() / output.shape()[-1];
-    tt_metal::Device *device = output.device();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const tt_metal::Device& device = output.device();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
-    const auto num_dram_banks = device->num_banks(BufferType::DRAM);
+    const auto num_dram_banks = device.num_banks(BufferType::DRAM);
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     uint32_t size_per_l1_bank = tt_metal::detail::SizeBytesPerBank(output.buffer()->size(), output.buffer()->page_size(), num_l1_banks);
@@ -108,12 +108,12 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
     );
 
     const CoreCoord logical_controller = CoreCoord{.x = 0, .y = 0};
-    CoreCoord noc_controller = device->worker_core_from_logical_core(logical_controller);
+    CoreCoord noc_controller = device.worker_core_from_logical_core(logical_controller);
     std::vector<CoreRange> logical_multicast_regions = get_multicast_regions(device, all_cores, logical_controller);
 
     std::vector<CoreRange> noc_multicast_regions;
     for (const auto &logical_cr : logical_multicast_regions) {
-        CoreRange noc_cr = {.start = device->worker_core_from_logical_core(logical_cr.start), .end = device->worker_core_from_logical_core(logical_cr.end)};
+        CoreRange noc_cr = {.start = device.worker_core_from_logical_core(logical_cr.start), .end = device.worker_core_from_logical_core(logical_cr.end)};
         noc_multicast_regions.push_back(std::move(noc_cr));
     }
 

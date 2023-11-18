@@ -17,11 +17,11 @@ using namespace tt::test_utils;
 using namespace tt::test::buffer::detail;
 
 namespace tt::test::buffer::detail {
-    bool SimpleDramReadOnly (Device* device, size_t local_address, size_t byte_size) {
+    bool SimpleDramReadOnly (const Device& device, size_t local_address, size_t byte_size) {
         std::vector<uint32_t> inputs =
             generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
         std::vector<uint32_t> outputs;
-        uint32_t dram_channel = device->dram_channel_from_bank_id(0);
+        uint32_t dram_channel = device.dram_channel_from_bank_id(0);
         writeDramBackdoor(device, dram_channel, local_address, inputs);
         readDramBackdoor(device, dram_channel, local_address, byte_size, outputs);
         bool pass = (inputs == outputs);
@@ -30,11 +30,11 @@ namespace tt::test::buffer::detail {
         }
         return pass;
     }
-    bool SimpleDramWriteOnly (Device* device, size_t local_address, size_t byte_size) {
+    bool SimpleDramWriteOnly (const Device& device, size_t local_address, size_t byte_size) {
         std::vector<uint32_t> inputs =
             generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
         std::vector<uint32_t> outputs;
-        uint32_t dram_channel = device->dram_channel_from_bank_id(0);
+        uint32_t dram_channel = device.dram_channel_from_bank_id(0);
         writeDramBackdoor(device, dram_channel, local_address, inputs);
         readDramBackdoor(device, dram_channel, local_address, byte_size, outputs);
         bool pass = (inputs == outputs);
@@ -58,7 +58,7 @@ TEST_F(DeviceFixture, TestSimpleDramBufferReadOnlyLo) {
 }
 TEST_F(DeviceFixture, TestSimpleDramBufferReadOnlyHi) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t hi_address = this->devices_.at(id)->dram_size_per_channel() - (16 * 1024);
+        size_t hi_address = this->devices_.at(id).dram_size_per_channel() - (16 * 1024);
         ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 4));
         ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 8));
         ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 16));
@@ -80,7 +80,7 @@ TEST_F(DeviceFixture, TestSimpleDramBufferWriteOnlyLo) {
 }
 TEST_F(DeviceFixture, TestSimpleDramBufferWriteOnlyHi) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t hi_address = this->devices_.at(id)->dram_size_per_channel() - (16 * 1024);
+        size_t hi_address = this->devices_.at(id).dram_size_per_channel() - (16 * 1024);
         ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 4));
         ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 8));
         ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 16));

@@ -32,14 +32,14 @@ namespace tt::tt_metal{
             return fd;
         }
 
-        static Allocator &GetAllocator( const Device* device )
+        static Allocator &GetAllocator( const Device& device )
         {
             static std::vector<std::unique_ptr<Allocator>> allocators( Device::detect_num_available_devices() );
             static vector<std::once_flag> vflags( Device::detect_num_available_devices() );
-            chip_id_t id = device->id();
+            chip_id_t id = device.id();
             TT_FATAL(id < allocators.size(), "Invalid device {} detected", id);
             std::call_once(vflags[id], [&device](){
-                allocators[device->id()] = std::make_unique<L1BankingAllocator>(*device); });
+                allocators[device.id()] = std::make_unique<L1BankingAllocator>(device); });
 
             return *(allocators[id]);
         }
@@ -71,7 +71,7 @@ namespace tt::tt_metal{
 
         // Launches all kernels on cores specified with kernels in the program.
         // All kernels on a given Tensix core must be launched.
-        void LaunchProgram(Device *device, Program &program);
+        void LaunchProgram(const Device& device, Program &program);
 
         /**
          *  Compiles all kernels within the program, and generates binaries that are written to `$TT_METAL_HOME/built/<device>/kernels/<kernel name>/<kernel hash>`
@@ -90,7 +90,7 @@ namespace tt::tt_metal{
          * | device         | Which device the program is compiled for                         | Device *  | Must be initialized via tt_metal::InitializeDevice | Yes      |
          * | program        | The program to compile                                           | Program & |                                                    | Yes      |
          */
-        void CompileProgram(Device *device, Program &program);
+        void CompileProgram(const Device& device, Program &program);
 
         /**
          * Writes runtime args that are saved in the program to device
@@ -102,13 +102,13 @@ namespace tt::tt_metal{
          * | device       | The device to whcih runtime args will be written                       | Device *                      |                                    | Yes      |
          * | program      | The program holding the runtime args                                   | const Program &               |                                    | Yes      |
          */
-        void WriteRuntimeArgsToDevice(Device *device, const Program &program);
+        void WriteRuntimeArgsToDevice(const Device& device, const Program &program);
 
         // Configures a given device with a given program.
         // - Loads all kernel binaries into L1s of assigned Tensix cores
         // - Configures circular buffers (inits regs with buffer data)
         // - Takes the device out of reset
-        bool ConfigureDeviceWithProgram(Device *device, Program &program);
+        bool ConfigureDeviceWithProgram(const Device& device, Program &program);
 
 
 
@@ -122,7 +122,7 @@ namespace tt::tt_metal{
          * | device        | The device holding the program being profiled.    | Device *                  |                           | True     |
          * | core_coords   | The logical core coordinates being profiled.      | const vector<CoreCoord> & |                           | True     |
          * */
-        void DumpDeviceProfileResults(Device *device, const vector<CoreCoord>& logical_cores);
+        void DumpDeviceProfileResults(const Device& device, const vector<CoreCoord>& logical_cores);
 
         /**
          * Set the directory for all CSV logs produced by the profiler instance in the tt-metal module
@@ -181,11 +181,11 @@ namespace tt::tt_metal{
          * | address      | Starting address on DRAM channel to begin writing data | uint32_t              | [DRAM_UNRESERVED_BASE, dram_size)         | Yes      |
          * | host_buffer  | Buffer on host to copy data from                       | std::vector<uint32_t> | Host buffer must be fully fit DRAM buffer | Yes      |
          */
-        inline bool WriteToDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, std::vector<uint32_t> &host_buffer)
+        inline bool WriteToDeviceDRAMChannel(const Device& device, int dram_channel, uint32_t address, std::vector<uint32_t> &host_buffer)
         {
             bool pass = true;
             TT_FATAL(address >= DRAM_UNRESERVED_BASE, "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!", DRAM_UNRESERVED_BASE);
-            tt::Cluster::instance().write_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
+            tt::Cluster::instance().write_dram_vec(host_buffer, tt_target_dram{device.id(), dram_channel, 0}, address);
             return pass;
         }
 
@@ -202,11 +202,11 @@ namespace tt::tt_metal{
          * | size         | Size of buffer to read from device in bytes                  | uint32_t              |                                | Yes      |
          * | host_buffer  | Buffer on host to copy data into                             | std::vector<uint32_t> |                                | Yes      |
          */
-        inline bool ReadFromDeviceDRAMChannel(Device *device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
+        inline bool ReadFromDeviceDRAMChannel(const Device& device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
         {
             bool pass = true;
-            tt::Cluster::instance().dram_barrier(device->id());
-            tt::Cluster::instance().read_dram_vec(host_buffer, size, tt_target_dram{device->id(), dram_channel, 0}, address);
+            tt::Cluster::instance().dram_barrier(device.id());
+            tt::Cluster::instance().read_dram_vec(host_buffer, size, tt_target_dram{device.id(), dram_channel, 0}, address);
             return pass;
         }
 
@@ -222,24 +222,24 @@ namespace tt::tt_metal{
          * | address       | Starting address in L1 to write into            | uint32_t              | Any non-reserved address in L1 that fits for buffer | Yes      |
          * | host_buffer   | Buffer on host whose data to copy from          | std::vector<uint32_t> | Buffer must fit into L1                             | Yes      |
          */
-        inline bool WriteToDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer)
+        inline bool WriteToDeviceL1(const Device& device, const CoreCoord &logical_core, uint32_t address, std::vector<uint32_t> &host_buffer)
         {
-            auto worker_core = device->worker_core_from_logical_core(logical_core);
-            llrt::write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
+            auto worker_core = device.worker_core_from_logical_core(logical_core);
+            llrt::write_hex_vec_to_core(device.id(), worker_core, host_buffer, address);
             return true;
         }
 
-        inline bool WriteToDeviceL1(Device *device, const CoreCoord &core, op_info_t op_info, int op_idx)
+        inline bool WriteToDeviceL1(const Device& device, const CoreCoord &core, op_info_t op_info, int op_idx)
         {
-            auto worker_core = device->worker_core_from_logical_core(core);
-            llrt::write_graph_interpreter_op_info_to_core(device->id(), worker_core, op_info, op_idx);
+            auto worker_core = device.worker_core_from_logical_core(core);
+            llrt::write_graph_interpreter_op_info_to_core(device.id(), worker_core, op_info, op_idx);
             return true;
         }
 
-        inline bool WriteRegToDevice(Device *device, const CoreCoord &logical_core, uint32_t address, const uint32_t &regval)
+        inline bool WriteRegToDevice(const Device& device, const CoreCoord &logical_core, uint32_t address, const uint32_t &regval)
         {
-            auto worker_core = device->worker_core_from_logical_core(logical_core);
-            tt::Cluster::instance().write_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
+            auto worker_core = device.worker_core_from_logical_core(logical_core);
+            tt::Cluster::instance().write_reg(&regval, tt_cxy_pair(device.id(), worker_core), address);
             return true;
         }
 
@@ -257,19 +257,19 @@ namespace tt::tt_metal{
          * | size                 | Size of L1 buffer in bytes                  | uint32_t              |                                                   | Yes      |
          * | host_buffer          | Buffer on host to copy data into            | std::vector<uint32_t> | Buffer must fit L1 buffer                         | Yes      |
          */
-        inline bool ReadFromDeviceL1(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
+        inline bool ReadFromDeviceL1(const Device& device, const CoreCoord &logical_core, uint32_t address, uint32_t size, std::vector<uint32_t> &host_buffer)
         {
-            tt::Cluster::instance().l1_barrier(device->id());
-            auto worker_core = device->worker_core_from_logical_core(logical_core);
-            host_buffer = llrt::read_hex_vec_from_core(device->id(), worker_core, address, size);
+            tt::Cluster::instance().l1_barrier(device.id());
+            auto worker_core = device.worker_core_from_logical_core(logical_core);
+            host_buffer = llrt::read_hex_vec_from_core(device.id(), worker_core, address, size);
             return true;
         }
 
-        inline bool ReadRegFromDevice(Device *device, const CoreCoord &logical_core, uint32_t address, uint32_t &regval)
+        inline bool ReadRegFromDevice(const Device& device, const CoreCoord &logical_core, uint32_t address, uint32_t &regval)
         {
-            tt::Cluster::instance().l1_barrier(device->id());
-            auto worker_core = device->worker_core_from_logical_core(logical_core);
-            tt::Cluster::instance().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
+            tt::Cluster::instance().l1_barrier(device.id());
+            auto worker_core = device.worker_core_from_logical_core(logical_core);
+            tt::Cluster::instance().read_reg(&regval, tt_cxy_pair(device.id(), worker_core), address);
             return true;
         }
 
@@ -280,7 +280,7 @@ namespace tt::tt_metal{
             }
         }
 
-        inline void DeallocateBuffers(Device * device)
+        inline void DeallocateBuffers(const Device& device)
         {
             allocator::deallocate_buffers(GetAllocator(device));
         }
@@ -292,29 +292,29 @@ namespace tt::tt_metal{
             }
         }
 
-        inline void GenerateDeviceHeaders(Device *device,
+        inline void GenerateDeviceHeaders(const Device& device,
                                           build_kernel_for_riscv_options_t *build_options,
                                           const std::string &op_path_suffix)
         {
             // Basic Allocator generates number of banks which may not be power of 2, so we could just pad and alias for now
-            const size_t num_dram_banks = device->num_banks(BufferType::DRAM);
+            const size_t num_dram_banks = device.num_banks(BufferType::DRAM);
             const size_t num_dram_banks_pow2 = std::pow(2, std::ceil(std::log2(num_dram_banks)));
             std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
             std::vector<int32_t> dram_offsets_per_bank(num_dram_banks);
             for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-                dram_noc_coord_per_bank[bank_id] = device->core_from_dram_channel(device->dram_channel_from_bank_id(bank_id));
-                dram_offsets_per_bank[bank_id] = device->dram_bank_offset_from_bank_id(bank_id);
+                dram_noc_coord_per_bank[bank_id] = device.core_from_dram_channel(device.dram_channel_from_bank_id(bank_id));
+                dram_offsets_per_bank[bank_id] = device.dram_bank_offset_from_bank_id(bank_id);
             }
-            const size_t num_l1_banks = device->num_banks(BufferType::L1); // 128
+            const size_t num_l1_banks = device.num_banks(BufferType::L1); // 128
             const size_t num_l1_banks_pow2 = std::pow(2, std::ceil(std::log2(num_l1_banks)));
             std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks);
             std::vector<int32_t> l1_offset_per_bank(num_l1_banks);
             for (unsigned bank_id = 0; bank_id < num_l1_banks; bank_id++) {
-                l1_noc_coord_per_bank[bank_id] = device->worker_core_from_logical_core(device->logical_core_from_bank_id(bank_id));
-                l1_offset_per_bank[bank_id] = device->l1_bank_offset_from_bank_id(bank_id);
+                l1_noc_coord_per_bank[bank_id] = device.worker_core_from_logical_core(device.logical_core_from_bank_id(bank_id));
+                l1_offset_per_bank[bank_id] = device.l1_bank_offset_from_bank_id(bank_id);
             }
 
-            const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
+            const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device.id());
 
             // Generate header file in proper location
             generate_bank_to_noc_coord_descriptor (
@@ -330,7 +330,7 @@ namespace tt::tt_metal{
             // Determine which noc-coords are harvested
             // TODO(PGK/Almeet): fix this w/ new UMD
             vector<uint32_t> harvested_rows;
-            uint32_t harvested_noc_rows = tt::Cluster::instance().get_harvested_rows(device->id());
+            uint32_t harvested_noc_rows = tt::Cluster::instance().get_harvested_rows(device.id());
             for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
                 bool row_harvested = (harvested_noc_rows >> y) & 0x1;
                 if (row_harvested) {
@@ -338,13 +338,13 @@ namespace tt::tt_metal{
                 }
             }
 
-            auto dispatch_cores = device->dispatch_cores().begin();
+            auto dispatch_cores = device.dispatch_cores().begin();
             CoreCoord producer_logical_core = *dispatch_cores++;
             CoreCoord consumer_logical_core = *dispatch_cores;
 
             generate_noc_addr_ranges_header(
                 build_options,
-                device->arch(),
+                device.arch(),
                 op_path_suffix,
                 0,
                 (uint64_t)4 * 1024 * 1024 * 1024,
@@ -355,7 +355,7 @@ namespace tt::tt_metal{
                 soc_d.get_physical_ethernet_cores(),
                 soc_d.grid_size,
                 harvested_rows,
-                {device->worker_core_from_logical_core(consumer_logical_core)});
+                {device.worker_core_from_logical_core(consumer_logical_core)});
         }
 
         inline void CheckDataMovementConfig(Program &program, const std::string &file_name, const CoreRangeSet &core_ranges) {

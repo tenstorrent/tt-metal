@@ -18,7 +18,7 @@ using tt::tt_metal::Layout;
 using tt::tt_metal::Shape;
 using tt::tt_metal::AutoFormat;
 
-Tensor run_avg_pool_2d_resnet(Shape& tensor_shape, Device* device) {
+Tensor run_avg_pool_2d_resnet(Shape& tensor_shape, const Device& device) {
     auto input_tensor = tt::numpy::random::random(tensor_shape, DataType::BFLOAT16);
     auto padded_input_shape = AutoFormat::pad_to_tile_shape(tensor_shape, false, false);
     Tensor padded_input_tensor = input_tensor;

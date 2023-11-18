@@ -57,13 +57,13 @@ class Kernel {
 
     virtual RISCV processor() const = 0;
 
-    virtual bool configure(Device *device, const CoreCoord &logical_core) const = 0;
+    virtual bool configure(const Device& device, const CoreCoord &logical_core) const = 0;
 
     virtual Config config() const = 0;
 
     std::string compute_hash() const;
     virtual void set_build_options(build_kernel_for_riscv_options_t &build_options) const = 0;
-    virtual void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const = 0;
+    virtual void generate_binaries(const Device& device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const = 0;
     inline uint16_t get_binary_size16() const { return binary_size16_; }
     void set_binary_path ( const std::string & binary_path) { binary_path_ = binary_path; }
     void set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&binaries);
@@ -105,10 +105,10 @@ class DataMovementKernel : public Kernel {
     RISCV processor() const;
 
     void set_build_options(build_kernel_for_riscv_options_t &build_options) const;
-    void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
+    void generate_binaries(const Device& device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
     void read_binaries(chip_id_t device_id);
 
-    bool configure(Device *device, const CoreCoord &logical_core) const;
+    bool configure(const Device& device, const CoreCoord &logical_core) const;
 
     Config config() const { return this->config_; }
 
@@ -131,10 +131,10 @@ class EthernetKernel : public Kernel {
     RISCV processor() const;
 
     void set_build_options(build_kernel_for_riscv_options_t &build_options) const;
-    void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
+    void generate_binaries(const Device& device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
     void read_binaries(int device_id);
 
-    bool configure(Device *device, const CoreCoord &logical_core) const;
+    bool configure(const Device& device, const CoreCoord &logical_core) const;
 
     Config config() const { return this->config_; }
 
@@ -157,10 +157,10 @@ class ComputeKernel : public Kernel {
     RISCV processor() const;
 
     void set_build_options(build_kernel_for_riscv_options_t &build_options) const;
-    void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
+    void generate_binaries(const Device& device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
     void read_binaries(chip_id_t device_id);
 
-    bool configure(Device *device, const CoreCoord &logical_core) const;
+    bool configure(const Device& device, const CoreCoord &logical_core) const;
 
     Config config() const { return this->config_; }
 

@@ -103,11 +103,11 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
     tt_metal::Buffer *src0_buffer = a.buffer();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     uint32_t num_tensor_tiles = a.volume() / TILE_HW;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;

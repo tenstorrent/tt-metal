@@ -87,7 +87,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> create_program(
-    tt_metal::Device *device,
+    const tt_metal::Device& device,
     int num_cores_r,
     int num_cores_c,
     int M,
@@ -189,7 +189,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> create_pro
 }
 
 bool assign_runtime_args_to_program(
-    tt_metal::Device *device,
+    const tt_metal::Device& device,
     tt_metal::Program &program,
     int num_cores_r,
     int num_cores_c,
@@ -329,10 +329,10 @@ int main(int argc, char **argv) {
 
     try {
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        const tt_metal::Device& device = tt_metal::CreateDevice(device_id);
 
-        int num_cores_r = device->logical_grid_size().y - 1;
-        int num_cores_c = device->logical_grid_size().x;
+        int num_cores_r = device.logical_grid_size().y - 1;
+        int num_cores_c = device.logical_grid_size().x;
         uint32_t M = 16 * num_cores_r;
         uint32_t K = 16 * 12;
         uint32_t N = 16 * num_cores_c;

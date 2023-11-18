@@ -3,4 +3,4 @@
 DumpDeviceProfileResults
 ========================
 
-.. doxygenfunction:: DumpDeviceProfileResults(Device *device, const Program &program);
+.. doxygenfunction:: DumpDeviceProfileResults(const Device& device, const Program &program);

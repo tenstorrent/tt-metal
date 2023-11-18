@@ -207,7 +207,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
     Program program = CreateProgram();
 
     // This should allocate a DRAM buffer on the device
-    Device *device = input.device();
+    const Device& device = input.device();
     Buffer *src_dram_buffer = input.buffer();
     Buffer *dst_dram_buffer = output.buffer();
 
@@ -246,7 +246,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
     uint32_t out_nhw = out_hw * nbatch;
 
     // distributing out_hw across the grid
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = device.compute_with_storage_grid_size();
     auto [ncores, all_cores, core_range, core_range_cliff, in_nhw_per_core, in_nhw_per_core_cliff, out_nhw_per_core, out_nhw_per_core_cliff] = max_pool_helpers::get_decomposition_nhw(grid_size, in_nhw, out_nhw);
     if (input.memory_config().is_sharded()) {
         all_cores = input.shard_spec().value().shard_grid;
@@ -687,7 +687,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
     Program program = CreateProgram();
 
     // This should allocate a DRAM buffer on the device
-    Device *device = input.device();
+    const Device& device = input.device();
     Buffer *src_dram_buffer = input.buffer();
     Buffer *dst_dram_buffer = output.buffer();
 
@@ -722,7 +722,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
     uint32_t in_hw = in_h * in_w;
     uint32_t out_hw = out_h * out_w;
 
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = device.compute_with_storage_grid_size();
     uint32_t total_ncores_w = grid_size.x;
     uint32_t total_ncores_h = grid_size.y;
     // distributing out_hw across the grid
@@ -1008,7 +1008,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
     Program program = CreateProgram();
 
     // This should allocate a DRAM buffer on the device
-    Device *device = input.device();
+    const Device& device = input.device();
     Buffer *src_dram_buffer = input.buffer();
     Buffer *dst_dram_buffer = output.buffer();
 
@@ -1049,7 +1049,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
     uint32_t out_nhw = out_hw * nbatch;
 
     // distributing out_hw across the grid
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = device.compute_with_storage_grid_size();
     // auto [ncores, all_cores, core_range, core_range_cliff, in_nhw_per_core, in_nhw_per_core_cliff, out_nhw_per_core, out_nhw_per_core_cliff] = max_pool_helpers::get_decomposition_nhw(grid_size, in_nhw, out_nhw);
     auto all_cores = input.shard_spec().value().shard_grid;
     uint32_t ncores = all_cores.num_cores();

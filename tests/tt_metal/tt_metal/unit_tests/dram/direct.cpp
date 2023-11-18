@@ -27,7 +27,7 @@ namespace unit_tests::dram::direct {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_only(
-    tt_metal::Device* device,
+    const tt_metal::Device& device,
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& reader_core) {
@@ -89,7 +89,7 @@ bool reader_only(
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool writer_only(
-    tt_metal::Device* device,
+    const tt_metal::Device& device,
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& writer_core) {
@@ -103,7 +103,7 @@ bool writer_only(
     auto output_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
     uint32_t dram_byte_address = output_dram_buffer.address();
     auto dram_noc_xy = output_dram_buffer.noc_coordinates();
-    auto l1_bank_ids = device->bank_ids_from_logical_core(writer_core);
+    auto l1_bank_ids = device.bank_ids_from_logical_core(writer_core);
     // TODO (abhullar): Use L1 buffer after bug with L1 banking and writing to < 1 MB is fixed.
     //                  Try this after KM uplifts TLB setup
     // auto l1_buffer =
@@ -158,7 +158,7 @@ struct ReaderWriterConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_config) {
+bool reader_writer(const tt_metal::Device& device, const ReaderWriterConfig& test_config) {
 
     bool pass = true;
 
@@ -248,7 +248,7 @@ struct ReaderDatacopyWriterConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriterConfig& test_config) {
+bool reader_datacopy_writer(const tt_metal::Device& device, const ReaderDatacopyWriterConfig& test_config) {
 
     bool pass = true;
 

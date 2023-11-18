@@ -35,7 +35,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
     tt_metal::Buffer *src1_buffer = b.buffer();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
     Shape cshape = output.shape();
 
     // A block of work is one MtNt
@@ -43,8 +43,8 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
     auto num_output_blocks_total = ashape[1]; // ashape[1] is Q num_heads; only parallelize on this
     auto [num_cores, all_cores, core_group_1, core_group_2, num_output_blocks_per_core_group_1, num_output_blocks_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total);
 
-    auto all_device_cores = CoreRange({0, 0}, {a.device()->compute_with_storage_grid_size().x - 1, a.device()->compute_with_storage_grid_size().y - 1});
-    auto total_num_cores = a.device()->compute_with_storage_grid_size().x * a.device()->compute_with_storage_grid_size().y;
+    auto all_device_cores = CoreRange({0, 0}, {a.device().compute_with_storage_grid_size().x - 1, a.device().compute_with_storage_grid_size().y - 1});
+    auto total_num_cores = a.device().compute_with_storage_grid_size().x * a.device().compute_with_storage_grid_size().y;
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");

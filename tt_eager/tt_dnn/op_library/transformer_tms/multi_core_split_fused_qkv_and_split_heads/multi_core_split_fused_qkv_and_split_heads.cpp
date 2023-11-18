@@ -19,7 +19,7 @@ operation::ProgramWithCallbacks multi_core_split_fused_qkv_and_split_heads(const
 
     const auto& ashape = a.shape();
 
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 

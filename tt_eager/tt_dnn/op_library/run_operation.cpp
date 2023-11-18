@@ -21,7 +21,7 @@ namespace tt::tt_metal::operation {
 
 namespace detail {
 
-static Device* get_device(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}) {
+static const Device& get_device(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}) {
     for (auto& input_tensor : input_tensors) {
         if (input_tensor.storage_type() == StorageType::DEVICE) {
             return input_tensor.device();
@@ -32,9 +32,8 @@ static Device* get_device(const std::vector<Tensor>& input_tensors, const std::v
             return optional_input_tensor.value().device();
         }
     }
-    auto device = AutoFormat::GetDefaultDevice();
-    TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to operation are on device");
-    return device;
+
+    return AutoFormat::GetDefaultDevice();
 }
 
 }  // namespace detail
@@ -259,7 +258,7 @@ std::vector<Tensor> run_without_autoformat(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors
 ) {
-    Device* device = detail::get_device(input_tensors, optional_input_tensors);
+    const Device& device = detail::get_device(input_tensors, optional_input_tensors);
 
     std::vector<Tensor> input_tensors_on_dev;
     input_tensors_on_dev.reserve(input_tensors.size());
@@ -290,7 +289,7 @@ std::vector<Tensor> run_with_autoformat(
     const float pad_value,
     const bool pad_c
 ) {
-    Device* device = detail::get_device(input_tensors, optional_input_tensors);
+    const Device& device = detail::get_device(input_tensors, optional_input_tensors);
 
     auto output_shapes = operation.compute_output_shapes(input_tensors);
 
@@ -341,7 +340,7 @@ std::vector<Tensor> run_with_autoformat(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<std::optional<FormatParams>>& optional_input_formatting
 ) {
-    Device* device = detail::get_device(input_tensors, optional_input_tensors);
+    const Device& device = detail::get_device(input_tensors, optional_input_tensors);
 
     auto output_shapes = operation.compute_output_shapes(input_tensors);
 

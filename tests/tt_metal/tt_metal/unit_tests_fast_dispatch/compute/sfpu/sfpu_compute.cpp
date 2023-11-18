@@ -113,7 +113,7 @@ struct SfpuConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_config) {
+bool run_sfpu_all_same_buffer(const tt_metal::Device& device, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::CreateProgram();
     auto input_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
@@ -200,7 +200,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
                 .defines = sfpu_defines});
 
         int chip_id = 0;
-        CoresInCoreRangeGenerator cores_in_core_range(core_range, device->logical_grid_size());
+        CoresInCoreRangeGenerator cores_in_core_range(core_range, device.logical_grid_size());
 
         bool terminate;
 
@@ -413,7 +413,7 @@ TEST_F(CommandQueueFixture, DISABLED_AllCoreSingleTileSfpuApproxCompute) {
     }
 
     int chip_id = 0;
-    CoreCoord worker_grid_size = this->device_->logical_grid_size();
+    CoreCoord worker_grid_size = this->device_.logical_grid_size();
     CoreRange core_range = {.start = {0, 0}, .end = {worker_grid_size.x - 2, worker_grid_size.y - 2}};
 
     CoreRangeSet core_set({core_range});
@@ -452,7 +452,7 @@ TEST_F(CommandQueueFixture, DISABLED_AllCoreMultiTileSfpuApproxCompute) {
     }
 
     int chip_id = 0;
-    CoreCoord worker_grid_size = this->device_->logical_grid_size();
+    CoreCoord worker_grid_size = this->device_.logical_grid_size();
     CoreRange core_range = {.start = {0, 0}, .end = {worker_grid_size.x - 2, worker_grid_size.y - 2}};
 
     CoreRangeSet core_set({core_range});

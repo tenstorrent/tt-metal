@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
     tt_metal::Buffer *src0_buffer = a.buffer();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
     auto output_shape = output.shape();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
@@ -50,7 +50,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
 
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
     // Ensure we don't intrude into storage space
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
+    uint32_t max_l1_size = a.device().l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
     uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size); // 2 CBs
     // Currently need the number of tiles in a row to be divisible by tiles in a block
     uint32_t num_tiles_per_block = 1;
@@ -191,7 +191,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     tt_metal::Buffer *src0_buffer = a.buffer();
 
@@ -222,7 +222,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
 
     uint32_t num_tiles_in_row = true_output_shape[3] / TILE_WIDTH;
     // Ensure we don't intrude into storage space
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
+    uint32_t max_l1_size = a.device().l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
     // Memory usage is 2 CBs of width W, plus buffer of size alignment + (W * datum size)
     uint32_t max_X = (max_l1_size - alignment) / (a.element_size() * TILE_HEIGHT * 2 + a.element_size());
     uint32_t max_tiles = max_X / TILE_WIDTH;

@@ -164,15 +164,8 @@ Tensor reduce(const Tensor &input_tensor, ReduceOpMath reduce_math, ReduceOpDim 
     float pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
     if (is_multicore_hw) {
-        Device * device;
+        const Device& device = input_tensor.storage_type() == StorageType::OWNED ? AutoFormat::GetDefaultDevice() : input_tensor.device();
 
-        // Get the device
-        if (input_tensor.storage_type() == StorageType::OWNED) {
-            device = AutoFormat::GetDefaultDevice();
-            TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-        } else {
-            device = input_tensor.device();
-        }
         auto input_tensor_pad_shape = AutoFormat::pad_to_tile_shape(input_tensor.shape());
         auto formatted_input_tensor = input_tensor;
         if (!AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
@@ -221,15 +214,7 @@ Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_
     }
 
     // Other sum dims will autoformat first before doing composite operations
-    Device * device;
-
-    // Get the device
-    if (input_tensor.storage_type() == StorageType::OWNED) {
-        device = AutoFormat::GetDefaultDevice();
-        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else {
-        device = input_tensor.device();
-    }
+    const Device& device = input_tensor.storage_type() == StorageType::OWNED ? AutoFormat::GetDefaultDevice() : input_tensor.device();
 
     // @tt-aho TODO: Profile/determine which is more performant
     // reduce sum on h

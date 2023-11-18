@@ -521,7 +521,7 @@ Tensor _atanh(const Tensor& input_a, const MemoryConfig& output_mem_config) {
     Tensor result = where(ltz(abs_temp, output_mem_config), comp_result, t_nan, output_mem_config); \
     return result;
 
-    if (is_arch_whb0(input_a.device()->arch())) {
+    if (is_arch_whb0(input_a.device().arch())) {
       Tensor  t_nan  = full_like(comp_result, std::nanf(""), output_mem_config);
       ATANH_IMPL
     } else {
@@ -719,7 +719,7 @@ Tensor repeat_interleave(const Tensor& input_a, uint32_t repeat, int32_t dim, co
 //nextafter
 Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
     float eps;
-    if (is_arch_whb0(input_a.device()->arch())) {
+    if (is_arch_whb0(input_a.device().arch())) {
         eps = 1.19209e-07f;
     } else {
         eps = 0.001953125f;
@@ -1083,26 +1083,26 @@ Tensor clamp(const Tensor& a,float low, float high, const MemoryConfig& output_m
 }
 
 //on-device tensor creation 0s with shape
-Tensor zeros(const Shape shape, DataType data_type, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
+Tensor zeros(const Shape shape, DataType data_type, Layout layout, const Device& device, const MemoryConfig& output_mem_config) {
     return tt::numpy::zeros(shape, data_type, layout, device, output_mem_config);
 }
 
-Tensor empty(const Shape shape, DataType data_type, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
+Tensor empty(const Shape shape, DataType data_type, Layout layout, const Device& device, const MemoryConfig& output_mem_config) {
   return create_device_tensor(shape, data_type, layout,  device, output_mem_config);
 }
 
 //on-device tensor creation 1s with shape
-Tensor ones(const Shape shape, DataType data_type, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
+Tensor ones(const Shape shape, DataType data_type, Layout layout, const Device& device, const MemoryConfig& output_mem_config) {
     return tt::numpy::ones(shape, data_type, layout, device, output_mem_config);
 }
 
 //on-device tensor creation with shape and filled with value
-Tensor full(const Shape shape, float value, DataType data_type, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
+Tensor full(const Shape shape, float value, DataType data_type, Layout layout, const Device& device, const MemoryConfig& output_mem_config) {
     return tt::numpy::full(shape, value, data_type, layout, device, output_mem_config);
 }
 
 //on-device with increment
-Tensor arange(int32_t start, int32_t end, int32_t step, Device * device, const MemoryConfig& output_mem_config) {
+Tensor arange(int32_t start, int32_t end, int32_t step, const Device& device, const MemoryConfig& output_mem_config) {
     return tt::numpy::arange<bfloat16>(start, end, step, Layout::ROW_MAJOR, device, output_mem_config);
 }
 
@@ -1200,11 +1200,11 @@ Tensor swiglu(const Tensor& input_a, int32_t dim /* = -1 */, const MemoryConfig&
 }
 
 //on-device tensor creation with shape and filled with value
-Tensor _sfpu_eps(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
-    float value = device->sfpu_eps();
+Tensor _sfpu_eps(const Shape shape, Layout layout, const Device& device, const MemoryConfig& output_mem_config) {
+    float value = device.sfpu_eps();
     return tt::numpy::full(shape, value, DataType::BFLOAT16, layout, device, output_mem_config);
 }
-Tensor sfpu_eps(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config) {
+Tensor sfpu_eps(const Shape shape, Layout layout, const Device& device, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _sfpu_eps)(shape,layout,device, output_mem_config);
 }
 

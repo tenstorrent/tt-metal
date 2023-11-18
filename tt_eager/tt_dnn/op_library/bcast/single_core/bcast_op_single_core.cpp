@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 

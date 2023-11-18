@@ -49,7 +49,7 @@ void DisableMemoryReports();
  * |---------------|---------------------------------------------------|-----------------|--------------------------------------------------------|----------|
  * | device        | The device for which memory stats will be dumped. | const Device *  |                                                        | True     |
  * */
-void DumpDeviceMemoryState(const Device *device);
+void DumpDeviceMemoryState(const Device& device);
 
 class MemoryReporter {
    public:
@@ -58,9 +58,9 @@ class MemoryReporter {
     MemoryReporter(const MemoryReporter&) = delete;
     MemoryReporter(MemoryReporter&& other) noexcept = delete;
 
-    void flush_program_memory_usage(const Program &program, const Device *device);
+    void flush_program_memory_usage(const Program &program, const Device& device);
 
-    void dump_memory_usage_state(const Device *device) const;
+    void dump_memory_usage_state(const Device& device) const;
 
     static void toggle(bool state);
     static MemoryReporter& inst();

@@ -25,7 +25,7 @@ namespace tt_metal {
 
 // Fwd declares
 namespace detail{
-    void ValidateCircularBufferRegion(const Program &program, const Device *device);
+    void ValidateCircularBufferRegion(const Program &program, const Device& device);
     KernelID AddKernel ( Program & program, Kernel * kernel);
     Kernel *GetKernel(const Program &program, KernelID kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CircularBufferID id);
@@ -91,7 +91,7 @@ class Program {
 
     std::vector<std::string> cores_to_ops() const;
 
-    void compile(Device * device);
+    void compile(const Device& device);
 
     void invalidate_compile();
 
@@ -150,7 +150,7 @@ class Program {
 
     friend CircularBufferID CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CircularBufferID id);
-    friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
+    friend void detail::ValidateCircularBufferRegion(const Program &program, const Device& device);
 
     friend KernelID detail::AddKernel(Program &program, Kernel *kernel);
     friend Kernel *detail::GetKernel(const Program &program, KernelID kernel_id);
@@ -165,9 +165,9 @@ class Program {
     void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
-    void validate_circular_buffer_region(const Device *device) const;
+    void validate_circular_buffer_region(const Device& device) const;
 
-    void set_cb_data_fmt( Device *device, Kernel *kernel, build_kernel_for_riscv_options_t &build_options) const;
+    void set_cb_data_fmt( const Device& device, Kernel *kernel, build_kernel_for_riscv_options_t &build_options) const;
 
     void update_kernel_groups();
 };

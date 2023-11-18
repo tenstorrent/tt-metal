@@ -58,7 +58,7 @@ void tt_gdb(int chip_id, const vector<CoreCoord> worker_cores, vector<string> op
 namespace tt {
 namespace tt_metal {
 
-void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> logical_cores, vector<string> ops);
+void tt_gdb(const Device& device, int chip_id, const vector<CoreCoord> logical_cores, vector<string> ops);
 
 }
 }

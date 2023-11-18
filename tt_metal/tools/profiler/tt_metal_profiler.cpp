@@ -13,7 +13,7 @@ namespace tt {
 
 namespace tt_metal {
 
-void DumpDeviceProfileResults(Device *device, const Program &program) {
+void DumpDeviceProfileResults(const Device& device, const Program &program) {
     detail::DumpDeviceProfileResults(device, program.logical_cores());
 }
 
@@ -22,7 +22,7 @@ namespace detail {
 
 static Profiler tt_metal_profiler = Profiler();
 
-void DumpDeviceProfileResults(Device *device, const vector<CoreCoord> &logical_cores) {
+void DumpDeviceProfileResults(const Device& device, const vector<CoreCoord> &logical_cores) {
 #if defined(PROFILER)
     ZoneScoped;
     if (getDeviceProfilerState())
@@ -34,9 +34,9 @@ void DumpDeviceProfileResults(Device *device, const vector<CoreCoord> &logical_c
         }
         TT_FATAL(tt_is_print_server_running() == false, "Debug print server is running, cannot dump device profiler data");
         auto worker_cores_used_in_program =\
-            device->worker_cores_from_logical_cores(logical_cores);
-        auto device_id = device->id();
-        tt_metal_profiler.setDeviceArchitecture(device->arch());
+            device.worker_cores_from_logical_cores(logical_cores);
+        auto device_id = device.id();
+        tt_metal_profiler.setDeviceArchitecture(device.arch());
         tt_metal_profiler.dumpDeviceResults(device_id, worker_cores_used_in_program);
     }
 #endif

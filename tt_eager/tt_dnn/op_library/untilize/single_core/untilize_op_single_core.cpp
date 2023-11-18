@@ -39,7 +39,7 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
     uint32_t stick_s = a.shape()[-1];
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
     // Ensure we don't intrude into storage space
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
+    uint32_t max_l1_size = a.device().l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
     uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size); // 2 CBs
     // Currently need the number of tiles in a row to be divisible by tiles in a block
     uint32_t num_tiles_per_block = 1;
@@ -59,7 +59,7 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
     uint32_t leftover_width_in_row = num_leftover_tiles * output.element_size();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -191,7 +191,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
     int32_t num_tiles = a.volume() / TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -205,7 +205,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
 
     uint32_t num_tiles_in_row = a.shape()[3] / TILE_WIDTH;
     // Ensure we don't intrude into storage space
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
+    uint32_t max_l1_size = a.device().l1_size_per_core() / 2 - L1_UNRESERVED_BASE;
     // Memory usage is 2 CBs of width W, plus buffer of size alignment + (W * datum size)
     uint32_t max_X = (max_l1_size - alignment) / (output.element_size() * TILE_HEIGHT * 2 + output.element_size());
     uint32_t max_tiles = max_X / TILE_WIDTH;

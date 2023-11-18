@@ -194,18 +194,18 @@ Tensor ones_like(const Tensor& reference_tensor, const MemoryConfig& output_mem_
 Tensor full_like(const Tensor& reference_tensor, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation 0s with shape
-Tensor empty(const Shape shape, DataType data_type = DataType::BFLOAT16, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor empty(const Shape shape, DataType data_type = DataType::BFLOAT16, Layout layout = Layout::ROW_MAJOR, std::optional<std::reference_wrapper<const Device> > device = std::nullopt, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation 0s with shape
-Tensor zeros(const Shape shape, DataType data_type = DataType::BFLOAT16, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor zeros(const Shape shape, DataType data_type = DataType::BFLOAT16, Layout layout = Layout::ROW_MAJOR, std::optional<std::reference_wrapper<const Device> > device = std::nullopt, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation 1s with shape
-Tensor ones(const Shape shape, DataType data_type = DataType::BFLOAT16, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor ones(const Shape shape, DataType data_type = DataType::BFLOAT16, Layout layout = Layout::ROW_MAJOR, std::optional<std::reference_wrapper<const Device> > device = std::nullopt, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-Tensor arange(int32_t start, int32_t end, int32_t step = 1, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor arange(int32_t start, int32_t end, int32_t step = 1, std::optional<std::reference_wrapper<const Device> > device = std::nullopt, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation with shape and filled with value
-Tensor full(const Shape shape, float value, DataType data_type = DataType::BFLOAT16, Layout layout = Layout::ROW_MAJOR, Device * device = nullptr, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor full(const Shape shape, float value, DataType data_type = DataType::BFLOAT16, Layout layout = Layout::ROW_MAJOR, std::optional<std::reference_wrapper<const Device> > device = std::nullopt, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //rpow: y = k**(a)
 Tensor rpow(const Tensor& a,float k, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
@@ -220,7 +220,7 @@ Tensor hardtanh(const Tensor& a,float low = -1.0f, float high = +1.0f, const Mem
 Tensor clamp(const Tensor& a,float low, float high, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //machine epsilon
-Tensor eps(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+Tensor eps(const Shape shape, Layout layout, const Device& device, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //logit(input, eps)=log(input / 1 - input)
 Tensor logit(const Tensor& input_a, float eps, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
@@ -287,7 +287,7 @@ Tensor geglu(const Tensor& input_a, int32_t dim = -1, const MemoryConfig& output
 Tensor swiglu(const Tensor& input_a, int32_t dim = -1, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 //on-device tensor creation with shape and filled with value
-Tensor sfpu_eps(const Shape shape, Layout layout, Device * device, const MemoryConfig& output_mem_config);
+Tensor sfpu_eps(const Shape shape, Layout layout, const Device& device, const MemoryConfig& output_mem_config);
 
 //tril : select lower triangular region of input matrix
 Tensor tril(const Tensor& input_a, int32_t diag = 0, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);

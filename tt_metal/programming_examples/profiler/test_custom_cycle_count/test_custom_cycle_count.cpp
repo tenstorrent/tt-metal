@@ -7,11 +7,11 @@
 
 using namespace tt;
 
-bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = " ")
+bool RunCustomCycle(const tt_metal::Device& device, int loop_count, string run_name = " ")
 {
     bool pass = true;
 
-    CoreCoord compute_with_storage_size = device->compute_with_storage_grid_size();
+    CoreCoord compute_with_storage_size = device.compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores{.start=start_core, .end=end_core};
@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device =
+        const tt_metal::Device& device =
             tt_metal::CreateDevice(device_id);
 
         int loop_count = 2000;

@@ -24,7 +24,7 @@ Tensor fully_connected(const Tensor &act, const Tensor& weights, std::optional<s
     TT_ASSERT(act.storage_type() == StorageType::DEVICE && weights.storage_type() == StorageType::DEVICE, "Activation and weight tensors need to be on device");
     // Assuming padding is already included. Not adding padding here.
     // NOTE: Bias is never padded.
-    Device * device = act.device();
+    const Device& device = act.device();
     return fully_connected_(act, weights, bias, output_mem_config);
 }
 

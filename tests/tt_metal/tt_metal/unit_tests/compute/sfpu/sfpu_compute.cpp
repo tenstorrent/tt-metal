@@ -112,7 +112,7 @@ struct SfpuConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_config) {
+bool run_sfpu_all_same_buffer(const tt_metal::Device& device, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::CreateProgram();
     auto input_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
@@ -198,7 +198,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
                 .defines = sfpu_defines});
 
         int chip_id = 0;
-        CoresInCoreRangeGenerator cores_in_core_range(core_range, device->logical_grid_size());
+        CoresInCoreRangeGenerator cores_in_core_range(core_range, device.logical_grid_size());
 
         bool terminate;
 

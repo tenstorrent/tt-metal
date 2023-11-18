@@ -153,8 +153,8 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
         log_debug(LogOp, "block_size_nbytes: {}", block_size_nbytes);
     }
 
-    Device *device = a.device();
-    auto grid_size = device->compute_with_storage_grid_size();
+    const Device& device = a.device();
+    auto grid_size = device.compute_with_storage_grid_size();
     auto [ncores, ncores_x, ncores_x_cliff, ncores_y, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] = split_blocks_across_cores(grid_size, nblocks);
 
     {
@@ -381,13 +381,13 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor &input, T
 
     uint32_t num_tiles = input.volume() / TILE_HW;
 
-    tt_metal::Device *device = input.device();
+    const tt_metal::Device& device = input.device();
 
     auto shard_spec = input.shard_spec().value();
     uint32_t num_tiles_per_shard = shard_spec.shard_shape[0] * shard_spec.shard_shape[1] / TILE_HW;
     uint32_t num_tiles_per_row = shard_spec.shard_shape[1] / TILE_WIDTH;
     auto all_cores = shard_spec.shard_grid;
-    uint32_t num_cores_x = device->compute_with_storage_grid_size().x;
+    uint32_t num_cores_x = device.compute_with_storage_grid_size().x;
     uint32_t num_cores = all_cores.num_cores();
 
     uint32_t src0_cb_index = CB::c_in0;
@@ -504,7 +504,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
     DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
-    Device *device = a.device();
+    const Device& device = a.device();
 
     auto input_shard_spec = a.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();

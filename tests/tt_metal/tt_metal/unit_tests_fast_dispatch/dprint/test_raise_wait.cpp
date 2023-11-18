@@ -21,7 +21,7 @@ TEST_F(CommandQueueWithDPrintFixture, TestPrintRaiseWait) {
     }
 try{
     // Device already set up by gtest fixture.
-    Device *device = this->device_;
+    const Device& device = this->device_;
 
     // Set up program and command queue
     CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;

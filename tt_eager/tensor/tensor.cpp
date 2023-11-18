@@ -34,8 +34,8 @@ Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layou
                 // do nothing
             }
             else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
-                TT_ASSERT(storage.device != nullptr);
-                tensor_impl::validate_on_device_dtype_and_layout(storage.device, dtype, layout);
+                TT_ASSERT(storage.device.has_value());
+                tensor_impl::validate_on_device_dtype_and_layout(storage.device.value().get(), dtype, layout);
             }
             else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 // do nothing
@@ -83,11 +83,11 @@ void Tensor::deallocate(bool force) {
     );
 }
 
-Tensor Tensor::to(Device *target_device, const MemoryConfig &mem_config) const {
+Tensor Tensor::to(const Device & target_device, const MemoryConfig &mem_config) const {
     ZoneScoped;
 
     if (storage_type() == StorageType::DEVICE) {
-        TT_ASSERT(this->device() == target_device && "Currently do not support moving between devices");
+        TT_ASSERT(&this->device() == &target_device && "Currently do not support moving between devices");
         return *this;
     }
     tensor_impl::validate_on_device_dtype_and_layout(target_device, this->dtype(), this->layout());
@@ -256,14 +256,14 @@ uint32_t Tensor::volume() const {
     return tt::tt_metal::compute_volume(this->shape_);
 }
 
-Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
+Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layout, const Device& device, const MemoryConfig& memory_config) {
     ZoneScoped;
     uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
     auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
     return Tensor(DeviceStorage{device_buffer, device, memory_config}, shape, data_type, layout);
 }
 
-Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config, ShardSpec shard_spec) {
+Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, const Device& device, const MemoryConfig& memory_config, ShardSpec shard_spec) {
     ZoneScoped;
     TT_ASSERT(memory_config.is_sharded());
     TT_ASSERT(memory_config.buffer_type == BufferType::L1);

@@ -80,7 +80,7 @@ operation::ProgramWithCallbacks unpad_rm_single_core(const Tensor &a, Tensor& ou
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     tt_metal::Buffer *src0_buffer = a.buffer();
 
@@ -248,7 +248,7 @@ operation::ProgramWithCallbacks unpad_tile_single_core(const Tensor &a, Tensor& 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     tt_metal::Buffer *src0_buffer = a.buffer();
 

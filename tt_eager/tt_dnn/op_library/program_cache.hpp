@@ -24,7 +24,7 @@ struct ProgramCache {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors,
-        Device* device) {
+        const Device& device) {
         auto program_hash = op.compute_program_hash(input_tensors, optional_input_tensors);
         auto cache_hit = this->cache_.count(program_hash) > 0;
         if (cache_hit) {

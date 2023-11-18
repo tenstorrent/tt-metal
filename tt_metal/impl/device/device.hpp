@@ -52,7 +52,7 @@ class Device {
     // TODO: move these to host_api
     static size_t detect_num_available_devices();
     static size_t detect_num_pci_devices();
-    // friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
+    // friend void tt_gdb(const Device& device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
     Device(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap = {});
 
@@ -65,6 +65,7 @@ class Device {
     Device(Device &&other) { }
     Device& operator=(Device &&other) { return *this; }
 
+    bool operator==(const Device& other) const{ return this->id() == other.id(); }
     tt::ARCH arch() const;
 
     chip_id_t id() const { return id_; }
@@ -137,6 +138,8 @@ class Device {
     // core.y represents different channels along one <x>
     const std::set<CoreCoord> &ethernet_cores() const { return this->ethernet_cores_; }
 
+    const std::set<CoreCoord> &compute_cores() const { return this->compute_cores_; }
+
     // machine epsilon
     float sfpu_eps() const;
 
@@ -155,7 +158,7 @@ class Device {
     void clear_l1_state();
     // Puts device into reset
     bool close();
-    friend bool CloseDevice(Device *device);
+    friend bool CloseDevice(const Device& device);
 
     // TODO: Uplift usage of friends. Buffer and Program just need access to allocator
     friend class Buffer;
@@ -166,7 +169,7 @@ class Device {
     std::vector<uint32_t> l1_bank_remap_;
     bool initialized_ = false;
 
-    std::set<CoreCoord> compute_cores;
+    std::set<CoreCoord> compute_cores_;
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> dispatch_cores_;
     std::set<CoreCoord> ethernet_cores_;

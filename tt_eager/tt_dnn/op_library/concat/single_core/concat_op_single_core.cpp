@@ -20,7 +20,7 @@ operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &in
 
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 
-    tt_metal::Device *device = output.device();
+    const tt_metal::Device& device = output.device();
 
     uint32_t num_output_tiles = output.volume() / TILE_HW;
 

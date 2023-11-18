@@ -125,11 +125,11 @@ operation::ProgramWithCallbacks unpad_rm_multi_core(const Tensor &a, Tensor& out
     tt_metal::Program program = tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     uint32_t num_unpadded_sticks = output.volume() / output.shape()[-1];
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
@@ -349,11 +349,11 @@ operation::ProgramWithCallbacks unpad_tile_multi_core(const Tensor &a, Tensor& o
     tt_metal::Program program = tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    const tt_metal::Device& device = a.device();
 
     uint32_t num_unpadded_tiles = output.volume() / TILE_HW;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto num_cores_total = num_cores_x*num_cores_y;

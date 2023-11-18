@@ -133,7 +133,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
     uint32_t padded_row_size_nbytes = output_shape[3] * a.element_size();   // Assuming output is same datatype as input
     TT_ASSERT(unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
-    Device *device = a.device();
+    const Device& device = a.device();
 
     // construct const buffer with the pad_value
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
@@ -151,7 +151,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
     uint32_t ntiles_h = output_tensor_shape[2] / TILE_HEIGHT;
     uint32_t ntiles_w = output_tensor_shape[3] / TILE_WIDTH;
 
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = device.compute_with_storage_grid_size();
     uint32_t nbatch = output_tensor_shape[0];
     uint32_t nchannel = output_tensor_shape[1];
     // first the batch dim is distributed along H, and within each batch then the tiles are distributed.

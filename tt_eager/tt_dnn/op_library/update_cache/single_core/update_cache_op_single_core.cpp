@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
     uint32_t B = cache_tensor.shape()[0];
     uint32_t tile_update_offset = update_idx % TILE_HEIGHT * Wbytes;
     uint32_t cache_tile_idx = update_idx / TILE_HEIGHT * Wt;
-    tt_metal::Device *device = input_tensor.device();
+    const tt_metal::Device& device = input_tensor.device();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2 * Wt;
@@ -208,7 +208,7 @@ operation::ProgramWithCallbacks fill_cache_single_core(const Tensor& cache_tenso
     uint32_t cache_HtWt = cache_Ht * cache_Wt;
     uint32_t update_idxt = update_idx / TILE_HEIGHT;
     uint32_t start_idx = batch_idx * cache_HtWt + update_idxt * cache_Wt;
-    tt_metal::Device *device = input_tensor.device();
+    const tt_metal::Device& device = input_tensor.device();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;

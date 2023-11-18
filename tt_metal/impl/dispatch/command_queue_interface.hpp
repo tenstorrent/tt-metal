@@ -36,7 +36,7 @@ struct SystemMemoryCQWriteInterface {
 
 class SystemMemoryWriter {
    private:
-    Device* device;
+    const Device& device;
     // Data required for fast writes to write pointer location
     // in prefetch core's L1
     // const std::tuple<uint32_t, uint32_t> tlb_data;
@@ -47,14 +47,14 @@ class SystemMemoryWriter {
 
    public:
     SystemMemoryCQWriteInterface cq_write_interface;
-    SystemMemoryWriter(Device* device) :
+    SystemMemoryWriter(const Device& device) :
+        device(device),
         m_dma_buf_size(tt::Cluster::instance().get_m_dma_buf_size()),
-        hugepage_start((char*) tt::Cluster::instance().host_dma_address(0, device->id(), 0)),
+        hugepage_start((char*) tt::Cluster::instance().host_dma_address(0, device.id(), 0)),
         fast_write_callable(
-            tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device->id())) {
+            tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device.id())) {
 
-        this->device = device;
-        const std::tuple<uint32_t, uint32_t> tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(device->id(), this->device->worker_core_from_logical_core(*device->dispatch_cores().begin()))).value();
+        const std::tuple<uint32_t, uint32_t> tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(device.id(), this->device.worker_core_from_logical_core(*device.dispatch_cores().begin()))).value();
         auto [tlb_offset, tlb_size] = tlb_data;
         this->byte_addr = tlb_offset + CQ_WRITE_PTR % tlb_size;
     }
@@ -67,7 +67,7 @@ class SystemMemoryWriter {
         uint32_t rd_ptr;
         uint32_t rd_toggle;
         do {
-            rd_ptr_and_toggle = get_cq_rd_ptr(this->device->id());
+            rd_ptr_and_toggle = get_cq_rd_ptr(this->device.id());
             rd_ptr = rd_ptr_and_toggle & 0x7fffffff;
             rd_toggle = rd_ptr_and_toggle >> 31;
 
@@ -92,7 +92,7 @@ class SystemMemoryWriter {
 
     void send_write_ptr() const {
         static CoreCoord dispatch_core =
-            this->device->worker_core_from_logical_core(*this->device->dispatch_cores().begin());
+            this->device.worker_core_from_logical_core(*this->device.dispatch_cores().begin());
 
         uint32_t write_ptr_and_toggle =
             this->cq_write_interface.fifo_wr_ptr | (this->cq_write_interface.fifo_wr_toggle << 31);

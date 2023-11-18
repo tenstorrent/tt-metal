@@ -21,7 +21,7 @@ using namespace tt_metal;
 using namespace constants;
 
 
-bool test_tensor_copy_semantics(Device *device) {
+bool test_tensor_copy_semantics(const Device& device) {
 
     bool pass = true;
     Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
@@ -81,7 +81,7 @@ bool test_tensor_copy_semantics(Device *device) {
     return pass;
 }
 
-bool test_tensor_move_semantics(Device *device) {
+bool test_tensor_move_semantics(const Device& device) {
     bool pass = true;
     Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
@@ -144,7 +144,7 @@ bool test_tensor_move_semantics(Device *device) {
     return pass;
 }
 
-bool test_tensor_deallocate_semantics(Device *device) {
+bool test_tensor_deallocate_semantics(const Device& device) {
 
     bool pass = true;
     Shape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
@@ -194,7 +194,7 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        const tt_metal::Device& device = tt_metal::CreateDevice(device_id);
 
         pass &= test_tensor_copy_semantics(device);
 

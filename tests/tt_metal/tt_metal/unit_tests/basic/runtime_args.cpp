@@ -26,7 +26,7 @@ enum class KernelType {
 };
 
 
-Program initialize_program_data_movement(Device *device, const CoreRangeSet &core_range_set) {
+Program initialize_program_data_movement(const Device& device, const CoreRangeSet &core_range_set) {
     Program program = tt_metal::CreateProgram();
 
     auto add_two_ints_kernel = tt_metal::CreateKernel(
@@ -42,7 +42,7 @@ Program initialize_program_data_movement(Device *device, const CoreRangeSet &cor
 
 
 
-Program initialize_program_compute(Device *device, const CoreRangeSet &core_range_set) {
+Program initialize_program_compute(const Device& device, const CoreRangeSet &core_range_set) {
     Program program = tt_metal::CreateProgram();
 
     std::vector<uint32_t> compute_args = {0};  // dummy
@@ -62,7 +62,7 @@ Program initialize_program_compute(Device *device, const CoreRangeSet &core_rang
 
 
 bool verify_result_data_movement(
-    Device *device, const Program &program, const std::map<CoreCoord, std::vector<uint32_t>> &core_to_rt_args) {
+    const Device& device, const Program &program, const std::map<CoreCoord, std::vector<uint32_t>> &core_to_rt_args) {
     bool pass = true;
     auto get_runtime_arg_addr = [](Kernel *kernel) {
         uint32_t arg_base = 0;
@@ -144,7 +144,7 @@ TEST_F(DeviceFixture, LegallyModifyRTArgsDataMovement) {
 }
 
 bool verify_result_compute(
-    Device *device, const Program &program,
+    const Device& device, const Program &program,
         const std::map<CoreCoord, std::vector<uint32_t>> &core_to_rt_args,
         KernelType kern_type = KernelType::DATA_MOVEMENT,
         uint32_t buffer_addr = 0) {

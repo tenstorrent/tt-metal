@@ -14,7 +14,7 @@ using namespace tt::tt_metal;
 
 namespace basic_tests::circular_buffer {
 
-void validate_cb_address(Program &program, Device *device, const CoreRangeSet &cr_set, const std::map<CoreCoord, std::map<uint8_t, uint32_t>> &core_to_address_per_buffer_index) {
+void validate_cb_address(Program &program, const Device& device, const CoreRangeSet &cr_set, const std::map<CoreCoord, std::map<uint8_t, uint32_t>> &core_to_address_per_buffer_index) {
     detail::LaunchProgram(device, program);
 
     vector<uint32_t> cb_config_vector;

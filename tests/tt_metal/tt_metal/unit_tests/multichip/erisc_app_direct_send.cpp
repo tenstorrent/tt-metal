@@ -37,9 +37,9 @@ bool send_over_eth(
     tt::log_debug(
         tt::LogTest,
         "Running direct send test with sender chip {} core {}, receiver chip {} core {}, sending {} bytes",
-        sender_device->id(),
+        sender_device.id(),
         sender_core.str(),
-        receiver_device->id(),
+        receiver_device.id(),
         receiver_core.str(),
         byte_size);
     std::vector<CoreCoord> eth_cores = {
@@ -64,53 +64,53 @@ bool send_over_eth(
     std::vector<uint32_t> run_test_app_flag = {0x0};
     for (const auto& eth_core : eth_cores) {
         llrt::write_hex_vec_to_core(
-            sender_device->id(), eth_core, run_test_app_flag, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
+            sender_device.id(), eth_core, run_test_app_flag, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
         llrt::write_hex_vec_to_core(
-            receiver_device->id(), eth_core, run_test_app_flag, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
+            receiver_device.id(), eth_core, run_test_app_flag, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
         std::vector<uint32_t> zero = {0, 0};
         llrt::write_hex_vec_to_core(
-            sender_device->id(), eth_core, zero, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+            sender_device.id(), eth_core, zero, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
         llrt::write_hex_vec_to_core(
-            receiver_device->id(), eth_core, zero, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+            receiver_device.id(), eth_core, zero, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
     }
 
     // TODO: is it possible that receiver core app is stil running when we push inputs here???
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     llrt::write_hex_vec_to_core(
-        sender_device->id(), sender_core, inputs, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE);
+        sender_device.id(), sender_core, inputs, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE);
 
     // Zero out receiving address to ensure no stale data is causing tests to pass
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
     llrt::write_hex_vec_to_core(
-        receiver_device->id(), receiver_core, all_zeros, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE);
+        receiver_device.id(), receiver_core, all_zeros, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE);
 
     uint32_t arg_0 = byte_size;
     std::vector<uint32_t> args = {arg_0, 0};
-    llrt::write_hex_vec_to_core(sender_device->id(), sender_core, args, eth_l1_mem::address_map::ERISC_L1_ARG_BASE);
+    llrt::write_hex_vec_to_core(sender_device.id(), sender_core, args, eth_l1_mem::address_map::ERISC_L1_ARG_BASE);
     args = {arg_0, 1};
-    llrt::write_hex_vec_to_core(receiver_device->id(), receiver_core, args, eth_l1_mem::address_map::ERISC_L1_ARG_BASE);
+    llrt::write_hex_vec_to_core(receiver_device.id(), receiver_core, args, eth_l1_mem::address_map::ERISC_L1_ARG_BASE);
 
     // TODO: this should be updated to use kernel api
-    ll_api::memory binary_mem_send = llrt::get_risc_binary("erisc/erisc_app.hex", sender_device->id(), true);
-    ll_api::memory binary_mem_receive = llrt::get_risc_binary("erisc/erisc_app.hex", receiver_device->id(), true);
+    ll_api::memory binary_mem_send = llrt::get_risc_binary("erisc/erisc_app.hex", sender_device.id(), true);
+    ll_api::memory binary_mem_receive = llrt::get_risc_binary("erisc/erisc_app.hex", receiver_device.id(), true);
 
     for (const auto& eth_core : eth_cores) {
         llrt::write_hex_vec_to_core(
-            sender_device->id(), eth_core, binary_mem_send.data(), eth_l1_mem::address_map::FIRMWARE_BASE);
+            sender_device.id(), eth_core, binary_mem_send.data(), eth_l1_mem::address_map::FIRMWARE_BASE);
         llrt::write_hex_vec_to_core(
-            receiver_device->id(), eth_core, binary_mem_receive.data(), eth_l1_mem::address_map::FIRMWARE_BASE);
+            receiver_device.id(), eth_core, binary_mem_receive.data(), eth_l1_mem::address_map::FIRMWARE_BASE);
     }
 
     // Activate sender core runtime app
     run_test_app_flag = {0x1};
     // send remote first, otherwise eth core may be blocked, very ugly for now...
-    if (receiver_device->id() == 1) {
+    if (receiver_device.id() == 1) {
         llrt::write_hex_vec_to_core(
             1, receiver_core, run_test_app_flag, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
     } else {
         llrt::write_hex_vec_to_core(1, sender_core, run_test_app_flag, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
     }
-    if (sender_device->id() == 0) {
+    if (sender_device.id() == 0) {
         llrt::write_hex_vec_to_core(0, sender_core, run_test_app_flag, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
     } else {
         llrt::write_hex_vec_to_core(
@@ -119,7 +119,7 @@ bool send_over_eth(
 
     bool pass = true;
     auto readback_vec = llrt::read_hex_vec_from_core(
-        receiver_device->id(), receiver_core, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE, byte_size);
+        receiver_device.id(), receiver_core, eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE, byte_size);
     pass &= (readback_vec == inputs);
 
     return pass;

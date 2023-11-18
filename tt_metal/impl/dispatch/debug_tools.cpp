@@ -80,7 +80,7 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
 }
 
 void wait_for_program_vector_to_arrive_and_compare_to_host_program_vector(
-    const char* DISPATCH_MAP_DUMP, Device* device) {
+    const char* DISPATCH_MAP_DUMP, const Device& device) {
     std::string device_dispatch_dump_file_name = "device_" + std::string(DISPATCH_MAP_DUMP);
     while (true) {
         std::ifstream device_dispatch_dump_file;

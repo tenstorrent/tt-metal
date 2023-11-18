@@ -86,7 +86,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID, tt_metal::KernelID, tt_metal::KernelID, tt_metal::KernelID, tt_metal::KernelID> create_program(
-    tt_metal::Device *device,
+    const tt_metal::Device& device,
     int start_core_x,
     int start_core_y,
     int num_cores_r,
@@ -244,7 +244,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID, tt_metal::
 }
 
 bool write_runtime_args_to_device(
-    tt_metal::Device *device,
+    const tt_metal::Device& device,
     tt_metal::Program &program,
     int start_core_x,
     int start_core_y,
@@ -295,12 +295,12 @@ bool write_runtime_args_to_device(
             CoreCoord top_core_plus_one     = {(std::size_t) core.x, (std::size_t) start_core_y + 1};
             CoreCoord bottom_core  = {(std::size_t) core.x, (std::size_t) start_core_y + num_cores_r - 1};
 
-            auto left_core_physical = device->worker_core_from_logical_core(left_core);
-            auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-            auto right_core_physical = device->worker_core_from_logical_core(right_core);
-            auto top_core_physical = device->worker_core_from_logical_core(top_core);
-            auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-            auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+            auto left_core_physical = device.worker_core_from_logical_core(left_core);
+            auto left_core_plus_one_physical = device.worker_core_from_logical_core(left_core_plus_one);
+            auto right_core_physical = device.worker_core_from_logical_core(right_core);
+            auto top_core_physical = device.worker_core_from_logical_core(top_core);
+            auto top_core_plus_one_physical = device.worker_core_from_logical_core(top_core_plus_one);
+            auto bottom_core_physical = device.worker_core_from_logical_core(bottom_core);
             std::vector<uint32_t> mm_reader_args = {
                 (std::uint32_t) in0_dram_addr, // in0_tensor_addr
                 (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
@@ -398,7 +398,7 @@ std::vector<bfloat16> get_col_slice(std::vector<bfloat16> data, int total_col_sl
     return result;
 }
 
-bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
+bool move_tiles_to_dram(const tt_metal::Device& device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
     bool pass = true;
     int tile_size = 512; // 32*32 packed into u32
     int tile_size_bytes = 32 * 32 * 2;
@@ -408,8 +408,8 @@ bool move_tiles_to_dram(tt_metal::Device *device, std::vector<uint32_t> tensor, 
         for(int j = 0; j < tiles_c; j++) {
             std::vector<uint32_t> tile;
             tile.insert(tile.end(), tensor.begin() + start_index, tensor.begin() + start_index + tile_size);
-            uint32_t dram_addr = (tile_id / device->num_dram_channels()) * tile_size_bytes + dram_buffer_addr;
-            int dram_channel = tile_id % device->num_dram_channels();
+            uint32_t dram_addr = (tile_id / device.num_dram_channels()) * tile_size_bytes + dram_buffer_addr;
+            int dram_channel = tile_id % device.num_dram_channels();
 
             pass &= tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_channel, dram_addr, tile);
             start_index += tile_size;
@@ -427,12 +427,12 @@ int main(int argc, char **argv) {
 
     try {
         int device_id = 0;
-        tt_metal::Device *device =
+        const tt_metal::Device& device =
             tt_metal::CreateDevice(device_id);
         int start_core_x = 0;
         int start_core_y = 0;
-        int num_cores_r = device->compute_with_storage_grid_size().y;
-        int num_cores_c = device->compute_with_storage_grid_size().x;
+        int num_cores_r = device.compute_with_storage_grid_size().y;
+        int num_cores_c = device.compute_with_storage_grid_size().x;
 
         uint32_t M = 16 * num_cores_r;
         uint32_t K = 16 * 12;
@@ -532,8 +532,8 @@ int main(int argc, char **argv) {
             for(int j = 0; j < N; j++) {
                 auto golden_tile = get_col_slice(row, N, j, 32, N * 32);
                 int tile_id = i * N + j;
-                int dram_bank = tile_id % device->num_dram_channels();
-                uint32_t dram_address = ((tile_id / device->num_dram_channels()) * single_tile_size) + out_dram_addr;
+                int dram_bank = tile_id % device.num_dram_channels();
+                uint32_t dram_address = ((tile_id / device.num_dram_channels()) * single_tile_size) + out_dram_addr;
                 std::vector<uint32_t> result_vec;
                 tt_metal::detail::ReadFromDeviceDRAMChannel(device, dram_bank, dram_address, single_tile_size, result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);

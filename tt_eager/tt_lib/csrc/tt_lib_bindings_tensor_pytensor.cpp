@@ -378,7 +378,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
             )
             .def(
                 py::init<>(
-                    [](std::vector<float>&& data, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout, Device *device) {
+                    [](std::vector<float>&& data, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout, const Device& device) {
                         auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
                         auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
                         return tensor.to(device, MemoryConfig{});
@@ -423,7 +423,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
             )
             .def(
                 py::init<>(
-                    [](std::vector<float>&& data, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config) {
+                    [](std::vector<float>&& data, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout, const Device& device, const MemoryConfig& memory_config) {
                         auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
                         auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
                         return tensor.to(device, memory_config);
@@ -504,7 +504,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     Dellocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
                 )doc"
             )
-            .def("to", [](const Tensor &self, Device *device, const MemoryConfig &mem_config) {
+            .def("to", [](const Tensor &self, const Device& device, const MemoryConfig &mem_config) {
                 return self.to(device, mem_config);
             }, py::arg().noconvert(), py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout=TensorMemoryLayout::INTERLEAVED}, py::keep_alive<0, 2>(), R"doc(
                 Move TT Tensor from host device to TT accelerator device.

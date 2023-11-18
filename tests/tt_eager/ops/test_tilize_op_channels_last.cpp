@@ -33,7 +33,7 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        const tt_metal::Device& device = tt_metal::CreateDevice(device_id);
 
 
 

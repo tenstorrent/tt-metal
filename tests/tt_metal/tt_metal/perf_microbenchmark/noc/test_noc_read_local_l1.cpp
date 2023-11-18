@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     int device_id = 0;
-    tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+    const tt_metal::Device& device = tt_metal::CreateDevice(device_id);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -212,7 +212,7 @@ int main(int argc, char **argv) {
       for (int c = 0; c < num_cores_c; ++c) {
         CoreCoord core = {(size_t)c, (size_t)r};
 
-        auto phy_core = device->worker_core_from_logical_core(core);
+        auto phy_core = device.worker_core_from_logical_core(core);
         if (debug) {
           log_info(LogTest, "{} {} - logical {} {} - phy_core {} {}", r, c, c,
                    r, phy_core.x, phy_core.y);

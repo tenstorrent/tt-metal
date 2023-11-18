@@ -191,8 +191,8 @@ void ComputeKernel::set_build_options(build_kernel_for_riscv_options_t &build_op
     build_options.hlk_defines = this->defines_;
 }
 
-void DataMovementKernel::generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const {
-    std::string arch_name = tt::get_string_lowercase(device->arch());
+void DataMovementKernel::generate_binaries(const Device& device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const {
+    std::string arch_name = tt::get_string_lowercase(device.arch());
     detail::GenerateDeviceHeaders(device, build_options, op_path_suffix);
     switch (this->config_.processor) {
         case DataMovementProcessor::RISCV_0: {
@@ -208,13 +208,13 @@ void DataMovementKernel::generate_binaries(Device *device, build_kernel_for_risc
     }
 }
 
-void EthernetKernel::generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const {
-    std::string arch_name = tt::get_string_lowercase(device->arch());
+void EthernetKernel::generate_binaries(const Device& device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const {
+    std::string arch_name = tt::get_string_lowercase(device.arch());
     generate_binary_for_erisc(build_options, op_path_suffix, arch_name, this->config_.noc, this->compile_time_args_);
 }
 
-void ComputeKernel::generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const {
-    std::string arch_name = tt::get_string_lowercase(device->arch());
+void ComputeKernel::generate_binaries(const Device& device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const {
+    std::string arch_name = tt::get_string_lowercase(device.arch());
     generate_binaries_for_triscs(build_options, op_path_suffix, arch_name, this->compile_time_args_);
 }
 
@@ -293,13 +293,13 @@ RISCV EthernetKernel::processor() const { return RISCV::ERISC; }
 
 RISCV ComputeKernel::processor() const { return RISCV::COMPUTE; }
 
-bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core) const {
+bool DataMovementKernel::configure(const Device& device, const CoreCoord &logical_core) const {
     bool pass = true;
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core " + logical_core.str());
     }
-    auto device_id = device->id();
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    auto device_id = device.id();
+    auto worker_core = device.worker_core_from_logical_core(logical_core);
     ll_api::memory binary_mem = this->binaries(device_id).at(0);
 
     int riscv_id;
@@ -320,24 +320,24 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     return pass;
 }
 
-bool EthernetKernel::configure(Device *device, const CoreCoord &worker_core) const {
+bool EthernetKernel::configure(const Device& device, const CoreCoord &worker_core) const {
     // TODO: use logical core somehow
     // untested
     bool pass = true;
-    auto device_id = device->id();
+    auto device_id = device.id();
     ll_api::memory binary_mem = this->binaries(device_id).at(0);
     int riscv_id = 5;
     pass &= tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, worker_core, riscv_id);
     return pass;
 }
 
-bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) const {
+bool ComputeKernel::configure(const Device& device, const CoreCoord &logical_core) const {
     bool pass = true;
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core " + logical_core.str());
     }
-    auto device_id = device->id();
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
+    auto device_id = device.id();
+    auto worker_core = device.worker_core_from_logical_core(logical_core);
     std::vector<ll_api::memory> binaries = this->binaries(device_id);
 
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {

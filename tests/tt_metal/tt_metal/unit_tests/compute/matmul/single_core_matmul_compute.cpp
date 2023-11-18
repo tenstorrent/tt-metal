@@ -27,7 +27,7 @@ namespace unit_tests::compute::matmul {
 
 void create_CBs_for_fused_matmul(
     tt_metal::Program& program,
-    tt_metal::Device* device,
+    const tt_metal::Device& device,
     CoreCoord core,
     bool activations_rm,
     bool output_rm,
@@ -150,7 +150,7 @@ struct SingleCoreMatmulConfig {
     CoreCoord core = {};
 };
 
-bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& cfg) {
+bool single_core_matmul(const tt_metal::Device& device, const SingleCoreMatmulConfig& cfg) {
     // Since running in slow dispatch mode
     tt::tt_metal::detail::GLOBAL_CQ.reset();
     bool pass = true;
@@ -375,7 +375,7 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
 
     return pass;
 }
-bool single_tile_matmul(tt_metal::Device* device) {
+bool single_tile_matmul(const tt_metal::Device& device) {
 
     bool pass = true;
     // FIXME: Convert to config
@@ -496,7 +496,7 @@ bool single_tile_matmul(tt_metal::Device* device) {
     return pass;
 }
 // blocked matmul has blocking, but still fits within dst, so no spill/reloads or intermediates
-bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N) {
+bool single_block_matmul(const tt_metal::Device& device, uint32_t M, uint32_t K, uint32_t N) {
 
     bool pass = true;
     // FIXME: Convert to config
@@ -635,7 +635,7 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
     return pass;
 }
 // blocked matmul has blocking on output, spill/reloads using intermediate
-bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N) {
+bool blocked_matmul(const tt_metal::Device& device, uint32_t M, uint32_t K, uint32_t N) {
 
     bool pass = true;
     // FIXME: Convert to config

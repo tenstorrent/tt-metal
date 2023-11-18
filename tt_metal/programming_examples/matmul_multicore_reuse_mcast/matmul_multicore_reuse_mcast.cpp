@@ -105,7 +105,7 @@ void golden_matmul(vector<bfloat16> a, vector<bfloat16> b, vector<uint32_t>& out
 }
 
 void matmul_multicore_reuse_mcast(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t>& output, bool bcast_batch,
-                        uint32_t M, uint32_t N, uint32_t K, uint32_t B, Device* device) {
+                        uint32_t M, uint32_t N, uint32_t K, uint32_t B, const Device& device) {
 
     /*
     * Setup program to execute along with its buffers and kernels to use
@@ -119,7 +119,7 @@ void matmul_multicore_reuse_mcast(vector<uint32_t>& a, vector<uint32_t>& b, vect
     uint32_t single_tile_size = detail::TileSize(cb_data_format);
     //uint32_t single_tile_size = 2 * 1024;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
@@ -367,12 +367,12 @@ void matmul_multicore_reuse_mcast(vector<uint32_t>& a, vector<uint32_t>& b, vect
             CoreCoord top_core_plus_one     = {(std::size_t) core.x, (std::size_t) start_core_y + 1};
             CoreCoord bottom_core  = {(std::size_t) core.x, (std::size_t) start_core_y + num_cores_r - 1};
 
-            auto left_core_physical = device->worker_core_from_logical_core(left_core);
-            auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-            auto right_core_physical = device->worker_core_from_logical_core(right_core);
-            auto top_core_physical = device->worker_core_from_logical_core(top_core);
-            auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-            auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+            auto left_core_physical = device.worker_core_from_logical_core(left_core);
+            auto left_core_plus_one_physical = device.worker_core_from_logical_core(left_core_plus_one);
+            auto right_core_physical = device.worker_core_from_logical_core(right_core);
+            auto top_core_physical = device.worker_core_from_logical_core(top_core);
+            auto top_core_plus_one_physical = device.worker_core_from_logical_core(top_core_plus_one);
+            auto bottom_core_physical = device.worker_core_from_logical_core(bottom_core);
 
             std::vector<uint32_t> mm_reader_args = {
                 (std::uint32_t)  src0_dram_buffer.address(), // in0_buffer_addr
@@ -489,7 +489,7 @@ int main(int argc, char **argv) {
     try {
         /* Silicon accelerator setup */
         constexpr int device_id = 0;
-        Device *device = CreateDevice(device_id);
+        const Device& device = CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Matmul Parameters Setup

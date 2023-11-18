@@ -21,15 +21,7 @@ namespace tt {
 namespace tt_metal {
 
 Tensor permute_(const Tensor &a, std::vector<uint32_t> dims, const MemoryConfig& output_mem_config) {
-    Device * device;
-
-    // Get the device
-    if (a.storage_type() == StorageType::OWNED) {
-        device = AutoFormat::GetDefaultDevice();
-        TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
-    } else {
-        device = a.device();
-    }
+    const Device& device = (a.storage_type() == StorageType::OWNED) ? AutoFormat::GetDefaultDevice() : a.device();
 
     TT_ASSERT(dims.size() == 4, "Only 4D tensor are supported for permute.");
     uint32_t N = dims[0], C = dims[1], H = dims[2], W = dims[3];

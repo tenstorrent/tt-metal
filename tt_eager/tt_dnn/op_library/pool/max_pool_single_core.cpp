@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
     CoreRange cores = {.start={0, 0}, .end={0, 0}};
 
     // This should allocate a DRAM buffer on the device
-    Device *device = input.device();
+    const Device& device = input.device();
     Buffer *src_dram_buffer = input.buffer();
     Buffer *dst_dram_buffer = output.buffer();
 

@@ -82,7 +82,7 @@ operation::ProgramWithCallbacks layernorm_(
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    Device *device = a.device();
+    const Device& device = a.device();
     auto dst_addr = output.buffer()->address();
 
 
@@ -127,7 +127,7 @@ operation::ProgramWithCallbacks layernorm_(
     TT_ASSERT(num_beta_tiles % block_size == 0);
 
     uint32_t num_tile_rows = NC * Ht;
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = device.compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = split_work_to_cores(grid_size, num_tile_rows, true);
 
     ////////////////////////////////////////////////////////////////////////////

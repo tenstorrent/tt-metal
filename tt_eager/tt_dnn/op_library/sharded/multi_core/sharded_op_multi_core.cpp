@@ -24,7 +24,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
 
     uint32_t num_units, num_units_per_shard, unit_size, num_units_per_shard_width, num_units_per_shard_height, num_units_offset, num_units_per_row;
 
-    tt_metal::Device *device = input.device();
+    const tt_metal::Device& device = input.device();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
 
@@ -208,7 +208,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
 
     uint32_t num_units, num_units_per_shard, unit_size, num_units_per_shard_width, num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_per_shard_height_last, num_units_per_shard_width_last;
 
-    tt_metal::Device *device = input.device();
+    const tt_metal::Device& device = input.device();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
 

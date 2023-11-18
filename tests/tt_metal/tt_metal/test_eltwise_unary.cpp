@@ -133,7 +133,7 @@ struct SfpuConfig {
     bool approx_mode = true;
 };
 
-bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_config) {
+bool run_sfpu_all_same_buffer(const tt_metal::Device& device, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::CreateProgram();
     auto input_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
@@ -218,7 +218,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
                 .defines = sfpu_defines});
 
         int chip_id = 0;
-        CoresInCoreRangeGenerator cores_in_core_range(core_range, device->logical_grid_size());
+        CoresInCoreRangeGenerator cores_in_core_range(core_range, device.logical_grid_size());
 
         bool terminate;
 
@@ -281,7 +281,7 @@ int main(int argc, char** argv) {
             log_info("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
 
                 for (unsigned int id = 0; id < 1; id++) {
-                    tt::tt_metal::Device* device = tt::tt_metal::CreateDevice(id);
+                    const tt::tt_metal::Device& device = tt::tt_metal::CreateDevice(id);
                     bool result = run_sfpu_all_same_buffer(device, test_config);
                     if (result) {
                         std::cout << "Test passed on device " << id << std::endl;

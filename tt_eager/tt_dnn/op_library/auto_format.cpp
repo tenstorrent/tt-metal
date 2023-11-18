@@ -20,7 +20,7 @@ namespace tt {
 
 namespace tt_metal {
 
-Tensor AutoFormat::move_tensor_to_device(const Tensor &input, Device * device, const MemoryConfig& mem_config) {
+Tensor AutoFormat::move_tensor_to_device(const Tensor &input, const Device& device, const MemoryConfig& mem_config) {
     if (input.storage_type() == StorageType::OWNED) {
         return data_transfer_to_device(input, device, mem_config);
     } else {
@@ -28,7 +28,7 @@ Tensor AutoFormat::move_tensor_to_device(const Tensor &input, Device * device, c
     }
 }
 
-Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, const Shape& padded_shape, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
+Tensor AutoFormat::format_input_tensor(const Tensor &input, const Device& device, const Shape& padded_shape, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
     bool pad_input = input.shape() != padded_shape;
     bool convert_layout = input.layout() != target_layout;
 
@@ -88,7 +88,7 @@ Tensor AutoFormat::format_input_tensor(const Tensor &input, Device * device, con
 }
 
 
-Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape, Device* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
+Tensor AutoFormat::format_output_tensor(const Tensor &output, const Shape& shape, const Device& device, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
     bool unpad_output = output.shape() != shape;
     bool convert_layout = output.layout() != target_layout;
 

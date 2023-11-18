@@ -28,7 +28,7 @@ int main(int argc, char **argv) {
         * Silicon accelerator setup
         */
         constexpr int device_id = 0;
-        Device *device =
+        const Device& device =
             CreateDevice(device_id);
 
         /*

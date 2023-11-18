@@ -187,8 +187,8 @@ MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Ten
     uint32_t Nt = bshape[3]/TILE_WIDTH;
     uint32_t in0_block_w = 2;
 
-    tt::tt_metal::Device *device = input_tensor_a.device();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const tt::tt_metal::Device& device = input_tensor_a.device();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
@@ -263,7 +263,7 @@ MatmulParallelizationStrategy get_parallelization_strategy(const std::vector<Ten
 
 tt::operations::primary::MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(const Tensor &input_tensor_a, const Tensor &input_tensor_b, bool fuse_batch, std::optional<UnaryWithParam> fused_activation, bool mcast_in0, bool out_sharded) {
     auto device = input_tensor_a.device();
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = device.compute_with_storage_grid_size();
     uint32_t M = fuse_batch ? input_tensor_a.volume() / input_tensor_a.shape()[-1] : input_tensor_a.shape()[-2];
     uint32_t K = input_tensor_a.shape()[-1];
     uint32_t N = input_tensor_b.shape()[-1];
@@ -332,7 +332,7 @@ void Matmul::validate(const std::vector<Tensor>& input_tensors, const std::vecto
     // This requires sweeping across shapes with different dtypes/dataformats; for now, ignore dtype assertions here and uplift to actual matmul/bmm implementations
     TT_FATAL(input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
-    TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
+    TT_FATAL(&input_tensor_a.device() == &input_tensor_b.device(), "Operands to matmul need to be on the same device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 }
 
@@ -365,7 +365,7 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
             return matmul_multi_core_reuse_mcast_2d_optimized(
                 input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
                 this->bcast_batch,
-                input_tensor_a.device()->compute_with_storage_grid_size(),
+                input_tensor_a.device().compute_with_storage_grid_size(),
                 MathFidelity::HiFi4,
                 2, 4, 2,
                 16, 16, false, false, std::nullopt
@@ -375,7 +375,7 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
             return matmul_multi_core_reuse_mcast_1d_optimized(
                 input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
                 this->bcast_batch,
-                input_tensor_a.device()->compute_with_storage_grid_size(),
+                input_tensor_a.device().compute_with_storage_grid_size(),
                 MathFidelity::HiFi4,
                 config.in0_block_w, config.out_subblock_h, config.out_subblock_w,
                 config.per_core_M, config.per_core_N, false, std::nullopt, true
@@ -385,7 +385,7 @@ operation::ProgramWithCallbacks Matmul::create_program(const std::vector<Tensor>
             return matmul_multi_core_reuse_mcast_1d_optimized(
                 input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
                 this->bcast_batch,
-                input_tensor_a.device()->compute_with_storage_grid_size(),
+                input_tensor_a.device().compute_with_storage_grid_size(),
                 MathFidelity::HiFi4,
                 config.in0_block_w, config.out_subblock_h, config.out_subblock_w,
                 config.per_core_M, config.per_core_N, false, std::nullopt, false
@@ -604,7 +604,7 @@ void Matmul::validate(
 
     TT_FATAL(input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "Unsupported data format");
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
-    TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
+    TT_FATAL(&input_tensor_a.device() == &input_tensor_b.device(), "Operands to matmul need to be on the same device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
 
@@ -839,7 +839,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                         return matmul_multi_core_reuse_mcast_2d_optimized(
                             input_tensor_a, input_tensor_b, bias, output_tensor,
                             broadcast_batch,
-                            input_tensor_a.device()->compute_with_storage_grid_size(),
+                            input_tensor_a.device().compute_with_storage_grid_size(),
                             MathFidelity::HiFi4,
                             2, 4, 2,
                             16, 16, false, false, std::nullopt
@@ -848,7 +848,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                         return matmul_multi_core_reuse_mcast_1d_optimized(
                             input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
                             broadcast_batch,
-                            input_tensor_a.device()->compute_with_storage_grid_size(),
+                            input_tensor_a.device().compute_with_storage_grid_size(),
                             MathFidelity::HiFi4,
                             2, 4, 2,
                             16, 16, false, std::nullopt, true
@@ -857,7 +857,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                         return matmul_multi_core_reuse_mcast_1d_optimized(
                             input_tensor_a, input_tensor_b, std::nullopt, output_tensor,
                             broadcast_batch,
-                            input_tensor_a.device()->compute_with_storage_grid_size(),
+                            input_tensor_a.device().compute_with_storage_grid_size(),
                             MathFidelity::HiFi4,
                             2, 4, 2,
                             16, 16, false, std::nullopt, false

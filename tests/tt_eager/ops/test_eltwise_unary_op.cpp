@@ -59,7 +59,7 @@ Tensor host_function(const Tensor& input_tensor) {
 }
 
 template <auto HostFunction, typename DeviceFunction, typename... Args>
-bool run_test(const DeviceFunction& device_function, Device* device, const Shape& shape, float low, float high, Args... args) {
+bool run_test(const DeviceFunction& device_function, const Device& device, const Shape& shape, float low, float high, Args... args) {
     auto input_tensor = tt::numpy::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
 
     auto host_output = HostFunction(input_tensor);

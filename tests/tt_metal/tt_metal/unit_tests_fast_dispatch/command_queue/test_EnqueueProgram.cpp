@@ -46,7 +46,7 @@ void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
     auto dummy_compute_kernel = CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 }
 
-bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & program_config){
+bool cb_config_successful(const Device& device, const DummyProgramMultiCBConfig & program_config){
 
     bool pass = true;
 
@@ -56,7 +56,7 @@ bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & prog
     uint32_t cb_config_buffer_size = NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
-        CoresInCoreRangeGenerator core_range_generator(core_range, device->compute_with_storage_grid_size());
+        CoresInCoreRangeGenerator core_range_generator(core_range, device.compute_with_storage_grid_size());
 
         bool terminate;
         do {
@@ -88,7 +88,7 @@ bool cb_config_successful(Device* device, const DummyProgramMultiCBConfig & prog
 
 }
 
-bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
+bool test_dummy_EnqueueProgram_with_cbs(const Device& device, CommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
 
     Program program;
 
@@ -112,7 +112,7 @@ bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyP
 
 }
 
-bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
+bool test_dummy_EnqueueProgram_with_cbs_update_size(const Device& device, CommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
 
     Program program;
 
@@ -152,7 +152,7 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
 }
 
 
-bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const DummyProgramConfig& program_config) {
+bool test_dummy_EnqueueProgram_with_sems(const Device& device, CommandQueue& cq, const DummyProgramConfig& program_config) {
     bool pass = true;
 
     Program program;
@@ -168,7 +168,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
     uint32_t sem_buffer_size = program_config.num_sems * SEMAPHORE_ALIGNMENT;
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
-        CoresInCoreRangeGenerator core_range_generator(core_range, device->compute_with_storage_grid_size());
+        CoresInCoreRangeGenerator core_range_generator(core_range, device.compute_with_storage_grid_size());
 
         bool terminate;
         do {
@@ -191,7 +191,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
     return pass;
 }
 
-bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& cq, const DummyProgramConfig& program_config) {
+bool test_dummy_EnqueueProgram_with_runtime_args(const Device& device, CommandQueue& cq, const DummyProgramConfig& program_config) {
     Program program;
     bool pass = true;
 
@@ -209,7 +209,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
     vector<uint32_t> dummy_kernel1_args = {9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20};
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
-        CoresInCoreRangeGenerator core_range_generator(core_range, device->compute_with_storage_grid_size());
+        CoresInCoreRangeGenerator core_range_generator(core_range, device.compute_with_storage_grid_size());
 
         bool terminate;
         do {
@@ -227,7 +227,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
     Finish(cq);
 
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
-        CoresInCoreRangeGenerator core_range_generator(core_range, device->compute_with_storage_grid_size());
+        CoresInCoreRangeGenerator core_range_generator(core_range, device.compute_with_storage_grid_size());
 
         bool terminate;
         do {
@@ -249,7 +249,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
     return pass;
 }
 
-bool test_EnqueueWrap_on_EnqueueWriteBuffer(Device* device, CommandQueue& cq, const BufferConfig& config) {
+bool test_EnqueueWrap_on_EnqueueWriteBuffer(const Device& device, CommandQueue& cq, const BufferConfig& config) {
     EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 
     /*
@@ -269,14 +269,14 @@ bool test_EnqueueWrap_on_EnqueueWriteBuffer(Device* device, CommandQueue& cq, co
     return true;
 }
 
-bool test_EnqueueWrap_on_Finish(Device* device, CommandQueue& cq, const BufferConfig& config) {
+bool test_EnqueueWrap_on_Finish(const Device& device, CommandQueue& cq, const BufferConfig& config) {
     bool pass = true;
     EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 
     return pass;
 }
 
-bool test_EnqueueWrap_on_EnqueueProgram(Device* device, CommandQueue& cq, const BufferConfig& config) {
+bool test_EnqueueWrap_on_EnqueueProgram(const Device& device, CommandQueue& cq, const BufferConfig& config) {
     bool pass = true;
     EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 
@@ -476,7 +476,7 @@ TEST_F(CommandQueueFixture, TestRuntimeArgsCorrectlySentSingleCore) {
 
 namespace multicore_tests {
 TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentMultiCore) {
-    CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
+    CoreCoord worker_grid_size = this->device_.compute_with_storage_grid_size();
 
     CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 1}};
     CoreRangeSet cr_set({cr});
@@ -494,7 +494,7 @@ TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentMultiCore) {
 }
 
 TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
-    CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
+    CoreCoord worker_grid_size = this->device_.compute_with_storage_grid_size();
 
     CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 1}};
     CoreRangeSet cr_set({cr});
@@ -512,7 +512,7 @@ TEST_F(CommandQueueFixture, TestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
 
 
 TEST_F(CommandQueueFixture, TestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
-    CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
+    CoreCoord worker_grid_size = this->device_.compute_with_storage_grid_size();
 
     CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 1}};
     CoreRangeSet cr_set({cr});
@@ -530,7 +530,7 @@ TEST_F(CommandQueueFixture, TestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) 
 }
 
 TEST_F(CommandQueueFixture, TestAllSemConfigsCorrectlySentMultiCore) {
-    CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
+    CoreCoord worker_grid_size = this->device_.compute_with_storage_grid_size();
 
     CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 1}};
     CoreRangeSet cr_set({cr});
@@ -541,7 +541,7 @@ TEST_F(CommandQueueFixture, TestAllSemConfigsCorrectlySentMultiCore) {
 }
 
 TEST_F(CommandQueueFixture, TestAllRuntimeArgsCorrectlySentMultiCore) {
-    CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
+    CoreCoord worker_grid_size = this->device_.compute_with_storage_grid_size();
 
     CoreRange cr = {.start = {0, 0}, .end = {worker_grid_size.x - 1, worker_grid_size.y - 1}};
     CoreRangeSet cr_set({cr});

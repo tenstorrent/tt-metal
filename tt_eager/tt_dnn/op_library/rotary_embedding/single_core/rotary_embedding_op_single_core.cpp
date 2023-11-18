@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks rotary_embedding_single_core(const Tensor &input
     uint32_t HtWt = Ht * Wt;
     uint32_t Wbytes = input.shape()[-1] * sizeof(bfloat16);
 
-    tt_metal::Device *device = input.device();
+    const tt_metal::Device& device = input.device();
 
     uint32_t input_cb_index = 0;
     uint32_t num_input_tiles = 2 * Wt;

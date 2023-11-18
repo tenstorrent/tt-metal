@@ -32,7 +32,7 @@ void Concat::validate(const std::vector<Tensor> &input_tensors) const {
 
     for (const Tensor &in_ref : input_tensors) {
         TT_FATAL((in_ref.layout() == Layout::TILE) && "Only tile layout supported.");
-        TT_FATAL(in_ref.device() && "Operand to concat needs to be on device.");
+        TT_FATAL(in_ref.has_device() && "Operand to concat needs to be on device.");
         TT_FATAL(in_ref.buffer() && "Operand to concat needs to be allocated in a buffer on device.");
         TT_FATAL(in_ref.layout() == input_tensors.at(0).layout() && "All Tensors should have same layouts.");
         tt::tt_metal::Shape curr_shape = in_ref.shape();

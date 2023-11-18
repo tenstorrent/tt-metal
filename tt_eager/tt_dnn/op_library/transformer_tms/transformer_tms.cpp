@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks SplitFusedQKVAndSplitHeads::create_program(const
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
-    auto device_compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto device_compute_with_storage_grid_size = input_tensor.device().compute_with_storage_grid_size();
     TT_ASSERT((this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x && this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y), "Unsupported grid shape");
 
 
@@ -85,7 +85,7 @@ operation::ProgramWithCallbacks ConcatenateHeads::create_program(const std::vect
     auto& output_tensor = output_tensors.at(0);
     const auto batch_size = input_tensor.shape()[0];
 
-    auto device_compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    auto device_compute_with_storage_grid_size = input_tensor.device().compute_with_storage_grid_size();
     TT_ASSERT((this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x && this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y), "Unsupported grid shape");
 
     return multi_core_concat_heads(input_tensor, output_tensor, this->compute_with_storage_grid_size);
@@ -112,7 +112,7 @@ void AttnMatmul::validate(const std::vector<Tensor>& input_tensors) const {
     // TODO: Uplift to support BFLOAT8_B and mixed precision
     TT_FATAL(input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format");
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE, "Operands to matmul need to be on device!");
-    TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
+    TT_FATAL(&input_tensor_a.device() == &input_tensor_b.device(), "Operands to matmul need to be on the same device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
     const auto ashape = input_tensor_a.shape();
@@ -167,7 +167,7 @@ operation::ProgramWithCallbacks AttnMatmul::create_program(const std::vector<Ten
     const auto& input_tensor_b = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
 
-    auto device_compute_with_storage_grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
+    auto device_compute_with_storage_grid_size = input_tensor_a.device().compute_with_storage_grid_size();
     TT_ASSERT((this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x && this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y), "Unsupported grid shape");
 
     return multi_core_attn_matmul(input_tensor_a, input_tensor_b, output_tensor, this->num_tokens, this->transpose_hw, this->compute_with_storage_grid_size, output_dtype);

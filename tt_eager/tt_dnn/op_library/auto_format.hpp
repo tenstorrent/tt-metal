@@ -27,12 +27,15 @@ struct FormatParams {
 
 class AutoFormat {
     private:
-        inline static Device* device = nullptr;
+        inline static std::optional<std::reference_wrapper<const Device>> device = std::nullopt;
 
         AutoFormat() {}
     public:
-        static void SetDefaultDevice(Device * dev) { device = dev; }
-        static Device * GetDefaultDevice() { return device; }
+        static void SetDefaultDevice(const Device &dev) { device = dev; }
+        static const Device & GetDefaultDevice() {
+            TT_FATAL( device.has_value(), "Default Device not set!");
+            return device.value().get();
+        }
 
 
         static Shape pad_to_tile_shape(const Shape& unpadded_shape, bool pad_c=false, bool pad_n=false, bool pad_h=true, bool pad_w=true) {
@@ -85,11 +88,11 @@ class AutoFormat {
             return false;
         }
 
-        static Tensor move_tensor_to_device(const Tensor &input, Device * device, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+        static Tensor move_tensor_to_device(const Tensor &input, const Device& device, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-        static Tensor format_input_tensor(const Tensor &input, Device * device, const Shape& padded_shape, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt);
+        static Tensor format_input_tensor(const Tensor &input, const Device& device, const Shape& padded_shape, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt);
 
-        static Tensor format_output_tensor(const Tensor &output, const Shape& shape, Device* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt);
+        static Tensor format_output_tensor(const Tensor &output, const Shape& shape, const Device& device, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt);
 };
 
 

@@ -25,7 +25,7 @@ namespace tt_metal {
 
 namespace {
 
-void ConfigureKernelGroup(const Program &program, const KernelGroup *kernel_group, Device *device, const CoreCoord &logical_core) {
+void ConfigureKernelGroup(const Program &program, const KernelGroup *kernel_group, const Device& device, const CoreCoord &logical_core) {
     if (kernel_group->compute_id.has_value()) {
         detail::GetKernel(program, kernel_group->compute_id.value())->configure(device, logical_core);
     }
@@ -117,7 +117,7 @@ namespace detail {
         uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
 
         auto device = buffer.device();
-        auto num_banks = device->num_banks(buffer.buffer_type());
+        auto num_banks = device.num_banks(buffer.buffer_type());
         uint32_t bank_index = 0;
         int data_index = 0;
         for (int page_index = 0; page_index < num_pages; page_index++) {
@@ -128,11 +128,11 @@ namespace detail {
             switch (buffer.buffer_type()) {
                 case BufferType::DRAM: {
                     auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
-                    tt::Cluster::instance().write_dram_vec(page, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
+                    tt::Cluster::instance().write_dram_vec(page, tt_target_dram{device.id(), dram_channel, 0}, absolute_address);
                 } break;
                 case BufferType::L1: {
                     auto noc_coordinates = buffer.noc_coordinates(bank_index);
-                    llrt::write_hex_vec_to_core(device->id(), noc_coordinates, page, absolute_address);
+                    llrt::write_hex_vec_to_core(device.id(), noc_coordinates, page, absolute_address);
                 } break;
                 default: TT_FATAL(false && "Unsupported buffer type to write to device!");
             }
@@ -165,7 +165,7 @@ namespace detail {
         uint32_t num_pages = buffer.size() / page_size;
 
         auto device = buffer.device();
-        auto num_banks = device->num_banks(buffer.buffer_type());
+        auto num_banks = device.num_banks(buffer.buffer_type());
 
         uint32_t bank_index = 0;
         for (int page_index = 0; page_index < num_pages; page_index++) {
@@ -174,11 +174,11 @@ namespace detail {
             switch (buffer.buffer_type()) {
                 case BufferType::DRAM: {
                     auto dram_channel = buffer.dram_channel_from_bank_id(bank_index);
-                    tt::Cluster::instance().read_dram_vec(page, page_size, tt_target_dram{device->id(), dram_channel, 0}, absolute_address);
+                    tt::Cluster::instance().read_dram_vec(page, page_size, tt_target_dram{device.id(), dram_channel, 0}, absolute_address);
                 } break;
                 case BufferType::L1: {
                     auto noc_coordinates = buffer.noc_coordinates(bank_index);
-                    page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
+                    page = llrt::read_hex_vec_from_core(device.id(), noc_coordinates, absolute_address, page_size);
                 } break;
                 default: TT_FATAL(false && "Unsupported buffer type to write to device!");
             }
@@ -194,14 +194,14 @@ namespace detail {
     }
 
     void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
-        Device *device = buffer.device();
+        const Device& device = buffer.device();
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
             case BufferType::L1: {
                 if (buffer.buffer_type() == BufferType::DRAM) {
-                    tt::Cluster::instance().dram_barrier(device->id());
+                    tt::Cluster::instance().dram_barrier(device.id());
                 } else {
-                    tt::Cluster::instance().l1_barrier(device->id());
+                    tt::Cluster::instance().l1_barrier(device.id());
                 }
                 ReadFromDevice(buffer, host_buffer);
             } break;
@@ -212,7 +212,7 @@ namespace detail {
         }
     }
 
-    void LaunchProgram(Device *device, Program &program) {
+    void LaunchProgram(const Device& device, Program &program) {
         {//Profiler scope start
         ZoneScoped;
         detail::DispatchStateCheck( false );
@@ -220,21 +220,21 @@ namespace detail {
         detail::CompileProgram(device, program);
         detail::WriteRuntimeArgsToDevice(device, program);
         detail::ConfigureDeviceWithProgram(device, program);
-        auto device_id = device->id();
+        auto device_id = device.id();
 
         tt::Cluster::instance().dram_barrier(device_id);
 
         // Note: the l1_barrier below is needed to be sure writes to cores that
         // don't get the GO mailbox (eg, storage cores) have all landed
-        tt::Cluster::instance().l1_barrier(device->id());
+        tt::Cluster::instance().l1_barrier(device.id());
 
         std::vector<CoreCoord> logical_cores_used_in_program = program.logical_cores();
         std::unordered_set<CoreCoord> not_done_cores;
         for (const auto &logical_core : logical_cores_used_in_program) {
             launch_msg_t *msg = &program.kernels_on_core(logical_core)->launch_msg;
-            auto worker_core = device->worker_core_from_logical_core(logical_core);
+            auto worker_core = device.worker_core_from_logical_core(logical_core);
             not_done_cores.insert(worker_core);
-            tt::llrt::write_launch_msg_to_core(device->id(), worker_core, msg);
+            tt::llrt::write_launch_msg_to_core(device.id(), worker_core, msg);
         }
 
         // Wait for all cores to be done
@@ -245,14 +245,14 @@ namespace detail {
     }
 
 
-    bool ConfigureDeviceWithProgram(Device *device, Program &program) {
+    bool ConfigureDeviceWithProgram(const Device& device, Program &program) {
         ZoneScoped;
         bool pass = true;
         detail::DispatchStateCheck( false );
         detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ConfigureDeviceWithProgram");
 
         std::unordered_set<CoreCoord> worker_cores;
-        auto device_id = device->id();
+        auto device_id = device.id();
 
         program.allocate_circular_buffers();
         detail::ValidateCircularBufferRegion(program, device);
@@ -260,7 +260,7 @@ namespace detail {
         std::vector<CoreCoord> logical_cores_used_in_program = program.logical_cores();
         for (const auto &logical_core : logical_cores_used_in_program) {
             KernelGroup *kernel_group = program.kernels_on_core(logical_core);
-            auto worker_core = device->worker_core_from_logical_core(logical_core);
+            auto worker_core = device.worker_core_from_logical_core(logical_core);
             worker_cores.insert(worker_core);
 
             // CircularBufferConfigVec -- common across all kernels, so written once to the core
@@ -287,15 +287,15 @@ namespace detail {
                     circular_buffer_config_vec);  // PROF_BEGIN("WRITE_CBS") PROF_END("WRITE_CBS")
             }
 
-            program.init_semaphores(*device, logical_core);
+            program.init_semaphores(device, logical_core);
         }
 
         return pass;
     }
 
-    void WriteRuntimeArgsToDevice(Device *device, const Program &program) {
+    void WriteRuntimeArgsToDevice(const Device& device, const Program &program) {
         ZoneScoped;
-        auto device_id = device->id();
+        auto device_id = device.id();
         detail::DispatchStateCheck( false );
 
         auto get_l1_arg_base_addr = [](const RISCV &riscv) {
@@ -320,34 +320,34 @@ namespace detail {
             const auto kernel = detail::GetKernel(program, kernel_id);
             auto processor = kernel->processor();
             for (const auto &logical_core : kernel->cores_with_runtime_args()) {
-                auto worker_core = device->worker_core_from_logical_core(logical_core);
+                auto worker_core = device.worker_core_from_logical_core(logical_core);
                 const auto & rt_args = kernel->runtime_args(logical_core);
                 tt::llrt::write_hex_vec_to_core(device_id, worker_core, rt_args, get_l1_arg_base_addr(processor));
             }
         }
     }
 
-    void CompileProgram(Device *device, Program &program){
+    void CompileProgram(const Device& device, Program &program){
         ZoneScoped;
         program.compile(device);
     }
 }
 
-Device *CreateDevice(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) {
+const Device& CreateDevice(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) {
     Device * dev = new Device(device_id, l1_bank_remap);
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        detail::GLOBAL_CQ = std::make_unique<CommandQueue>(dev);
+        detail::GLOBAL_CQ = std::make_unique<CommandQueue>(*dev);
     }
-    return dev;
+    return *dev;
 }
 
-bool CloseDevice(Device *device) {
+bool CloseDevice(const Device &device) {
     // Needed to ensure that GLOBAL_CQ doesn't contain a closed device
     if (detail::GLOBAL_CQ) {
         detail::GLOBAL_CQ.reset(nullptr);
     }
-    return device->close();
+    return const_cast<Device*>(&device)->close();
 }
 
 Program CreateProgram(){
@@ -438,7 +438,7 @@ uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRang
 }
 
 
-Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size, const BufferType buffer_type)
+Buffer CreateBuffer(const Device& device, std::uint64_t size, std::uint64_t page_size, const BufferType buffer_type)
 {
     return Buffer(device, size, page_size, buffer_type);
 }
@@ -446,7 +446,7 @@ Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size,
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
 
-void ConfigureKernelGroup(const Program &program, const KernelGroup &kernel_group, Device *device, const CoreCoord &logical_core) {
+void ConfigureKernelGroup(const Program &program, const KernelGroup &kernel_group, const Device& device, const CoreCoord &logical_core) {
     if (kernel_group.compute_id.has_value()) {
         detail::GetKernel(program, kernel_group.compute_id.value())->configure(device, logical_core);
     }

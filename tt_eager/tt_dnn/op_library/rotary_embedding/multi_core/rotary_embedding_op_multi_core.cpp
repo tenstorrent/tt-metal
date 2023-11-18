@@ -41,9 +41,9 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
     uint32_t HtWt = Ht * Wt;
     uint32_t Wbytes = input.shape()[-1] * sizeof(bfloat16);
 
-    tt_metal::Device *device = input.device();
+    const tt_metal::Device& device = input.device();
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] = split_work_to_cores(compute_with_storage_grid_size, num_rows);

@@ -14,13 +14,13 @@ using namespace tt;
 
 void measure_latency(string kernel_name) {
     const int device_id = 0;
-    tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+    const tt_metal::Device& device = tt_metal::CreateDevice(device_id);
 
-    auto dispatch_cores = device->dispatch_cores().begin();
+    auto dispatch_cores = device.dispatch_cores().begin();
     CoreCoord producer_logical_core = *dispatch_cores++;
     CoreCoord consumer_logical_core = *dispatch_cores;
 
-    auto first_worker_physical_core = device->worker_core_from_logical_core({0, 0});
+    auto first_worker_physical_core = device.worker_core_from_logical_core({0, 0});
 
     std::map<string, string> defines = {
         {"WORKER_NOC_X", std::to_string(first_worker_physical_core.x)},

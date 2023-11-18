@@ -44,7 +44,7 @@ class Tensor {
 
         void deallocate(bool force=false);
 
-        Tensor to(Device *target_device, const MemoryConfig &mem_config={.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
+        Tensor to(const Device & target_device, const MemoryConfig &mem_config={.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
 
         Tensor to(Layout target_layout) const;
 
@@ -88,7 +88,12 @@ class Tensor {
 
         // TODO(arakhmati): clean up the methods below
         Buffer* buffer() const { return std::get<DeviceStorage>(this->storage_).buffer.get(); }
-        Device* device() const { return std::get<DeviceStorage>(this->storage_).device; }
+
+        bool has_device() const { return std::get<DeviceStorage>(this->storage_).device.has_value(); }
+        const Device& device() const {
+            TT_FATAL( this->has_device(), "Underlying device for Tensor not set!");
+            return std::get<DeviceStorage>(this->storage_).device.value().get();
+        }
         const MemoryConfig memory_config() const { return std::get<DeviceStorage>(this->storage_).memory_config; }
 
         const bool is_sharded() const { return this->memory_config().is_sharded(); }
@@ -115,9 +120,9 @@ class Tensor {
 
 };
 
-Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, Device *device, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
+Tensor create_device_tensor(const Shape& shape, DataType dtype, Layout layout, const Device& device, const MemoryConfig& memory_config = {.memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED});
 
-Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config, ShardSpec shard_spec);
+Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, const Device& device, const MemoryConfig& memory_config, ShardSpec shard_spec);
 
 }  // namespace tt_metal
 

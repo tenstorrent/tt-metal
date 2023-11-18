@@ -56,7 +56,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     uint32_t num_tiles = input_tensor.volume()/TILE_HW;
 
     // This should allocate input_tensor DRAM buffer on the device
-    Device *device = input_tensor.device();
+    const Device& device = input_tensor.device();
 
     uint32_t block_size = find_max_divisor(Wt, 8);
 
@@ -85,7 +85,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     TT_ASSERT(W <= TILE_WIDTH*im0_t && "W exceeds the maximum supported size of tile buffer (kernel limitation right now).");
 
     uint32_t num_tile_rows = NC * Ht;
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = device.compute_with_storage_grid_size();
     auto all_device_cores = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = split_work_to_cores(grid_size, num_tile_rows, true);
 
