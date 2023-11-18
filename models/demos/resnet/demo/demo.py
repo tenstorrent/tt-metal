@@ -81,7 +81,7 @@ def run_resnet_imagenet_inference(
         inputs, labels = get_batch(data_loader, image_processor)
         tt_inputs = tt_resnet50.preprocessing(inputs)
         tt_output = tt_resnet50(tt_inputs)
-        tt_output = tt_output.to_torch().to(torch.float)
+        tt_output = tt_output.cpu().to_torch().to(torch.float)
         prediction = tt_output[:, 0, 0, :].argmax(dim=-1)
         for i in range(batch_size):
             predictions.append(imagenet_label_dict[prediction[i].item()])
@@ -175,7 +175,7 @@ def run_resnet_inference(
 
     profiler.start(f"post_processing")
     predictions = []
-    tt_out = tt_out.to_torch().to(torch.float)
+    tt_out = tt_out.cpu().to_torch().to(torch.float)
 
     prediction = tt_out[:, 0, 0, :].argmax(dim=-1)
     for i in range(batch_size):

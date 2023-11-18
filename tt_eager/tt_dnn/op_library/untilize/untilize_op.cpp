@@ -124,22 +124,15 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor> &input_tensors) c
     );
 
     TT_FATAL(input_tensor_a.volume() % TILE_HW == 0);
-    TT_FATAL(this->output_tensor_start[0] < input_tensor_a.shape()[0]);
-    TT_FATAL(this->output_tensor_end[0] < input_tensor_a.shape()[0]);
-    TT_FATAL(this->output_tensor_start[1] < input_tensor_a.shape()[1]);
-    TT_FATAL(this->output_tensor_end[1] < input_tensor_a.shape()[1]);
-    TT_FATAL(this->output_tensor_start[2] < input_tensor_a.shape()[2]);
-    TT_FATAL(this->output_tensor_end[2] < input_tensor_a.shape()[2]);
-    TT_FATAL(this->output_tensor_start[3] < input_tensor_a.shape()[3]);
-    TT_FATAL(this->output_tensor_end[3] < input_tensor_a.shape()[3]);
+    for (uint32_t i = 0; i < input_tensor_a.shape().rank(); i++) {
+        TT_FATAL(this->output_tensor_start[i] < input_tensor_a.shape()[i]);
+        TT_FATAL(this->output_tensor_end[i] < input_tensor_a.shape()[i]);
 
-    // Check if start shape is <= end shape
-    TT_FATAL(this->output_tensor_start[0] <= this->output_tensor_end[0]);
-    TT_FATAL(this->output_tensor_start[1] <= this->output_tensor_end[1]);
-    TT_FATAL(this->output_tensor_start[2] <= this->output_tensor_end[2]);
-    TT_FATAL(this->output_tensor_start[3] <= this->output_tensor_end[3]);
+        // Check if start shape is <= end shape
+        TT_FATAL(this->output_tensor_start[i] <= this->output_tensor_end[i]);
+    }
 
-    TT_FATAL(((this->output_tensor_end[3] - this->output_tensor_start[3] + 1) % 2 == 0), "Can only unpad to row major tensor of even width");
+    TT_FATAL(((this->output_tensor_end[-1] - this->output_tensor_start[-1] + 1) % 2 == 0), "Can only unpad to row major tensor of even width");
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -148,16 +141,18 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor> &input_tensors) c
             TT_FATAL(input_tensor_a.volume() / (input_tensor_a.shape()[-2] * input_tensor_a.shape()[-1]) == 1, "Can only write unbatched output interleaved");
         } else if(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             auto output_shape = this->compute_output_shapes(input_tensors).at(0);
-            for (uint32_t i = 0; i < output_shape.rank(); i++) {
-                if (i != output_shape.rank() - 2) {
-                    TT_FATAL(input_tensor_a.shape()[i] == output_shape[i]);
-                }
-                if (output_mem_config.is_sharded()) {
-                    TT_FATAL(this->output_mem_config == input_tensor_a.memory_config());
-                } else {
-                    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
-                    TT_FATAL(input_tensor_a.volume() / (input_tensor_a.shape()[-2] * input_tensor_a.shape()[-1]) == 1, "Can only write unbatched output interleaved");
-                }
+            // Minor host code changes required to remove this restriction
+            TT_FATAL(input_tensor_a.shard_spec().value().shard_grid.ranges().size() == 1);
+            for (uint32_t i = 0; i < output_shape.rank() - 2; i++) {
+                TT_FATAL(input_tensor_a.shape()[i] == output_shape[i]);
+            }
+            if (output_mem_config.is_sharded()) {
+                TT_FATAL(this->output_mem_config == input_tensor_a.memory_config());
+                TT_ASSERT(input_tensor_a.shape()[-1] == output_shape[-1]);
+            } else {
+                TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED);
+                TT_FATAL(input_tensor_a.volume() / (input_tensor_a.shape()[-2] * input_tensor_a.shape()[-1]) == 1, "Can only write unbatched output interleaved");
+                TT_FATAL(input_tensor_a.shape()[-1] - output_shape[-1] < input_tensor_a.shard_spec().value().shard_shape[1]);
             }
         } else {
             TT_FATAL(false, "Unsupported sharding scheme");
@@ -168,12 +163,13 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor> &input_tensors) c
     }
 }
 std::vector<Shape> UntilizeWithUnpadding::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    Shape output_tensor_shape = {
-        this->output_tensor_end[0] - this->output_tensor_start[0] + 1,
-        this->output_tensor_end[1] - this->output_tensor_start[1] + 1,
-        this->output_tensor_end[2] - this->output_tensor_start[2] + 1,
-        this->output_tensor_end[3] - this->output_tensor_start[3] + 1,
-    };
+    std::vector<uint32_t> out_shape;
+    auto rank = input_tensors[0].shape().rank();
+    out_shape.reserve(rank);
+    for (uint32_t i = 0; i < rank; i++) {
+        out_shape.push_back(this->output_tensor_end[i] - this->output_tensor_start[i] + 1);
+    }
+    Shape output_tensor_shape(out_shape);
     return {output_tensor_shape};
 }
 std::vector<Tensor> UntilizeWithUnpadding::create_output_tensors(const std::vector<Tensor> &input_tensors) const {

@@ -606,14 +606,14 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
     bool row_major = true;
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0, num_output_rows_unpadded = 0;
     CoreCoord end_core;
+    uint32_t last_idx = 0;
     auto shard_spec = a.shard_spec().value();
     row_major = shard_spec.shard_orientation == ShardOrientation::ROW_MAJOR;
     auto grid = *shard_spec.shard_grid.ranges().begin();
     uint32_t ncores_x = grid.end.x + 1;
     uint32_t ncores_y = grid.end.y + 1;
     auto all_cores = shard_spec.shard_grid;
-    uint32_t num_cores = all_cores.num_cores();
-    uint32_t ncores = num_cores;
+    uint32_t ncores = all_cores.num_cores();
     ntiles_per_block = shard_spec.shard_shape[1] / TILE_WIDTH;
     uint32_t nblocks_per_core = shard_spec.shard_shape[0] / TILE_HEIGHT;
     uint32_t batch = a.volume() / (a.shape()[-2] * a.shape()[-1]);
@@ -625,7 +625,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
     last_block_row_size_unpadded = block_row_size - (round_up(output.shape()[-1], shard_spec.shard_shape[1]) - output.shape()[-1]) * output.element_size();
     uint32_t num_output_rows = output.volume() / output.shape()[-1];
     num_output_rows_unpadded = num_rows_block - (round_up(num_output_rows, shard_spec.shard_shape[0]) - num_output_rows);
-    end_core = {round_up(output.shape()[-1], shard_spec.shard_shape[1]) /shard_spec.shard_shape[1] - 1, round_up(num_output_rows, shard_spec.shard_shape[0]) / shard_spec.shard_shape[0] - 1};
+    if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+        last_idx = div_up(output.shape()[-1], shard_spec.shard_shape[1]) - 1;
+    } else if (a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        last_idx = div_up(num_output_rows, shard_spec.shard_shape[0]) - 1;
+    } else {
+        end_core = {div_up(output.shape()[-1], shard_spec.shard_shape[1]) - 1, div_up(num_output_rows, shard_spec.shard_shape[0]) - 1};
+    }
     if (!row_major) {
         std::swap(end_core.x, end_core.y);
     }
@@ -724,6 +730,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
         all_cores,
         reader_rt_args
     );
+    std::vector<CoreCoord> cores;
 
     if (out_sharded) {
         vector<uint32_t> writer_rt_args = {
@@ -741,12 +748,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
     } else {
         uint32_t tile_start_id = 0;
         uint32_t row_start_id = 0;
-        auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
-        for (uint32_t i = 0; i < cores.size(); i++){
-            CoreCoord core = cores[i];
-            if (!all_cores.core_coord_in_core_ranges(core)) {
-                continue;
-            }
+        cores = grid_to_cores(ncores, ncores_x, ncores_y, row_major);
+        for (uint32_t i = 0; i < cores.size(); ++i){
+            CoreCoord &core = cores[i];
 
             // writer runtime args
             vector<uint32_t> writer_rt_args;
@@ -757,9 +761,21 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
             if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
                 block_start_row_offset = i * block_row_size;
                 block_start_row_id_offset = 0;
+                if (i == last_idx) {
+                    row_size_unpadded = last_block_row_size_unpadded;
+                } else if (i > last_idx) {
+                    row_size_unpadded =  0;
+                    num_rows_unpadded =  0;
+                }
             } else if (a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                 block_start_row_offset = 0;
                 block_start_row_id_offset = i * num_rows_block;
+                if (i == last_idx) {
+                    num_rows_unpadded = num_output_rows_unpadded;
+                } else if (i > last_idx) {
+                    row_size_unpadded =  0;
+                    num_rows_unpadded =  0;
+                }
             } else {
                 if (row_major) {
                     block_start_row_offset = core.x * block_row_size;
@@ -816,11 +832,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
             writer_kernel_id=unary_writer_kernel_id,
             cb_src0=cb_src0,
             cb_sharded_output=cb_sharded_output,
-            all_cores=all_cores,
-            ncores=ncores,
-            ncores_x=ncores_x,
-            ncores_y=ncores_y,
-            row_major=row_major
+            cores
         ]
     (
         const void* operation,
@@ -841,7 +853,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
         if (out_sharded) {
             UpdateDynamicCircularBufferAddress(program, cb_sharded_output, *dst_buffer);
         } else {
-            auto cores = grid_to_cores(ncores, ncores_x, ncores_y, row_major);
             for (const CoreCoord& core : cores){
                 auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
