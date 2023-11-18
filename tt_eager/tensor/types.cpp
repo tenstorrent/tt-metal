@@ -108,7 +108,7 @@ const Shape Shape::without_padding() const {
 const uint32_t Shape::get_normalized_index(std::int64_t index) const {
     auto rank = this->rank_;
     auto normalized_index = index >= 0 ? index : rank + index;
-    TT_ASSERT(normalized_index >= 0 and normalized_index < rank, fmt::format("0 <= {} < {}", normalized_index, rank));
+    TT_ASSERT(normalized_index >= 0 and normalized_index < rank, fmt::format("Index is out of bounds for the rank, should be between 0 and {} however is {}",rank-1, normalized_index));
     return normalized_index;
 }
 

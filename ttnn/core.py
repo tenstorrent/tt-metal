@@ -371,7 +371,7 @@ def add(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, al
     """
     add(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, alpha: Union[int, float]=1) -> Tensor
 
-    Adds :attr:`input_tensor_b`, scaled by :attr:`alpha`, to :attr:`input_tensor_a`.
+    Adds :attr:`input_tensor_b`, scaled by :attr:`alpha`, to :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`
 
     .. math::
         \mathrm{{input\_tensor\_a}}_i + \mathrm{{alpha}} \\times \mathrm{{input\_tensor\_b}}_i
@@ -402,7 +402,7 @@ def add(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, al
     input_tensor_a = _reshape_to_4D(input_tensor_a)
     ttl_input_tensor_a = input_tensor_a._tensor
 
-    if ttl_input_tensor_a.storage_type() != ttl.tensor.StorageType.DEVICE:
+    if not input_tensor_a.is_on_device:
         raise RuntimeError("input_tensor_a must be on device!")
 
     if _is_scalar(input_tensor_b):
@@ -562,43 +562,93 @@ def mul(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor:
 
     """
 
+    original_shape = tuple(input_tensor_a.shape)
+    input_tensor_a = _reshape_to_4D(input_tensor_a)
+    ttl_input_tensor_a = input_tensor_a._tensor
+
     if not isinstance(input_tensor_a, Tensor):
         raise TypeError("Expected first argument to be a ttnn.Tensor")
 
     ttl_input_tensor_a = input_tensor_a._tensor
 
-    if ttl_input_tensor_a.storage_type() != ttl.tensor.StorageType.DEVICE:
+    if not input_tensor_a.is_on_device:
         raise RuntimeError("input_tensor_a must be on device!")
 
-    input_shape_a = ttl_input_tensor_a.shape()
     if _is_scalar(input_tensor_b):
-        return Tensor(ttl.tensor.mul_unary(ttl_input_tensor_a, input_tensor_b))
+        return reshape(Tensor(ttl.tensor.mul_unary(ttl_input_tensor_a, input_tensor_b)), original_shape)
     elif not isinstance(input_tensor_b, Tensor):
         raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
 
+    input_tensor_b = _reshape_to_4D(input_tensor_b)
     ttl_input_tensor_b = input_tensor_b._tensor
     input_shape_b = ttl_input_tensor_b.shape()
     *_, height_b, width_b = input_shape_b
 
     if height_b == 1 and width_b == 1:
-        return Tensor(
-            ttl.tensor.bcast(
-                ttl_input_tensor_a, ttl_input_tensor_b, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.HW
+        return reshape(
+            Tensor(
+                ttl.tensor.bcast(
+                    ttl_input_tensor_a, ttl_input_tensor_b, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.HW
+                ),
+                original_shape,
             )
         )
     elif height_b == 1:
-        return Tensor(
-            ttl.tensor.bcast(
-                ttl_input_tensor_a, ttl_input_tensor_b, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.H
-            )
+        return reshape(
+            Tensor(
+                ttl.tensor.bcast(
+                    ttl_input_tensor_a, ttl_input_tensor_b, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.H
+                )
+            ),
+            original_shape,
         )
     elif width_b == 1:
-        return Tensor(
-            ttl.tensor.bcast(
-                ttl_input_tensor_a, ttl_input_tensor_b, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.W
-            )
+        return reshape(
+            Tensor(
+                ttl.tensor.bcast(
+                    ttl_input_tensor_a, ttl_input_tensor_b, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.W
+                )
+            ),
+            original_shape,
         )
-    return Tensor(ttl.tensor.mul(input_shape_a, ttl_input_tensor_b))
+
+    return reshape(Tensor(ttl.tensor.mul(ttl_input_tensor_a, ttl_input_tensor_b)), original_shape)
+
+
+def tanh(input_tensor: Tensor) -> Tensor:
+    """
+    mul(input_tensor: Tensor) -> Tensor
+
+    Applies tanh to :attr:`input_tensor` element-wise.
+
+    .. math::
+        tanh(\mathrm{{input\_tensor}}_i)
+
+    Args:
+        * :attr:`input_tensor`
+
+    Example::
+
+        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+        >>> output = ttnn.tanh(tensor)
+        >>> print(output)
+        Tensor([ 0, 2], dtype=bfloat16 )
+
+    """
+
+    original_shape = tuple(input_tensor.shape)
+    input_tensor = _reshape_to_4D(input_tensor)
+    ttl_input_tensor = input_tensor._tensor
+
+    if not isinstance(input_tensor, Tensor):
+        raise TypeError("Expected first argument to be a ttnn.Tensor")
+
+    ttl_input_tensor = input_tensor._tensor
+
+    if not input_tensor.is_on_device:
+        raise RuntimeError("input_tensor must be on device!")
+
+    return reshape(Tensor(ttl.tensor.tanh(ttl_input_tensor)), original_shape)
 
 
 subtract = sub
@@ -607,8 +657,10 @@ multiply = mul
 
 Tensor.__matmul__ = matmul
 Tensor.__add__ = add
+Tensor.__radd__ = add
 Tensor.__sub__ = sub
 Tensor.__mul__ = mul
+Tensor.__rmul__ = mul
 
 
 # Data Transformations
@@ -703,10 +755,13 @@ def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
     if not isinstance(order, tuple):
         raise RuntimeError("order must be a tuple")
 
+    if not input_tensor.is_on_device:
+        RuntimeError("input_tensor must be on device!")
+
     ttl_input_tensor = input_tensor._tensor
 
     try:
-        return Tensor(ttl.tensor.permute(input_tensor._tensor, order))
+        return Tensor(ttl.tensor.permute(ttl_input_tensor, order))
     except:
 
         def torch_permute(tensor, order):
@@ -745,7 +800,7 @@ def softmax(input_tensor: Tensor, dim: int) -> Tensor:
     if dim < 0:
         dim = rank + dim
     if dim != rank - 1:
-        raise RuntimeError("Softmax can operation only on the last dim")
+        raise RuntimeError("Softmax can only operate on the last dimension.")
 
     ttl_input_tensor = input_tensor._tensor
     ttl_output_tensor = ttl.tensor.softmax(ttl_input_tensor)
@@ -807,15 +862,4 @@ def embedding(
     return embeddings
 
 
-__all__ = [
-    "matmul",
-    "add",
-    "sub",
-    "subtract",
-    "mul",
-    "multiply",
-    "reshape",
-    "permute",
-    "softmax",
-    "embedding",
-]
+__all__ = ["matmul", "add", "sub", "subtract", "mul", "multiply", "reshape", "permute", "softmax", "embedding", "tanh"]

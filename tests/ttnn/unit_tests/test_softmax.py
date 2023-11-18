@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import torch_random
 
 
 @skip_for_wormhole_b0()
@@ -18,9 +19,8 @@ from models.utility_functions import skip_for_wormhole_b0
 def test_softmax(device, h, w):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.zeros((1, 1, h, w), dtype=torch.bfloat16).uniform_(-1.0, 1.0)
-    torch_output_tensor = F.softmax(torch_input_tensor, dim=-1)
-
+    torch_input_tensor = torch_random((1, 16, 4, 4), -10, 10, dtype=torch.bfloat16)
+    torch_output_tensor = F.softmax(torch_input_tensor, dim=-1, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor)
     input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = ttnn.softmax(input_tensor, dim=-1)

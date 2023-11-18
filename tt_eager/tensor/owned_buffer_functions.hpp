@@ -18,6 +18,7 @@ namespace owned_buffer {
 template<typename T>
 Buffer<T> create(std::vector<T>&& storage) {
     return Buffer<T>{std::make_shared<std::vector<T>>(std::move(storage))};
+    //return Buffer<T>{std::make_shared<std::vector<T>>(std::forward<T>(storage))};
 }
 
 template<typename T>

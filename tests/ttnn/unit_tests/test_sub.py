@@ -29,6 +29,26 @@ def test_sub_scalar(device, s, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
 
 
+@pytest.mark.parametrize("s", [3])
+@pytest.mark.parametrize("h", [2 * 32])
+@pytest.mark.parametrize("w", [4 * 32])
+def test_rsub_scalar(device, s, h, w):
+    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = s - torch_input_tensor
+
+    input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.to_device(input_tensor, device)
+
+    # TODO : add Tensor.__rsub__ eventually
+    output_tensor = ttnn.mul(input_tensor, -1.0)
+    output_tensor = ttnn.add(output_tensor, s)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.99)
+
+
 @pytest.mark.parametrize("alpha", [0.42])
 @pytest.mark.parametrize("scalar_input_tensor_b", [0.5])
 @pytest.mark.parametrize("h", [1])
