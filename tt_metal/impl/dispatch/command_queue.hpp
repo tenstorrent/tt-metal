@@ -58,10 +58,8 @@ enum class EnqueueCommandType { ENQUEUE_READ_BUFFER, ENQUEUE_WRITE_BUFFER, ENQUE
 string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 
 // TEMPORARY! TODO(agrebenisan): need to use proper macro based on loading noc
-#define NOC_X(x) x
-#define NOC_Y(y) y
-
-uint32_t get_noc_unicast_encoding(CoreCoord coord);
+#define NOC_X(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x-1-(x)))
+#define NOC_Y(noc_index, noc_size_y, y) (noc_index == 0 ? (y) : (noc_size_y-1-(y)))
 
 class Command {
     EnqueueCommandType type_ = EnqueueCommandType::INVALID;

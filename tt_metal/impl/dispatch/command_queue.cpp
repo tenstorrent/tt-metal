@@ -20,16 +20,24 @@ namespace tt::tt_metal {
 
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
-uint32_t get_noc_multicast_encoding(const CoreCoord& top_left, const CoreCoord& bottom_right) {
-    return NOC_MULTICAST_ENCODING(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
+constexpr NOC consumer_noc = NOC::NOC_1;
+
+inline uint32_t get_noc_unicast_encoding(NOC noc, uint32_t noc_size_x, uint32_t noc_size_y, CoreCoord coord) {
+    return NOC_XY_ENCODING(NOC_X(noc, noc_size_x, coord.x), NOC_Y(noc, noc_size_y, coord.y));
 }
 
-uint32_t get_noc_unicast_encoding(CoreCoord coord) { return NOC_XY_ENCODING(NOC_X(coord.x), NOC_Y(coord.y)); }
+inline uint32_t get_noc_multicast_encoding(NOC noc, uint32_t noc_size_x, uint32_t noc_size_y, const CoreCoord& top_left, const CoreCoord& bottom_right) {
+    if (noc == 0) {
+        return NOC_MULTICAST_ENCODING(NOC_X(noc, noc_size_x, top_left.x), NOC_Y(noc, noc_size_y, top_left.y), NOC_X(noc, noc_size_x, bottom_right.x), NOC_Y(noc, noc_size_y, bottom_right.y));
+    } else {
+        return NOC_MULTICAST_ENCODING(NOC_X(noc, noc_size_x, bottom_right.x), NOC_Y(noc, noc_size_y, bottom_right.y), NOC_X(noc, noc_size_x, top_left.x), NOC_Y(noc, noc_size_y, top_left.y));
+    }
+}
 
 uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
 
-ProgramMap ConstructProgramMap(const Device* device, Program& program) {
+ProgramMap ConstructProgramMap(const Device* device, Program& program, const NOC noc, const uint32_t noc_size_x, const uint32_t noc_size_y) {
     /*
         TODO(agrebenisan): Move this logic to compile program
     */
@@ -78,14 +86,14 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         return src;
     };
 
-    auto extract_dst_noc_multicast_info = [&device](const set<CoreRange>& ranges) -> vector<pair<uint32_t, uint32_t>> {
+    auto extract_dst_noc_multicast_info = [&device, &noc, &noc_size_x, &noc_size_y](const set<CoreRange>& ranges) -> vector<pair<uint32_t, uint32_t>> {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
         vector<pair<uint32_t, uint32_t>> dst_noc_multicast_info;
         for (const CoreRange& core_range : ranges) {
             CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start);
             CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end);
 
-            uint32_t dst_noc_multicast_encoding = get_noc_multicast_encoding(physical_start, physical_end);
+            uint32_t dst_noc_multicast_encoding = get_noc_multicast_encoding(noc, noc_size_x, noc_size_y, physical_start, physical_end);
 
             uint32_t num_receivers = core_range.size();
             dst_noc_multicast_info.push_back(std::make_pair(dst_noc_multicast_encoding, num_receivers));
@@ -109,7 +117,7 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
             CoreCoord physical_core = device->worker_core_from_logical_core(core_coord);
             const auto & runtime_args = kernel->runtime_args(core_coord);
             uint32_t num_bytes = runtime_args.size() * sizeof(uint32_t);
-            uint32_t dst_noc = get_noc_unicast_encoding(physical_core);
+            uint32_t dst_noc = get_noc_unicast_encoding(noc, noc_size_x, noc_size_y, physical_core);
 
             // Only one receiver per set of runtime arguments
             src = update_program_page_transfers(
@@ -636,7 +644,6 @@ void send_dispatch_kernel_to_device(Device* device) {
     CoreCoord consumer_physical_core = device->worker_core_from_logical_core(consumer_logical_core);
 
     std::map<string, string> producer_defines = {
-        {"IS_DISPATCH_KERNEL", ""},
         {"CONSUMER_NOC_X", std::to_string(consumer_physical_core.x)},
         {"CONSUMER_NOC_Y", std::to_string(consumer_physical_core.y)},
     };
@@ -650,7 +657,7 @@ void send_dispatch_kernel_to_device(Device* device) {
         "tt_metal/impl/dispatch/kernels/command_queue_producer.cpp",
         producer_logical_core,
         tt::tt_metal::DataMovementConfig {
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .compile_args = dispatch_compile_args,
             .defines = producer_defines});
@@ -660,8 +667,8 @@ void send_dispatch_kernel_to_device(Device* device) {
         "tt_metal/impl/dispatch/kernels/command_queue_consumer.cpp",
         consumer_logical_core,
         tt::tt_metal::DataMovementConfig {
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = consumer_noc,
             .compile_args = dispatch_compile_args,
             .defines = consumer_defines});
 
@@ -680,14 +687,13 @@ void send_dispatch_kernel_to_device(Device* device) {
 
     const std::tuple<uint32_t, uint32_t> tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(device->id(), device->worker_core_from_logical_core(*device->dispatch_cores().begin()))).value();
     auto [tlb_offset, tlb_size] = tlb_data;
-    // std::cout << "CORE: " << device->worker_core_from_logical_core(*device->dispatch_cores().begin()).str() << std::endl;
-    // std::cout << "after sending pointers to device. my tlb_offset: " << tlb_offset << ", my tlb_size: " << tlb_size << std::endl;
 
-    launch_msg_t msg = dispatch_program.kernels_on_core(producer_logical_core)->launch_msg;
+    launch_msg_t producer_msg = dispatch_program.kernels_on_core(producer_logical_core)->launch_msg;
+    launch_msg_t consumer_msg = dispatch_program.kernels_on_core(consumer_logical_core)->launch_msg;
 
     // TODO(pkeller): Should use detail::LaunchProgram once we have a mechanism to avoid running all RISCs
-    tt::llrt::write_launch_msg_to_core(device->id(), producer_physical_core, &msg);
-    tt::llrt::write_launch_msg_to_core(device->id(), consumer_physical_core, &msg);
+    tt::llrt::write_launch_msg_to_core(device->id(), producer_physical_core, &producer_msg);
+    tt::llrt::write_launch_msg_to_core(device->id(), consumer_physical_core, &consumer_msg);
 }
 
 // CommandQueue section
@@ -788,7 +794,9 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
     bool stall = false;
     if (not this->program_to_buffer.count(program_id)) {
         stall = true;
-        ProgramMap program_to_device_map = ConstructProgramMap(this->device, program);
+        const CoreCoord grid_size = tt::Cluster::instance().get_soc_desc(this->device->id()).grid_size;
+
+        ProgramMap program_to_device_map = ConstructProgramMap(this->device, program, consumer_noc, grid_size.x, grid_size.y);
 
         vector<uint32_t>& program_pages = program_to_device_map.program_pages;
         uint32_t program_data_size_in_bytes = program_pages.size() * sizeof(uint32_t);

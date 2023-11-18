@@ -222,7 +222,7 @@ FORCE_INLINE void wait_for_program_completion(
 FORCE_INLINE void notify_host_complete() {
     volatile tt_l1_ptr uint32_t* finish_ptr = get_cq_finish_ptr();
     finish_ptr[0] = 1;
-    constexpr static uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32;
+    uint64_t pcie_core_noc_encoding = uint64_t(NOC_XY_ENCODING(NOC_X(PCIE_NOC_X), NOC_Y(PCIE_NOC_Y))) << 32;
     uint64_t finish_noc_addr = pcie_core_noc_encoding | HOST_CQ_FINISH_PTR;
     noc_async_write(uint32_t(finish_ptr), finish_noc_addr, 4);
     noc_async_write_barrier();

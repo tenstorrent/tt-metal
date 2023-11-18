@@ -14,8 +14,8 @@ void kernel_main() {
 
     static constexpr uint32_t command_start_addr = L1_UNRESERVED_BASE; // Space between L1_UNRESERVED_BASE -> data_start is for commands
 
-    uint64_t producer_noc_encoding = uint64_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y)) << 32;
-    uint64_t consumer_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0])) << 32;
+    uint64_t producer_noc_encoding = uint64_t(NOC_XY_ENCODING(NOC_X(PRODUCER_NOC_X), NOC_Y(PRODUCER_NOC_Y))) << 32;
+    uint64_t consumer_noc_encoding = uint64_t(NOC_XY_ENCODING(NOC_X(my_x[0]), NOC_Y(my_y[0]))) << 32;
 
     while (true) {
         // Wait for producer to supply a command
