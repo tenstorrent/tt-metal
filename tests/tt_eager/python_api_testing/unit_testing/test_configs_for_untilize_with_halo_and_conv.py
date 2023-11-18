@@ -36,6 +36,11 @@ from tt_lib.utils import _nearest_y
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 16, (1, 28, 28), 98, False),  # layer2 b16 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 16, (1, 14, 14), 11, False),  # layer3 b16 - 11 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 16, (1, 7, 7), 9, False),  # layer4 b16 - 9 cores for height slicing
+        ((1, 1, 4, 4, 1, 1, 1, 1, 1, 1), 20, (1, 115, 115), 98, False),  # first conv b16 - 98 cores for height slicing
+        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 20, (1, 56, 56), 98, False),  # layer1 b20 - 98 cores for height slicing
+        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 20, (1, 28, 28), 98, False),  # layer2 b20 - 98 cores for height slicing
+        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 20, (1, 14, 14), 12, False),  # layer3 b20 - 12 cores for height slicing
+        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 20, (1, 7, 7), 11, False),  # layer4 b20 - 11 cores for height slicing
         # resnet50 s2 convs
         ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 8, (1, 56, 56), 98, False),  # layer2 b8 - 98 cores for height slicing
         ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 8, (1, 28, 28), 10, False),  # layer3 b8 - 10 cores for height slicing
@@ -43,9 +48,13 @@ from tt_lib.utils import _nearest_y
         ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 16, (1, 56, 56), 98, False),  # layer2 b16 - 98 cores for height slicing
         ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 16, (1, 28, 28), 11, False),  # layer3 b16 - 11 cores for height slicing
         ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 16, (1, 14, 14), 9, False),  # layer3 b16 - 9 cores for height slicing
+        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 20, (1, 56, 56), 98, False),  # layer2 b20 - 98 cores for height slicing
+        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 20, (1, 28, 28), 12, False),  # layer3 b20 - 12 cores for height slicing
+        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 20, (1, 14, 14), 11, False),  # layer3 b20 - 11 cores for height slicing
         # resnet50 maxpool
         ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 8, (1, 112, 112), 98, True),
         ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 16, (1, 112, 112), 98, True),
+        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 20, (1, 112, 112), 98, True),
     ),
 )
 def test_generate_all_configs_and_references(conv_params, batch_size, input_chw_shape, num_cores, test_max_pool):
