@@ -25,7 +25,7 @@ namespace tt::tt_metal::detail{
                 )doc");
 
         m_tensor.def("sfpu_eps", &tt::tt_metal::sfpu_eps,
-                py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+                py::arg("shape"), py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
                     Returns a new tensor filled with the machine epsilon value in shape specified by input ``shape``.
 
                     Input shape is specified as a list of 4 integer elements
@@ -449,7 +449,7 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("zeros", &zeros,
-            py::arg("shape"), py::arg("data_type").noconvert() = DataType::BFLOAT16, py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("shape"), py::arg("data_type").noconvert() = DataType::BFLOAT16, py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns a new tensor filled with zeros in shape specified by input ``shape``.
 
             Input shape is specified as a list of 4 integer elements
@@ -467,7 +467,7 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("empty", &empty,
-            py::arg("shape"), py::arg("data_type").noconvert() = DataType::BFLOAT16, py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("shape"), py::arg("data_type").noconvert() = DataType::BFLOAT16, py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns a new empty tensor (on device) in shape specified by input ``shape``.
 
             Input shape is specified as a list of 4 integer elements
@@ -485,7 +485,7 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("ones", &ones,
-            py::arg("shape"), py::arg("data_type").noconvert() = DataType::BFLOAT16, py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("shape"), py::arg("data_type").noconvert() = DataType::BFLOAT16, py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns a new tensor filled with ones in shape specified by input ``shape``.
 
             Input shape is specified as a list of 4 integer elements
@@ -503,7 +503,7 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("full", &full,
-            py::arg("shape"), py::arg("fill_value"), py::arg("data_type").noconvert() = DataType::BFLOAT16, py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("shape"), py::arg("fill_value"), py::arg("data_type").noconvert() = DataType::BFLOAT16, py::arg("layout").noconvert() = Layout::ROW_MAJOR, py::arg("device").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns a new tensor filled with the scalar value in shape specified by input ``shape``.
 
             Input shape is specified as a list of 4 integer elements
@@ -522,7 +522,7 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("arange", &arange,
-            py::arg("start"), py::arg("end"), py::arg("step"), py::arg("device") = nullptr, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("start"), py::arg("end"), py::arg("step"), py::arg("device").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Returns a new 1D tensor with the incremented values in size specified by inputs ``start``, ``end`` and ``step``.
 
             Inpute scalars are integers specifying start, end, and step sizes.

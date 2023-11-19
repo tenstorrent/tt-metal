@@ -1083,26 +1083,26 @@ Tensor clamp(const Tensor& a,float low, float high, const MemoryConfig& output_m
 }
 
 //on-device tensor creation 0s with shape
-Tensor zeros(const Shape shape, DataType data_type, Layout layout, const Device& device, const MemoryConfig& output_mem_config) {
+Tensor zeros(const Shape shape, DataType data_type, Layout layout, std::optional<std::reference_wrapper<const Device> > device, const MemoryConfig& output_mem_config) {
     return tt::numpy::zeros(shape, data_type, layout, device, output_mem_config);
 }
 
-Tensor empty(const Shape shape, DataType data_type, Layout layout, const Device& device, const MemoryConfig& output_mem_config) {
-  return create_device_tensor(shape, data_type, layout,  device, output_mem_config);
+Tensor empty(const Shape shape, DataType data_type, Layout layout, std::optional<std::reference_wrapper<const Device> > device, const MemoryConfig& output_mem_config) {
+  return create_device_tensor(shape, data_type, layout, device.value(), output_mem_config);
 }
 
 //on-device tensor creation 1s with shape
-Tensor ones(const Shape shape, DataType data_type, Layout layout, const Device& device, const MemoryConfig& output_mem_config) {
+Tensor ones(const Shape shape, DataType data_type, Layout layout, std::optional<std::reference_wrapper<const Device> > device,  const MemoryConfig& output_mem_config) {
     return tt::numpy::ones(shape, data_type, layout, device, output_mem_config);
 }
 
 //on-device tensor creation with shape and filled with value
-Tensor full(const Shape shape, float value, DataType data_type, Layout layout, const Device& device, const MemoryConfig& output_mem_config) {
+Tensor full(const Shape shape, float value, DataType data_type, Layout layout, std::optional<std::reference_wrapper<const Device> > device, const MemoryConfig& output_mem_config) {
     return tt::numpy::full(shape, value, data_type, layout, device, output_mem_config);
 }
 
 //on-device with increment
-Tensor arange(int32_t start, int32_t end, int32_t step, const Device& device, const MemoryConfig& output_mem_config) {
+Tensor arange(int32_t start, int32_t end, int32_t step, std::optional<std::reference_wrapper<const Device> > device, const MemoryConfig& output_mem_config) {
     return tt::numpy::arange<bfloat16>(start, end, step, Layout::ROW_MAJOR, device, output_mem_config);
 }
 
