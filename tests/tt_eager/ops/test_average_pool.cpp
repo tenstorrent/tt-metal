@@ -31,7 +31,7 @@ Tensor run_avg_pool_2d_resnet(Shape& tensor_shape, const Device& device) {
 
 int main () {
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
+    const auto &device = tt::tt_metal::CreateDevice(device_id);
 
     Shape resnet18_shape = {1, 1, 7 * 7, 2048};
     auto result = run_avg_pool_2d_resnet(resnet18_shape, device);

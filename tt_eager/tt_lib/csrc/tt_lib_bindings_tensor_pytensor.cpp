@@ -864,7 +864,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     storage_type = tt_tensor.storage_type()
 
             )doc")
-            .def("device", [](const Tensor &self) {
+            .def("device", [](const Tensor &self) -> const Device & {
                 return self.device();
             }, R"doc(
                 Get the device of the tensor.

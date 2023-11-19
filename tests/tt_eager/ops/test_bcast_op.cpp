@@ -39,7 +39,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         auto shapes = std::vector<Shape>{{1, 1, TILE_HEIGHT, TILE_WIDTH}, {1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2}, {1, 1, TILE_HEIGHT * 3, TILE_WIDTH * 4}};
 
-        auto run_operations = [&shapes, device] {
+        auto run_operations = [&shapes, &device] {
             for (const auto shape : shapes) {
                 for (auto bcast_dim: magic_enum::enum_values<BcastOpDim>()) {
                     auto input_shape_a = shape;

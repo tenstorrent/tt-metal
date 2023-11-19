@@ -193,7 +193,7 @@ void test_bert() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
+    const auto &device = tt::tt_metal::CreateDevice(device_id);
     CoreCoord compute_grid_size = device.compute_with_storage_grid_size();
 
     if (compute_grid_size.x * compute_grid_size.y == 88) {

@@ -59,11 +59,11 @@ class Device {
     ~Device();
 
     // TODO: Add copy/move semantics
-    Device(const Device &other) { }
-    Device& operator=(const Device &other) { return *this; }
+    Device(const Device &other) = delete;
+    Device& operator=(const Device &other) = delete;
 
-    Device(Device &&other) { }
-    Device& operator=(Device &&other) { return *this; }
+    Device(Device &&other) = default;
+    Device& operator=(Device &&other) = default;
 
     bool operator==(const Device& other) const{ return this->id() == other.id(); }
     tt::ARCH arch() const;

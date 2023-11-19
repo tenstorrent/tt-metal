@@ -116,7 +116,7 @@ namespace detail {
         TT_FATAL(page_size % bytes_per_page_entry == 0);
         uint32_t num_entries_per_page = page_size / bytes_per_page_entry;
 
-        auto device = buffer.device();
+        const auto &device = buffer.device();
         auto num_banks = device.num_banks(buffer.buffer_type());
         uint32_t bank_index = 0;
         int data_index = 0;
@@ -164,7 +164,7 @@ namespace detail {
         TT_FATAL(buffer.size() % page_size == 0);
         uint32_t num_pages = buffer.size() / page_size;
 
-        auto device = buffer.device();
+        const auto &device = buffer.device();
         auto num_banks = device.num_banks(buffer.buffer_type());
 
         uint32_t bank_index = 0;

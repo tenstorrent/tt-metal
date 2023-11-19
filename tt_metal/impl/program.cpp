@@ -553,7 +553,7 @@ void Program::compile( const Device& device )
 
     // compile all kernels in parallel
     for (Kernel * kernel : kernels_) {
-        events.emplace_back ( detail::async ( [kernel, device, this] {
+        events.emplace_back ( detail::async ( [kernel, &device, this] {
             build_kernel_for_riscv_options_t build_options(device.id(), kernel->name());
             ZoneScoped;
 
@@ -583,7 +583,7 @@ void Program::compile( const Device& device )
         f.wait();
 
     for (Kernel * kernel : kernels_) {
-        events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device.id()); }));
+        events.emplace_back ( detail::async ( [kernel, &device] { kernel->read_binaries(device.id()); }));
     }
 
     for (auto & f : events)

@@ -320,7 +320,7 @@ std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor &input_ten
     if (AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape)) {
         return operation::run(op, {input_tensor});
     } else {
-        auto device = input_tensor.device();
+        const auto &device = input_tensor.device();
         auto output_shape = op.compute_output_shapes({input_tensor}).at(0);
         const auto padded_tensor =
             AutoFormat::format_input_tensor(input_tensor, device, padded_input_shape, 0.0, Layout::TILE);

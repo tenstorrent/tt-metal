@@ -47,7 +47,7 @@ int main() {
     using tt::constants::TILE_WIDTH;
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
+    const auto &device = tt::tt_metal::CreateDevice(device_id);
 
 
 

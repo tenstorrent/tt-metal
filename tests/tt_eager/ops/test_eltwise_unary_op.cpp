@@ -97,7 +97,7 @@ void test_shape_padding() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
+    const auto &device = tt::tt_metal::CreateDevice(device_id);
     tt::tt_metal::AutoFormat::SetDefaultDevice(device);
 
 
@@ -136,7 +136,7 @@ void test_numerically() {
     using tt::constants::TILE_WIDTH;
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
+    const auto &device = tt::tt_metal::CreateDevice(device_id);
 
 
 
@@ -203,7 +203,7 @@ void test_program_cache() {
     using tt::constants::TILE_WIDTH;
 
     int device_id = 0;
-    auto device = tt::tt_metal::CreateDevice(device_id);
+    const auto &device = tt::tt_metal::CreateDevice(device_id);
 
 
 
