@@ -10,28 +10,8 @@ permissions:
   packages: write
 
 jobs:
-  get-params:
-    runs-on: ubuntu-latest
-    outputs:
-      is-release-candidate: ${{ steps.get-is-release-candidate.outputs.is-release-candidate }}
-    steps:
-      - name: Get is-release-candidate
-        id: get-is-release-candidate
-        run: |
-          isReleaseCandidate=${{ github.ref_type == 'branch' && github.event_name == 'push' }}
-          echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
-  create-tag:
-    needs: [get-params]
-    uses: tenstorrent-metal/metal-workflows/.github/workflows/release-verify-or-create-tag.yaml@main
-    with:
-      fetch_depth: 0
-      bump_each_commit: false
-      release_candidate_suffix: ${{ needs.get-params.outputs.is-release-candidate && fromJSON(needs.get-params.outputs.is-release-candidate) }}
-    secrets:
-      CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
   create-changelog:
     permissions: read-all
-    needs: create-tag
     runs-on: ubuntu-latest
     steps:
       - name: Create changelog
@@ -50,7 +30,6 @@ jobs:
           name: changelog
           path: CHANGELOG.txt
   build-eager-package:
-    needs: create-tag
     strategy:
       matrix:
         os: [ubuntu-20.04]
@@ -62,20 +41,10 @@ jobs:
       arch: ${{ matrix.arch }}
     secrets:
       CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
-  release-run-frequent-slow-dispatch:
-    uses: ./.github/workflows/full-regressions-and-models.yaml
-    secrets: inherit
-  release-run-frequent-fast-dispatch:
-    uses: ./.github/workflows/fast-dispatch-full-regressions-and-models.yaml
-    secrets: inherit
-  # Candidate for breaking up
   create-and-upload-draft-release:
     needs: [
-      create-tag,
       create-changelog,
       build-eager-package,
-      release-run-frequent-slow-dispatch,
-      release-run-frequent-fast-dispatch,
     ]
     strategy:
       matrix:
@@ -92,7 +61,7 @@ jobs:
         with:
           name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
       - name: Create VERSION
-        run: echo ${{ needs.create-tag.outputs.version }} > VERSION
+        run: echo v0.37.0 > VERSION
       - name : Download changelog
         uses: actions/download-artifact@v3
         with:
@@ -111,8 +80,8 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ${{ needs.create-tag.outputs.version }}
-          name: ${{ needs.create-tag.outputs.version }}
+          tag_name: v0.37.0
+          name: syseng-assets-release-test
           draft: true
           body_path: CHANGELOG.txt
           files: |
