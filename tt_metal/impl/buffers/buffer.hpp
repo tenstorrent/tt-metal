@@ -30,9 +30,9 @@ class Buffer {
 
     Buffer(const Buffer &other);
 
-    Buffer(Buffer &&other);
+    Buffer(Buffer &&other) = default;
     Buffer& operator=(const Buffer &other) = delete;
-    Buffer& operator=(Buffer &&other) = delete;
+    Buffer& operator=(Buffer &&other) = default;
 
     ~Buffer();
 

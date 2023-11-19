@@ -33,9 +33,6 @@ Buffer::Buffer(const Buffer &other)
     this->allocate();
 }
 
-Buffer::Buffer(Buffer &&other) : device_(other.device_), size_(other.size_), address_(other.address_), page_size_(other.page_size_), buffer_type_(other.buffer_type_) {
-}
-
 void Buffer::allocate() {
     // L1 buffers are allocated top down!
     bool bottom_up = this->buffer_type_ == BufferType::DRAM;
