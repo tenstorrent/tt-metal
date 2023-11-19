@@ -56,7 +56,7 @@ void DeviceModule(py::module &m_device) {
         | device           | return machine epsilon | tt_lib.device.Device  |     NA      | Yes      |
         +------------------+------------------------+-----------------------+-------------+----------+
         )doc");
-    m_device.def("CreateDevice", [](int device_id) -> const Device& { return CreateDevice(device_id); }, R"doc(
+    m_device.def("CreateDevice", [](int device_id) -> const Device& { return CreateDevice(device_id); }, py::return_value_policy::reference, R"doc(
         Creates an instance of TT device.
 
         +------------------+------------------------+---------------------+------------------------------+----------+
@@ -85,7 +85,7 @@ void DeviceModule(py::module &m_device) {
         +------------------+------------------------+-----------------------+-------------+----------+
     )doc");
 
-    m_device.def("GetDefaultDevice", &AutoFormat::GetDefaultDevice, R"doc(
+    m_device.def("GetDefaultDevice", &AutoFormat::GetDefaultDevice,  py::return_value_policy::reference, R"doc(
         Gets the default device to use for ops when inputs aren't on device.
     )doc");
 
