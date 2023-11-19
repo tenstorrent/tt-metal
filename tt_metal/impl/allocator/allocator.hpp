@@ -42,7 +42,7 @@ class BankManager {
 
     uint64_t allocate_buffer(uint32_t size, uint32_t page_size, bool bottom_up);
 
-    void deallocate_buffer(uint64_t address);
+    void deallocate_buffer(uint64_t address) const;
     void deallocate_all() const;
 
     std::optional<uint64_t> lowest_occupied_address(uint32_t bank_id) const;
@@ -98,8 +98,8 @@ uint64_t base_alloc(const AllocatorConfig & config, BankManager &bank_manager, u
 
 uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size, const BufferType &buffer_type, bool bottom_up);
 
-void deallocate_buffer(Allocator &allocator, uint64_t address, const BufferType &buffer_type);
-void deallocate_buffers(Allocator &allocator);
+void deallocate_buffer(const Allocator &allocator, uint64_t address, const BufferType &buffer_type);
+void deallocate_buffers(const Allocator &allocator);
 
 void clear(Allocator &allocatator);
 

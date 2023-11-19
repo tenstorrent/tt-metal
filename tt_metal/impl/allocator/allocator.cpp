@@ -88,7 +88,7 @@ uint64_t BankManager::allocate_buffer(uint32_t size, uint32_t page_size, bool bo
     return address.value();
 }
 
-void BankManager::deallocate_buffer(uint64_t address) {
+void BankManager::deallocate_buffer(uint64_t address) const {
     this->allocator_->deallocate(address);
 }
 
@@ -248,7 +248,7 @@ uint64_t allocate_buffer(Allocator &allocator, uint32_t size, uint32_t page_size
     return address;
 }
 
-void deallocate_buffer(Allocator &allocator, uint64_t address, const BufferType &buffer_type) {
+void deallocate_buffer(const Allocator &allocator, uint64_t address, const BufferType &buffer_type) {
     switch (buffer_type) {
         case BufferType::DRAM:
             allocator.dram_manager.deallocate_buffer(address);
