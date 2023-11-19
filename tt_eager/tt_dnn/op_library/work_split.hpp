@@ -111,7 +111,7 @@ inline int find_max_block_size(uint32_t val, uint32_t max_block_size=8) {
     return result;
 }
 
-inline std::set<CoreRange> num_cores_to_corerange_set(uint32_t target_num_cores, CoreCoord grid_size, bool row_wise = false) {
+inline std::set<CoreRange> num_cores_to_corerange_set(const uint32_t target_num_cores, const CoreCoord grid_size, const bool row_wise = false) {
 	uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
 
@@ -154,7 +154,7 @@ inline std::set<CoreRange> num_cores_to_corerange_set(uint32_t target_num_cores,
 // the greater amount of work, and the CoreRangeSet that does less work if work cannot be evenly divided
 // If it can be evenly divided, the second CoreRangeSet is the same as the first, and the last is empty
 // The last 2 args are the units of work for the two core grids
-inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(CoreCoord grid_size, uint32_t units_to_divide, bool row_wise = false) {
+inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(const CoreCoord grid_size, const uint32_t units_to_divide, const bool row_wise = false) {
     ZoneScoped;
 	uint32_t num_cores_x = grid_size.x, num_cores_y = grid_size.y;
 	auto target_num_cores = std::min(units_to_divide, num_cores_x * num_cores_y);
@@ -233,7 +233,7 @@ inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, 
 	return std::make_tuple(target_num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2);
 }
 
-inline std::vector<CoreCoord> grid_to_cores(uint32_t num_cores, uint32_t grid_size_x, uint32_t grid_size_y, bool row_wise=false) {
+inline std::vector<CoreCoord> grid_to_cores(const uint32_t num_cores, const uint32_t grid_size_x, const uint32_t grid_size_y, const bool row_wise=false) {
     ZoneScoped;
     std::vector<CoreCoord> cores;
     cores.reserve(num_cores);
@@ -251,4 +251,42 @@ inline std::vector<CoreCoord> grid_to_cores(uint32_t num_cores, uint32_t grid_si
     return cores;
 }
 
-} } // namespace tt::tt_metal
+// Noop cores are appended at the end with no guarantees on ordering
+inline std::vector<CoreCoord> grid_to_cores_with_noop(const uint32_t bbox_x, const uint32_t bbox_y, const uint32_t grid_size_x, const uint32_t grid_size_y, const bool row_wise=false) {
+    ZoneScoped;
+    std::vector<CoreCoord> cores;
+    cores.reserve(grid_size_x * grid_size_y);
+    TT_ASSERT(bbox_x < grid_size_x);
+    TT_ASSERT(bbox_y < grid_size_y);
+    const uint32_t box_size_x = bbox_x + 1;
+    const uint32_t box_size_y = bbox_y + 1;
+
+    if (row_wise) {
+        for(uint32_t i = 0; i < box_size_x * box_size_y; ++i) {
+            cores.push_back({i % box_size_x, i / box_size_x});
+        }
+    } else {
+        for(uint32_t i = 0; i < box_size_x * box_size_y; ++i) {
+            cores.push_back({i / box_size_y, i % box_size_y});
+        }
+    }
+
+    // Right rectangle noops
+    for(uint32_t x = box_size_x; x < grid_size_x; ++x) {
+        for (uint32_t y = 0; y < grid_size_y; ++y) {
+            cores.push_back({x, y});
+        }
+    }
+
+    // Bottom rectangle noops
+    for(uint32_t y = box_size_y; y < grid_size_y; ++y) {
+        for (uint32_t x = 0; x < box_size_x; ++x) {
+            cores.push_back({x, y});
+        }
+    }
+
+    return cores;
+}
+
+} // namespace tt_metal
+} // namespace tt
