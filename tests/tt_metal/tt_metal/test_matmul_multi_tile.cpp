@@ -119,9 +119,9 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         auto src0_dram_buffer = CreateBuffer(device, dram_buffer_size_act, dram_buffer_size_act, tt_metal::BufferType::DRAM);
         auto src1_dram_buffer = CreateBuffer(device, dram_buffer_size_weights, dram_buffer_size_weights, tt_metal::BufferType::DRAM);
 
-        tt_metal::Buffer src2_dram_buffer;
+        std::unique_ptr<tt_metal::Buffer> src2_dram_buffer;
         if (with_bias) {
-            src2_dram_buffer = CreateBuffer(device, single_tile_size * N, single_tile_size * N, tt_metal::BufferType::DRAM);
+            src2_dram_buffer = std::make_unique<tt_metal::Buffer>(CreateBuffer(device, single_tile_size * N, single_tile_size * N, tt_metal::BufferType::DRAM));
         }
 
         auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size_out, dram_buffer_size_out, tt_metal::BufferType::DRAM);
@@ -225,7 +225,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
 
         if (with_bias) {
             vector<uint32_t> bias(N * 512, 0); // Just a zero bias, since the output check is identity
-            tt_metal::detail::WriteToBuffer(src2_dram_buffer, bias);
+            tt_metal::detail::WriteToBuffer(*src2_dram_buffer, bias);
         }
 
 
@@ -246,9 +246,9 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         };
 
         if (with_bias) {
-            auto dram_src2_noc_xy = src2_dram_buffer.noc_coordinates();
+            auto dram_src2_noc_xy = src2_dram_buffer->noc_coordinates();
             vector<uint32_t> bias_args = {
-                src2_dram_buffer.address(),
+                src2_dram_buffer->address(),
                 (std::uint32_t)dram_src2_noc_xy.x,
                 (std::uint32_t)dram_src2_noc_xy.y,
                 N,
@@ -292,7 +292,7 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         DeallocateBuffer(src0_dram_buffer);
         DeallocateBuffer(src1_dram_buffer);
         if (with_bias) {
-            DeallocateBuffer(src2_dram_buffer);
+            DeallocateBuffer(*src2_dram_buffer);
         }
         DeallocateBuffer(dst_dram_buffer);
 

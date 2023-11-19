@@ -32,8 +32,7 @@ class DeviceFixture : public ::testing::Test {
         }
 
         for (unsigned int id = 0; id < num_devices_; id++) {
-            auto* device = tt::tt_metal::CreateDevice(id);
-            devices_.push_back(device);
+            devices_.emplace_back(tt::tt_metal::CreateDevice(id));
         }
     }
 
@@ -43,7 +42,7 @@ class DeviceFixture : public ::testing::Test {
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<std::reference_wrapper<const tt::tt_metal::Device>> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 };

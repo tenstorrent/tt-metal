@@ -305,8 +305,6 @@ bool run_chained_sfpu_test(int chain_length) {
         DeallocateBuffer(dst_dram_buffer);
 
         pass &= tt_metal::CloseDevice(device);
-        delete device;
-
 
     } catch (const std::exception &e) {
         pass = false;
@@ -527,8 +525,6 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
         }
 
         pass &= tt_metal::CloseDevice(device);
-        delete device;
-
 
     } catch (const std::exception &e) {
         pass = false;
@@ -1005,8 +1001,6 @@ bool run_forked_binary_test() {
         }
 
         pass &= tt_metal::CloseDevice(device);
-        delete device;
-
 
     } catch (const std::exception &e) {
         pass = false;

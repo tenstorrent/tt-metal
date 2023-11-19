@@ -26,8 +26,7 @@ class N300DeviceFixture : public ::testing::Test {
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::Device::detect_num_available_devices() == 2 and
             tt::tt_metal::Device::detect_num_pci_devices() == 1) {
             for (unsigned int id = 0; id < num_devices_; id++) {
-                auto* device = tt::tt_metal::CreateDevice(id);
-                devices_.push_back(device);
+                devices_.emplace_back(tt::tt_metal::CreateDevice(id));
             }
 
         } else {
@@ -41,7 +40,7 @@ class N300DeviceFixture : public ::testing::Test {
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<std::reference_wrapper<const tt::tt_metal::Device> > devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 };

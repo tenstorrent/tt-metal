@@ -410,7 +410,7 @@ TEST_F(DeviceFixture, DISABLED_AllCoreSingleTileSfpuApproxCompute) {
     }
 
     int chip_id = 0;
-    CoreCoord worker_grid_size = this->devices_.at(0)->logical_grid_size();
+    CoreCoord worker_grid_size = this->devices_.at(0).get().logical_grid_size();
     CoreRange core_range = {.start = {0, 0}, .end = {worker_grid_size.x - 2, worker_grid_size.y - 2}};
 
     CoreRangeSet core_set({core_range});
@@ -449,7 +449,7 @@ TEST_F(DeviceFixture, DISABLED_AllCoreMultiTileSfpuApproxCompute) {
     }
 
     int chip_id = 0;
-    CoreCoord worker_grid_size = this->devices_.at(0)->logical_grid_size();
+    CoreCoord worker_grid_size = this->devices_.at(0).get().logical_grid_size();
     CoreRange core_range = {.start = {0, 0}, .end = {worker_grid_size.x - 2, worker_grid_size.y - 2}};
 
     CoreRangeSet core_set({core_range});

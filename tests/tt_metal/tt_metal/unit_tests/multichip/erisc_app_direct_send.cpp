@@ -29,8 +29,8 @@ using namespace tt::test_utils::df;
 namespace unit_tests::erisc::direct_send {
 // Tests ethernet direct send/receive from ERISC_APP_RESERVED_BASE
 bool send_over_eth(
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    const tt_metal::Device& sender_device,
+    const tt_metal::Device& receiver_device,
     const CoreCoord& sender_core,
     const CoreCoord& receiver_core,
     const size_t& byte_size) {

@@ -20,9 +20,6 @@ TEST_F(CommandQueueWithDPrintFixture, TestPrintRaiseWait) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }
 try{
-    // Device already set up by gtest fixture.
-    const Device& device = this->device_;
-
     // Set up program and command queue
     CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
     Program program = Program();

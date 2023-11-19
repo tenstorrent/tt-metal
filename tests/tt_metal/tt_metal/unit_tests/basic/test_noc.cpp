@@ -74,9 +74,8 @@ void read_translation_table (const Device& device, CoreCoord logical_node, std::
 
 TEST_F(BasicFixture, VerifyNocNodeIDs) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
-    const tt::tt_metal::Device& device;
-    const unsigned int device_id = 0;
-    device = tt::tt_metal::CreateDevice(device_id);
+    const tt::tt_metal::Device& device = tt::tt_metal::CreateDevice(0);
+
     // Ping all the Noc Nodes
     auto logical_grid_size = device.logical_grid_size();
     for (size_t y = 0; y < logical_grid_size.y; y++) {
@@ -101,9 +100,8 @@ TEST_F(BasicFixture, VerifyNocIdentityTranslationTable) {
     // If the translation tables are not defined, we should skip :)
     GTEST_SKIP();
 #endif
-    const tt::tt_metal::Device& device;
-    const unsigned int device_id = 0;
-    device = tt::tt_metal::CreateDevice(device_id);
+    const tt::tt_metal::Device& device = tt::tt_metal::CreateDevice(0);
+
     // Ping all the registers for NOC
     auto logical_grid_size = device.logical_grid_size();
     for (size_t y = 0; y < logical_grid_size.y; y++) {

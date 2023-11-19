@@ -58,7 +58,7 @@ TEST_F(DeviceFixture, TestSimpleDramBufferReadOnlyLo) {
 }
 TEST_F(DeviceFixture, TestSimpleDramBufferReadOnlyHi) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t hi_address = this->devices_.at(id).dram_size_per_channel() - (16 * 1024);
+        size_t hi_address = this->devices_.at(id).get().dram_size_per_channel() - (16 * 1024);
         ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 4));
         ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 8));
         ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), hi_address, 16));
@@ -80,7 +80,7 @@ TEST_F(DeviceFixture, TestSimpleDramBufferWriteOnlyLo) {
 }
 TEST_F(DeviceFixture, TestSimpleDramBufferWriteOnlyHi) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t hi_address = this->devices_.at(id).dram_size_per_channel() - (16 * 1024);
+        size_t hi_address = this->devices_.at(id).get().dram_size_per_channel() - (16 * 1024);
         ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 4));
         ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 8));
         ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 16));

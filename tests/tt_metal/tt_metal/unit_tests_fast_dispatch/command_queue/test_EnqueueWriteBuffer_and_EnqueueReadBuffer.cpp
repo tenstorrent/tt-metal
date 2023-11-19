@@ -123,11 +123,12 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
     for (uint32_t i = 0; i < config.num_iterations; i++) {
         size_t buf_size = unique_vectors[i % unique_vectors.size()].size() * sizeof(uint32_t);
         try {
-            bufs.push_back(CreateBuffer(device, buf_size, config.page_size, BufferType::DRAM));
+            bufs.emplace_back(CreateBuffer(device, buf_size, config.page_size, BufferType::DRAM));
         } catch (const std::exception& e) {
             tt::log_info("Deallocating on iteration {}", i);
             start = i;
-            bufs = {CreateBuffer(device, buf_size, config.page_size, BufferType::DRAM)};
+            bufs.clear();
+            bufs.emplace_back( CreateBuffer(device, buf_size, config.page_size, BufferType::DRAM) );
         }
 
         EnqueueWriteBuffer(cq, bufs[bufs.size() - 1], unique_vectors[i % unique_vectors.size()], false);

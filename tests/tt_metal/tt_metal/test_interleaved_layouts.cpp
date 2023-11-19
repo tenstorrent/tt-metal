@@ -433,42 +433,41 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     std::vector<uint32_t> host_buffer = create_random_vector_of_bfloat16(
         buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
-    tt_metal::Buffer src;
-    tt_metal::Buffer dst;
+    std::unique_ptr<tt_metal::Buffer> src, dst;
     if constexpr (src_is_in_l1) {
         TT_FATAL((buffer_size % num_l1_banks) == 0);
 
-        src = CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::L1);
-        tt_metal::detail::WriteToBuffer(src, host_buffer);
+        src = std::make_unique<tt_metal::Buffer>(CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::L1));
+        tt_metal::detail::WriteToBuffer(*src, host_buffer);
 
         tt_metal::SetRuntimeArgs(
             program,
             unary_reader_kernel,
             core,
-            {src.address(), 0, 0, num_pages});
+            {src->address(), 0, 0, num_pages});
 
     } else {
         TT_FATAL((buffer_size % num_dram_banks) == 0);
 
-        src = CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::DRAM);
-        tt_metal::detail::WriteToBuffer(src, host_buffer);
+        src = std::make_unique<tt_metal::Buffer>(CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::DRAM));
+        tt_metal::detail::WriteToBuffer(*src, host_buffer);
 
         tt_metal::SetRuntimeArgs(
             program,
             unary_reader_kernel,
             core,
-            {src.address(), 0, 0, num_pages});
+            {src->address(), 0, 0, num_pages});
     }
 
     std::vector<uint32_t> readback_buffer;
     if constexpr (dst_is_in_l1) {
-        dst = CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::L1);
+        dst = std::make_unique<tt_metal::Buffer>(CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::L1));
 
         tt_metal::SetRuntimeArgs(
             program,
             unary_writer_kernel,
             core,
-            {dst.address(), 0, 0, num_pages});
+            {dst->address(), 0, 0, num_pages});
 
 
 
@@ -476,16 +475,16 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
         tt_metal::detail::LaunchProgram(device, program);
 
-        tt_metal::detail::ReadFromBuffer(dst, readback_buffer);
+        tt_metal::detail::ReadFromBuffer(*dst, readback_buffer);
 
     } else {
-         dst = CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::DRAM);
+         dst = std::make_unique<tt_metal::Buffer>(CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::DRAM));
 
         tt_metal::SetRuntimeArgs(
             program,
             unary_writer_kernel,
             core,
-            {dst.address(), 0, 0, num_pages});
+            {dst->address(), 0, 0, num_pages});
 
 
 
@@ -493,7 +492,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
         tt_metal::detail::LaunchProgram(device, program);
 
-        tt_metal::detail::ReadFromBuffer(dst, readback_buffer);
+        tt_metal::detail::ReadFromBuffer(*dst, readback_buffer);
     }
 
     pass = (host_buffer == readback_buffer);
