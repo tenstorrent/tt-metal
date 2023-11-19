@@ -7,6 +7,21 @@ if [[ -z "$GITHUB_TOKEN" ]]; then
   exit 1
 fi
 
+release=false
+
+# Parse command-line arguments
+while getopts ":r" opt; do
+  case $opt in
+    r)
+      release=true
+      ;;
+    \?)
+      echo "Invalid option: -$OPTARG" >&2
+      exit 1
+      ;;
+  esac
+done
+
 TT_METAL_HOME=$(git rev-parse --show-toplevel)
 ASSETS_DIR=$TT_METAL_HOME/infra/machine_setup/assets
 
@@ -49,25 +64,36 @@ GS_TT_FLASH_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(
 WH_TT_FLASH_SERVER_LOCATION=$(echo $PYBUDA_WH_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $WH_TT_FLASH_FILENAME)\")" | jq '.url' | tr \" \ )
 GS_TT_DRIVER_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $GS_TT_DRIVER_FILENAME)\")" | jq '.url' | tr \" \ )
 
-GS_TT_SMI_LOCAL_FOLDER=$ASSETS_DIR/tt_smi/grayskull
-WH_TT_SMI_LOCAL_FOLDER=$ASSETS_DIR/tt_smi/wormhole_b0
-GS_TT_FLASH_LOCAL_FOLDER=$ASSETS_DIR/tt_flash/grayskull
-WH_TT_FLASH_LOCAL_FOLDER=$ASSETS_DIR/tt_flash/wormhole_b0
+# We download all assets into a flat list in a directory to upload later
+# as release assets with filenames as is. We can't use the generic names
+# that are for Ansible installations as we want to preserve filenames,
+# especially if version numbers are implanted in them.
+if [ "$release" = true ]; then
+  GS_TT_SMI_LOCAL_LOCATION=$ASSETS_DIR/$GS_TT_SMI_FILENAME
+  WH_TT_SMI_LOCAL_LOCATION=$ASSETS_DIR/$WH_TT_SMI_FILENAME
+  GS_TT_FLASH_LOCAL_LOCATION=$ASSETS_DIR/$GS_TT_FLASH_FILENAME
+  WH_TT_FLASH_LOCAL_LOCATION=$ASSETS_DIR/$WH_TT_FLASH_FILENAME
+  TT_DRIVER_LOCAL_LOCATION=$ASSETS_DIR/$GS_TT_DRIVER_FILENAME
+else
+  GS_TT_SMI_LOCAL_FOLDER=$ASSETS_DIR/tt_smi/grayskull
+  WH_TT_SMI_LOCAL_FOLDER=$ASSETS_DIR/tt_smi/wormhole_b0
+  GS_TT_FLASH_LOCAL_FOLDER=$ASSETS_DIR/tt_flash/grayskull
+  WH_TT_FLASH_LOCAL_FOLDER=$ASSETS_DIR/tt_flash/wormhole_b0
+  TT_DRIVER_LOCAL_FOLDER=$ASSETS_DIR/tt_driver
 
-# Note we are forcing same driver for both devices for now
-TT_DRIVER_LOCAL_FOLDER=$ASSETS_DIR/tt_driver
+  mkdir -p $GS_TT_SMI_LOCAL_FOLDER
+  mkdir -p $WH_TT_SMI_LOCAL_FOLDER
+  mkdir -p $GS_TT_FLASH_LOCAL_FOLDER
+  mkdir -p $WH_TT_FLASH_LOCAL_FOLDER
+  mkdir -p $TT_DRIVER_LOCAL_FOLDER
 
-mkdir -p $GS_TT_SMI_LOCAL_FOLDER
-mkdir -p $WH_TT_SMI_LOCAL_FOLDER
-mkdir -p $GS_TT_FLASH_LOCAL_FOLDER
-mkdir -p $WH_TT_FLASH_LOCAL_FOLDER
-mkdir -p $TT_DRIVER_LOCAL_FOLDER
+  GS_TT_SMI_LOCAL_LOCATION=$GS_TT_SMI_LOCAL_FOLDER/tt-smi
+  WH_TT_SMI_LOCAL_LOCATION=$WH_TT_SMI_LOCAL_FOLDER/tt-smi
+  GS_TT_FLASH_LOCAL_LOCATION=$GS_TT_FLASH_LOCAL_FOLDER/tt-flash
+  WH_TT_FLASH_LOCAL_LOCATION=$WH_TT_FLASH_LOCAL_FOLDER/tt-flash
+  TT_DRIVER_LOCAL_LOCATION=$TT_DRIVER_LOCAL_FOLDER/install_ttkmd.bash
+fi
 
-GS_TT_SMI_LOCAL_LOCATION=$GS_TT_SMI_LOCAL_FOLDER/tt-smi
-WH_TT_SMI_LOCAL_LOCATION=$WH_TT_SMI_LOCAL_FOLDER/tt-smi
-GS_TT_FLASH_LOCAL_LOCATION=$GS_TT_FLASH_LOCAL_FOLDER/tt-flash
-WH_TT_FLASH_LOCAL_LOCATION=$WH_TT_FLASH_LOCAL_FOLDER/tt-flash
-TT_DRIVER_LOCAL_LOCATION=$TT_DRIVER_LOCAL_FOLDER/install_ttkmd.bash
 
 echo $GS_TT_SMI_SERVER_LOCATION
 echo $GS_TT_SMI_LOCAL_LOCATION
