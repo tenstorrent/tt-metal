@@ -230,22 +230,6 @@ void SetRuntimeArgs(const Program &program, KernelID kernel, const std::variant<
  */
 void SetRuntimeArgs(const Program &program, KernelID kernel, const std::vector< CoreCoord > & core_spec, const std::vector< std::vector<uint32_t> > &runtime_args);
 
-
-/**
- * Update a single runtime arg of a kernel, yielding performance benefits in certain situations. This API can only be called after SetRuntimeArgs has been called on a kernel.
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
- * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
- * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
- * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelID (uint64_t)                                    |                                                                     | Yes      |
- * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
- * | offset       | Offset into original vector of runtime args                            | size_t                                                 | Within the bounds of the original runtime arg vector                | Yes      |
- * | value        | The runtime args to be written                                         | uint32_t                                               |                                                                     | Yes      |
- */
-void UpdateRuntimeArg(const Program &program, KernelID kernel, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, size_t offset, uint32_t value);
-
 /**
  * Get the runtime args for a kernel.
  *
