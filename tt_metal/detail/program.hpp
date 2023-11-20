@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/impl/program.hpp"
+#include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/kernels/kernel_types.hpp"

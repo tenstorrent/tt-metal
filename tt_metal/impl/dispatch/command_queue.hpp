@@ -17,7 +17,7 @@
 #include "tt_metal/impl/dispatch/thread_safe_queue.hpp"
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
-#include "tt_metal/impl/program.hpp"
+#include "tt_metal/impl/program/program.hpp"
 #include "noc/noc_parameters.h"
 
 
