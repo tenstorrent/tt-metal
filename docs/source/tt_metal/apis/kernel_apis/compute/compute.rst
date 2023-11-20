@@ -64,5 +64,11 @@ Compute APIs
   gez_tile
   nez_tile
 
+  cb_wait_front
+  cb_pop_front
+  cb_reserve_back
+  cb_push_back
+
+  binary_op_init_funcs
 
 .. only:: not html

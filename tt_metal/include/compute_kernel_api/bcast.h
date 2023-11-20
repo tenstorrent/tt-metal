@@ -88,6 +88,20 @@ ALWI void add_tiles_bcast_cols(uint32_t icb0, uint32_t icb1, uint32_t itile0, ui
     UNPACK(( llk_unpack_AB<BroadcastType::COL>(icb0, icb1, itile0, itile1) ));
 }
 
+
+
+/**
+ * Associated init function that must be called before calling a bcast op.
+ *
+ * Return value: None
+ *
+ *
+ * | Argument       | Description                                                   | Type          | Valid Range                                    | Required |
+ * |----------------|---------------------------------------------------------------|---------------|------------------------------------------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t      | 0 to 31                                        | True     |
+ * | icb1           | The indentifier of the circular buffer (CB) containing B      | uint32_t      | 0 to 31                                        | True     |
+ * | ocb            | The indentifier of the circular buffer (CB) containing output | uint32_t      | 0 to 31                                        | False    |
+ */
 template<EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
 void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb = 16)
 {
@@ -119,6 +133,10 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb = 16)
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
 }
 
+
+/*
+Internal helper function for all broadcast ops
+*/
 template<EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
 ALWI void any_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst)
 {
@@ -190,6 +208,7 @@ ALWI void mul_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_
 
 /**
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_rows to be executed correctly.
+ * Required to be called before add_tiles_bcast if using column as broadcast type
  */
 ALWI void add_bcast_rows_init_short()
 {
@@ -232,6 +251,7 @@ ALWI void add_bcast_rows_init_short_post_matmul()
 
 /**
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_cols to be executed correctly.
+ * Required to be called before add_tiles_bcast if using column as broadcast type
  */
 ALWI void add_bcast_cols_init_short()
 {
