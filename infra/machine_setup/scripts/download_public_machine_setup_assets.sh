@@ -64,6 +64,8 @@ GS_TT_FLASH_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(
 WH_TT_FLASH_SERVER_LOCATION=$(echo $PYBUDA_WH_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $WH_TT_FLASH_FILENAME)\")" | jq '.url' | tr \" \ )
 GS_TT_DRIVER_SERVER_LOCATION=$(echo $PYBUDA_GS_RELEASE_ASSETS | jq ".[] | select(.name==\"$(echo $GS_TT_DRIVER_FILENAME)\")" | jq '.url' | tr \" \ )
 
+mkdir -p $ASSETS_DIR
+
 # We download all assets into a flat list in a directory to upload later
 # as release assets with filenames as is. We can't use the generic names
 # that are for Ansible installations as we want to preserve filenames,
