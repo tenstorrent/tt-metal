@@ -86,8 +86,6 @@ template <bool is_tile_dim_reconfig_en = false>
 inline void _llk_unpack_reconfig_data_format_srcb_impl_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
     if constexpr(is_tile_dim_reconfig_en) {
-        const uint face_dim = face_r_dim*FACE_C_DIM;
-
         cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 16, 0xffff0000>(face_r_dim*FACE_C_DIM);
         cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32+1, 16, 0xffff0000>(num_faces);
     }

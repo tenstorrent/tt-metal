@@ -356,23 +356,18 @@ namespace ckernel::unpacker
       switch (face_r_dim) {
          case 1: 
             TTI_SETADCXX(UNP_SEL, 1*FACE_C_DIM-1, 0x0);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16);
             break;
          case 2: 
             TTI_SETADCXX(UNP_SEL, 2*FACE_C_DIM-1, 0x0);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_2x16);
             break;
          case 4: 
             TTI_SETADCXX(UNP_SEL, 4*FACE_C_DIM-1, 0x0);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_4x16);
             break;
          case 8: 
             TTI_SETADCXX(UNP_SEL, 8*FACE_C_DIM-1, 0x0);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_8x16);
             break;
          default:      
             TTI_SETADCXX(UNP_SEL, FACE_R_DIM*FACE_C_DIM-1, 0x0);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_16x16);
             break;
       }
 
