@@ -8,7 +8,7 @@
 #include <mutex>
 
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/impl/program.hpp"
+#include "tt_metal/impl/program/program.hpp"
 
 using std::unique_lock;
 using std::mutex;
