@@ -69,12 +69,6 @@ operation::ProgramWithCallbacks MorehDot::create_program(
     return moreh_dot_single_core(input_tensor_a, input_tensor_b, output_tensor);
 }
 
-stl::reflection::Attributes MorehDot::attributes() const {
-    return {
-        {"output_mem_config", this->output_mem_config},
-        {"output_dtype", this->output_dtype},
-    };
-}
 
 }  // namespace primary
 }  // namespace operations

@@ -45,7 +45,12 @@ struct MorehMatmul {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+    static constexpr auto attribute_names =
+        std::make_tuple("transpose_input", "transpose_other");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->transpose_input), std::cref(this->transpose_other));
+    }
 };
 
 Tensor moreh_matmul(

@@ -77,13 +77,6 @@ operation::ProgramWithCallbacks MorehMatmul::create_program(
         this->output_start_tile_id);
 }
 
-stl::reflection::Attributes MorehMatmul::attributes() const {
-    return {
-        {"transpose_input", this->transpose_input},
-        {"transpose_other", this->transpose_other},
-    };
-}
-
 inline void moreh_matmul_validate(
     const Tensor& input_tensor, const Tensor& other_tensor, bool transpose_input, bool transpose_other) {
     const auto& input_shape = input_tensor.shape().without_padding();
