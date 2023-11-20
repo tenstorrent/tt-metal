@@ -2,11 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <thread>
-#include <chrono>
-
 #include "command_queue_fixture.hpp"
-#include "common/bfloat16.hpp"
+#include "llrt/tt_debug_print_server.hpp"
 #include "gtest/gtest.h"
 #include "test_utils.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -58,9 +55,8 @@ TEST_F(CommandQueueWithDPrintFixture, TestPrintFromAllHarts) {
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
-    // Since the program takes almost no time to run, wait a bit for the print
-    // server to catch up.
-    std::this_thread::sleep_for (std::chrono::seconds(1));
+    // Wait for the print server to catch up
+    tt_await_debug_print_server();
 
     // Check that the expected print messages are in the log file
     vector<string> expected_prints({

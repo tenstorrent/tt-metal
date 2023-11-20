@@ -62,3 +62,22 @@ void tt_set_profiler_state_for_debug_print(bool profile_device);
 @brief Return if the instance debug print server is running or not.
 */
 bool tt_is_print_server_running();
+
+/**
+@brief Set whether the debug print server should be muted.
+
+Note that (1) muting the print server does not disable prints on the device or reading the data back
+to the host (the print data is simply discarded instead of emitted), and (2) calling this function
+while a kernel is running may result in loss of print data.
+
+@param mute_print_server true to mute the print server, false to unmute
+*/
+void tt_set_debug_print_server_mute(bool mute_print_server);
+
+/**
+@brief Wait until the debug print server is not currently processing data.
+
+Note that this function does not actually check whether the device will continue producing print
+data, it only checks whether the print server is currently processing print data.
+*/
+void tt_await_debug_print_server();
