@@ -49,6 +49,9 @@ ALWI void transpose_wh_init(uint32_t icb)
     #endif
 }
 
+/**
+ * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for transpose_wh to be executed correctly.
+ */
 ALWI void transpose_wh_init_short(uint32_t icb)
 {
     #ifdef ARCH_GRAYSKULL
