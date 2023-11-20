@@ -36,9 +36,10 @@ class TtAttention(nn.Module):
         self.scale = self.args.head_dim**-0.5
 
         wq_weights = self.state_dict[f"{base_address}wq.weight"]
+        ref_wq_weights = wq_weights.unsqueeze(0).unsqueeze(0)
         self.wq_weights = tt_lib.tensor.Tensor(
-            wq_weights.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
-            wq_weights.unsqueeze(0).unsqueeze(0).shape,
+            ref_wq_weights.reshape(-1).tolist(),
+            ref_wq_weights.shape,
             self.args.WEIGHTS_DTYPE,
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
@@ -50,9 +51,10 @@ class TtAttention(nn.Module):
         )
 
         wk_weights = self.state_dict[f"{base_address}wk.weight"]
+        ref_wk_weights = wk_weights.unsqueeze(0).unsqueeze(0)
         self.wk_weights = tt_lib.tensor.Tensor(
-            wk_weights.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
-            wk_weights.unsqueeze(0).unsqueeze(0).shape,
+            ref_wk_weights.reshape(-1).tolist(),
+            ref_wk_weights.shape,
             self.args.WEIGHTS_DTYPE,
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
@@ -64,9 +66,10 @@ class TtAttention(nn.Module):
         )
 
         wv_weights = self.state_dict[f"{base_address}wv.weight"]
+        ref_wv_weights = wv_weights.unsqueeze(0).unsqueeze(0)
         self.wv_weights = tt_lib.tensor.Tensor(
-            wv_weights.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
-            wv_weights.unsqueeze(0).unsqueeze(0).shape,
+            ref_wv_weights.reshape(-1).tolist(),
+            ref_wv_weights.shape,
             self.args.WEIGHTS_DTYPE,
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
@@ -78,9 +81,10 @@ class TtAttention(nn.Module):
         )
 
         wo_weights = state_dict[f"{base_address}wo.weight"]
+        ref_wo_weights = wo_weights.unsqueeze(0).unsqueeze(0)
         self.wo_weights = tt_lib.tensor.Tensor(
-            wo_weights.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
-            wo_weights.unsqueeze(0).unsqueeze(0).shape,
+            ref_wo_weights.reshape(-1).tolist(),
+            ref_wo_weights.shape,
             self.args.WEIGHTS_DTYPE,
             tt_lib.tensor.Layout.ROW_MAJOR,
         )

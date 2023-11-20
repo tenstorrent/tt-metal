@@ -50,9 +50,10 @@ class TtTransformer(nn.Module):
         )
         self.norm = TtRMSNorm(args.dim, base_address=f"norm.", state_dict=state_dict, device=device, eps=args.norm_eps)
         output_weight = state_dict["output.weight"]
+        ref_output_weight = output_weight.unsqueeze(0).unsqueeze(0)
         self.output_weight = tt_lib.tensor.Tensor(
-            output_weight.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
-            output_weight.unsqueeze(0).unsqueeze(0).shape,
+            ref_output_weight.reshape(-1).tolist(),
+            ref_output_weight.shape,
             args.WEIGHTS_DTYPE,
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
