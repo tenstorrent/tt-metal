@@ -17,7 +17,7 @@ namespace tt::tt_metal::detail {
         detail::bind_binary_op(m_tensor, "add", add, R"doc(Perform an eltwise-binary add (``{0} + {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "sub", sub, R"doc(Perform an eltwise-binary sub (``{0} - {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "mul", mul, R"doc(Perform an eltwise-binary mul (``{0} * {1}``) on two tensors.)doc");
-        detail::bind_binary_op_out(m_tensor, "mul_out", mul_out, R"doc(Perform an eltwise-binary mul (``{0} * {1}``) on two tensors.)doc");
+        detail::bind_binary_op_out(m_tensor, "mul_out", mul_out, R"doc(Perform an eltwise-binary mul (``{2} = {0} * {1}``) on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "squared_difference", squared_difference, R"doc(Perform an eltwise-binary squared_difference (``{0} - {1}``)^2 on two tensors.)doc");
         detail::bind_binary_op(m_tensor, "logical_and", logical_and, R"doc(Performs the element-wise logical AND of the given input tensors ``{0}`` && ``{1}``, Zeros are treated as False and nonzeros are treated as True.)doc");
         detail::bind_binary_op(m_tensor, "bias_gelu", bias_gelu, R"doc(Perform an eltwise-binary bias_gelu (``{0} + {1}``) on two tensors.)doc");
