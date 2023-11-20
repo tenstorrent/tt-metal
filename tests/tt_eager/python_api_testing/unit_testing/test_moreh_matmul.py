@@ -22,19 +22,9 @@ def get_tensors(input_shape, other_shape, output_shape, require_input_grad, requ
     input = torch.randint(-2, 3, input_shape, dtype=cpu_dtype)
     other = torch.randint(-2, 3, other_shape, dtype=cpu_dtype)
 
-    tt_input = (
-        ttl.tensor.Tensor(input.reshape(-1).tolist(), input_shape, npu_dtype, cpu_layout)
-        .pad_to_tile(1)
-        .to(npu_layout)
-        .to(device)
-    )
+    tt_input = ttl.tensor.Tensor(input, npu_dtype).pad_to_tile(1).to(npu_layout).to(device)
 
-    tt_other = (
-        ttl.tensor.Tensor(other.reshape(-1).tolist(), other_shape, npu_dtype, cpu_layout)
-        .pad_to_tile(float("nan"))
-        .to(npu_layout)
-        .to(device)
-    )
+    tt_other = ttl.tensor.Tensor(other, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
 
     torch_input = input.reshape(-1) if is_1d else input
     torch_other = other.reshape(-1) if is_1d else other
@@ -43,36 +33,19 @@ def get_tensors(input_shape, other_shape, output_shape, require_input_grad, requ
     output_grad = tt_output_grad = torch_output_grad = tt_input_grad = tt_other_grad = None
     if require_input_grad or require_other_grad:
         output_grad = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
-        tt_output_grad = (
-            ttl.tensor.Tensor(output_grad.reshape(-1).tolist(), output_shape, npu_dtype, cpu_layout)
-            .pad_to_tile(float("nan"))
-            .to(npu_layout)
-            .to(device)
-        )
+        tt_output_grad = ttl.tensor.Tensor(output_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
         torch_output_grad = output_grad[0][0][0][0] if is_1d else output_grad
 
         if require_input_grad:
             input_grad = torch.full(input_shape, float("nan"), dtype=cpu_dtype)
-            tt_input_grad = (
-                ttl.tensor.Tensor(
-                    input_grad.flatten().tolist(),
-                    input_shape,
-                    npu_dtype,
-                    cpu_layout,
-                )
-                .pad_to_tile(float("nan"))
-                .to(npu_layout)
-                .to(device)
-            )
+            tt_input_grad = ttl.tensor.Tensor(input_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
 
         if require_other_grad:
             other_grad = torch.full(other_shape, float("nan"), dtype=cpu_dtype)
             tt_other_grad = (
                 ttl.tensor.Tensor(
-                    other_grad.flatten().tolist(),
-                    other_shape,
+                    other_grad,
                     npu_dtype,
-                    cpu_layout,
                 )
                 .pad_to_tile(float("nan"))
                 .to(npu_layout)
