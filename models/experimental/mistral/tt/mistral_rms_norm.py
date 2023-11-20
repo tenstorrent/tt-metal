@@ -21,9 +21,10 @@ class TtRMSNorm(nn.Module):
         weight = state_dict[f"{base_address}weight"]
 
         # converting to bfp8 reduces PCC
+        ref_weight = weight.unsqueeze(0).unsqueeze(0).unsqueeze(0)
         self.weight = tt_lib.tensor.Tensor(
-            weight.unsqueeze(0).unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
-            weight.unsqueeze(0).unsqueeze(0).unsqueeze(0).shape,
+            ref_weight.reshape(-1).tolist(),
+            ref_weight.shape,
             tt_lib.tensor.DataType.BFLOAT16,
             tt_lib.tensor.Layout.ROW_MAJOR,
         )

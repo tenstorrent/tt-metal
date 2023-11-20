@@ -21,9 +21,10 @@ class TtFeedForward(nn.Module):
         self.device = device
 
         w1_weights = state_dict[f"{base_address}w1.weight"]
+        ref_w1_weights = w1_weights.unsqueeze(0).unsqueeze(0)
         self.w1_weights = tt_lib.tensor.Tensor(
-            w1_weights.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
-            w1_weights.unsqueeze(0).unsqueeze(0).shape,
+            ref_w1_weights.reshape(-1).tolist(),
+            ref_w1_weights.shape,
             args.WEIGHTS_DTYPE,
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
@@ -35,9 +36,10 @@ class TtFeedForward(nn.Module):
         )
 
         w2_weights = state_dict[f"{base_address}w2.weight"]
+        ref_w2_weights = w2_weights.unsqueeze(0).unsqueeze(0)
         self.w2_weights = tt_lib.tensor.Tensor(
-            w2_weights.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
-            w2_weights.unsqueeze(0).unsqueeze(0).shape,
+            ref_w2_weights.reshape(-1).tolist(),
+            ref_w2_weights.shape,
             args.WEIGHTS_DTYPE,
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
@@ -49,9 +51,10 @@ class TtFeedForward(nn.Module):
         )
 
         w3_weights = state_dict[f"{base_address}w3.weight"]
+        ref_w3_weights = w3_weights.unsqueeze(0).unsqueeze(0)
         self.w3_weights = tt_lib.tensor.Tensor(
-            w3_weights.unsqueeze(0).unsqueeze(0).reshape(-1).tolist(),
-            w3_weights.unsqueeze(0).unsqueeze(0).shape,
+            ref_w3_weights.reshape(-1).tolist(),
+            ref_w3_weights.shape,
             args.WEIGHTS_DTYPE,
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
