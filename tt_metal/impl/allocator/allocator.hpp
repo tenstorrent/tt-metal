@@ -43,6 +43,8 @@ class BankManager {
     void deallocate_buffer(uint64_t address);
     void deallocate_all();
 
+    void clear();
+
     std::optional<uint64_t> lowest_occupied_address(uint32_t bank_id) const;
 
     Statistics get_statistics() const;

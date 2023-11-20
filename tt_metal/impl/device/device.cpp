@@ -261,6 +261,7 @@ bool Device::close() {
     tt::Cluster::instance().assert_risc_reset(id_);
     this->clear_l1_state();
     tt::Cluster::instance().l1_barrier(id_);
+    allocator::clear(detail::GetAllocator(this));
 
     this->active_devices_.deactivate_device(this->id_);
 

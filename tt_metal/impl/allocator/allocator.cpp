@@ -99,6 +99,11 @@ void BankManager::deallocate_all(){
     }
 }
 
+
+void BankManager::clear() {
+    this->allocator_->clear();
+}
+
 std::optional<uint64_t> BankManager::lowest_occupied_address(uint32_t bank_id) const {
     auto lowest_address = this->allocator_->lowest_occupied_address();
     if (not lowest_address.has_value()) {
@@ -265,6 +270,11 @@ void deallocate_buffer(Allocator &allocator, uint64_t address, const BufferType 
 void deallocate_buffers(Allocator &allocator) {
     allocator.dram_manager.deallocate_all();
     allocator.l1_manager.deallocate_all();
+}
+
+void clear(Allocator &allocator) {
+    allocator.dram_manager.clear();
+    allocator.l1_manager.clear();
 }
 
 }  // namespace allocator
