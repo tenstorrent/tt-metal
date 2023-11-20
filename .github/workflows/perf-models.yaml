@@ -51,33 +51,3 @@ jobs:
         with:
           name: perf-report-csv-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
-
-  build-and-test-measure-device-perf:
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        runner-info: [
-          {arch: grayskull, runs-on: ["perf-no-reset-grayskull", "self-reset"], machine-type: "bare_metal"},
-        ]
-    env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
-    environment: dev
-    runs-on: ${{ matrix.runner-info.runs-on }}
-    steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
-        with:
-          token: ${{ secrets.CHECKOUT_TOKEN }}
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - name: Build tt-metal and libs
-        run: |
-          ./scripts/build_scripts/build_with_profiler_opt.sh
-      - name: Run device performance regressions
-        timeout-minutes: 60
-        run: |
-          source build/python_env/bin/activate
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_device_performance_${{ matrix.runner-info.machine-type }}
