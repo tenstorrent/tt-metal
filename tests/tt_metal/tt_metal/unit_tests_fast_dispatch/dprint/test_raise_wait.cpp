@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "command_queue_fixture.hpp"
+#include "llrt/tt_debug_print_server.hpp"
 #include "gtest/gtest.h"
 #include "test_utils.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -88,9 +89,8 @@ try{
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
-    // Since the program takes almost no time to run, wait a bit for the print
-    // server to catch up.
-    std::this_thread::sleep_for (std::chrono::seconds(1));
+    // Wait for the print server to catch up
+    tt_await_debug_print_server();
 
     // Check the print log against golden output.
     EXPECT_TRUE(

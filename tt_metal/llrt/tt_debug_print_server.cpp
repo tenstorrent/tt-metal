@@ -37,6 +37,14 @@ static inline float bfloat16_to_float(uint16_t bfloat_val) {
     return *reinterpret_cast<float*>(&val);
 }
 
+// A null stream for when the print server is muted.
+class NullBuffer : public std::streambuf {
+public:
+   int overflow(int c) { return c; }
+};
+NullBuffer null_buffer;
+std::ostream null_stream(&null_buffer);
+
 // Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
 // Used for debug print server startup sequence.
 void write_init_magic(int chip_id, const CoreCoord& core, int hart_id, bool starting = true) {
@@ -72,6 +80,8 @@ struct DebugPrintServerContext {
         stream_ = outfile_ ? outfile_ : &cout;
 
         stop_print_server_ = false;
+        mute_print_server_ = false;
+        new_data_processed_ = false;
         print_server_thread_ = new std::thread(
             [this, chip_ids, cores, hart_mask] { thread_poll(chip_ids, cores, hart_mask); }
         );
@@ -96,10 +106,27 @@ struct DebugPrintServerContext {
         inst = nullptr;
     }
 
+    void SetMute(bool mute_print_server) { mute_print_server_ = mute_print_server; }
+
+    void WaitForNoNewDataProcessed() {
+        // Simply poll the flag every few ms to check whether new data is still being processed.
+        // TODO(dma): once we have access to the device is there a way we can poll the device to
+        // help here?
+        do {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        } while (new_data_processed_);
+    }
+
 private:
 
     // Flag for main thread to signal the print server thread to stop.
     std::atomic<bool> stop_print_server_;
+    // Flag for muting the print server. This doesn't disable reading print data from the device,
+    // but it supresses the output of that print data the user.
+    std::atomic<bool> mute_print_server_;
+    // Flag for signalling whether the print server thread has recently processed data (and is
+    // therefore likely to continue processing data in the next round of polling).
+    std::atomic<bool> new_data_processed_;
     std::thread* print_server_thread_;
 
     std::ofstream* outfile_ = nullptr; // non-cout
@@ -112,7 +139,7 @@ private:
     std::set<uint32_t> raised_signals_;
 
     void thread_poll(const vector<int>& chip_ids, const vector<CoreCoord>& cores, uint32_t hart_mask);
-    void peek_flush_one_hart_nonblocking(int chip_id, const CoreCoord& core, int hart_index);
+    bool peek_flush_one_hart_nonblocking(int chip_id, const CoreCoord& core, int hart_index);
 };
 
 static void print_tile_slice(ostream& stream, uint8_t* ptr) {
@@ -153,8 +180,10 @@ bool check_init_magic_cleared(int chip_id, const CoreCoord& core, int hart_id) {
     return (result[0] != initbuf[0]);
 } // check_init_magic_cleared
 
-// peeks a specified hart for any debug prints present in the buffer and flushes it, printing the contents out to host-side stream
-void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const CoreCoord& core, int hart_id) {
+// Peeks a specified hart for any debug prints present in the buffer and flushes it, printing the
+// contents out to host-side stream. Returns true if some data was read out, and false if no new
+// print data was present on the device.
+bool DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const CoreCoord& core, int hart_id) {
     // compute the buffer address for the requested hart
     uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
 
@@ -171,7 +200,7 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
     uint32_t sigval = 0;
     uint32_t sticky_setw = 0; // std::setw is not sticky by default, we have to implement it manually
     char val = 0;
-    ostream& stream = *stream_;
+    ostream& stream = (mute_print_server_)? null_stream : *stream_;
     if (rpos < wpos) {
         // Now read the entire buffer
         from_dev = tt::llrt::read_hex_vec_from_core(chip_id, core, base_addr, PRINT_BUFFER_SIZE);
@@ -309,7 +338,13 @@ void DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
         rposbuf.push_back(rpos);
         uint32_t offs = DebugPrintMemLayout().rpos_offs();
         tt::llrt::write_hex_vec_to_core(chip_id, core, rposbuf, base_addr+offs);
+
+        // Return true to signal that some print data was read
+        return true;
     } // if (rpos < wpos)
+
+    // Return false to signal that no print data was ready this time.
+    return false;
 } // peek_one_hart_once_nonblocking
 
 void DebugPrintServerContext::thread_poll(
@@ -336,6 +371,9 @@ void DebugPrintServerContext::thread_poll(
     while (true) {
         if (stop_print_server_)
             break;
+
+        // Flag for whether any new print data was found in this round of polling.
+        bool new_print_data = false;
         for (auto chip: chip_ids) {
             for (auto core: cores) {
                 for (int hart_index = 0; hart_index < DPRINT_NRISCVS; hart_index++) {
@@ -358,14 +396,17 @@ void DebugPrintServerContext::thread_poll(
                             }
                         }
 
-                        peek_flush_one_hart_nonblocking(chip, core, hart_index);
+                        new_print_data |= peek_flush_one_hart_nonblocking(chip, core, hart_index);
                     }
                 }
             }
         }
 
-        // Sleep for a few ms.
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        // Signal whether the print server is currently processing data.
+        new_data_processed_ = new_print_data;
+        // Sleep for a few ms if no data was processed.
+        if (!new_print_data)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
 
@@ -391,6 +432,16 @@ void tt_set_profiler_state_for_debug_print(bool profile_device)
 bool tt_is_print_server_running()
 {
     return DebugPrintServerContext::inst != nullptr;
+}
+
+void tt_set_debug_print_server_mute(bool mute_print_server) {
+    if (DebugPrintServerContext::inst != nullptr)
+        DebugPrintServerContext::inst->SetMute(mute_print_server);
+}
+
+void tt_await_debug_print_server() {
+    if (DebugPrintServerContext::inst != nullptr)
+        DebugPrintServerContext::inst->WaitForNoNewDataProcessed();
 }
 
 // The print server is not valid without alive Cluster and tt_device
