@@ -56,7 +56,7 @@ inline void _llk_pack_mop_config_() {
 
     if constexpr (!untilize) {
         tmp.set_last_inner_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 0));
-        tmp.set_last_outer_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 1));
         // Write header to l1
         tmp.set_end_op(TT_OP_STOREIND(
             1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
@@ -73,21 +73,14 @@ inline void _llk_pack_mop_config_() {
 
 template <bool untilize = false>
 inline void _llk_pack_hw_configure_(const uint pack_src_format, const uint pack_dst_format, const uint relu_config) {
-
-    configure_pack(pack_src_format, pack_dst_format, relu_config);
-
-    if constexpr (untilize) {
-        regfile[p_gpr_pack::ONE_MSG_RECEIVED] =
-            ((1 * GET_L1_HEADERLESS_TILE_SIZE(pack_dst_format)) << 12) |
-            1; /*SOURCE_ENDPOINT_NEW_MSGS_TOTAL_SIZE=12*/
-    }
+    configure_pack<untilize>(pack_src_format, pack_dst_format, relu_config);
 }
 
 // FIXME: Remove once edge mask spec is defined
 template <bool untilize = false, PoolType type, ReduceDim dim>
 inline void _llk_pack_reduce_hw_configure_(const uint pack_src_format, const uint pack_dst_format, const uint relu_config) {
     
-    configure_pack(pack_src_format, pack_dst_format, relu_config);
+    configure_pack<untilize>(pack_src_format, pack_dst_format, relu_config);
     
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
@@ -106,12 +99,6 @@ inline void _llk_pack_reduce_hw_configure_(const uint pack_src_format, const uin
         } else {
             cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x00000001;
         }
-    }
-
-    if constexpr (untilize) {
-        regfile[p_gpr_pack::ONE_MSG_RECEIVED] =
-            ((1 * GET_L1_HEADERLESS_TILE_SIZE(pack_dst_format)) << 12) |
-            1; /*SOURCE_ENDPOINT_NEW_MSGS_TOTAL_SIZE=12*/
     }
 }
 
@@ -142,3 +129,5 @@ inline void _llk_pack_(std::uint32_t tile_index, std::uint32_t pack_dst_format, 
         TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1);
     }
 }
+
+#include "llk_pack_untilize.h"
