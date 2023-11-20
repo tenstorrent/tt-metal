@@ -35,6 +35,9 @@ tests/scripts/run_tests.sh @tt-rkim
 # metal - base
 # tt_metal/tt_metal.cpp @abhullar-tt @TT-billteng
 tt_metal/host_api.hpp @abhullar-tt @TT-billteng @davorchap
+tt_metal/impl/device/ @TT-billteng
+tt_metal/impl/buffers/ @TT-billteng
+tt_metal/impl/program/ @TT-billteng
 # tt_metal/impl/ @abhullar-tt @TT-billteng
 # tt_metal/impl/**/module.mk @tt-rkim @abhullar-tt @TT-billteng
 
@@ -43,6 +46,7 @@ tt_metal/impl/dispatch/ @DrJessop @davorchap
 tt_metal/impl/dispatch/**/module.mk @DrJessop @davorchap @tt-rkim
 tt_metal/kernels/dataflow/dispatch/ @DrJessop @davorchap
 docs/source/frameworks/tt_dispatch.rst @DrJessop @davorchap
+docs/source/tt_metal/apis/ @TT-billteng
 
 # metal - fw, llks, risc-v
 # tt_metal/hw/ckernels/ @davorchap
