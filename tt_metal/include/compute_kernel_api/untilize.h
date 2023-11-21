@@ -15,7 +15,9 @@
 
 namespace ckernel {
 
-
+/**
+ * Init function for untilize operations, to be used at the beginning of the kernel.
+ */
 ALWI void untilize_init(uint32_t icb, uint32_t ocb = 16)
 {
     #ifdef ARCH_GRAYSKULL
@@ -35,6 +37,9 @@ ALWI void untilize_init(uint32_t icb, uint32_t ocb = 16)
     UNPACK(( llk_unpack_untilize_init(icb) )); // init must be after configure
 }
 
+/**
+ * Short init function to initialize untilize op, after a full init is already performed.
+ */
 ALWI void untilize_init_short(uint32_t icb)
 {
     #ifdef ARCH_GRAYSKULL
@@ -45,6 +50,9 @@ ALWI void untilize_init_short(uint32_t icb)
     UNPACK(( llk_unpack_untilize_init(icb) ));
 }
 
+/**
+ * Perform the untilize operation on a block of tiles. This simply loops over the provided block size.
+*/
 template <int N = 1>
 ALWI void untilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
 {
@@ -72,6 +80,9 @@ ALWI void untilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
     }
 }
 
+/**
+ * Uninitialize untilize operation, to allow initializing another operation.
+ */
 ALWI void untilize_uninit(uint32_t icb) {
     UNPACK(( llk_unpack_untilize_uninit(icb) ));
 }
