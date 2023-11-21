@@ -148,7 +148,7 @@ bool validation(
 ////////////////////////////////////////////////////////////////////////////
 int main(int argc, char** argv) {
     bool pass = true;
-    bool bypass_check;
+    bool bypass_check = false;
     try {
         ////////////////////////////////////////////////////////////////////////////
         //                      Initial Runtime Args Parse
@@ -157,7 +157,7 @@ int main(int argc, char** argv) {
         uint32_t M;
         uint32_t N;
         uint32_t K;
-        bool fast_dispatch_mode;
+        bool fast_dispatch_mode = false;
         try {
             std::tie(M, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--m", 11264);
             std::tie(N, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--n", 3072);
@@ -170,7 +170,7 @@ int main(int argc, char** argv) {
 
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
-            log_fatal(LogTest, "Command line arguments found exception", e.what());
+            log_error(LogTest, "Command line arguments found exception", e.what());
         }
 
         ////////////////////////////////////////////////////////////////////////////
@@ -302,9 +302,9 @@ int main(int argc, char** argv) {
         log_debug(LogTest, "number of matmul ops: {}", num_of_matmul_ops);
 
         if (fast_dispatch_mode == false) {
-            log_debug(LogTest, "calling LaunchProgram");
-            LaunchProgram(device, program);
-            log_debug(LogTest, "LaunchProgram done");
+            log_debug(LogTest, "calling detail::LaunchProgram");
+            detail::LaunchProgram(device, program);
+            log_debug(LogTest, "detail::LaunchProgram done");
 
             uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(device, program);
             double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
@@ -378,7 +378,7 @@ int main(int argc, char** argv) {
     if (pass) {
         log_info(LogTest, "Test Passed");
     } else {
-        log_fatal(LogTest, "Test Failed");
+        log_error(LogTest, "Test Failed");
     }
 
     TT_ASSERT(pass);
@@ -638,7 +638,7 @@ tt_metal::Program create_program(
     auto cb_out = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_out_config);
 
     // Create reader and writer kernels per core
-    auto mm_in0_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    auto mm_in0_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/"
         "in0_reader_bmm_tile_layout.cpp",
@@ -648,7 +648,7 @@ tt_metal::Program create_program(
 
     std::map<string, string> mm_in1_reader_writer_defines;
     mm_in1_reader_writer_defines["IN1_IS_IDENTITY"] = "1";
-    auto mm_in1_reader_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    auto mm_in1_reader_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/"
         "in1_reader_writer_bmm_tile_layout.cpp",
@@ -661,7 +661,7 @@ tt_metal::Program create_program(
     // Create compute kernel
     // Gelu currently has better accuracy when run in approx mode
     bool math_approx_mode = false;
-    auto mm_kernel_id = tt_metal::CreateComputeKernel(
+    auto mm_kernel_id = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/"
         "bmm_large_block_zm_fused_bias_activation.cpp",

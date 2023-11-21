@@ -31,7 +31,7 @@ using std::chrono::microseconds;
 
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        log_fatal("Test not supported w/ slow dispatch, exiting");
+        log_error("Test not supported w/ slow dispatch, exiting");
     }
 
     bool pass = true;
@@ -41,10 +41,10 @@ int main(int argc, char** argv) {
     //                      Initial Runtime Args Parse
     ////////////////////////////////////////////////////////////////////////////
     std::vector<std::string> input_args(argv, argv + argc);
-    uint32_t num_cores_r;
-    uint32_t num_cores_c;
+    uint32_t num_cores_r = 0;
+    uint32_t num_cores_c = 0;
     uint32_t num_core_groups;
-    bool bypass_check;
+    bool bypass_check = false;
     try {
         std::tie(num_cores_r, input_args) =
             test_args::get_command_option_uint32_and_remaining_args(input_args, "--cores-r", 0);
@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
 
         test_args::validate_remaining_args(input_args);
     } catch (const std::exception& e) {
-        log_fatal(LogTest, "Command line arguments found exception", e.what());
+        log_error(LogTest, "Command line arguments found exception", e.what());
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
     num_cores_r = (num_cores_r == 0) ? grid_coord.y : num_cores_r;
 
     if (num_cores_r < num_core_groups) {
-        log_fatal(
+        log_error(
             LogTest,
             "The number of cores in a row ({}) must be bigger than or equal than "
             "the number of core groups ({})",
@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
             }
 
             vector<uint32_t> reader_compile_args = {uint32_t(core_group_idx)};
-            auto reader_kernel = tt_metal::CreateDataMovementKernel(
+            auto reader_kernel = tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/perf_microbenchmark/7_kernel_launch/"
                 "kernels/"
@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
                     .compile_args = reader_compile_args});
 
             vector<uint32_t> writer_compile_args = {uint32_t(core_group_idx)};
-            auto writer_kernel = tt_metal::CreateDataMovementKernel(
+            auto writer_kernel = tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/perf_microbenchmark/7_kernel_launch/"
                 "kernels/"
@@ -144,7 +144,7 @@ int main(int argc, char** argv) {
                     .compile_args = writer_compile_args});
 
             vector<uint32_t> compute_compile_args = {uint32_t(core_group_idx)};
-            auto compute_kernel = tt_metal::CreateComputeKernel(
+            auto compute_kernel = tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/perf_microbenchmark/7_kernel_launch/"
                 "kernels/"
@@ -209,7 +209,7 @@ int main(int argc, char** argv) {
     if (pass) {
         log_info(LogTest, "Test Passed");
     } else {
-        log_fatal(LogTest, "Test Failed");
+        log_error(LogTest, "Test Failed");
     }
 
     TT_ASSERT(pass);

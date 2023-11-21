@@ -32,7 +32,7 @@ using std::chrono::microseconds;
 //   - This benchmark is designed to support an input size larger than 4GB. But
 //   current tt-metal does not seem to support buffer allocation larger than 4GB
 //   yet.
-//   - Also, ReadFromBuffer API used in DRAM write test may take a long time if
+//   - Also, detail::ReadFromBuffer API used in DRAM write test may take a long time if
 //   the input size is large.
 //
 // Usage example:
@@ -79,7 +79,7 @@ uint32_t get_dram_bandwidth(tt::ARCH arch);
 
 int main(int argc, char **argv) {
   if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-    log_fatal("Test not supported w/ slow dispatch, exiting");
+    log_error("Test not supported w/ slow dispatch, exiting");
   }
 
   bool pass = true;
@@ -114,7 +114,7 @@ int main(int argc, char **argv) {
 
       test_args::validate_remaining_args(input_args);
     } catch (const std::exception &e) {
-      log_fatal(tt::LogTest, "Command line arguments found exception",
+      log_error(tt::LogTest, "Command line arguments found exception",
                 e.what());
       TT_ASSERT(false);
     }
@@ -122,7 +122,7 @@ int main(int argc, char **argv) {
 
     if (use_device_profiler) {
 #if !defined(PROFILER)
-      log_fatal(LogTest,
+      log_error(LogTest,
                 "Metal library and test code should be build with "
                 "'ENABLE_PROFILER=1' to use device profiler");
 #endif
@@ -173,7 +173,7 @@ int main(int argc, char **argv) {
     std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
         input_size, 100,
         std::chrono::system_clock::now().time_since_epoch().count());
-    tt_metal::Buffer input_buffer(device, input_vec.size() * sizeof(u32),
+    tt_metal::Buffer input_buffer(device, input_vec.size() * sizeof(uint32_t),
                                   single_tile_size, tt_metal::BufferType::DRAM);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -193,7 +193,7 @@ int main(int argc, char **argv) {
     //                      Copy Input To DRAM or L1
     ////////////////////////////////////////////////////////////////////////////
     if (access_type == 0) {
-      tt_metal::WriteToBuffer(input_buffer, input_vec);
+      tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
     } else {
       for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -273,7 +273,7 @@ int main(int argc, char **argv) {
   if (pass) {
     log_info(LogTest, "Test Passed");
   } else {
-    log_fatal(LogTest, "Test Failed");
+    log_error(LogTest, "Test Failed");
   }
 
   TT_ASSERT(pass);
@@ -326,7 +326,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, uint32_t> create_program(
   auto cb = tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
 
-  auto reader_kernel = tt_metal::CreateDataMovementKernel(
+  auto reader_kernel = tt_metal::CreateKernel(
       program,
       (access_type == 0) ? "tests/tt_metal/tt_metal/perf_microbenchmark/"
                            "6_dram_offchip/kernels/reader_dram.cpp"
@@ -417,9 +417,9 @@ bool validation(tt_metal::Device *device, tt_metal::Buffer &input_buffer,
     std::vector<uint32_t> result_vec;
     log_info(
         LogTest,
-        "ReadFromBuffer API may take a long time if the input size is large");
-    tt_metal::ReadFromBuffer(input_buffer, result_vec);
-    log_info(LogTest, "ReadFromBuffer API done");
+        "detail::ReadFromBuffer API may take a long time if the input size is large");
+    tt_metal::detail::ReadFromBuffer(input_buffer, result_vec);
+    log_info(LogTest, "detail::ReadFromBuffer API done");
 
     for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
       CoreCoord core = {i / num_cores_y, i % num_cores_y};
