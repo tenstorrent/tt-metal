@@ -31,7 +31,7 @@ using std::chrono::microseconds;
 
 int main(int argc, char** argv) {
     bool pass = true;
-    bool bypass_check;
+    bool bypass_check = false;
     double h2d_bandwidth = 0;
     double d2h_bandwidth = 0;
 
@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
         // Input arguments parsing
         std::vector<std::string> input_args(argv, argv + argc);
 
-        int32_t buffer_type;
+        int32_t buffer_type = 0;
         uint32_t transfer_size;
         try {
             std::tie(buffer_type, input_args) =
@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
 
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
-            log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
+            log_error(tt::LogTest, "Command line arguments found exception", e.what());
         }
 
         // Device setup
@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
     if (pass) {
         log_info(LogTest, "Test Passed");
     } else {
-        log_fatal(LogTest, "Test Failed");
+        log_error(LogTest, "Test Failed");
     }
 
     TT_ASSERT(pass);

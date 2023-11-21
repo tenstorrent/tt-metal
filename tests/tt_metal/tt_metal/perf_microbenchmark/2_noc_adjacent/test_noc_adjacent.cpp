@@ -39,7 +39,7 @@ using std::chrono::microseconds;
 
 int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        log_fatal("Test not supported w/ slow dispatch, exiting");
+        log_error("Test not supported w/ slow dispatch, exiting");
     }
 
     bool pass = true;
@@ -49,15 +49,15 @@ int main(int argc, char** argv) {
     //                      Initial Runtime Args Parse
     ////////////////////////////////////////////////////////////////////////////
     std::vector<std::string> input_args(argv, argv + argc);
-    uint32_t num_cores_r;
-    uint32_t num_cores_c;
-    uint32_t num_tiles;
+    uint32_t num_cores_r = 0;
+    uint32_t num_cores_c = 0;
+    uint32_t num_tiles = 204800;
     uint32_t noc_index;
-    uint32_t noc_direction;
+    uint32_t noc_direction = 0;
     uint32_t access_type;
     uint32_t tiles_per_transfer;
-    bool use_device_profiler;
-    bool bypass_check;
+    bool use_device_profiler = false;
+    bool bypass_check = false;
     try {
         std::tie(num_cores_r, input_args) =
             test_args::get_command_option_uint32_and_remaining_args(input_args, "--cores-r", 0);
@@ -87,11 +87,11 @@ int main(int argc, char** argv) {
 
         test_args::validate_remaining_args(input_args);
     } catch (const std::exception& e) {
-        log_fatal(tt::LogTest, "Command line arguments found exception", e.what());
+        log_error(tt::LogTest, "Command line arguments found exception", e.what());
     }
 
     if (num_tiles % tiles_per_transfer != 0) {
-        log_fatal(
+        log_error(
             LogTest,
             "Total number of tiles each core transfers ({}) must be the multiple "
             "of number of tiles for each transfer ({})",
@@ -100,7 +100,7 @@ int main(int argc, char** argv) {
     }
 
     if (num_tiles < tiles_per_transfer) {
-        log_fatal(
+        log_error(
             LogTest,
             "Total number of tiles each core transfers ({}) must be bigger "
             "than or equal to the number of tiles for each transfer ({})",
@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
 
     if (use_device_profiler) {
 #if !defined(PROFILER)
-        log_fatal(
+        log_error(
             LogTest,
             "Metal library and test code should be build with "
             "'ENABLE_PROFILER=1' to use device profiler");
@@ -159,7 +159,7 @@ int main(int argc, char** argv) {
                 .set_page_size(cb_src1_index, single_tile_size);
         auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
-        auto noc_kernel = tt_metal::CreateDataMovementKernel(
+        auto noc_kernel = tt_metal::CreateKernel(
             program,
             (access_type == 0) ? "tests/tt_metal/tt_metal/perf_microbenchmark/"
                                  "2_noc_adjacent/kernels/noc_read.cpp"
@@ -255,7 +255,7 @@ int main(int argc, char** argv) {
     if (pass) {
         log_info(LogTest, "Test Passed");
     } else {
-        log_fatal(LogTest, "Test Failed");
+        log_error(LogTest, "Test Failed");
     }
 
     TT_ASSERT(pass);
