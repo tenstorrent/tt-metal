@@ -15,18 +15,14 @@ class TtFeedForward(nn.Module):
         args: TtModelArgs,
         base_address=None,
         device=None,
-        state_dict=None,
+        tt_cache_path=None,
     ):
         super().__init__()
         self.device = device
+        self.args = args
 
-        w1_weights = state_dict[f"{base_address}w1.weight"]
-        ref_w1_weights = w1_weights.unsqueeze(0).unsqueeze(0)
-        self.w1_weights = tt_lib.tensor.Tensor(
-            ref_w1_weights.reshape(-1).tolist(),
-            ref_w1_weights.shape,
-            args.WEIGHTS_DTYPE,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+        self.w1_weights = tt_lib.tensor.load_tensor(
+            tt_cache_path + base_address + "w1.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.w1 = TtLinear(
             args.dim,
@@ -35,13 +31,8 @@ class TtFeedForward(nn.Module):
             device=self.device,
         )
 
-        w2_weights = state_dict[f"{base_address}w2.weight"]
-        ref_w2_weights = w2_weights.unsqueeze(0).unsqueeze(0)
-        self.w2_weights = tt_lib.tensor.Tensor(
-            ref_w2_weights.reshape(-1).tolist(),
-            ref_w2_weights.shape,
-            args.WEIGHTS_DTYPE,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+        self.w2_weights = tt_lib.tensor.load_tensor(
+            tt_cache_path + base_address + "w2.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.w2 = TtLinear(
             args.hidden_dim,
@@ -50,13 +41,8 @@ class TtFeedForward(nn.Module):
             device=self.device,
         )
 
-        w3_weights = state_dict[f"{base_address}w3.weight"]
-        ref_w3_weights = w3_weights.unsqueeze(0).unsqueeze(0)
-        self.w3_weights = tt_lib.tensor.Tensor(
-            ref_w3_weights.reshape(-1).tolist(),
-            ref_w3_weights.shape,
-            args.WEIGHTS_DTYPE,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+        self.w3_weights = tt_lib.tensor.load_tensor(
+            tt_cache_path + base_address + "w3.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.w3 = TtLinear(
             args.dim,

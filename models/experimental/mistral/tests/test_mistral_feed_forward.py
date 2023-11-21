@@ -27,7 +27,7 @@ from models.utility_functions import (
 def test_mistral_feed_forward_inference(pcc, model_location_generator, device, dtype, reset_seeds):
     mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
     state_dict = torch.load(mistral_path / "consolidated.00.pth")
-    base_address = f""
+    base_address = f"layers.0.feed_forward."
     with open(mistral_path / "params.json", "r") as f:
         model_args = TtModelArgs(**json.loads(f.read()))
 
@@ -37,11 +37,13 @@ def test_mistral_feed_forward_inference(pcc, model_location_generator, device, d
     reference_model = FeedForward(args=model_args)
     reference_model.load_state_dict(state_dict)
 
+    tt_cache_path = "/mnt/MLPerf/tt_dnn-models/tt/Mistral/"
+
     tt_model = TtFeedForward(
         args=model_args,
-        state_dict=state_dict,
         device=device,
         base_address=base_address,
+        tt_cache_path=tt_cache_path,
     )
     input = torch.rand(1, 11, 4096)
     reference_output = reference_model(input)

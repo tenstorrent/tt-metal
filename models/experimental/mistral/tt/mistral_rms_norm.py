@@ -11,23 +11,14 @@ class TtRMSNorm(nn.Module):
         self,
         dim: int,
         eps: float = 1e-6,
-        state_dict=None,
-        device=None,
         base_address=None,
+        tt_cache_path=None,
     ):
         super().__init__()
         self.eps = eps
-        self.device = device
-        weight = state_dict[f"{base_address}weight"]
 
-        # converting to bfp8 reduces PCC
-        ref_weight = weight.unsqueeze(0).unsqueeze(0).unsqueeze(0)
-        self.weight = tt_lib.tensor.Tensor(
-            ref_weight.reshape(-1).tolist(),
-            ref_weight.shape,
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-        )
+        # bfp8 reduces PCC for so using weights in bfloat16
+        self.weight = tt_lib.tensor.load_tensor(tt_cache_path + base_address + "weightDataType.BFLOAT16.bin")
 
     def forward(self, x: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         return tt_lib.tensor.rmsnorm(x, self.eps, self.weight)

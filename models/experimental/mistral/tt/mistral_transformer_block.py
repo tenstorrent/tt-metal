@@ -15,25 +15,27 @@ class TtTransformerBlock(nn.Module):
     def __init__(
         self,
         args: TtModelArgs,
-        state_dict=None,
         device=None,
         base_address=None,
+        tt_cache_path=None,
     ):
         super().__init__()
         self.n_heads = args.n_heads
         self.dim = args.dim
         self.device = device
-        self.attention = TtAttention(args, f"{base_address}attention.", device, state_dict)
-        self.feed_forward = TtFeedForward(args, f"{base_address}feed_forward.", device, state_dict)
+        self.attention = TtAttention(args, f"{base_address}attention.", device, tt_cache_path=tt_cache_path)
+        self.feed_forward = TtFeedForward(args, f"{base_address}feed_forward.", device, tt_cache_path=tt_cache_path)
         self.attention_norm = TtRMSNorm(
             args.dim,
             base_address=f"{base_address}attention_norm.",
-            state_dict=state_dict,
-            device=device,
             eps=args.norm_eps,
+            tt_cache_path=tt_cache_path,
         )
         self.ffn_norm = TtRMSNorm(
-            args.dim, base_address=f"{base_address}ffn_norm.", state_dict=state_dict, device=device, eps=args.norm_eps
+            args.dim,
+            base_address=f"{base_address}ffn_norm.",
+            eps=args.norm_eps,
+            tt_cache_path=tt_cache_path,
         )
         self.args = args
 
