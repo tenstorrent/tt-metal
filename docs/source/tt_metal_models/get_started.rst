@@ -28,6 +28,8 @@ Running an example model
 We develop models in ``models`` folder, splitting them to ``demo`` and ``experimental`` sub-folders.
 In ``models/demo`` folder you will find models with prepared demos and a ``README.md`` file giving instructions how to run the model demo(s).
 
+Models in the ``experimental`` sub-folder are our work in progress and are not yet ready to be used by the users.
+
 Many models will have a ``tests`` sub-folder containing tests for parts of the model or the entire model.
 You can run these tests using ``pytest``.
 
@@ -38,6 +40,6 @@ You can run these tests using ``pytest``.
 Next steps
 ----------
 
-We write the models with the Python Libraries we have for TT-Metal. Refer to
+We write the models using TTNN which is a user-friendly Python Library that we developed on top of TT-Metal. Refer to
 the docs under *Libraries* for documentation, such as the :ref:`Tensor
 API<Tensor>` or the :ref:`TT-LIB Dependencies<TT-LIB>`.
