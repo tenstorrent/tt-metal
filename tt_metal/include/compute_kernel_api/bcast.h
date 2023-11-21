@@ -221,6 +221,11 @@ ALWI void add_bcast_rows_init_short()
     #endif
 }
 
+/**
+ * This function reconfigures the compute engine from ColMajor mode to RowMajor mode. It performs
+ * a switch-from-matmul_block tile hw reconfiguration step needed for add_bcast_rows to be executed correctly.
+ * Required to be called before add_tiles_bcast if using row as broadcast type
+ */
 ALWI void add_bcast_rows_init_short_post_matmul()
 {
     // math
