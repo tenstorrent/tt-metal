@@ -10,8 +10,8 @@
 #include "common/tt_backend_api_types.hpp"
 #include "common/utils.hpp"
 #include "common/core_coord.h"
-#include "build_kernels_for_riscv/data_format.hpp"
-#include "build_kernels_for_riscv/build_kernel_options.hpp"
+#include "jit_build/data_format.hpp"
+#include "jit_build/settings.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 

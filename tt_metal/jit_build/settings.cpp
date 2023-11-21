@@ -4,7 +4,7 @@
 
 #include "common/assert.hpp"
 #include "common/core_coord.h"
-#include "build_kernels_for_riscv/build_kernel_options.hpp"
+#include "jit_build/settings.hpp"
 #include <iostream>
 #include <string>
 

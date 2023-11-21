@@ -3,7 +3,7 @@
 CFLAGS += -DFMT_HEADER_ONLY -I$(TT_METAL_HOME)/tt_metal/third_party/fmt
 
 include $(TT_METAL_HOME)/tt_metal/common/module.mk
-include $(TT_METAL_HOME)/tt_metal/build_kernels_for_riscv/module.mk
+include $(TT_METAL_HOME)/tt_metal/jit_build/module.mk
 include $(TT_METAL_HOME)/tt_metal/llrt/module.mk
 include $(TT_METAL_HOME)/tt_metal/tools/module.mk
 

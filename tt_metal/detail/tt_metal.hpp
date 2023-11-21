@@ -8,7 +8,7 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
-#include "tt_metal/build_kernels_for_riscv/build_kernels_for_riscv.hpp"
+#include "tt_metal/jit_build/build.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/detail/program.hpp"
