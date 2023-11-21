@@ -1607,3 +1607,25 @@ def gen_groupnorm_args(
     mem_configs=[supported_mem_configs],
 ):
     return gen_dtype_layout_device(input_shapes, dtypes, layouts, mem_configs, do_sanitize_args=False)
+
+
+def gen_power_fp_args(
+    input_shapes,
+    dtypes,
+    layouts,
+    mem_configs,
+    low=0,
+    high=10,
+    dtype=torch.bfloat16,
+):
+    for input_info in gen_scalar_args(
+        input_shapes,
+        dtypes,
+        layouts,
+        mem_configs,
+        "exponent",
+        low,
+        high,
+        dtype,
+    ):
+        yield input_info
