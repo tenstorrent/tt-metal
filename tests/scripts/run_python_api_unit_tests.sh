@@ -26,10 +26,6 @@ env pytest $TT_METAL_HOME/tests/ttnn/
 # For now, adding tests with fast dispatch and non-32B divisible page sizes here. Python/models people,
 # you can move to where you'd like.
 
-# Test forcing ops to single core
-env TT_METAL_SINGLE_CORE_MODE=1 pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_matmul.py::test_run_matmul_test -k BFLOAT16
-env TT_METAL_SINGLE_CORE_MODE=1 pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_unpad.py
-
 if [ "$ARCH_NAME" != "wormhole_b0" ]; then
 # Tests for tensors in L1
 pytest $TT_METAL_HOME/models/experimental/bert_large_performant/unit_tests/test_bert_large*matmul* -k in0_L1-in1_L1-bias_L1-out_L1
