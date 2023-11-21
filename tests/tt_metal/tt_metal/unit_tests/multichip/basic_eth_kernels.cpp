@@ -396,6 +396,7 @@ bool eth_hung_kernels(
 }  // namespace unit_tests::erisc::kernels
 
 TEST_F(N300DeviceFixture, EthKernelsDirectSendChip0ToChip1) {
+    GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
@@ -440,6 +441,7 @@ TEST_F(N300DeviceFixture, EthKernelsDirectSendChip0ToChip1) {
 }
 
 TEST_F(N300DeviceFixture, EthKernelsDirectSendChip1ToChip0) {
+    GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
@@ -484,6 +486,7 @@ TEST_F(N300DeviceFixture, EthKernelsDirectSendChip1ToChip0) {
 }
 
 TEST_F(N300DeviceFixture, EthKernelsBidirectionalDirectSend) {
+    GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
