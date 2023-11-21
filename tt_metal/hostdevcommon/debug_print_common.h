@@ -23,10 +23,13 @@ constexpr int DEBUG_PRINT_TYPEID_WAIT           = 7;
 constexpr int DEBUG_PRINT_TYPEID_BFLOAT16       = 8;
 constexpr int DEBUG_PRINT_TYPEID_SETP           = 9; // std::setprecision
 constexpr int DEBUG_PRINT_TYPEID_FIXP           = 10; // std::fixed
-constexpr int DEBUG_PRINT_TYPEID_HEX            = 11; // std::hex
-constexpr int DEBUG_PRINT_TYPEID_INT32          = 12;
-constexpr int DEBUG_PRINT_TYPEID_TILESLICE      = 13;
-constexpr int DEBUG_PRINT_TYPEID_UINT64         = 14;
+constexpr int DEBUG_PRINT_TYPEID_DEFFLOAT       = 11; // std::defaultfloat
+constexpr int DEBUG_PRINT_TYPEID_HEX            = 12; // std::hex
+constexpr int DEBUG_PRINT_TYPEID_OCT            = 13; // std::oct
+constexpr int DEBUG_PRINT_TYPEID_DEC            = 14; // std::dec
+constexpr int DEBUG_PRINT_TYPEID_INT32          = 15;
+constexpr int DEBUG_PRINT_TYPEID_TILESLICE      = 16;
+constexpr int DEBUG_PRINT_TYPEID_UINT64         = 17;
 
 // We need to set thw wpos, rpos pointers to 0 in the beginning of the kernel startup
 // Because there's no mechanism (known to me) to initialize values at fixed mem locations in kernel code,

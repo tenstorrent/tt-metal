@@ -70,7 +70,10 @@ struct U32  { uint32_t val; U32(uint32_t val) : val(val) {} } ATTR_PACK;
 struct ENDL { char tmp; } ATTR_PACK; // Analog of cout << std::endl - not making it zero size to avoid special cases
 struct SETP { char p; SETP(char pa) : p(pa) {} } ATTR_PACK; // Analog of cout << std::setprecision()
 struct FIXP { char tmp; } ATTR_PACK; // Analog of cout << std::fixed
+struct DEFFLOAT { char tmp; } ATTR_PACK; // Analog of cout << std::defaultfloat
 struct HEX  { char tmp; } ATTR_PACK; // Analog of cout << std::hex
+struct OCT  { char tmp; } ATTR_PACK; // Analog of cout << std::oct
+struct DEC  { char tmp; } ATTR_PACK; // Analog of cout << std::dec
 struct SETW {
     char w;
     SETW(char wa, bool sticky = true) { w = wa; if (sticky) w |= 0b10000000; }
@@ -115,7 +118,10 @@ template<> uint8_t DebugPrintTypeToId<WAIT>()          { return DEBUG_PRINT_TYPE
 template<> uint8_t DebugPrintTypeToId<BF16>()          { return DEBUG_PRINT_TYPEID_BFLOAT16; }
 template<> uint8_t DebugPrintTypeToId<SETP>()          { return DEBUG_PRINT_TYPEID_SETP; }
 template<> uint8_t DebugPrintTypeToId<FIXP>()          { return DEBUG_PRINT_TYPEID_FIXP; }
+template<> uint8_t DebugPrintTypeToId<DEFFLOAT>()      { return DEBUG_PRINT_TYPEID_DEFFLOAT; }
 template<> uint8_t DebugPrintTypeToId<HEX>()           { return DEBUG_PRINT_TYPEID_HEX; }
+template<> uint8_t DebugPrintTypeToId<OCT>()           { return DEBUG_PRINT_TYPEID_OCT; }
+template<> uint8_t DebugPrintTypeToId<DEC>()           { return DEBUG_PRINT_TYPEID_DEC; }
 template<> uint8_t DebugPrintTypeToId<F32>()           { return DEBUG_PRINT_TYPEID_FLOAT32; }
 template<> uint8_t DebugPrintTypeToId<U32>()           { return DEBUG_PRINT_TYPEID_UINT32; }
 template<> uint8_t DebugPrintTypeToId<int>()           { return DEBUG_PRINT_TYPEID_INT32; }
@@ -230,7 +236,10 @@ template DebugPrinter operator<< <char>(DebugPrinter, char val);
 template DebugPrinter operator<< <RAISE>(DebugPrinter, RAISE val);
 template DebugPrinter operator<< <WAIT>(DebugPrinter, WAIT val);
 template DebugPrinter operator<< <FIXP>(DebugPrinter, FIXP val);
+template DebugPrinter operator<< <DEFFLOAT>(DebugPrinter, DEFFLOAT val);
 template DebugPrinter operator<< <HEX>(DebugPrinter, HEX val);
+template DebugPrinter operator<< <OCT>(DebugPrinter, OCT val);
+template DebugPrinter operator<< <DEC>(DebugPrinter, DEC val);
 template DebugPrinter operator<< <SETP>(DebugPrinter, SETP val);
 template DebugPrinter operator<< <BF16>(DebugPrinter, BF16 val);
 template DebugPrinter operator<< <F32>(DebugPrinter, F32 val);

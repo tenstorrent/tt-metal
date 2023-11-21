@@ -262,11 +262,22 @@ bool DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                     stream << std::fixed;
                     TT_ASSERT(sz == 1);
                 break;
+                case DEBUG_PRINT_TYPEID_DEFFLOAT:
+                    stream << std::defaultfloat;
+                    TT_ASSERT(sz == 1);
+                break;
                 case DEBUG_PRINT_TYPEID_HEX:
                     stream << std::hex;
                     TT_ASSERT(sz == 1);
                 break;
-
+                case DEBUG_PRINT_TYPEID_OCT:
+                    stream << std::oct;
+                    TT_ASSERT(sz == 1);
+                break;
+                case DEBUG_PRINT_TYPEID_DEC:
+                    stream << std::dec;
+                    TT_ASSERT(sz == 1);
+                break;
                 case DEBUG_PRINT_TYPEID_UINT32:
                     if (sticky_setw) stream << setw(sticky_setw);
                     stream << *reinterpret_cast<uint32_t*>(ptr);
