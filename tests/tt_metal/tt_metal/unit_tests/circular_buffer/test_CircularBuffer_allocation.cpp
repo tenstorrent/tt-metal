@@ -180,7 +180,7 @@ TEST_F(DeviceFixture, TestValidUpdateCircularBufferSize) {
 
     const uint32_t core0_num_cbs = 2;
     std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
-    std::vector<CircularBufferID> cb_ids;
+    std::vector<CBHandle> cb_ids;
     auto expected_cb_addr = L1_UNRESERVED_BASE;
     for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}}).set_page_size(buffer_idx, cb_config.page_size);
@@ -213,7 +213,7 @@ TEST_F(DeviceFixture, TestInvalidUpdateCircularBufferSize) {
 
     const uint32_t core0_num_cbs = 2;
     std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
-    std::vector<CircularBufferID> cb_ids;
+    std::vector<CBHandle> cb_ids;
     auto expected_cb_addr = L1_UNRESERVED_BASE;
     for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}}).set_page_size(buffer_idx, cb_config.page_size);
@@ -246,7 +246,7 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferAddress) {
 
     const uint32_t core0_num_cbs = 2;
     std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
-    std::vector<CircularBufferID> cb_ids;
+    std::vector<CBHandle> cb_ids;
     auto expected_cb_addr = L1_UNRESERVED_BASE;
     for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}}).set_page_size(buffer_idx, cb_config.page_size);
@@ -277,7 +277,7 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferPageSize) {
     const uint32_t core0_num_cbs = 2;
     std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
     std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_num_pages_per_core;
-    std::vector<CircularBufferID> cb_ids;
+    std::vector<CBHandle> cb_ids;
     auto expected_cb_addr = L1_UNRESERVED_BASE;
     for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
         CircularBufferConfig config1 = CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}}).set_page_size(buffer_idx, cb_config.page_size);

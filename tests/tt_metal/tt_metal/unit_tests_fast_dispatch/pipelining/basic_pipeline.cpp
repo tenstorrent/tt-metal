@@ -97,8 +97,8 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
     dst_noc_xy = dst_buffer.noc_coordinates();
 
     // create kernels
-    vector<tt_metal::KernelID> receiver_kernels;
-    vector<tt_metal::KernelID> sender_kernels;
+    vector<tt_metal::KernelHandle> receiver_kernels;
+    vector<tt_metal::KernelHandle> sender_kernels;
     for (int core_id = 0; core_id < num_cores; core_id++) {
         string receiver_kernel_name;
         if (core_id == 0) {

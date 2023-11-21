@@ -156,7 +156,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     const auto compute_kernel_1_id = CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_output_tiles_per_core_group_1, compute_args_group_1}, compute_defines);
 
-    std::optional<KernelID> compute_kernel_2_id = std::nullopt;
+    std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2 = {
             1,                                  // B

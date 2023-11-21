@@ -77,13 +77,13 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
         (std::uint32_t) dst_is_dram
     };
 
-    tt_metal::KernelID reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/reduce/kernels/dataflow/reader_unary_reduce_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    tt_metal::KernelID writer_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,

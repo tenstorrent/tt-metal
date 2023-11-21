@@ -18,7 +18,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> create_program(
+std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
     tt_metal::Device *device,
     uint32_t single_tile_size,
     const CoreRange &all_cores,
@@ -87,7 +87,7 @@ void compile_and_configure_program(
 
 }
 
-void set_rt_args(tt_metal::Program &program, tt_metal::KernelID kernel, const CoreRange &core_range, const std::vector<uint32_t> &rt_args) {
+void set_rt_args(tt_metal::Program &program, tt_metal::KernelHandle kernel, const CoreRange &core_range, const std::vector<uint32_t> &rt_args) {
     for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
         for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
             CoreCoord core = CoreCoord(x, y);
@@ -99,8 +99,8 @@ void set_rt_args(tt_metal::Program &program, tt_metal::KernelID kernel, const Co
 void write_same_runtime_args_to_device(
     tt_metal::Device *device,
     tt_metal::Program &program,
-    tt_metal::KernelID reader_kernel_id,
-    tt_metal::KernelID writer_kernel_id,
+    tt_metal::KernelHandle reader_kernel_id,
+    tt_metal::KernelHandle writer_kernel_id,
     const CoreRange &core_range,
     int32_t num_tiles,
     tt_metal::Buffer &src_dram_buffer,
@@ -129,8 +129,8 @@ void write_same_runtime_args_to_device(
 void write_unique_writer_runtime_args_to_device(
     tt_metal::Device *device,
     tt_metal::Program &program,
-    tt_metal::KernelID reader_kernel_id,
-    tt_metal::KernelID writer_kernel_id,
+    tt_metal::KernelHandle reader_kernel_id,
+    tt_metal::KernelHandle writer_kernel_id,
     const CoreRange &core_range,
     const CoreRangeSet &core_blocks,
     int32_t num_tiles,

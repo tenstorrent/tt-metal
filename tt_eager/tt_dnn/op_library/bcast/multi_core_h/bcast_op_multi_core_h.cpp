@@ -85,13 +85,13 @@ operation::ProgramWithCallbacks bcast_multi_core_h(const Tensor &a, const Tensor
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
 
-	KernelID binary_reader_kernel_id = tt_metal::CreateKernel(
+	KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
 		program,
 		reader_name,
 		all_device_cores,
 		tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-	KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
+	KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
 		program,
 		"tt_eager/tt_dnn/kernels/dataflow/writer_unary_8bank_input_cols_batched.cpp",
 		all_device_cores,

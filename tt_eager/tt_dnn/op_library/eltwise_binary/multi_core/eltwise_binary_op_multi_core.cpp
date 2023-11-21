@@ -132,13 +132,13 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
         (std::uint32_t) dst_is_dram
     };
 
-    KernelID binary_reader_kernel_id = tt_metal::CreateKernel(
+    KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
         all_device_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = reader_defines});
 
-    KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
+    KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         (block_sharded and not out_sharded) ? "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded_blocks_interleaved_start_id.cpp" : "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,

@@ -33,14 +33,14 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, int device_id) {
 
     CoreCoord core = {0, 0};
 
-    tt_metal::KernelID unary_reader_kernel = tt_metal::CreateKernel(
+    tt_metal::KernelHandle unary_reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/test_compile_args.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = compile_args_vec});
 
 
-    tt_metal::KernelID unary_writer_kernel = tt_metal::CreateKernel(
+    tt_metal::KernelHandle unary_writer_kernel = tt_metal::CreateKernel(
         program, "tt_metal/kernels/dataflow/blank.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});

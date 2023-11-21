@@ -56,13 +56,13 @@ operation::ProgramWithCallbacks eltwise_unary_multi_core(const Tensor &a, Tensor
         (std::uint32_t) dst_is_dram
     };
 
-    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,

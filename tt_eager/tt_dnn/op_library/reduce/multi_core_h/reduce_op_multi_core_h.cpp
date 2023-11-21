@@ -60,9 +60,9 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     string compute_kernel_name = reduce_op_utils::dim_to_kernel_name(reduce_dim, reduce_op);
 
     uint32_t src0_cb_index = CB::c_in0;
-    CircularBufferID cb_src0;
+    CBHandle cb_src0;
     uint32_t src1_cb_index = CB::c_in1;
-    CircularBufferID cb_src1 = 0;
+    CBHandle cb_src1 = 0;
     if (in_sharded) {
         uint32_t num_shard_tiles = a.shard_spec().value().numel() / TILE_HW;
         uint32_t num_input_tiles = 2;
@@ -86,7 +86,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     auto cb_scaler = tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
     uint32_t output_cb_index = CB::c_out0; // output operands start at index 16
-    CircularBufferID cb_output;
+    CBHandle cb_output;
     if (out_sharded) {
         uint32_t num_output_tiles = output.shard_spec().value().numel() / TILE_HW;
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
@@ -99,7 +99,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
     }
     tt_metal::Buffer *src0_buffer = a.buffer();
-    tt_metal::KernelID reader_kernel_id;
+    tt_metal::KernelHandle reader_kernel_id;
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     if (in_sharded) {
@@ -135,7 +135,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     }
 
     tt_metal::Buffer *dst_buffer = output.buffer();
-    tt_metal::KernelID writer_kernel_id;
+    tt_metal::KernelHandle writer_kernel_id;
 
     if (out_sharded) {
         vector<uint32_t> writer_ct_args = {

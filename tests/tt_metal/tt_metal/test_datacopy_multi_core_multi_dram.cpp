@@ -84,7 +84,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
     return result;
 }
 
-std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> create_program(
+std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
     tt_metal::Device *device,
     int num_cores_r,
     int num_cores_c,
@@ -171,8 +171,8 @@ bool write_runtime_args_to_device(
     tt_metal::Program &program,
     int num_cores_r,
     int num_cores_c,
-    tt_metal::KernelID reader_kernel,
-    tt_metal::KernelID writer_kernel,
+    tt_metal::KernelHandle reader_kernel,
+    tt_metal::KernelHandle writer_kernel,
     int tensor_num_tiles,
     int block_num_tiles,
     int Ht,
