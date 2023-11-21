@@ -212,28 +212,36 @@ bool run_sfpu_test(string sfpu_name) {
     return pass;
 }
 
-int main(int argc, char **argv) {
+bool run_unit_test(std::string op_name) {
+    log_info(LogTest, "Running {}", op_name);
 
+    bool pass_ = run_sfpu_test(op_name);
+
+    if (pass_) {
+        log_info(LogTest, "{} test passed", op_name);
+    } else {
+        log_info(LogTest, "{} test failed", op_name);
+    }
+    return pass_;
+}
+
+int main(int argc, char **argv) {
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     bool pass = true;
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Initial Runtime Args Parse
-    ////////////////////////////////////////////////////////////////////////////
+
     update_sfpu_op_to_hlk_op();
-    for (const auto& [op_name, _]: sfpu_op_to_hlk_op_name) {
-        log_info(LogTest, "Running {}", op_name);
 
-        bool pass_ = run_sfpu_test(op_name);
 
-        if (pass_) {
-            log_info(LogTest, "{} test passed", op_name);
-        } else {
-            log_info(LogTest, "{} test failed", op_name);
+    if ( argc == 1 ) {
+        for (const auto& [op_name, _]: sfpu_op_to_hlk_op_name) {
+            pass &= run_unit_test(op_name);
         }
-
-        pass &= pass_;
+    } else {
+        for(uint32_t idx = 1; idx < argc; idx++) {
+            pass &= run_unit_test(argv[idx]);
+        }
     }
 
     if (pass) {

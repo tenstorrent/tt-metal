@@ -127,10 +127,11 @@ def run_eltwise_unary_ops(
         }
     )
 
-    if fn_kind in ["gelu", "rsqrt", "erf", "erfc"]:
+    if fn_kind in ["gelu", "rsqrt", "erf", "erfc", "exp"]:
         test_args.update(
             {
                 "fast_and_appx": True,
+                "fast_and_approx": True,
             }
         )
 
