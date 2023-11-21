@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
     if (pass) {
         log_info(LogTest, "Test Passed");
     } else {
-        log_fatal(LogTest, "Test Failed");
+        TT_THROW("Test Failed");
     }
 
     TT_ASSERT(pass);
