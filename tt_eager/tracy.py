@@ -4,100 +4,53 @@
 
 import importlib.machinery
 import sys
+import os
 import io
-import random
+import subprocess
+import time
 
 from loguru import logger
-import seaborn as sns
 
-from tt_lib.profiler import start_tracy_zone, stop_tracy_zone
+from tt_metal.tools.profiler.common import TT_METAL_HOME, PROFILER_BIN_DIR, PROFILER_LOGS_DIR
+
+TRACY_MODULE_PATH = TT_METAL_HOME / "tt_metal/third_party/tracy"
+TRACY_FILE_NAME = "tracy_profile_log_host.tracy"
+TRACY_CSV_FILE_NAME = "tracy_profile_log_host.csv"
+
+TRACY_CAPTURE_TOOL = "capture"
+TRACY_CSVEXPROT_TOOL = "csvexport"
 
 import tracy_state
 
 
-def hex_to_int(color):
-    return int(color[1:], 16)
-
-
-plotColors = sns.color_palette("deep").as_hex()
-plotColorOne = random.choice(plotColors)
-plotColors.remove(plotColorOne)
-plotColorTwo = random.choice(plotColors)
-plotColors.remove(plotColorTwo)
-plotColorThree = random.choice(plotColors)
-plotColors.remove(plotColorThree)
-plotColorFour = random.choice(plotColors)
-
-plotColorOne = hex_to_int(plotColorOne)
-plotColorTwo = hex_to_int(plotColorTwo)
-plotColorThree = hex_to_int(plotColorThree)
-plotColorFour = hex_to_int(plotColorFour)
-
-callStack = []
-
-
-def tracy_marker_line(frame, event, args):
-    global callStack
-    if event == "call":
-        callStack.append("call")
-        start_tracy_zone(f"{frame.f_code.co_filename}", f"PY_FUNC_{frame.f_code.co_name}", frame.f_lineno)
-    elif event == "return":
-        while callStack and callStack.pop() == "line":
-            stop_tracy_zone(color=plotColorThree)
-        if (
-            "tt_lib_profiler_wrapper.py" in f"{frame.f_code.co_filename}"
-            and frame.f_locals
-            and "local_name" in frame.f_locals.keys()
-        ):
-            stop_tracy_zone(f"PY_TT_LIB_{frame.f_locals['local_name']}", plotColorTwo)
-        else:
-            stop_tracy_zone(color=plotColorOne)
-    elif event == "line":
-        if "tt_lib_profiler_wrapper.py" not in f"{frame.f_code.co_filename}":
-            if callStack and callStack[-1] == "line":
-                stop_tracy_zone(color=plotColorThree)
-            else:
-                callStack.append("line")
-            start_tracy_zone(f"{frame.f_code.co_filename}", f"PY_LINE_{frame.f_code.co_name}", frame.f_lineno)
-
-    return tracy_marker_line
-
-
-def tracy_marker_func(frame, event, args):
-    if event in ["call", "c_call"]:
-        start_tracy_zone(f"{frame.f_code.co_filename}", f"PY_FUNC_{frame.f_code.co_name}", frame.f_lineno)
-    elif event in ["return", "c_return", "c_exception"]:
-        if (
-            "tt_lib_profiler_wrapper.py" in f"{frame.f_code.co_filename}"
-            and frame.f_locals
-            and "local_name" in frame.f_locals.keys()
-        ):
-            stop_tracy_zone(f"PY_TT_LIB_{frame.f_locals['local_name']}", plotColorTwo)
-        else:
-            stop_tracy_zone(color=plotColorOne)
-
-
 class Profiler:
     def __init__(self):
+        from tracy_tt_lib import tracy_marker_func, tracy_marker_line, finish_all_zones
+
         self.doProfile = tracy_state.doPartial and sys.gettrace() is None and sys.getprofile() is None
         self.doLine = tracy_state.doLine
+
+        self.lineMarker = tracy_marker_line
+        self.funcMarker = tracy_marker_func
+        self.finishZones = finish_all_zones
 
     def enable(self):
         if self.doProfile:
             if self.doLine:
-                sys.settrace(tracy_marker_line)
+                sys.settrace(self.lineMarker)
             else:
-                sys.setprofile(tracy_marker_func)
+                sys.setprofile(self.funcMarker)
 
     def disable(self):
         if self.doProfile:
             sys.settrace(None)
             sys.setprofile(None)
-            while not stop_tracy_zone(color=plotColorFour):
-                pass
+            self.finishZones()
 
 
 def runctx(cmd, globals, locals, partialProfile):
+    from tracy_tt_lib import tracy_marker_func, finish_all_zones
+
     if not partialProfile:
         sys.setprofile(tracy_marker_func)
 
@@ -105,12 +58,87 @@ def runctx(cmd, globals, locals, partialProfile):
         exec(cmd, globals, locals)
     finally:
         sys.setprofile(None)
-        while not stop_tracy_zone(color=plotColorFour):
-            pass
+        finish_all_zones()
+
+
+def confirmTracyToolInstall(tool):
+    ret = True
+    if not os.path.exists(PROFILER_BIN_DIR / tool):
+        toolTracyPath = TRACY_MODULE_PATH / tool / "build/unix"
+        try:
+            logger.info(f"Building tracy profiling tool: {tool}")
+            subprocess.run(
+                f"mkdir -p {PROFILER_BIN_DIR}",
+                shell=True,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            subprocess.run(
+                f"cd {toolTracyPath}; make",
+                shell=True,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            subprocess.run(
+                f"cp {toolTracyPath}/{tool}-release {PROFILER_BIN_DIR / tool}",
+                shell=True,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except subprocess.CalledProcessError as e:
+            ret = False
+    return ret
+
+
+def run_report_setup():
+    toolsReady = True
+
+    logger.info("Verifying tracy profiling tools")
+    toolsReady &= confirmTracyToolInstall(TRACY_CAPTURE_TOOL)
+    toolsReady &= confirmTracyToolInstall(TRACY_CSVEXPROT_TOOL)
+
+    if toolsReady:
+        subprocess.run(
+            f"rm -rf {PROFILER_LOGS_DIR}; mkdir -p {PROFILER_LOGS_DIR}",
+            shell=True,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        subprocess.run(
+            f"{PROFILER_BIN_DIR / TRACY_CAPTURE_TOOL} -o {PROFILER_LOGS_DIR / TRACY_FILE_NAME} -f&",
+            shell=True,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    else:
+        logger.warning(
+            "Perf report generation is skipped!! Tracy tools can't be installed,  make sure tt_metal dev packages are installed"
+        )
+
+    return toolsReady
+
+
+def generate_report():
+    while not os.path.exists(PROFILER_LOGS_DIR / TRACY_FILE_NAME):
+        time.sleep(1)
+    with open(PROFILER_LOGS_DIR / TRACY_CSV_FILE_NAME, "w") as csvFile:
+        subprocess.run(
+            f"{PROFILER_BIN_DIR / TRACY_CSVEXPROT_TOOL} -u {PROFILER_LOGS_DIR / TRACY_FILE_NAME}",
+            shell=True,
+            check=True,
+            stdout=csvFile,
+            stderr=subprocess.DEVNULL,
+        )
+
+    logger.info(f"Host side profiling report generated at {PROFILER_LOGS_DIR / TRACY_CSV_FILE_NAME}")
 
 
 def main():
-    import os
     from optparse import OptionParser
 
     usage = "tracy_python.py [-m module | scriptfile] [arg] ..."
@@ -119,49 +147,65 @@ def main():
     parser.add_option("-m", dest="module", action="store_true", help="Profile a library module.", default=False)
     parser.add_option("-p", dest="partial", action="store_true", help="Only profile enabled zones", default=False)
     parser.add_option("-l", dest="lines", action="store_true", help="Profile every line of python code", default=False)
+    parser.add_option("-r", dest="report", action="store_true", help="Generate ops report", default=False)
 
     if not sys.argv[1:]:
         parser.print_usage()
         sys.exit(2)
 
+    originalArgs = sys.argv.copy()
+
     (options, args) = parser.parse_args()
     sys.argv[:] = args
 
     if len(args) > 0:
-        if options.module:
-            import runpy
+        doReport = False
+        if options.report:
+            doReport = run_report_setup()
 
-            code = "run_module(modname, run_name='__main__')"
-            globs = {
-                "run_module": runpy.run_module,
-                "modname": args[0],
-            }
+        if not doReport:
+            if options.module:
+                import runpy
+
+                code = "run_module(modname, run_name='__main__')"
+                globs = {
+                    "run_module": runpy.run_module,
+                    "modname": args[0],
+                }
+            else:
+                progname = args[0]
+                sys.path.insert(0, os.path.dirname(progname))
+                with io.open_code(progname) as fp:
+                    code = compile(fp.read(), progname, "exec")
+                spec = importlib.machinery.ModuleSpec(name="__main__", loader=None, origin=progname)
+                globs = {
+                    "__spec__": spec,
+                    "__file__": spec.origin,
+                    "__name__": spec.name,
+                    "__package__": None,
+                    "__cached__": None,
+                }
+
+            if options.partial:
+                tracy_state.doPartial = True
+
+            if options.lines:
+                tracy_state.doLine = True
+
+            try:
+                runctx(code, globs, None, options.partial)
+            except BrokenPipeError as exc:
+                # Prevent "Exception ignored" during interpreter shutdown.
+                sys.stdout = None
+                sys.exit(exc.errno)
         else:
-            progname = args[0]
-            sys.path.insert(0, os.path.dirname(progname))
-            with io.open_code(progname) as fp:
-                code = compile(fp.read(), progname, "exec")
-            spec = importlib.machinery.ModuleSpec(name="__main__", loader=None, origin=progname)
-            globs = {
-                "__spec__": spec,
-                "__file__": spec.origin,
-                "__name__": spec.name,
-                "__package__": None,
-                "__cached__": None,
-            }
+            originalArgs.remove("-r")
+            osCmd = " ".join(originalArgs[1:])
 
-        if options.partial:
-            tracy_state.doPartial = True
+            test_command = f"python -m tracy {osCmd}&"
+            subprocess.run([test_command], shell=True, check=False, env=dict(os.environ))
+            generate_report()
 
-        if options.lines:
-            tracy_state.doLine = True
-
-        try:
-            runctx(code, globs, None, options.partial)
-        except BrokenPipeError as exc:
-            # Prevent "Exception ignored" during interpreter shutdown.
-            sys.stdout = None
-            sys.exit(exc.errno)
     else:
         parser.print_usage()
     return parser
