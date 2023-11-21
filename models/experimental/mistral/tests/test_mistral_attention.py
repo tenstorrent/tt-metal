@@ -30,6 +30,10 @@ from models.utility_functions import (
     (True, False),
 )
 @pytest.mark.parametrize(
+    "scatter_ondevice",
+    (True, False),
+)
+@pytest.mark.parametrize(
     "dtype",
     (tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B),
 )
@@ -45,6 +49,7 @@ def test_mistral_attention_inference(
     empty_ondevice,
     rotary_embedding_ondevice,
     softmax_ondevice,
+    scatter_ondevice,
     dtype,
 ):
     mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
@@ -61,6 +66,7 @@ def test_mistral_attention_inference(
     model_args.FALLBACK_ROTARY_EMBEDDING = rotary_embedding_ondevice
     model_args.FALLBACK_SOFTMAX = softmax_ondevice
     model_args.FALLBACK_EMPTY = empty_ondevice
+    model_args.FALLBACK_SCATTER = scatter_ondevice
     model_args.WEIGHTS_DTYPE = dtype
     tt_model = TtAttention(
         args=model_args,
