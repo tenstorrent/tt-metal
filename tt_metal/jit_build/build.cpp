@@ -10,7 +10,7 @@
 #include <thread>
 #include <string>
 
-#include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
+#include "jit_build/build.hpp"
 #include "dev_mem_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "tools/profiler/profiler_state.hpp"

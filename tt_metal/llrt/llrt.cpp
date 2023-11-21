@@ -6,7 +6,7 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 
-#include "build_kernels_for_riscv/build_kernel_options.hpp"
+#include "jit_build/settings.hpp"
 
 #include <unordered_set>
 #include <mutex>

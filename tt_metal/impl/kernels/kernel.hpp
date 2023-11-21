@@ -11,7 +11,7 @@
 #include <type_traits>
 #include <memory>
 
-#include "build_kernels_for_riscv/build_kernel_options.hpp"
+#include "jit_build/build.hpp"
 #include "common/base_types.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/kernels/kernel_types.hpp"

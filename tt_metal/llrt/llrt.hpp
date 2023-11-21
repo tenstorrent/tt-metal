@@ -17,7 +17,7 @@
 #include "llrt_common/tiles.hpp"
 #include "llrt/tt_memory.h"
 #include "hostdevcommon/common_runtime_address_map.h"
-#include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
+#include "jit_build/build.hpp"
 #include "dev_msgs.h"
 
 namespace tt {

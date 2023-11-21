@@ -12,7 +12,7 @@
 #include <fstream>
 
 
-#include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
+#include "jit_build/build.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/thread_safe_queue.hpp"
 #include "tt_metal/common/base.hpp"

@@ -4,7 +4,7 @@
 
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
+#include "jit_build/build.hpp"
 #include "llrt/llrt.hpp"
 
 #include <fmt/ranges.h>
