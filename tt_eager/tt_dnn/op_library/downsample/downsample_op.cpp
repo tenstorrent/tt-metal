@@ -515,7 +515,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
     };
 
     // Writer to downsample - drops rows from untilized cb
-    tt_metal::KernelID downsample_writer_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle downsample_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/downsample/kernels/downsample_writer_kernel.cpp",
         core_range,

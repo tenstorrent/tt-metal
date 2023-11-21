@@ -152,9 +152,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     auto cb_in2_id = CreateCircularBuffer( program, all_device_cores, c_in2_config );
     auto c_intermed0_config = CircularBufferConfig(im0_t * in0_tile_size, {{CB::c_intermed0, in0_cb_data_format}}).set_page_size(CB::c_intermed0, in0_tile_size);
     auto cb_intermed0_id = CreateCircularBuffer( program, all_device_cores, c_intermed0_config );
-    std::optional<CircularBufferID> cb_intermed3_id;
-    std::optional<CircularBufferID> cb_in3_id;
-    std::optional<CircularBufferID> cb_in4_id;
+    std::optional<CBHandle> cb_intermed3_id;
+    std::optional<CBHandle> cb_in3_id;
+    std::optional<CBHandle> cb_in4_id;
     if (mask.has_value()) {
         CircularBufferConfig c_intermed3_config = CircularBufferConfig(im3_t * in0_tile_size, {{CB::c_intermed3, in0_cb_data_format}}).set_page_size(CB::c_intermed3, in0_tile_size);
         cb_intermed3_id = CreateCircularBuffer( program, all_device_cores, c_intermed3_config );

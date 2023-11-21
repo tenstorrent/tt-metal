@@ -34,8 +34,8 @@ void setup_runtime(
     tt_metal::Buffer *in0_buffer,
     tt_metal::Buffer *out0_buffer,
     tt_metal::Buffer *out1_buffer,
-    tt_metal::KernelID reader_kernel_id,
-    tt_metal::KernelID writer_kernel_id) {
+    tt_metal::KernelHandle reader_kernel_id,
+    tt_metal::KernelHandle writer_kernel_id) {
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
 

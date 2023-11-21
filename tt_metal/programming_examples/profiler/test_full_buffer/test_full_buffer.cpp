@@ -25,18 +25,18 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count, string run_name = 
         {"LOOP_SIZE", std::to_string(loop_size)}
     };
 
-    tt_metal::KernelID brisc_kernel = tt_metal::CreateKernel(
+    tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
         program, "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = kernel_defines});
 
-    tt_metal::KernelID ncrisc_kernel = tt_metal::CreateKernel(
+    tt_metal::KernelHandle ncrisc_kernel = tt_metal::CreateKernel(
         program, "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .defines = kernel_defines});
 
     vector<uint32_t> trisc_kernel_args = {};
-    tt_metal::KernelID trisc_kernel = tt_metal::CreateKernel(
+    tt_metal::KernelHandle trisc_kernel = tt_metal::CreateKernel(
         program, "tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer_compute.cpp",
         all_cores,
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines}

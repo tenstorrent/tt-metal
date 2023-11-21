@@ -197,7 +197,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
         (std::uint32_t) stick_size_is_power_of_two,
         (std::uint32_t) log2_stick_size,
     };
-    KernelID unary_reader_kernel_id = CreateKernel(
+    KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
         all_cores,
@@ -213,7 +213,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor &a, T
         (std::uint32_t) output_cb_index,
         (std::uint32_t) out_is_dram
     };
-    KernelID unary_writer_kernel_id = CreateKernel(
+    KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
@@ -415,13 +415,13 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor &input, T
         (std::uint32_t) output_cb_index
     };
 
-    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
@@ -558,7 +558,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
 
     /** reader
      */
-    KernelID unary_reader_kernel_id;
+    KernelHandle unary_reader_kernel_id;
     std::vector<uint32_t> reader_ct_args = {
             (std::uint32_t) src0_cb_index,
             (std::uint32_t) src1_cb_index,
@@ -573,7 +573,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(const Tensor 
 
     /** writer
      */
-    KernelID unary_writer_kernel_id;
+    KernelHandle unary_writer_kernel_id;
     bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     vector<uint32_t> writer_ct_args = {
         output_cb_index,

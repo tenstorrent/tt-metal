@@ -348,7 +348,7 @@ namespace tt::tt_metal{
             bool riscv0_in_use = false; bool riscv1_in_use = false;
             bool noc0_in_use = false; bool noc1_in_use = false;
 
-            auto set_global_and_local_noc_usage = [&](KernelID kernel_id, bool &local_noc0_usage, bool &local_noc1_usage) {
+            auto set_global_and_local_noc_usage = [&](KernelHandle kernel_id, bool &local_noc0_usage, bool &local_noc1_usage) {
                 const auto kernel = detail::GetKernel(program, kernel_id);
                 auto kernel_config = std::get<DataMovementConfig>(kernel->config());
                 auto noc_value = magic_enum::enum_integer(kernel_config.noc);

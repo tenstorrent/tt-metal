@@ -17,7 +17,7 @@
 
 namespace tt::tt_metal {
 
-using CircularBufferID = uintptr_t;
+using CBHandle = uintptr_t;
 
 class CircularBufferConfig {
    public:

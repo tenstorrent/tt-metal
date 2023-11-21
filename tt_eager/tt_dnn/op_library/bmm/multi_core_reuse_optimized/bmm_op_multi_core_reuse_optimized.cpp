@@ -205,8 +205,8 @@ operation::ProgramWithCallbacks create_program(
         .set_page_size(interm0_cb_index, output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_output_config);
 
-    std::vector<KernelID> reader_kernel_ids;
-    std::vector<KernelID> writer_kernel_ids;
+    std::vector<KernelHandle> reader_kernel_ids;
+    std::vector<KernelHandle> writer_kernel_ids;
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++){
         uint32_t core_idx_x = i / core_range.y;
         uint32_t core_idx_y = i % core_range.y;

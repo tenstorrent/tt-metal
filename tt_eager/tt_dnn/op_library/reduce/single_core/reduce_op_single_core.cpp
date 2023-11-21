@@ -84,7 +84,7 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
     if (reduce_dim == ReduceOpDim::H) {
         reader_defines["REDUCE_SCALER"] = "1";
     }
-    tt_metal::KernelID reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         reduce_dim == ReduceOpDim::H ?
             "tt_eager/tt_dnn/kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp" :
@@ -92,7 +92,7 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = reader_defines});
 
-    tt_metal::KernelID writer_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,

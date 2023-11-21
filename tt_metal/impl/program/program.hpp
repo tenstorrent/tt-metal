@@ -24,23 +24,23 @@ namespace tt_metal {
 // Fwd declares
 namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device);
-    KernelID AddKernel ( Program & program, Kernel * kernel);
-    Kernel *GetKernel(const Program &program, KernelID kernel_id);
-    std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CircularBufferID id);
+    KernelHandle AddKernel ( Program & program, Kernel * kernel);
+    Kernel *GetKernel(const Program &program, KernelHandle kernel_id);
+    std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
 }
 
 struct KernelGroup {
     CoreRangeSet core_ranges;
-    std::optional<KernelID> compute_id = std::nullopt;
-    std::optional<KernelID> riscv0_id = std::nullopt;
-    std::optional<KernelID> riscv1_id = std::nullopt;
+    std::optional<KernelHandle> compute_id = std::nullopt;
+    std::optional<KernelHandle> riscv0_id = std::nullopt;
+    std::optional<KernelHandle> riscv1_id = std::nullopt;
     launch_msg_t launch_msg;
 
     KernelGroup();
     KernelGroup(const Program& program,
-                std::optional<KernelID> brisc_id,
-                std::optional<KernelID> ncrisc_id,
-                std::optional<KernelID> trisc_id,
+                std::optional<KernelHandle> brisc_id,
+                std::optional<KernelHandle> ncrisc_id,
+                std::optional<KernelHandle> trisc_id,
                 int last_cb_index,
                 const CoreRangeSet& new_ranges);
 };
@@ -130,7 +130,7 @@ class Program {
     CoreCoord grid_extent_;
 
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_;
-    std::unordered_map<CircularBufferID,  std::shared_ptr<CircularBuffer>> circular_buffer_by_id_;
+    std::unordered_map<CBHandle,  std::shared_ptr<CircularBuffer>> circular_buffer_by_id_;
     // Tracks which circular buffer indices are being used
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_cb_indices_;
     // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
@@ -146,19 +146,19 @@ class Program {
     std::vector<KernelGroup> kernel_groups_;
     std::vector<uint8_t> core_to_kernel_group_index_table_;
 
-    friend CircularBufferID CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
-    friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CircularBufferID id);
+    friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
+    friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
-    friend KernelID detail::AddKernel(Program &program, Kernel *kernel);
-    friend Kernel *detail::GetKernel(const Program &program, KernelID kernel_id);
+    friend KernelHandle detail::AddKernel(Program &program, Kernel *kernel);
+    friend Kernel *detail::GetKernel(const Program &program, KernelHandle kernel_id);
 
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value);
-    KernelID add_kernel(Kernel *kernel);
-    Kernel *get_kernel(KernelID kernel_id) const;
+    KernelHandle add_kernel(Kernel *kernel);
+    Kernel *get_kernel(KernelHandle kernel_id) const;
 
-    CircularBufferID add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
-    std::shared_ptr<CircularBuffer> get_circular_buffer(CircularBufferID cb_id) const;
+    CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
+    std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
 

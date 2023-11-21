@@ -37,7 +37,7 @@ const uint32_t untilize_mode_reblock_cb               = CB::c_intermed2;
 const uint32_t out0_cb                                = CB::c_out0;
 
 
-tuple<CircularBufferID, CircularBufferID> create_CBs_for_sharded_input(
+tuple<CBHandle, CBHandle> create_CBs_for_sharded_input(
     tt_metal::Program &program,
     const Tensor& input,
     CoreRange core,
@@ -99,7 +99,7 @@ tuple<CircularBufferID, CircularBufferID> create_CBs_for_sharded_input(
 		.set_page_size(tilize_mode_tilized_act_cb, tilized_act_tile_size);
     auto cb_src0_tilized = tt_metal::CreateCircularBuffer(program, core, cb_src0_tilized_config);
 
-    CircularBufferID cb_output = 0;
+    CBHandle cb_output = 0;
     if (untilize_out) {
         CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * out_tile_size, {{matmul_partials_cb, out_df}})
 		    .set_page_size(matmul_partials_cb, out_tile_size);
@@ -754,7 +754,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
         .compile_args = writer_compile_time_args,
         .defines = writer_mcast_sender_defines});
 
-    KernelID writer_mcast_receiver_id;
+    KernelHandle writer_mcast_receiver_id;
     if (total_num_cores > 1) {
         writer_mcast_receiver_id = CreateKernel(
         program,
@@ -795,8 +795,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
         noop_cores, ComputeConfig{});
     }
 
-    vector<KernelID> reader_ids;
-    vector<KernelID> writer_ids;
+    vector<KernelHandle> reader_ids;
+    vector<KernelHandle> writer_ids;
     //tt_start_debug_print_server();
     for(uint32_t core_i = 0; core_i < total_num_cores; core_i++) {
         uint32_t core_x_i = core_i % num_cores_x;

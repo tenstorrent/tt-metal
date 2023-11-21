@@ -388,7 +388,7 @@ operation::ProgramWithCallbacks embeddings_rm(
     std::vector<tt_metal::NOC> noc_ports = {tt_metal::NOC::RISCV_0_default, tt_metal::NOC::RISCV_1_default};
 
 
-    std::vector<tt::tt_metal::KernelID> kernIds(RISC_CORES_PER_TENSIX);
+    std::vector<tt::tt_metal::KernelHandle> kernIds(RISC_CORES_PER_TENSIX);
 
     for(int risc_id =0; risc_id < embedding_risc_cores_per_tensix; risc_id++){
        std::vector<uint32_t> embedding_compile_time_args= {  (std::uint32_t) in0_is_dram,
