@@ -104,6 +104,8 @@ struct OptimizedConv {
     operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor> &output_tensors) const;
 
     static constexpr auto attribute_names = std::make_tuple(
+        "parallelization_config",
+        "block_config",
         "conv_params",
         "output_channels",
         "untilize_out",
@@ -112,9 +114,12 @@ struct OptimizedConv {
         "math_fidelity",
         "extra_padding_for_32B_alignment",
         "output_mem_config",
-        "output_dtype");
+        "output_dtype",
+        "input_tensor_shape");
     const auto attribute_values() const {
         return std::make_tuple(
+            std::cref(this->parallelization_config),
+            std::cref(this->block_config),
             std::cref(this->conv_params),
             std::cref(this->output_channels),
             std::cref(this->untilize_out),
@@ -123,7 +128,8 @@ struct OptimizedConv {
             std::cref(this->math_fidelity),
             std::cref(this->extra_padding_for_32B_alignment),
             std::cref(this->output_mem_config),
-            std::cref(this->output_dtype));
+            std::cref(this->output_dtype),
+            std::cref(this->input_tensor_shape));
     }
 };
 

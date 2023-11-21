@@ -64,7 +64,7 @@ tuple<CircularBufferID, CircularBufferID> create_CBs_for_sharded_input(
     uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
     uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
 
-    auto cb_sharded_act = 0;
+    CircularBufferID cb_sharded_act = 0;
     if (input.memory_config().is_sharded()) {
         uint32_t num_bytes_for_df = datum_size(act_df);
         auto shard_shape = input.shard_spec().value().shard_shape;
