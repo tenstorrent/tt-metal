@@ -69,6 +69,9 @@ ALWI void copy_tile_matmul_partials_init_short_with_dt(uint32_t cbid) {
     #endif
 }
 
+/**
+ * Perform the init short for copy tile. This does not reconfigure the unpacker data types.
+ */
 ALWI void copy_tile_to_dst_init_short()
 {
     #ifdef ARCH_GRAYSKULL
@@ -80,6 +83,9 @@ ALWI void copy_tile_to_dst_init_short()
     #endif
 }
 
+/**
+ * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset registers.
+ */
 ALWI void copy_tile_init()
 {
     copy_tile_to_dst_init_short();
