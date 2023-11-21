@@ -318,12 +318,7 @@ CoreCoord Device::logical_grid_size() const {
 }
 
 CoreCoord Device::compute_with_storage_grid_size() const {
-    const char *TT_METAL_SINGLE_CORE_MODE = std::getenv("TT_METAL_SINGLE_CORE_MODE");
-    if (TT_METAL_SINGLE_CORE_MODE == nullptr) {
-        return tt::Cluster::instance().get_soc_desc(id_).compute_with_storage_grid_size;
-    } else {
-        return {1, 1};
-    }
+    return tt::Cluster::instance().get_soc_desc(id_).compute_with_storage_grid_size;
 }
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {
