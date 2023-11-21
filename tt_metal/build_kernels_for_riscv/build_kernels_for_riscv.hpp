@@ -117,7 +117,6 @@ void generate_bank_to_noc_coord_descriptor(
 
 void generate_noc_addr_ranges_header(
     build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
-    tt::ARCH arch,
     string out_dir_path,
     uint64_t pcie_addr_base,
     uint64_t pcie_addr_size,
