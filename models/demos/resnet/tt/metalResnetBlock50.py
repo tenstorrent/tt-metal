@@ -1163,14 +1163,15 @@ class ResNet(nn.Module):
         self.relu = tt_lib.tensor.relu_without_autoformat
         # self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
         # self.maxpool = TtMaxPool(self.device, kernel_size=3, stride=2, padding=1, output_mem_config=self.memory_config, nblocks=8, channels_last=True, reshape_2d=True)
+        self.maxpool_config_params = {"kernel_size": 3, "stride": 2, "pad": 1, "dilation": 1}
         self.maxpool = TtMaxPool(
             self.device,
             self.conv1_output_shape[0],  ## in_n
             self.conv1_output_shape[1],  ## in_h
             self.conv1_output_shape[2],  ## in_w
-            kernel_size=3,
-            stride=2,
-            padding=1,
+            kernel_size=self.maxpool_config_params["kernel_size"],
+            stride=self.maxpool_config_params["stride"],
+            padding=self.maxpool_config_params["pad"],
             output_mem_config=self.height_sharded_memory_config,
             nblocks=1,
             channels_last=True,
@@ -1552,13 +1553,24 @@ class ResNet(nn.Module):
         # Relu is fused with conv1
 
         if self.sharded:
-            x = tt_lib.tensor.untilize_with_halo(
+            # x = tt_lib.tensor.untilize_with_halo(
+            #     x,
+            #     0xF7FF,  ## pad_val
+            #     self.conv1_output_shape[0],  ## in_n
+            #     self.conv1_output_shape[1],  ## in_h
+            #     self.conv1_output_shape[2],  ## in_w
+            #     2,  ## stride case
+            #     self.height_sharded_memory_config,
+            # )
+            x = tt_lib.tensor.untilize_with_halo_v2(
                 x,
                 0xF7FF,  ## pad_val
                 self.conv1_output_shape[0],  ## in_n
                 self.conv1_output_shape[1],  ## in_h
                 self.conv1_output_shape[2],  ## in_w
-                2,  ## stride case
+                self.maxpool_config_params["kernel_size"],  ## kernel_h == kernel_w
+                self.maxpool_config_params["stride"],  ## stride_h == stride_w
+                self.maxpool_config_params["pad"],  ## pad_h == pad_w
                 self.height_sharded_memory_config,
             )
         else:
