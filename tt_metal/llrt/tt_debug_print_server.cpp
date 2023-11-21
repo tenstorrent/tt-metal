@@ -151,12 +151,14 @@ static void print_tile_slice(ostream& stream, uint8_t* ptr) {
     } else {
         uint32_t i = 0;
         for (int h = ts->h0_; h < ts->h1_; h += ts->hs_) {
-            stream << "  ";
+            if (ts->w0_ < ts->w1_)
+                stream << "  ";
             for (int w = ts->w0_; w < ts->w1_; w += ts->ws_) {
                 if (i >= ts->count_)
                     goto done;
                 stream << bfloat16_to_float(ts->samples_[i]);
-                stream << " ";
+                if (w + ts->ws_ < ts->w1_)
+                    stream << " ";
                 i++;
             }
             if (ts->endl_rows_)
@@ -440,8 +442,17 @@ void tt_set_debug_print_server_mute(bool mute_print_server) {
 }
 
 void tt_await_debug_print_server() {
-    if (DebugPrintServerContext::inst != nullptr)
-        DebugPrintServerContext::inst->WaitForNoNewDataProcessed();
+    if (DebugPrintServerContext::inst != nullptr) {
+        // Call the wait function for the print server, with a timeout
+        auto future = std::async(
+            std::launch::async,
+            &DebugPrintServerContext::WaitForNoNewDataProcessed,
+            DebugPrintServerContext::inst
+        );
+        if (future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout) {
+            TT_FATAL(false && "Timed out waiting on debug print server to read data.");
+        }
+    }
 }
 
 // The print server is not valid without alive Cluster and tt_device

@@ -3,11 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "debug/dprint.h"
+#include "debug/dprint_test_common.h"
 
 /*
  * Test printing from a kernel running on NCRISC.
 */
 
 void kernel_main() {
-    DPRINT_DATA1(DPRINT << "Test Debug Print: Data1" << ENDL());
+    DPRINT_DATA1(
+        // Wait for previous core (UNPACK) to finish printing.
+        DPRINT << WAIT{4};
+        DPRINT << "Test Debug Print: Data1" << ENDL();
+        print_test_data();
+    );
 }

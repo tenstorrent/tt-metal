@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "command_queue_fixture.hpp"
+#include "common/bfloat16.hpp"
 #include "llrt/tt_debug_print_server.hpp"
 #include "gtest/gtest.h"
 #include "test_utils.hpp"
@@ -26,12 +27,21 @@ TEST_F(CommandQueueWithDPrintFixture, TestPrintFromAllHarts) {
     Device *device = this->device_;
 
     // Set up program and command queue
+    constexpr CoreCoord core = {0, 0}; // Print on first core only
     CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
     Program program = Program();
 
+    // Create a CB for testing TSLICE, dimensions are 32x32 bfloat16s
+    constexpr uint32_t src0_cb_index = CB::c_in0;
+    constexpr uint32_t buffer_size = 32*32*sizeof(bfloat16);
+    CircularBufferConfig cb_src0_config = CircularBufferConfig(
+        buffer_size,
+        {{src0_cb_index, tt::DataFormat::RawUInt32}}
+    ).set_page_size(src0_cb_index, buffer_size);
+    CircularBufferID cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+
     // Three different kernels to mirror typical usage and some previously
     // failing test cases, although all three kernels simply print.
-    constexpr CoreCoord core = {0, 0}; // Print on first core only
     KernelHandle brisc_print_kernel_id = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/brisc_print.cpp",
@@ -59,17 +69,10 @@ TEST_F(CommandQueueWithDPrintFixture, TestPrintFromAllHarts) {
     tt_await_debug_print_server();
 
     // Check that the expected print messages are in the log file
-    vector<string> expected_prints({
-        "Test Debug Print: Pack",
-        "Test Debug Print: Unpack",
-        "Test Debug Print: Math",
-        "Test Debug Print: Data0",
-        "Test Debug Print: Data1"
-    });
     EXPECT_TRUE(
-        FileContainsAllStrings(
+        FilesAreIdentical(
             CommandQueueWithDPrintFixture::dprint_file_name,
-            expected_prints
+            "tests/tt_metal/tt_metal/unit_tests_fast_dispatch/dprint/test_print_all_harts_golden.txt"
         )
     );
 }
