@@ -4,13 +4,14 @@
       * [A note about rebooting](#a-note-about-rebooting)
       * [Installing system-level dependencies](#installing-system-level-dependencies)
          * [Installing dependencies on Ubuntu](#installing-dependencies-on-ubuntu)
-         * [Installing developer-level dependencies on Ubuntu](#installing-developer-level-dependencies-on-ubuntu)
       * [Installing accelerator-level dependencies](#installing-accelerator-level-dependencies)
          * [Installing TTKMD (kernel-mode driver)](#installing-ttkmd-kernel-mode-driver)
          * [Installing tt-smi](#installing-tt-smi)
          * [Installing tt-flash firmware](#installing-tt-flash-firmware)
+      * [Installing developer dependencies](#installing-developer-dependencies)
+         * [Installing developer-level dependencies on Ubuntu](#installing-developer-level-dependencies-on-ubuntu)
+         * [About wheel installation](#about-wheel-installation)
       * [From source](#from-source)
-      * [From a release wheel (UNSTABLE)](#from-a-release-wheel-unstable)
    * [Getting started](#getting-started)
       * [Environment setup](#environment-setup)
       * [Running example programs](#running-example-programs)
@@ -18,7 +19,6 @@
       * [Python Integration Tests](#python-integration-tests)
    * [Documentation](#documentation)
    * [Troubleshooting and debugging tips](#troubleshooting-and-debugging-tips)
-      * [Slow Dispatch Mode](#slow-dispatch-mode)
    * [Contributing](#contributing)
    * [Communication](#communication)
 
@@ -43,10 +43,6 @@ These are the official ways of installing this software:
 However, you must have the appropriate accelerator-level and related
 system-level dependencies. Otherwise, you may skip to your preferred
 installation method in the above list.
-
-Note that the following installation methods are not officially supported and are under development:
-
-- [From a release wheel (Python, unstable)](#from-a-release-wheel-unstable)
 
 ### A note about rebooting
 
@@ -82,8 +78,6 @@ sudo apt update
 sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.8 libgoogle-glog-dev=0.4.0-1build1 libyaml-cpp-dev=0.6.2-4ubuntu1 libboost-all-dev=1.71.0.0ubuntu2 libsndfile1=1.0.28-7ubuntu0.2 libhwloc-dev
 ```
 
-Additionally, you will need developer-level dependencies if you plan to install things from source or run tests from the repository.
-
 2. Download the raw latest version of the `setup_hugepages.py` script. It should be located [in the repository](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py).
 
 3. Invoke the first pass of the hugepages script and then reboot.
@@ -102,17 +96,7 @@ sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py 
 
 **NOTE**: You may have to repeat the hugepages steps upon every reboot, depending on your system and other services that use hugepages.
 
-#### Installing developer-level dependencies on Ubuntu
-
-1. Install host system-level dependencies for development through `apt`.
-
-```
-sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc
-```
-
-2. Download and install [Doxygen](https://www.doxygen.nl/download.html), version 1.9 or higher, but less than 1.10.
-
-3. Download and install [gtest](https://github.com/google/googletest) from source, version 1.13, and no higher.
+6. If you are a developer, you should also go through the [section](#installing-developer-dependencies) on developer dependencies, in addition to accelerator-level dependencies.
 
 ### Installing accelerator-level dependencies
 
@@ -230,11 +214,37 @@ If you have a Wormhole card, you may use warm reset via `tt-smi`:
 tt-smi -wr all wait
 ```
 
+5. If you are a developer, you should also go through the [section](#installing-developer-dependencies) on developer dependencies.
+
+### Installing developer dependencies
+
+#### Installing developer-level dependencies on Ubuntu
+
+1. Install host system-level dependencies for development through `apt`.
+
+```
+sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc
+```
+
+2. Download and install [Doxygen](https://www.doxygen.nl/download.html), version 1.9 or higher, but less than 1.10.
+
+3. Download and install [gtest](https://github.com/google/googletest) from source, version 1.13, and no higher.
+
+#### About wheel installation
+
+We currently do not support installing our software from a wheel. Not all
+features have been tested. The wheel is not an official release asset.
+
+You can reference interim notes about wheel installation in
+[documentation](infra/README_WHEELS.md) within source.
+
 ### From source
 
 Currently, the best way to use our software is building from source.
 
-You must also ensure that you have all accelerator-level, system-level, and developer system-level dependencies as outlined in the instructions above.
+You must also ensure that you have all accelerator-level and system-level
+dependencies as outlined in the instructions above. This also includes
+developer dependencies if you are a developer.
 
 
 1. Clone the repo. If you're using a release, please use ``--branch
@@ -276,51 +286,6 @@ export TT_METAL_ENV=dev
 ```
 make build && source build/python_env/bin/activate
 ```
-
-You should look ahead to [Getting started](#getting-started) to further use
-this project.
-
-### From a release wheel (UNSTABLE)
-
-**NOTE**: The wheel is not a fully-tested software artifact and most features do not work right now through the wheel. Furthermore, we do not plan to release the wheel as an official artifact until it is supported. As of this moment, we encourage users to try metal through source. Therefore, this section is under construction.
-
-Wheel files will eventually be available through the
-[releases](https://github.com/tenstorrent-metal/tt-metal/releases) page.
-
-You must also ensure that you have all accelerator-level, system-level, and developer system-level dependencies as outlined in the instructions above.
-
-1. You must add an extra index URL to download the necessary dependencies
-during wheel installation. Do so:
-
-```
-pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
-```
-
-Note: Ensure that you're using the correct ``pip`` when adding the index.
-
-2. Install the wheel into your environment and then activate your environment.
-For example, if you'd like to use a ``venv`` from Python 3.8, you can do:
-
-```
-python3 -m venv env
-source env/bin/activate
-python -m pip install <wheel_file_name>
-```
-
-3. Set up the necessary environment variables for a user environment.
-
-```
-export ARCH_NAME=<arch name>
-export TT_METAL_HOME=$(python -m tt_lib.scripts.get_home_dir --short)
-```
-
-4. Set up the kernels build environment.
-
-```
-python -m tt_lib.scripts.set_up_kernels --short prepare
-```
-
-5. Now you're ready!
 
 You should look ahead to [Getting started](#getting-started) to further use
 this project.
@@ -374,6 +339,7 @@ make tests
 2. Run the test binaries from the path **${TT_METAL_HOME}/build/test/tt_metal**
 
 ### Python Integration Tests
+
 1. Initialize the Python virtual environment [see documentation](#Environment-setup)
 2. Run the specific test point with pytest tool, e.g.
    ```
@@ -391,21 +357,18 @@ Please refer to our
 
 ## Troubleshooting and debugging tips
 
-You can check out relevant sections in the
-[contribution
+In addition to our documentation above, you can check out relevant sections in
+the [contribution
 standards](https://github.com/tenstorrent-metal/tt-metal/blob/main/CONTRIBUTING.md)
 if you ever need hardware troubleshooting help or debugging tips.
 
-### Slow Dispatch Mode
-The default mode is **fast-dispatch** but if you do need to use **slow-dispatch** you can set the following environment variable,
-```
-TT_METAL_SLOW_DISPATCH_MODE=1
-```
-
 ## Contributing
 
-We appreciate any contributions. Please review the [contributor's
-guide](CONTRIBUTING.md) for more information.
+We are excited to move our development to the public, open-source domain.
+However, we are not adequately staffed to review contributions in an expedient
+and manageable time frame at this time. In the meantime, please review the
+[contributor's guide](CONTRIBUTING.md) for more information about contribution
+standards.
 
 ## Communication
 
@@ -418,5 +381,5 @@ formally proposing it, you can make a post in the [ideas discussions
 page](https://github.com/orgs/tenstorrent-metal/discussions/categories/ideas).
 
 If you would like to formally propose a new feature, report a bug, or have
-issues with permissions, please through [GitHub
+issues with permissions, please file through [GitHub
 issues](https://github.com/tenstorrent-metal/tt-metal/issues/new/choose).
