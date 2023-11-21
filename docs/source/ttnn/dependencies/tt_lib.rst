@@ -724,6 +724,8 @@ Other Operations
 
 .. autofunction:: tt_lib.tensor.nextafter
 
+.. autofunction:: tt_lib.tensor.repeat
+
 .. autofunction:: tt_lib.tensor.repeat_interleave
 
 .. autofunction:: tt_lib.tensor.power_fp

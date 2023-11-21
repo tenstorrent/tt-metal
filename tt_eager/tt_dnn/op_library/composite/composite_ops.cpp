@@ -1247,6 +1247,26 @@ Tensor power_fp(const Tensor& input_a, float exponent, const MemoryConfig& outpu
     return operation::decorate_as_composite(__func__, _power_fp)(input_a, exponent, output_mem_config);
 }
 
+//repeat a input tensor @input_a as specified by the number of dimensions
+Tensor _repeat(const Tensor& input_a, const Shape& shape,const MemoryConfig& output_mem_config) {
+    auto& input_shape = input_a.shape();
+    TT_FATAL( input_shape.rank() == shape.rank(), "repeat dimensions should be same rank as input tensor");
+
+    Tensor y = input_a;
+    for(uint32_t dim = 0 ; dim < shape.rank(); dim++) {
+        TT_FATAL( shape[dim] > 0, "repetition dimension should be 1 or more; unable to delete tensor dimension at this time");
+        std::vector<Tensor> Yrepetitions;
+        for(uint32_t idx=0; idx < shape[dim]; idx++)
+            Yrepetitions.emplace_back(y);
+        y = concat(Yrepetitions,dim,output_mem_config);
+        Yrepetitions.clear();
+    }
+    return y;
+}
+Tensor repeat(const Tensor& input_a, const Shape& shape_b, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
+    return operation::decorate_as_composite(__func__, _repeat)(input_a, shape_b, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt

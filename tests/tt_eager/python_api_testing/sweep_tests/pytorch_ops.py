@@ -740,6 +740,10 @@ def repeat_interleave(x, *args, repeat, dim, **kwargs):
     return torch.repeat_interleave(x, repeats=repeat, dim=dim)
 
 
+def repeat(x, *args, repeat, **kwargs):
+    return x.repeat(*repeat)
+
+
 def lte(x, y, *args, **kwargs):
     return x <= y
 
