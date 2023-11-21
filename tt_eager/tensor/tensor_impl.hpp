@@ -377,9 +377,14 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
 
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, *device_buffer, device_data, true);
+        std::vector<T> device_data;
+        device_data.resize(size_in_bytes / sizeof(T));
+        EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, *device_buffer, device_data.data(), true);
+        return device_data;
     } else {
-        ReadFromBuffer(*device_buffer, device_data);
+        std::vector<uint32_t> device_data;
+        ::detail::ReadFromBuffer(*device_buffer, device_data);
+        return unpack_uint32_vec<T>(device_data);
     }
 }
 
