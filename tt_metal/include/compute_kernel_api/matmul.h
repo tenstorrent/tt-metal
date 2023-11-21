@@ -77,7 +77,7 @@ ALWI void matmul_tiles(uint32_t c_in0, uint32_t c_in1, uint32_t itile0, uint32_t
 }
 
 /**
- * A shor version of initialization for matmul_tiles operation.
+ * A short version of matmul_tiles initialization.
  * It is used to reconfigure srcA of the compute engine back to matmul mode.
  *
  * Return value: None
@@ -100,7 +100,7 @@ ALWI void mm_init_short_with_dt(uint32_t cbid, const uint32_t transpose=0) {
 }
 
 /**
- * A short version of initialization for matmul_tiles operation.
+ * A short version of matmul_tiles initialization.
  * Configure the unpacker and math engine to matmul mode.
  *
  * Return value: None
@@ -182,7 +182,7 @@ ALWI void matmul_block(uint32_t c_in0, uint32_t c_in1, uint32_t itile0, uint32_t
 }
 
 /**
- * A short version of initialization for matmul_block operation.
+ * A short version of matmul_block initialization.
  * It is used to reconfigure srcA of the compute engine back to matmul mode.
  *
  * Return value: None
@@ -206,7 +206,7 @@ ALWI void mm_block_init_short_with_dt(uint32_t in0_cb_id = 0, uint32_t in1_cb_id
 }
 
 /**
- * A short version of initialization for matmul_block operation.
+ * A short version of matmul_block initialization.
  * Configure the unpacker and math engine to matmul mode.
  *
  * Return value: None
