@@ -1189,34 +1189,21 @@ void generate_bank_to_noc_coord_descriptor(
     file_stream_nc.close();
 }
 
-static string generate_noc_core_xy_range_define(const std::vector<CoreCoord>& cores,
-                                                uint32_t expected_x_flag = 0) {
+static string generate_noc_core_xy_range_define(const std::vector<CoreCoord>& cores) {
     stringstream ss;
 
-    ss << " \\\n    ( \\" << endl;
-    if (expected_x_flag != 0) {
-        ss << "     ((x) & " << expected_x_flag << ") && ( \\";
-    } else {
-        ss << "     ( \\";
-    }
-
-    string end_of_line = "";
+    string end_of_line = " \\\n    ( \\";
     for (const auto& core : cores) {
         ss << end_of_line << endl;
-        if (expected_x_flag != 0) {
-            ss << "      (((x) & " << std::hex << "0x" << ~expected_x_flag << std::dec << ") == NOC_X((uint32_t)" << core.x << ") && (y) == NOC_Y((uint32_t)" << core.y << "))";
-        } else {
-            ss << "      ((x) == NOC_X((uint32_t)" << core.x << ") && (y) == NOC_Y((uint32_t)" << core.y << "))";
-        }
+        ss << "    ((x) == NOC_X((uint32_t)" << core.x << ") && (y) == NOC_Y((uint32_t)" << core.y << "))";
         end_of_line = " || \\";
     }
-    ss << "))" << endl;
+    ss << ")" << endl;
 
     return ss.str();
 }
 
 static string generate_noc_addr_ranges_string(
-    tt::ARCH arch,
     uint64_t pcie_addr_base,
     uint64_t pcie_addr_size,
     uint64_t dram_addr_base,
@@ -1256,16 +1243,13 @@ static string generate_noc_addr_ranges_string(
     ss << "#define NOC_DRAM_ADDR_END (NOC_DRAM_ADDR_BASE + NOC_DRAM_ADDR_SIZE)" << endl;
     ss << endl;
 
-    // On WH, PCIE core has a bit ORed into the x coord
-    uint32_t expected_x_flag = 0;
-    if (arch == tt::ARCH::WORMHOLE_B0) {
-        expected_x_flag = 0x8;
-    } else if (arch != tt::ARCH::GRAYSKULL) {
-        TT_ASSERT(0, "Invalid arch");
+    if (pcie_addr_base == pcie_addr_size) {
+        // If the address range is 0, then there are no PCIe cores (non-mmio device)
+        ss << "#define NOC_PCIE_XY_P(x, y) false" << endl;
+    } else {
+        ss << "#define NOC_PCIE_XY_P(x, y)";
+        ss << generate_noc_core_xy_range_define(pcie_cores);
     }
-
-    ss << "#define NOC_PCIE_XY_P(x, y)";
-    ss << generate_noc_core_xy_range_define(pcie_cores, expected_x_flag);
     ss << endl;
 
     ss << "#define NOC_DRAM_XY_P(x, y)";
@@ -1318,7 +1302,6 @@ static string generate_noc_addr_ranges_string(
 
 void generate_noc_addr_ranges_header(
     build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
-    tt::ARCH arch,
     string out_dir_path,
     uint64_t pcie_addr_base,
     uint64_t pcie_addr_size,
@@ -1331,8 +1314,7 @@ void generate_noc_addr_ranges_header(
     const std::vector<uint32_t>& harvested_rows,
     const vector<CoreCoord>& dispatch_cores) {
 
-    string output_string = generate_noc_addr_ranges_string(arch,
-                                                           pcie_addr_base, pcie_addr_size, dram_addr_base, dram_addr_size,
+    string output_string = generate_noc_addr_ranges_string(pcie_addr_base, pcie_addr_size, dram_addr_base, dram_addr_size,
                                                            pcie_cores, dram_cores, ethernet_cores, grid_size, harvested_rows, dispatch_cores);
 
     string full_path = build_kernel_for_riscv_options->outpath;

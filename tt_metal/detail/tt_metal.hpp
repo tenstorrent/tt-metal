@@ -97,7 +97,6 @@ namespace tt::tt_metal{
         bool ConfigureDeviceWithProgram(Device *device, Program &program);
 
 
-
         /**
          * Read device side profiler data and dump results into device side CSV log
          *
@@ -328,12 +327,20 @@ namespace tt::tt_metal{
             CoreCoord producer_logical_core = *dispatch_cores++;
             CoreCoord consumer_logical_core = *dispatch_cores;
 
+            // Create valid PCIe address ranges
+            // This implementation assumes contiguous ranges and aggregates the ranges into one bounds check
+            // TODO: consider checking multiple ranges to detect straddling transactions
+            uint64_t pcie_chan_base_addr = tt::Cluster::instance().get_pcie_base_addr_from_device();
+            uint64_t pcie_chan_end_addr = pcie_chan_base_addr;
+            for (int pcie_chan = 0; pcie_chan < tt::Cluster::instance().get_num_host_channels(device->id()); pcie_chan++) {
+                pcie_chan_end_addr += tt::Cluster::instance().get_host_channel_size(device->id(), pcie_chan);
+            }
+
             generate_noc_addr_ranges_header(
                 build_options,
-                device->arch(),
                 op_path_suffix,
-                0,
-                (uint64_t)4 * 1024 * 1024 * 1024,
+                pcie_chan_base_addr,
+                pcie_chan_end_addr - pcie_chan_base_addr,
                 0,
                 soc_d.dram_core_size,
                 soc_d.get_pcie_cores(),

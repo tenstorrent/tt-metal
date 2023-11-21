@@ -517,14 +517,17 @@ void Cluster::l1_barrier(chip_id_t chip_id) const {
 }
 
 uint32_t Cluster::get_num_host_channels(chip_id_t device_id) const {
-    return this->device_->get_num_host_channels(device_id);
+    bool mmio_capable = this->cluster_desc_->is_chip_mmio_capable(device_id);
+    return mmio_capable ? this->device_->get_num_host_channels(device_id) : 0;
 }
 
 uint32_t Cluster::get_host_channel_size(chip_id_t device_id, uint32_t channel) const {
+    TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(device_id));
     return this->device_->get_host_channel_size(device_id, channel);
 }
 
 void *Cluster::host_dma_address(uint64_t offset, chip_id_t src_device_id, uint16_t channel) const {
+    TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(src_device_id));
     return this->device_->host_dma_address(offset, src_device_id, channel);
 }
 
