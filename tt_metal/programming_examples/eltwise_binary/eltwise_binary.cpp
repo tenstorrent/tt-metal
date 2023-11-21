@@ -92,28 +92,28 @@ int main(int argc, char **argv) {
         constexpr uint32_t src0_cb_index = CB::c_in0;
         constexpr uint32_t num_input_tiles = 2;
         CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
-        CircularBufferID cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+        CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         constexpr uint32_t src1_cb_index = CB::c_in1;
         CircularBufferConfig cb_src1_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src1_cb_index, single_tile_size);
-        CircularBufferID cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+        CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
         constexpr uint32_t output_cb_index = CB::c_out0;
         constexpr uint32_t num_output_tiles = 2;
         CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}}).set_page_size(output_cb_index, single_tile_size);
-        CircularBufferID cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         /*
          * Specify data movement kernels for reading/writing data to/from
          * DRAM.
          */
-        KernelID binary_reader_kernel_id = CreateKernel(
+        KernelHandle binary_reader_kernel_id = CreateKernel(
             program,
             "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-        KernelID unary_writer_kernel_id = CreateKernel(
+        KernelHandle unary_writer_kernel_id = CreateKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
@@ -132,7 +132,7 @@ int main(int argc, char **argv) {
          * Use the add_tiles operation available in the eltwise_binary
          * compute kernel.
          */
-        KernelID eltwise_binary_kernel_id = CreateKernel(
+        KernelHandle eltwise_binary_kernel_id = CreateKernel(
             program,
             "tt_metal/kernels/compute/eltwise_binary.cpp",
             core,

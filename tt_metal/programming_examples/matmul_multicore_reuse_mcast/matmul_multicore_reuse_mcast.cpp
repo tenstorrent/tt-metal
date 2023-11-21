@@ -354,8 +354,8 @@ void matmul_multicore_reuse_mcast(vector<uint32_t>& a, vector<uint32_t>& b, vect
     /*
     * Kernels - Runtime arguments
     */
-    std::vector<KernelID> reader_kernel_ids;
-    std::vector<KernelID> writer_kernel_ids;
+    std::vector<KernelHandle> reader_kernel_ids;
+    std::vector<KernelHandle> writer_kernel_ids;
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};

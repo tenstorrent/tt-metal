@@ -95,13 +95,13 @@ operation::ProgramWithCallbacks concat_single_core(const std::vector<Tensor> &in
     };
 
     // Tilized reader
-    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_concat_interleaved_start_id.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,

@@ -33,7 +33,7 @@ try{
 
     // Two kernels - one for brisc and one for ncrisc. Nothing for triscs in
     // this test.
-    KernelID brisc_kernel_id = CreateKernel(
+    KernelHandle brisc_kernel_id = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/dprint_raise_wait_brisc.cpp",
         CoreRange{
@@ -45,7 +45,7 @@ try{
             .noc = NOC::RISCV_0_default
         }
     );
-    KernelID ncrisc_kernel_id = CreateKernel(
+    KernelHandle ncrisc_kernel_id = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/dprint_raise_wait_ncrisc.cpp",
         CoreRange{

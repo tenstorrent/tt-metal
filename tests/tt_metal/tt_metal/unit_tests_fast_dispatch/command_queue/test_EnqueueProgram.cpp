@@ -117,7 +117,7 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
     Program program;
 
 
-    std::vector<CircularBufferID> cb_ids;
+    std::vector<CBHandle> cb_ids;
     for (uint32_t i = 0; i < program_config.cb_config_vector.size(); i++) {
         uint32_t cb_id = program_config.cb_config_vector[i].cb_id;
         uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;

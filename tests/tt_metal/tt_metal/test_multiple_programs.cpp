@@ -35,7 +35,7 @@ std::map<string, string> get_defines(BinaryOpType::Enum op_type){
 }
 
 
-std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> setup_program_one(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
+std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_one(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t src0_cb_index = 0;
@@ -88,7 +88,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> setup_prog
     return {std::move(program), binary_reader_kernel, unary_writer_kernel};
 }
 
-std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> setup_program_two(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
+std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_two(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t src0_cb_index = 0;
@@ -143,8 +143,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelID, tt_metal::KernelID> setup_prog
 void write_program_runtime_args_to_device(
     tt_metal::Device *device,
     tt_metal::Program &program,
-    tt_metal::KernelID reader_kernel_id,
-    tt_metal::KernelID writer_kernel_id,
+    tt_metal::KernelHandle reader_kernel_id,
+    tt_metal::KernelHandle writer_kernel_id,
     const CoreCoord &core,
     uint32_t num_tiles,
     tt_metal::Buffer &src0_dram_buffer,

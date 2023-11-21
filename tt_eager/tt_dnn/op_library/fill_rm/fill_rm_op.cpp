@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) dst_is_dram};
 
-    tt_metal::KernelID binary_reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program, "tt_eager/tt_dnn/kernels/dataflow/fill_rm_interleaved.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args=reader_compile_time_args});

@@ -50,7 +50,7 @@ We will be using the accelerator core with coordinates ``{0, 0}``.
 
     constexpr CoreCoord core = {0, 0};
 
-    KernelID dram_copy_kernel_id = CreateKernel(
+    KernelHandle dram_copy_kernel_id = CreateKernel(
         program,
         "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
         core,

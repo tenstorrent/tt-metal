@@ -147,13 +147,13 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
         (std::uint32_t) dst_is_dram
     };
 
-    tt_metal::KernelID reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/transpose/kernels/dataflow/reader_unary_transpose_hc_interleaved_partitioned.cpp",
         total_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    tt_metal::KernelID writer_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         total_cores,

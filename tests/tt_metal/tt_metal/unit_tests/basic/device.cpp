@@ -315,7 +315,7 @@ TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
         CoreCoord logical_target_core = CoreCoord({.x = 0, .y = 0});
         uint32_t intermediate_l1_addr = L1_UNRESERVED_BASE;
         uint32_t size_bytes = host_input.size() * sizeof(uint32_t);
-        tt_metal::KernelID kernel_id = tt_metal::CreateKernel(
+        tt_metal::KernelHandle kernel_id = tt_metal::CreateKernel(
             program,
             kernel_name,
             logical_target_core,

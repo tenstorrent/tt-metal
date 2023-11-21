@@ -83,7 +83,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2);
 }
 
-KernelID CreateReadKernel(
+KernelHandle CreateReadKernel(
     Program &program,
     const std::string &file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
@@ -100,7 +100,7 @@ KernelID CreateReadKernel(
             .defines = defines});
 }
 
-KernelID CreateWriteKernel(
+KernelHandle CreateWriteKernel(
     Program &program,
     const std::string &file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
@@ -117,7 +117,7 @@ KernelID CreateWriteKernel(
             .defines = defines});
 }
 
-[[maybe_unused]] std::vector<KernelID> CreateComputeKernel(
+[[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
     Program &program,
     const std::string &file_name,
     std::vector<ComputeKernelArg> args,
@@ -125,8 +125,8 @@ KernelID CreateWriteKernel(
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode) {
-    std::vector<KernelID> compute_kernel_ids{};
-    KernelID compute_kernel_id{};
+    std::vector<KernelHandle> compute_kernel_ids{};
+    KernelHandle compute_kernel_id{};
     for (auto arg : args) {
         compute_kernel_id =
             CreateComputeKernel(program, file_name, arg, defines, math_fidelity, fp32_dest_acc_en, math_approx_mode);
@@ -135,7 +135,7 @@ KernelID CreateWriteKernel(
     return compute_kernel_ids;
 }
 
-[[maybe_unused]] KernelID CreateComputeKernel(
+[[maybe_unused]] KernelHandle CreateComputeKernel(
     Program &program,
     const std::string &file_name,
     ComputeKernelArg arg,
@@ -143,7 +143,7 @@ KernelID CreateWriteKernel(
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode) {
-    KernelID compute_kernel_id{0};
+    KernelHandle compute_kernel_id{0};
     if (arg.num_tile_per_core_group > 0) {
         compute_kernel_id = CreateKernel(
             program,
@@ -159,10 +159,10 @@ KernelID CreateWriteKernel(
     return compute_kernel_id;
 }
 
-[[maybe_unused]] std::vector<CircularBufferID> CreateCircularBuffer(
+[[maybe_unused]] std::vector<CBHandle> CreateCircularBuffer(
     Program &program, const CoreRangeSet &core_range, tt::DataFormat data_format, std::vector<CircularBufferArg> args) {
-    std::vector<CircularBufferID> cb_ids{};
-    CircularBufferID cb_id{};
+    std::vector<CBHandle> cb_ids{};
+    CBHandle cb_id{};
     for (auto arg : args) {
         cb_id = CreateCircularBuffer(program, core_range, data_format, arg);
         cb_ids.push_back(cb_id);
@@ -170,9 +170,9 @@ KernelID CreateWriteKernel(
     return cb_ids;
 }
 
-[[maybe_unused]] CircularBufferID CreateCircularBuffer(
+[[maybe_unused]] CBHandle CreateCircularBuffer(
     Program &program, const CoreRangeSet &core_range, tt::DataFormat data_format, CircularBufferArg arg) {
-    CircularBufferID cb_id{0};
+    CBHandle cb_id{0};
     if (arg.num_tiles > 0) {
         auto _buffer_index = arg.buffer_index;
         auto _num_tiles = arg.num_tiles;

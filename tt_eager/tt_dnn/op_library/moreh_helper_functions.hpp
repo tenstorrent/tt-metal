@@ -55,14 +55,14 @@ std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
     CoreRange core_range, uint32_t units_to_divide);
 
-KernelID CreateReadKernel(
+KernelHandle CreateReadKernel(
     Program &program,
     const std::string &file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::vector<uint32_t> &compile_args,
     std::map<string, string> defines = {});
 
-KernelID CreateWriteKernel(
+KernelHandle CreateWriteKernel(
     Program &program,
     const std::string &file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
@@ -75,7 +75,7 @@ struct ComputeKernelArg {
     const std::vector<uint32_t> &compile_args;
 };
 
-[[maybe_unused]] std::vector<KernelID> CreateComputeKernel(
+[[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
     Program &program,
     const std::string &file_name,
     std::vector<ComputeKernelArg> args,
@@ -84,7 +84,7 @@ struct ComputeKernelArg {
     bool fp32_dest_acc_en = false,
     bool math_approx_mode = false);
 
-[[maybe_unused]] KernelID CreateComputeKernel(
+[[maybe_unused]] KernelHandle CreateComputeKernel(
     Program &program,
     const std::string &file_name,
     ComputeKernelArg arg,
@@ -108,10 +108,10 @@ struct CircularBufferArg {
     }
 };
 
-[[maybe_unused]] std::vector<CircularBufferID> CreateCircularBuffer(
+[[maybe_unused]] std::vector<CBHandle> CreateCircularBuffer(
     Program &program, const CoreRangeSet &core_range, tt::DataFormat data_format, std::vector<CircularBufferArg> args);
 
-[[maybe_unused]] CircularBufferID CreateCircularBuffer(
+[[maybe_unused]] CBHandle CreateCircularBuffer(
     Program &program, const CoreRangeSet &core_range, tt::DataFormat data_format, CircularBufferArg arg);
 
 }  // namespace primary

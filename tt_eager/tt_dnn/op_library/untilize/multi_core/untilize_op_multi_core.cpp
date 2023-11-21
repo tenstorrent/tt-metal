@@ -233,7 +233,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 
     /** reader
      */
-    KernelID unary_reader_kernel_id;
+    KernelHandle unary_reader_kernel_id;
 
     if (src_sharded) {
         std::vector<uint32_t> reader_ct_args = {
@@ -263,7 +263,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 
     /** writer
      */
-    KernelID unary_writer_kernel_id;
+    KernelHandle unary_writer_kernel_id;
     if (out_sharded) {
         std::vector<uint32_t> writer_ct_args = {
             (std::uint32_t) output_cb_index
@@ -650,7 +650,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
         .set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
-    CircularBufferID cb_sharded_output = 0;
+    CBHandle cb_sharded_output = 0;
     uint32_t sharded_output_cb_index = CB::c_out1;
     if (out_sharded) {
         tt_metal::CircularBufferConfig sharded_output_cb_config = tt_metal::CircularBufferConfig(num_output_rows_unpadded * block_row_size, {{sharded_output_cb_index, output_cb_data_format}})
@@ -664,7 +664,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
 
     /** reader
      */
-    KernelID unary_reader_kernel_id;
+    KernelHandle unary_reader_kernel_id;
     std::vector<uint32_t> reader_ct_args = {
             (std::uint32_t) src0_cb_index
         };
@@ -677,7 +677,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
 
     /** writer
      */
-    KernelID unary_writer_kernel_id;
+    KernelHandle unary_writer_kernel_id;
     if (out_sharded) {
         vector<uint32_t> writer_ct_args = {
             (uint32_t) output_cb_index,

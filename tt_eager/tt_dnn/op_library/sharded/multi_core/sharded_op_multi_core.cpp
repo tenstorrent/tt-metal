@@ -68,7 +68,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
 
     bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
-    tt_metal::KernelID unary_reader_kernel_id;
+    tt_metal::KernelHandle unary_reader_kernel_id;
     if (input.layout() == Layout::TILE) {
 
         std::vector<uint32_t> reader_compile_time_args = {
@@ -99,7 +99,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
     }
 
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
-    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
@@ -262,7 +262,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
         (std::uint32_t) src0_cb_index
     };
 
-    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
@@ -271,7 +271,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
-    tt_metal::KernelID unary_writer_kernel_id;
+    tt_metal::KernelHandle unary_writer_kernel_id;
     if (input.layout() == Layout::TILE) {
         std::vector<uint32_t> writer_compile_time_args = {
             (std::uint32_t) src0_cb_index,

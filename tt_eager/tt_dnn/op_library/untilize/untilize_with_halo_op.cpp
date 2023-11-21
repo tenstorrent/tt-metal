@@ -261,7 +261,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         (std::uint32_t) src_cb_id
     };
 
-    KernelID reader_kernel_id = CreateKernel(
+    KernelHandle reader_kernel_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
@@ -284,7 +284,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         (std::uint32_t) pc.pad_w,
         (std::uint32_t) pc.pad_h,
     };
-    KernelID writer_kernel_id = CreateKernel(
+    KernelHandle writer_kernel_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_sharded_with_halo_s2.cpp",
         all_cores,
@@ -300,7 +300,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         (uint32_t) nblocks_per_core,    // per_core_block_cnt
         (uint32_t) ntiles_per_block,    // per_block_ntiles
     };
-    KernelID untilize_kernel_id = CreateKernel(
+    KernelHandle untilize_kernel_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
         all_cores,
@@ -899,7 +899,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
         (std::uint32_t) src_cb_id
     };
 
-    KernelID reader_kernel_id = CreateKernel(
+    KernelHandle reader_kernel_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
@@ -922,7 +922,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
         (std::uint32_t) pad_w,
         (std::uint32_t) pad_h,
     };
-    KernelID writer_kernel_id = CreateKernel(
+    KernelHandle writer_kernel_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_sharded_with_halo.cpp",
         all_cores,
@@ -938,7 +938,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
         (uint32_t) nblocks_per_core,    // per_core_block_cnt
         (uint32_t) ntiles_per_block,    // per_block_ntiles
     };
-    KernelID untilize_kernel_id = CreateKernel(
+    KernelHandle untilize_kernel_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
         all_cores,
