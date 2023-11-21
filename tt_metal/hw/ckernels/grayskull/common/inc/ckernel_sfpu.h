@@ -181,7 +181,8 @@ inline void calculate_asin()
 }
 
 
-#define PI_2 (1.570796326794)
+
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_acos()
 {
@@ -191,7 +192,7 @@ inline void calculate_acos()
     {
         vFloat v = dst_reg[0];
         v = sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v);
-        v = PI_2 - v;
+        v = (1.570796326794) - v;
         dst_reg[0] = v;
         dst_reg++;
     }
