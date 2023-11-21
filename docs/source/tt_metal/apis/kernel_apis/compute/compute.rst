@@ -20,6 +20,7 @@ Compute APIs
   mul_tiles_bcast
 
   matmul_tiles
+  matmul_block
   exp_tile
   exp2_tile
   expm1_tile
