@@ -19,13 +19,12 @@ class TtAttention(nn.Module):
         args: TtModelArgs,
         base_address=None,
         device=None,
-        state_dict=None,
+        tt_cache_path=None,
     ):
         super().__init__()
         self.args = args
         self.device = device
         self.base_address = base_address
-        self.state_dict = state_dict
 
         self.n_heads: int = args.n_heads
         self.n_kv_heads: int = args.n_kv_heads
@@ -35,13 +34,8 @@ class TtAttention(nn.Module):
 
         self.scale = self.args.head_dim**-0.5
 
-        wq_weights = self.state_dict[f"{base_address}wq.weight"]
-        ref_wq_weights = wq_weights.unsqueeze(0).unsqueeze(0)
-        self.wq_weights = tt_lib.tensor.Tensor(
-            ref_wq_weights.reshape(-1).tolist(),
-            ref_wq_weights.shape,
-            self.args.WEIGHTS_DTYPE,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+        self.wq_weights = tt_lib.tensor.load_tensor(
+            tt_cache_path + base_address + "wq.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.wq = TtLinear(
             args.dim,
@@ -51,13 +45,8 @@ class TtAttention(nn.Module):
             output_mem_config=self.args.out_mem_config,
         )
 
-        wk_weights = self.state_dict[f"{base_address}wk.weight"]
-        ref_wk_weights = wk_weights.unsqueeze(0).unsqueeze(0)
-        self.wk_weights = tt_lib.tensor.Tensor(
-            ref_wk_weights.reshape(-1).tolist(),
-            ref_wk_weights.shape,
-            self.args.WEIGHTS_DTYPE,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+        self.wk_weights = tt_lib.tensor.load_tensor(
+            tt_cache_path + base_address + "wk.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.wk = TtLinear(
             args.dim,
@@ -67,13 +56,8 @@ class TtAttention(nn.Module):
             output_mem_config=self.args.out_mem_config,
         )
 
-        wv_weights = self.state_dict[f"{base_address}wv.weight"]
-        ref_wv_weights = wv_weights.unsqueeze(0).unsqueeze(0)
-        self.wv_weights = tt_lib.tensor.Tensor(
-            ref_wv_weights.reshape(-1).tolist(),
-            ref_wv_weights.shape,
-            self.args.WEIGHTS_DTYPE,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+        self.wv_weights = tt_lib.tensor.load_tensor(
+            tt_cache_path + base_address + "wv.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.wv = TtLinear(
             args.dim,
@@ -83,13 +67,8 @@ class TtAttention(nn.Module):
             output_mem_config=self.args.out_mem_config,
         )
 
-        wo_weights = state_dict[f"{base_address}wo.weight"]
-        ref_wo_weights = wo_weights.unsqueeze(0).unsqueeze(0)
-        self.wo_weights = tt_lib.tensor.Tensor(
-            ref_wo_weights.reshape(-1).tolist(),
-            ref_wo_weights.shape,
-            self.args.WEIGHTS_DTYPE,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+        self.wo_weights = tt_lib.tensor.load_tensor(
+            tt_cache_path + base_address + "wo.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.wo = TtLinear(
             args.n_heads * args.head_dim,
@@ -141,11 +120,11 @@ class TtAttention(nn.Module):
         _, bsz, seqlen, _ = x.shape()
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
 
-        xq = fallback_ops.reshape(xq, bsz, seqlen, self.n_heads, self.args.head_dim)
+        xq = tt_lib.tensor.reshape(xq, bsz, seqlen, self.n_heads, self.args.head_dim)
 
-        xk = fallback_ops.reshape(xk, bsz, seqlen, self.n_kv_heads, self.args.head_dim)
+        xk = tt_lib.tensor.reshape(xk, bsz, seqlen, self.n_kv_heads, self.args.head_dim)
 
-        xv = fallback_ops.reshape(xv, bsz, seqlen, self.n_kv_heads, self.args.head_dim)
+        xv = tt_lib.tensor.reshape(xv, bsz, seqlen, self.n_kv_heads, self.args.head_dim)
 
         xq = tt_to_torch_tensor(xq).to(torch.float32)
         xk = tt_to_torch_tensor(xk).to(torch.float32)
@@ -203,7 +182,6 @@ class TtAttention(nn.Module):
                 mask = mask.squeeze()
             scores += mask[None, None, ...]
 
-        query = tt_to_torch_tensor(query)
         scores = torch_to_tt_tensor_rm(scores, self.device, put_on_device=False)
 
         if self.args.FALLBACK_SOFTMAX:

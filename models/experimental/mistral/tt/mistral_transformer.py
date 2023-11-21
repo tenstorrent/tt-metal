@@ -27,6 +27,7 @@ class TtTransformer(nn.Module):
         device=None,
         state_dict=None,
         base_address=None,
+        tt_cache_path=None,
     ):
         super().__init__()
         self.args = args
@@ -43,19 +44,23 @@ class TtTransformer(nn.Module):
         self.layers = torch.nn.ModuleList(
             [
                 TtTransformerBlock(
-                    args=args, state_dict=self.state_dict, base_address=f"layers.{i}.", device=self.device
+                    args=args,
+                    base_address=f"layers.{i}.",
+                    device=self.device,
+                    tt_cache_path=tt_cache_path,
                 )
                 for i in range(args.n_layers)
             ]
         )
-        self.norm = TtRMSNorm(args.dim, base_address=f"norm.", state_dict=state_dict, device=device, eps=args.norm_eps)
-        output_weight = state_dict["output.weight"]
-        ref_output_weight = output_weight.unsqueeze(0).unsqueeze(0)
-        self.output_weight = tt_lib.tensor.Tensor(
-            ref_output_weight.reshape(-1).tolist(),
-            ref_output_weight.shape,
-            args.WEIGHTS_DTYPE,
-            tt_lib.tensor.Layout.ROW_MAJOR,
+        self.norm = TtRMSNorm(
+            args.dim,
+            base_address=f"norm.",
+            eps=args.norm_eps,
+            tt_cache_path=tt_cache_path,
+        )
+
+        self.output_weight = tt_lib.tensor.load_tensor(
+            tt_cache_path + "output.weight" + str(self.args.WEIGHTS_DTYPE) + ".bin"
         )
         self.output = TtLinear(
             args.dim,

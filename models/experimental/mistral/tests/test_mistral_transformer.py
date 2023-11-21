@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import tt_lib
 import torch
 import tt_lib
 import pytest
@@ -38,17 +39,21 @@ def test_mistral_transformer_inference(pcc, model_location_generator, device, dt
     with open(mistral_path / "params.json", "r") as f:
         model_args = TtModelArgs(**json.loads(f.read()))
 
+    model_args.WEIGHTS_DTYPE = dtype
     model_args.max_batch_size = 1
     model_args.n_layers = 32
     model_args.WEIGHTS_DTYPE = dtype
     reference_model = Transformer(args=model_args)
     reference_model.load_state_dict(state_dict)
 
+    tt_cache_path = "/mnt/MLPerf/tt_dnn-models/tt/Mistral/"
+
     tt_model = TtTransformer(
         args=model_args,
         state_dict=state_dict,
         device=device,
         base_address=base_address,
+        tt_cache_path=tt_cache_path,
     )
 
     encoded_prompts = [tokenizer.encode(prompt) for prompt in prompts]

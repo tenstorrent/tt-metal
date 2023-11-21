@@ -54,7 +54,7 @@ def test_mistral_attention_inference(
 ):
     mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
     state_dict = torch.load(mistral_path / "consolidated.00.pth")
-    base_address = f""
+    base_address = f"layers.0.attention."
     with open(mistral_path / "params.json", "r") as f:
         model_args = TtModelArgs(**json.loads(f.read()))
     if True:
@@ -68,11 +68,12 @@ def test_mistral_attention_inference(
     model_args.FALLBACK_EMPTY = empty_ondevice
     model_args.FALLBACK_SCATTER = scatter_ondevice
     model_args.WEIGHTS_DTYPE = dtype
+    tt_cache_path = "/mnt/MLPerf/tt_dnn-models/tt/Mistral/"
     tt_model = TtAttention(
         args=model_args,
-        state_dict=state_dict,
         device=device,
         base_address=base_address,
+        tt_cache_path=tt_cache_path,
     )
     input = torch.randn(1, 11, 4096)
     empty_tensor = torch.zeros((11, 64))

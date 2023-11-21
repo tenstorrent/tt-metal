@@ -35,11 +35,13 @@ def test_gs_demo_single_input_inference(batch_size, model_location_generator, de
     model_args.max_batch_size = batch_size
     model_args.n_layers = 32
 
+    tt_cache_path = "/mnt/MLPerf/tt_dnn-models/tt/Mistral/"
     tt_model = TtTransformer(
         args=model_args,
         state_dict=state_dict,
         device=device,
         base_address=base_address,
+        tt_cache_path=tt_cache_path,
     )
 
     tt_output = generate(

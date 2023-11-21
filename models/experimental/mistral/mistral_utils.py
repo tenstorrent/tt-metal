@@ -9,6 +9,10 @@ from models.experimental.mistral.tt.mistral_transformer import TtTransformer
 from sentencepiece import SentencePieceProcessor
 from pathlib import Path
 from models.utility_functions import tt_to_torch_tensor
+import tt_lib
+import json
+from models.experimental.mistral.tt.mistral_configuration import TtModelArgs
+from tt_lib.utils import pad_weight
 
 
 class Tokenizer:
@@ -76,3 +80,35 @@ def generate(prompts: List[str], model: TtTransformer, tokenizer: Tokenizer, max
         for i, x in enumerate(encoded_prompts):
             res.append(tokenizer.decode(x[:min_prompt_len] + generated[i].tolist()))
     return res
+
+
+def cache_weights_in_weka(model_location_generator, device, dtype, reset_seeds):
+    mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
+    state_dict = torch.load(mistral_path / "consolidated.00.pth")
+    with open(mistral_path / "params.json", "r") as f:
+        model_args = TtModelArgs(**json.loads(f.read()))
+    weights_dtype = dtype
+
+    # initial weights are stored in "models/experimental/mistral/weights/" and moved to weka path
+    file_name = "models/experimental/mistral/weights/"
+    for key, value in state_dict.items():
+        if len(value.shape) == 1:
+            value = value.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+        else:
+            value = value.unsqueeze(0).unsqueeze(0)
+        if value.shape[-2] % 32 == 0 and value.shape[-1] % 32 == 0:
+            value = tt_lib.tensor.Tensor(
+                value.reshape(-1).tolist(),
+                value.shape,
+                weights_dtype,
+                tt_lib.tensor.Layout.ROW_MAJOR,
+            ).to(tt_lib.tensor.Layout.TILE)
+        else:
+            value = pad_weight(value)
+            value = tt_lib.tensor.Tensor(
+                value.reshape(-1).tolist(),
+                value.shape,
+                weights_dtype,
+                tt_lib.tensor.Layout.ROW_MAJOR,
+            ).to(tt_lib.tensor.Layout.TILE)
+        tt_lib.tensor.dump_tensor(file_name + str(key) + str(weights_dtype) + ".bin", value)
