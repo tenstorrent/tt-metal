@@ -1324,7 +1324,7 @@ def gen_polyval_args(
     ):
         if input_info is not None:
             num_coeffs = torch.tensor(1, dtype=torch.int).random_(1, max_num_coeffs + 1).item()
-            coeffs = torch.Tensor(num_coeffs).uniform_(low, high).tolist()
+            coeffs = torch.Tensor(num_coeffs).uniform_(low, high).to(torch.bfloat16).tolist()
             input_info.update({"coeffs": coeffs})
             yield input_info
 
