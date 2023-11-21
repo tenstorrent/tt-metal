@@ -94,7 +94,7 @@ operation::ProgramWithCallbacks moreh_bias_backward_single_core_hw(
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
     const auto compute_kernel_file =
         "tt_eager/tt_dnn/op_library/moreh_linear_backward/kernels/moreh_bias_backward_single_core_hw.cpp";
-    const auto compute_kernel_id = tt_metal::CreateComputeKernel(
+    const auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         compute_kernel_file,
         core,

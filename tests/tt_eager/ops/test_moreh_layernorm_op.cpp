@@ -112,7 +112,7 @@ int main(int argc, char **argv) {
                         if (pass) {
                             log_info(LogTest, "{} test passed.", run_type);
                         } else {
-                            log_fatal(LogTest, "{} test failed.", run_type);
+                            TT_THROW("{} test failed.", run_type);
                         }
                     } catch (const std::exception &e) {
                         pass = false;
@@ -127,7 +127,7 @@ int main(int argc, char **argv) {
     if (pass) {
         log_info(LogTest, "Test Passed");
     } else {
-        log_fatal(LogTest, "Test Failed");
+        TT_THROW("Test Failed");
     }
 
     TT_ASSERT(pass);

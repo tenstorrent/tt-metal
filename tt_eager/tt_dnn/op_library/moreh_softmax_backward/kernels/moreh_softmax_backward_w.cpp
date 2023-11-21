@@ -15,7 +15,6 @@
 #include "compute_kernel_api/softmax.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api.h"
-#include "debug_print.h"
 #include "tt_eager/tt_dnn/op_library/moreh_softmax_backward/kernels/common_ckernels.hpp"
 
 namespace NAMESPACE {

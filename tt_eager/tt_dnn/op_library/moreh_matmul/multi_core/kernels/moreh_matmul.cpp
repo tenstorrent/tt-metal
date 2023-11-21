@@ -9,7 +9,6 @@
 
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/transpose_wh.h"
-#include "debug_print.h"
 
 using std::uint32_t;
 ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }

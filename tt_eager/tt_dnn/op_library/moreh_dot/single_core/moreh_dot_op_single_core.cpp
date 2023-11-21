@@ -87,7 +87,7 @@ operation::ProgramWithCallbacks moreh_dot_single_core(const Tensor &a, const Ten
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
-    KernelID binary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    KernelID binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/moreh_dot/single_core/kernels/reader_moreh_dot.cpp",
         core,
@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks moreh_dot_single_core(const Tensor &a, const Ten
             .noc = tt_metal::NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args});
 
-    KernelID unary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/moreh_dot/single_core/kernels/writer_moreh_dot.cpp",
         core,
@@ -110,7 +110,7 @@ operation::ProgramWithCallbacks moreh_dot_single_core(const Tensor &a, const Ten
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
-    auto dot_kernel = tt_metal::CreateComputeKernel(
+    auto dot_kernel = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/moreh_dot/single_core/kernels/moreh_dot.cpp",
         core,

@@ -158,7 +158,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
-    auto reader_id = tt_metal::CreateDataMovementKernel(
+    auto reader_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/kernels/reader_moreh_matmul.cpp",
         all_cores,
@@ -167,7 +167,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
             .noc = NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args});
 
-    auto writer_id = tt_metal::CreateDataMovementKernel(
+    auto writer_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/kernels/writer_moreh_matmul.cpp",
         all_cores,
@@ -185,7 +185,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
         uint32_t(transpose_b)};  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1
                                  // large loop, so only set Nt for simplicity
 
-    auto eltwise_binary_kernel_group_1_id = tt_metal::CreateComputeKernel(
+    auto eltwise_binary_kernel_group_1_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/kernels/moreh_matmul.cpp",
         core_group_1,
@@ -201,7 +201,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
             uint32_t(transpose_b)};  // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1
                                      // large loop, so only set Nt for simplicity
 
-        auto eltwise_binary_kernel_group_2_id = tt_metal::CreateComputeKernel(
+        auto eltwise_binary_kernel_group_2_id = tt_metal::CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/kernels/moreh_matmul.cpp",
             core_group_2,

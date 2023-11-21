@@ -111,7 +111,7 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
         (std::uint32_t)dst1_is_dram,
     };
 
-    KernelID binary_reader_kernel_id = tt_metal::CreateDataMovementKernel(
+    KernelID binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/moreh_dot_backward/kernels/reader_moreh_dot_backward.cpp",
         core,
@@ -120,7 +120,7 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
             .noc = tt_metal::NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args});
 
-    KernelID binary_writer_kernel_id = tt_metal::CreateDataMovementKernel(
+    KernelID binary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/moreh_dot_backward/kernels/writer_moreh_dot_backward.cpp",
         core,
@@ -132,7 +132,7 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
     vector<uint32_t> compute_kernel_args = {};
     std::map<string, string> defines;
 
-    auto dot_backward_kernel = tt_metal::CreateComputeKernel(
+    auto dot_backward_kernel = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/moreh_dot_backward/kernels/moreh_dot_backward.cpp",
         core,
