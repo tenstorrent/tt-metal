@@ -158,11 +158,23 @@ class TtAttention(nn.Module):
 
         # The cache is a rotating buffer
         positions = tt_to_torch_tensor(positions).squeeze(0).squeeze(0).squeeze(0)
-        scatter_pos = (positions[-self.sliding_window :] % self.sliding_window)[None, :, None, None]
-        scatter_pos = scatter_pos.to(torch.int64)
-        scatter_pos = scatter_pos.repeat(bsz, 1, self.n_kv_heads, self.args.head_dim)
-        self.cache_k[:bsz].scatter_(dim=1, index=scatter_pos, src=xk[:, -self.sliding_window :])
-        self.cache_v[:bsz].scatter_(dim=1, index=scatter_pos, src=xv[:, -self.sliding_window :])
+        if self.args.FALLBACK_SCATTER:
+            scatter_pos = (positions[-self.sliding_window :] % self.sliding_window)[None, :, None, None]
+            scatter_pos = scatter_pos.to(torch.int64)
+            scatter_pos = scatter_pos.repeat(bsz, 1, self.n_kv_heads, self.args.head_dim)
+            self.cache_k[:bsz].scatter_(dim=1, index=scatter_pos, src=xk[:, -self.sliding_window :])
+            self.cache_v[:bsz].scatter_(dim=1, index=scatter_pos, src=xv[:, -self.sliding_window :])
+        else:
+            self.cache_k = tt_to_torch_tensor(
+                tt_lib.tensor.scatter(
+                    torch_to_tt_tensor_rm(xk, self.device), torch_to_tt_tensor_rm(self.cache_k, self.device)
+                )
+            )
+            self.cache_v = tt_to_torch_tensor(
+                tt_lib.tensor.scatter(
+                    torch_to_tt_tensor_rm(xv, self.device), torch_to_tt_tensor_rm(self.cache_v, self.device)
+                )
+            )
 
         if positions.shape[0] > 1:
             # prefill

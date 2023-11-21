@@ -21,4 +21,5 @@ class TtModelArgs:
     FALLBACK_SOFTMAX: bool = False
     FALLBACK_ROTARY_EMBEDDING: bool = False
     FALLBACK_EMPTY: bool = False
+    FALLBACK_SCATTER: bool = False
     WEIGHTS_DTYPE = tt_lib.tensor.DataType.BFLOAT16
