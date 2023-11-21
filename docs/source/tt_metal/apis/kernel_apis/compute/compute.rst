@@ -5,9 +5,11 @@ Compute APIs
 
   copy_tile
   pack_tile
+  move_copy_tile
 
   acquire_dst
   release_dst
+  reg_api
 
   init_functions
 
@@ -56,7 +58,6 @@ Compute APIs
   atan_tile
   acos_tile
 
-
   ltz_tile
   eqz_tile
   lez_tile
@@ -70,5 +71,9 @@ Compute APIs
   cb_push_back
 
   binary_op_init_funcs
+
+  tilize
+  unpack
+  untilize
 
 .. only:: not html
