@@ -18,6 +18,9 @@
 
 namespace ckernel {
 
+/**
+ * Initialize the tilize operation. To be called once at beginning of a kernel.
+ */
 ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
 {
     #ifdef ARCH_GRAYSKULL
@@ -42,6 +45,9 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
     UNPACK(( llk_unpack_tilize_init(icb, block) ));
 }
 
+/**
+ * Re-initialize for the tilize operation. This can be called after a full init.
+ */
 ALWI void tilize_init_short(uint32_t icb, uint32_t block)
 {
     #ifdef ARCH_GRAYSKULL
@@ -52,6 +58,9 @@ ALWI void tilize_init_short(uint32_t icb, uint32_t block)
     UNPACK(( llk_unpack_tilize_init(icb, block) ));
 }
 
+/**
+ * Re-initialize for the tilize operation. This also reconfigure the unpacker with CB data type.
+ */
 ALWI void tilize_init_short_with_dt(uint32_t icb, uint32_t block) {
     #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
@@ -62,6 +71,9 @@ ALWI void tilize_init_short_with_dt(uint32_t icb, uint32_t block) {
     UNPACK(( llk_unpack_tilize_init(icb, block) ));
 }
 
+/**
+ * Perform tilize operation on a block. This simply loops over the provided blocks.
+ */
 ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
 {
     UNPACK(( llk_unpack_tilize_block(icb, block) ));
@@ -81,11 +93,17 @@ ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb)
     }
 }
 
+/**
+ * Uninitialize tilize operation before re-initializing for another operation.
+ */
 ALWI void tilize_uninit()
 {
     UNPACK(( llk_unpack_tilize_uninit() ));
 }
 
+/**
+ * Uninitialize the tilize operation along with re-configuring unpacker with the CB data types.
+ */
 ALWI void tilize_uninit_with_dt() {
     UNPACK(( llk_unpack_tilize_uninit() ));
     UNPACK(( llk_unpack_reconfig_data_format(0, 1, 0, 0) ));
