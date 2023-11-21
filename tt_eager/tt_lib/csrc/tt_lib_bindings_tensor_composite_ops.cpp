@@ -10,6 +10,20 @@
 namespace tt::tt_metal::detail{
     void TensorModuleCompositeOPs( py::module & m_tensor){
 
+	m_tensor.def("repeat", &tt::tt_metal::repeat,
+		     py::arg("input_a"), py::arg("shape"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+                    Returns a new tensor filled with repetition of input ``input_a`` tensor according to number of times specified in ``shape``. The rank of ``shape`` should be same as rank of tensor ``input_a`` and contain positive integer entries - a limitation in our implementation.
+
+                    Output tensor will have BFLOAT16 data type.
+
+                    .. csv-table::
+                        :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                        "input_a", "Input tensor for which repetition is computed", "Tensor", "Tensor of any shape", "Yes"
+                        "shape", "Shape value", "Shape", "The number of times to repeat this tensor along each dimension", "Yes"
+                        "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+                )doc");
+
 	m_tensor.def("power_fp", &tt::tt_metal::power_fp,
 		     py::arg("input_a"), py::arg("exponent"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
                     Returns a new tensor filled with power of input ``input_a`` raised to value of ``exponent``.

@@ -48,3 +48,25 @@ def test_run_repeat_interleave_test(input_shapes, dim, repeat, device):
         device,
         test_args,
     )
+
+
+@pytest.mark.parametrize("input_shapes", ([[1, 1, 32, 32]], [[32, 32, 32, 32]]))
+@pytest.mark.parametrize("repeat", ([1, 2, 3, 4], [1, 1, 1, 2], [1, 1, 2, 1], [1, 2, 1, 1], [2, 1, 1, 1]))
+def test_run_repeat_test(input_shapes, repeat, device):
+    datagen_func = [
+        generation_funcs.gen_func_with_cast(
+            partial(generation_funcs.gen_rand_along_dim, low=-100, high=100),
+            torch.bfloat16,
+        )
+    ]
+    test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+    test_args.update({"repeat": repeat})
+    comparison_func = comparison_funcs.comp_equal
+    run_single_pytorch_test(
+        f"repeat",
+        input_shapes,
+        datagen_func,
+        comparison_func,
+        device,
+        test_args,
+    )

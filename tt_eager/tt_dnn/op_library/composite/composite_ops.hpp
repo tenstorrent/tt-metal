@@ -296,6 +296,9 @@ Tensor triu(const Tensor& input_a, int32_t diag = 0, const MemoryConfig& output_
 //power_fp : power with floating point exponent
 Tensor power_fp(const Tensor& input_a, float exponent, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+//repeat a input tensor @input_a as specified by the number of dimensions
+Tensor repeat(const Tensor& input_a, const Shape& shape,const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 } //namespace tt_metal
 
 } //namespace tt
