@@ -175,13 +175,16 @@ def test_run_max_pool(
     in_h = int(math.sqrt(act_shape_padded[-2]))
     in_w = in_h
     assert in_h * in_w == act_shape_padded[-2]
-    out_untilize = ttl.tensor.untilize_with_halo(ttact_sharded, 0xF7FF, in_n, in_h, in_w, 2, out_mem_config)
+    assert kernel_w == kernel_h and stride_w == stride_h and pad_w == pad_h and dilation_w == dilation_h
+    # out_untilize = ttl.tensor.untilize_with_halo(ttact_sharded, 0xF7FF, in_n, in_h, in_w, 2, out_mem_config)
+    out_untilize = ttl.tensor.untilize_with_halo_v2(
+        ttact_sharded, 0xF7FF, in_n, in_h, in_w, kernel_w, stride_w, pad_w, out_mem_config
+    )
     # ttl.device.DumpDeviceMemoryState(device)
     ttact_sharded.deallocate()
 
     out_padded = ttl.tensor.max_pool2d(
         out_untilize,
-        # ttact,
         in_n,
         in_h,
         in_w,

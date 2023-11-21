@@ -362,6 +362,7 @@ def generate_untilize_with_halo_kernel_configs(tensor_metadata: list, resharded_
             else:  ## data stick
                 ## the neighbor core of dst_core_id this data stick is coming from (src_core_id): ll, l, local, r or rr
                 neighbor_idx = NEIGHBORHOOD_DIST + (dst_core_id - src_core_id)
+                assert neighbor_idx >= 0 and neighbor_idx < 2 * NEIGHBORHOOD_DIST + 1
 
                 if curr_segment_size > 0:
                     if curr_segment_src_core_id == src_core_id:
