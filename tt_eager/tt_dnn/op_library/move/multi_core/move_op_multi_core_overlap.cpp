@@ -100,7 +100,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
         compile_time_args.push_back((uint32_t)page_size_is_power_of_two);
     }
 
-    KernelID kernel_id = CreateKernel(
+    KernelHandle kernel_id = CreateKernel(
         program,
         tilized ? "tt_eager/tt_dnn/op_library/move/kernels/move_interleaved_with_overlap.cpp" : "tt_eager/tt_dnn/op_library/move/kernels/move_stick_layout_interleaved_with_overlap.cpp",
         all_cores,

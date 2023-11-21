@@ -349,7 +349,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (CoreRangeSet) (std::set<CoreRange>) {in0_sender_in1_receiver, in0_receiver_in1_receiver_left_half},
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc, .compile_args = in1_receiver_writer_compile_time_args, .defines = mm_kernel_in1_receiver_writer_defines});
 
-    KernelID mm_kernel_in0_receiver_id = 0;
+    KernelHandle mm_kernel_in0_receiver_id = 0;
     if (!in0_is_sharded) {
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
             program,
@@ -359,8 +359,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc, .compile_args = in0_receiver_compile_time_args});
     }
 
-    KernelID mm_kernel_in1_receiver_writer_other_noc_setup_id = mm_kernel_in1_receiver_writer_id;
-    KernelID mm_kernel_in0_receiver_other_noc_setup_id = mm_kernel_in0_receiver_id;
+    KernelHandle mm_kernel_in1_receiver_writer_other_noc_setup_id = mm_kernel_in1_receiver_writer_id;
+    KernelHandle mm_kernel_in0_receiver_other_noc_setup_id = mm_kernel_in0_receiver_id;
 
     if (split_half) {
         mm_kernel_in1_receiver_writer_other_noc_setup_id = tt_metal::CreateKernel(
@@ -427,7 +427,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
     uint32_t src2_cb_index = 2;
-    CircularBufferID cb_src2 = 0;
+    CBHandle cb_src2 = 0;
     if (in0_is_sharded) {
         tt_metal::CircularBufferConfig src2_cb_config = tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
             .set_page_size(src2_cb_index, in0_single_tile_size).set_globally_allocated_address(*in0_buffer);
@@ -467,8 +467,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t last_block_padded_block_tiles_w_skip =  (out_subblock_w * out_subblock_h) * (per_core_N / out_subblock_w - last_block_num_nonzero_subblocks_w);
     uint32_t last_block_padded_block_tiles_h_skip = (per_core_M / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_N * out_subblock_h);
 
-    std::vector<KernelID> reader_kernel_ids;
-    std::vector<KernelID> writer_kernel_ids;
+    std::vector<KernelHandle> reader_kernel_ids;
+    std::vector<KernelHandle> writer_kernel_ids;
 
     uint32_t diff_start_coord;
     uint32_t diff_end_coord;

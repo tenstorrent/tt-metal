@@ -111,14 +111,14 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor &a, Tensor& outp
     };
 
     // Tilized reader
-    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     // Tilized writer
-    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
@@ -314,14 +314,14 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(const Tensor
     };
 
     // Tilized reader
-    tt_metal::KernelID unary_reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_unary_pad_dims_split_rows.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
     // Tilized writer
-    tt_metal::KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
+    tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,

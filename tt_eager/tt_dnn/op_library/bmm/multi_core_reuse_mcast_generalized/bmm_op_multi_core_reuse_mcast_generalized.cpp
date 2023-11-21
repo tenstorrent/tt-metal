@@ -187,8 +187,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         .set_page_size(interm0_cb_index, single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_output_config);
 
-    std::vector<KernelID> reader_kernel_ids;
-    std::vector<KernelID> writer_kernel_ids;
+    std::vector<KernelHandle> reader_kernel_ids;
+    std::vector<KernelHandle> writer_kernel_ids;
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
@@ -473,8 +473,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         .set_page_size(interm0_cb_index, single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_output_config);
 
-    std::vector<KernelID> reader_kernel_ids;
-    std::vector<KernelID> writer_kernel_ids;
+    std::vector<KernelHandle> reader_kernel_ids;
+    std::vector<KernelHandle> writer_kernel_ids;
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
@@ -733,8 +733,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         .set_page_size(interm0_cb_index, single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_output_config);
 
-    std::vector<KernelID> reader_kernel_ids;
-    std::vector<KernelID> writer_kernel_ids;
+    std::vector<KernelHandle> reader_kernel_ids;
+    std::vector<KernelHandle> writer_kernel_ids;
     for(int core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
         for(int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};

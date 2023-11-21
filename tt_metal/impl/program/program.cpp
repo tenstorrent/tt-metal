@@ -95,16 +95,16 @@ std::atomic<uint64_t> Program::program_counter = 0;
 
 Program::Program(): id(program_counter++),worker_crs_({}), local_circular_buffer_allocation_needed_(false) {}
 
-KernelID Program::add_kernel(Kernel *kernel) {
+KernelHandle Program::add_kernel(Kernel *kernel) {
     this->invalidate_compile();
-    KernelID id = kernels_.size();
+    KernelHandle id = kernels_.size();
     kernels_.push_back(kernel);
     kernel_groups_.resize(0);
     core_to_kernel_group_index_table_.clear();
     return id;
 }
 
-Kernel *Program::get_kernel(KernelID kernel_id) const {
+Kernel *Program::get_kernel(KernelHandle kernel_id) const {
     //TT_ASSERT(kernel_id < this->kernels_.size(), "Expected Kernel with ID {} to be in Program {}", kernel_id, this->id);
     return this->kernels_.at(kernel_id);
 }
@@ -114,10 +114,10 @@ KernelGroup::KernelGroup() : core_ranges({}) {
 
 KernelGroup::KernelGroup(
     const Program &program,
-    std::optional<KernelID> brisc_id,
-    std::optional<KernelID> ncrisc_id,
-    std::optional<KernelID> trisc_id,
-    std::optional<KernelID> erisc_id,
+    std::optional<KernelHandle> brisc_id,
+    std::optional<KernelHandle> ncrisc_id,
+    std::optional<KernelHandle> trisc_id,
+    std::optional<KernelHandle> erisc_id,
     int last_cb_index,
     const CoreRangeSet &new_ranges) :
     core_ranges({}) {
@@ -187,26 +187,26 @@ KernelGroup * Program::kernels_on_core(const CoreCoord &core) {
 
 struct KernelGroupInt {
     bool valid;
-    std::optional<KernelID> trisc_id = std::nullopt;
-    std::optional<KernelID> brisc_id = std::nullopt;
-    std::optional<KernelID> ncrisc_id = std::nullopt;
-    std::optional<KernelID> erisc_id = std::nullopt;
+    std::optional<KernelHandle> trisc_id = std::nullopt;
+    std::optional<KernelHandle> brisc_id = std::nullopt;
+    std::optional<KernelHandle> ncrisc_id = std::nullopt;
+    std::optional<KernelHandle> erisc_id = std::nullopt;
 
     bool operator==(const KernelGroupInt& b) const;
     void update(Kernel* kernel, size_t kernel_idx) {
         RISCV riscv_processor = kernel->processor();
         switch (riscv_processor) {
         case RISCV::BRISC:
-            this->brisc_id = static_cast<KernelID>(kernel_idx);
+            this->brisc_id = static_cast<KernelHandle>(kernel_idx);
             break;
         case RISCV::NCRISC:
-            this->ncrisc_id = static_cast<KernelID>(kernel_idx);
+            this->ncrisc_id = static_cast<KernelHandle>(kernel_idx);
             break;
         case RISCV::COMPUTE:
-            this->trisc_id = static_cast<KernelID>(kernel_idx);
+            this->trisc_id = static_cast<KernelHandle>(kernel_idx);
             break;
         case RISCV::ERISC:
-            this->erisc_id = static_cast<KernelID>(kernel_idx);
+            this->erisc_id = static_cast<KernelHandle>(kernel_idx);
             break;
         default:
             TT_ASSERT(false, "Unsupported kernel processor!");
@@ -337,7 +337,7 @@ void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t s
     }
 }
 
-CircularBufferID Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
+CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
     this->invalidate_compile();
     std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(core_range_set, config);
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory allocator
@@ -378,7 +378,7 @@ CircularBufferID Program::add_circular_buffer(const CoreRangeSet &core_range_set
     return circular_buffer->id();
 }
 
-std::shared_ptr<CircularBuffer> Program::get_circular_buffer(CircularBufferID cb_id) const {
+std::shared_ptr<CircularBuffer> Program::get_circular_buffer(CBHandle cb_id) const {
     if (this->circular_buffer_by_id_.find(cb_id) == this->circular_buffer_by_id_.end()) {
         TT_THROW("No circular buffer with id {} exists in Program {}", cb_id, this->id);
     }

@@ -260,7 +260,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = in1_sender_writer_compile_time_args, .defines = mm_kernel_in1_sender_writer_defines});
 
 
-    KernelID mm_kernel_in0_receiver_id = 0;
+    KernelHandle mm_kernel_in0_receiver_id = 0;
     if (!in0_is_sharded) {
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
             program,
@@ -320,7 +320,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
     uint32_t src2_cb_index = 2;
-    CircularBufferID cb_src2 = 0;
+    CBHandle cb_src2 = 0;
     if (in0_is_sharded) {
         tt_metal::CircularBufferConfig src2_cb_config = tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
             .set_page_size(src2_cb_index, in0_single_tile_size).set_globally_allocated_address(*in0_buffer);
@@ -359,8 +359,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     uint32_t last_block_padded_block_tiles_w_skip =  (out_subblock_w * out_subblock_h) * (per_core_N / out_subblock_w - last_block_num_nonzero_subblocks_w);
     uint32_t last_block_padded_block_tiles_h_skip = (per_core_M / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_N * out_subblock_h);
 
-    std::vector<KernelID> reader_kernel_ids;
-    std::vector<KernelID> writer_kernel_ids;
+    std::vector<KernelHandle> reader_kernel_ids;
+    std::vector<KernelHandle> writer_kernel_ids;
 
     std::vector<uint32_t> in0_mcast_noc_x;
     std::vector<uint32_t> in0_mcast_noc_y;
@@ -873,8 +873,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t last_block_padded_block_tiles_w_skip =  (out_subblock_w * out_subblock_h) * (per_core_N / out_subblock_w - last_block_num_nonzero_subblocks_w);
     uint32_t last_block_padded_block_tiles_h_skip = (per_core_M / out_subblock_h - last_block_num_nonzero_subblocks_h) * (per_core_N * out_subblock_h);
 
-    std::vector<KernelID> reader_kernel_ids;
-    std::vector<KernelID> writer_kernel_ids;
+    std::vector<KernelHandle> reader_kernel_ids;
+    std::vector<KernelHandle> writer_kernel_ids;
     for(uint32_t i = 0; i < num_cores; i++) {
         uint32_t core_idx_x = i % num_cores_c;
         uint32_t core_idx_y = i / num_cores_c;

@@ -77,13 +77,13 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
     };
 
     const char* reader_name = bcast_op_utils::get_reader_name(bcast_dim, BcastOpParallelizationStrategy::SINGLE_CORE);
-    KernelID binary_reader_kernel_id = tt_metal::CreateKernel(
+    KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         reader_name,
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
-    KernelID unary_writer_kernel_id = tt_metal::CreateKernel(
+    KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,

@@ -69,13 +69,13 @@ std::optional<uint32_t> get_semaphore_address(const Program &program, const Core
 }
 
 
-inline void SetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreCoord &c, const std::vector<uint32_t> &runtime_args)
+inline void SetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &c, const std::vector<uint32_t> &runtime_args)
 {
     detail::GetKernel(program, kernel_id)->set_runtime_args(c, runtime_args);
 }
 
 
-inline void SetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args)
+inline void SetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreRange &core_range, const std::vector<uint32_t> &runtime_args)
 {
     for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
         for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
@@ -351,8 +351,8 @@ Program CreateProgram(){
     return Program();
 }
 
-KernelID CreateKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig,ComputeConfig, experimental::EthernetConfig> &config) {
-    return std::visit( [&](auto&& cfg) -> KernelID
+KernelHandle CreateKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig,ComputeConfig, experimental::EthernetConfig> &config) {
+    return std::visit( [&](auto&& cfg) -> KernelHandle
                         {
                             CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
                             Kernel * kernel;
@@ -373,16 +373,16 @@ KernelID CreateKernel(Program &program, const std::string &file_name, const std:
                     );
 }
 
-CircularBufferID CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config) {
+CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config) {
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     return program.add_circular_buffer(core_ranges, config);
 }
 
-const CircularBufferConfig &GetCircularBufferConfig(Program &program, CircularBufferID cb_handle) {
+const CircularBufferConfig &GetCircularBufferConfig(Program &program, CBHandle cb_handle) {
     return detail::GetCircularBuffer(program, cb_handle)->config();
 }
 
-void UpdateCircularBufferTotalSize(Program &program, CircularBufferID cb_handle, uint32_t total_size) {
+void UpdateCircularBufferTotalSize(Program &program, CBHandle cb_handle, uint32_t total_size) {
     std::shared_ptr<CircularBuffer> circular_buffer = detail::GetCircularBuffer(program, cb_handle);
     if (not circular_buffer->globally_allocated()) {
         program.invalidate_circular_buffer_allocation();
@@ -390,11 +390,11 @@ void UpdateCircularBufferTotalSize(Program &program, CircularBufferID cb_handle,
     circular_buffer->config().set_total_size(total_size);
 }
 
-void UpdateCircularBufferPageSize(Program &program, CircularBufferID cb_handle, uint8_t buffer_index, uint32_t page_size) {
+void UpdateCircularBufferPageSize(Program &program, CBHandle cb_handle, uint8_t buffer_index, uint32_t page_size) {
     detail::GetCircularBuffer(program, cb_handle)->config().set_page_size(buffer_index, page_size);
 }
 
-void UpdateDynamicCircularBufferAddress(Program &program, CircularBufferID cb_handle, const Buffer &buffer) {
+void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, const Buffer &buffer) {
     if (buffer.buffer_type() != BufferType::L1) {
         TT_FATAL("Only L1 buffers can have an associated circular buffer!");
     }
@@ -442,7 +442,7 @@ Buffer CreateBuffer(Device *device, std::uint64_t size, std::uint64_t page_size,
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
-void SetRuntimeArgs(const Program &program, KernelID kernel_id, const std::variant<CoreCoord,CoreRange,CoreRangeSet> &core_spec, const std::vector<uint32_t> &runtime_args) {
+void SetRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::variant<CoreCoord,CoreRange,CoreRangeSet> &core_spec, const std::vector<uint32_t> &runtime_args) {
     ZoneScoped;
     std::visit(
         [&](auto&& core_spec)
@@ -461,7 +461,7 @@ void SetRuntimeArgs(const Program &program, KernelID kernel_id, const std::varia
     );
 }
 
-void SetRuntimeArgs(const Program &program, KernelID kernel, const std::vector< CoreCoord > & core_spec, const std::vector< std::vector<uint32_t> > &runtime_args)
+void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::vector< CoreCoord > & core_spec, const std::vector< std::vector<uint32_t> > &runtime_args)
 {
     ZoneScoped;
     TT_FATAL( core_spec.size() == runtime_args.size(), "Mistmatch between number of cores {} and number of runtime args {} getting updated", core_spec.size(), runtime_args.size());
@@ -470,7 +470,7 @@ void SetRuntimeArgs(const Program &program, KernelID kernel, const std::vector< 
         k->set_runtime_args(core_spec[i], runtime_args[i]);
 }
 
-std::vector<uint32_t> & GetRuntimeArgs(const Program &program, KernelID kernel_id, const CoreCoord &logical_core) {
+std::vector<uint32_t> & GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core) {
     return detail::GetKernel(program, kernel_id)->runtime_args(logical_core);
 }
 
