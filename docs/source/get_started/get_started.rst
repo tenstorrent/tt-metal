@@ -41,14 +41,13 @@ for details.
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Learn the basics of multi-head attention operations in tt-metal's ttnn module
-with a simple example. Follow the tutorial :ref:`here
-<Multi-Head Attention>`.
+with a simple example: :ref:`here </ttnn/tutorials/ttnn_tutorials/003.ipynb#Write-Multi-Head-Attention-using-ttnn>`.
 
 4. ttnn Tutorial: Multi-Head Attention (Optimized)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Dive deeper into multi-head attention operations in ttnn, optimizing
-performance. Coming soon.
+performance: :ref:`here </ttnn/tutorials/ttnn_tutorials/003.ipynb#Write-optimized-version-of-Multi-Head-Attention>`.
 
 5. Advanced Metal Usage: Matrix Multiplication Kernels
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
