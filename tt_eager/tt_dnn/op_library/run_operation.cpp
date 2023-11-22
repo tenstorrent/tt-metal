@@ -86,90 +86,6 @@ void setup_profiler(const DeviceOperation& operation, const std::vector<Tensor>&
     op_profiler::append_meta_data(fmt::format("{}", operation.attributes()));
 }
 
-std::vector<Tensor> run_without_program_cache(
-    const DeviceOperation& operation,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
-    ZoneScoped;
-    ZoneText( operation.get_type_name().c_str(), operation.get_type_name().length() );
-
-    auto device = detail::get_device(input_tensors, optional_input_tensors);
-    auto output_tensors = operation.create_output_tensors(input_tensors);
-
-    auto program_with_callbacks = operation.create_program(input_tensors, optional_input_tensors, output_tensors);
-    auto& program = program_with_callbacks.program;
-
-    auto do_profile = op_profiler::get_profiler_flag();
-    if (do_profile) { detail::setup_profiler(operation, input_tensors, program); }
-
-    const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
-        // Only need to dump device data when in dispatch mode
-        // LaunchKernel automatically dumps device data
-        op_profiler::dump_device_profiler_results(device, program);
-    } else {
-        ::detail::LaunchProgram(device, program);
-    }
-
-    return output_tensors;
-}
-
-std::vector<Tensor> run_with_program_cache(
-    const DeviceOperation& operation,
-    const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
-    ZoneScoped;
-    ZoneText( operation.get_type_name().c_str(), operation.get_type_name().length() );
-
-    auto device = detail::get_device(input_tensors, optional_input_tensors);
-    auto output_tensors = operation.create_output_tensors(input_tensors);
-
-    auto&& [program_with_callbacks, cache_hit] = program_cache::get_or_create(
-        operation, input_tensors, optional_input_tensors, output_tensors, device
-    );
-    TT_ASSERT(program_with_callbacks.supports_program_cache());
-
-    auto& program = program_with_callbacks.program;
-    if (cache_hit) {
-        ZoneScopedN ("Cache_hit_set_runtime_args");
-        if (program_with_callbacks.override_addresses_callback.has_value()) {
-            auto override_addresses_callback = program_with_callbacks.override_addresses_callback.value();
-            override_addresses(
-                override_addresses_callback,
-                program, input_tensors, optional_input_tensors, output_tensors
-            );
-        }
-
-        if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
-            auto override_runtime_arguments_callback = program_with_callbacks.override_runtime_arguments_callback.value();
-            operation.override_runtime_arguments(override_runtime_arguments_callback, program, input_tensors, optional_input_tensors, output_tensors);
-        }
-    }
-
-    {
-        ZoneScopedN ("Profiler Check");
-        auto do_profile = op_profiler::get_profiler_flag();
-        if (do_profile) { detail::setup_profiler(operation, input_tensors, program); }
-    }
-
-    const char *TT_METAL_SLOW_DISPATCH_MODE = nullptr;
-    {
-        ZoneScopedN ("Get Env Var");
-        TT_METAL_SLOW_DISPATCH_MODE =  std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    }
-    if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
-        // Only need to dump device data when in dispatch mode
-        // LaunchKernel automatically dumps device data
-        op_profiler::dump_device_profiler_results(device, program);
-    } else {
-        ::detail::LaunchProgram(device, program);
-    }
-
-    return output_tensors;
-}
-
 template <typename OperationType>
 constexpr op_profiler::OpType get_profiler_operation_type() {
     if constexpr (std::is_same_v<OperationType, HostOperation>) {
@@ -228,14 +144,87 @@ std::vector<Tensor> run_device_operation(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) {
     auto profile_scope = op_profiler::OpProfileScope(operation.get_type_name(), op_profiler::OpType::tt_dnn_device);
 
-    operation.validate(input_tensors, optional_input_tensors);
-
-    std::vector<Tensor> output_tensors;
+    std::function<std::variant<Program, std::reference_wrapper<Program>>(
+        const DeviceOperation&,
+        const std::vector<Tensor>&,
+        const std::vector<std::optional<const Tensor>>&,
+        std::vector<Tensor>&)>
+        get_or_create_program;
     if (program_cache::is_enabled()) {
-        output_tensors = detail::run_with_program_cache(operation, input_tensors, optional_input_tensors);
+        get_or_create_program = [](const DeviceOperation& operation,
+                                   const std::vector<Tensor>& input_tensors,
+                                   const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                                   std::vector<Tensor>& output_tensors) -> std::reference_wrapper<Program> {
+            auto&& [program_with_callbacks, cache_hit] =
+                program_cache::get_or_create(operation, input_tensors, optional_input_tensors, output_tensors);
+            TT_ASSERT(program_with_callbacks.supports_program_cache());
+
+            auto& program = program_with_callbacks.program;
+            if (cache_hit) {
+                ZoneScopedN("Cache_hit_set_runtime_args");
+                if (program_with_callbacks.override_addresses_callback.has_value()) {
+                    auto override_addresses_callback = program_with_callbacks.override_addresses_callback.value();
+                    override_addresses(
+                        override_addresses_callback, program, input_tensors, optional_input_tensors, output_tensors);
+                }
+
+                if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
+                    auto override_runtime_arguments_callback =
+                        program_with_callbacks.override_runtime_arguments_callback.value();
+                    operation.override_runtime_arguments(
+                        override_runtime_arguments_callback,
+                        program,
+                        input_tensors,
+                        optional_input_tensors,
+                        output_tensors);
+                }
+            }
+            return program;
+        };
     } else {
-        output_tensors = detail::run_without_program_cache(operation, input_tensors, optional_input_tensors);
+        get_or_create_program = [](const DeviceOperation& operation,
+                                   const std::vector<Tensor>& input_tensors,
+                                   const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                                   std::vector<Tensor>& output_tensors) -> Program {
+            auto program_with_callbacks =
+                operation.create_program(input_tensors, optional_input_tensors, output_tensors);
+            return std::move(program_with_callbacks.program);
+        };
     }
+
+    ZoneScoped;
+    ZoneText(operation.get_type_name().c_str(), operation.get_type_name().length());
+    operation.validate(input_tensors, optional_input_tensors);
+    auto output_tensors = operation.create_output_tensors(input_tensors);
+    auto program = get_or_create_program(operation, input_tensors, optional_input_tensors, output_tensors);
+
+    // Enqueue or Launch Program
+    std::visit(
+        [&operation, &input_tensors, &optional_input_tensors](auto& program) {
+            auto device = detail::get_device(input_tensors, optional_input_tensors);
+
+            auto do_profile = op_profiler::get_profiler_flag();
+            if (do_profile) {
+                detail::setup_profiler(operation, input_tensors, program);
+            }
+
+            const char* TT_METAL_SLOW_DISPATCH_MODE = nullptr;
+            {
+                ZoneScopedN("Get Env Var");
+                TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+            }
+
+            if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+                EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
+
+                // Only need to dump device data when in dispatch mode
+                // LaunchKernel automatically dumps device data
+                op_profiler::dump_device_profiler_results(device, program);
+            } else {
+                ::detail::LaunchProgram(device, program);
+            }
+        },
+        program);
 
     op_profiler::append_all_tensor_io_data(input_tensors, optional_input_tensors, output_tensors);
 
