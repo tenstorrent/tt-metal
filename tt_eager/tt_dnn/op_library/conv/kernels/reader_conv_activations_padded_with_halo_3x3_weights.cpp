@@ -14,9 +14,10 @@ void kernel_main() {
     uint32_t weight_size_h = get_arg_val<uint32_t>(i); i+=1;
     uint32_t weight_size_w = get_arg_val<uint32_t>(i); i+=1;
 
+    uint32_t act_num_blocks_h = get_arg_val<uint32_t>(i); i+=1;
     // inner loop bounds as compile-time args improve pef
     // uint32_t act_block_h_datums = get_arg_val<uint32_t>(i); i+=1;
-    i+=1; // skip an arg
+    // i+=1; // skip an arg
 
     uint32_t act_block_num_tiles = get_arg_val<uint32_t>(i); i+=1;
 
@@ -150,25 +151,30 @@ void kernel_main() {
         static_assert(coalesced_read_bytes <= NOC_MAX_BURST_SIZE);
         // set_state uses just x/y from the get_noc_addr, addr is ignored
         noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
+        uint32_t start_reader_idx = 0;
+        for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
+            for (uint32_t outer = 0; outer < window_outer; outer++) {
+                // Reset reader_idx to finish act_block_h_datums
+                reader_idx = start_reader_idx;
 
-        for (uint32_t outer = 0; outer < window_outer; outer++) {
-            // Reset reader_idx to finish act_block_h_datums
-            reader_idx = 0;
-            cb_reserve_back(cb_id_act, act_block_num_tiles);
-            uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
-            uint32_t reader_offset = act_l1_read_addr + (reader_offsets_ptr[reader_offset_idx] << log_base_2_of_conv_act_size_c_bytes);
-            // #pragma GCC unroll 4 // unroll didn't help, but act_block_h_datums (loop bound) being const does help
-            for (uint32_t bh = 0; bh < act_block_h_datums; bh++) {
-                // local read from reader_index + reader_offset;
-                act_l1_offset = reader_offset + (reader_indices_ptr[reader_idx] << log_base_2_of_conv_act_size_c_bytes);
-                noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                l1_write_addr_act += coalesced_read_bytes;
-                reader_idx++;
+                cb_reserve_back(cb_id_act, act_block_num_tiles);
+                uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
+                uint32_t reader_offset = act_l1_read_addr + (reader_offsets_ptr[reader_offset_idx] << log_base_2_of_conv_act_size_c_bytes);
+                // #pragma GCC unroll 4 // unroll didn't help, but act_block_h_datums (loop bound) being const does help
+                for (uint32_t bhd = 0; bhd < act_block_h_datums; bhd++) {
+                    // local read from reader_index + reader_offset;
+                    act_l1_offset = reader_offset + (reader_indices_ptr[reader_idx] << log_base_2_of_conv_act_size_c_bytes);
+                    noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
+                    l1_write_addr_act += coalesced_read_bytes;
+                    reader_idx++;
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_id_act, act_block_num_tiles);
+
+                reader_offset_idx += window_inner;
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_id_act, act_block_num_tiles);
-
-            reader_offset_idx += window_inner;
+            reader_offset_idx = 0;
+            start_reader_idx = reader_idx;
         }
 
     } else {
@@ -181,28 +187,34 @@ void kernel_main() {
         // set_state uses just x/y from the get_noc_addr, addr is ignored
         noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), conv_act_c_read_bytes);
 
-        for (uint32_t outer = 0; outer < window_outer; outer++) {
-            // Reset reader_idx to finish act_block_h_datums
-            reader_idx = 0;
-            cb_reserve_back(cb_id_act, act_block_num_tiles);
-            uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
-            for (uint32_t bh = 0; bh < act_block_h_datums; bh++) {
-                // when no read coalesing, main use case is window_inner == 1,
-                // and if window_inner is const this loop should be removed by the compiler
-                for (uint32_t inner = 0; inner < window_inner; inner++) {
-                    // local read from reader_index + reader_offset;
-                    act_l1_offset = act_l1_read_addr + ((reader_indices_ptr[reader_idx] + reader_offsets_ptr[reader_offset_idx + inner]) << log_base_2_of_conv_act_size_c_bytes);
-                    noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
-                    l1_write_addr_act += conv_act_c_read_bytes;
+        uint32_t start_reader_idx = 0;
+        for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
+            for (uint32_t outer = 0; outer < window_outer; outer++) {
+                // Reset reader_idx to finish act_block_h_datums
+                reader_idx = start_reader_idx;
+                cb_reserve_back(cb_id_act, act_block_num_tiles);
+                uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
+                for (uint32_t bhd = 0; bhd < act_block_h_datums; bhd++) {
+                    // when no read coalesing, main use case is window_inner == 1,
+                    // and if window_inner is const this loop should be removed by the compiler
+                    for (uint32_t inner = 0; inner < window_inner; inner++) {
+                        // local read from reader_index + reader_offset;
+                        act_l1_offset = act_l1_read_addr + ((reader_indices_ptr[reader_idx] + reader_offsets_ptr[reader_offset_idx + inner]) << log_base_2_of_conv_act_size_c_bytes);
+                        noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
+                        l1_write_addr_act += conv_act_c_read_bytes;
 
+                    }
+                    reader_idx++;
                 }
-                reader_idx++;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_id_act, act_block_num_tiles);
+                noc_async_read_barrier();
+                cb_push_back(cb_id_act, act_block_num_tiles);
 
             reader_offset_idx += window_inner;
+            reader_offset_idx += window_inner;
+                reader_offset_idx += window_inner;
+            }
+            reader_offset_idx = 0;
+            start_reader_idx = reader_idx;
         }
-
     }
 }

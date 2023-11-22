@@ -26,7 +26,7 @@ def test_demo_sample(
         "Border terrier",
         "brown bear, bruin, Ursus arctos",
         "soap dispenser",
-        "vestment",
+        "boa constrictor, Constrictor constrictor",
     ]
     measurements, predictions = run_resnet_inference(
         batch_size,
