@@ -46,7 +46,7 @@ tt_metal/impl/dispatch/ @DrJessop @davorchap
 tt_metal/impl/dispatch/**/module.mk @DrJessop @davorchap @tt-rkim
 tt_metal/kernels/dataflow/dispatch/ @DrJessop @davorchap
 docs/source/frameworks/tt_dispatch.rst @DrJessop @davorchap
-docs/source/tt_metal/apis/ @TT-billteng
+docs/source/tt_metal/apis/host_apis/ @TT-billteng
 
 # metal - fw, llks, risc-v
 # tt_metal/hw/ckernels/ @davorchap
