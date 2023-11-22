@@ -324,6 +324,8 @@ void Finish(CommandQueue& cq);
 /**
  * Read device side profiler data and dump results into device side CSV log
  *
+ * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
+ *
  * Return value: void
  *
  * | Argument      | Description                                       | Type            | Valid Range               | Required |
