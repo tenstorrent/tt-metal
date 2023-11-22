@@ -95,6 +95,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/reshape/reshape_op.cpp \
 	tt_eager/tt_dnn/op_library/permute/permute_op.cpp \
 	tt_eager/tt_dnn/op_library/composite/composite_ops.cpp\
+	tt_eager/tt_dnn/op_library/backward/backward_ops.cpp\
 	tt_eager/tt_dnn/op_library/complex/complex_ops.cpp\
 	tt_eager/tt_dnn/op_library/transformer_tms/transformer_tms.cpp \
 	tt_eager/tt_dnn/op_library/transformer_tms/multi_core_split_fused_qkv_and_split_heads/multi_core_split_fused_qkv_and_split_heads.cpp \

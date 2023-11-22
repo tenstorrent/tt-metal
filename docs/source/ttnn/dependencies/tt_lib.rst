@@ -731,3 +731,9 @@ Other Operations
 .. autofunction:: tt_lib.tensor.power_fp
 
 .. autofunction:: tt_lib.tensor.identity
+
+Backward Operations
+-------------------
+
+.. autofunction:: tt_lib.tensor.addalpha_bw
+
