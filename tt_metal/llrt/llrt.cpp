@@ -55,35 +55,19 @@ struct HexNameToMemVectorCache {
     std::mutex mutex_;
 };
 
-// made these free functions -- they're copy/paste of the member functions
-// TODO: clean-up epoch_loader / epoch_binary -- a bunch of functions there should not be member functions
-ll_api::memory get_risc_binary(string path, chip_id_t chip_id, bool fw_build) {
+ll_api::memory get_risc_binary(string path) {
 
-    std::string binary_key = fmt::format("{}_{}", chip_id, path);
-    string path_to_bin = (fw_build ? get_firmware_compile_outpath(chip_id) : get_kernel_compile_outpath(chip_id)) + path;
-
-    if (HexNameToMemVectorCache::inst().exists(binary_key)) {
-        // std::cout << "-- HEX2MEM CACHE HIT FOR " << binary_key << std::endl;
-        return HexNameToMemVectorCache::inst().get(binary_key);
+    if (HexNameToMemVectorCache::inst().exists(path)) {
+        return HexNameToMemVectorCache::inst().get(path);
     }
 
-    fs::path bin_file(path_to_bin);
-    if (!fs::exists(bin_file)) {
-        string tt_metal_home = string(getenv("TT_METAL_HOME"));
-        // try loading from home in case cwd isn't home
-        path_to_bin = tt_metal_home + "/" + path_to_bin;
-        fs::path bin_file_h(path_to_bin);
-        if (!fs::exists(bin_file_h)) {
-            std::cout << " Error: " << bin_file.c_str() << " doesn't exist" << endl;
-            TT_ASSERT(false);
-        }
-    }
+    fs::path bin_file(path);
 
-    std::ifstream hex_istream(path_to_bin);
+    std::ifstream hex_istream(path);
     ll_api::memory mem(hex_istream);
 
     // add this path to binary cache
-    HexNameToMemVectorCache::inst().add(binary_key, mem);
+    HexNameToMemVectorCache::inst().add(path, mem);
 
     return mem;
 }

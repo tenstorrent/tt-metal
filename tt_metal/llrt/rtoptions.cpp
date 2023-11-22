@@ -8,6 +8,7 @@
 
 #include "rtoptions.hpp"
 #include "impl/debug/dprint_server.hpp"
+#include "tools/profiler/profiler_state.hpp"
 
 using std::vector;
 
@@ -21,6 +22,11 @@ namespace llrt {
 RunTimeOptions OptionsG;
 
 RunTimeOptions::RunTimeOptions() {
+    if (const char* root_dir_ptr = std::getenv("TT_METAL_HOME")) {
+        root_dir = string(root_dir_ptr) + "/";
+    }
+
+    build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
 
     watcher_enabled = false;
     watcher_interval_ms = 0;
@@ -41,8 +47,24 @@ RunTimeOptions::RunTimeOptions() {
         watcher_dump_all = true;
     }
 
-
     ParseDPrintEnv();
+
+    profiler_enabled = false;
+#if defined(PROFILER)
+    const char *profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
+    if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
+        profiler_enabled = true;
+    }
+#endif
+    TT_FATAL(!(get_dprint_enabled() && get_profiler_enabled()), "Cannot enable both debug printing and profiling");
+}
+
+const std::string& RunTimeOptions::get_root_dir() {
+    if (root_dir == "") {
+        TT_THROW("Env var " + std::string("TT_METAL_HOME") + " is not set.");
+    }
+
+    return root_dir;
 }
 
 void RunTimeOptions::ParseDPrintEnv() {

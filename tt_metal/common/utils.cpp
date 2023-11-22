@@ -5,6 +5,7 @@
 #include "common/utils.hpp"
 #include <mutex>
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include "llrt/rtoptions.hpp"
 
 namespace tt
 {
@@ -44,20 +45,11 @@ namespace utils
         ofs.close();
     }
 
-    std::string get_root_dir() {
-        constexpr std::string_view ROOT_DIR_ENV_VAR = "TT_METAL_HOME";
-        std::string root_dir;
-
-        if(const char* root_dir_ptr = std::getenv(ROOT_DIR_ENV_VAR.data())) {
-            root_dir = root_dir_ptr;
-        } else {
-            TT_THROW("Env var " + std::string(ROOT_DIR_ENV_VAR) + " is not set.");
-        }
-        return root_dir;
-    }
-
     const std::string& get_reports_dir() {
-        static const std::string outpath = get_root_dir() + "/.reports/";
+        static std::string outpath;
+        if (outpath == "") {
+            outpath = tt::llrt::OptionsG.get_root_dir() + "/.reports/";
+        }
         return outpath;
     }
 

@@ -5,51 +5,48 @@
 #include "common/assert.hpp"
 #include "common/core_coord.h"
 #include "jit_build/settings.hpp"
+#include "jit_build/build.hpp"
 #include <iostream>
 #include <string>
 
-namespace tt
+namespace tt::tt_metal
 {
 
-    build_kernel_for_riscv_options_t::build_kernel_for_riscv_options_t(int dev_id) :
-      device_id(dev_id),
-      name(""),
-      outpath(get_firmware_compile_outpath(dev_id)),
-      fp32_dest_acc_en(false),
-      fw_build_(true) {}
+    JitBuildOptions::JitBuildOptions(const JitBuildEnv& env) :
+      build_env(env),
+      fp32_dest_acc_en(false) {}
 
-    build_kernel_for_riscv_options_t::build_kernel_for_riscv_options_t(int dev_id, std::string name) :
-      device_id(dev_id),
-      name(name),
-      outpath(get_kernel_compile_outpath(dev_id)),
-      fp32_dest_acc_en(false),
-      fw_build_(false) {}
+    void JitBuildOptions::set_name(const string& n)
+    {
+        name = n;
+        path = build_env.get_out_kernel_root_path() + n;
+    }
 
-    void build_kernel_for_riscv_options_t::set_hlk_file_name_all_cores(std::string file_name)
+    void JitBuildOptions::set_hlk_file_name_all_cores(std::string file_name)
     {
         hlk_desc.set_hlk_file_name(file_name);
     }
 
-    void build_kernel_for_riscv_options_t::set_hlk_math_fidelity_all_cores(MathFidelity math_fidelity)
+    void JitBuildOptions::set_hlk_math_fidelity_all_cores(MathFidelity math_fidelity)
     {
         hlk_desc.set_hlk_math_fidelity(math_fidelity);
     }
 
-    void build_kernel_for_riscv_options_t::set_hlk_math_approx_mode_all_cores(bool approx_mode)
+    void JitBuildOptions::set_hlk_math_approx_mode_all_cores(bool approx_mode)
     {
         hlk_desc.set_hlk_math_approx_mode(approx_mode);
     }
 
-    void build_kernel_for_riscv_options_t::set_hlk_args_all_cores(void *args, size_t size)
+    void JitBuildOptions::set_hlk_args_all_cores(void *args, size_t size)
     {
         hlk_desc.set_hlk_args(args, size);
     }
 
-    void build_kernel_for_riscv_options_t::set_cb_dataformat_all_cores(CB cb_id, DataFormat data_format) {
+    void JitBuildOptions::set_cb_dataformat_all_cores(CB cb_id, DataFormat data_format) {
         set_hlk_operand_dataformat_all_cores((HlkOperand)cb_id, data_format);
     }
 
-    void build_kernel_for_riscv_options_t::set_hlk_operand_dataformat_all_cores(HlkOperand op_id, DataFormat data_format)
+    void JitBuildOptions::set_hlk_operand_dataformat_all_cores(HlkOperand op_id, DataFormat data_format)
     {
         static_assert(HlkOperand::in7 == int(HlkOperand::param0)-1);
         static_assert(HlkOperand::param7 == int(HlkOperand::out0)-1);

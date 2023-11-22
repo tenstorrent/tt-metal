@@ -71,6 +71,37 @@ CoreType Kernel::get_kernel_core_type() const {
     return CoreType::WORKER;
 }
 
+const string& Kernel::get_full_kernel_name() const {
+    return this->kernel_full_name_;
+}
+
+void Kernel::process_defines(const std::function<void (const string& define, const string &value)> callback) const {
+    for (const auto &[define, value]: this->defines_) {
+        callback(define, value);
+    }
+}
+
+void DataMovementKernel::process_defines(const std::function<void (const string& define, const string &value)>callback) const {
+    Kernel::process_defines(callback);
+    callback("NOC_INDEX", std::to_string(this->config_.noc));
+}
+
+void ComputeKernel::process_defines(const std::function<void (const string& define, const string &value)>callback) const {
+    for (const auto &[define, value]: this->defines_) {
+        callback(define, value);
+    }
+}
+
+void EthernetKernel::process_defines(const std::function<void (const string& define, const string &value)>callback) const {
+    callback("NOC_INDEX", std::to_string(this->config_.noc));
+}
+
+void Kernel::process_compile_time_args(const std::function<void (int i, uint32_t value)>callback) const {
+    for (int i = 0; i < this->compile_time_args_.size(); i++) {
+        callback(i, this->compile_time_args_[i]);
+    }
+}
+
 uint8_t DataMovementKernel::expected_num_binaries() const { return 1; }
 
 uint8_t EthernetKernel::expected_num_binaries() const { return 1; }
@@ -173,7 +204,7 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
     this->core_with_runtime_args_.insert( logical_core );
 }
 
-void DataMovementKernel::set_build_options(build_kernel_for_riscv_options_t &build_options) const {
+void DataMovementKernel::set_build_options(JitBuildOptions& build_options) const {
     ZoneScoped;
     switch (this->config_.processor) {
         case DataMovementProcessor::RISCV_0: {
@@ -192,12 +223,12 @@ void DataMovementKernel::set_build_options(build_kernel_for_riscv_options_t &bui
     }
 }
 
-void EthernetKernel::set_build_options(build_kernel_for_riscv_options_t &build_options) const {
+void EthernetKernel::set_build_options(JitBuildOptions& build_options) const {
     build_options.erisc_kernel_file_name = this->kernel_path_file_name_;
     build_options.erisc_defines = this->defines_;
 }
 
-void ComputeKernel::set_build_options(build_kernel_for_riscv_options_t &build_options) const {
+void ComputeKernel::set_build_options(JitBuildOptions& build_options) const {
     build_options.set_hlk_file_name_all_cores(this->kernel_path_file_name_);
     build_options.set_hlk_math_fidelity_all_cores(this->config_.math_fidelity);
     build_options.set_hlk_math_approx_mode_all_cores(this->config_.math_approx_mode);
@@ -205,32 +236,21 @@ void ComputeKernel::set_build_options(build_kernel_for_riscv_options_t &build_op
     build_options.hlk_defines = this->defines_;
 }
 
-void DataMovementKernel::generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const {
-    std::string arch_name = tt::get_string_lowercase(device->arch());
-    detail::GenerateDeviceHeaders(device, build_options, op_path_suffix);
-    switch (this->config_.processor) {
-        case DataMovementProcessor::RISCV_0: {
-            generate_binary_for_brisc(build_options, op_path_suffix, arch_name, this->config_.noc, this->compile_time_args_);
-        }
-        break;
-        case DataMovementProcessor::RISCV_1: {
-            generate_binary_for_ncrisc(build_options, op_path_suffix, arch_name, this->config_.noc, this->compile_time_args_);
-        }
-        break;
-        default:
-            TT_THROW("Unsupported data movement processor!");
-    }
+void DataMovementKernel::generate_binaries(Device *device, JitBuildOptions& build_options) const {
+    detail::GenerateDeviceHeaders(device, build_options.path);
+    int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
+    jit_build(device->build_kernel_state(JitBuildProcessorType::DATA_MOVEMENT, riscv_id), this, this->kernel_path_file_name_);
 }
 
-void EthernetKernel::generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const {
-    std::string arch_name = tt::get_string_lowercase(device->arch());
-    detail::GenerateDeviceHeaders(device, build_options, op_path_suffix);
-    generate_binary_for_erisc(build_options, op_path_suffix, arch_name, this->config_.noc, this->compile_time_args_);
+void EthernetKernel::generate_binaries(Device *device, JitBuildOptions& build_options) const {
+    detail::GenerateDeviceHeaders(device, build_options.path);
+    jit_build(device->build_kernel_state(JitBuildProcessorType::ETHERNET, 0), this, this->kernel_path_file_name_);
 }
 
-void ComputeKernel::generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const {
-    std::string arch_name = tt::get_string_lowercase(device->arch());
-    generate_binaries_for_triscs(build_options, op_path_suffix, arch_name, this->compile_time_args_);
+void ComputeKernel::generate_binaries(Device *device, JitBuildOptions& build_options) const {
+    jit_build_genfiles_triscs_src(device->build_env(), *this, this->kernel_path_file_name_);
+    JitBuildStateSubset build_states = device->build_kernel_states(JitBuildProcessorType::COMPUTE);
+    jit_build_subset(build_states, this, this->kernel_path_file_name_);
 }
 
 void Kernel::set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&binaries) {
@@ -241,56 +261,44 @@ void Kernel::set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&bin
     }
 }
 
-void DataMovementKernel::read_binaries(chip_id_t device_id) {
+void DataMovementKernel::read_binaries(Device *device) {
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
-    uint32_t riscv_id;
-    std::string binary_path_suffix;
-    switch (this->config_.processor) {
-        case (DataMovementProcessor::RISCV_0): {
-            riscv_id = 0;
-            binary_path_suffix = "/brisc/brisc.hex";
-        }
-        break;
-        case (DataMovementProcessor::RISCV_1): {
-            riscv_id = 1;
-            binary_path_suffix = "/ncrisc/ncrisc.hex";
-        }
-        break;
-        default:
-            TT_THROW("Unsupported data movement processor!");
-    }
 
-    ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, device_id, false);
+    // TODO(pgk): move the procssor types into the build system.  or just use integer indicies
+    // TODO(pgk): consolidate read_binaries where possible
+    int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
+    const JitBuildState& build_state = device->build_kernel_state(JitBuildProcessorType::DATA_MOVEMENT, riscv_id);
+    ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_));
     this->binary_size16_ = llrt::get_binary_code_size16(binary_mem, riscv_id);
     log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", riscv_id, this->binary_size16_ * 16);
 
     binaries.push_back(binary_mem);
-    this->set_binaries(device_id, std::move(binaries));
+    this->set_binaries(device->id(), std::move(binaries));
 }
 
-void EthernetKernel::read_binaries(int device_id) {
+void EthernetKernel::read_binaries(Device *device) {
    // untested
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
-    std::string binary_path_suffix = "/erisc/erisc.hex";
-    ll_api::memory binary_mem = llrt::get_risc_binary(binary_path_ + binary_path_suffix, device_id, false);
+
+    const JitBuildState& build_state = device->build_kernel_state(JitBuildProcessorType::ETHERNET, 0);
+    ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_));
     binaries.push_back(binary_mem);
-    this->set_binaries(device_id, std::move(binaries));
+    this->set_binaries(device->id(), std::move(binaries));
 }
 
-void ComputeKernel::read_binaries(int device_id) {
+void ComputeKernel::read_binaries(Device *device) {
     TT_ASSERT ( !binary_path_.empty(), "Path to Kernel binaries not set!" );
     std::vector<ll_api::memory> binaries;
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
-        std::string trisc_id_str = std::to_string(trisc_id);
-        std::string hex_path = binary_path_ + "/tensix_thread" + trisc_id_str + "/tensix_thread" + trisc_id_str + ".hex";
-        ll_api::memory binary_mem = llrt::get_risc_binary(hex_path, device_id, false);
+        const JitBuildState& build_state = device->build_kernel_state(JitBuildProcessorType::COMPUTE, trisc_id);
+        ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_));
         this->binary_size16_ = llrt::get_binary_code_size16(binary_mem, trisc_id + 2);
         log_debug("RISC {} kernel binary size: {} in bytes", trisc_id + 2, this->binary_size16_ * 16);
         binaries.push_back(binary_mem);
     }
-    this->set_binaries(device_id, std::move(binaries));
+    this->set_binaries(device->id(), std::move(binaries));
 }
 
 RISCV DataMovementKernel::processor() const {

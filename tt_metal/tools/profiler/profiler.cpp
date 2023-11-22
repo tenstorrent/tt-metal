@@ -10,6 +10,7 @@
 #include "tools/profiler/profiler.hpp"
 #include "tools/profiler/profiler_state.hpp"
 #include "hostdevcommon/profiler_common.h"
+#include "llrt/rtoptions.hpp"
 
 #define HOST_SIDE_LOG "profile_log_host.csv"
 #define DEVICE_SIDE_LOG "profile_log_device.csv"
@@ -259,15 +260,7 @@ bool getHostProfilerState ()
 
 bool getDeviceProfilerState ()
 {
-    bool profile_device = false;
-#if defined(PROFILER)
-    const char *TT_METAL_DEVICE_PROFILER = std::getenv("TT_METAL_DEVICE_PROFILER");
-    if (TT_METAL_DEVICE_PROFILER != nullptr && TT_METAL_DEVICE_PROFILER[0] == '1')
-    {
-        profile_device = true;
-    }
-#endif
-    return profile_device;
+    return tt::llrt::OptionsG.get_profiler_enabled();
 }
 
 }  // namespace tt_metal

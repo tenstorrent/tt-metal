@@ -52,9 +52,7 @@ using WorkerCore = tt_cxy_pair;
 using WorkerCores = std::vector<WorkerCore>;
 using CircularBufferConfigVec = std::vector<uint32_t>;
 
-// made these free functions -- they're copy/paste of the member functions
-// TODO: clean-up epoch_loader / epoch_binary -- a bunch of functions there should not be member functions
-ll_api::memory get_risc_binary(string path, chip_id_t chip_id, bool fw_build);
+ll_api::memory get_risc_binary(string path);
 uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id);
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset

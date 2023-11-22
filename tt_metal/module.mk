@@ -30,7 +30,7 @@ TT_METAL_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_SRCS:.cpp=.d))
 # Each module has a top level target as the entrypoint which must match the subdir name
 tt_metal: $(TT_METAL_LIB) tools
 
-TT_METAL_AND_DEPS_OBJS = $(COMMON_OBJS) $(TT_METAL_OBJS) $(DEVICE_OBJS) $(TT_METAL_IMPL_OBJS) $(TT_METAL_DETAIL_OBJS) $(LLRT_OBJS) $(BUILD_KERNELS_FOR_RISCV_OBJS) $(PROFILER_OBJS) $(TRACY_OBJS)
+TT_METAL_AND_DEPS_OBJS = $(COMMON_OBJS) $(TT_METAL_OBJS) $(DEVICE_OBJS) $(TT_METAL_IMPL_OBJS) $(TT_METAL_DETAIL_OBJS) $(LLRT_OBJS) $(JIT_BUILD_OBJS) $(PROFILER_OBJS) $(TRACY_OBJS)
 
 ifeq ($(TT_METAL_CREATE_STATIC_LIB), 1)
 # If production build, release all of tt_metal as a full static library for later build with Eager wheel

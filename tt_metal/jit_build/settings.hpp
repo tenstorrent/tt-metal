@@ -9,17 +9,18 @@
 #include "hostdevcommon/kernel_structs.h"
 #include "hlk_desc.hpp"
 
-namespace tt
+namespace tt::tt_metal
 {
 
-class build_kernel_for_riscv_options_t
-{
+class JitBuildEnv;
+
+class JitBuildOptions {
     public:
 
     // general config
-    int device_id;
+    const JitBuildEnv& build_env;
     std::string name;
-    const std::string outpath;
+    std::string path;
 
     // HLK config
     tt::tt_hlk_desc hlk_desc;
@@ -36,15 +37,13 @@ class build_kernel_for_riscv_options_t
     // ERISC config
     std::string erisc_kernel_file_name;
 
-    bool fw_build_;
-
     std::map<std::string, std::string> hlk_defines; // preprocessor defines for HLK
     std::map<std::string, std::string> ncrisc_defines;
     std::map<std::string, std::string> brisc_defines;
     std::map<std::string, std::string> erisc_defines;
 
-    build_kernel_for_riscv_options_t(int device_id);
-    build_kernel_for_riscv_options_t(int device_id, std::string name);
+    JitBuildOptions(const JitBuildEnv& env);
+    void set_name(const std::string& name);
 
     void set_hlk_file_name_all_cores(std::string file_name) ;
     void set_hlk_math_fidelity_all_cores(MathFidelity math_fidelity) ;
@@ -55,22 +54,5 @@ class build_kernel_for_riscv_options_t
     // old API name
     void set_hlk_operand_dataformat_all_cores(HlkOperand op_id, DataFormat data_format);
 };
-
-// TODO: llrt needs these but doesn't link against build_kernels_for_riscv.cpp
-inline const std::string get_compile_outpath() {
-    return tt::utils::get_root_dir() + "/built/";
-}
-
-inline const std::string get_device_compile_outpath(int device_id) {
-    return tt::utils::get_root_dir() + "/built/" + std::to_string(device_id) + "/";
-}
-
-inline const std::string get_firmware_compile_outpath(int device_id) {
-    return tt::utils::get_root_dir() + "/built/" + std::to_string(device_id) + "/firmware/";
-}
-
-inline const std::string get_kernel_compile_outpath(int device_id) {
-    return tt::utils::get_root_dir() + "/built/" + std::to_string(device_id) + "/kernels/";
-}
 
 } // end namespace tt

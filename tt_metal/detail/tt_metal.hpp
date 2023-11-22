@@ -278,8 +278,7 @@ namespace tt::tt_metal{
         }
 
         inline void GenerateDeviceHeaders(Device *device,
-                                          build_kernel_for_riscv_options_t *build_options,
-                                          const std::string &op_path_suffix)
+                                          const std::string &path)
         {
             // Basic Allocator generates number of banks which may not be power of 2, so we could just pad and alias for now
             const size_t num_dram_banks = device->num_banks(BufferType::DRAM);
@@ -303,8 +302,7 @@ namespace tt::tt_metal{
 
             // Generate header file in proper location
             generate_bank_to_noc_coord_descriptor (
-                build_options,
-                op_path_suffix,
+                path,
                 soc_d.grid_size,
                 dram_noc_coord_per_bank,
                 dram_offsets_per_bank,
@@ -337,8 +335,7 @@ namespace tt::tt_metal{
             }
 
             generate_noc_addr_ranges_header(
-                build_options,
-                op_path_suffix,
+                path,
                 pcie_chan_base_addr,
                 pcie_chan_end_addr - pcie_chan_base_addr,
                 0,

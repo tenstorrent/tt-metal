@@ -24,13 +24,13 @@ namespace tt::tt_metal {
 namespace{
     std::atomic<bool> enable_persistent_kernel_cache = false;
 
-    void GenerateBinaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix, Kernel *kernel) {
+    void GenerateBinaries(Device *device, JitBuildOptions& build_options, Kernel *kernel) {
         ZoneScoped;
         const std::string tracyPrefix = "GenerateBinaries_";
-        ZoneName( (tracyPrefix + op_path_suffix).c_str(), op_path_suffix.length() + tracyPrefix.length());
+        ZoneName( (tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
         try {
-            generate_descriptors(build_options, op_path_suffix, device->arch());
-            kernel->generate_binaries(device, build_options, op_path_suffix);
+            generate_descriptors(device->build_env(), build_options);
+            kernel->generate_binaries(device, build_options);
         } catch (std::runtime_error &ex) {
             TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
         }
@@ -42,9 +42,10 @@ namespace{
     #endif
 
     size_t KernelCompileHash(
-        Kernel *kernel, build_kernel_for_riscv_options_t &build_options, const chip_id_t &device_id) {
+        Kernel *kernel, JitBuildOptions &build_options, const chip_id_t &device_id) {
         // Account for device id in hash because generated headers are dependent on harvesting config, which can differ per device
         // This can be removed with https://github.com/tenstorrent-metal/tt-metal/issues/3381
+
         string compile_hash_str = fmt::format(
             "{}_{}_{}",
             device_id,
@@ -532,7 +533,7 @@ void Program::construct_core_range_set_for_worker_cores() {
 }
 
 void Program::set_cb_data_fmt(
-    Device *device, Kernel *kernel, build_kernel_for_riscv_options_t &build_options) const {
+    Device *device, Kernel *kernel, JitBuildOptions &build_options) const {
     ZoneScoped;
     for (auto logical_cr : kernel->logical_coreranges()) {
         auto cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
@@ -566,35 +567,35 @@ void Program::compile( Device * device )
     detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("CompileProgram");
     bool profile_kernel = getDeviceProfilerState();
     std::vector<std::future<void>> events;
-    TT_FATAL(
-        !(profile_kernel && tt_is_print_server_running()), "Debug print server is running, profiling is not allowed");
     tt_set_profiler_state_for_debug_print(profile_kernel);
 
     // compile all kernels in parallel
     for (Kernel * kernel : kernels_) {
         events.emplace_back ( detail::async ( [kernel, device, this] {
-            build_kernel_for_riscv_options_t build_options(device->id(), kernel->name());
             ZoneScoped;
 
+            JitBuildOptions build_options(device->build_env());
             kernel->set_build_options(build_options);
             this->set_cb_data_fmt(device, kernel, build_options);
 
             auto kernel_hash = KernelCompileHash(kernel, build_options, device->id());
-            std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash);
+            std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
+            kernel->set_full_name(kernel_path_suffix);
+            build_options.set_name(kernel_path_suffix);
 
             bool cache_hit = true;
-            bool path_exists = std::filesystem::exists(build_options.outpath + kernel_path_suffix);
+            bool path_exists = std::filesystem::exists(build_options.path);
             if ( enable_persistent_kernel_cache && path_exists ) {
                 if ( not detail::HashLookup::inst().exists(kernel_hash) ) detail::HashLookup::inst().add(kernel_hash);
             } else if ( detail::HashLookup::inst().add(kernel_hash) ) {
                 cache_hit = false;
-                GenerateBinaries(device, &build_options, kernel_path_suffix, kernel);
+                GenerateBinaries(device, build_options, kernel);
             }
             if (detail::CompilationReporter::enabled()) {
                 detail::CompilationReporter::inst().add_kernel_compile_stats(*this, kernel, cache_hit, kernel_hash);
             }
 
-            kernel->set_binary_path(kernel_path_suffix);
+            kernel->set_binary_path(build_options.path);
         } ) );
     }
 
@@ -602,7 +603,7 @@ void Program::compile( Device * device )
         f.wait();
 
     for (Kernel * kernel : kernels_) {
-        events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device->id()); }));
+        events.emplace_back ( detail::async ( [kernel, device] { kernel->read_binaries(device); }));
     }
 
     for (auto & f : events)

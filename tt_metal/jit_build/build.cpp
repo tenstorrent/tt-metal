@@ -14,7 +14,6 @@
 #include "dev_mem_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "tools/profiler/profiler_state.hpp"
-#include "llrt/rtoptions.hpp"
 
 #include "noc/noc_parameters.h"
 
@@ -23,704 +22,317 @@ using namespace tt;
 
 namespace tt::tt_metal {
 
-std::string RISCID_to_string(RISCID id) {
-    switch (id) {
-        case NC: return "NC";
-        case BR: return "BR";
-        case TR0: return "TR0";
-        case TR1: return "TR1";
-        case TR2: return "TR2";
-        case ER: return "ER";
-        default: TT_ASSERT(false);
+static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
+    switch (arch) {
+        case tt::ARCH::GRAYSKULL: return "grayskull"; break;
+        case tt::ARCH::WORMHOLE: return "wormhole"; break;
+        case tt::ARCH::WORMHOLE_B0: return "wormhole"; break;
+        default: return "invalid"; break;
     }
-    return string();
 }
 
-struct CompileState {
-    RISCID           hwthread               { RISCID::NC }; // 0=NC, 1=UNPACK, BR=4, ER=5
-    uint32_t         perf_dump_level        { 0 };
-    uint32_t         noc_index              { 0 };
-    bool             profile_kernel         { false };
-    vector<uint32_t> compile_time_args;
-    string           kernel_inc;
-    ARCH             arch                   { ARCH::GRAYSKULL };
-    map<std::string, std::string> kernel_defines;
-    string home_;
-    string gpp_           { "/tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++ " };
-    string gcc_           { "/tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-gcc " }; // TODO(AP): this wasn't really necessary for assembler
-    string objcopy_       { "/tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-objcopy " };
-    int device_id;
-    string kernel_subdir_;
-    string thread_bin_subdir;
-    string log_file;
-    bool is_fw_build_;
-
-    CompileState(RISCID risc_id,
-                 const string& in_kernel_subdir,
-                 tt::build_kernel_for_riscv_options_t* build_opts) {
-
-        is_fw_build_ = build_opts->fw_build_;
-        home_ = tt::utils::get_root_dir();
-        if (home_.back() != '/')
-            home_.push_back('/');
-        kernel_subdir_ = build_opts->outpath + in_kernel_subdir;
-        device_id = build_opts->device_id;
-        gpp_ = home_ + gpp_;
-        gcc_ = home_ + gcc_;
-        objcopy_ = home_ + objcopy_;
-
-        // this is in the top-level outdir because "/ncrisc" is deleted by make clean, but we log the output of make clean as well
-        log_file = fs::absolute(kernel_subdir_).string() + "/risc_build_" + RISCID_to_string(risc_id) + ".log";
-        utils::create_file(log_file);
-
-        switch (risc_id) {
-            case RISCID::NC: thread_bin_subdir = "/ncrisc/"; break;
-            case RISCID::BR: thread_bin_subdir = "/brisc/"; break;
-            case RISCID::TR0: thread_bin_subdir = "/tensix_thread0/"; break;
-            case RISCID::TR1: thread_bin_subdir = "/tensix_thread1/"; break;
-            case RISCID::TR2: thread_bin_subdir = "/tensix_thread2/"; break;
-            case RISCID::ER: thread_bin_subdir = "/erisc/"; break;
-        }
-    }
-
-    ~CompileState() {
-    }
-
-    bool is_trisc() const { return (hwthread >= RISCID::TR0) && (hwthread <= RISCID::TR2); }
-    bool is_brisc() const { return hwthread == RISCID::BR; }
-    bool is_ncrisc() const { return hwthread == RISCID::NC; }
-    bool is_erisc() const { return hwthread == RISCID::ER; }
-
-    string generate_includes() const {
-        vector<string> includes; // relative to home_
-        vector<string> includes_abs; // absolute
-        if (is_trisc()) {
-            // TODO(AP): allocating the vec every time is suboptimal
-            includes = move(vector<string>({
-                "",
-                "tt_metal/include",
-                "tt_metal/hw/ckernels/" + get_string_lowercase(arch) + "/inc",
-                "tt_metal/hw/ckernels/" + get_string_lowercase(arch) + "/llk_lib",
-                "tt_metal/hw/ckernels/" + get_string_lowercase(arch) + "/common/inc",
-                "tt_metal/third_party/sfpi/include",
-                "tt_metal/hw/inc",
-                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/noc",
-                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch),
-                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
-                "tt_metal",
-                "tt_metal/third_party/umd/device/" + get_string_aliased_arch_lowercase(arch),
-            }));
-            includes_abs.push_back(kernel_subdir_);
-        } else if (is_brisc() || is_ncrisc()) {
-            includes = move(vector<string>({
-                "",
-                "tt_metal/include",
-                "tt_metal/hw/ckernels/" + get_string_lowercase(arch) + "/common/inc", // XXXX TODO(PGK) remove this dependency
-                "tt_metal/hw/inc",
-                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch),
-                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
-                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/noc",
-                "tt_metal/hw/firmware/src",
-                "tt_metal",
-                "tt_metal/third_party/umd/device/" + get_string_aliased_arch_lowercase(arch)}
-            ));
-            if (is_brisc()) {
-                includes_abs.push_back(kernel_subdir_ + "/brisc");
-            } else {
-                includes_abs.push_back(kernel_subdir_ + "/ncrisc");
-            }
-        } else if (is_erisc()) {
-            includes = move(vector<string>({
-                "",
-                "tt_metal/include",
-                "tt_metal/hw/inc",
-                "tt_metal/hw/inc/ethernet",
-                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch),
-                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines",
-                "tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/noc",
-                "tt_metal/hw/firmware/src",
-                "tt_metal",
-                "tt_metal/third_party/umd/device/" + get_string_aliased_arch_lowercase(arch)}
-            ));
-            includes_abs.push_back(kernel_subdir_ + "/erisc");
-        }
-
-        string result = "";
-        for (auto s: includes)
-            result += " -I" + home_ + s; // convert to absolute path
-        for (auto s: includes_abs)
-            result += " -I" + s; // already absolute path
-        result += " ";
-
-        // TODO(AP): this seems odd, Makefile had both relative iquote and absolute
-        // in general this first pass conversion to c++ compiler driver just replicates the Makefile cmdlines verbatim
-        // but it looks like a lot of the include paths in the original Makefile were intermixed in unintended ways
-        vector<string> iquote_includes_abs;
-        if (is_brisc() || is_ncrisc()) {
-            iquote_includes_abs.push_back("/tt_metal/hw/inc");
-            iquote_includes_abs.push_back("/tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/");
-            iquote_includes_abs.push_back("/tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/" + get_string_lowercase(arch) + "_defines/");
-            if (!is_ncrisc()) // TODO(AP): cleanup, looks like some quirk of original Makefile
-                iquote_includes_abs.push_back("/tt_metal/hw/inc/" + get_string_aliased_arch_lowercase(arch) + "/noc/");
-        }
-        for (auto s: iquote_includes_abs)
-            result += " -iquote " + home_ + s;
-
-        vector<string> iquote_includes;
-        if (is_trisc()) {
-            iquote_includes.push_back("tt_metal/hw/");
-            iquote_includes.push_back(".");
-        } else if (is_brisc() || is_ncrisc()) {
-            iquote_includes.push_back(".");
-        }
-        for (auto s: iquote_includes)
-            result += " -iquote " + s;
-        return result;
-    }
-
-    string generate_gpp_options(bool is_asm) const {
-
-        string options_string;
-
-        if (arch == tt::ARCH::GRAYSKULL) {
-            options_string = " -mgrayskull -march=rv32iy -mtune=rvtt-b1 ";
-        } else if (arch == tt::ARCH::WORMHOLE_B0) {
-            options_string = " -mwormhole -march=rv32imw -mtune=rvtt-b1 ";
-        } else {
-            TT_ASSERT(false, "Invalid arch");
-        }
-
-        options_string +=
-            "-mabi=ilp32 \"-m" + get_string_aliased_arch_lowercase(arch) + "\" -flto -ffast-math -g -Wall -Werror";
-        if (!is_asm) // TODO(AP): wasn't necessary to split for assembler
-            options_string +=
-                " -std=c++17 -Wno-unknown-pragmas -fno-use-cxa-atexit "
-                " -Wno-error=multistatement-macros -Wno-error=parentheses "
-                " -Wno-error=unused-but-set-variable -Wno-unused-variable -fno-exceptions ";
-        string result = "";
-        switch  (hwthread) {
-            case RISCID::NC:
-                result += " -Os";
-            break;
-            case RISCID::BR:
-                result += " -Os";
-                result += " -fno-tree-loop-distribute-patterns";
-            break;
-            case RISCID::ER:
-                result += " -Os";
-                result += " -fno-delete-null-pointer-checks";
-            break;
-            default:
-                //result += " -finline-limit=1 --no-inline -fno-inline-functions -fno-inline-small-functions -fno-inline-functions-called-once ";
-                result += " -O3";
-            break;
-        }
-        result += options_string;
-        return result;
-    }
-
-    string generate_defines() const {
-        string result = "";
-        string arch_define = "";
-        switch (arch) {
-            case ARCH::GRAYSKULL:
-                arch_define = " -DARCH_GRAYSKULL";
-                break;
-            case ARCH::WORMHOLE:
-            case ARCH::WORMHOLE_B0:
-                arch_define = " -DARCH_WORMHOLE";
-                break;
-            default:
-                break;
-        }
-        switch (hwthread) {
-            case RISCID::NC:
-                result += " -DCOMPILE_FOR_NCRISC ";
-                result += arch_define;
-            break;
-            case RISCID::TR0:
-                result += " -DUCK_CHLKC_UNPACK ";
-                result += " -DNAMESPACE=chlkc_unpack ";
-                result += " -DCOMPILE_FOR_TRISC=0 ";
-                result += arch_define;
-            break;
-            case RISCID::TR1:
-                result += " -DUCK_CHLKC_MATH ";
-                result += " -DNAMESPACE=chlkc_math ";
-                result += " -DCOMPILE_FOR_TRISC=1 ";
-                result += arch_define;
-            break;
-            case RISCID::TR2:
-                result += " -DUCK_CHLKC_PACK ";
-                result += " -DNAMESPACE=chlkc_pack ";
-                result += " -DCOMPILE_FOR_TRISC=2 ";
-                result += arch_define;
-            break;
-            case RISCID::BR:
-                result += " -DCOMPILE_FOR_BRISC ";
-                result += arch_define;
-            break;
-            case RISCID::ER:
-                result += " -DCOMPILE_FOR_ERISC ";
-                result += " -DERISC ";
-                result += " -DRISC_B0_HW ";
-                // result += "-DLOAD_ERISC_IRAM";
-            break;
-            default: break;
-        }
-
-        if (is_ncrisc() or is_brisc()) {
-            for (const auto &[def, val]: kernel_defines) {
-                result += " -D" + def + "=" + val + " ";
-            }
-        }
-
-        if (perf_dump_level != 0 || is_trisc()) // TODO(AP): double check
-            result += " -DPERF_DUMP_LEVEL=" + to_string(perf_dump_level);
-        result += " -DTENSIX_FIRMWARE";
-        if (is_fw_build_) {
-            result += " -DFW_BUILD";
-        } else {
-            result += " -DKERNEL_BUILD";
-        }
-        if (profile_kernel) {
-            result += " -DPROFILE_KERNEL=1";
-        }
-        for (int j = 0; j < compile_time_args.size(); j++)
-            result += " -DKERNEL_COMPILE_TIME_ARG_" + to_string(j) + "=" + to_string(compile_time_args[j]);
-        if (!is_trisc())
-            result += " -DNOC_INDEX=" + to_string(noc_index);
-        if (std::getenv("TT_METAL_WATCHER") != nullptr) {
-            result += " -DWATCHER_ENABLED";
-        }
-        if (tt::llrt::OptionsG.get_dprint_enabled()) {
-            if (profile_kernel) {
-                TT_THROW("Cannot enable debug printing and profiling");
-            }
-            result += " -DDEBUG_PRINT_ENABLED";
-        }
-
-        result += " -DLOCAL_MEM_EN=0 ";
-
-        return result;
-    }
-
-    string get_compile_cmd(const string& hwthread_name, const string& obj_name, const string& cpp_name) const
-    {
-        string gpp_str;
-        bool is_asm = (cpp_name.find(".S") != std::string::npos);
-        if (is_asm) // TODO(AP): wasn't necessary to split for assembler
-            gpp_str = gcc_;
-        else
-            gpp_str = gpp_;
-
-        gpp_str += generate_gpp_options(is_asm);
-        gpp_str += generate_includes();
-        gpp_str += generate_defines();
-        gpp_str += "-c -o " + kernel_subdir_ + hwthread_name + obj_name + " " + cpp_name;
-        return gpp_str;
-    }
-
-    vector<string> get_verilog_cmd(const string& elfname) const {
-        string hk = kernel_subdir_ + thread_bin_subdir;
-        string result = objcopy_ + " -O verilog " + hk + elfname + ".elf " + hk + elfname + ".hex.tmp";
-        vector<string> results;
-        results.push_back(result);
-        result = string("python3 ") + home_ + "tt_metal/hw/toolchain/hex8tohex32.py " + hk+elfname+".hex.tmp" + " " + hk+elfname + ".hex";
-        results.push_back(result);
-        return results;
-    }
-
-    string get_weaken_cmd(const string& elfname) const {
-        // Given this elf (A) and a later elf (B)
-        // Weakens symbols in A so that it can be used as a "library" for B.
-        // B imports A's weakened symbols, B's symbols of the same name don't
-        // result in duplicate symbols but B can reference A's symbols.
-        // Force the fw_export symbols to remain strong so to propogate link
-        // addresses
-        string hk = kernel_subdir_ + thread_bin_subdir;
-        return objcopy_ +
-            " --wildcard --weaken-symbol \"*\" --weaken-symbol \"!__fw_export_*\" " +
-            hk + elfname + ".elf " + hk + elfname + "_weakened.elf";
-    }
-
-    vector<string> get_link_cmd(const vector<string>& obj_names) const
-    {
-        string linkopts;
-
-        if (arch == tt::ARCH::GRAYSKULL) {
-            linkopts = " -mgrayskull -march=rv32iy -mtune=rvtt-b1 ";
-        } else if (arch == tt::ARCH::WORMHOLE_B0) {
-            linkopts = " -mwormhole -march=rv32imw -mtune=rvtt-b1 ";
-        } else {
-            TT_ASSERT(false, "Invalid arch");
-        }
-
-        linkopts += "-mabi=ilp32 -m" + get_string_aliased_arch_lowercase(arch) + " -flto -ffast-math"
-                          " -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 "
-                          " -nostartfiles -g";
-
-        string elfname;
-        switch (hwthread) {
-            case RISCID::NC:
-                elfname = "ncrisc";
-            break;
-            case RISCID::BR:
-                elfname = "brisc";
-            break;
-            case RISCID::TR0:
-                elfname = "tensix_thread0";
-            break;
-            case RISCID::TR1:
-                elfname = "tensix_thread1";
-            break;
-            case RISCID::TR2:
-                elfname = "tensix_thread2";
-            break;
-            case RISCID::ER:
-                elfname = "erisc";
-            break;
-            default: TT_ASSERT(false); break;
-        }
-
-        if (is_trisc()) {
-            linkopts += " -fno-exceptions"; // TODO(AP): odd that this was not present for brisc in the Makefile
-        } else if (is_brisc()) {
-            // TODO(AP): not on ncrisc, why?
-            linkopts += " -fno-tree-loop-distribute-patterns";
-        }
-        if (!is_fw_build_) {
-            string weakened_elf_name = tt::get_firmware_compile_outpath(device_id) + elfname + "/" + elfname + "_weakened.elf";
-            if (!fs::exists(weakened_elf_name)) {
-                TT_THROW("File {} does not exist, link failed\n", weakened_elf_name);
-            }
-            linkopts += " -Xlinker \"--just-symbols=" + weakened_elf_name + "\"";
-        }
-
-        if (getenv("TT_METAL_KERNEL_MAP") != nullptr) {
-            linkopts += " -Wl,-Map=" + kernel_subdir_ + thread_bin_subdir + "linker.map";
-        }
-
-        string hk = string(" ") + kernel_subdir_;
-        string link_str = gpp_;
-        link_str += linkopts;
-        switch  (hwthread) {
-            case RISCID::NC:
-            link_str += " -Os";
-            link_str += " -T" + home_ + "build/hw/toolchain/ncrisc.ld "; break;
-            case RISCID::TR0:
-            link_str += " -O3";
-            link_str += " -T" + home_ + "build/hw/toolchain/trisc0.ld "; break;
-            case RISCID::TR1:
-            link_str += " -O3";
-            link_str += " -T" + home_ + "build/hw/toolchain/trisc1.ld "; break;
-            case RISCID::TR2:
-            link_str += " -O3";
-            link_str += " -T" + home_ + "build/hw/toolchain/trisc2.ld "; break;
-            case RISCID::ER:
-            link_str += " -Os";
-            // TODO: change to build ld
-            link_str += " -L" + home_ + "/tt_metal/hw/toolchain ";
-            link_str += " -T" + home_ + "tt_metal/hw/toolchain/erisc-b0-app.ld "; break;
-            default:
-            TT_ASSERT(hwthread == RISCID::BR);
-            link_str += " -Os";
-            link_str += " -T" + home_ + "build/hw/toolchain/brisc.ld "; break;
-        }
-        for (auto oname: obj_names)
-            link_str += hk + thread_bin_subdir + oname;
-
-        // add -o target.elf
-        link_str += " -o " + hk + thread_bin_subdir + elfname + ".elf";
-        return vector<string>({link_str, elfname});
-    }
-};
-
-static CompileState pre_compile_for_risc(
-    RISCID risc_id,
-    tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
-    const std::string &out_dir_path,
-    const std::string& arch_name,
-    const std::uint8_t noc_index,
-    const std::vector<std::uint32_t>& kernel_compile_time_args)
+JitBuildEnv::JitBuildEnv()
 {
-    ZoneScoped;
-
-    // default ARCH_NAME is grayskull in Makefile
-    TT_ASSERT( (arch_name.compare("grayskull") == 0) || (arch_name.compare("wormhole") == 0) || (arch_name.compare("wormhole_b0") == 0) );
-
-    log_trace(tt::LogBuildKernels, "Compiling RISCID={}", risc_id);
-
-    CompileState ctx(risc_id, out_dir_path, build_kernel_for_riscv_options);
-    string kernel_dir = ctx.kernel_subdir_ + "/" + ctx.thread_bin_subdir;
-    fs::create_directories(kernel_dir);
-    ctx.hwthread = risc_id;
-    ctx.arch = get_arch_from_string(arch_name);
-
-    // Only modifying dataflow paths, we can make a separate
-    // isuue for the compute paths
-    if (ctx.is_brisc()) {
-        ctx.kernel_defines = build_kernel_for_riscv_options->brisc_defines;
-    } else if (ctx.is_ncrisc()) {
-        ctx.kernel_defines = build_kernel_for_riscv_options->ncrisc_defines;
-    }
-
-    ctx.is_fw_build_ = build_kernel_for_riscv_options->fw_build_;
-    ctx.noc_index = noc_index;
-    ctx.profile_kernel = tt::tt_metal::getDeviceProfilerState();
-    ctx.compile_time_args = kernel_compile_time_args;
-    ctx.kernel_inc = fs::absolute(kernel_dir).string();
-
-    // copy the NCRISC/BRISC kernel to that directory, w/a generic filename kernel.cpp (this is what ncrisc.cc includes)
-    // Note that for TRISCS this is not needed because they are currently generated in a previous pass and included
-    // indirectly from ckernel_main.cc
-    // ckernel_main.cc then includes "chlkc_list.h" which in turn includes one of previously generated cpps for each trisc thread
-    string kernel_file_name;
-    if (!ctx.is_fw_build_) {
-        if (ctx.is_ncrisc()) {
-            kernel_file_name = build_kernel_for_riscv_options->ncrisc_kernel_file_name;
-            fs::copy(ctx.home_+ kernel_file_name, kernel_dir + "/kernel.cpp", fs::copy_options::overwrite_existing);
-        } else if (ctx.is_brisc()) {
-            kernel_file_name = build_kernel_for_riscv_options->brisc_kernel_file_name;
-            fs::copy(ctx.home_+ kernel_file_name, kernel_dir + "/kernel.cpp", fs::copy_options::overwrite_existing);
-        } else if (ctx.is_erisc()) {
-            kernel_file_name = build_kernel_for_riscv_options->erisc_kernel_file_name;
-            fs::copy(ctx.home_+ kernel_file_name, kernel_dir + "/kernel.cpp", fs::copy_options::overwrite_existing);
-        }
-
-        // copy unpack/pack data formats to the kernel dir
-        if (fs::exists(ctx.kernel_subdir_ + "/chlkc_unpack_data_format.h")) {
-            fs::copy(ctx.kernel_subdir_ + "/chlkc_unpack_data_format.h", kernel_dir, fs::copy_options::overwrite_existing);
-            fs::copy(ctx.kernel_subdir_ + "/chlkc_pack_data_format.h", kernel_dir, fs::copy_options::overwrite_existing);
-        }
-    }
-
-    return ctx;
 }
 
-static void build_failure(RISCID thread,
-                          string op,
-                          string cmd,
-                          string logfile)
+void JitBuildEnv::init(uint32_t device_id, tt::ARCH arch)
 {
-    string thread_name = RISCID_to_string(thread);
-    log_info(tt::LogBuildKernels, "{}RISC {} failure -- cmd: {}", thread_name, op, cmd);
-    string cat = "cat " + logfile;
-    // XXXX PGK(TODO) not portable
-    if (system(cat.c_str())) {
-        TT_THROW("Failed system comand {}", cat);
+    // Paths
+    this->root_ = llrt::OptionsG.get_root_dir();
+    this->out_root_ = this->root_ + "built/";
+    this->arch_ = arch;
+    this->arch_name_ = get_string_lowercase(arch);
+    this->aliased_arch_name_ = get_string_aliased_arch_lowercase(arch);
+
+    this->out_firmware_root_ = this->out_root_ + to_string(device_id) + "/firmware/";
+    this->out_kernel_root_ = this->out_root_ + to_string(device_id) + "/kernels/";
+
+    // Tools
+    this->gpp_ = this->root_ + "tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
+    this->objcopy_ = this->root_ + "tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-objcopy ";
+    this->hex8tohex32_ = string("python3 ") + this->root_ + "tt_metal/hw/toolchain/hex8tohex32.py ";
+
+    // Flags
+    string common_flags;
+    switch (arch) {
+    case ARCH::GRAYSKULL:
+        common_flags = "-mgrayskull -march=rv32iy -mtune=rvtt-b1 -mabi=ilp32 ";
+        break;
+    case ARCH::WORMHOLE_B0:
+        common_flags = "-mwormhole -march=rv32imw -mtune=rvtt-b1 -mabi=ilp32 ";
+        break;
+    default:
+        TT_ASSERT(false, "Invalid arch");
+        break;
     }
-    TT_THROW("{}RISC build failed", thread_name);
+    common_flags += "-std=c++17 -g -flto -ffast-math ";
+    this->cflags_ = common_flags;
+    this->cflags_ +=
+        "-fno-use-cxa-atexit -fno-exceptions "
+        "-Wall -Werror -Wno-unknown-pragmas "
+        "-Wno-error=multistatement-macros -Wno-error=parentheses "
+        "-Wno-error=unused-but-set-variable -Wno-unused-variable ";
+
+    // Defines
+    switch (arch) {
+    case ARCH::GRAYSKULL:
+        this->defines_ = "-DARCH_GRAYSKULL ";
+        break;
+    case ARCH::WORMHOLE_B0:
+        this->defines_ = "-DARCH_WORMHOLE ";
+        break;
+    default:
+        break;
+    }
+    this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
+
+    if (tt::tt_metal::getDeviceProfilerState()) {
+        this->defines_ += "-DPROFILE_KERNEL=1 ";
+    }
+
+    if (tt::llrt::OptionsG.get_watcher_enabled()) {
+        this->defines_ += "-DWATCHER_ENABLED ";
+    }
+
+    if (tt::llrt::OptionsG.get_dprint_enabled()) {
+        this->defines_ += "-DDEBUG_PRINT_ENABLED ";
+    }
+
+    // Includes
+    // TODO(pgk) this list is insane
+    this->includes_ = string("") +
+        "-I. " +
+        "-I.. " +
+        "-I" + this->root_ + " " +
+        "-I" + this->root_ + "tt_metal " +
+        "-I" + this->root_ + "tt_metal/include " +
+        "-I" + this->root_ + "tt_metal/hw/inc " +
+        "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + " " +
+        "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines " +
+        "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc " +
+        "-I" + this->root_ + "tt_metal/third_party/umd/device/" + this->arch_name_ + " " + // TODO(fixme)
+        "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/common/inc "; // TODO(fixme) datamovement fw shouldn't read this
+
+    this->lflags_ = common_flags;
+    this->lflags_ += "-fno-exceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
 }
 
-static void compile_for_risc(
-    RISCID risc_id,
-    tt::build_kernel_for_riscv_options_t* build_opts,
-    const CompileState& ctx) {
-    ZoneScoped;
-
-    struct build_files_t {
-        const vector<string> cpps, objs;
-    };
-    static const build_files_t bf[4][2] = {
-        {   // ncrisc
-            {   // kernel
-                {"ncrisck.cc", "risc_common.cc", "substitutes.cpp", "tmu-crt0k.S"},
-                {"ncrisck.o",  "risc_common.o", "substitutes.o",   "tmu-crt0k.o"},
-            },
-            {   // firmware
-                {"ncrisc.cc", "risc_common.cc", "substitutes.cpp", "ncrisc-halt.S", "tmu-crt0.S"},
-                {"ncrisc.o",  "risc_common.o", "substitutes.o",   "ncrisc-halt.o", "tmu-crt0.o"},
-            },
-        },
-        {   // trisc
-            {   // kernel
-                {"src/ckernel_template.cc", "trisck.cc",           "substitutes.cpp", "tmu-crt0k.S" },
-                {"ckernel_template.o",      "trisck.o",            "substitutes.o",   "tmu-crt0k.o" },
-            },
-            {   // firmware
-                {"trisc.cc",       "substitutes.cpp", "tmu-crt0.S" },
-                {"trisc.o",        "substitutes.o",   "tmu-crt0.o" },
-            },
-        },
-        {   // brisc
-            {   // kernel
-                {"brisck.cc", "risc_common.cc", "tdma_xmov.c", "noc.c", "substitutes.cpp", "tmu-crt0k.S"},
-                {"brisck.o",  "risc_common.o",  "tdma_xmov.o", "noc.o", "substitutes.o",   "tmu-crt0k.o"},
-            },
-            {   // firmware
-                {"brisc.cc", "risc_common.cc", "tdma_xmov.c", "noc.c", "substitutes.cpp", "tmu-crt0.S"},
-                {"brisc.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o",     "tmu-crt0.o"},
-            },
-        },
-        {   // erisc
-            {   // kernel
-                {"erisck.cc", "substitutes.cpp", "tmu-crt0k.S"},
-                {"erisck.o", "substitutes.o", "tmu-crt0k.o"},
-            },
-            {   // firmware
-                {"erisc.cc", "substitutes.cpp"},
-                {"erisc.o", "substitutes.o"},
-            },
-        },
-    };
-
-    // TODO(pgk): have the build system copy these files into a build dir w/
-    // arch at the top level below root, move below into table above
-    vector<string> cwds;
-    int risc_type = 0;
-    switch (risc_id) {
-        case RISCID::NC:
-            cwds.resize(5);
-            cwds[0] = "tt_metal/hw/firmware/src";
-            cwds[1] = "tt_metal/hw/firmware/src";
-            cwds[2] = "tt_metal/hw/toolchain";
-            cwds[3] = "tt_metal/hw/toolchain";
-            risc_type = 0;
-        break;
-        case RISCID::BR:
-            cwds.resize(6);
-            cwds[0] = "tt_metal/hw/firmware/src";
-            cwds[1] = "tt_metal/hw/firmware/src";
-            cwds[2] = "tt_metal/hw/firmware/src";
-            cwds[3] = "tt_metal/hw/firmware/src/" + get_string_aliased_arch_lowercase(ctx.arch);
-            cwds[4] = "tt_metal/hw/toolchain";
-            risc_type = 2;
-        break;
-        case RISCID::TR0:
-        case RISCID::TR1:
-        case RISCID::TR2:
-            if (build_opts->fw_build_) {
-                cwds.resize(3);
-                cwds[0] = "tt_metal/hw/firmware/src";
-                cwds[1] = "tt_metal/hw/toolchain"; // TODO(AP): refactor
-            } else {
-                cwds.resize(4);
-                cwds[0] = "tt_metal/hw/ckernels/" + get_string_lowercase(ctx.arch) + "/common";
-                cwds[1] = "tt_metal/hw/firmware/src";
-                cwds[2] = "tt_metal/hw/toolchain"; // TODO(AP): refactor
-            }
-            risc_type = 1;
-        break;
-        case RISCID::ER:
-            cwds.resize(3);
-            cwds[0] = "tt_metal/hw/firmware/src";
-            cwds[1] = "tt_metal/hw/toolchain";
-            cwds[2] = "tt_metal/hw/toolchain";
-            risc_type = 3;
-        break;
-    }
-
-    const vector<string> &cpps = bf[risc_type][build_opts->fw_build_].cpps;
-    const vector<string> &objs = bf[risc_type][build_opts->fw_build_].objs;
-
-    string pushd_cmd;
-
-    vector<thread> compile_threads;
-    for (int i = 0; i < cpps.size(); i++) {
-        if (cwds[i] != "")
-            pushd_cmd = "cd " + ctx.home_ + cwds[i] + " && ";
-        string gpp_cmd = pushd_cmd + ctx.get_compile_cmd(ctx.thread_bin_subdir, objs[i], cpps[i]);
-        auto lambda = [gpp_cmd, ctx]() {
-            log_debug(tt::LogBuildKernels, "    g++ compile cmd: {}", gpp_cmd);
-            if (!tt::utils::run_command(gpp_cmd, ctx.log_file, false)) {
-                build_failure(ctx.hwthread, "compiile", gpp_cmd, ctx.log_file);
-            }
-        };
-        std::thread t(lambda);
-        compile_threads.push_back(std::move(t));
-    }
-    for (auto& t: compile_threads) t.join();
+JitBuildState::JitBuildState(const JitBuildEnv& env, int which, bool is_fw) : env_(env), core_id_(which), is_fw_(is_fw)
+{
 }
 
-void link_for_risc(RISCID risc_id,
-                   tt::build_kernel_for_riscv_options_t* build_opts,
-                   const CompileState& ctx) {
-    ZoneScoped;
-
-    string pushd_cmd = string("cd ") + ctx.home_ + "tt_metal/hw/ckernels && "; // TODO(AP): Optimize
-
-    vector<string> bobjl, nobjl, tobjl, eobjl;
-
-    if (!build_opts->fw_build_) {
-        bobjl = {"brisck.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o", "tmu-crt0k.o"};
-        nobjl = {"ncrisck.o", "risc_common.o", "substitutes.o", "tmu-crt0k.o"};
-        tobjl = {"trisck.o", "substitutes.o", "ckernel_template.o", "tmu-crt0k.o" };
-        eobjl = {"erisck.o", "substitutes.o", "tmu-crt0k.o"};
+// Fill in common state derived from the default state set up in the constructors
+void JitBuildState::finish_init()
+{
+    if (this->is_fw_) {
+        this->defines_ += "-DFW_BUILD ";
     } else {
-        bobjl = {"brisc.o", "risc_common.o", "tdma_xmov.o", "noc.o", "substitutes.o", "tmu-crt0.o"};
-        nobjl = {"ncrisc.o", "risc_common.o", "substitutes.o", "ncrisc-halt.o", "tmu-crt0.o"};
-        tobjl = {"substitutes.o", "trisc.o", "tmu-crt0.o" };
-        eobjl = {"erisc.o", "substitutes.o"};
+        this->defines_ += "-DKERNEL_BUILD ";
     }
 
-    vector<string> objls;
-    switch (risc_id) {
-        case RISCID::NC:
-            objls = move(nobjl);
-        break;
-        case RISCID::BR:
-            objls = move(bobjl);
-        break;
-        case RISCID::TR0:
-        case RISCID::TR1:
-        case RISCID::TR2:
-            objls = move(tobjl);
-        break;
-        case RISCID::ER:
-            objls = move(eobjl);
-        break;
+    // Create the objs from the srcs
+    for (string src : srcs_) {
+        // Lop off the right side from the last "."
+        string stub = src.substr(0, src.find_last_of("."));
+        // Lop off the leading path
+        stub = stub.substr(stub.find_last_of("/") + 1, stub.length());
+        this->objs_.push_back(stub + ".o");
     }
 
-    vector<string> link = ctx.get_link_cmd(objls);
-    log_debug(tt::LogBuildKernels, "    g++ link cmd: {}", pushd_cmd + link[0]);
-    if (!tt::utils::run_command(pushd_cmd + link[0], ctx.log_file, false)) {
-        build_failure(ctx.hwthread, "link", link[0], ctx.log_file);
+    // Prepend root path to srcs, but not to outputs (objs) due to device dependency
+    for (string& src : this->srcs_) {
+        src = env_.root_ + src;
     }
 
-    pushd_cmd = string("cd ") + ctx.kernel_subdir_ + ctx.thread_bin_subdir + " && "; // TODO(AP): Optimize
-    auto verilogcmds = ctx.get_verilog_cmd(link[1]);
-    tt::utils::run_command(pushd_cmd + verilogcmds[0], ctx.log_file, false);
-    tt::utils::run_command(pushd_cmd + verilogcmds[1], ctx.log_file, false);
-
-    if (build_opts->fw_build_) {
-        string weaken_cmd = ctx.get_weaken_cmd(link[1]);
-        log_debug(tt::LogBuildKernels, "    objcopy cmd: {}", weaken_cmd);
-        if (!tt::utils::run_command(weaken_cmd, ctx.log_file, false)) {
-            TT_THROW("{}RISC objcopy failed -- cmd: {}", RISCID_to_string(ctx.hwthread), weaken_cmd);
-        }
+    // Create list of object files for link
+    for (const string& obj : this->objs_) {
+        this->link_objs_ += obj + " ";
     }
+
+    // Note the preceding slash which defies convention as this gets appended to
+    // the kernel name used as a path which doesn't have a slash
+    this->target_full_path_ = "/" + this->target_name_ + "/" + this->target_name_ + ".hex";
 }
 
-void generate_binary_for_risc(RISCID risc_id,
-    tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
-    const std::string &out_dir_path,
-    const std::string& arch_name,
-    const std::uint8_t noc_index,
-    const std::vector<std::uint32_t>& kernel_compile_time_args)
+JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bool is_fw) : JitBuildState(env, which, is_fw)
 {
+    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid data movement processor");
 
-    CompileState state = pre_compile_for_risc(
-        risc_id,
-        build_kernel_for_riscv_options,
-        out_dir_path,
-        arch_name,
-        noc_index,
-        kernel_compile_time_args);
+    this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
-    compile_for_risc(risc_id, build_kernel_for_riscv_options, state);
+    this->cflags_ = env_.cflags_ +
+        "-Os " +
+        "-fno-tree-loop-distribute-patterns "; // don't use memcpy for cpy loops
+    this->includes_ = env_.includes_ +
+        "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
 
-    link_for_risc(risc_id, build_kernel_for_riscv_options, state);
+    this->defines_ = env_.defines_;
+
+    // TODO(pgk): build these once at init into built/libs!
+    this->srcs_.push_back("tt_metal/hw/firmware/src/risc_common.cc");
+    this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
+
+    this->lflags_ = env_.lflags_ + "-Os ";
+
+    switch (this->core_id_) {
+    case 0:
+        this->target_name_ = "brisc";
+
+        this->defines_ += "-DCOMPILE_FOR_BRISC ";
+
+        this->srcs_.push_back("tt_metal/hw/firmware/src/tdma_xmov.c");
+        this->srcs_.push_back("tt_metal/hw/firmware/src/" + env_.aliased_arch_name_ + "/noc.c");
+        if (this->is_fw_) {
+            this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0.S");
+            this->srcs_.push_back("tt_metal/hw/firmware/src/brisc.cc");
+        } else {
+            this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
+            this->srcs_.push_back("tt_metal/hw/firmware/src/brisck.cc");
+        }
+
+        this->lflags_ +=
+            "-T" + env_.root_ + "build/hw/toolchain/brisc.ld ";
+
+        break;
+
+    case 1:
+        this->target_name_ = "ncrisc";
+
+        this->defines_ += "-DCOMPILE_FOR_NCRISC ";
+
+        if (this->is_fw_) {
+            this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0.S");
+            this->srcs_.push_back("tt_metal/hw/firmware/src/ncrisc.cc");
+            this->srcs_.push_back("tt_metal/hw/toolchain/ncrisc-halt.S");
+        } else {
+            this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
+            this->srcs_.push_back("tt_metal/hw/firmware/src/ncrisck.cc");
+        }
+
+        this->lflags_ +=
+            "-T" + env_.root_ + "build/hw/toolchain/ncrisc.ld ";
+
+        break;
+    }
+
+    this->process_defines_at_compile = true;
+
+    finish_init();
+}
+
+JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw) : JitBuildState(env, which, is_fw)
+{
+    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 3, "Invalid compute processor");
+
+    this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
+
+    this->cflags_ = env_.cflags_ +
+        "-O3 ";
+
+    this->defines_ = env_.defines_;
+
+    this->includes_ = env_.includes_ +
+        "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/inc " +
+        "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/llk_lib " +
+        "-I" + env_.root_ + "tt_metal/third_party/sfpi/include " +
+        "-I" + env_.root_ + "tt_metal/hw/firmware/src ";
+
+    this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
+    if (this->is_fw_) {
+        this->srcs_.push_back("tt_metal/hw/firmware/src/trisc.cc");
+        this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0.S");
+    } else {
+        this->srcs_.push_back("tt_metal/hw/ckernels/" + env_.arch_name_ + "/common/src/ckernel_template.cc");
+        this->srcs_.push_back("tt_metal/hw/firmware/src/trisck.cc");
+        this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
+    }
+
+    this->lflags_ = env_.lflags_ + "-O3 ";
+
+    switch (this->core_id_) {
+    case 0:
+        this->target_name_ = "trisc0";
+
+        this->defines_ += "-DUCK_CHLKC_UNPACK ";
+        this->defines_ += "-DNAMESPACE=chlkc_unpack ";
+        this->defines_ += "-DCOMPILE_FOR_TRISC=0 ";
+
+        this->lflags_ +=
+            "-T" + env_.root_ + "build/hw/toolchain/trisc0.ld ";
+
+        break;
+
+    case 1:
+        this->target_name_ = "trisc1";
+
+        this->defines_ += "-DUCK_CHLKC_MATH ";
+        this->defines_ += "-DNAMESPACE=chlkc_math ";
+        this->defines_ += "-DCOMPILE_FOR_TRISC=1 ";
+
+        this->lflags_ +=
+            "-T" + env_.root_ + "build/hw/toolchain/trisc1.ld ";
+
+        break;
+
+    case 2:
+        this->target_name_ = "trisc2";
+
+        this->defines_ += "-DUCK_CHLKC_PACK ";
+        this->defines_ += "-DNAMESPACE=chlkc_pack ";
+        this->defines_ += "-DCOMPILE_FOR_TRISC=2 ";
+
+        this->lflags_ +=
+            "-T" + env_.root_ + "build/hw/toolchain/trisc2.ld ";
+
+        break;
+    }
+
+    this->process_defines_at_compile = false;
+
+    finish_init();
+}
+
+JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw) : JitBuildState(env, which, is_fw)
+{
+    this->target_name_ = "erisc";
+
+    this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
+
+    this->cflags_ = env_.cflags_ + "-Os -fno-delete-null-pointer-checks ";
+
+    this->defines_ = env_.defines_ +
+        "-DCOMPILE_FOR_ERISC "
+        "-DERISC "
+        "-DRISC_B0_HW ";
+    if (this->is_fw_) {
+        this->defines_ += "-DLOADING_NOC=0 ";
+    }
+
+    this->includes_ = env_.includes_ +
+        "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
+
+    this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
+    if (this->is_fw_) {
+        this->srcs_.push_back("tt_metal/hw/firmware/src/erisc.cc");
+    } else {
+        this->srcs_.push_back("tt_metal/hw/firmware/src/erisck.cc");
+        this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
+    }
+
+    this->lflags_ = env_.lflags_ +
+        "-Os "
+        "-L" + env_.root_ + "/tt_metal/hw/toolchain "
+        "-T" + env_.root_ + "tt_metal/hw/toolchain/erisc-b0-app.ld ";
+
+    this->process_defines_at_compile = true;
+
+    finish_init();
 }
 
 //////////////////
 // TRISCs       //
 //////////////////
-void generate_data_format_descriptors(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path, const tt::ARCH arch);
-void generate_math_approx_mode_descriptor(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path);
-void generate_math_fidelity_descriptor(tt::build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path);
-
-void gen_trisc_cpp(const string& src_name, const string& dst_name, vector<string>& prolog)
+static void gen_trisc_cpp(const string& src_name, const string& dst_name, vector<string>& prolog)
 {
     std::ofstream out(dst_name);
     for (auto s: prolog)
@@ -728,26 +340,17 @@ void gen_trisc_cpp(const string& src_name, const string& dst_name, vector<string
     out << "#include \"" << src_name << "\"\n";
 }
 
-std::string gen_trisc_cpps(
-    string input_hlk_file_path,
-    tt::build_kernel_for_riscv_options_t* build_opts,
-    string out_kernel_path,
-    string device_name,
-    const std::map<std::string, std::string>& defines,
-    bool dump_perf_events,
-    bool untilize_output,
-    bool enable_cache,
-    bool pack_microblocks,
-    bool fp32_dest_acc_en
-)
+void jit_build_genfiles_triscs_src(const JitBuildEnv& env,
+                                   const JitBuildSettings& settings,
+                                   const string& input_hlk_file_path)
 {
-    string hlkc_path;
+    // Note: assumes dirs (and descriptors) already created
+    log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
-    string out_dir_path = build_opts->outpath + out_kernel_path + "/";
-    string out_file_name_base = "chlkc";
-    string unpack_base        = out_dir_path + out_file_name_base + "_unpack";
-    string math_base          = out_dir_path + out_file_name_base + "_math";
-    string pack_base          = out_dir_path + out_file_name_base + "_pack";
+    string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";;
+    string unpack_base        = out_dir + "chlkc_unpack";
+    string math_base          = out_dir + "chlkc_math";
+    string pack_base          = out_dir + "chlkc_pack";
     string unpack_cpp         = unpack_base + ".cpp";
     string unpack_llk_args_h  = unpack_base + "_llk_args.h";
     string math_cpp           = math_base + ".cpp";
@@ -765,57 +368,21 @@ std::string gen_trisc_cpps(
     pack_prolog.push_back("#define TRISC_PACK\n");
     pack_prolog.push_back("#include \"defines_generated.h\"\n");
 
+    // TODO(pgk) - is this really worth it?
     std::thread t0( [&]() { gen_trisc_cpp(input_hlk_file_path, unpack_cpp, unpack_prolog); } );
     std::thread t1( [&]() { gen_trisc_cpp(input_hlk_file_path, math_cpp, math_prolog); } );
     std::thread t2( [&]() { gen_trisc_cpp(input_hlk_file_path, pack_cpp, pack_prolog); } );
     t0.join(); t1.join(); t2.join();
 
-    string input_hlk_with_defines = input_hlk_file_path;
-    {
-        // Here we generate an auxiliary header with defines added via add_define() call
-        // this header is then included from the kernel
-        // We also append the include path to generated dir to hlkc cmldline.
-        std::ofstream gen_defines_file;
-        string generated_defines_fname = out_dir_path + "/defines_generated.h";
-        gen_defines_file.open(generated_defines_fname, std::ios_base::out);
-
-        for (auto it = defines.begin(); it != defines.end(); ++it) {
-            gen_defines_file << "#define " << it->first << " " << it->second << endl;
-        }
-
-        // this string will be returned from the function to be reused in subsequent calls
-        input_hlk_with_defines += " -I" + out_dir_path + " ";
-        hlkc_path += " " + input_hlk_with_defines;
-    }
-
-    return input_hlk_with_defines;
-}
-
-void generate_src_for_triscs(
-    tt::build_kernel_for_riscv_options_t* topts,
-    const string &out_dir_path,
-    const string& arch_name,
-    std::vector<uint32_t> kernel_compile_time_args) {
-
-    // Note: Dirs (and descriptors) must be created by a prior call of generate_descriptors()
-    // So, this call currently doesn't work in isolation
-
-    log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
-
-    string hlk_file_name = topts->hlk_desc.get_hlk_file_name();
-    auto hlk_defines = topts->hlk_defines;
-
-    gen_trisc_cpps(
-        hlk_file_name,
-        topts,
-        out_dir_path,
-        arch_name,
-        hlk_defines,
-        false, // is_perf_dump_en,
-        false, // untilize
-        false, // enable_cache,
-        false,  // pack_microblocks -- not supported
-        topts->fp32_dest_acc_en);
+    // Here we generate an auxiliary header with defines added via add_define() call
+    // this header is then included from the kernel
+    // We also append the include path to generated dir to hlkc cmldline.
+    std::ofstream gen_defines_file;
+    string generated_defines_fname = out_dir + "/defines_generated.h";
+    gen_defines_file.open(generated_defines_fname, std::ios_base::out);
+    settings.process_defines([&gen_defines_file] (const string& define, const string& value) {
+        gen_defines_file << "#define " << define << " " << value << endl;
+    });
 }
 
 std::pair<vector<DataFormat>,vector<DataFormat>> extend_unpack_data_format_vectors_to_all_cbs(const vector<DataFormat> &src_formats, const vector<DataFormat> &dst_formats) {
@@ -986,14 +553,14 @@ void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataF
     }
 }
 
-void generate_data_format_descriptors(build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path, const tt::ARCH arch) {
+void generate_data_format_descriptors(JitBuildOptions& options, const tt::ARCH arch) {
     string out_file_name_base = "chlkc_";
     string out_file_name_suffix = "_data_format.h";
-    string unpack_data_format_descs = build_kernel_for_riscv_options->outpath + out_dir_path + "/" + out_file_name_base + "unpack" + out_file_name_suffix;
-    string pack_data_format_descs = build_kernel_for_riscv_options->outpath + out_dir_path + "/" + out_file_name_base + "pack" + out_file_name_suffix;
+    string unpack_data_format_descs = options.path + out_file_name_base + "unpack" + out_file_name_suffix;
+    string pack_data_format_descs = options.path + out_file_name_base + "pack" + out_file_name_suffix;
 
     // assuming all cores within a op have the same desc
-    tt_hlk_desc& desc = build_kernel_for_riscv_options->hlk_desc;
+    tt_hlk_desc& desc = options.hlk_desc;
 
     // Determine what the packformat should be
     DataFormat pack_format =
@@ -1011,7 +578,7 @@ void generate_data_format_descriptors(build_kernel_for_riscv_options_t* build_ke
             (pack_exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
     }
 
-    if (tt::is_all_fp32_formats(desc.input_buf_dataformat_arr) && build_kernel_for_riscv_options->fp32_dest_acc_en){
+    if (tt::is_all_fp32_formats(desc.input_buf_dataformat_arr) && options.fp32_dest_acc_en){
         unpack_conditional_dst_format = DataFormat::Tf32;
     }
 
@@ -1022,10 +589,10 @@ void generate_data_format_descriptors(build_kernel_for_riscv_options_t* build_ke
         desc.intermediate_buf_dataformat_arr);
 
     vector<DataFormat> unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs;
-    tie(unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs) = generate_unpack_data_formats(desc, unpack_conditional_dst_format, build_kernel_for_riscv_options->fp32_dest_acc_en);
+    tie(unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs) = generate_unpack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en);
 
     vector<DataFormat> pack_src_formats_all_cbs, pack_dst_formats_all_cbs;
-    tie(pack_src_formats_all_cbs, pack_dst_formats_all_cbs) = generate_pack_data_formats(desc, unpack_conditional_dst_format, build_kernel_for_riscv_options->fp32_dest_acc_en, arch);
+    tie(pack_src_formats_all_cbs, pack_dst_formats_all_cbs) = generate_pack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, arch);
 
     // equalize "upack src" and "pack dst" data format vectors
     // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
@@ -1039,10 +606,10 @@ void generate_data_format_descriptors(build_kernel_for_riscv_options_t* build_ke
     emit_pack_data_formats(pack_data_format_descs, pack_src_formats_all_cbs, pack_dst_formats_all_cbs);
 }
 
-void generate_math_fidelity_descriptor(build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path) {
-    string math_fidelity_descriptor = build_kernel_for_riscv_options->outpath + out_dir_path + "/" + "chlkc_math_fidelity.h";
+void generate_math_fidelity_descriptor(JitBuildOptions& options) {
+    string math_fidelity_descriptor = options.path + "chlkc_math_fidelity.h";
     // assuming all cores within a op have the same desc
-    tt_hlk_desc& desc = build_kernel_for_riscv_options->hlk_desc;
+    tt_hlk_desc& desc = options.hlk_desc;
 
     ofstream file_stream;
 
@@ -1051,11 +618,11 @@ void generate_math_fidelity_descriptor(build_kernel_for_riscv_options_t* build_k
     file_stream.close();
 }
 
-void generate_math_approx_mode_descriptor(build_kernel_for_riscv_options_t* build_kernel_for_riscv_options, string out_dir_path) {
-    string approx_descriptor = build_kernel_for_riscv_options->outpath + out_dir_path + "/" + "chlkc_math_approx_mode.h";
+void generate_math_approx_mode_descriptor(JitBuildOptions& options) {
+    string approx_descriptor = options.path + "chlkc_math_approx_mode.h";
 
     // assuming all cores within a op have the same desc
-    tt_hlk_desc& desc = build_kernel_for_riscv_options->hlk_desc;
+    tt_hlk_desc& desc = options.hlk_desc;
 
     ofstream file_stream;
 
@@ -1174,8 +741,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     return ss.str();
 }
 void generate_bank_to_noc_coord_descriptor(
-    build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
-    string out_dir_path,
+    const string& path,
     tt_xy_pair grid_size,
     std::vector<CoreCoord>& dram_bank_map,
     std::vector<int32_t>& dram_bank_offset_map,
@@ -1184,18 +750,16 @@ void generate_bank_to_noc_coord_descriptor(
 ) {
     string output_string = generate_bank_to_noc_coord_descriptor_string(grid_size, dram_bank_map, dram_bank_offset_map, l1_bank_map, l1_bank_offset_map);
 
-    string full_path = build_kernel_for_riscv_options->outpath;
-    full_path += out_dir_path;
-    fs::create_directories(full_path + "/brisc");
-    ofstream file_stream_br(full_path + "/brisc/generated_bank_to_noc_coord_mapping.h");
+    fs::create_directories(path + "/brisc");
+    ofstream file_stream_br(path + "/brisc/generated_bank_to_noc_coord_mapping.h");
     file_stream_br << output_string;
     file_stream_br.close();
-    fs::create_directories(full_path + "/ncrisc");
-    ofstream file_stream_nc(full_path + "/ncrisc/generated_bank_to_noc_coord_mapping.h");
+    fs::create_directories(path + "/ncrisc");
+    ofstream file_stream_nc(path + "/ncrisc/generated_bank_to_noc_coord_mapping.h");
     file_stream_nc << output_string;
     file_stream_nc.close();
-    fs::create_directories(full_path + "/erisc");
-    ofstream file_stream_ec(full_path + "/erisc/generated_bank_to_noc_coord_mapping.h");
+    fs::create_directories(path + "/erisc");
+    ofstream file_stream_ec(path + "/erisc/generated_bank_to_noc_coord_mapping.h");
     file_stream_ec << output_string;
     file_stream_ec.close();
 }
@@ -1312,8 +876,7 @@ static string generate_noc_addr_ranges_string(
 }
 
 void generate_noc_addr_ranges_header(
-    build_kernel_for_riscv_options_t* build_kernel_for_riscv_options,
-    string out_dir_path,
+    const std::string& path,
     uint64_t pcie_addr_base,
     uint64_t pcie_addr_size,
     uint64_t dram_addr_base,
@@ -1328,127 +891,283 @@ void generate_noc_addr_ranges_header(
     string output_string = generate_noc_addr_ranges_string(pcie_addr_base, pcie_addr_size, dram_addr_base, dram_addr_size,
                                                            pcie_cores, dram_cores, ethernet_cores, grid_size, harvested_rows, dispatch_cores);
 
-    string full_path = build_kernel_for_riscv_options->outpath;
-    full_path += out_dir_path;
-    fs::create_directories(full_path + "/brisc");
-    ofstream file_stream_br(full_path + "/brisc/noc_addr_ranges_gen.h");
+    ofstream file_stream_br(path + "/brisc/noc_addr_ranges_gen.h");
     file_stream_br << output_string;
     file_stream_br.close();
 
-    fs::create_directories(full_path + "/ncrisc");
-    ofstream file_stream_nc(full_path + "/ncrisc/noc_addr_ranges_gen.h");
+    fs::create_directories(path + "/ncrisc");
+    ofstream file_stream_nc(path + "/ncrisc/noc_addr_ranges_gen.h");
     file_stream_nc << output_string;
     file_stream_nc.close();
 
-    fs::create_directories(full_path + "/erisc");
-    ofstream file_stream_er(full_path + "/erisc/noc_addr_ranges_gen.h");
+    fs::create_directories(path + "/erisc");
+    ofstream file_stream_er(path + "/erisc/noc_addr_ranges_gen.h");
     file_stream_er << output_string;
     file_stream_er.close();
 }
 
-void generate_binaries_all_riscs(
-    tt::build_kernel_for_riscv_options_t* opts, const std::string& out_dir_path, const tt::ARCH arch,
-    generate_binaries_params_t p)
+static void build_failure(const string& target_name,
+                          const string& op,
+                          const string& cmd,
+                          const string& log_file)
 {
-    ZoneScoped;
-    const std::string tracyPrefix = "generate_binaries_all_riscs_";
-    ZoneName( (tracyPrefix + out_dir_path).c_str(), out_dir_path.length() + tracyPrefix.length());
+    log_info(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
+    string cat = "cat " + log_file;
+    if (fs::exists(log_file)) {
+        // XXXX PGK(TODO) not portable
+        if (system(cat.c_str())) {
+            TT_THROW("Failed system comand {}", cat);
+        }
+    }
+    TT_THROW("{} build failed", target_name);
+}
 
-    if (!opts->fw_build_) {
-        generate_descriptors(opts, out_dir_path, arch);
+void JitBuildState::pre_compile(const string& kernel_in_path, const string& op_out_path) const
+{
+}
+
+void JitBuildState::copy_kernel(const string& kernel_in_path, const string& op_out_path) const
+{
+    // TODO(pgk): get rid of this copy, compile kernel file in place as its own .o
+    const string out_dir = this->out_path_ + op_out_path + this->target_name_;
+    const string src = env_.get_root_path() + kernel_in_path;
+    const string dst = out_dir + "/kernel.cpp";
+    fs::copy(src, dst, fs::copy_options::overwrite_existing);
+}
+
+void JitBuildDataMovement::pre_compile(const string& kernel_in_path, const string& op_out_path) const
+{
+    copy_kernel(kernel_in_path, op_out_path);
+}
+
+void JitBuildEthernet::pre_compile(const string& kernel_in_path, const string& op_out_path) const
+{
+    copy_kernel(kernel_in_path, op_out_path);
+}
+
+
+void JitBuildState::compile_one(const string& log_file,
+                                const string& out_dir,
+                                const JitBuildSettings *settings,
+                                const string& src,
+                                const string& obj) const
+{
+    fs::create_directories(out_dir);
+
+    // Add kernel specific defines
+    string defines = this->defines_;
+    if (settings != nullptr) {
+        if (process_defines_at_compile) {
+            settings->process_defines([&defines] (const string& define, const string& value) {
+                defines += "-D" + define + "=" + value + " ";
+            });
+        }
+
+        settings->process_compile_time_args([&defines] (int i, uint32_t value) {
+            defines += "-DKERNEL_COMPILE_TIME_ARG_" + to_string(i) + "=" + to_string(value) + " ";
+        });
     }
 
-    const std::string arch_name = tt::get_string_lowercase(arch);
+    string cmd;
+    cmd = "cd " + out_dir + " && ";
+    cmd += env_.gpp_;
+    cmd += this->cflags_;
+    cmd += defines;
+    cmd += this->includes_;
+    cmd += "-c -o " + obj + " " + src;
 
-    std::vector<std::thread> threads;
-    std::function<void()> lambdas[] = {
-        [opts, out_dir_path, arch_name, p] () {
-            generate_binaries_for_triscs(
-                opts, out_dir_path, arch_name, p.compute_kernel_compile_time_args);
-        },
-        [opts, out_dir_path, arch_name, p] () {
-            generate_binary_for_ncrisc(
-                opts, out_dir_path, arch_name, p.nc_noc_index, p.nc_kernel_compile_time_args);
-        },
-        [opts, out_dir_path, arch_name, p] () {
-            generate_binary_for_brisc(
-                opts, out_dir_path, arch_name, p.br_noc_index, p.br_kernel_compile_time_args);
-        },
-    };
-
-    bool flags[3] = { p.compile_trisc, p.compile_ncrisc, p.compile_brisc };
-
-    // compile all 3 in parallel if requested, otherwise compile just NC,BR in parallel
-    // TODO(AP): re-paralllelize
-    for (int j = 0; j < 3; j++)
-        if (flags[j])
-            threads.push_back( thread(lambdas[j]) );
-
-    for (auto& th: threads)
-        th.join();
-    if (arch_name == "wormhole_b0") {
-      // TODO: maybe add this to generate_binaries_param_t er_noc_index
-      std::uint8_t noc_index = 0;
-      generate_binary_for_erisc(opts, out_dir_path, arch_name, noc_index, p.er_kernel_compile_time_args);
-    } else {
-      log_info(tt::LogBuildKernels, "Skip generating erisc binaries for {}", arch_name);
+    log_debug(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
+    if (!tt::utils::run_command(cmd, log_file, false)) {
+        build_failure(this->target_name_, "compiile", cmd, log_file);
     }
 }
 
-void generate_binaries_for_triscs(
-    tt::build_kernel_for_riscv_options_t* topts,
-    const std::string &dir,
-    const std::string& arch_name,
-    const std::vector<std::uint32_t>& kernel_compile_time_args)
+void JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings *settings) const
+{
+    // Compile each of the srcs to an obj in parallel
+    std::vector<std::thread> threads;
+    threads.resize(this->srcs_.size());;
+    for (int i = 0; i < this->srcs_.size(); i++) {
+        threads[i] = thread(&JitBuildState::compile_one, &*this,
+                            ref(log_file), ref(out_dir), settings, ref(this->srcs_[i]), ref(this->objs_[i]));
+    }
+
+    for (auto& th: threads) {
+        th.join();
+    }
+}
+
+void JitBuildState::link(const string& log_file, const string& out_dir) const
+{
+    string lflags = this->lflags_;
+    if (tt::llrt::OptionsG.get_build_map_enabled()) {
+        lflags += " -Wl,-Map=" + out_dir + "linker.map";
+    }
+
+    string cmd;
+    cmd = "cd " + out_dir + " && ";
+    cmd += env_.gpp_;
+    cmd += this->lflags_;
+    cmd += this->link_objs_;
+
+    if (!this->is_fw_) {
+        string weakened_elf_name = env_.out_firmware_root_ + this->target_name_ + "/" + this->target_name_  + "_weakened.elf";
+        cmd += " -Xlinker \"--just-symbols=" + weakened_elf_name + "\" ";
+    }
+
+    cmd += "-o " + out_dir + this->target_name_ + ".elf";
+    log_debug(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
+    if (!tt::utils::run_command(cmd, log_file, false)) {
+        build_failure(this->target_name_, "link", cmd, log_file);
+    }
+}
+
+void JitBuildState::elf_to_hex8(const string& log_file, const string& out_dir) const
+{
+    string cmd;
+    cmd = "cd " + out_dir + " && ";
+    cmd += env_.objcopy_;
+    cmd += " -O verilog " + this->target_name_ + ".elf" + " " + this->target_name_ + ".hex.tmp";
+
+    log_debug(tt::LogBuildKernels, "    objcopy cmd: {}", cmd);
+    if (!tt::utils::run_command(cmd, log_file, false)) {
+        build_failure(this->target_name_, "objcopy", cmd, log_file);
+    }
+}
+
+void JitBuildState::hex8_to_hex32(const string& log_file, const string& out_dir) const
+{
+    string cmd;
+    cmd = "cd " + out_dir + " && ";
+    cmd += env_.hex8tohex32_ + this->target_name_ + ".hex.tmp " + this->target_name_ + ".hex";
+
+    log_debug(tt::LogBuildKernels, "    hex8tohex32 cmd: {}", cmd);
+    if (!tt::utils::run_command(cmd, log_file, false)) {
+        build_failure(this->target_name_, "hex8tohex32.py", cmd, log_file);
+    }
+}
+
+// Given this elf (A) and a later elf (B):
+// weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of the
+// same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
+// strong so to propogate link addresses
+void JitBuildState::weaken(const string& log_file, const string& out_dir) const
+{
+    string cmd;
+    cmd = "cd " + out_dir + " && ";
+    cmd += env_.objcopy_;
+    cmd += " --wildcard --weaken-symbol \"*\" --weaken-symbol \"!__fw_export_*\" " +
+        this->target_name_ + ".elf " + this->target_name_ + "_weakened.elf";
+
+    log_debug(tt::LogBuildKernels, "    objcopy cmd: {}", cmd);
+    if (!tt::utils::run_command(cmd, log_file, false)) {
+        build_failure(this->target_name_, "objcopy weaken", cmd, log_file);
+    }
+}
+
+void JitBuildState::build(const JitBuildSettings *settings) const
+{
+    string out_dir = (settings == nullptr) ?
+        this->out_path_ + this->target_name_ + "/" :
+        this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
+
+    string log_file = out_dir + "build.log";
+    if (fs::exists(log_file)) {
+        std::remove(log_file.c_str());
+    }
+
+    compile(log_file, out_dir, settings);
+    link(log_file, out_dir);
+    elf_to_hex8(log_file, out_dir);
+    hex8_to_hex32(log_file, out_dir);
+    if (this->is_fw_) {
+        weaken(log_file, out_dir);
+    }
+}
+
+void jit_build(const JitBuildState& build,
+               const JitBuildSettings *settings,
+               const string& kernel_in_path)
 {
     ZoneScoped;
-    const std::string tracyPrefix = "generate_binaries_for_triscs_";
-    ZoneName( (tracyPrefix + dir).c_str(), dir.length() + tracyPrefix.length());
-    generate_src_for_triscs(topts, dir, arch_name, kernel_compile_time_args);
-    auto lambda0 = [=]() { generate_binary_for_risc(RISCID::TR0, topts, dir, arch_name, 0, kernel_compile_time_args); };
-    auto lambda1 = [=]() { generate_binary_for_risc(RISCID::TR1, topts, dir, arch_name, 0, kernel_compile_time_args); };
-    auto lambda2 = [=]() { generate_binary_for_risc(RISCID::TR2, topts, dir, arch_name, 0, kernel_compile_time_args); };
-    if (0) {
-        lambda0();
-        lambda1();
-        lambda2();
-    } else {
-        auto t0 = std::thread(lambda0);
-        auto t1 = std::thread(lambda1);
-        auto t2 = std::thread(lambda2);
-        t0.join(); t1.join(); t2.join();
+    const std::string tracyPrefix = "jit_build";
+
+    if (settings != nullptr) {
+        build.pre_compile(kernel_in_path, settings->get_full_kernel_name());
+    }
+
+    build.build(settings);
+}
+
+void jit_build_set(const JitBuildStateSet& build_set,
+                   const JitBuildSettings *settings,
+                   const string& kernel_in_path)
+{
+    ZoneScoped;
+    const std::string tracyPrefix = "jit_build_set";
+    ZoneName( tracyPrefix, tracyPrefix.length());
+
+    std::vector<std::thread> threads;
+    threads.resize(build_set.size());
+    for (int i = 0; i < build_set.size(); i++) {
+        const JitBuildState& build = *(build_set[i]);
+        std::function<void()> lambda = [&build, &kernel_in_path, &settings] () {
+            if (settings != nullptr) {
+                build.pre_compile(kernel_in_path, settings->get_full_kernel_name());
+            }
+            build.build(settings);
+        };
+        threads[i] = thread(lambda);
+    }
+
+    for (auto& th: threads) {
+        th.join();
+    }
+}
+
+void jit_build_subset(const JitBuildStateSubset& build_subset,
+                      const JitBuildSettings *settings,
+                      const string& kernel_in_path)
+{
+    ZoneScoped;
+    const std::string tracyPrefix = "jit_build_subset";
+    ZoneName( tracyPrefix, tracyPrefix.length());
+
+    std::vector<std::thread> threads;
+    threads.resize(build_subset.size);
+    for (int i = 0; i < build_subset.size; i++) {
+        const JitBuildState& build = *(build_subset.build_ptr[i]);
+        std::function<void()> lambda = [&build, &kernel_in_path, &settings] () {
+            if (settings != nullptr) {
+                build.pre_compile(kernel_in_path, settings->get_full_kernel_name());
+            }
+            build.build(settings);
+        };
+        threads[i] = thread(lambda);
+    }
+
+    for (auto& th: threads) {
+        th.join();
     }
 }
 
 // TODO(AP): can move joins for these threads to happen later (to compiler launch)
-void generate_descriptors(
-    tt::build_kernel_for_riscv_options_t* opts, const std::string &op_dir, const tt::ARCH arch)
+void generate_descriptors(const JitBuildEnv& env,
+                          JitBuildOptions& options)
 {
     ZoneScoped;
     const std::string tracyPrefix = "generate_descriptors_";
-    ZoneName( (tracyPrefix + op_dir).c_str(), op_dir.length() + tracyPrefix.length());
-    string full_path = opts->outpath + op_dir;
-    fs::create_directories(full_path);
+    ZoneName( (tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
+    fs::create_directories(options.path);
     try {
-        std::thread td( [=]() { generate_data_format_descriptors(opts, op_dir, arch); } );
-        std::thread tm( [=]() { generate_math_fidelity_descriptor(opts, op_dir); } );
-        std::thread ta( [=]() { generate_math_approx_mode_descriptor(opts, op_dir); } );
+        std::thread td( [&]() { generate_data_format_descriptors(options, env.get_arch()); } );
+        std::thread tm( [&]() { generate_math_fidelity_descriptor(options); } );
+        std::thread ta( [&]() { generate_math_approx_mode_descriptor(options); } );
         td.join();
         tm.join();
         ta.join();
     } catch (std::runtime_error &ex) {
         std::cerr << "EXCEPTION FROM THREADING IN GENERATE_DESCRIPTORS: " << ex.what() << std::endl;
-    }
-}
-
-//! wormhole/wormhole_b0 are aliased for firmwares...
-// TODO: (kk) remove these exceptions?
-std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
-    switch (arch) {
-        case tt::ARCH::GRAYSKULL: return "grayskull"; break;
-        case tt::ARCH::WORMHOLE: return "wormhole"; break;
-        case tt::ARCH::WORMHOLE_B0: return "wormhole"; break;
-        default: return "invalid"; break;
     }
 }
 

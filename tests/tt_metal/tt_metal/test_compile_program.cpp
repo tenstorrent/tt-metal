@@ -24,14 +24,14 @@ struct KernelCacheStatus {
 };
 
 void ClearKernelCache (int device_id){
-    std::filesystem::remove_all(get_kernel_compile_outpath(device_id));
+    std::filesystem::remove_all(jit_build_get_kernel_compile_outpath(device_id));
     detail::HashLookup::inst().clear();
 }
 
 // This assumes binaries are written to specific location: kernel_compile_outpath / kernel_name / hash
 std::unordered_map<std::string, std::string> get_last_program_binary_path(const Program &program, int device_id) {
     std::unordered_map<std::string, std::string> kernel_name_to_last_compiled_dir;
-    auto root_dir = get_kernel_compile_outpath(device_id);
+    auto root_dir = jit_build_get_kernel_compile_outpath(device_id);
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         tt_metal::Kernel *kernel = detail::GetKernel(program, kernel_id);
         if (not std::filesystem::exists(root_dir + kernel->name())) {
@@ -57,7 +57,7 @@ std::unordered_map<std::string, std::string> get_last_program_binary_path(const 
 // TODO: Replace this when we have debug/test hooks (GH: #964) to inspect inside CompileProgram
 KernelCacheStatus CompileProgramTestWrapper(Device *device, Program &program, bool profile_kernel=false) {
     // Check
-    auto root_dir = get_kernel_compile_outpath(device->id());
+    auto root_dir = jit_build_get_kernel_compile_outpath(device->id());
     std::unordered_map<std::string, std::string> pre_compile_kernel_to_hash_str = get_last_program_binary_path(program, device->id());
 
     detail::CompileProgram(device, program);
@@ -148,7 +148,7 @@ void assert_kernel_binary_path_exists(const Program &program, int device_id, con
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         tt_metal::Kernel *kernel = detail::GetKernel(program, kernel_id);
         auto hash = kernel_name_to_hash.at(kernel->name());
-        auto kernel_binary_path = get_kernel_compile_outpath(device_id) + kernel->name() + "/" + hash;
+        auto kernel_binary_path = jit_build_get_kernel_compile_outpath(device_id) + kernel->name() + "/" + hash;
         TT_FATAL(std::filesystem::exists(kernel_binary_path), "Expected " + kernel_binary_path + " folder to exist!");
     }
 }
