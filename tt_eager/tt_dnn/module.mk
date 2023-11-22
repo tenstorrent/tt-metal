@@ -57,6 +57,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/conv/optimized_conv_op.cpp \
 	tt_eager/tt_dnn/op_library/conv/multi_core_optimized_conv/optimized_conv_op.cpp \
 	tt_eager/tt_dnn/op_library/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded.cpp \
+	tt_eager/tt_dnn/op_library/conv/multi_core_optimized_conv_sharded/optimized_conv_op_sharded_v2.cpp \
 	tt_eager/tt_dnn/op_library/tilize/tilize_multi_core/tilize_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/tilize/tilize_single_core/tilize_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/tilize/tilize_op.cpp \

@@ -16,6 +16,8 @@ from models.demos.resnet.tt.metalResnetBlock50 import (
     format_tensor,
 )
 
+from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_conv import TTPyConv
+
 # hardcoding matmul config for 1x1 convs
 # key: mm act height, mm act width, mm weight width
 hardcoded_matmul_config_conv = {
@@ -381,16 +383,16 @@ hardcoded_matmul_config_conv = {
 
 hardcoded_conv_blocking_and_parallelization_config = {
     8: {
-        (25088, 64): [64 * 3, 256, 1, 64, 128, 64, 256, (12, 9), 256, 64],
-        (6272, 128): [128 * 3, 64, 1, 128, 64, 128, 64, (12, 9), 64, 128],
-        (1568, 256): [256, 160, 8, 32, 160, 32, 160, (10, 8), 160, 32],
-        (416, 512): [512, 64, 8, 64, 64, 64, 64, (7, 8), 64, 64],
+        (25088, 64): [64 * 3, 256, 1, 64, 128, 64, 256, (12, 9), 256, 64, 98],
+        (6272, 128): [128 * 3, 64, 1, 128, 64, 128, 64, (12, 9), 64, 128, 98],
+        (1568, 256): [256, 160, 8, 32, 160, 32, 160, (10, 8), 160, 32, 10],
+        (416, 512): [512, 64, 8, 64, 64, 64, 64, (7, 8), 64, 64, 7],
     },
     16: {
-        (50176, 64): [64 * 3, 256, 1, 64, 128, 64, 512, (12, 9), 512, 64],
-        (12544, 128): [128 * 3, 128, 1, 128, 64, 128, 128, (12, 9), 128, 128],
-        (3136, 256): [256, 288, 8, 32, 96, 32, 288, (11, 8), 288, 32],
-        (800, 512): [512, 96, 8, 64, 96, 64, 96, (9, 8), 96, 64],
+        (50176, 64): [64 * 3, 256, 1, 64, 128, 64, 512, (12, 9), 512, 64, 98],
+        (12544, 128): [128 * 3, 128, 1, 128, 64, 128, 128, (12, 9), 128, 128, 98],
+        (3136, 256): [256, 288, 8, 32, 96, 32, 288, (11, 8), 288, 32, 11],
+        (800, 512): [512, 96, 8, 64, 96, 64, 96, (9, 8), 96, 64, 9],
     },
 }
 
@@ -482,7 +484,7 @@ def test_resnet50_conv(
         conv_blocking_and_parallelization_config = hardcoded_conv_blocking_and_parallelization_config[N][
             (conv_as_mm_padded_act_height, K)
         ]
-        assert len(conv_blocking_and_parallelization_config) == 10
+        assert len(conv_blocking_and_parallelization_config) == 11
 
         [
             act_block_w_datums,
@@ -495,6 +497,7 @@ def test_resnet50_conv(
             grid_size,
             per_core_out_matrix_h,
             per_core_weight_matrix_w,
+            num_cores_nhw,
         ] = conv_blocking_and_parallelization_config
         if R == 1 and S == 1:
             assert C % act_block_w_datums == 0
@@ -579,7 +582,16 @@ def test_resnet50_conv(
                 tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
             )
 
-        conv = resnet50_optimized_conv(
+        sliding_window_op_params = [
+            (stride_h, stride_w),
+            (pad_h, pad_w),
+            (R, S),
+            (N, H, W),
+            grid_size,
+            num_cores_nhw,
+        ]
+        conv = TTPyConv(
+            sliding_window_op_params,
             conv_weight_pyt.reshape(-1).tolist(),
             conv_params,
             device,
@@ -670,6 +682,8 @@ def test_resnet50_conv(
         # NHWC to NCHW
         out_result = torch.transpose(out_result, 2, 3)
         out_result = torch.transpose(out_result, 1, 2)
+
+        TTPyConv.static_kernel_configs_cache_map = {}
 
         # Compare baseline against golden
         assert out_result_baseline.shape == out_golden.shape
