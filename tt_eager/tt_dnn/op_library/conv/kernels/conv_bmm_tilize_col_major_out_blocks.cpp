@@ -130,6 +130,8 @@ void MAIN {
     constexpr bool tilize_in0                 = get_compile_time_arg_val(14);
     constexpr bool untilize_out               = get_compile_time_arg_val(15);
 
+    constexpr uint32_t out_block_num_tiles    = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
+
     constexpr uint32_t out_block_w = in1_block_w;
     constexpr bool spill = in0_num_blocks_w > 1;
 
@@ -181,6 +183,8 @@ void MAIN {
             }
             #endif
 
+            UNPACK( const uint32_t partials_cb_read_ptr = cb_interface[matmul_partials_cb].fifo_rd_ptr );
+            PACK( const uint32_t partials_cb_write_ptr = cb_interface[matmul_partials_cb].fifo_wr_ptr );
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for(uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
@@ -195,10 +199,8 @@ void MAIN {
                     tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
                     mm_init_short();
                     unpack_reconfig_data_format_srca(in0_cb_id, in1_cb_id);
-                    cb_wait_front(tilized_in0_cb_id, in0_block_num_tiles);
-                } else {
-                    cb_wait_front(in0_cb_id, in0_block_num_tiles);
                 }
+                cb_wait_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_wait_front(in1_cb_id, in1_block_num_tiles);
 
                 if (last_out) {
@@ -234,13 +236,15 @@ void MAIN {
                         uint32_t dst_index = 0;
                         uint32_t in0_index_h_offset = 0;
                         for (uint32_t h = 0; h < out_subblock_h; ++h) {
+                            uint32_t in0_index_offset = in0_index_subblock_offset + in0_index_h_offset;
                             for (uint32_t w = 0; w < out_subblock_w; ++w) {
                                 uint32_t in1_index_inner_dim_offset = 0;
+                                uint32_t in1_index_offset = in1_index_subblock_offset + w;
                                 for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
                                     matmul_tiles(mm_in0_cb_id,                    // in0_cb
                                                  in1_cb_id,                                                     // in1_cb
-                                                 in0_index_subblock_offset + in0_index_h_offset + inner_dim,    // in0 tile
-                                                 in1_index_subblock_offset + in1_index_inner_dim_offset + w,    // in1 tile
+                                                 in0_index_offset + inner_dim,    // in0 tile
+                                                 in1_index_offset + in1_index_inner_dim_offset,    // in1 tile
                                                  dst_index,                                                     // dst
                                                  false);
                                     in1_index_inner_dim_offset += in1_block_w;
@@ -264,11 +268,19 @@ void MAIN {
                     in0_index_subblock_offset += in0_subblock_num_tiles;
                 }
 
-                if constexpr (spill) enable_reload = true;
-
+                if constexpr (spill) {
+                    enable_reload = true;
+                    if (!last_out) {
+                        UNPACK( cb_interface[matmul_partials_cb].fifo_rd_ptr = partials_cb_read_ptr );
+                        PACK( cb_interface[matmul_partials_cb].fifo_wr_ptr = partials_cb_write_ptr );
+                    }
+                }
                 cb_pop_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
             } // for in0_num_blocks_w
+            if constexpr(matmul_partials_cb == mm_out_cb_id) {
+                UNPACK( cb_interface[matmul_partials_cb].fifo_rd_ptr = partials_cb_read_ptr );
+            }
             #ifdef FUSE_BIAS
             #ifdef PACK_RELU
             // if last block we pack the final result with relu enabled
@@ -276,15 +288,11 @@ void MAIN {
             #endif
             add_bcast_rows_init_short();
             unpack_reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
+            cb_wait_front(bias_cb_id, bias_ntiles_w);
+            cb_wait_front(matmul_partials_cb, out_block_num_tiles);
             for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                 uint32_t in1_index_subblock_offset = 0;
                 for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
-                    // if bias is to be added, add it to the data in dst before packing into the out cb
-                    // reconfig unpacker df for src B
-                    // unpack_reconfig_data_format(out_for_bias_cb_id, bias_cb_id);
-                    // bcast add data from bias_cb_id
-                    cb_wait_front(bias_cb_id, bias_ntiles_w);
-                    cb_wait_front(matmul_partials_cb, out_subblock_num_tiles);
                     // reconfig packer df for out
                     // pack_reconfig_data_format(out_cb_id);
                     tile_regs_acquire();
@@ -297,19 +305,15 @@ void MAIN {
                             ++ i;
                         }
                     }
-                    // if SFPU fusion is not enabled, then we commit right away
-                    #ifndef SFPU_OP_INIT_ACTIVATION
-                    tile_regs_commit();
-                    #endif
-                    // do not pop front bias as it may be used again for subsequent blocks
-                    cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
 
                     #ifdef SFPU_OP_INIT_ACTIVATION
                     for (uint32_t i = 0; i < out_subblock_num_tiles; ++ i) {
                         SFPU_OP_FUNC_ACTIVATION
                     }
-                    tile_regs_commit();
                     #endif
+                    tile_regs_commit();
+                    // do not pop front bias as it may be used again for subsequent blocks
+                    cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
 
                     pack_matmul_subblock(untilize_mode_out_cb_id, out_subblock_num_tiles);
                     in1_index_subblock_offset += out_subblock_w;

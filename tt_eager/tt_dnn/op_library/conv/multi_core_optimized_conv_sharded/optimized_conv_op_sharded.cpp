@@ -283,6 +283,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
 
     // sanity check
     assert(num_blocks_output_w == num_blocks_weight_w);
+
+    uint32_t out_block_h_datums = out_block_h_ntiles * TILE_HEIGHT;
+
     tt_metal::Program program = tt_metal::CreateProgram();
     //CoreCoord core_coord = {0, 0};      // TODO: avoid another var here. Find a way to use core range instead.
     //CoreRange core = {.start={0, 0}, .end={0, 0}};
@@ -341,7 +344,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
 
     std::map<string, string> reader_defines;
 
-    if (act_matrix_height_unpadded < act_block_h_datums * num_blocks_act_h) {
+    if (act_matrix_height_unpadded < act_matrix_height) {
         reader_defines["ACT_BLOCK_HEIGHT_PADDING"] = "1";
     }
 
@@ -355,7 +358,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
 
     uint32_t src_dram_act_buffer_size_bytes = src0_dram_buffer->size();
     uint32_t src_dram_weight_buffer_size_bytes = src1_dram_buffer->size();
-    uint32_t dst_l1_act_buffer_size_bytes = act_block_h_ntiles * act_block_w_ntiles * tt::tt_metal::detail::TileSize(act_df);
+    uint32_t dst_l1_act_buffer_size_bytes = out_block_h_ntiles * act_block_w_ntiles * tt::tt_metal::detail::TileSize(act_df);
     uint32_t dst_l1_weight_buffer_size_bytes = weight_block_h_ntiles * weight_block_w_ntiles * tt::tt_metal::detail::TileSize(weight_df);
 
 
@@ -648,7 +651,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
 
             // Local L1 to store array for reader indices
             // TODO: once 1D-sys-conv is uint16_t indicies (2D-sys-conv already is), then each entry can be 2B (not 4)
-            CircularBufferConfig cb_for_reader_indices_config = CircularBufferConfig(act_block_h_datums * 4, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
+            CircularBufferConfig cb_for_reader_indices_config = CircularBufferConfig(out_block_h_datums * 4, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
 		        .set_page_size(cb_for_reader_indices, 4);
             auto cb_for_reader_indices_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_indices_config);
 
@@ -886,8 +889,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
              */
 
             // If 2D, same image specs across a row
-            uint32_t start_stick = weight_width_sliced ? core_x_i * act_block_h_datums : core_i * act_block_h_datums;
-            uint32_t end_stick = start_stick + act_block_h_datums;
+            uint32_t start_stick = weight_width_sliced ? core_x_i * out_block_h_datums : core_i * out_block_h_datums;
+            uint32_t end_stick = start_stick + out_block_h_datums;
 
             ShardingConfig sharding_config = get_specs_for_sharding_partition(start_stick, end_stick, conv_act_size_h, conv_act_size_w, weight_size_w, pad_h, pad_w);
             uint32_t first_partial_right_aligned_row_width = sharding_config.first_partial_right_aligned_row_width;
@@ -956,8 +959,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
                     conv_act_size_h,
                     weight_size_h,
                     weight_size_w,
-
-                    act_block_h_datums,
+                    num_blocks_act_h_per_core,
+                    // act_block_h_datums,
                     act_block_num_tiles / conv_act_c_blocks,
 
                     // Specs for reader indices

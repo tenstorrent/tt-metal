@@ -387,7 +387,7 @@ hardcoded_conv_blocking_and_parallelization_config = {
         (416, 512): [512, 64, 8, 64, 64, 64, 64, (7, 8), 64, 64],
     },
     16: {
-        (50176, 64): [64 * 3, 512, 1, 64, 128, 64, 512, (12, 9), 512, 64],
+        (50176, 64): [64 * 3, 256, 1, 64, 128, 64, 512, (12, 9), 512, 64],
         (12544, 128): [128 * 3, 128, 1, 128, 64, 128, 128, (12, 9), 128, 128],
         (3136, 256): [256, 288, 8, 32, 96, 32, 288, (11, 8), 288, 32],
         (800, 512): [512, 96, 8, 64, 96, 64, 96, (9, 8), 96, 64],
@@ -634,7 +634,7 @@ def test_resnet50_conv(
                 conv_input_on_device,
                 grid_size,
                 [
-                    act_block_h_datums,
+                    per_core_out_matrix_h,
                     weight_block_w_datums,
                 ],  # act_block_w_datums may include reads of multiple pixels in window
                 tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
