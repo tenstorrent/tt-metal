@@ -169,6 +169,7 @@ namespace ckernel::packer
       DEBUG_STATUS('W', 'U', 'C', 'D');
    }
 
+   template <bool untilize = false>
    inline void configure_pack(uint pack_output, uint relu_config = 0, bool skip_alu_format_set=false)
    {
       // Get pointer to registers for current state ID
@@ -199,7 +200,7 @@ namespace ckernel::packer
       // PACK_COUNTERS_SEC0_pack_reads_per_xy_plane = cfg_reg_array[3][8 +: 8];
       // PACK_COUNTERS_SEC0_pack_xys_per_tile = cfg_reg_array[3][16 +: 7];
       // PACK_COUNTERS_SEC0_pack_yz_transposed = cfg_reg_array[3][23 +: 1];
-      for (uint i=0; i<4; i++) cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32+i]=pack_per_xy_plane | (pack_per_xy_plane<<8) | (1<<16);
+      for (uint i=0; i<4; i++) cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32+i]=pack_per_xy_plane | (pack_per_xy_plane<<8) | ((untilize?1:0)<<16); // Auto last generation is disabled
 
       for (uint i=0; i<4; i++) {
 	 cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+i]=0xffffffff;
@@ -404,6 +405,27 @@ namespace ckernel::packer
      } else {
         FWASSERT("Unsupported pack select mask!", false);
      }
+   }
+
+   template <uint32_t block_ct_dim>
+   inline void program_packer_untilized_destination(const uint32_t addr, const uint32_t pack_dst_format)
+   {
+      const uint32_t block_size = SCALE_DATUM_SIZE(pack_dst_format, block_ct_dim * TILE_C_DIM * (TILE_R_DIM/4));
+      constexpr uint32_t offset0 = 0;
+      const uint32_t offset1 = (1*block_size)/16;
+      const uint32_t offset2 = (2*block_size)/16;
+      const uint32_t offset3 = (3*block_size)/16;
+
+      TT_SETDMAREG(0, addr+offset0, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+0));
+      TT_SETDMAREG(0, addr+offset1, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+1));
+      TT_SETDMAREG(0, addr+offset2, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+2));
+      TT_SETDMAREG(0, addr+offset3, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+3));
+      TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK0 | p_stall::PACK1);
+      TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+0,   p_cfg::WRCFG_32b, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+      TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+1,   p_cfg::WRCFG_32b, THCON_SEC0_REG8_L1_Dest_addr_ADDR32);
+      TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK2 | p_stall::PACK3);
+      TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+2,   p_cfg::WRCFG_32b, THCON_SEC1_REG1_L1_Dest_addr_ADDR32);
+      TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+3,   p_cfg::WRCFG_32b, THCON_SEC1_REG8_L1_Dest_addr_ADDR32);
    }
 
    // Write tile header to l1
