@@ -24,8 +24,8 @@ namespace tt_metal {
 // Fwd declares
 namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device);
-    KernelHandle AddKernel ( Program & program, Kernel * kernel);
-    Kernel *GetKernel(const Program &program, KernelHandle kernel_id);
+    size_t AddKernel ( Program & program, Kernel * kernel);
+    Kernel *GetKernel(const Program &program, size_t kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, uintptr_t id);
 }
 
@@ -150,12 +150,12 @@ class Program {
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, uintptr_t id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
-    friend KernelHandle detail::AddKernel(Program &program, Kernel *kernel);
-    friend Kernel *detail::GetKernel(const Program &program, KernelHandle kernel_id);
+    friend size_t detail::AddKernel(Program &program, Kernel *kernel);
+    friend Kernel *detail::GetKernel(const Program &program, size_t kernel_id);
 
     friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value);
-    KernelHandle add_kernel(Kernel *kernel);
-    Kernel *get_kernel(KernelHandle kernel_id) const;
+    size_t add_kernel(Kernel *kernel);
+    Kernel *get_kernel(size_t kernel_id) const;
 
     uintptr_t add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
     std::shared_ptr<CircularBuffer> get_circular_buffer(uintptr_t cb_id) const;

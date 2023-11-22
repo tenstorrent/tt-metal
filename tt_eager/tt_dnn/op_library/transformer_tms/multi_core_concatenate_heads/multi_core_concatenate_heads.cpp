@@ -137,8 +137,8 @@ operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor&
                 (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles, // out_tensor_tile_id
             };
 
-            tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-            tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+            tt_metal::SetRuntimeArgs(reader_kernel_id, core, reader_runtime_args);
+            tt_metal::SetRuntimeArgs(writer_kernel_id, core, writer_runtime_args);
         }
     }
 
@@ -165,12 +165,12 @@ operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &a, Tensor&
                 CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
 
                 {
-                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
                     runtime_args[0] = src_dram_buffer->address();
                 }
 
                 {
-                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
                     runtime_args[0] = dst_dram_buffer->address();
                 }
             }

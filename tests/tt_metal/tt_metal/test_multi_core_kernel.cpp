@@ -91,7 +91,7 @@ void set_rt_args(tt_metal::Program &program, tt_metal::KernelHandle kernel, cons
     for (auto x = core_range.start.x; x <= core_range.end.x; x++) {
         for (auto y = core_range.start.y; y <= core_range.end.y; y++) {
             CoreCoord core = CoreCoord(x, y);
-            tt_metal::SetRuntimeArgs(program, kernel, core, rt_args);
+            tt_metal::SetRuntimeArgs(kernel, core, rt_args);
         }
     }
 }

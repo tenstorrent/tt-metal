@@ -164,7 +164,6 @@ int main(int argc, char **argv) {
 
 
         SetRuntimeArgs(
-            program,
             binary_reader_kernel_id,
             core,
             {
@@ -181,7 +180,6 @@ int main(int argc, char **argv) {
         );
 
         SetRuntimeArgs(
-            program,
             eltwise_binary_kernel_id,
             core,
             {
@@ -190,7 +188,6 @@ int main(int argc, char **argv) {
         );
 
         SetRuntimeArgs(
-            program,
             unary_writer_kernel_id,
             core,
             {
@@ -267,7 +264,6 @@ int main(int argc, char **argv) {
          * Configure program and runtime kernel arguments.
          */
         SetRuntimeArgs(
-            program_mul,
             binary_reader_kernel_id,
             core,
             {
@@ -284,7 +280,6 @@ int main(int argc, char **argv) {
         );
 
         SetRuntimeArgs(
-            program_mul,
             eltwise_binary_kernel_id,
             core,
             {
@@ -293,7 +288,6 @@ int main(int argc, char **argv) {
         );
 
         SetRuntimeArgs(
-            program_mul,
             unary_writer_kernel_id,
             core,
             {

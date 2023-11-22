@@ -60,7 +60,7 @@ Device *CreateDevice(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_r
 bool CloseDevice(Device *device);
 
 // ==================================================
-//                  HOST API: program & kernels
+//                  HOST API: program
 // ==================================================
 
 /**
@@ -69,20 +69,6 @@ bool CloseDevice(Device *device);
  * Return value: Program
  */
 Program CreateProgram();
-
-/**
- * Creates a data movement kernel with no compile time arguments and adds it to the program.
- *
- * Return value: Kernel ID (uintptr_t)
- *
- * | Argument     | Description                                                                                                                          | Type                                                     | Valid Range | Required |
- * |--------------|--------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|-------------|----------|
- * | program      | The program to which this kernel will be added to                                                                                    | Program &                                                |             | Yes      |
- * | file_name    | Path to kernel src                                                                                                                   | const std::string &                                      |             | Yes      |
- * | core_spec    | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
- * | config       | Config for data movement or compute kernel                                                                                           | const std::variant<DataMovementConfig,ComputeConfig,EthernetConfig> &   |             | No       |
- */
-KernelHandle CreateKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig,ComputeConfig,EthernetConfig> & config);
 
 // ==================================================
 //                  HOST API: buffers
@@ -196,6 +182,21 @@ void DeallocateBuffer(Buffer &buffer);
 //
 // ==================================================
 
+
+/**
+ * Creates a data movement kernel with no compile time arguments and adds it to the program.
+ *
+ * Return value: Kernel ID (uintptr_t)
+ *
+ * | Argument     | Description                                                                                                                          | Type                                                     | Valid Range | Required |
+ * |--------------|--------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|-------------|----------|
+ * | program      | The program to which this kernel will be added to                                                                                    | Program &                                                |             | Yes      |
+ * | file_name    | Path to kernel src                                                                                                                   | const std::string &                                      |             | Yes      |
+ * | core_spec    | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
+ * | config       | Config for data movement or compute kernel                                                                                           | const std::variant<DataMovementConfig,ComputeConfig,EthernetConfig> &   |             | No       |
+ */
+KernelHandle CreateKernel(Program &program, const std::string &file_name, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::variant<DataMovementConfig,ComputeConfig,EthernetConfig> & config);
+
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
  *
@@ -203,12 +204,11 @@ void DeallocateBuffer(Buffer &buffer);
  *
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
- * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                    |                                                                     | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
  * | runtime_args | The runtime args to be written                                         | const std::vector<uint32_t> &                          |                                                                     | Yes      |
  */
-void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::vector<uint32_t> &runtime_args);
+void SetRuntimeArgs(KernelHandle kernel, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const std::vector<uint32_t> &runtime_args);
 
 /**
  * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
@@ -217,12 +217,11 @@ void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::vari
  *
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------|----------|
- * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                            | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                    |                                                                            | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::vector<CoreCoord> &                         | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
  * | runtime_args | The runtime args to be written                                         | const std::vector< vector<uint32_t> > &                | outer vector size must be equal to size of core_spec vector                | Yes      |
  */
-void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::vector< CoreCoord > & core_spec, const std::vector< std::vector<uint32_t> > &runtime_args);
+void SetRuntimeArgs(KernelHandle kernel, const std::vector< CoreCoord > & core_spec, const std::vector< std::vector<uint32_t> > &runtime_args);
 
 /**
  * Get the runtime args for a kernel.
@@ -231,11 +230,10 @@ void SetRuntimeArgs(const Program &program, KernelHandle kernel, const std::vect
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                |                                    | Yes      |
  * | logical_core | The location of the Tensix core where the runtime args will be written | const CoreCoord &             | Any logical Tensix core coordinate | Yes      |
  */
-std::vector<uint32_t>& GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core);
+std::vector<uint32_t>& GetRuntimeArgs(KernelHandle kernel_id, const CoreCoord &logical_core);
 
 /**
  * Reads a buffer from the device

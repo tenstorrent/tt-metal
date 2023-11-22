@@ -95,16 +95,16 @@ std::atomic<uint64_t> Program::program_counter = 0;
 
 Program::Program(): id(program_counter++),worker_crs_({}), local_circular_buffer_allocation_needed_(false) {}
 
-KernelHandle Program::add_kernel(Kernel *kernel) {
+size_t Program::add_kernel(Kernel *kernel) {
     this->invalidate_compile();
-    KernelHandle id = kernels_.size();
+    auto id = kernels_.size();
     kernels_.push_back(kernel);
     kernel_groups_.resize(0);
     core_to_kernel_group_index_table_.clear();
     return id;
 }
 
-Kernel *Program::get_kernel(KernelHandle kernel_id) const {
+Kernel *Program::get_kernel(size_t kernel_id) const {
     //TT_ASSERT(kernel_id < this->kernels_.size(), "Expected Kernel with ID {} to be in Program {}", kernel_id, this->id);
     return this->kernels_.at(kernel_id);
 }
@@ -131,21 +131,21 @@ KernelGroup::KernelGroup(const Program& program,
     if (brisc_id) {
         // Use brisc's noc if brisc specifies a noc
         this->launch_msg.enable_brisc = true;
-        this->launch_msg.brisc_noc_id = std::get<DataMovementConfig>(program.get_kernel(brisc_id.value())->config()).noc;
-        this->launch_msg.brisc_watcher_kernel_id = program.get_kernel(brisc_id.value())->get_watcher_kernel_id();
+        this->launch_msg.brisc_noc_id = std::get<DataMovementConfig>(program.get_kernel(brisc_id.value().kernelID)->config()).noc;
+        this->launch_msg.brisc_watcher_kernel_id = program.get_kernel(brisc_id.value().kernelID)->get_watcher_kernel_id();
     } else {
         this->launch_msg.brisc_watcher_kernel_id = 0;
         this->launch_msg.enable_brisc = false;
     }
 
     if (ncrisc_id) {
-        const Kernel *kernel = program.get_kernel(ncrisc_id.value());
+        const Kernel *kernel = program.get_kernel(ncrisc_id.value().kernelID);
         // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
         // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
         this->launch_msg.enable_ncrisc = true;
         this->launch_msg.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
         this->launch_msg.ncrisc_kernel_size16 = kernel->get_binary_size16();
-        this->launch_msg.ncrisc_watcher_kernel_id = program.get_kernel(ncrisc_id.value())->get_watcher_kernel_id();
+        this->launch_msg.ncrisc_watcher_kernel_id = program.get_kernel(ncrisc_id.value().kernelID)->get_watcher_kernel_id();
     } else {
         this->launch_msg.ncrisc_watcher_kernel_id = 0;
         this->launch_msg.enable_ncrisc = false;
@@ -154,7 +154,7 @@ KernelGroup::KernelGroup(const Program& program,
 
     if (trisc_id) {
         this->launch_msg.enable_triscs = true;
-        this->launch_msg.triscs_watcher_kernel_id = program.get_kernel(trisc_id.value())->get_watcher_kernel_id();
+        this->launch_msg.triscs_watcher_kernel_id = program.get_kernel(trisc_id.value().kernelID)->get_watcher_kernel_id();
     } else {
         this->launch_msg.triscs_watcher_kernel_id = 0;
         this->launch_msg.enable_triscs = false;
@@ -178,21 +178,21 @@ KernelGroup * Program::kernels_on_core(const CoreCoord &core) {
 
 struct KernelGroupInt {
     bool valid;
-    std::optional<KernelHandle> trisc_id = std::nullopt;
-    std::optional<KernelHandle> brisc_id = std::nullopt;
-    std::optional<KernelHandle> ncrisc_id = std::nullopt;
+    std::optional<size_t> trisc_id = std::nullopt;
+    std::optional<size_t> brisc_id = std::nullopt;
+    std::optional<size_t> ncrisc_id = std::nullopt;
     bool operator==(const KernelGroupInt& b) const;
     void update(Kernel* kernel, size_t kernel_idx) {
         RISCV riscv_processor = kernel->processor();
         switch (riscv_processor) {
         case RISCV::BRISC:
-            this->brisc_id = static_cast<KernelHandle>(kernel_idx);
+            this->brisc_id = static_cast<size_t>(kernel_idx);
             break;
         case RISCV::NCRISC:
-            this->ncrisc_id = static_cast<KernelHandle>(kernel_idx);
+            this->ncrisc_id = static_cast<size_t>(kernel_idx);
             break;
         case RISCV::COMPUTE:
-            this->trisc_id = static_cast<KernelHandle>(kernel_idx);
+            this->trisc_id = static_cast<size_t>(kernel_idx);
             break;
         default:
             TT_ASSERT(false, "Unsupported kernel processor!");
@@ -283,11 +283,18 @@ void Program::update_kernel_groups() {
                     }
                 }
             }
+            std::optional<KernelHandle> brisc, ncrisc, trisc;
+            if ( kg_to_cores.first.brisc_id)
+                brisc = {.program=*this, .kernelID=kg_to_cores.first.brisc_id.value()};
+            if (kg_to_cores.first.ncrisc_id )
+                ncrisc = {.program=*this, .kernelID=kg_to_cores.first.ncrisc_id.value()};
+            if ( kg_to_cores.first.trisc_id)
+                trisc = {.program=*this, .kernelID=kg_to_cores.first.trisc_id.value()};
 
             kernel_groups_.push_back(KernelGroup(*this,
-                                                 kg_to_cores.first.brisc_id,
-                                                 kg_to_cores.first.ncrisc_id,
-                                                 kg_to_cores.first.trisc_id,
+                                                 brisc,
+                                                 ncrisc,
+                                                 trisc,
                                                  last_cb_index,
                                                  kg_to_cores.second));
             index++;

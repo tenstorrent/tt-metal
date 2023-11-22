@@ -153,14 +153,12 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
     for(uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         tt_metal::SetRuntimeArgs(
-            program,
             reader_kernel_id,
             core,
             all_runtime_args[i].first
         );
 
         tt_metal::SetRuntimeArgs(
-            program,
             writer_kernel_id,
             core,
             all_runtime_args[i].second
@@ -201,11 +199,11 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
+                SetRuntimeArgs(reader_kernel_id, core, all_runtime_args[i].first);
             }
 
             {
-                SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
+                SetRuntimeArgs(writer_kernel_id, core, all_runtime_args[i].second);
             }
         }
     };

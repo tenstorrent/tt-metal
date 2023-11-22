@@ -217,7 +217,7 @@ int main(int argc, char **argv) {
           log_info(LogTest, "{} {} - logical {} {} - phy_core {} {}", r, c, c,
                    r, phy_core.x, phy_core.y);
         }
-        tt_metal::SetRuntimeArgs(program, mm_reader_kernel, core,
+        tt_metal::SetRuntimeArgs(mm_reader_kernel, core,
                                  {activations_addr, (uint32_t)phy_core.x,
                                   (uint32_t)phy_core.y, num_blocks, cb_n});
       }

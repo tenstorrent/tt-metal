@@ -146,8 +146,7 @@ appropriate tile count when assigning args.
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        tt_metal::SetRuntimeArgs(
-            program, reader_id, core,
+        tt_metal::SetRuntimeArgs( reader_id, core,
             {src0_addr,
             src1_addr,
             Mt,
@@ -162,7 +161,6 @@ appropriate tile count when assigning args.
             MtNt }
         );
         tt_metal::SetRuntimeArgs(
-            program,
             writer_id,
             core,
             {dst_addr,

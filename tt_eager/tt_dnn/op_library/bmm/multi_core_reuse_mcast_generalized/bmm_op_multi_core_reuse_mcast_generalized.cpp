@@ -273,23 +273,23 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             };
 
             if(core_idx_x == 0 and core_idx_y == 0) {
-                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_in0_sender_in1_sender_id, core, mm_reader_args); // RISCV_0_default
-                tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc1_id, core, writer_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_sender_in1_sender_id, core, mm_reader_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc1_id, core, writer_args); // RISCV_1_default
                 reader_kernel_ids.push_back(mm_reader_kernel_in0_sender_in1_sender_id);
                 writer_kernel_ids.push_back(unary_writer_kernel_noc1_id);
             } else if (core_idx_x == 0 and core_idx_y != 0) {
-                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_in0_sender_in1_receiver_id, core, mm_reader_args); // RISCV_0_default
-                tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc1_id, core, writer_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_sender_in1_receiver_id, core, mm_reader_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc1_id, core, writer_args); // RISCV_1_default
                 reader_kernel_ids.push_back(mm_reader_kernel_in0_sender_in1_receiver_id);
                 writer_kernel_ids.push_back(unary_writer_kernel_noc1_id);
             } else if (core_idx_x != 0 and core_idx_y == 0) {
-                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_in0_receiver_in1_sender_id, core, mm_reader_args); // RISCV_1_default
-                tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc0_id, core, writer_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_receiver_in1_sender_id, core, mm_reader_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc0_id, core, writer_args); // RISCV_0_default
                 reader_kernel_ids.push_back(mm_reader_kernel_in0_receiver_in1_sender_id);
                 writer_kernel_ids.push_back(unary_writer_kernel_noc0_id);
             } else {
-                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_in0_receiver_in1_receiver_id, core, mm_reader_args); // RISCV_1_default
-                tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc0_id, core, writer_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_receiver_in1_receiver_id, core, mm_reader_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc0_id, core, writer_args); // RISCV_0_default
                 reader_kernel_ids.push_back(mm_reader_kernel_in0_receiver_in1_receiver_id);
                 writer_kernel_ids.push_back(unary_writer_kernel_noc0_id);
             }
@@ -323,14 +323,14 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
                 {
                     auto reader_kernel_id = reader_kernel_ids.at(i);
-                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
                     runtime_args[0] = src_dram_buffer_a->address();
                     runtime_args[8] = src_dram_buffer_b->address();
                 }
 
                 {
                     auto writer_kernel_id = writer_kernel_ids.at(i);
-                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
                     runtime_args[0] = dst_dram_buffer->address();
                 }
 
@@ -544,13 +544,13 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             };
 
             if(core_idx_x == 0) {
-                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_sender_id, core, mm_reader_args);
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_sender_id, core, mm_reader_args);
                 reader_kernel_ids.push_back(mm_reader_kernel_sender_id);
             } else {
-                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_receiver_id, core, mm_reader_args);
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_receiver_id, core, mm_reader_args);
                 reader_kernel_ids.push_back(mm_reader_kernel_receiver_id);
             }
-            tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_args);
+            tt_metal::SetRuntimeArgs(unary_writer_kernel_id, core, writer_args);
             writer_kernel_ids.push_back(unary_writer_kernel_id);
 
         }
@@ -582,14 +582,14 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
 
                 {
                     auto reader_kernel_id = reader_kernel_ids.at(i);
-                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
                     runtime_args[0] = src_dram_buffer_a->address();
                     runtime_args[8] = src_dram_buffer_b->address();
                 }
 
                 {
                     auto writer_kernel_id = writer_kernel_ids.at(i);
-                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
                     runtime_args[0] = dst_dram_buffer->address();
                 }
 
@@ -803,13 +803,13 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             };
 
             if(core_idx_y == 0) {
-                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_sender_id, core, mm_reader_args);
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_sender_id, core, mm_reader_args);
                 reader_kernel_ids.push_back(mm_reader_kernel_sender_id);
             } else {
-                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_receiver_id, core, mm_reader_args);
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_receiver_id, core, mm_reader_args);
                 reader_kernel_ids.push_back(mm_reader_kernel_receiver_id);
             }
-            tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_args);
+            tt_metal::SetRuntimeArgs(unary_writer_kernel_id, core, writer_args);
             writer_kernel_ids.push_back(unary_writer_kernel_id);
 
         }
@@ -841,14 +841,14 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 
                 {
                     auto reader_kernel_id = reader_kernel_ids.at(i);
-                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
                     runtime_args[0] = src_dram_buffer_a->address();
                     runtime_args[8] = src_dram_buffer_b->address();
                 }
 
                 {
                     auto writer_kernel_id = writer_kernel_ids.at(i);
-                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
                     runtime_args[0] = dst_dram_buffer->address();
                 }
 

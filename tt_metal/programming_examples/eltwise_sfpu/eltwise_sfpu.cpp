@@ -128,7 +128,6 @@ int main(int argc, char **argv) {
          * Configure program and runtime kernel arguments, then execute.
          */
         SetRuntimeArgs(
-            program,
             unary_reader_kernel_id,
             core,
             {
@@ -140,7 +139,6 @@ int main(int argc, char **argv) {
         );
 
         SetRuntimeArgs(
-            program,
             unary_writer_kernel_id,
             core,
             {

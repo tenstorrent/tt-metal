@@ -231,7 +231,6 @@ operation::ProgramWithCallbacks rotary_embedding_single_core(const Tensor &input
     }
 
     SetRuntimeArgs(
-        program,
         unary_reader_kernel_id,
         core,
         {
@@ -245,7 +244,6 @@ operation::ProgramWithCallbacks rotary_embedding_single_core(const Tensor &input
     );
 
     SetRuntimeArgs(
-        program,
         unary_writer_kernel_id,
         core,
         {
@@ -288,7 +286,7 @@ operation::ProgramWithCallbacks rotary_embedding_single_core(const Tensor &input
         CoreCoord core = {0, 0};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(unary_reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
             runtime_args[1] = cos_buffer->address();
             runtime_args[2] = sin_buffer->address();
@@ -296,7 +294,7 @@ operation::ProgramWithCallbacks rotary_embedding_single_core(const Tensor &input
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
             runtime_args[3] = cos_sin_offset;
         }

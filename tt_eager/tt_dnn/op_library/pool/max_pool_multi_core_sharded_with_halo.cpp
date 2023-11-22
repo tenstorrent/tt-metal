@@ -634,9 +634,9 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
             }
 
             // log_debug("CORE: {},{} :: 37 = {}, 38 = {}, 39 = {}, 41 = {}", core.x, core.y, reader_rt_args[37], reader_rt_args[38], reader_rt_args[39], reader_rt_args[41]);
-            SetRuntimeArgs(program, reader_kernel, core, reader_rt_args);
+            SetRuntimeArgs(reader_kernel, core, reader_rt_args);
             std::vector<uint32_t> writer_rt_args = reader_rt_args;
-            SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
+            SetRuntimeArgs(writer_kernel, core, writer_rt_args);
 
             curr_out_stick_id += out_nhw_per_core;
             curr_in_stick_id += in_nhw_per_core;
@@ -662,12 +662,12 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
         for (uint32_t i = 0; i < ncores; ++ i) {
             CoreCoord core{i % ncores_w, i / ncores_w };
             {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel, core);
+                auto &runtime_args = GetRuntimeArgs(reader_kernel, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
             }
             {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel, core);
+                auto &runtime_args = GetRuntimeArgs(writer_kernel, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
             }

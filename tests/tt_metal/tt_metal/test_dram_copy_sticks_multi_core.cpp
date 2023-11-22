@@ -98,7 +98,6 @@ int main(int argc, char **argv) {
             for(int j = start_core.x; j < start_core.x + num_cores_c; j++) {
                 CoreCoord core = {(std::size_t) j, (std::size_t) i};
                 tt_metal::SetRuntimeArgs(
-                    program,
                     unary_reader_kernel,
                     core,
                     {core_to_l1_addr.at(core),

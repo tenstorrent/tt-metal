@@ -66,7 +66,6 @@ try{
                 x, y, multi_core, 15
             };
             SetRuntimeArgs(
-                program,
                 brisc_kernel_id,
                 CoreCoord{x, y},
                 brisc_rt_args
@@ -75,7 +74,6 @@ try{
                 x, y, (uint32_t) xy_end.x+1, multi_core, 4, 2, 10
             };
             SetRuntimeArgs(
-                program,
                 ncrisc_kernel_id,
                 CoreCoord{x, y},
                 ncrisc_rt_args

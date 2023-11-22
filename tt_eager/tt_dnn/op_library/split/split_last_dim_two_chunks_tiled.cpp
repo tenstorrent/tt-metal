@@ -84,8 +84,8 @@ void setup_runtime(
                         (std::uint32_t)out1_buffer->address(),  // second base addr
                         (std::uint32_t)out0_only,
                         (std::uint32_t)out1_only};
-                    tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-                    tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+                    tt_metal::SetRuntimeArgs(reader_kernel_id, core, reader_runtime_args);
+                    tt_metal::SetRuntimeArgs(writer_kernel_id, core, writer_runtime_args);
                 }
             }
         }
@@ -264,12 +264,12 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
                     CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
 
                     {
-                        auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                        auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
                         runtime_args[1] = src_dram_buffer->address();
                     }
 
                     {
-                        auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                        auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
                         runtime_args[1] = dst_0_dram_buffer->address();
                         runtime_args[2] = dst_1_dram_buffer->address();
                     }

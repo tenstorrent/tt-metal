@@ -153,14 +153,13 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             num_output_blocks_per_core = num_output_blocks_per_core_group_2;
         } else {
-            tt_metal::SetRuntimeArgs(program, reader_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
-            tt_metal::SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {0, 0, 0, 0});
-            tt_metal::SetRuntimeArgs(program, writer_id, core, {0, 0, 0});
+            tt_metal::SetRuntimeArgs(reader_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+            tt_metal::SetRuntimeArgs(eltwise_binary_kernel_id, core, {0, 0, 0, 0});
+            tt_metal::SetRuntimeArgs(writer_id, core, {0, 0, 0});
             continue;
         }
 
-        tt_metal::SetRuntimeArgs(
-            program, reader_id, core,
+        tt_metal::SetRuntimeArgs( reader_id, core,
             {
                 src0_addr,
                 src1_addr,
@@ -178,7 +177,6 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
 
 
         tt_metal::SetRuntimeArgs(
-            program,
             eltwise_binary_kernel_id,
             core,
             {
@@ -190,7 +188,6 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         );
 
         tt_metal::SetRuntimeArgs(
-            program,
             writer_id,
             core,
             {
@@ -268,14 +265,13 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
             } else if (core_group_2.core_coord_in_core_ranges(core)) {
                 num_output_blocks_per_core = num_output_blocks_per_core_group_2;
             } else {
-                tt_metal::SetRuntimeArgs(program, reader_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
-                tt_metal::SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {0, 0, 0, 0});
-                tt_metal::SetRuntimeArgs(program, writer_id, core, {0, 0, 0});
+                tt_metal::SetRuntimeArgs(reader_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+                tt_metal::SetRuntimeArgs(eltwise_binary_kernel_id, core, {0, 0, 0, 0});
+                tt_metal::SetRuntimeArgs(writer_id, core, {0, 0, 0});
                 continue;
             }
 
-            tt_metal::SetRuntimeArgs(
-                program, reader_id, core,
+            tt_metal::SetRuntimeArgs(reader_id, core,
                 {
                     src_dram_buffer_a->address(),
                     src_dram_buffer_b->address(),
@@ -293,7 +289,6 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
 
 
             tt_metal::SetRuntimeArgs(
-                program,
                 eltwise_binary_kernel_id,
                 core,
                 {
@@ -305,7 +300,6 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
             );
 
             tt_metal::SetRuntimeArgs(
-                program,
                 writer_id,
                 core,
                 {

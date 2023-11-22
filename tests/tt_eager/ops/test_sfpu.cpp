@@ -150,7 +150,6 @@ bool run_sfpu_test(string sfpu_name) {
 
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_reader_kernel,
             core,
             {
@@ -163,7 +162,6 @@ bool run_sfpu_test(string sfpu_name) {
         );
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel,
             core,
             {

@@ -753,7 +753,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
         .compile_args = writer_compile_time_args,
         .defines = writer_mcast_sender_defines});
 
-    KernelHandle writer_mcast_receiver_id;
+    std::optional<KernelHandle> writer_mcast_receiver_id;
     if (total_num_cores > 1) {
         writer_mcast_receiver_id = CreateKernel(
         program,
@@ -959,7 +959,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
         }
 
         SetRuntimeArgs(
-            program, reader_id, core,
+            reader_id, core,
             reader_rt_args
         );
         reader_ids.push_back(reader_id);
@@ -1030,7 +1030,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
                 writer_rt_args.push_back(weights_mcast_receiver_semaphore);
 
                 SetRuntimeArgs(
-                    program, writer_mcast_sender_id, core,
+                    writer_mcast_sender_id, core,
                     writer_rt_args
                 );
                 writer_ids.push_back(writer_mcast_sender_id);
@@ -1042,10 +1042,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
                 writer_rt_args.push_back(weights_mcast_receiver_semaphore);
 
                 SetRuntimeArgs(
-                    program, writer_mcast_receiver_id, core,
+                    writer_mcast_receiver_id.value(), core,
                     writer_rt_args
                 );
-                writer_ids.push_back(writer_mcast_receiver_id);
+                writer_ids.push_back(writer_mcast_receiver_id.value());
             }
         // 1D mcast
         } else {
@@ -1068,7 +1068,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
                 writer_rt_args.push_back(weights_mcast_receiver_semaphore);
 
                 SetRuntimeArgs(
-                    program, writer_mcast_sender_id, core,
+                    writer_mcast_sender_id, core,
                     writer_rt_args
                 );
                 writer_ids.push_back(writer_mcast_sender_id);
@@ -1080,10 +1080,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
                 writer_rt_args.push_back(weights_mcast_receiver_semaphore);
 
                 SetRuntimeArgs(
-                    program, writer_mcast_receiver_id, core,
+                    writer_mcast_receiver_id.value(), core,
                     writer_rt_args
                 );
-                writer_ids.push_back(writer_mcast_receiver_id);
+                writer_ids.push_back(writer_mcast_receiver_id.value());
             }
         }
 
@@ -1123,12 +1123,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_(const Tensor&
             CoreCoord core = {core_x_i, core_y_i};
 
             if (!src_a_is_sharded) {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_i], core);
+                auto &runtime_args = GetRuntimeArgs(reader_kernel_ids[core_i], core);
                 runtime_args[0] = src_buffer_a->address();
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_i], core);
+                auto &runtime_args = GetRuntimeArgs(writer_kernel_ids[core_i], core);
                 runtime_args[0] = dst_buffer->address();
                 runtime_args[1] = src_buffer_b->address();
                 if (has_bias) {

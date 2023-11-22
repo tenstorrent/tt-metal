@@ -168,13 +168,11 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
 
         if (core_id == 0) {
             SetRuntimeArgs(
-                program,
                 receiver_kernels.at(core_id),
                 core,
                 {src_address, (uint32_t)src_noc_xy.x, (uint32_t)src_noc_xy.y, (uint32_t)num_tiles, (uint32_t)num_repetitions});
         } else {
             SetRuntimeArgs(
-                program,
                 receiver_kernels.at(core_id),
                 core,
                 {(uint32_t)device->worker_core_from_logical_core(cores[core_id - 1]).x,
@@ -187,13 +185,11 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
 
         if (core_id == num_cores - 1) {
             SetRuntimeArgs(
-                program,
                 sender_kernels.at(core_id),
                 core,
                 {dst_address, (uint32_t)dst_noc_xy.x, (uint32_t)dst_noc_xy.y, (uint32_t)num_tiles, (uint32_t)num_repetitions});
         } else {
             SetRuntimeArgs(
-                program,
                 sender_kernels.at(core_id),
                 core,
                 {(uint32_t)device->worker_core_from_logical_core(cores[core_id + 1]).x,

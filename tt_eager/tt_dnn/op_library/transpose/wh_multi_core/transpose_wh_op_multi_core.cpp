@@ -172,7 +172,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         tt_metal::SetRuntimeArgs(
-            program,
             reader_kernel_id,
             core,
             all_runtime_args[i][0]
@@ -180,7 +179,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
         );
 
         tt_metal::SetRuntimeArgs(
-            program,
             compute_kernel_id,
             core,
             all_runtime_args[i][1]
@@ -188,7 +186,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
         );
 
         tt_metal::SetRuntimeArgs(
-            program,
             writer_kernel_id,
             core,
             all_runtime_args[i][2]
@@ -227,15 +224,15 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor &a, Tensor 
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i][0]);
+                SetRuntimeArgs(reader_kernel_id, core, all_runtime_args[i][0]);
             }
 
             {
-                SetRuntimeArgs(program, compute_kernel_id, core, all_runtime_args[i][1]);
+                SetRuntimeArgs(compute_kernel_id, core, all_runtime_args[i][1]);
             }
 
             {
-                SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i][2]);
+                SetRuntimeArgs(writer_kernel_id, core, all_runtime_args[i][2]);
             }
 
         }

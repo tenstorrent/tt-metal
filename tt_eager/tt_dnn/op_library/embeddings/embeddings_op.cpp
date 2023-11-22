@@ -237,14 +237,14 @@ operation::ProgramWithCallbacks embeddings_tilized(
                     (std::uint32_t) a.buffer()->address(),
                     (std::uint32_t) weights.buffer()->address()
                     };
-                    tt_metal::SetRuntimeArgs(program, reader_kernel_id, core,runtime_args);
+                    tt_metal::SetRuntimeArgs(reader_kernel_id, core,runtime_args);
                 }
 
                 //Writer
                 {
                     std::vector<uint32_t> runtime_args = {output.buffer()->address(),(uint32_t) num_tiles_per_block*local_num_blocks, tile_offset};
                     tile_offset += local_num_blocks * num_tiles_per_block;
-                    tt_metal::SetRuntimeArgs(program, writer_kernel_id, core,runtime_args);
+                    tt_metal::SetRuntimeArgs(writer_kernel_id, core,runtime_args);
                 }
 
                 if(split_weights){
@@ -274,13 +274,13 @@ operation::ProgramWithCallbacks embeddings_tilized(
                         auto weights_dram_buffer = input_buffers.at(1);
                         {
 
-                            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                            auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
                             runtime_args[2] = input_dram_buffer->address();
                             runtime_args[3] = weights_dram_buffer->address();
                         }
 
                         {
-                            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                            auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
                             runtime_args[0] = output_dram_buffer->address();
                         }
                     }
@@ -388,7 +388,7 @@ operation::ProgramWithCallbacks embeddings_rm(
     std::vector<tt_metal::NOC> noc_ports = {tt_metal::NOC::RISCV_0_default, tt_metal::NOC::RISCV_1_default};
 
 
-    std::vector<tt::tt_metal::KernelHandle> kernIds(RISC_CORES_PER_TENSIX);
+    std::vector<std::optional<KernelHandle>> kernIds(RISC_CORES_PER_TENSIX);
 
     for(int risc_id =0; risc_id < embedding_risc_cores_per_tensix; risc_id++){
        std::vector<uint32_t> embedding_compile_time_args= {  (std::uint32_t) in0_is_dram,
@@ -469,7 +469,7 @@ operation::ProgramWithCallbacks embeddings_rm(
                         (std::uint32_t) weights.buffer()->address(),
                         (std::uint32_t) output.buffer()->address()
                         };
-                    tt_metal::SetRuntimeArgs(program, kernIds[idc], core,runtime_args);
+                    tt_metal::SetRuntimeArgs(kernIds[idc].value(), core,runtime_args);
                 }
 
             }
@@ -492,7 +492,7 @@ operation::ProgramWithCallbacks embeddings_rm(
                             auto output_dram_buffer = output_buffers.at(0);
                             {
 
-                                auto &runtime_args = GetRuntimeArgs(program, kernIds[idc], core);
+                                auto &runtime_args = GetRuntimeArgs(kernIds[idc].value(), core);
                                 runtime_args[4] = input_dram_buffer->address();
                                 runtime_args[5] = weights_dram_buffer->address();
                                 runtime_args[6] = output_dram_buffer->address();

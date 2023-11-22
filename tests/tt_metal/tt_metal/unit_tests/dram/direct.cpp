@@ -61,7 +61,6 @@ bool reader_only(
     tt_metal::detail::WriteToBuffer(input_dram_buffer, inputs);
 
     tt_metal::SetRuntimeArgs(
-        program,
         reader_kernel,
         reader_core,
         {
@@ -126,7 +125,6 @@ bool writer_only(
 
 
     tt_metal::SetRuntimeArgs(
-        program,
         writer_kernel,
         writer_core,
         {
@@ -210,7 +208,6 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
 
 
     tt_metal::SetRuntimeArgs(
-        program,
         reader_kernel,
         test_config.core,
         {
@@ -220,7 +217,6 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
             (uint32_t)test_config.num_tiles,
         });
     tt_metal::SetRuntimeArgs(
-        program,
         writer_kernel,
         test_config.core,
         {
@@ -314,7 +310,6 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
 
 
     tt_metal::SetRuntimeArgs(
-        program,
         reader_kernel,
         test_config.core,
         {
@@ -324,7 +319,6 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
             (uint32_t)test_config.num_tiles,
         });
     tt_metal::SetRuntimeArgs(
-        program,
         writer_kernel,
         test_config.core,
         {

@@ -376,7 +376,6 @@ TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
             .compile_args = {cb_index}});
 
     SetRuntimeArgs(
-        program,
         reader_kernel,
         core,
         {
@@ -386,7 +385,6 @@ TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
             (uint32_t)num_tiles,
         });
     SetRuntimeArgs(
-        program,
         writer_kernel,
         core,
         {

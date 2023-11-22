@@ -572,7 +572,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         CoreCoord core_coord = {core % ncores_x, core / ncores_x};  // logical
 
         // set reader rt args
-        SetRuntimeArgs(program, reader_kernel_id, core_coord, reader_rt_args);
+        SetRuntimeArgs(reader_kernel_id, core_coord, reader_rt_args);
 
         // for each core, identify its sections with padding for the data it locally owns
         // that is, compute the sharding config
@@ -703,7 +703,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         writer_rt_args[70] = send_from_offset_nsticks[core][4] * in_stick_nbytes;
         writer_rt_args[71] = send_to_offset_nsticks[core][4] * in_stick_nbytes;
 
-        SetRuntimeArgs(program, writer_kernel_id, core_coord, writer_rt_args);
+        SetRuntimeArgs(writer_kernel_id, core_coord, writer_rt_args);
 
         in_stick_start += in_nsticks_per_core;
     }
@@ -1240,9 +1240,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
             }
 
             // reader rt args
-            SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
+            SetRuntimeArgs(reader_kernel_id, core, reader_rt_args);
             // writer rt args
-            SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
+            SetRuntimeArgs(writer_kernel_id, core, writer_rt_args);
         }
         if (0) {
             log_debug(LogOp, "++++ Core: {}", i);

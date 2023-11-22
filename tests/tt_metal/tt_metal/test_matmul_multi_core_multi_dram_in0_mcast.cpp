@@ -306,11 +306,11 @@ bool write_runtime_args_to_device(
             };
 
             if(core_idx_x == 0) {
-                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_sender, core, mm_reader_args);
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_sender, core, mm_reader_args);
             } else {
-                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_receiver, core, mm_reader_args);
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_receiver, core, mm_reader_args);
             }
-            tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
+            tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
         }
     }
     return pass;

@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
         tt_metal::detail::WriteToBuffer(dram_buffer, activations);
 
 
-        tt_metal::SetRuntimeArgs(program, mcast_reader_kernel, core, mcast_reader_args);
+        tt_metal::SetRuntimeArgs(mcast_reader_kernel, core, mcast_reader_args);
 
 
 

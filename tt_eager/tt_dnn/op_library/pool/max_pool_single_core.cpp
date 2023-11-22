@@ -158,7 +158,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                   reader_kernel_fname,
                                                   cores,
                                                   reader_config);
-    SetRuntimeArgs(program, reader_kernel, cores, reader_rt_args);
+    SetRuntimeArgs(reader_kernel, cores, reader_rt_args);
 
     #if 0
     {   // debug
@@ -209,7 +209,7 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
                                                   writer_kernel_fname,
                                                   cores,
                                                   writer_config);
-    SetRuntimeArgs(program, writer_kernel, cores, writer_rt_args);
+    SetRuntimeArgs(writer_kernel, cores, writer_rt_args);
 
     /**
      * Compute Kernel: input cb -> tilize_block -> input tiles -> reduce_h max -> output tiles -> untilize_block -> output cb
@@ -246,12 +246,12 @@ operation::ProgramWithCallbacks max_pool_2d_single_core(const Tensor &input, Ten
         auto dst_dram_buffer = output_buffers.at(0);
         CoreCoord core = {0, 0};
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernel, core);
+            auto &runtime_args = GetRuntimeArgs(reader_kernel, core);
             runtime_args[0] = src_dram_buffer->address();
             runtime_args[1] = dst_dram_buffer->address();
         }
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernel, core);
+            auto &runtime_args = GetRuntimeArgs(writer_kernel, core);
             runtime_args[0] = src_dram_buffer->address();
             runtime_args[1] = dst_dram_buffer->address();
         }

@@ -140,14 +140,12 @@ operation::ProgramWithCallbacks unpad_rm_single_core(const Tensor &a, Tensor& ou
 
 
     tt_metal::SetRuntimeArgs(
-        program,
         unary_reader_kernel_id,
         core,
         all_runtime_args.first
     );
 
     tt_metal::SetRuntimeArgs(
-        program,
         unary_writer_kernel_id,
         core,
         all_runtime_args.second
@@ -168,11 +166,11 @@ operation::ProgramWithCallbacks unpad_rm_single_core(const Tensor &a, Tensor& ou
         auto all_runtime_args = get_unpad_runtime_args_rm(src_tensor, dst_tensor);
 
         {
-            SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args.first);
+            SetRuntimeArgs(unary_reader_kernel_id, core, all_runtime_args.first);
         }
 
         {
-            SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args.second);
+            SetRuntimeArgs(unary_writer_kernel_id, core, all_runtime_args.second);
         }
     };
 
@@ -298,14 +296,12 @@ operation::ProgramWithCallbacks unpad_tile_single_core(const Tensor &a, Tensor& 
     auto all_runtime_args = get_unpad_runtime_args_tile(a, output);
 
     tt_metal::SetRuntimeArgs(
-        program,
         unary_reader_kernel_id,
         core,
         all_runtime_args.first
     );
 
     tt_metal::SetRuntimeArgs(
-        program,
         unary_writer_kernel_id,
         core,
         all_runtime_args.second
@@ -327,11 +323,11 @@ operation::ProgramWithCallbacks unpad_tile_single_core(const Tensor &a, Tensor& 
         auto all_runtime_args = get_unpad_runtime_args_tile(src_tensor, dst_tensor);
 
         {
-            SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args.first);
+            SetRuntimeArgs(unary_reader_kernel_id, core, all_runtime_args.first);
         }
 
         {
-            SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args.second);
+            SetRuntimeArgs(unary_writer_kernel_id, core, all_runtime_args.second);
         }
     };
 

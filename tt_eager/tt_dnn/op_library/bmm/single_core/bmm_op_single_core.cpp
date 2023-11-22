@@ -93,12 +93,10 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args}
     );
 
-    tt_metal::SetRuntimeArgs(
-        program, reader_id, core,
+    tt_metal::SetRuntimeArgs( reader_id, core,
         {src0_addr, src1_addr, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B, uint32_t(bcast_batch ? 1 : 0)}
     );
-    tt_metal::SetRuntimeArgs(
-        program, writer_id, core,
+    tt_metal::SetRuntimeArgs( writer_id, core,
         {dst_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
     );
 
@@ -120,13 +118,13 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
         CoreCoord core = {0, 0};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer_a->address();
             runtime_args[1] = src_dram_buffer_b->address();
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
         }
     };

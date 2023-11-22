@@ -122,14 +122,13 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 		} else if (core_group_2.core_coord_in_core_ranges(core)) {
 			num_tensor_tiles_per_core = num_tiles_per_core_group_2;
 		} else {
-			tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, std::vector<uint32_t>(7, 0));
-			tt_metal::SetRuntimeArgs(program, bcast_kernel_id, core, std::vector<uint32_t>(3, 0));
-			tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, std::vector<uint32_t>(3, 0));
+			tt_metal::SetRuntimeArgs(binary_reader_kernel_id, core, std::vector<uint32_t>(7, 0));
+			tt_metal::SetRuntimeArgs(bcast_kernel_id, core, std::vector<uint32_t>(3, 0));
+			tt_metal::SetRuntimeArgs(unary_writer_kernel_id, core, std::vector<uint32_t>(3, 0));
 			continue;
 		}
 
 		tt_metal::SetRuntimeArgs(
-			program,
 			binary_reader_kernel_id,
 			core,
 			{
@@ -144,7 +143,6 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 		);
 
 		tt_metal::SetRuntimeArgs(
-			program,
 			bcast_kernel_id,
 			core,
 			{
@@ -154,8 +152,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 			}
 		);
 
-		tt_metal::SetRuntimeArgs(
-			program, unary_writer_kernel_id, core,
+		tt_metal::SetRuntimeArgs( unary_writer_kernel_id, core,
 			{
 				output.buffer()->address(),
 				num_tensor_tiles_per_core,
@@ -211,14 +208,13 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 			} else if (core_group_2.core_coord_in_core_ranges(core)) {
 				num_tensor_tiles_per_core = num_tiles_per_core_group_2;
 			} else {
-				tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, std::vector<uint32_t>(7, 0));
-				tt_metal::SetRuntimeArgs(program, bcast_kernel_id, core, std::vector<uint32_t>(3, 0));
-				tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, std::vector<uint32_t>(3, 0));
+				tt_metal::SetRuntimeArgs(binary_reader_kernel_id, core, std::vector<uint32_t>(7, 0));
+				tt_metal::SetRuntimeArgs(bcast_kernel_id, core, std::vector<uint32_t>(3, 0));
+				tt_metal::SetRuntimeArgs(unary_writer_kernel_id, core, std::vector<uint32_t>(3, 0));
 				continue;
 			}
 
 			tt_metal::SetRuntimeArgs(
-				program,
 				binary_reader_kernel_id,
 				core,
 				{
@@ -233,7 +229,6 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 			);
 
 			tt_metal::SetRuntimeArgs(
-				program,
 				bcast_kernel_id,
 				core,
 				{
@@ -243,8 +238,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
 				}
 			);
 
-			tt_metal::SetRuntimeArgs(
-				program, unary_writer_kernel_id, core,
+			tt_metal::SetRuntimeArgs( unary_writer_kernel_id, core,
 				{
 					dst_dram_buffer->address(),
 					num_tensor_tiles_per_core,

@@ -345,8 +345,8 @@ void matmul_multicore_reuse(vector<uint32_t>& a, vector<uint32_t>& b, vector<uin
                 (std::uint32_t) B // batch
             };
 
-            tt_metal::SetRuntimeArgs(program, reader_id, core, mm_reader_args);
-            tt_metal::SetRuntimeArgs(program, writer_id, core, writer_args);
+            tt_metal::SetRuntimeArgs(reader_id, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(writer_id, core, writer_args);
 
             num_blocks_read++;
         }

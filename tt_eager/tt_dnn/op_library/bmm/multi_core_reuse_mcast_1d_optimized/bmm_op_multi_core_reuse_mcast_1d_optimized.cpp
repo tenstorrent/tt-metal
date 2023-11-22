@@ -260,7 +260,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = in1_sender_writer_compile_time_args, .defines = mm_kernel_in1_sender_writer_defines});
 
 
-    KernelHandle mm_kernel_in0_receiver_id = 0;
+    std::optional<KernelHandle> mm_kernel_in0_receiver_id;
     if (!in0_is_sharded) {
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
             program,
@@ -394,7 +394,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             mm_in0_sender_args.push_back(end_core_noc.y);
             mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
             mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_y.begin(), in0_mcast_noc_y.end());
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
+            tt_metal::SetRuntimeArgs(mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
             reader_kernel_ids.push_back(mm_kernel_in0_sender_id);
         }
         // in0 sender and in1 sender
@@ -412,7 +412,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 // padding args
                 (std::uint32_t) per_core_M // last_block_h
             };
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
+            tt_metal::SetRuntimeArgs(mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
             reader_kernel_ids.push_back(mm_kernel_in0_sender_id);
         }
         // in0 receiver and in 1 sender
@@ -422,8 +422,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 (std::uint32_t)  top_left_core_physical.x, // in0_mcast_sender_noc_x
                 (std::uint32_t)  top_left_core_physical.y // in0_mcast_sender_noc_y
             };
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args); // RISCV_1_default
-            reader_kernel_ids.push_back(mm_kernel_in0_receiver_id);
+            tt_metal::SetRuntimeArgs(mm_kernel_in0_receiver_id.value(), core, mm_in0_receiver_args); // RISCV_1_default
+            reader_kernel_ids.push_back(mm_kernel_in0_receiver_id.value());
         }
         std::vector<uint32_t> mm_in1_sender_writer_args = {
             // READER
@@ -472,7 +472,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             mm_in1_sender_writer_args.push_back((std::uint32_t)  bias_buffer->address());
             mm_in1_sender_writer_args.push_back((std::uint32_t)  per_core_N * output_idx_x); //in3_tensor_start_tile_id
         }
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args); // RISCV_0_default
+        tt_metal::SetRuntimeArgs(mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args); // RISCV_0_default
         writer_kernel_ids.push_back(mm_kernel_in1_sender_writer_id);
     }
 
@@ -512,10 +512,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
 
             auto reader_kernel_id = reader_kernel_ids.at(i);
-            auto &reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto &reader_runtime_args = GetRuntimeArgs(reader_kernel_id, core);
 
             auto writer_kernel_id = writer_kernel_ids.at(i);
-            auto &writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto &writer_runtime_args = GetRuntimeArgs(writer_kernel_id, core);
 
             // in0 sender
             if (!src0_sharded && core_idx_x == 0 and core_idx_y == 0) {
@@ -917,7 +917,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 mm_in1_sender_writer_args.push_back((std::uint32_t)  per_core_N * output_idx_x); //in3_tensor_start_tile_id
             }
 
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args); // RISCV_1_default
+            tt_metal::SetRuntimeArgs(mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args); // RISCV_1_default
             writer_kernel_ids.push_back(mm_kernel_in1_sender_writer_id);
         }
         // in0 sender and in1 receiver
@@ -954,7 +954,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 mm_in1_receiver_writer_args.push_back(0);
             }
 
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in1_receiver_writer_id, core, mm_in1_receiver_writer_args); // RISCV_0_default
+            tt_metal::SetRuntimeArgs(mm_kernel_in1_receiver_writer_id, core, mm_in1_receiver_writer_args); // RISCV_0_default
             writer_kernel_ids.push_back(mm_kernel_in1_receiver_writer_id);
         }
         std::vector<uint32_t> mm_in0_sender_args =  {
@@ -970,7 +970,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             // padding args
             (std::uint32_t) per_core_M // last_block_h
         };
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_1_default
+        tt_metal::SetRuntimeArgs(mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_1_default
         reader_kernel_ids.push_back(mm_kernel_in0_sender_id);
     }
 
@@ -1010,10 +1010,10 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
 
             auto reader_kernel_id = reader_kernel_ids.at(i);
-            auto &reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto &reader_runtime_args = GetRuntimeArgs(reader_kernel_id, core);
 
             auto writer_kernel_id = writer_kernel_ids.at(i);
-            auto &writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto &writer_runtime_args = GetRuntimeArgs(writer_kernel_id, core);
 
             // in0 sender
             reader_runtime_args[0] = src_buffer_a->address();

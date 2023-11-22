@@ -264,8 +264,7 @@ int main(int argc, char **argv) {
                     << num_blocks << " " << cb_n << " "
                     << cb_n * single_tile_size << std::endl;
         }
-        tt_metal::SetRuntimeArgs(
-            program, mm_reader_kernel, core,
+        tt_metal::SetRuntimeArgs( mm_reader_kernel, core,
             {l1_buffer_addr, l1_buffer_offset, num_blocks, cb_n});
       }
     }

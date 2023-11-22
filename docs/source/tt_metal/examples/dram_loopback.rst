@@ -117,7 +117,7 @@ Setting runtime arguments for the data movement kernel
       static_cast<uint32_t>(output_dram_buffer.noc_coordinates().y),
       l1_buffer.size()
   };
-            tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
+            tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
 
   SetRuntimeArgs(
       program,

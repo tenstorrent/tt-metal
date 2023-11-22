@@ -510,9 +510,9 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
     );
 
     // Reader rt args
-    SetRuntimeArgs(program, reader_id, core_range, reader_rt_args);
+    SetRuntimeArgs(reader_id, core_range, reader_rt_args);
     // Writer rt args
-    SetRuntimeArgs(program, writer_id, core_range, writer_rt_args);
+    SetRuntimeArgs(writer_id, core_range, writer_rt_args);
 
     auto override_runtime_args_callback = [kernel_reader_id = reader_id, kernel_writer_id = writer_id](
                                             const Program &program,
@@ -524,7 +524,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
         auto out_dram_buffer = output_buffers.at(0);
         CoreCoord core = {0, 0};
         {
-            auto &runtime_args = GetRuntimeArgs(program, kernel_reader_id, core);
+            auto &runtime_args = GetRuntimeArgs(kernel_reader_id, core);
             runtime_args[0] = in0_dram_buffer->address();
             runtime_args[9] = in1_dram_buffer->address();
             if (bias_dram_buffer != nullptr) {
@@ -532,7 +532,7 @@ operation::ProgramWithCallbacks bmm_single_core_tilize_untilize(
             }
         }
         {
-            auto &runtime_args = GetRuntimeArgs(program, kernel_writer_id, core);
+            auto &runtime_args = GetRuntimeArgs(kernel_writer_id, core);
             runtime_args[0] = out_dram_buffer->address();
         }
     };

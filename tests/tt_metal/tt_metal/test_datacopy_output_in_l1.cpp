@@ -112,7 +112,6 @@ int main(int argc, char **argv) {
 
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_reader_kernel,
             core,
             {src_dram_buffer.address(),
@@ -121,7 +120,6 @@ int main(int argc, char **argv) {
             num_tiles});
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel,
             core,
             {dst_l1_buffer.address(),

@@ -100,7 +100,6 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
 
     uint32_t bnc1 = (bN*bC == 1) ? 1 : 0;
     tt_metal::SetRuntimeArgs(
-        program,
         binary_reader_kernel_id,
         core,
         {
@@ -117,7 +116,6 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
 
 
     tt_metal::SetRuntimeArgs(
-        program,
         bcast_kernel_id,
         core,
         {
@@ -128,7 +126,6 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
     );
 
     tt_metal::SetRuntimeArgs(
-        program,
         unary_writer_kernel_id,
         core,
         {
@@ -173,7 +170,6 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
         CoreCoord core = {0, 0};
 
         tt_metal::SetRuntimeArgs(
-            program,
             binary_reader_kernel_id,
             core,
             {
@@ -190,7 +186,6 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
 
 
         tt_metal::SetRuntimeArgs(
-            program,
             bcast_kernel_id,
             core,
             {
@@ -201,7 +196,6 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
         );
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel_id,
             core,
             {

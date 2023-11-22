@@ -108,21 +108,18 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
     auto all_runtime_args = get_runtime_args_wh(a, output);
 
     tt_metal::SetRuntimeArgs(
-        program,
         reader_kernel_id,
         core,
         all_runtime_args[0]
     );
 
     tt_metal::SetRuntimeArgs(
-        program,
         eltwise_binary_kernel_id,
         core,
         all_runtime_args[1]
     );
 
     tt_metal::SetRuntimeArgs(
-        program,
         writer_kernel_id,
         core,
         all_runtime_args[2]
@@ -145,15 +142,15 @@ operation::ProgramWithCallbacks transpose_wh_single_core(const Tensor &a, Tensor
         CoreCoord core = {0, 0};
 
         {
-            SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[0]);
+            SetRuntimeArgs(reader_kernel_id, core, all_runtime_args[0]);
         }
 
         {
-            SetRuntimeArgs(program, eltwise_binary_kernel_id, core, all_runtime_args[1]);
+            SetRuntimeArgs(eltwise_binary_kernel_id, core, all_runtime_args[1]);
         }
 
         {
-            SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[2]);
+            SetRuntimeArgs(writer_kernel_id, core, all_runtime_args[2]);
         }
     };
 
@@ -251,14 +248,12 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
     auto all_runtime_args = get_runtime_args_hc(a, output);
 
     tt_metal::SetRuntimeArgs(
-        program,
         reader_kernel_id,
         core,
         all_runtime_args.first
     );
 
     tt_metal::SetRuntimeArgs(
-        program,
         writer_kernel_id,
         core,
         all_runtime_args.second
@@ -281,11 +276,11 @@ operation::ProgramWithCallbacks transpose_hc_single_core(const Tensor &a, Tensor
         CoreCoord core = {0, 0};
 
         {
-            SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args.first);
+            SetRuntimeArgs(reader_kernel_id, core, all_runtime_args.first);
         }
 
         {
-            SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args.second);
+            SetRuntimeArgs(writer_kernel_id, core, all_runtime_args.second);
         }
     };
 
@@ -365,14 +360,12 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
     auto all_runtime_args = get_runtime_args_cn(a, output);
 
     tt_metal::SetRuntimeArgs(
-        program,
         reader_kernel_id,
         core,
         all_runtime_args.first
     );
 
     tt_metal::SetRuntimeArgs(
-        program,
         writer_kernel_id,
         core,
         all_runtime_args.second
@@ -394,11 +387,11 @@ operation::ProgramWithCallbacks transpose_cn_single_core(const Tensor &a, Tensor
         CoreCoord core = {0, 0};
 
         {
-            SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args.first);
+            SetRuntimeArgs(reader_kernel_id, core, all_runtime_args.first);
         }
 
         {
-            SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args.second);
+            SetRuntimeArgs(writer_kernel_id, core, all_runtime_args.second);
         }
     };
 

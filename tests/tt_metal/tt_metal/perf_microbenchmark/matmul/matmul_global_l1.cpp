@@ -400,8 +400,7 @@ tt_metal::Program create_program_mcast_in0_in1(
           .noc = tt_metal::NOC::RISCV_0_default,
           .compile_args = in0_receiver_compile_time_args});
 
-  KernelHandle mm_kernel_in1_receiver_writer_other_noc_setup_id = 0;
-  KernelHandle mm_kernel_in0_receiver_other_noc_setup_id = 0;
+  std::optional<KernelHandle> mm_kernel_in1_receiver_writer_other_noc_setup_id, mm_kernel_in0_receiver_other_noc_setup_id;
 
   if (split_half) {
     mm_kernel_in1_receiver_writer_other_noc_setup_id =
@@ -669,9 +668,9 @@ tt_metal::Program create_program_mcast_in0_in1(
                   top_core_plus_one_physical.x);  // in1_mcast_dest_noc_end_x
         }
 
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core,
+        tt_metal::SetRuntimeArgs(mm_kernel_in0_sender_id, core,
                                  mm_in0_sender_args);  // RISCV_0_default
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core,
+        tt_metal::SetRuntimeArgs(mm_kernel_in1_sender_writer_id, core,
                                  mm_in1_sender_writer_args);  // RISCV_1_default
         reader_kernel_ids.push_back(mm_kernel_in0_sender_id);
         writer_kernel_ids.push_back(mm_kernel_in1_sender_writer_id);
@@ -734,10 +733,9 @@ tt_metal::Program create_program_mcast_in0_in1(
               (std::uint32_t)top_core_physical.x);  // in1_mcast_sender_noc_x
         }
 
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core,
+        tt_metal::SetRuntimeArgs(mm_kernel_in0_sender_id, core,
                                  mm_in0_sender_args);  // RISCV_0_default
-        tt_metal::SetRuntimeArgs(
-            program, mm_kernel_in1_receiver_writer_id, core,
+        tt_metal::SetRuntimeArgs( mm_kernel_in1_receiver_writer_id, core,
             mm_in1_receiver_writer_args);  // RISCV_1_default
         reader_kernel_ids.push_back(mm_kernel_in0_sender_id);
         writer_kernel_ids.push_back(mm_kernel_in1_receiver_writer_id);
@@ -808,9 +806,9 @@ tt_metal::Program create_program_mcast_in0_in1(
               (std::uint32_t)
                   top_core_plus_one_physical.x);  // in1_mcast_dest_noc_end_x
         }
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core,
+        tt_metal::SetRuntimeArgs(mm_kernel_in0_receiver_id, core,
                                  mm_in0_receiver_args);  // RISCV_1_default
-        tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core,
+        tt_metal::SetRuntimeArgs(mm_kernel_in1_sender_writer_id, core,
                                  mm_in1_sender_writer_args);  // RISCV_0_default
         reader_kernel_ids.push_back(mm_kernel_in0_receiver_id);
         writer_kernel_ids.push_back(mm_kernel_in1_sender_writer_id);
@@ -888,25 +886,24 @@ tt_metal::Program create_program_mcast_in0_in1(
 
         // left half
         if (core_idx_x <= half_core) {
-          tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core,
+          tt_metal::SetRuntimeArgs(mm_kernel_in0_receiver_id, core,
                                    mm_in0_receiver_args);
-          tt_metal::SetRuntimeArgs(program, mm_kernel_in1_receiver_writer_id,
+          tt_metal::SetRuntimeArgs(mm_kernel_in1_receiver_writer_id,
                                    core, mm_in1_receiver_writer_args);
           reader_kernel_ids.push_back(mm_kernel_in0_receiver_id);
           writer_kernel_ids.push_back(mm_kernel_in1_receiver_writer_id);
         }
         // right half
         else {
-          tt_metal::SetRuntimeArgs(program,
-                                   mm_kernel_in0_receiver_other_noc_setup_id,
+          tt_metal::SetRuntimeArgs( mm_kernel_in0_receiver_other_noc_setup_id.value(),
                                    core, mm_in0_receiver_args);
           tt_metal::SetRuntimeArgs(
-              program, mm_kernel_in1_receiver_writer_other_noc_setup_id, core,
+              mm_kernel_in1_receiver_writer_other_noc_setup_id.value(), core,
               mm_in1_receiver_writer_args);
           reader_kernel_ids.push_back(
-              mm_kernel_in0_receiver_other_noc_setup_id);
+              mm_kernel_in0_receiver_other_noc_setup_id.value());
           writer_kernel_ids.push_back(
-              mm_kernel_in1_receiver_writer_other_noc_setup_id);
+              mm_kernel_in1_receiver_writer_other_noc_setup_id.value());
         }
         /* Checkerboard logic
         // white

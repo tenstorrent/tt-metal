@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
     }
     tt_metal::Buffer *src0_buffer = a.buffer();
-    tt_metal::KernelHandle reader_kernel_id;
+    std::optional<tt_metal::KernelHandle> reader_kernel_id;
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     if (in_sharded) {
@@ -134,7 +134,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     }
 
     tt_metal::Buffer *dst_buffer = output.buffer();
-    tt_metal::KernelHandle writer_kernel_id;
+    std::optional<tt_metal::KernelHandle> writer_kernel_id;
 
     if (out_sharded) {
         vector<uint32_t> writer_ct_args = {
@@ -204,8 +204,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
             packed_scaler_value
         };
         tt_metal::SetRuntimeArgs(
-            program,
-            reader_kernel_id,
+            reader_kernel_id.value(),
             all_cores,
             reader_rt_args
         );
@@ -214,8 +213,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
             num_cols_per_core_group_1
         };
         tt_metal::SetRuntimeArgs(
-            program,
-            writer_kernel_id,
+            writer_kernel_id.value(),
             all_cores,
             writer_rt_args
         );
@@ -231,7 +229,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
                 TT_ASSERT(false, "Core not in specified core ranges");
             }
             tt_metal::SetRuntimeArgs(
-                program, reader_kernel_id, core,
+                reader_kernel_id.value(), core,
                 {
                     a.buffer()->address(),
                     num_cols_read / Wt * HtWt + num_cols_read % Wt,
@@ -241,7 +239,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
             );
 
             tt_metal::SetRuntimeArgs(
-                program, writer_kernel_id, core,
+                writer_kernel_id.value(), core,
                 {
                     output.buffer()->address(),
                     num_cols_per_core, // number of tiles to write
@@ -253,8 +251,8 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     }
 
     auto override_runtime_arguments_callback = [
-            reader_kernel_id=reader_kernel_id,
-            writer_kernel_id=writer_kernel_id,
+            reader_kernel_id=reader_kernel_id.value(),
+            writer_kernel_id=writer_kernel_id.value(),
             cb_src1=cb_src1,
             cb_output=cb_output,
             num_cores=num_cores,
@@ -282,12 +280,12 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
                 {
-                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
                     runtime_args[0] = src_buffer->address();
                 }
 
                 {
-                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
                     runtime_args[0] = dst_buffer->address();
                 }
             }

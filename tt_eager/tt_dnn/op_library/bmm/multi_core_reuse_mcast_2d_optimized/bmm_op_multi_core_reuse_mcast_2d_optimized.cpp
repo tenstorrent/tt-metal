@@ -349,7 +349,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (CoreRangeSet) (std::set<CoreRange>) {in0_sender_in1_receiver, in0_receiver_in1_receiver_left_half},
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc, .compile_args = in1_receiver_writer_compile_time_args, .defines = mm_kernel_in1_receiver_writer_defines});
 
-    KernelHandle mm_kernel_in0_receiver_id = 0;
+    std::optional<KernelHandle> mm_kernel_in0_receiver_id;
     if (!in0_is_sharded) {
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
             program,
@@ -360,7 +360,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
 
     KernelHandle mm_kernel_in1_receiver_writer_other_noc_setup_id = mm_kernel_in1_receiver_writer_id;
-    KernelHandle mm_kernel_in0_receiver_other_noc_setup_id = mm_kernel_in0_receiver_id;
+    KernelHandle mm_kernel_in0_receiver_other_noc_setup_id = mm_kernel_in0_receiver_id.value();
 
     if (split_half) {
         mm_kernel_in1_receiver_writer_other_noc_setup_id = tt_metal::CreateKernel(
@@ -549,7 +549,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in0_sender_args.insert(mm_in0_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
                     mm_in0_sender_args.push_back(worker_shard_same_coord);
                 }
-                tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
                 reader_kernel_ids.push_back(mm_kernel_in0_sender_id);
             } else if (in1_idx == 0) {
                 std::vector<uint32_t> mm_in0_sender_args =  {
@@ -569,7 +569,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in0_sender_args.push_back(per_core_M);
                 }
 
-                tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(mm_kernel_in0_sender_id, core, mm_in0_sender_args); // RISCV_0_default
                 reader_kernel_ids.push_back(mm_kernel_in0_sender_id);
 
             // in0 receiver
@@ -581,12 +581,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 };
                 // left half
                 if (core_idx_x <= half_core) {
-                    tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);
-                    reader_kernel_ids.push_back(mm_kernel_in0_receiver_id);
+                    tt_metal::SetRuntimeArgs(mm_kernel_in0_receiver_id.value(), core, mm_in0_receiver_args);
+                    reader_kernel_ids.push_back(mm_kernel_in0_receiver_id.value());
                 }
                 // right half
                 else {
-                    tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_other_noc_setup_id, core, mm_in0_receiver_args);
+                    tt_metal::SetRuntimeArgs(mm_kernel_in0_receiver_other_noc_setup_id, core, mm_in0_receiver_args);
                     reader_kernel_ids.push_back(mm_kernel_in0_receiver_other_noc_setup_id);
                 }
             }
@@ -640,7 +640,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back((std::uint32_t)  bias_buffer->address());
                     mm_in1_sender_writer_args.push_back((std::uint32_t)  per_core_N * in1_idx); //in1_tensor_start_tile_id
                 }
-                tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args); // RISCV_1_default
                 writer_kernel_ids.push_back(mm_kernel_in1_sender_writer_id);
 
             // in1 receiver
@@ -697,12 +697,12 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
                 // left half
                 if (core_idx_x <= half_core) {
-                    tt_metal::SetRuntimeArgs(program, mm_kernel_in1_receiver_writer_id, core, mm_in1_receiver_writer_args);
+                    tt_metal::SetRuntimeArgs(mm_kernel_in1_receiver_writer_id, core, mm_in1_receiver_writer_args);
                     writer_kernel_ids.push_back(mm_kernel_in1_receiver_writer_id);
                 }
                 // right half
                 else {
-                    tt_metal::SetRuntimeArgs(program, mm_kernel_in1_receiver_writer_other_noc_setup_id, core, mm_in1_receiver_writer_args);
+                    tt_metal::SetRuntimeArgs(mm_kernel_in1_receiver_writer_other_noc_setup_id, core, mm_in1_receiver_writer_args);
                     writer_kernel_ids.push_back(mm_kernel_in1_receiver_writer_other_noc_setup_id);
                 }
             }
@@ -745,10 +745,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 CoreCoord core = {(std::size_t) start_core_x + core_idx_x, (std::size_t) start_core_y + core_idx_y};
 
                 auto reader_kernel_id = reader_kernel_ids.at(i);
-                auto &reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto &reader_runtime_args = GetRuntimeArgs(reader_kernel_id, core);
 
                 auto writer_kernel_id = writer_kernel_ids.at(i);
-                auto &writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto &writer_runtime_args = GetRuntimeArgs(writer_kernel_id, core);
 
                 uint32_t in0_idx = core_idx_y;
                 uint32_t in1_idx = core_idx_x;

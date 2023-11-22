@@ -135,7 +135,6 @@ int main(int argc, char** argv) {
                 tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
 
             SetRuntimeArgs(
-                program,
                 eltwise_binary_kernel,
                 core,
                 {2048, 1}
@@ -178,8 +177,8 @@ int main(int argc, char** argv) {
             vector<uint32_t> writer_args = {
                 dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, num_tiles};
 
-            SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
-            SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
+            SetRuntimeArgs(unary_writer_kernel, core, writer_args);
+            SetRuntimeArgs(binary_reader_kernel, core, reader_args);
 
             EnqueueProgram(cq, program, false);
             std::vector<uint32_t> result_vec;

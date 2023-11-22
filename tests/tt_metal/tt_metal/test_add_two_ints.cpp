@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::SetRuntimeArgs(program, add_two_ints_kernel, core, first_runtime_args);
+        tt_metal::SetRuntimeArgs(add_two_ints_kernel, core, first_runtime_args);
 
 
         tt_metal::detail::LaunchProgram(device, program);
@@ -58,7 +58,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                  Update Runtime Args and Re-run Application
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::SetRuntimeArgs(program, add_two_ints_kernel, core, second_runtime_args);
+        tt_metal::SetRuntimeArgs(add_two_ints_kernel, core, second_runtime_args);
         tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> second_kernel_result;

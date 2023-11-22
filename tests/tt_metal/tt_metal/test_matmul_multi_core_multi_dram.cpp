@@ -263,8 +263,8 @@ bool assign_runtime_args_to_program(
                 (std::uint32_t)(per_core_M / out_subblock_h),      // out_num_subblocks_h
             };
 
-            tt_metal::SetRuntimeArgs(program, mm_reader_kernel, core, mm_reader_args);
-            tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
+            tt_metal::SetRuntimeArgs(mm_reader_kernel, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
         }
     }
 

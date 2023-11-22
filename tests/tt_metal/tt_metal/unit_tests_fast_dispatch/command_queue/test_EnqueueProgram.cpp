@@ -215,8 +215,8 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
         do {
             auto [core_coord, terminate_] = core_range_generator();
 
-            SetRuntimeArgs(program, dummy_kernel0, core_coord, dummy_kernel0_args);
-            SetRuntimeArgs(program, dummy_kernel1, core_coord, dummy_kernel1_args);
+            SetRuntimeArgs(dummy_kernel0, core_coord, dummy_kernel0_args);
+            SetRuntimeArgs(dummy_kernel1, core_coord, dummy_kernel1_args);
 
             terminate = terminate_;
         } while (not terminate);
@@ -449,7 +449,7 @@ TEST_F(CommandQueueFixture, ComputeRuntimeArgs) {
 
 
     std::vector<uint32_t> initial_runtime_args = {101, 202};
-    SetRuntimeArgs(program, 0, cr_set, initial_runtime_args);
+    SetRuntimeArgs(compute_kernel_id, cr_set, initial_runtime_args);
     EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
     Finish(*tt::tt_metal::detail::GLOBAL_CQ);
 

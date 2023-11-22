@@ -188,14 +188,12 @@ operation::ProgramWithCallbacks unpad_rm_multi_core(const Tensor &a, Tensor& out
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_total; i++){
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         tt_metal::SetRuntimeArgs(
-            program,
             unary_reader_kernel_id,
             core,
             all_runtime_args[i].first
         );
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel_id,
             core,
             all_runtime_args[i].second
@@ -229,11 +227,11 @@ operation::ProgramWithCallbacks unpad_rm_multi_core(const Tensor &a, Tensor& out
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
+                SetRuntimeArgs(unary_reader_kernel_id, core, all_runtime_args[i].first);
             }
 
             {
-                SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
+                SetRuntimeArgs(unary_writer_kernel_id, core, all_runtime_args[i].second);
             }
         }
     };
@@ -415,14 +413,12 @@ operation::ProgramWithCallbacks unpad_tile_multi_core(const Tensor &a, Tensor& o
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_reader_kernel_id,
             core,
             all_runtime_args[i].first
         );
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel_id,
             core,
             all_runtime_args[i].second
@@ -458,10 +454,10 @@ operation::ProgramWithCallbacks unpad_tile_multi_core(const Tensor &a, Tensor& o
         for (uint32_t i = 0; i < num_cores_total; i++){
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             {
-                SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
+                SetRuntimeArgs(unary_reader_kernel_id, core, all_runtime_args[i].first);
             }
             {
-                SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
+                SetRuntimeArgs(unary_writer_kernel_id, core, all_runtime_args[i].second);
             }
         }
     };

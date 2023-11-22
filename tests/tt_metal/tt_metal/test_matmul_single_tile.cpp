@@ -121,7 +121,6 @@ int main(int argc, char **argv) {
 
 
         tt_metal::SetRuntimeArgs(
-            program,
             mm_reader_kernel,
             core,
             {src0_dram_buffer.address(),
@@ -137,7 +136,6 @@ int main(int argc, char **argv) {
             1 * single_tile_size});
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel,
             core,
             {dst_dram_buffer.address(),

@@ -151,7 +151,6 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
 
         if (tilized) {
             tt_metal::SetRuntimeArgs(
-                program,
                 unary_reader_kernel_id,
                 core,
                 {
@@ -162,7 +161,6 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
             );
 
             tt_metal::SetRuntimeArgs(
-                program,
                 unary_writer_kernel_id,
                 core,
                 {
@@ -173,7 +171,6 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
             );
         } else {
             tt_metal::SetRuntimeArgs(
-                program,
                 unary_reader_kernel_id,
                 core,
                 {
@@ -185,7 +182,6 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
             );
 
             tt_metal::SetRuntimeArgs(
-                program,
                 unary_writer_kernel_id,
                 core,
                 {
@@ -223,12 +219,12 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(unary_reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
             }
         }

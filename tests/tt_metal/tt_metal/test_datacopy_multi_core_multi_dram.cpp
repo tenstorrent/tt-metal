@@ -266,8 +266,8 @@ bool write_runtime_args_to_device(
             // log_info(LogTest, "dst_stride_x = {}", 1);
             // log_info(LogTest, "dst_stride_y = {}", N);
 
-            tt_metal::SetRuntimeArgs(program, mm_reader_kernel, core, mm_reader_args);
-            tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
+            tt_metal::SetRuntimeArgs(mm_reader_kernel, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(unary_writer_kernel, core, writer_args);
         }
     }
 

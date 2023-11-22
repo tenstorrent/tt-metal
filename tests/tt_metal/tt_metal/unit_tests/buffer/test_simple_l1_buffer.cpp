@@ -77,7 +77,6 @@ namespace tt::test::buffer::detail {
 
 
         tt_metal::SetRuntimeArgs(
-            program,
             reader_kernel,
             core,
             {
@@ -87,7 +86,6 @@ namespace tt::test::buffer::detail {
                 (uint32_t)num_tiles,
             });
         tt_metal::SetRuntimeArgs(
-            program,
             writer_kernel,
             core,
             {

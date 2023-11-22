@@ -26,7 +26,7 @@ enum class KernelType {
 };
 
 
-Program initialize_program_data_movement(Device *device, const CoreRangeSet &core_range_set) {
+auto initialize_program_data_movement(Device *device, const CoreRangeSet &core_range_set) {
     Program program = tt_metal::CreateProgram();
 
     auto add_two_ints_kernel = tt_metal::CreateKernel(
@@ -37,12 +37,12 @@ Program initialize_program_data_movement(Device *device, const CoreRangeSet &cor
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     detail::CompileProgram(device, program);
-    return std::move(program);
+    return std::tuple{std::move(program), add_two_ints_kernel} ;
 }
 
 
 
-Program initialize_program_compute(Device *device, const CoreRangeSet &core_range_set) {
+auto initialize_program_compute(Device *device, const CoreRangeSet &core_range_set) {
     Program program = tt_metal::CreateProgram();
 
     std::vector<uint32_t> compute_args = {0};  // dummy
@@ -57,7 +57,7 @@ Program initialize_program_compute(Device *device, const CoreRangeSet &core_rang
 
 
 
-    return std::move(program);
+    return std::tuple{std::move(program), compute_kernel_id};
 }
 
 
@@ -108,13 +108,13 @@ TEST_F(DeviceFixture, LegallyModifyRTArgsDataMovement) {
         CoreRange first_core_range = {.start = CoreCoord(0, 0), .end = CoreCoord(1, 1)};
         CoreRange second_core_range = {.start = CoreCoord(3, 3), .end = CoreCoord(5, 5)};
         CoreRangeSet core_range_set({first_core_range, second_core_range});
-        auto program =
+        auto[program, kh] =
             unit_tests::runtime_args::initialize_program_data_movement(this->devices_.at(id), core_range_set);
         ASSERT_TRUE(
             program.num_kernels() ==
             1);
         std::vector<uint32_t> initial_runtime_args = {101, 202};
-        SetRuntimeArgs(program, 0, core_range_set, initial_runtime_args);
+        SetRuntimeArgs(kh, core_range_set, initial_runtime_args);
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
         for (auto core_range : core_range_set.ranges()) {
@@ -130,7 +130,7 @@ TEST_F(DeviceFixture, LegallyModifyRTArgsDataMovement) {
             unit_tests::runtime_args::verify_result_data_movement(this->devices_.at(id), program, core_to_rt_args));
 
         std::vector<uint32_t> second_runtime_args = {303, 606};
-        SetRuntimeArgs(program, 0, first_core_range, second_runtime_args);
+        SetRuntimeArgs(kh, first_core_range, second_runtime_args);
         detail::WriteRuntimeArgsToDevice(this->devices_.at(id), program);
         for (auto x = first_core_range.start.x; x <= first_core_range.end.x; x++) {
             for (auto y = first_core_range.start.y; y <= first_core_range.end.y; y++) {
@@ -204,9 +204,9 @@ TEST_F(DeviceFixture, LegallyModifyRTArgsCompute) {
         CoreRange first_core_range = {.start = CoreCoord(0, 0), .end = CoreCoord(1, 1)};
         CoreRange second_core_range = {.start = CoreCoord(3, 3), .end = CoreCoord(5, 5)};
         CoreRangeSet core_range_set({first_core_range, second_core_range});
-        auto program = unit_tests::runtime_args::initialize_program_compute(this->devices_.at(id), core_range_set);
+        auto [program, kh] = unit_tests::runtime_args::initialize_program_compute(this->devices_.at(id), core_range_set);
         std::vector<uint32_t> initial_runtime_args = {101, 202};
-        SetRuntimeArgs(program, 0, core_range_set, initial_runtime_args);
+        SetRuntimeArgs(kh, core_range_set, initial_runtime_args);
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
         for (auto core_range : core_range_set.ranges()) {
@@ -229,13 +229,13 @@ TEST_F(DeviceFixture, IllegallyModifyRTArgs) {
         CoreRange first_core_range = {.start = CoreCoord(0, 0), .end = CoreCoord(1, 1)};
         CoreRange second_core_range = {.start = CoreCoord(3, 3), .end = CoreCoord(5, 5)};
         CoreRangeSet core_range_set({first_core_range, second_core_range});
-        auto program =
+        auto [program, kh] =
             unit_tests::runtime_args::initialize_program_data_movement(this->devices_.at(id), core_range_set);
         ASSERT_TRUE(
             program.num_kernels() ==
             1);
         std::vector<uint32_t> initial_runtime_args = {101, 202};
-        SetRuntimeArgs(program, 0, core_range_set, initial_runtime_args);
+        SetRuntimeArgs(kh, core_range_set, initial_runtime_args);
 
         std::map<CoreCoord, std::vector<uint32_t>> core_to_rt_args;
         for (auto core_range : core_range_set.ranges()) {
@@ -250,7 +250,7 @@ TEST_F(DeviceFixture, IllegallyModifyRTArgs) {
         ASSERT_TRUE(
             unit_tests::runtime_args::verify_result_data_movement(this->devices_.at(id), program, core_to_rt_args));
         std::vector<uint32_t> invalid_runtime_args = {303, 404, 505};
-        EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, first_core_range, invalid_runtime_args));
+        EXPECT_ANY_THROW(SetRuntimeArgs(kh, first_core_range, invalid_runtime_args));
     }
 }
 

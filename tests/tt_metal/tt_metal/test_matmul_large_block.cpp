@@ -366,13 +366,11 @@ bool test_matmul_large_block(tt_metal::Device *device, bool activations_rm, bool
 
 
         tt_metal::SetRuntimeArgs(
-            program,
             mm_reader_kernel,
             core,
             mm_reader_rt_args);
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel,
             core,
             writer_rt_args);

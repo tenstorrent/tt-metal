@@ -84,7 +84,6 @@ Extra runtime arguments for reader/writer
 .. code-block:: cpp
 
     SetRuntimeArgs(
-        program,
         unary_writer_kernel_id,
         core,
         {

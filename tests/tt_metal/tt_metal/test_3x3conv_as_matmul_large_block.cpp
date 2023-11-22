@@ -264,13 +264,11 @@ int main(int argc, char **argv) {
         std::cout << "DONE WRITING TO DEVICE. GOING TO CONFIGURE DEVICE WITH PROGRAM" << std::endl;
 
         tt_metal::SetRuntimeArgs(
-            program,
             generic_binary_reader_kernel,
             core,
             generic_binary_reader_args);
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel,
             core,
             writer_rt_args);

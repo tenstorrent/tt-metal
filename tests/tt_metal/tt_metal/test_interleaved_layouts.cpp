@@ -162,7 +162,6 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
 
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_reader_kernel,
             core,
             {dram_buffer_src_addr,
@@ -171,7 +170,6 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             (uint32_t) log2(stick_size)});
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel,
             core,
             {dram_buffer_dst_addr,
@@ -329,7 +327,6 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
 
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_reader_kernel,
             core,
             {dram_buffer_src_addr,
@@ -338,7 +335,6 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
             (uint32_t) log2(stick_size)});
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel,
             core,
             {dram_buffer_dst_addr,
@@ -442,7 +438,6 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
         tt_metal::detail::WriteToBuffer(src, host_buffer);
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_reader_kernel,
             core,
             {src.address(), 0, 0, num_pages});
@@ -454,7 +449,6 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
         tt_metal::detail::WriteToBuffer(src, host_buffer);
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_reader_kernel,
             core,
             {src.address(), 0, 0, num_pages});
@@ -465,7 +459,6 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
         dst = CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::L1);
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel,
             core,
             {dst.address(), 0, 0, num_pages});
@@ -482,7 +475,6 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
          dst = CreateBuffer(device, buffer_size, num_bytes_per_page, tt_metal::BufferType::DRAM);
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel,
             core,
             {dst.address(), 0, 0, num_pages});

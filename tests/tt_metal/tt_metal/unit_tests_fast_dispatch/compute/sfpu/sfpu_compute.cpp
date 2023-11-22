@@ -210,8 +210,8 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
             terminate = terminate_;
 
-            SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
-            SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
+            SetRuntimeArgs(writer_kernel, core_coord, writer_rt_args);
+            SetRuntimeArgs(reader_kernel, core_coord, reader_rt_args);
         } while (not terminate);
     }
 

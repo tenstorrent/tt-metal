@@ -264,17 +264,17 @@ operation::ProgramWithCallbacks create_program(
 
         // left half
         if (core_idx_x <= 5) {
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_id, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(mm_kernel_in0_reader_id, core, mm_reader_args);
             mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end());
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in1_reader_writer_id, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(mm_kernel_in1_reader_writer_id, core, mm_reader_args);
             reader_kernel_ids.push_back(mm_kernel_in0_reader_id);
             writer_kernel_ids.push_back(mm_kernel_in1_reader_writer_id);
         }
         // right half
         else {
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_other_noc_setup_id, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(mm_kernel_in0_reader_other_noc_setup_id, core, mm_reader_args);
             mm_reader_args.insert(mm_reader_args.end(), writer_args.begin(), writer_args.end());
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in1_reader_writer_other_noc_setup_id, core, mm_reader_args);
+            tt_metal::SetRuntimeArgs(mm_kernel_in1_reader_writer_other_noc_setup_id, core, mm_reader_args);
             reader_kernel_ids.push_back(mm_kernel_in0_reader_other_noc_setup_id);
             writer_kernel_ids.push_back(mm_kernel_in1_reader_writer_other_noc_setup_id);
         }
@@ -378,14 +378,14 @@ operation::ProgramWithCallbacks create_program(
 
             {
                 auto reader_kernel_id = reader_kernel_ids.at(i);
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
                 runtime_args[0] = src_dram_buffer_a->address();
                 runtime_args[8] = src_dram_buffer_b->address();
             }
 
             {
                 auto writer_kernel_id = writer_kernel_ids.at(i);
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
                 runtime_args[0] = src_dram_buffer_a->address();
                 runtime_args[8] = src_dram_buffer_b->address();
                 runtime_args[21] = dst_dram_buffer->address();

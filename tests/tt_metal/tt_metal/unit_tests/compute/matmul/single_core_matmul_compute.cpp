@@ -343,8 +343,8 @@ bool single_core_matmul(tt_metal::Device* device, const SingleCoreMatmulConfig& 
     print_vector_fixed_numel_per_row(unpack_vector<bfloat16, uint32_t>(input1_dram_readback_packed), 32);
 
 
-    tt_metal::SetRuntimeArgs(program, reader_kernel, cfg.core, reader_rt_args);
-    tt_metal::SetRuntimeArgs(program, writer_kernel, cfg.core, writer_rt_args);
+    tt_metal::SetRuntimeArgs(reader_kernel, cfg.core, reader_rt_args);
+    tt_metal::SetRuntimeArgs(writer_kernel, cfg.core, writer_rt_args);
 
 
     tt_metal::detail::LaunchProgram(device, program);
@@ -460,7 +460,6 @@ bool single_tile_matmul(tt_metal::Device* device) {
 
 
     tt_metal::SetRuntimeArgs(
-        program,
         reader_kernel,
         core,
         {
@@ -473,7 +472,6 @@ bool single_tile_matmul(tt_metal::Device* device) {
             (uint32_t)1,  // num_tiles
         });
     tt_metal::SetRuntimeArgs(
-        program,
         writer_kernel,
         core,
         {
@@ -588,7 +586,6 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
 
 
     tt_metal::SetRuntimeArgs(
-        program,
         reader_kernel,
         core,
         {
@@ -605,7 +602,6 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
             (uint32_t)in1_byte_size,  // in1_block_size_bytes
         });
     tt_metal::SetRuntimeArgs(
-        program,
         writer_kernel,
         core,
         {
@@ -744,7 +740,6 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
 
 
     tt_metal::SetRuntimeArgs(
-        program,
         reader_kernel,
         core,
         {
@@ -761,7 +756,6 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
             (uint32_t)in1_byte_size,  // in1_block_size_bytes
         });
     tt_metal::SetRuntimeArgs(
-        program,
         writer_kernel,
         core,
         {

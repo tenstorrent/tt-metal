@@ -131,7 +131,6 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
     );
 
     SetRuntimeArgs(
-        program,
         unary_reader_kernel_id,
         core,
         {
@@ -142,7 +141,6 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
     );
 
     SetRuntimeArgs(
-        program,
         unary_writer_kernel_id,
         core,
         {
@@ -175,14 +173,14 @@ operation::ProgramWithCallbacks update_cache_single_core(const Tensor& cache_ten
         CoreCoord core = {0, 0};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(unary_reader_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
             runtime_args[1] = src_buffer->address();
             runtime_args[5] = cache_tile_idx;
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
             runtime_args[5] = cache_tile_idx;
             runtime_args[6] = tile_update_offset;
@@ -243,7 +241,6 @@ operation::ProgramWithCallbacks fill_cache_single_core(const Tensor& cache_tenso
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     SetRuntimeArgs(
-        program,
         unary_reader_kernel_id,
         core,
         {
@@ -253,7 +250,6 @@ operation::ProgramWithCallbacks fill_cache_single_core(const Tensor& cache_tenso
     );
 
     SetRuntimeArgs(
-        program,
         unary_writer_kernel_id,
         core,
         {
@@ -287,12 +283,12 @@ operation::ProgramWithCallbacks fill_cache_single_core(const Tensor& cache_tenso
         CoreCoord core = {0, 0};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(unary_reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
             runtime_args[2] = start_idx;
         }

@@ -107,7 +107,6 @@ int main(int argc, char **argv) {
         tt_metal::detail::WriteToDeviceL1(device, core, address_map_l1_addr, address_map);
 
         tt_metal::SetRuntimeArgs(
-            program,
             dram_to_l1_copy_kernel,
             core,
             {input_dram_buffer_addr,

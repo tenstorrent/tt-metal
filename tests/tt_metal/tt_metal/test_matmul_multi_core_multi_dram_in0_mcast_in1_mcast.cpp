@@ -360,17 +360,17 @@ bool write_runtime_args_to_device(
             };
 
             if(core_idx_x == 0 and core_idx_y == 0) {
-                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_in0_sender_in1_sender, core, mm_reader_args); // RISCV_0_default
-                tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_sender_in1_sender, core, mm_reader_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
             } else if (core_idx_x == 0 and core_idx_y != 0) {
-                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_in0_sender_in1_receiver, core, mm_reader_args); // RISCV_0_default
-                tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_sender_in1_receiver, core, mm_reader_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc1, core, writer_args); // RISCV_1_default
             } else if (core_idx_x != 0 and core_idx_y == 0) {
-                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_in0_receiver_in1_sender, core, mm_reader_args); // RISCV_1_default
-                tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_receiver_in1_sender, core, mm_reader_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
             } else {
-                tt_metal::SetRuntimeArgs(program, mm_reader_kernel_in0_receiver_in1_receiver, core, mm_reader_args); // RISCV_1_default
-                tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
+                tt_metal::SetRuntimeArgs(mm_reader_kernel_in0_receiver_in1_receiver, core, mm_reader_args); // RISCV_1_default
+                tt_metal::SetRuntimeArgs(unary_writer_kernel_noc0, core, writer_args); // RISCV_0_default
             }
         }
     }

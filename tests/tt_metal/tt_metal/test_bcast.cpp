@@ -222,7 +222,6 @@ int main(int argc, char **argv) {
 
         uint32_t nc1 = 0;
         tt_metal::SetRuntimeArgs(
-            program,
             binary_reader_kernel,
             core,
             {dram_buffer_src0_addr, // 0
@@ -235,7 +234,6 @@ int main(int argc, char **argv) {
             num_bcast_tiles, NC*Ht*Wt, NC, Ht, Wt, nc1}); // 7 8 9 10 11 12
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel,
             core,
             {dram_buffer_dst_addr,
@@ -256,7 +254,6 @@ int main(int argc, char **argv) {
         );
 
         tt_metal::SetRuntimeArgs(
-            program,
             eltwise_binary_kernel,
             core,
             {

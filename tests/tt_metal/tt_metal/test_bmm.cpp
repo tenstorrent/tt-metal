@@ -110,12 +110,10 @@ int main(int argc, char **argv) {
         tt_metal::detail::WriteToBuffer(src1_dram_buffer, src1_vec);
 
         uint32_t do_bcast = 0;
-        tt_metal::SetRuntimeArgs(
-            program, reader, core,
+        tt_metal::SetRuntimeArgs( reader, core,
             {dram_buffer_src0_addr, dram_buffer_src1_addr, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B, do_bcast}
         );
-        tt_metal::SetRuntimeArgs(
-            program, writer, core,
+        tt_metal::SetRuntimeArgs( writer, core,
             {dram_buffer_dst_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
         );
 

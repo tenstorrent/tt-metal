@@ -11,7 +11,12 @@
 
 namespace tt::tt_metal {
 
-using KernelHandle = std::uint16_t;
+class Program;
+
+struct KernelHandle{
+    std::reference_wrapper<Program> program;
+    size_t kernelID;
+};
 
 enum class DataMovementProcessor {
     RISCV_0 = 0,  // BRISC

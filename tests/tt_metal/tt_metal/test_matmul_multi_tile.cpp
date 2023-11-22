@@ -261,13 +261,11 @@ bool run_matmul(const tt::ARCH& arch, const bool with_bias) {
         }
 
         tt_metal::SetRuntimeArgs(
-            program,
             mm_reader_kernel,
             core,
             reader_l1_args);
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel,
             core,
             {dst_dram_buffer.address(),

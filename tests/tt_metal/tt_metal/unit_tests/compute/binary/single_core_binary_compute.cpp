@@ -104,7 +104,6 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines});
 
     SetRuntimeArgs(
-        program,
         binary_kernel,
         test_config.core,
         {uint32_t(test_config.num_tiles), 1}
@@ -147,7 +146,6 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
 
 
     tt_metal::SetRuntimeArgs(
-        program,
         reader_kernel,
         test_config.core,
         {
@@ -160,7 +158,6 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
             (uint32_t)test_config.num_tiles,
         });
     tt_metal::SetRuntimeArgs(
-        program,
         writer_kernel,
         test_config.core,
         {

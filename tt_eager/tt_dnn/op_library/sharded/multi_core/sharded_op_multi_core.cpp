@@ -68,7 +68,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
 
     bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
-    tt_metal::KernelHandle unary_reader_kernel_id;
+    std::optional<KernelHandle> unary_reader_kernel_id;
     if (input.layout() == Layout::TILE) {
 
         std::vector<uint32_t> reader_compile_time_args = {
@@ -106,7 +106,6 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
     tt_metal::SetRuntimeArgs(
-        program,
         unary_writer_kernel_id,
         all_cores,
         {
@@ -124,8 +123,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
 
         if (input.layout() == Layout::TILE) {
             tt_metal::SetRuntimeArgs(
-                program,
-                unary_reader_kernel_id,
+                unary_reader_kernel_id.value(),
                 core,
                 {
                     src_buffer->address(),
@@ -143,8 +141,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
             }
         } else {
             tt_metal::SetRuntimeArgs(
-                program,
-                unary_reader_kernel_id,
+                unary_reader_kernel_id.value(),
                 core,
                 {
                     src_buffer->address(),
@@ -164,7 +161,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
     }
 
     auto override_runtime_arguments_callback = [
-            unary_reader_kernel_id,
+            reader_kh=unary_reader_kernel_id.value(),
             unary_writer_kernel_id,
             cb_output,
             num_cores,
@@ -193,7 +190,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
                 if (!all_cores.core_coord_in_core_ranges(core)) {
                     continue;
                 }
-                auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(reader_kh, core);
                 runtime_args[0] = src_buffer->address();
             }
         }
@@ -271,7 +268,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
-    tt_metal::KernelHandle unary_writer_kernel_id;
+    std::optional<tt_metal::KernelHandle> unary_writer_kernel_id;
     if (input.layout() == Layout::TILE) {
         std::vector<uint32_t> writer_compile_time_args = {
             (std::uint32_t) src0_cb_index,
@@ -301,7 +298,6 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
     }
 
     tt_metal::SetRuntimeArgs(
-        program,
         unary_reader_kernel_id,
         all_cores,
         {
@@ -346,8 +342,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
                 }
             }
             tt_metal::SetRuntimeArgs(
-                program,
-                unary_writer_kernel_id,
+                unary_writer_kernel_id.value(),
                 core,
                 {
                     dst_buffer->address(),
@@ -395,8 +390,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
             }
 
             tt_metal::SetRuntimeArgs(
-                program,
-                unary_writer_kernel_id,
+                unary_writer_kernel_id.value(),
                 core,
                 {
                     dst_buffer->address(),
@@ -416,7 +410,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
     }
     auto override_runtime_arguments_callback = [
             unary_reader_kernel_id,
-            unary_writer_kernel_id,
+            unary_writer_kernel_id=unary_writer_kernel_id.value(),
             cb_src0,
             num_cores,
             num_cores_x,
@@ -444,7 +438,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
                 if (!all_cores.core_coord_in_core_ranges(core)) {
                     continue;
                 }
-                auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
             }
         }

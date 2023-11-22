@@ -130,7 +130,6 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
     );
 
     tt_metal::SetRuntimeArgs(
-        program,
         unary_reader_kernel_id,
         core,
         {src0_buffer->address(),
@@ -138,7 +137,6 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
     );
 
     tt_metal::SetRuntimeArgs(
-        program,
         unary_writer_kernel_id,
         core,
         writer_kernel_args
@@ -159,12 +157,12 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
         CoreCoord core = {0, 0};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
         }
     };
@@ -309,7 +307,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
     );
 
     tt_metal::SetRuntimeArgs(
-        program,
         unary_reader_kernel_id,
         core,
         {src0_buffer->address(),
@@ -317,7 +314,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
     );
 
     tt_metal::SetRuntimeArgs(
-        program,
         unary_writer_kernel_id,
         core,
         writer_kernel_args
@@ -338,12 +334,12 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor
         CoreCoord core = {0, 0};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
         }
     };

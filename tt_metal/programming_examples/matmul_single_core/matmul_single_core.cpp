@@ -206,13 +206,11 @@ void matmul_single_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_
     /*
     * Kernels - Runtime arguments
     */
-    tt_metal::SetRuntimeArgs(
-        program, reader_id, core,
+    tt_metal::SetRuntimeArgs( reader_id, core,
         {src0_addr, src1_addr, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B, uint32_t(bcast_batch ? 1 : 0)}
     );
 
-    tt_metal::SetRuntimeArgs(
-        program, writer_id, core,
+    tt_metal::SetRuntimeArgs( writer_id, core,
         {dst_addr, 0, Mt, Kt, Nt, Mt*Kt, Kt*Nt, B}
     );
 

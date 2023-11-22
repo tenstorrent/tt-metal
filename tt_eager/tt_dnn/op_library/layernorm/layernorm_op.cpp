@@ -286,12 +286,12 @@ operation::ProgramWithCallbacks layernorm_(
 
         uint32_t tile_offset = curr_row * Wt;
 
-        SetRuntimeArgs(program, reader_kernels_id, core,
+        SetRuntimeArgs(reader_kernels_id, core,
             { a_addr, num_tile_rows_per_core, Wt, tile_offset, packed_winv_value, e.u, // 0-5
             gamma_dram_addr, beta_dram_addr, b_dram_addr } // 6-8
         );
-        SetRuntimeArgs(program, compute_kernels_id, core, { num_tile_rows_per_core });
-        SetRuntimeArgs(program, writer_kernels_id, core, { dst_addr, num_tile_rows_per_core * Wt, tile_offset } );
+        SetRuntimeArgs(compute_kernels_id, core, { num_tile_rows_per_core });
+        SetRuntimeArgs(writer_kernels_id, core, { dst_addr, num_tile_rows_per_core * Wt, tile_offset } );
         curr_row += num_tile_rows_per_core;
     }
 
@@ -318,7 +318,7 @@ operation::ProgramWithCallbacks layernorm_(
             CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
                 runtime_args[0] = src_a_dram_buffer->address();
                 if (src_b_dram_buffer != nullptr) {
                     runtime_args[8] = src_b_dram_buffer->address();
@@ -332,7 +332,7 @@ operation::ProgramWithCallbacks layernorm_(
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
                 runtime_args[0] = dst_dram_buffer->address();
             }
         }

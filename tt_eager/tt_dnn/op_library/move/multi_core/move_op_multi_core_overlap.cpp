@@ -167,7 +167,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
             runtime_args.push_back(aligned_page_size);
             runtime_args.push_back(log2_page_size);
         }
-        SetRuntimeArgs(program, kernel_id, core, runtime_args);
+        SetRuntimeArgs(kernel_id, core, runtime_args);
         pages_handled_per_core += num_pages_per_core;
     }
 
@@ -178,7 +178,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
         for (uint32_t i = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             {
-                auto &runtime_args = GetRuntimeArgs(program, kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(kernel_id, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
             }

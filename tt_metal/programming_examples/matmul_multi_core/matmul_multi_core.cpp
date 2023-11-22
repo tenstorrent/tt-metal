@@ -253,8 +253,7 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        tt_metal::SetRuntimeArgs(
-            program, reader_id, core,
+        tt_metal::SetRuntimeArgs( reader_id, core,
             {src0_addr,
             src1_addr,
             Mt,
@@ -269,7 +268,6 @@ void matmul_multi_core(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t
             MtNt }
         );
         tt_metal::SetRuntimeArgs(
-            program,
             writer_id,
             core,
             {dst_addr,

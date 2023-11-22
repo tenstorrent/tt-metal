@@ -273,8 +273,8 @@ bool run_chained_sfpu_test(int chain_length) {
 
 
 
-        tt_metal::SetRuntimeArgs(program, unary_reader_kernel, core, unary_reader_args);
-        tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, unary_writer_args);
+        tt_metal::SetRuntimeArgs(unary_reader_kernel, core, unary_reader_args);
+        tt_metal::SetRuntimeArgs(unary_writer_kernel, core, unary_writer_args);
 
 
 
@@ -498,8 +498,8 @@ bool run_binary_add_and_then_eltwise_gelu_test() {
 
 
 
-        tt_metal::SetRuntimeArgs(program, binary_reader_kernel, core, binary_reader_args);
-        tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, unary_writer_args);
+        tt_metal::SetRuntimeArgs(binary_reader_kernel, core, binary_reader_args);
+        tt_metal::SetRuntimeArgs(unary_writer_kernel, core, unary_writer_args);
 
 
 
@@ -971,8 +971,8 @@ bool run_forked_binary_test() {
 
 
 
-        tt_metal::SetRuntimeArgs(program, nary_reader_kernel, core, nary_reader_args);
-        tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, unary_writer_args);
+        tt_metal::SetRuntimeArgs(nary_reader_kernel, core, nary_reader_args);
+        tt_metal::SetRuntimeArgs(unary_writer_kernel, core, unary_writer_args);
 
 
         tt_metal::detail::LaunchProgram(device, program);

@@ -689,7 +689,6 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
         };
 
         tt_metal::SetRuntimeArgs(
-            program,
             downsample_compute_kernel_id,
             core,
             compile_rt_kernel_args
@@ -770,7 +769,6 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
         };
 
         tt_metal::SetRuntimeArgs(
-            program,
             downsample_writer_kernel_id,
             core,
             writer_kernel_args
@@ -799,7 +797,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
         UpdateDynamicCircularBufferAddress( final_tilize_output_cb, *dst_buffer);
         for (uint32_t i = 0; i < num_cores; i++) {
             CoreCoord core = {i % num_cores_x, i / num_cores_x};
-            auto &runtime_args = GetRuntimeArgs(program, downsample_writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(downsample_writer_kernel_id, core);
             runtime_args[8] = src_buffer->address();
             runtime_args[39] = src_buffer->address();
         }

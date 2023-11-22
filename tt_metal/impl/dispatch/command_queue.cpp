@@ -164,14 +164,14 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
         // which use multiple core ranges
         bool linked = dst_noc_multicast_info.size() == 1;
 
-        vector<KernelHandle> kernel_ids;
-        if (kg.riscv0_id) kernel_ids.push_back(kg.riscv0_id.value());
-        if (kg.riscv1_id) kernel_ids.push_back(kg.riscv1_id.value());
-        if (kg.compute_id) kernel_ids.push_back(kg.compute_id.value());
+        vector<size_t> kernel_ids;
+        if (kg.riscv0_id) kernel_ids.push_back(kg.riscv0_id.value().kernelID);
+        if (kg.riscv1_id) kernel_ids.push_back(kg.riscv1_id.value().kernelID);
+        if (kg.compute_id) kernel_ids.push_back(kg.compute_id.value().kernelID);
 
         uint32_t src_copy = src;
         for (size_t i = 0; i < kernel_ids.size(); i++) {
-            KernelHandle kernel_id = kernel_ids[i];
+            size_t kernel_id = kernel_ids[i];
             vector<RISCV> sub_kernels;
             const Kernel* kernel = detail::GetKernel(program, kernel_id);
             if (kernel->processor() == RISCV::COMPUTE) {
@@ -254,12 +254,12 @@ ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     // Create a vector of all program binaries/cbs/semaphores
     uint32_t program_page_idx = 0;
     for (const KernelGroup &kg: program.get_kernel_groups()) {
-        vector<KernelHandle> kernel_ids;
-        if (kg.riscv0_id) kernel_ids.push_back(kg.riscv0_id.value());
-        if (kg.riscv1_id) kernel_ids.push_back(kg.riscv1_id.value());
-        if (kg.compute_id) kernel_ids.push_back(kg.compute_id.value());
-        for (KernelHandle kernel_id: kernel_ids) {
-            const Kernel* kernel = detail::GetKernel(program, kernel_id);
+        vector<size_t> kernel_ids;
+        if (kg.riscv0_id) kernel_ids.push_back(kg.riscv0_id.value().kernelID);
+        if (kg.riscv1_id) kernel_ids.push_back(kg.riscv1_id.value().kernelID);
+        if (kg.compute_id) kernel_ids.push_back(kg.compute_id.value().kernelID);
+        for (auto kid: kernel_ids) {
+            const Kernel* kernel = detail::GetKernel(program, kid);
 
             for (const ll_api::memory& kernel_bin : kernel->binaries(device->id())) {
                 kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {

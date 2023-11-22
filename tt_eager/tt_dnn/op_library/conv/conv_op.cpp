@@ -606,12 +606,12 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
             .defines = compute_defines});
 
     SetRuntimeArgs(
-        program, reader_id, core,
+        reader_id, core,
         reader_rt_args
     );
 
     SetRuntimeArgs(
-        program, writer_id, core,
+        writer_id, core,
         writer_rt_args
     );
 
@@ -637,12 +637,12 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         CoreCoord core = {0, 0};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer_a->address();
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
             runtime_args[1] = src_dram_buffer_b->address();
             if (has_bias) {
@@ -1291,12 +1291,12 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
     );
 
     tt_metal::SetRuntimeArgs(
-        program, reader_id, core,
+        reader_id, core,
         reader_rt_args
     );
 
     tt_metal::SetRuntimeArgs(
-        program, writer_id, core,
+        writer_id, core,
         writer_rt_args
     );
 
@@ -1321,7 +1321,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         CoreCoord core = {0, 0};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer_a->address();
             runtime_args[1] = src_dram_buffer_a->noc_coordinates().x;
             runtime_args[2] = src_dram_buffer_a->noc_coordinates().y;
@@ -1331,7 +1331,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
         }
     };

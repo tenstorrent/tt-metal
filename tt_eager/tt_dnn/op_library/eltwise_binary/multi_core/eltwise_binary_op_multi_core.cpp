@@ -306,9 +306,9 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
             num_tiles_read += num_tiles_per_core;
         }
 
-        SetRuntimeArgs(program, binary_reader_kernel_id, cores, binary_reader_args);
-        SetRuntimeArgs(program, eltwise_binary_kernel_id, cores, eltwise_binary_args);
-        SetRuntimeArgs(program, unary_writer_kernel_id, cores, unary_writer_args);
+        SetRuntimeArgs(binary_reader_kernel_id, cores, binary_reader_args);
+        SetRuntimeArgs(eltwise_binary_kernel_id, cores, eltwise_binary_args);
+        SetRuntimeArgs(unary_writer_kernel_id, cores, unary_writer_args);
 
         if (src0_sharded) {
             UpdateDynamicCircularBufferAddress( cb_src0, *src_buffer_a);

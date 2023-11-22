@@ -47,8 +47,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args=reader_compile_time_args});
 
-    tt_metal::SetRuntimeArgs(
-        program, binary_reader_kernel_id, core,
+    tt_metal::SetRuntimeArgs( binary_reader_kernel_id, core,
         { dst_buffer->address(), uint32_t(N*C), uint32_t(H), uint32_t(W), uint32_t(hFill), uint32_t(wFill), uint32_t(bfloat16(val_hi).to_uint16()), uint32_t(bfloat16(val_lo).to_uint16()) }
     );
 
@@ -63,7 +62,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
         CoreCoord core = {0, 0};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(kernel_id, core);
             runtime_args[0] = dst_buffer->address();
         }
     };

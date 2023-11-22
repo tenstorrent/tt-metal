@@ -131,7 +131,6 @@ int main(int argc, char **argv) {
 
 
         tt_metal::SetRuntimeArgs(
-            program,
             reader_kernel,
             core,
             {
@@ -143,7 +142,6 @@ int main(int argc, char **argv) {
         );
 
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel,
             core,
             {

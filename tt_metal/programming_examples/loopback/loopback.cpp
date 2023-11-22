@@ -77,7 +77,6 @@ int main(int argc, char **argv) {
         };
 
         SetRuntimeArgs(
-            program,
             dram_copy_kernel_id,
             core,
             runtime_args

@@ -124,7 +124,6 @@ int main(int argc, char **argv) {
 
 
         tt_metal::SetRuntimeArgs(
-            program,
             producer_kernel,
             loader_logical_core,
             {dram_buffer_src_addr,
@@ -142,7 +141,6 @@ int main(int argc, char **argv) {
         );
 
         tt_metal::SetRuntimeArgs(
-            program,
             consumer_kernel,
             writer_logical_core,
             {loader_buffer_address1,

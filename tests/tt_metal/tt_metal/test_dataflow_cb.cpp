@@ -101,7 +101,6 @@ int main(int argc, char **argv) {
 
 
         tt_metal::SetRuntimeArgs(
-            program,
             reader_cb_kernel,
             core,
             {dram_buffer_src_addr,
@@ -110,7 +109,6 @@ int main(int argc, char **argv) {
             (uint32_t)num_tiles_per_cb});
 
         tt_metal::SetRuntimeArgs(
-            program,
             writer_cb_kernel,
             core,
             {dram_buffer_dst_addr,

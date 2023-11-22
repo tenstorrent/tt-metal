@@ -158,14 +158,12 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
 
     for (const auto &[core, dst_l1_buffer] : core_to_l1_buffer) {
         tt_metal::SetRuntimeArgs(
-            program,
             unary_reader_kernel,
             core,
             reader_rt_args);
 
         auto l1_dst_noc_xy = dst_l1_buffer.noc_coordinates();
         tt_metal::SetRuntimeArgs(
-            program,
             unary_writer_kernel,
             core,
             {dst_l1_buffer.address(),

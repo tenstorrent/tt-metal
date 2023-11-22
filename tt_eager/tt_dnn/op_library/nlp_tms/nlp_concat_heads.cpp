@@ -123,8 +123,8 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
             num_blocks_written * per_tensor_tiles,
         };
 
-        tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-        tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+        tt_metal::SetRuntimeArgs(reader_kernel_id, core, reader_runtime_args);
+        tt_metal::SetRuntimeArgs(writer_kernel_id, core, writer_runtime_args);
         num_blocks_written += num_blocks_per_core;
     }
 
@@ -148,12 +148,12 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
                 runtime_args[0] = src_dram_buffer->address();
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
                 runtime_args[0] = dst_dram_buffer->address();
             }
         }

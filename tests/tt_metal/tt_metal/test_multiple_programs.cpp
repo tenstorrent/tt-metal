@@ -79,7 +79,6 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> se
     );
 
     SetRuntimeArgs(
-        program,
         eltwise_binary_kernel,
         core,
         {1, 1}
@@ -156,8 +155,7 @@ void write_program_runtime_args_to_device(
     auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
 
 
-    tt_metal::SetRuntimeArgs(
-        program, reader_kernel_id, core,
+    tt_metal::SetRuntimeArgs( reader_kernel_id, core,
         {src0_dram_buffer.address(),
         (std::uint32_t)dram_src0_noc_xy.x,
         (std::uint32_t)dram_src0_noc_xy.y,
@@ -167,8 +165,7 @@ void write_program_runtime_args_to_device(
         num_tiles}
     );
 
-    tt_metal::SetRuntimeArgs(
-        program, writer_kernel_id, core,
+    tt_metal::SetRuntimeArgs( writer_kernel_id, core,
         {dst_dram_buffer.address(),
         (std::uint32_t)dram_dst_noc_xy.x,
         (std::uint32_t)dram_dst_noc_xy.y,

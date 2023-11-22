@@ -117,16 +117,14 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
     );
 
     if (reduce_dim == ReduceOpDim::H) {
-        tt_metal::SetRuntimeArgs(
-            program, reader_kernel_id, core,
+        tt_metal::SetRuntimeArgs( reader_kernel_id, core,
             {
                 a.buffer()->address(),
                 NC, Ht, Wt, HtWt
             }
         );
     } else {
-        tt_metal::SetRuntimeArgs(
-            program, reader_kernel_id, core,
+        tt_metal::SetRuntimeArgs( reader_kernel_id, core,
             {
                 a.buffer()->address(),
                 num_tensor_tiles, 0
@@ -142,8 +140,7 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
         default: TT_ASSERT(false && "Unsupported reduce_dim!");
     }
 
-    tt_metal::SetRuntimeArgs(
-        program, writer_kernel_id, core,
+    tt_metal::SetRuntimeArgs( writer_kernel_id, core,
         {
             output.buffer()->address(),
             num_tensor_tiles/out_dim_divider,
@@ -164,12 +161,12 @@ operation::ProgramWithCallbacks reduce_single_core(const Tensor &a, Tensor& outp
         CoreCoord core = {0, 0};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
             runtime_args[0] = src_dram_buffer->address();
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
             runtime_args[0] = dst_dram_buffer->address();
         }
     };

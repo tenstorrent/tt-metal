@@ -308,12 +308,10 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
                 //     log_debug("{} :: ncores_per_batch_h: {}", core.y, ncores_per_batch_h);
                 // }
                 vector<uint32_t> writer_rt_args = reader_rt_args;
-                SetRuntimeArgs(program,
-                                reader_kernel_id,
+                SetRuntimeArgs(reader_kernel_id,
                                 core,
                                 reader_rt_args);
-                SetRuntimeArgs(program,
-                                writer_kernel_id,
+                SetRuntimeArgs(writer_kernel_id,
                                 core,
                                 writer_rt_args);
                 start_src_stick_wi += ntiles_per_core_w * TILE_WIDTH;
@@ -338,12 +336,12 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
             for (uint32_t i = 0; i < ncores_w; ++ i) {
                 CoreCoord core = {i, j};
                 {
-                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
                     runtime_args[0] = src_buffer->address();
                     runtime_args[1] = dst_buffer->address();
                 }
                 {
-                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
                     runtime_args[0] = src_buffer->address();
                     runtime_args[1] = dst_buffer->address();
                 }

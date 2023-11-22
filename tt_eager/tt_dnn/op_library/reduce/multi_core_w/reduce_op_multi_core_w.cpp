@@ -130,8 +130,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
             TT_ASSERT(false, "Core not in specified core ranges");
         }
         uint32_t num_tensor_tiles_per_core = num_rows_per_core*Wt;
-        tt_metal::SetRuntimeArgs(
-            program, reader_kernel_id, core,
+        tt_metal::SetRuntimeArgs( reader_kernel_id, core,
             {
                 a.buffer()->address(),
                 num_tensor_tiles_per_core,
@@ -139,8 +138,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
             }
         );
 
-        tt_metal::SetRuntimeArgs(
-            program, writer_kernel_id, core,
+        tt_metal::SetRuntimeArgs( writer_kernel_id, core,
             {
                 output.buffer()->address(),
                 num_tensor_tiles_per_core / out_dim_divider, // number of tiles to write
@@ -170,12 +168,12 @@ operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a, Tensor& out
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
                 runtime_args[0] = src_dram_buffer->address();
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
                 runtime_args[0] = dst_dram_buffer->address();
             }
         }

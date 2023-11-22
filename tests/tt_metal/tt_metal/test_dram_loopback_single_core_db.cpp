@@ -79,7 +79,6 @@ int main(int argc, char **argv) {
 
 
         tt_metal::SetRuntimeArgs(
-            program,
             dram_copy_kernel,
             core,
             {input_dram_buffer_addr,

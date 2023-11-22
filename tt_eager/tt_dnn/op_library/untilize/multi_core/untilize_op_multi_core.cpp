@@ -233,7 +233,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 
     /** reader
      */
-    KernelHandle unary_reader_kernel_id;
+    std::optional<KernelHandle> unary_reader_kernel_id;
 
     if (src_sharded) {
         std::vector<uint32_t> reader_ct_args = {
@@ -263,7 +263,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
 
     /** writer
      */
-    KernelHandle unary_writer_kernel_id;
+    std::optional<KernelHandle> unary_writer_kernel_id;
     if (out_sharded) {
         std::vector<uint32_t> writer_ct_args = {
             (std::uint32_t) output_cb_index
@@ -429,15 +429,13 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         // log_debug("writer[{}]: {},{} = {} {}", dst_buffer->address(), core.x, core.y, block_size_nbytes, row_start_id);
 
         tt_metal::SetRuntimeArgs(
-            program,
-            unary_reader_kernel_id,
+            unary_reader_kernel_id.value(),
             core,
             reader_rt_args
         );
 
         tt_metal::SetRuntimeArgs(
-            program,
-            unary_writer_kernel_id,
+            unary_writer_kernel_id.value(),
             core,
             writer_rt_args
         );
@@ -525,23 +523,21 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         // log_debug("writer: {},{} = {} {}", core.x, core.y, block_size_nbytes, row_start_id);
 
         tt_metal::SetRuntimeArgs(
-            program,
-            unary_reader_kernel_id,
+            unary_reader_kernel_id.value(),
             core,
             reader_rt_args
         );
 
         tt_metal::SetRuntimeArgs(
-            program,
-            unary_writer_kernel_id,
+            unary_writer_kernel_id.value(),
             core,
             writer_rt_args
         );
         cores_with_rtargs.push_back(core);
     }
     auto override_runtime_arguments_callback = [
-            reader_kernel_id=unary_reader_kernel_id,
-            writer_kernel_id=unary_writer_kernel_id,
+            reader_kernel_id=unary_reader_kernel_id.value(),
+            writer_kernel_id=unary_writer_kernel_id.value(),
             cb_src0=cb_src0,
             cb_output=cb_output,
             cores_with_rtargs
@@ -564,7 +560,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             UpdateDynamicCircularBufferAddress( cb_src0, *src_buffer);
         } else {
             for (const CoreCoord& core : cores_with_rtargs){
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
             }
         }
@@ -573,7 +569,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
             UpdateDynamicCircularBufferAddress( cb_output, *dst_buffer);
         } else {
             for (const CoreCoord& core : cores_with_rtargs){
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
             }
         }
@@ -664,12 +660,11 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
 
     /** reader
      */
-    KernelHandle unary_reader_kernel_id;
     std::vector<uint32_t> reader_ct_args = {
             (std::uint32_t) src0_cb_index
         };
 
-    unary_reader_kernel_id = tt_metal::CreateKernel(
+    KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
@@ -677,7 +672,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
 
     /** writer
      */
-    KernelHandle unary_writer_kernel_id;
+    std::optional<KernelHandle> unary_writer_kernel_id;
     if (out_sharded) {
         vector<uint32_t> writer_ct_args = {
             (uint32_t) output_cb_index,
@@ -725,7 +720,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
         ntiles_per_block * nblocks_per_core // ntiles
     };
     tt_metal::SetRuntimeArgs(
-        program,
         unary_reader_kernel_id,
         all_cores,
         reader_rt_args
@@ -740,8 +734,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
             batch
         };
         tt_metal::SetRuntimeArgs(
-            program,
-            unary_writer_kernel_id,
+            unary_writer_kernel_id.value(),
             all_cores,
             writer_rt_args
         );
@@ -817,8 +810,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
             };
 
             tt_metal::SetRuntimeArgs(
-                program,
-                unary_writer_kernel_id,
+                unary_writer_kernel_id.value(),
                 core,
                 writer_rt_args
             );
@@ -829,7 +821,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
 
     auto override_runtime_arguments_callback = [
             reader_kernel_id=unary_reader_kernel_id,
-            writer_kernel_id=unary_writer_kernel_id,
+            writer_kernel_id=unary_writer_kernel_id.value(),
             cb_src0=cb_src0,
             cb_sharded_output=cb_sharded_output,
             cores
@@ -854,7 +846,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
             UpdateDynamicCircularBufferAddress( cb_sharded_output.value(), *dst_buffer);
         } else {
             for (const CoreCoord& core : cores){
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto &runtime_args = GetRuntimeArgs(writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
             }
         }
