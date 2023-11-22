@@ -55,6 +55,7 @@ namespace tt_metal {
 Tensor optimized_conv(const Tensor& a,
             const Tensor &b,
             std::optional<const Tensor> bias,
+            const std::optional<const Tensor> conv_reader_indices,
             const vector<int> conv_params,
             uint32_t output_channels,
             bool untilize_out,
@@ -86,7 +87,7 @@ Tensor optimized_conv(const Tensor& a,
         OptimizedConv(conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_mem_config.value_or(a.memory_config()), output_dtype.value_or(a.dtype()), ashape
         ),
         {a, b},
-        {bias}).at(0);
+        {bias, conv_reader_indices}).at(0);
 }
 
 void OptimizedConv::validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
@@ -187,10 +188,16 @@ operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& input_tensor_bias = optional_input_tensors.at(0);
+    const auto& conv_reader_indices = optional_input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
     // TODO: Clean up split between different conv types
     if (input_tensor_a.memory_config().is_sharded()) {
-        return multi_core_optimized_conv_sharded_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_tensor);
+        // If conv_reader_indices is passed in, use v2 where we don't generate indices locally
+        if (conv_reader_indices.has_value()) {
+            return multi_core_optimized_conv_sharded_v2_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_reader_indices, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_tensor);
+        } else {
+            return multi_core_optimized_conv_sharded_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_tensor);
+        }
     } else {
         return multi_core_optimized_conv_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_tensor);
     }
