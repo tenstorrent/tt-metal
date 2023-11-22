@@ -73,7 +73,6 @@ void golden_matmul(vector<bfloat16> a, vector<bfloat16> b, vector<uint32_t>& out
     std::uint32_t idx_a = 0;
     std::uint32_t idx_b = 0;
 
-    //vector<float> c_f(M * N, 0);
     float c_f;
     float float_tmp;
     vector<bfloat16> c_bf(M * N, 0);
@@ -81,24 +80,16 @@ void golden_matmul(vector<bfloat16> a, vector<bfloat16> b, vector<uint32_t>& out
     for (int i = 0; i < M; i++) {
         for (int j = 0; j < N; j++) {
             idx_c = j+ (i * N);
-            //c_f.at(idx_c) = 0;
             idx_a = i * K;
             idx_b = j;
             c_f = 0;
             for (int k_m = 0; k_m < K; k_m++) {
-                //c_f.at(idx_c) += a[idx_a].to_float() * b[idx_b].to_float();
                 float_tmp = a[idx_a].to_float() * b[idx_b].to_float();
-                // uint32_t* int_tmp = (uint32_t*) &float_tmp;
-                // *int_tmp &= 0xffff0000 ;
                 c_f += float_tmp;
                 idx_a += 1;
                 idx_b += K;
             }
             c_bf.at(idx_c) = bfloat16(c_f);
-            //if (idx_c < 128) {
-            //    cout << "GG " << c_f << " .. " << c_bf.at(idx_c) << endl;
-            //}
-            //output[idx_c] = (uint32_t)c_bf.to_uint16() | ((uint32_t)c_bf.to_uint16() << 16);
         }
     }
     output = pack_bfloat16_vec_into_uint32_vec(c_bf);
@@ -529,8 +520,8 @@ int main(int argc, char **argv) {
 
         cout << "-input size- " << src0_vec.size() << " -- " << src1_vec.size() << endl;
 
-
         cout << "----orig input 0--" << endl;
+        /*
         for (int i = 0; i < src0_vec.size(); i++) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(src0_vec.at(i));
             float a1 = as.first.to_float();
@@ -540,6 +531,7 @@ int main(int argc, char **argv) {
                 //cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << src0_vec.at(i) << endl;
             }
         }
+        */
         /*
         cout << "----orig input 1--" << endl;
         for (int i = 0; i < 512; i++) {
@@ -566,9 +558,9 @@ int main(int argc, char **argv) {
         vector<uint32_t> result_vec;
         matmul_multicore_reuse_mcast(tilized_src0_vec, tilized_src1_vec, result_vec, false, M, N, K, B, device);
 
-        /*
         cout << "----metal--" << endl;
         cout << result_vec.size() << endl;
+        /*
         for (int i = 0; i < result_vec.size(); i++) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(result_vec.at(i));
             float a1 = as.first.to_float();
@@ -581,6 +573,7 @@ int main(int argc, char **argv) {
 
 
         vector<uint32_t> result_vec_untilized = pack_bfloat16_vec_into_uint32_vec(untilize(unpack_uint32_vec_into_bfloat16_vec(result_vec), M, N));
+        /*
         cout << "----metal_untilized--" << endl;
         cout << result_vec.size() << endl;
         for (int i = 0; i < result_vec.size(); i++) {
@@ -591,6 +584,7 @@ int main(int argc, char **argv) {
                 //cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << result_vec_untilized.at(i) << endl;
             }
         }
+        */
 
         /* Golden Matmul running on CPU (Float)*/
         vector<uint32_t> golden_vec;
@@ -599,6 +593,7 @@ int main(int argc, char **argv) {
 
         cout << "----golden--" << endl;
         cout << golden_vec.size() << endl;
+        /*
         for (int i = 0; i < golden_vec.size(); i++) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(golden_vec.at(i));
             float a1 = as.first.to_float();
@@ -607,6 +602,7 @@ int main(int argc, char **argv) {
                 //cout << "-- " << i << " -- " << a1 << "  " << a2 << "---" << golden_vec.at(i) << endl;
             }
         }
+        */
 
         /* Comparison: Golden vs. METAL Matmul*/
         constexpr float abs_tolerance = 0.01f;

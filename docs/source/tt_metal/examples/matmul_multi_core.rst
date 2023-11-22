@@ -17,7 +17,7 @@ All important ways we use the API different are in the new
 ``matmul_multi_core`` function.
 
 The full example program is in
-``tt_metal/programming_examples/matmul_single_core/matmul_multi_core.cpp``
+``tt_metal/programming_examples/matmul_multi_core/matmul_multi_core.cpp``
 
 Accessing all the cores
 -----------------------

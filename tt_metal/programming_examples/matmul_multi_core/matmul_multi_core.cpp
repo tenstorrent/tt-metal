@@ -329,6 +329,7 @@ int main(int argc, char **argv) {
         cout << "-input size- " << src0_vec.size() << " -- " << src1_vec.size() << endl;
 
         /* Printing out input data for user to see */
+        /*
         cout << "----orig input 0--" << endl;
         for (int i = 0; i < src0_vec.size(); i++) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(src0_vec.at(i));
@@ -339,6 +340,7 @@ int main(int argc, char **argv) {
                 cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << src0_vec.at(i) << endl;
             }
         }
+        */
         /*
         cout << "----orig input 1--" << endl;
         for (int i = 0; i < 512; i++) {
@@ -367,6 +369,7 @@ int main(int argc, char **argv) {
 
         cout << "----metal--" << endl;
         cout << result_vec.size() << endl;
+        /*
         for (int i = 0; i < result_vec.size(); i++) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(result_vec.at(i));
             float a1 = as.first.to_float();
@@ -375,6 +378,7 @@ int main(int argc, char **argv) {
                 cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << result_vec.at(i) << endl;
             }
         }
+        */
 
         /*
         vector<uint32_t> result_vec_untilized = pack_bfloat16_vec_into_uint32_vec(untilize(unpack_uint32_vec_into_bfloat16_vec(result_vec), M, N));
@@ -397,6 +401,7 @@ int main(int argc, char **argv) {
 
         cout << "----golden--" << endl;
         cout << golden_vec.size() << endl;
+        /*
         for (int i = 0; i < golden_vec.size(); i++) {
             std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(golden_vec.at(i));
             float a1 = as.first.to_float();
@@ -405,6 +410,7 @@ int main(int argc, char **argv) {
                 cout << "-- " << i << " -- " << a1 << "  " << a2 << "---" << golden_vec.at(i) << endl;
             }
         }
+        */
 
         /* Comparison: Golden vs. METAL Matmul*/
         constexpr float abs_tolerance = 0.01f;
@@ -414,7 +420,7 @@ int main(int argc, char **argv) {
         };
 
         float pearson = packed_uint32_t_vector_pcc_v2(golden_vec_tilized, result_vec);
-        cout << "PCC_v2= " << pearson << endl;
+        cout << "PCC= " << pearson << endl;
 
         TT_FATAL(pearson > 0.99, "PCC not high");
 
