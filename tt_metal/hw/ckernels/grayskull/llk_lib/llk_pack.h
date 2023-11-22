@@ -56,7 +56,7 @@ inline void llk_pack_mop_config() {
 
     if constexpr (!untilize) {
         tmp.set_last_inner_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 0));
-        tmp.set_last_outer_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 1));
 
         // there's no tile headers, so we don't need to do this
         // Write header to l1
@@ -75,14 +75,7 @@ inline void llk_pack_mop_config() {
 
 template <bool untilize = false>
 inline void llk_pack_hw_configure(const llk_pack_params_t *pack_params) {
-    configure_pack(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
-
-    std::uint32_t output = get_output_id(pack_params->pack_output);
-    if constexpr (untilize) {
-        regfile[p_gpr_pack::ONE_MSG_RECEIVED] =
-            ((1 * GET_L1_HEADERLESS_TILE_SIZE((uint)pack_dst_format[output])) << 12) |
-            1; /*SOURCE_ENDPOINT_NEW_MSGS_TOTAL_SIZE=12*/
-    }
+    configure_pack<untilize>(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
 }
 
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_operand, const std::uint32_t new_operand) {
@@ -106,7 +99,7 @@ inline void llk_pack_hw_configure_disaggregated(std::uint32_t pack_output) {
 // FIXME: Remove once edge mask spec is defined
 template <bool untilize = false, PoolType type, ReduceDim dim>
 inline void llk_pack_reduce_hw_configure(const llk_pack_params_t *pack_params) {
-    configure_pack(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
+    configure_pack<untilize>(get_output_id(pack_params->pack_output), pack_params->relu_config.val);
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
     if constexpr (dim == ReduceDim::REDUCE_ROW) {
@@ -124,13 +117,6 @@ inline void llk_pack_reduce_hw_configure(const llk_pack_params_t *pack_params) {
         } else {
             cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x00000001;
         }
-    }
-
-    if constexpr (untilize) {
-        std::uint32_t output = get_output_id(pack_params->pack_output);
-        regfile[p_gpr_pack::ONE_MSG_RECEIVED] =
-            ((1 * GET_L1_HEADERLESS_TILE_SIZE((uint)pack_dst_format[output])) << 12) |
-            1; /*SOURCE_ENDPOINT_NEW_MSGS_TOTAL_SIZE=12*/
     }
 }
 
@@ -264,3 +250,5 @@ inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
         cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = revert ? 0xF : 0x1;
     }
 }
+
+#include "llk_pack_untilize.h"
