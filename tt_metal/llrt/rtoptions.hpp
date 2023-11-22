@@ -19,6 +19,10 @@ namespace tt {
 namespace llrt {
 
 class RunTimeOptions {
+    std::string root_dir;
+
+    bool build_map_enabled;
+
     bool watcher_enabled;
     int watcher_interval_ms;
     bool watcher_dump_all;
@@ -29,8 +33,14 @@ class RunTimeOptions {
     uint32_t dprint_riscv_mask;
     std::string dprint_file_name;
 
+    bool profiler_enabled;
+
 public:
     RunTimeOptions();
+
+    const std::string& get_root_dir();
+
+    inline bool get_build_map_enabled() { return build_map_enabled; }
 
     inline bool get_watcher_enabled() { return watcher_enabled; }
     inline int get_watcher_interval() { return watcher_interval_ms; }
@@ -74,6 +84,8 @@ public:
     inline void set_dprint_file_name(std::string file_name) {
         dprint_file_name = file_name;
     }
+
+    inline bool get_profiler_enabled() { return profiler_enabled; }
 
 private:
     // Helper functions to parse DPrint-specific environment vaiables.

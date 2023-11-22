@@ -168,7 +168,7 @@ class Program {
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const Device *device) const;
 
-    void set_cb_data_fmt( Device *device, Kernel *kernel, build_kernel_for_riscv_options_t &build_options) const;
+    void set_cb_data_fmt( Device *device, Kernel *kernel, JitBuildOptions& build_options) const;
 
     void update_kernel_groups();
 };

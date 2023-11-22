@@ -98,8 +98,8 @@ bool send_over_eth(
     llrt::write_hex_vec_to_core(receiver_device->id(), receiver_core, args_1, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
 
     // TODO: this should be updated to use kernel api
-    ll_api::memory binary_mem_send = llrt::get_risc_binary("erisc/erisc.hex", sender_device->id(), true);
-    ll_api::memory binary_mem_receive = llrt::get_risc_binary("erisc/erisc.hex", receiver_device->id(), true);
+    ll_api::memory binary_mem_send = llrt::get_risc_binary(sender_device->build_firmware_target_path(JitBuildProcessorType::ETHERNET, 0));
+    ll_api::memory binary_mem_receive = llrt::get_risc_binary(receiver_device->build_firmware_target_path(JitBuildProcessorType::ETHERNET, 0));
 
     for (const auto& eth_core : eth_cores) {
         llrt::write_hex_vec_to_core(

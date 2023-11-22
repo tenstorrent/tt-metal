@@ -12,6 +12,7 @@
 #include "common/bfloat16.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -68,8 +69,10 @@ int main(int argc, char **argv) {
 
     try {
         int device_id = 0;
+
+        // Remove old compiled kernels
         static const std::string kernel_name = "test_compile_args";
-        auto binary_path_str = get_kernel_compile_outpath(device_id) + kernel_name;
+        auto binary_path_str = jit_build_get_kernel_compile_outpath(device_id) + kernel_name;
         std::filesystem::remove_all(binary_path_str);
 
         pass &= test_compile_args({0, 68, 0, 124}, device_id);
@@ -80,7 +83,6 @@ int main(int argc, char **argv) {
         std::filesystem::path binary_path{binary_path_str};
         auto num_built_kernels = std::distance(std::filesystem::directory_iterator(binary_path), std::filesystem::directory_iterator{});
         TT_FATAL(num_built_kernels == 2, "Expected compute kernel test_compile_args to be compiled twice!");
-
     } catch (const std::exception &e) {
         pass = false;
         // Capture the exception error message

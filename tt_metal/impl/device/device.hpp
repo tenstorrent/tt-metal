@@ -9,6 +9,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include "tt_metal/jit_build/build.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "dev_msgs.h"
 
@@ -20,6 +21,7 @@ namespace tt_metal {
 enum class BufferType;
 class Buffer;
 class Program;
+class JitBuildEnv;
 
 using on_close_device_callback = std::function<void ()>;
 
@@ -138,6 +140,13 @@ class Device {
     // machine epsilon
     float sfpu_eps() const;
 
+    const JitBuildEnv& build_env() const { return this->build_env_; }
+    const string build_firmware_target_path(JitBuildProcessorType t, int i) const;
+    const string build_kernel_target_path(JitBuildProcessorType t, int i, const string& kernel_name) const;
+    const JitBuildState& build_firmware_state(JitBuildProcessorType t, int i) const;
+    const JitBuildState& build_kernel_state(JitBuildProcessorType t, int i) const;
+    const JitBuildStateSubset build_kernel_states(JitBuildProcessorType t) const;
+
    private:
     void check_allocator_is_initialized() const;
 
@@ -147,9 +156,13 @@ class Device {
     void initialize_cluster();
     void initialize_allocator(const std::vector<uint32_t>& l1_bank_remap = {});
     void initialize_build();
+    void build_firmware();
     void initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg);
     void initialize_and_launch_firmware();
     void clear_l1_state();
+
+    std::pair<int, int> build_processor_type_to_index(JitBuildProcessorType t) const;
+
     // Puts device into reset
     bool close();
     friend bool CloseDevice(Device *device);
@@ -163,6 +176,10 @@ class Device {
     chip_id_t id_;
     std::unique_ptr<Allocator> allocator_ = nullptr;
     bool initialized_ = false;
+
+    JitBuildEnv build_env_;
+    JitBuildStateSet firmware_build_states_;
+    JitBuildStateSet kernel_build_states_;
 
     std::set<CoreCoord> compute_cores;
     std::set<CoreCoord> storage_only_cores_;

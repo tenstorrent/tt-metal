@@ -120,32 +120,50 @@ void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
 
 void Device::initialize_build() {
     ZoneScoped;
-    build_kernel_for_riscv_options_t build_options(this->id());
-    detail::GenerateDeviceHeaders(this, &build_options, "");
-    tt::ARCH arch = this->arch();
-    generate_binaries_params_t default_params;
-    generate_binaries_all_riscs(&build_options,
-                                "",
-                                arch,
-                                default_params);
+
+    this->build_env_.init(this->id(), this->arch());
+
+    auto init_helper = [this] (bool is_fw) -> JitBuildStateSet {
+        std::vector<std::shared_ptr<JitBuildState>> build_states;
+
+        build_states.resize(arch() == tt::ARCH::GRAYSKULL ? 5 : 6);
+
+        build_states[build_processor_type_to_index(JitBuildProcessorType::DATA_MOVEMENT).first + 0] =
+            std::make_shared<JitBuildDataMovement>(this->build_env_, 0, is_fw);
+        build_states[build_processor_type_to_index(JitBuildProcessorType::DATA_MOVEMENT).first + 1] =
+            std::make_shared<JitBuildDataMovement>(this->build_env_, 1, is_fw);
+        build_states[build_processor_type_to_index(JitBuildProcessorType::COMPUTE).first + 0] =
+            std::make_shared<JitBuildCompute>(this->build_env_, 0, is_fw);
+        build_states[build_processor_type_to_index(JitBuildProcessorType::COMPUTE).first + 1] =
+            std::make_shared<JitBuildCompute>(this->build_env_, 1, is_fw);
+        build_states[build_processor_type_to_index(JitBuildProcessorType::COMPUTE).first + 2] =
+            std::make_shared<JitBuildCompute>(this->build_env_, 2, is_fw);
+
+        if (arch() != tt::ARCH::GRAYSKULL) {
+            build_states[build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0] =
+                std::make_shared<JitBuildEthernet>(this->build_env_, 0, is_fw);
+        }
+
+       return build_states;
+    };
+
+    this->firmware_build_states_ = init_helper(true);
+    this->kernel_build_states_ = init_helper(false);
+}
+
+void Device::build_firmware() {
+    ZoneScoped;
+
+    detail::GenerateDeviceHeaders(this, this->build_env_.get_out_firmware_root_path());
+    jit_build_set(this->firmware_build_states_, nullptr, "");
 }
 
 void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) {
     ZoneScoped;
-    for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
-        string fname;
-        switch (riscv_id) {
-        case 0:
-            fname = "brisc/brisc.hex";
-            llrt::program_brisc_startup_addr(this->id(), phys_core);
-            break;
-        case 1: fname = "ncrisc/ncrisc.hex"; break;
-        case 2: fname = "tensix_thread0/tensix_thread0.hex"; break;
-        case 3: fname = "tensix_thread1/tensix_thread1.hex"; break;
-        case 4: fname = "tensix_thread2/tensix_thread2.hex"; break;
-        }
 
-        ll_api::memory binary_mem = llrt::get_risc_binary(fname, this->id(), true);
+    llrt::program_brisc_startup_addr(this->id(), phys_core);
+    for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
+        ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""));
         uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, riscv_id);
         if (riscv_id == 1) {
             launch_msg->ncrisc_kernel_size16 = kernel_size16;
@@ -240,8 +258,9 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
     bool already_initialized = this->active_devices_.activate_device(this->id_);
     this->initialize_cluster();
     this->initialize_allocator(l1_bank_remap);
+    this->initialize_build();
     if (!already_initialized) {
-        this->initialize_build();
+        this->build_firmware();
     }
 
     tt_start_debug_print_server(
@@ -259,9 +278,8 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
                          [&, this]() { return this->logical_grid_size(); },
                          [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); },
                          [&, this]() -> const std::set<CoreCoord>& { return this->storage_only_cores(); },
-                         get_compile_outpath()
+                         build_env_.get_out_kernel_root_path()
                          );
-
     this->initialized_ = true;
     return true;
 }
@@ -458,6 +476,50 @@ float Device::sfpu_eps() const {
   }
 
   return value;
+}
+
+pair<int, int> Device::build_processor_type_to_index(JitBuildProcessorType t) const {
+    constexpr int DataMovementBuildCount = 2;
+    constexpr int ComputeBuildCount = 3;
+    constexpr int EthernetBuildCount = 1;
+
+    switch (t) {
+    case JitBuildProcessorType::DATA_MOVEMENT: return pair<int, int>(0, DataMovementBuildCount);
+    case JitBuildProcessorType::COMPUTE: return pair<int, int>(DataMovementBuildCount, ComputeBuildCount);
+    case JitBuildProcessorType::ETHERNET: return pair<int, int>(DataMovementBuildCount + ComputeBuildCount, EthernetBuildCount);
+    default: TT_ASSERT("Bad processor type: {}", static_cast<std::underlying_type<JitBuildProcessorType>::type>(t));
+    }
+
+    // shh the warnings
+    return pair<int, int>(0, 0);
+}
+
+// Ideally the firmware getter would be private to the device, however, tests look for this
+const JitBuildState& Device::build_firmware_state(JitBuildProcessorType t, int i) const {
+    return *(this->firmware_build_states_[build_processor_type_to_index(t).first + i]);
+}
+
+const JitBuildState& Device::build_kernel_state(JitBuildProcessorType t, int i) const {
+    return *(this->kernel_build_states_[build_processor_type_to_index(t).first + i]);
+}
+
+const JitBuildStateSubset Device::build_kernel_states(JitBuildProcessorType t) const {
+    pair<int, int> bptti = build_processor_type_to_index(t);
+    JitBuildStateSubset subset = {
+        &this->kernel_build_states_[bptti.first],
+        bptti.second
+    };
+    return subset;
+}
+
+const string Device::build_firmware_target_path(JitBuildProcessorType t, int i) const {
+    const JitBuildState& bs = build_firmware_state(t, i);
+    return bs.get_target_out_path("");
+}
+
+const string Device::build_kernel_target_path(JitBuildProcessorType t, int i, const string& kernel_name) const {
+    const JitBuildState& bs = build_kernel_state(t, i);
+    return bs.get_target_out_path(kernel_name);
 }
 
 }  // namespace tt_metal

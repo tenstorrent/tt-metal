@@ -125,7 +125,7 @@ class tt_hlk_desc
         hlk_file_name = file_name;
     }
 
-    const std::string & get_hlk_file_name()
+    const std::string & get_hlk_file_name() const
     {
         return hlk_file_name;
     }

@@ -23,9 +23,9 @@ namespace tt_metal {
 
 using Config = std::variant<DataMovementConfig, experimental::EthernetConfig, ComputeConfig>;
 
-class Kernel {
+class Kernel : public JitBuildSettings {
    public:
-    Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compile_args, const std::map<std::string, std::string> &defines);
+    Kernel(const std::string &kernel_path_file_name, const CoreRangeSet &core_range_set, const std::vector<uint32_t> &compile_args, const std::map<std::string, std::string>&defines);
 
     virtual ~Kernel() {}
 
@@ -60,22 +60,27 @@ class Kernel {
     virtual Config config() const = 0;
 
     std::string compute_hash() const;
-    virtual void set_build_options(build_kernel_for_riscv_options_t &build_options) const = 0;
-    virtual void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const = 0;
+    virtual void set_build_options(JitBuildOptions &build_options) const = 0;
+    virtual void generate_binaries(Device *device, JitBuildOptions& build_options) const = 0;
     inline uint16_t get_binary_size16() const { return binary_size16_; }
     void set_binary_path ( const std::string & binary_path) { binary_path_ = binary_path; }
     void set_binaries(chip_id_t device_id, std::vector<ll_api::memory> &&binaries);
-    virtual void read_binaries(chip_id_t device_id) = 0;
+    virtual void read_binaries(Device *device) = 0;
 
     void set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
 
     int get_watcher_kernel_id() { return watcher_kernel_id_; }
 
     CoreType get_kernel_core_type() const;
+    void set_full_name(const string& s) { kernel_full_name_ = s; }
+    const string& get_full_kernel_name() const override;
+    void process_defines(const std::function<void (const string& define, const string &value)>) const override;
+    void process_compile_time_args(const std::function<void (int i, uint32_t value)>) const override;
 
    protected:
     const int watcher_kernel_id_;
     std::string kernel_path_file_name_;                 // Full kernel path and file name
+    std::string kernel_full_name_;                      // Name + hash
     CoreRangeSet core_range_set_;
     std::string binary_path_;
     // DataMovement kernels have one binary each and Compute kernels have three binaries
@@ -104,13 +109,15 @@ class DataMovementKernel : public Kernel {
 
     RISCV processor() const;
 
-    void set_build_options(build_kernel_for_riscv_options_t &build_options) const;
-    void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
-    void read_binaries(chip_id_t device_id);
+    void set_build_options(JitBuildOptions& build_options) const;
+    void generate_binaries(Device *device, JitBuildOptions& build_options) const;
+    void read_binaries(Device *device);
 
     bool configure(Device *device, const CoreCoord &logical_core) const;
 
     Config config() const { return this->config_; }
+
+    void process_defines(const std::function<void (const string& define, const string &value)>) const override;
 
    private:
     const DataMovementConfig config_;
@@ -130,13 +137,15 @@ class EthernetKernel : public Kernel {
 
     RISCV processor() const;
 
-    void set_build_options(build_kernel_for_riscv_options_t &build_options) const;
-    void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
-    void read_binaries(int device_id);
+    void set_build_options(JitBuildOptions& build_options) const;
+    void generate_binaries(Device *device, JitBuildOptions& build_options) const;
+    void read_binaries(Device *device);
 
     bool configure(Device *device, const CoreCoord &logical_core) const;
 
     Config config() const { return this->config_; }
+
+    void process_defines(const std::function<void (const string& define, const string &value)>) const override;
 
    private:
     const experimental::EthernetConfig config_;
@@ -156,13 +165,15 @@ class ComputeKernel : public Kernel {
 
     RISCV processor() const;
 
-    void set_build_options(build_kernel_for_riscv_options_t &build_options) const;
-    void generate_binaries(Device *device, build_kernel_for_riscv_options_t *build_options, const std::string &op_path_suffix) const;
-    void read_binaries(chip_id_t device_id);
+    void set_build_options(JitBuildOptions& build_options) const;
+    void generate_binaries(Device *device, JitBuildOptions& build_options) const;
+    void read_binaries(Device *device);
 
     bool configure(Device *device, const CoreCoord &logical_core) const;
 
     Config config() const { return this->config_; }
+
+    void process_defines(const std::function<void (const string& define, const string &value)>) const override;
 
    private:
     const ComputeConfig config_;
