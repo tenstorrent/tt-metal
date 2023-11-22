@@ -6,6 +6,7 @@
 #include <functional>
 #include <random>
 #include <cmath>
+#include <sstream>
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
@@ -22,28 +23,28 @@ std::map<std::string,std::map<std::string, std::string>> sfpu_op_to_hlk_op_name=
 
 void update_sfpu_op_to_hlk_op()
 {
-  for(const std::string& sfpu_op_name : sfpu_op) {
-    std::string unary_op_name{sfpu_op_name};
-    for(auto& c: unary_op_name) {
-        c = toupper(c);
-    }
-    if (unary_op_name == "EXPONENTIAL") {
-        unary_op_name = "EXP";
-    }
-    else if (unary_op_name == "RECIPROCAL") {
-        unary_op_name = "RECIP";
-    }
-    auto unary_op_type = magic_enum::enum_cast<tt::tt_metal::UnaryOpType>(unary_op_name).value();
-    if ( tt::tt_metal::is_parametrized_type(unary_op_type) ) {
-        if (unary_op_type == tt::tt_metal::UnaryOpType::EXP) {
-            sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_block_defines({tt::tt_metal::UnaryWithParam{unary_op_type, 1.0}});
-        } else {
-            sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_block_defines({tt::tt_metal::UnaryWithParam{unary_op_type, 0.5}});
+    for(const std::string& sfpu_op_name : sfpu_op) {
+        std::string unary_op_name{sfpu_op_name};
+        for(auto& c: unary_op_name) {
+            c = toupper(c);
         }
-    } else {
-        sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_block_defines({tt::tt_metal::UnaryWithParam{unary_op_type, std::nullopt}});
+        if (unary_op_name == "EXPONENTIAL") {
+            unary_op_name = "EXP";
+        }
+        else if (unary_op_name == "RECIPROCAL") {
+            unary_op_name = "RECIP";
+        }
+        auto unary_op_type = magic_enum::enum_cast<tt::tt_metal::UnaryOpType>(unary_op_name).value();
+        if ( tt::tt_metal::is_parametrized_type(unary_op_type) ) {
+            if (unary_op_type == tt::tt_metal::UnaryOpType::EXP) {
+                sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_block_defines({tt::tt_metal::UnaryWithParam{unary_op_type, 1.0}});
+            } else {
+                sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_block_defines({tt::tt_metal::UnaryWithParam{unary_op_type, 0.5}});
+            }
+        } else {
+            sfpu_op_to_hlk_op_name[sfpu_op_name]  = eltwise_unary_op_utils::get_block_defines({tt::tt_metal::UnaryWithParam{unary_op_type, std::nullopt}});
+        }
     }
-  }
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -51,7 +52,7 @@ void update_sfpu_op_to_hlk_op()
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-bool run_sfpu_test(string sfpu_name) {
+bool run_sfpu_test(string sfpu_name,int tile_factor=1,bool use_DRAM=true) {
 
     bool multibank = true;
     bool pass = true;
@@ -72,7 +73,7 @@ bool run_sfpu_test(string sfpu_name) {
         CoreCoord core = {0, 0};
 
         uint32_t single_tile_size = 2 * 1024;
-        uint32_t num_tiles = 2048;
+        uint32_t num_tiles = 2048*tile_factor;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         uint32_t page_size = single_tile_size;
@@ -80,9 +81,11 @@ bool run_sfpu_test(string sfpu_name) {
             page_size = dram_buffer_size;
         }
 
-        auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, page_size, tt_metal::BufferType::DRAM);
+        auto src_dram_buffer = CreateBuffer(device, dram_buffer_size, page_size,
+                                            (use_DRAM) ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1);
         uint32_t dram_buffer_src_addr = src_dram_buffer.address();
-        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size, page_size, tt_metal::BufferType::DRAM);
+        auto dst_dram_buffer = CreateBuffer(device, dram_buffer_size, page_size,
+                                            (use_DRAM) ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer.address();
 
         auto dram_src_noc_xy = src_dram_buffer.noc_coordinates();
@@ -105,34 +108,34 @@ bool run_sfpu_test(string sfpu_name) {
         auto cb_output = tt_metal::CreateCircularBuffer(program, core, output_cb_config);
 
         auto unary_reader_kernel = tt_metal::CreateKernel(
-            program,
-            multibank ?
-                "tests/tt_eager/kernels/dataflow/reader_unary_8bank.cpp" :
-                "tests/tt_eager/kernels/dataflow/reader_unary_push_4.cpp",
-            core,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+                                                          program,
+                                                          multibank ?
+                                                          "tests/tt_eager/kernels/dataflow/reader_unary_8bank.cpp" :
+                                                          "tests/tt_eager/kernels/dataflow/reader_unary_push_4.cpp",
+                                                          core,
+                                                          tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         auto unary_writer_kernel = tt_metal::CreateKernel(
-            program,
-            multibank ?
-                "tests/tt_eager/kernels/dataflow/writer_unary_8bank.cpp" :
-                "tt_metal/kernels/dataflow/writer_unary.cpp",
-            core,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+                                                          program,
+                                                          multibank ?
+                                                          "tests/tt_eager/kernels/dataflow/writer_unary_8bank.cpp" :
+                                                          "tt_metal/kernels/dataflow/writer_unary.cpp",
+                                                          core,
+                                                          tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         vector<uint32_t> compute_kernel_args = {
-            uint(num_tiles),
-            1
+                                                uint(num_tiles),
+                                                1,
         };
         string hlk_kernel_name = "tt_metal/kernels/compute/eltwise_sfpu.cpp";
         // defines macro expands per SFPU ops
         std::map<string, string> hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
         auto eltwise_unary_kernel = tt_metal::CreateKernel(
-            program,
-            hlk_kernel_name,
-            core,
-            tt_metal::ComputeConfig{.math_approx_mode = true, .compile_args = compute_kernel_args, .defines = hlk_op_name}
-        );
+                                                           program,
+                                                           hlk_kernel_name,
+                                                           core,
+                                                           tt_metal::ComputeConfig{.math_approx_mode = true, .compile_args = compute_kernel_args, .defines = hlk_op_name}
+                                                           );
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
@@ -143,40 +146,39 @@ bool run_sfpu_test(string sfpu_name) {
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> src_vec = sfpu_op_to_init_func.at(sfpu_name)(
-            dram_buffer_size, std::chrono::system_clock::now().time_since_epoch().count());
+                                                                           dram_buffer_size, std::chrono::system_clock::now().time_since_epoch().count());
 
         tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
 
 
         tt_metal::SetRuntimeArgs(
-            program,
-            unary_reader_kernel,
-            core,
-            {
-                dram_buffer_src_addr,
-                (std::uint32_t)dram_src_noc_xy.x,
-                (std::uint32_t)dram_src_noc_xy.y,
-                num_tiles,
-                0,0,0,0,0 // TODO(AP): [8] is scaler
-            }
-        );
+                                 program,
+                                 unary_reader_kernel,
+                                 core,
+                                 {
+                                  dram_buffer_src_addr,
+                                  (std::uint32_t)dram_src_noc_xy.x,
+                                  (std::uint32_t)dram_src_noc_xy.y,
+                                  num_tiles,
+                                  0,0,0,0,0 // TODO(AP): [8] is scaler
+                                 }
+                                 );
 
         tt_metal::SetRuntimeArgs(
-            program,
-            unary_writer_kernel,
-            core,
-            {
-                dram_buffer_dst_addr,
-                (std::uint32_t)dram_dst_noc_xy.x,
-                (std::uint32_t)dram_dst_noc_xy.y,
-                num_tiles
-            }
-        );
+                                 program,
+                                 unary_writer_kernel,
+                                 core,
+                                 {
+                                  dram_buffer_dst_addr,
+                                  (std::uint32_t)dram_dst_noc_xy.x,
+                                  (std::uint32_t)dram_dst_noc_xy.y,
+                                  num_tiles
+                                 }
+                                 );
 
 
 
-        // tt::tt_metal::tt_gdb(device, 0, program->cores(), program->cores_to_ops());
         tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> result_vec;
@@ -188,18 +190,8 @@ bool run_sfpu_test(string sfpu_name) {
 
         pass &= packed_uint32_t_vector_comparison(result_vec, golden, sfpu_op_to_comparison_function.at(sfpu_name));
 
-        if (not pass) {
-            // Printing of large tiles causes a system lockup. Do not print these unless debugging please.
-            //std::cout << "GOLDEN" << std::endl;
-            //print_vec_of_uint32_as_packed_bfloat16(golden, num_tiles);
-
-            //std::cout << "RESULT" << std::endl;
-            //print_vec_of_uint32_as_packed_bfloat16(result_vec, num_tiles);
-        }
 
         pass &= tt_metal::CloseDevice(device);;
-        // TODO (abhullar): Uplift when raw ptr usages are removed. Commenting out delete for now because device needs to outlive buffers
-        //delete device;
 
     } catch (const std::exception &e) {
         pass = false;
@@ -212,10 +204,10 @@ bool run_sfpu_test(string sfpu_name) {
     return pass;
 }
 
-bool run_unit_test(std::string op_name) {
+bool run_unit_test(std::string op_name,int tile_factor,bool use_DRAM) {
     log_info(LogTest, "Running {}", op_name);
 
-    bool pass_ = run_sfpu_test(op_name);
+    bool pass_ = run_sfpu_test(op_name,tile_factor,use_DRAM);
 
     if (pass_) {
         log_info(LogTest, "{} test passed", op_name);
@@ -230,17 +222,47 @@ int main(int argc, char **argv) {
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     bool pass = true;
-
+    int arg_tile_factor = 1;
+    int arg_use_DRAM = true;
+    int arg_help = false;
     update_sfpu_op_to_hlk_op();
 
 
     if ( argc == 1 ) {
         for (const auto& [op_name, _]: sfpu_op_to_hlk_op_name) {
-            pass &= run_unit_test(op_name);
+            pass &= run_unit_test(op_name,arg_tile_factor, arg_use_DRAM);
         }
     } else {
+        std::vector<std::string> operators;
         for(uint32_t idx = 1; idx < argc; idx++) {
-            pass &= run_unit_test(argv[idx]);
+            if ( strstr(argv[idx],"-tile-factor") ) {
+                idx++;
+                arg_tile_factor = atoi(argv[idx]);
+            } else if( strstr(argv[idx],"-use-L1") ) {
+                arg_use_DRAM = false;
+            } else if( strstr(argv[idx],"-use-DRAM") ) {
+                arg_use_DRAM = true;
+            } else if( strstr(argv[idx],"-help") ) {
+                arg_help = true;
+                break;
+            } else {
+                operators.push_back(std::string(argv[idx]));
+            }
+        }
+        if ( arg_help ) {
+            std::stringstream ss;
+            ss << "Usage: test_sfpu {operators}+ [flags]+\n";
+            ss <<"--use-L1 or --use-DRAM chooses between L1 or DRAM. Default is DRAM\n";
+            ss << "--tile-factor: integer between 1 to 1024 to specify number of repetitions of 32x64x32x32 tensor\n";
+            ss << "operators are standard SFPU operators:\n\t";
+            for (const auto& [op_name, _]: sfpu_op_to_hlk_op_name) {
+                ss << op_name << ", ";
+            }
+            log_info(LogTest,"Help: {}",ss.str().c_str());
+            exit(0);
+        }
+        for(uint32_t idx = 0; idx < operators.size(); idx++) {
+            pass &= run_unit_test(operators[idx],arg_tile_factor,arg_use_DRAM);
         }
     }
 
