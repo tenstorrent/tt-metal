@@ -729,3 +729,8 @@ Other Operations
 .. autofunction:: tt_lib.tensor.repeat_interleave
 
 .. autofunction:: tt_lib.tensor.power_fp
+
+Backward Operations
+-------------------
+
+.. autofunction:: tt_lib.tensor.addalpha_bw
