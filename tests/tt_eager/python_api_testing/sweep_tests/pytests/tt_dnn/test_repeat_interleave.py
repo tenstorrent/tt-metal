@@ -23,8 +23,6 @@ shapes = (
     [[1, 3, 32, 2048]],  # Multi core h
     [[4, 3, 40, 640]],  # Multi core h
 )
-if is_wormhole_b0():
-    shapes = (shapes[0],)
 
 
 @pytest.mark.parametrize("input_shapes", shapes)
@@ -50,7 +48,7 @@ def test_run_repeat_interleave_test(input_shapes, dim, repeat, device):
     )
 
 
-@pytest.mark.parametrize("input_shapes", ([[1, 1, 32, 32]], [[32, 32, 32, 32]]))
+@pytest.mark.parametrize("input_shapes", shapes[:-1])
 @pytest.mark.parametrize("repeat", ([1, 2, 3, 4], [1, 1, 1, 2], [1, 1, 2, 1], [1, 2, 1, 1], [2, 1, 1, 1]))
 def test_run_repeat_test(input_shapes, repeat, device):
     datagen_func = [

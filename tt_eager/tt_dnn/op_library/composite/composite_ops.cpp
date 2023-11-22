@@ -718,12 +718,7 @@ Tensor repeat_interleave(const Tensor& input_a, uint32_t repeat, int32_t dim, co
 
 //nextafter
 Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-    float eps;
-    if (is_arch_whb0(input_a.device()->arch())) {
-        eps = 1.19209e-07f;
-    } else {
-        eps = 0.001953125f;
-    }
+    const float eps = input_a.device()->sfpu_eps();
     Tensor result(input_a);
     {
         Tensor eps_gt(input_a);
