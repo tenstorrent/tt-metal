@@ -9,6 +9,7 @@ TT_LIB_SRCS = \
 	tt_eager/tt_lib/csrc/type_caster.cpp \
 	tt_eager/tt_lib/csrc/tt_lib_bindings_tensor.cpp \
 	tt_eager/tt_lib/csrc/tt_lib_bindings_tensor_composite_ops.cpp \
+	tt_eager/tt_lib/csrc/tt_lib_bindings_tensor_backward_ops.cpp \
 	tt_eager/tt_lib/csrc/tt_lib_bindings_tensor_pytensor.cpp \
 	tt_eager/tt_lib/csrc/tt_lib_bindings_tensor_dm_ops.cpp \
 	tt_eager/tt_lib/csrc/tt_lib_bindings_tensor_custom_bmm_ops.cpp \
