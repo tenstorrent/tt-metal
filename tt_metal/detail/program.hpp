@@ -22,7 +22,7 @@ namespace tt::tt_metal::detail{
         return program.kernels_.at(kernel_id);
     }
 
-    inline std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id) {
+    inline std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, uintptr_t id) {
         return program.get_circular_buffer(id);
     }
 

@@ -280,7 +280,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
 		                                        .set_page_size(in_scalar_cb_id, in_scalar_cb_pagesize);
     auto in_scalar_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config);
 
-    CBHandle raw_in_cb = 0;
+    std::optional<CBHandle> raw_in_cb;
     if (input.memory_config().is_sharded()) {
         // incoming data is the input cb instead of raw l1/dram addr
         auto raw_in_cb_id = CB::c_in2;
@@ -319,7 +319,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
 		.set_page_size(out_cb_id, out_cb_pagesize);
     auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
 
-    CBHandle cb_sharded_out = 0;
+    std::optional<CBHandle> cb_sharded_out;
     if (output.memory_config().is_sharded()) {
         uint32_t sharded_out_cb_id = CB::c_out1;            // output rows in RM
 
@@ -665,10 +665,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
             }
         }
         if (input_sharded) {
-            UpdateDynamicCircularBufferAddress(program, raw_in_cb, *src_buffer);
+            UpdateDynamicCircularBufferAddress( raw_in_cb.value(), *src_buffer);
         }
         if (out_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_sharded_out, *dst_buffer);
+            UpdateDynamicCircularBufferAddress( cb_sharded_out.value(), *dst_buffer);
         }
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
@@ -1121,7 +1121,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
 		.set_page_size(out_cb_id, out_cb_pagesize);
     auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
 
-    CBHandle cb_sharded_out = 0;
+    std::optional<CBHandle> cb_sharded_out;
     if (output.memory_config().is_sharded()) {
         uint32_t sharded_out_cb_id = CB::c_out1;            // output rows in RM
 
@@ -1595,10 +1595,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
             }
         }
         if (input_sharded) {
-            UpdateDynamicCircularBufferAddress(program, raw_in_cb, *src_buffer);
+            UpdateDynamicCircularBufferAddress( raw_in_cb, *src_buffer);
         }
         if (out_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_sharded_out, *dst_buffer);
+            UpdateDynamicCircularBufferAddress( cb_sharded_out.value(), *dst_buffer);
         }
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

@@ -614,7 +614,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
             TT_ASSERT(halo_prev_num_tiles % num_input_tiles_in_row == 0);
             halo_prev_input_num_rows_of_tiles = halo_prev_num_tiles / num_input_tiles_in_row;
             halo_prev_addr_offset = num_input_tiles_in_row * halo_prev_start_tile_id_h * input_single_tile_size;
-            halo_prev_start_addr = GetCircularBufferConfig(program, input_cb).globally_allocated_address().value();
+            halo_prev_start_addr = GetCircularBufferConfig( input_cb).globally_allocated_address().value();
 
             TT_ASSERT((halo_prev_start_addr + halo_prev_addr_offset) % 32 == 0); // read address should be 32 byte aligned
             auto halo_noc_coords = device->worker_core_from_logical_core(prev_core);
@@ -668,7 +668,7 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
             TT_ASSERT(halo_next_num_tiles % num_input_tiles_in_row == 0);
             halo_next_input_num_rows_of_tiles = halo_next_num_tiles / num_input_tiles_in_row;
             halo_next_addr_offset = 0;
-            halo_next_start_addr = GetCircularBufferConfig(program, input_cb).globally_allocated_address().value();
+            halo_next_start_addr = GetCircularBufferConfig( input_cb).globally_allocated_address().value();
             TT_ASSERT((halo_next_start_addr + halo_next_addr_offset) % 32 == 0); // read address should be 32 byte aligned
             auto halo_noc_coords = device->worker_core_from_logical_core(next_core);
             halo_next_noc_x = halo_noc_coords.x;
@@ -795,8 +795,8 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
-        UpdateDynamicCircularBufferAddress(program, input_cb, *src_buffer);
-        UpdateDynamicCircularBufferAddress(program, final_tilize_output_cb, *dst_buffer);
+        UpdateDynamicCircularBufferAddress( input_cb, *src_buffer);
+        UpdateDynamicCircularBufferAddress( final_tilize_output_cb, *dst_buffer);
         for (uint32_t i = 0; i < num_cores; i++) {
             CoreCoord core = {i % num_cores_x, i / num_cores_x};
             auto &runtime_args = GetRuntimeArgs(program, downsample_writer_kernel_id, core);

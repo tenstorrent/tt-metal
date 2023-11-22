@@ -197,7 +197,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &
                 runtime_args[0] = src_buffer->address();
             }
         }
-        UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+        UpdateDynamicCircularBufferAddress( cb_output, *dst_buffer);
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
@@ -448,7 +448,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &
                 runtime_args[0] = dst_buffer->address();
             }
         }
-        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+        UpdateDynamicCircularBufferAddress( cb_src0, *src_buffer);
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

@@ -17,7 +17,7 @@ class CircularBuffer {
    public:
     CircularBuffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
 
-    const CBHandle id() const { return id_; }
+    const uintptr_t id() const { return id_; }
 
     const CoreRangeSet &core_ranges() const { return core_ranges_; }
 

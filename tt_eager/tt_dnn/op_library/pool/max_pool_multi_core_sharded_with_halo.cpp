@@ -673,10 +673,10 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
             }
         }
         if (input_sharded) {
-            UpdateDynamicCircularBufferAddress(program, raw_in_cb, *src_buffer);
+            UpdateDynamicCircularBufferAddress( raw_in_cb, *src_buffer);
         }
         if (out_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_sharded_out, *dst_buffer);
+            UpdateDynamicCircularBufferAddress( cb_sharded_out, *dst_buffer);
         }
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

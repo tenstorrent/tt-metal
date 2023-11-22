@@ -267,16 +267,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
         auto all_device_cores = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
         auto [num_cores, all_cores, core_group_1, core_group_2, num_tile_rows_per_core_group_1, num_tile_rows_per_core_group_2] = split_work_to_cores(grid_size, num_tile_rows, true);
 
-        UpdateCircularBufferTotalSize(program, cb_in0_id, in0_t * in0_tile_size);
-        UpdateCircularBufferTotalSize(program, cb_out0_id, out0_t * out0_tile_size);
-        UpdateCircularBufferTotalSize(program, cb_intermed1_id, im1_t * in0_tile_size);
-        UpdateCircularBufferTotalSize(program, cb_in2_id, in2_t * scalar_tile_size);
-        UpdateCircularBufferTotalSize(program, cb_intermed0_id, im0_t * in0_tile_size);
+        UpdateCircularBufferTotalSize( cb_in0_id, in0_t * in0_tile_size);
+        UpdateCircularBufferTotalSize( cb_out0_id, out0_t * out0_tile_size);
+        UpdateCircularBufferTotalSize( cb_intermed1_id, im1_t * in0_tile_size);
+        UpdateCircularBufferTotalSize( cb_in2_id, in2_t * scalar_tile_size);
+        UpdateCircularBufferTotalSize( cb_intermed0_id, im0_t * in0_tile_size);
 
         if (optional_input_tensors.at(0).has_value()) {
-            UpdateCircularBufferTotalSize(program, cb_intermed3_id.value(), im3_t * in0_tile_size);
-            UpdateCircularBufferTotalSize(program, cb_in3_id.value(), in3_t * scalar_tile_size);
-            UpdateCircularBufferTotalSize(program, cb_in4_id.value(), in4_t * mask_tile_size);
+            UpdateCircularBufferTotalSize( cb_intermed3_id.value(), im3_t * in0_tile_size);
+            UpdateCircularBufferTotalSize( cb_in3_id.value(), in3_t * scalar_tile_size);
+            UpdateCircularBufferTotalSize( cb_in4_id.value(), in4_t * mask_tile_size);
         }
 
         uint32_t curr_row = 0;

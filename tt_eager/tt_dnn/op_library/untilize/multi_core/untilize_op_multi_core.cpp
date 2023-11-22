@@ -561,7 +561,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
         if (src_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+            UpdateDynamicCircularBufferAddress( cb_src0, *src_buffer);
         } else {
             for (const CoreCoord& core : cores_with_rtargs){
                 auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
@@ -570,7 +570,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         }
 
         if (out_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+            UpdateDynamicCircularBufferAddress( cb_output, *dst_buffer);
         } else {
             for (const CoreCoord& core : cores_with_rtargs){
                 auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
@@ -650,7 +650,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
         .set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
-    CBHandle cb_sharded_output = 0;
+    std::optional<CBHandle> cb_sharded_output;
     uint32_t sharded_output_cb_index = CB::c_out1;
     if (out_sharded) {
         tt_metal::CircularBufferConfig sharded_output_cb_config = tt_metal::CircularBufferConfig(num_output_rows_unpadded * block_row_size, {{sharded_output_cb_index, output_cb_data_format}})
@@ -848,10 +848,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor 
         bool src_sharded = input_tensors.at(0).memory_config().is_sharded();
         bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
-        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+        UpdateDynamicCircularBufferAddress( cb_src0, *src_buffer);
 
         if (out_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_sharded_output, *dst_buffer);
+            UpdateDynamicCircularBufferAddress( cb_sharded_output.value(), *dst_buffer);
         } else {
             for (const CoreCoord& core : cores){
                 auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);

@@ -37,7 +37,7 @@ const uint32_t untilize_mode_reblock_cb               = CB::c_intermed2;
 const uint32_t out0_cb                                = CB::c_out0;
 
 
-tuple<CBHandle, CBHandle> create_CBs(tt_metal::Program &program,
+auto create_CBs(tt_metal::Program &program,
                                 const Tensor& input,
                                 CoreRange core,
                                 uint32_t num_cb0_tiles,
@@ -68,8 +68,7 @@ tuple<CBHandle, CBHandle> create_CBs(tt_metal::Program &program,
 		.set_page_size(act_cb, act_tile_size);
     auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
 
-    auto cb_sharded_act = 0;
-    auto cb_sharded_act_mcast_receiver = 0;
+    std::optional<CBHandle> cb_sharded_act, cb_sharded_act_mcast_receiver, cb_output;
     if (input.is_sharded()) {
         uint32_t num_bytes_for_df = datum_size(act_df);
         auto shard_shape = input.shard_spec().value().shard_shape;
@@ -96,7 +95,6 @@ tuple<CBHandle, CBHandle> create_CBs(tt_metal::Program &program,
 		.set_page_size(tilize_mode_tilized_act_cb, tilized_act_tile_size);
     auto cb_src0_tilized = tt_metal::CreateCircularBuffer(program, core, cb_src0_tilized_config);
 
-    CBHandle cb_output = 0;
     if (untilize_out) {
         CircularBufferConfig cb_matmul_partials_config = CircularBufferConfig(num_output_tiles * out_tile_size, {{matmul_partials_cb, out_df}})
 		    .set_page_size(matmul_partials_cb, out_tile_size);
@@ -140,7 +138,7 @@ tuple<CBHandle, CBHandle> create_CBs(tt_metal::Program &program,
         log_debug("BIAS CBs: {} {} {}", bias_cb, bias_ntiles, bias_pagesize);
     }
 
-    return {cb_sharded_act, cb_output};
+    return std::tuple{cb_sharded_act, cb_output};
 }
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output) {
@@ -1250,11 +1248,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
         }
 
         if (src_a_is_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_sharded_act, *src_buffer_a);
+            UpdateDynamicCircularBufferAddress( cb_sharded_act.value(), *src_buffer_a);
         }
 
         if (out_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+            UpdateDynamicCircularBufferAddress( cb_output.value(), *dst_buffer);
         }
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

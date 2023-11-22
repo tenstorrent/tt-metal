@@ -60,9 +60,8 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     string compute_kernel_name = reduce_op_utils::dim_to_kernel_name(reduce_dim, reduce_op);
 
     uint32_t src0_cb_index = CB::c_in0;
-    CBHandle cb_src0;
+    std::optional<CBHandle> cb_src0, cb_src1;
     uint32_t src1_cb_index = CB::c_in1;
-    CBHandle cb_src1 = 0;
     if (in_sharded) {
         uint32_t num_shard_tiles = a.shard_spec().value().numel() / TILE_HW;
         uint32_t num_input_tiles = 2;
@@ -86,7 +85,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
     auto cb_scaler = tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
     uint32_t output_cb_index = CB::c_out0; // output operands start at index 16
-    CBHandle cb_output;
+    std::optional<CBHandle> cb_output;
     if (out_sharded) {
         uint32_t num_output_tiles = output.shard_spec().value().numel() / TILE_HW;
         tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
@@ -276,8 +275,8 @@ operation::ProgramWithCallbacks reduce_multi_core_h(const Tensor &a, Tensor& out
         bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
         if (src_sharded && out_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer);
-            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+            UpdateDynamicCircularBufferAddress( cb_src1.value(), *src_buffer);
+            UpdateDynamicCircularBufferAddress( cb_output.value(), *dst_buffer);
         } else {
             for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++){
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};

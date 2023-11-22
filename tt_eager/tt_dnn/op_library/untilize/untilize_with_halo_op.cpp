@@ -747,9 +747,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s2(const Tensor& i
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
-        UpdateDynamicCircularBufferAddress(program, src_cb, *src_buffer);
+        UpdateDynamicCircularBufferAddress( src_cb, *src_buffer);
 
-        UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
+        UpdateDynamicCircularBufferAddress( out_cb, *dst_buffer);
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
@@ -1283,9 +1283,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_s1(const Tensor& a
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
-        UpdateDynamicCircularBufferAddress(program, src_cb, *src_buffer);
+        UpdateDynamicCircularBufferAddress( src_cb, *src_buffer);
 
-        UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
+        UpdateDynamicCircularBufferAddress( out_cb, *dst_buffer);
     };
 
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

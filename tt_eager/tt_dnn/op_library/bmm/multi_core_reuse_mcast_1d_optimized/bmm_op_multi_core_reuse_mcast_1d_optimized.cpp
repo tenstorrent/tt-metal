@@ -320,7 +320,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
     uint32_t src2_cb_index = 2;
-    CBHandle cb_src2 = 0;
+    std::optional<CBHandle> cb_src2;
     if (in0_is_sharded) {
         tt_metal::CircularBufferConfig src2_cb_config = tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
             .set_page_size(src2_cb_index, in0_single_tile_size).set_globally_allocated_address(*in0_buffer);
@@ -534,11 +534,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             }
         }
         if (src0_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_src2, *src_buffer_a);
+            UpdateDynamicCircularBufferAddress( cb_src2.value(), *src_buffer_a);
         }
 
         if (out_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+            UpdateDynamicCircularBufferAddress( cb_output, *dst_buffer);
         }
     };
 
@@ -1032,11 +1032,11 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         }
 
         if (src0_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
+            UpdateDynamicCircularBufferAddress( cb_src0, *src_buffer_a);
         }
 
         if (out_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+            UpdateDynamicCircularBufferAddress( cb_output, *dst_buffer);
         }
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};

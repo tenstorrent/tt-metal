@@ -321,7 +321,7 @@ void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t s
     }
 }
 
-CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
+uintptr_t Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
     this->invalidate_compile();
     std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(core_range_set, config);
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory allocator
@@ -362,7 +362,7 @@ CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const 
     return circular_buffer->id();
 }
 
-std::shared_ptr<CircularBuffer> Program::get_circular_buffer(CBHandle cb_id) const {
+std::shared_ptr<CircularBuffer> Program::get_circular_buffer(uintptr_t cb_id) const {
     if (this->circular_buffer_by_id_.find(cb_id) == this->circular_buffer_by_id_.end()) {
         TT_THROW("No circular buffer with id {} exists in Program {}", cb_id, this->id);
     }

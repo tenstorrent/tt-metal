@@ -26,7 +26,7 @@ namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device);
     KernelHandle AddKernel ( Program & program, Kernel * kernel);
     Kernel *GetKernel(const Program &program, KernelHandle kernel_id);
-    std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
+    std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, uintptr_t id);
 }
 
 struct KernelGroup {
@@ -130,7 +130,7 @@ class Program {
     CoreCoord grid_extent_;
 
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers_;
-    std::unordered_map<CBHandle,  std::shared_ptr<CircularBuffer>> circular_buffer_by_id_;
+    std::unordered_map<uintptr_t,  std::shared_ptr<CircularBuffer>> circular_buffer_by_id_;
     // Tracks which circular buffer indices are being used
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_cb_indices_;
     // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
@@ -147,7 +147,7 @@ class Program {
     std::vector<uint8_t> core_to_kernel_group_index_table_;
 
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
-    friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
+    friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, uintptr_t id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
     friend KernelHandle detail::AddKernel(Program &program, Kernel *kernel);
@@ -157,8 +157,8 @@ class Program {
     KernelHandle add_kernel(Kernel *kernel);
     Kernel *get_kernel(KernelHandle kernel_id) const;
 
-    CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
-    std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
+    uintptr_t add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
+    std::shared_ptr<CircularBuffer> get_circular_buffer(uintptr_t cb_id) const;
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t address, uint32_t init_value);
 

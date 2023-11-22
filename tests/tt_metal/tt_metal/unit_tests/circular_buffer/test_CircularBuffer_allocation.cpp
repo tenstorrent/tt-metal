@@ -193,7 +193,7 @@ TEST_F(DeviceFixture, TestValidUpdateCircularBufferSize) {
     validate_cb_address(program, this->devices_.at(id), cr_set, golden_addresses_per_core);
 
     // Update size of the first CB
-    UpdateCircularBufferTotalSize(program, cb_ids[0], cb_config.page_size * 2);
+    UpdateCircularBufferTotalSize( cb_ids[0], cb_config.page_size * 2);
     golden_addresses_per_core[core0][0] = L1_UNRESERVED_BASE;
     golden_addresses_per_core[core0][1] = (L1_UNRESERVED_BASE + (cb_config.page_size * 2));
 
@@ -226,7 +226,7 @@ TEST_F(DeviceFixture, TestInvalidUpdateCircularBufferSize) {
     validate_cb_address(program, this->devices_.at(id), cr_set, golden_addresses_per_core);
 
     // Update size of the first CB
-    UpdateCircularBufferTotalSize(program, cb_ids[0], cb_config.page_size / 2);
+    UpdateCircularBufferTotalSize( cb_ids[0], cb_config.page_size / 2);
     EXPECT_ANY_THROW(detail::LaunchProgram(this->devices_.at(id), program));
 }
 }
@@ -258,7 +258,7 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferAddress) {
 
     validate_cb_address(program, this->devices_.at(id), cr_set, golden_addresses_per_core);
     // Update address of the first CB
-    UpdateDynamicCircularBufferAddress(program, cb_ids[0], l1_buffer);
+    UpdateDynamicCircularBufferAddress( cb_ids[0], l1_buffer);
     golden_addresses_per_core[core0][0] = l1_buffer.address();
     validate_cb_address(program, this->devices_.at(id), cr_set, golden_addresses_per_core);
 }
@@ -312,7 +312,7 @@ TEST_F(DeviceFixture, TestUpdateCircularBufferPageSize) {
         }
     }
 
-    UpdateCircularBufferPageSize(program, cb_ids[1], 1, cb_config.page_size / 2);
+    UpdateCircularBufferPageSize( cb_ids[1], 1, cb_config.page_size / 2);
     golden_num_pages_per_core[core0][1] = 2;
 
     detail::LaunchProgram(this->devices_.at(id), program);
@@ -412,7 +412,7 @@ TEST_F(DeviceFixture, TestDataCopyWithUpdatedCircularBufferConfig) {
     EXPECT_EQ(src_vec, input_cb_data);
 
     // update cb address
-    UpdateDynamicCircularBufferAddress(program, cb_src0, global_cb_buffer);
+    UpdateDynamicCircularBufferAddress( cb_src0, global_cb_buffer);
 
     // zero out dst buffer
     std::vector<uint32_t> zero_vec = create_constant_vector_of_bfloat16(buffer_size, 0);

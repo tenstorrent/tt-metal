@@ -311,16 +311,16 @@ operation::ProgramWithCallbacks eltwise_binary_multi_core(const Tensor &a, const
         SetRuntimeArgs(program, unary_writer_kernel_id, cores, unary_writer_args);
 
         if (src0_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
-            UpdateCircularBufferTotalSize(program, cb_src0, num_tiles_per_core_group_1 * src0_single_tile_size);
+            UpdateDynamicCircularBufferAddress( cb_src0, *src_buffer_a);
+            UpdateCircularBufferTotalSize( cb_src0, num_tiles_per_core_group_1 * src0_single_tile_size);
         }
         if (src1_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
-            UpdateCircularBufferTotalSize(program, cb_src1, num_tiles_per_core_group_1 * src1_single_tile_size);
+            UpdateDynamicCircularBufferAddress( cb_src1, *src_buffer_b);
+            UpdateCircularBufferTotalSize( cb_src1, num_tiles_per_core_group_1 * src1_single_tile_size);
         }
         if (out_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
-            UpdateCircularBufferTotalSize(program, cb_output, num_tiles_per_core_group_1 * dst_single_tile_size);
+            UpdateDynamicCircularBufferAddress( cb_output, *dst_buffer);
+            UpdateCircularBufferTotalSize( cb_output, num_tiles_per_core_group_1 * dst_single_tile_size);
         }
     };
 

@@ -17,7 +17,12 @@
 
 namespace tt::tt_metal {
 
-using CBHandle = uintptr_t;
+class Program;
+
+struct CBHandle {
+    std::reference_wrapper<Program> program;
+    uintptr_t cbref;
+};
 
 class CircularBufferConfig {
    public:
