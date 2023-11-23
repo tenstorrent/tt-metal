@@ -68,27 +68,28 @@ inline void _llk_unpack_debug_dump_seek_(std::uint8_t offset) {
     debug_dump_seek(offset);
 }
 
-template <bool is_tile_dim_reconfig_en = false>
-inline void _llk_unpack_reconfig_data_format_srca_impl_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+inline void _llk_unpack_config_tile_dim_srca_impl_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
-    if constexpr(is_tile_dim_reconfig_en) {
-        const uint face_dim = face_r_dim*FACE_C_DIM;
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32+1, 16, 0xffff0000>(num_faces);
+    config_unpacker_0_face_dim<true, p_setadc::UNP_A>(face_r_dim);
+}
 
-        cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32+1, 16, 0xffff0000>(num_faces);
-        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(face_dim | face_dim << 16);
-    }
+inline void _llk_unpack_config_tile_dim_srcb_impl_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+{
+    const uint face_dim = face_r_dim*FACE_C_DIM;
+    cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 16, 0xffff0000>(face_dim);
+    cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32+1, 16, 0xffff0000>(num_faces);
+}
+
+inline void _llk_unpack_reconfig_data_format_srca_impl_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t tile_size)
+{
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(unpack_dst_format);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A)); // update gpr which holds tile size A
 }
 
-template <bool is_tile_dim_reconfig_en = false>
-inline void _llk_unpack_reconfig_data_format_srcb_impl_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+inline void _llk_unpack_reconfig_data_format_srcb_impl_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t tile_size)
 {
-    if constexpr(is_tile_dim_reconfig_en) {
-        cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 16, 0xffff0000>(face_r_dim*FACE_C_DIM);
-        cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32+1, 16, 0xffff0000>(num_faces);
-    }
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format);
     cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpack_dst_format);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B)); // update gpr which holds tile size B

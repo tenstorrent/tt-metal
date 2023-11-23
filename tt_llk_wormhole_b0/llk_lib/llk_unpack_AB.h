@@ -93,7 +93,7 @@ inline void _llk_unpack_AB_init_(const std::uint32_t face_r_dim=FACE_R_DIM, cons
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose); // transpose within the face
 
     constexpr std::uint32_t UNP_SEL = p_setadc::UNP_AB;
-    config_face_dim<false, UNP_SEL>(face_r_dim);
+    config_unpacker_x_end<UNP_SEL>(face_r_dim);
 
     _llk_unpack_AB_mop_config_<BType>(transpose>0, num_faces, narrow_tile); // transpose of faces 0,2,1,3
 }

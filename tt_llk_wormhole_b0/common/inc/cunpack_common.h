@@ -350,8 +350,8 @@ namespace ckernel::unpacker
       reset_config_context();
    }
 
-   template <bool INSERT_FENCE=false, std::uint32_t UNP_SEL = p_setadc::UNP_AB>
-   inline void config_face_dim(const uint32_t face_r_dim) 
+   template <std::uint32_t UNP_SEL = p_setadc::UNP_AB>
+   inline void config_unpacker_x_end(const uint32_t face_r_dim) 
    {
       switch (face_r_dim) {
          case 1: 
@@ -368,6 +368,30 @@ namespace ckernel::unpacker
             break;
          default:      
             TTI_SETADCXX(UNP_SEL, FACE_R_DIM*FACE_C_DIM-1, 0x0);
+            break;
+      }
+   }   
+
+   template <bool INSERT_FENCE=false, std::uint32_t UNP_SEL = p_setadc::UNP_AB>
+   inline void config_unpacker_0_face_dim(const uint32_t face_r_dim) 
+   {
+      //tile x dim registers are only for unpacker 0
+      static_assert(UNP_SEL != p_setadc::UNP_B);
+      switch (face_r_dim) {
+         case 1: 
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16);
+            break;
+         case 2: 
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_2x16);
+            break;
+         case 4: 
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_4x16);
+            break;
+         case 8: 
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_8x16);
+            break;
+         default:      
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_16x16);
             break;
       }
 

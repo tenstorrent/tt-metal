@@ -138,7 +138,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(const std
     if (partial_face) {
         // Do face by face unpacking. Need to program correct face dim 
         // to compute address of the next face
-        config_face_dim<false, p_setadc::UNP_B>(unpB_face_r_dim);
+        config_unpacker_x_end<p_setadc::UNP_B>(unpB_face_r_dim);
     } else {
         // Do full tile unpacking. No need to program face dim
         // as address counter pointing to the face is not incremented
