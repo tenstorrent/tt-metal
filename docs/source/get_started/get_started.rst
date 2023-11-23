@@ -3,6 +3,8 @@
 Getting Started
 ===============
 
+Metal is designed with the needs for non-ML and ML use cases.
+
 The GitHub page for the project is located here:
 https://github.com/tenstorrent-metal/tt-metal
 
