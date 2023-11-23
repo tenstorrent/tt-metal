@@ -18,35 +18,55 @@ class TtTransformerBlock(nn.Module):
         device=None,
         base_address=None,
         tt_cache_path=None,
+        output_mem_config=None,
     ):
         super().__init__()
         self.n_heads = args.n_heads
         self.dim = args.dim
         self.device = device
-        self.attention = TtAttention(args, f"{base_address}attention.", device, tt_cache_path=tt_cache_path)
-        self.feed_forward = TtFeedForward(args, f"{base_address}feed_forward.", device, tt_cache_path=tt_cache_path)
+        self.output_mem_config = output_mem_config
+        self.attention = TtAttention(
+            args,
+            f"{base_address}attention.",
+            device,
+            tt_cache_path=tt_cache_path,
+            output_mem_config=self.output_mem_config,
+        )
+        self.feed_forward = TtFeedForward(
+            args,
+            f"{base_address}feed_forward.",
+            device,
+            tt_cache_path=tt_cache_path,
+            output_mem_config=self.output_mem_config,
+        )
         self.attention_norm = TtRMSNorm(
             args.dim,
             base_address=f"{base_address}attention_norm.",
             eps=args.norm_eps,
             tt_cache_path=tt_cache_path,
+            device=self.device,
+            output_mem_config=self.output_mem_config,
         )
         self.ffn_norm = TtRMSNorm(
             args.dim,
             base_address=f"{base_address}ffn_norm.",
             eps=args.norm_eps,
             tt_cache_path=tt_cache_path,
+            device=self.device,
+            output_mem_config=self.output_mem_config,
         )
         self.args = args
 
     def forward(
         self,
         x: tt_lib.tensor.Tensor,
-        freqs_cis: torch.Tensor,
+        bcast_freq_xq: tt_lib.tensor.complex_tensor,
+        bcast_freq_xk: tt_lib.tensor.complex_tensor,
         positions: tt_lib.tensor.Tensor,
         mask: Optional[torch.Tensor],
+        seqlen: int,
     ) -> tt_lib.tensor.Tensor:
-        r = self.attention.forward(self.attention_norm(x), freqs_cis, positions, mask)
+        r = self.attention.forward(self.attention_norm(x), bcast_freq_xq, bcast_freq_xk, positions, mask, seqlen)
         h = tt_lib.tensor.add(x, r)
         x.deallocate()
         r = self.feed_forward.forward(self.ffn_norm(h))

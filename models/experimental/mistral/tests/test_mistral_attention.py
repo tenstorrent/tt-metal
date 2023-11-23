@@ -10,7 +10,8 @@ import json
 from models.experimental.mistral.tt.mistral_attention import TtAttention
 from models.experimental.mistral.tt.mistral_configuration import TtModelArgs
 from models.experimental.mistral.reference.model import Attention
-from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
+from models.utility_functions import torch_to_tt_tensor_rm
+from models.experimental.mistral.mistral_helper_funcs import unpad_from_zero, get_freqs_cis, format_tensor
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -68,16 +69,24 @@ def test_mistral_attention_inference(
     model_args.FALLBACK_EMPTY = empty_ondevice
     model_args.FALLBACK_SCATTER = scatter_ondevice
     model_args.WEIGHTS_DTYPE = dtype
+    output_mem_config = tt_lib.tensor.MemoryConfig(
+        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    )
     tt_cache_path = "/mnt/MLPerf/tt_dnn-models/tt/Mistral/"
     tt_model = TtAttention(
         args=model_args,
         device=device,
         base_address=base_address,
         tt_cache_path=tt_cache_path,
+        output_mem_config=output_mem_config,
     )
     input = torch.randn(1, 11, 4096)
+    seqlen = input.shape[1]
     empty_tensor = torch.zeros((11, 64))
     freqs_cis = torch.complex(empty_tensor, empty_tensor)
+    query_shape = [1, 11, model_args.n_heads, model_args.head_dim // 2]
+    key_shape = [1, 11, model_args.n_kv_heads, model_args.head_dim // 2]
+    bcast_freq_xq, bcast_freq_xk = get_freqs_cis(freqs_cis, query_shape, key_shape, device, output_mem_config)
     positions = torch.arange(0, 11)
     mask = torch.randn(11, 11)
 
@@ -85,8 +94,13 @@ def test_mistral_attention_inference(
     del reference_model
     tt_input = torch_to_tt_tensor_rm(input, device)
     tt_position = torch_to_tt_tensor_rm(positions, device, put_on_device=False)
-    tt_output = tt_model(tt_input, freqs_cis, tt_position, mask)
-    tt_output_torch = tt_to_torch_tensor(tt_output).squeeze(0)
+    mask = torch_to_tt_tensor_rm(mask, device, put_on_device=False)
+    mask = format_tensor(mask, tt_lib.tensor.Layout.TILE, device, output_mem_config, pad_value=-10000)
+    tt_input = format_tensor(tt_input, tt_lib.tensor.Layout.TILE, device, output_mem_config)
+    tt_output = tt_model(tt_input, bcast_freq_xq, bcast_freq_xk, tt_position, mask, seqlen)
+    desired_shape = list(reference_output.shape)
+    desired_shape.insert(0, 1)
+    tt_output_torch = unpad_from_zero(tt_output, desired_shape).squeeze(0)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
