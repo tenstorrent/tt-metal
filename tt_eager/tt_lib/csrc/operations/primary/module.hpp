@@ -13,6 +13,7 @@
 #include "tt_dnn/op_library/moreh_arange/moreh_arange_op.hpp"
 #include "tt_dnn/op_library/moreh_bmm/moreh_bmm_op.hpp"
 #include "tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
+#include "tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
 #include "tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_linear/moreh_linear_op.hpp"
@@ -350,6 +351,21 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
         "Performs a moreh_bmm operation.
+    )doc");
+
+    // moreh_clip_grad_norm
+    m_primary.def(
+        "moreh_clip_grad_norm",
+        &moreh_clip_grad_norm,
+        py::arg("inputs").noconvert(),
+        py::arg("max_norm").noconvert(),
+        py::arg("norm_type").noconvert() = 2.0f,
+        py::arg("error_if_nonfinite").noconvert() = false,
+        py::kw_only(),
+        py::arg("total_norm").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        R"doc(
+        "Performs a moreh_clip_grad_norm operation.
     )doc");
 
     // moreh_bmm_backward

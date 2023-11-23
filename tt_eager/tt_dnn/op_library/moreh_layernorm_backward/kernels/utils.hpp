@@ -152,3 +152,19 @@ void generate_mask_h_w(uint32_t cb_mask_h_w, uint32_t mask_h, uint32_t mask_w, u
 
     cb_push_back(cb_mask_h_w, 2);
 }
+
+void generate_mask_h_w_if_needed(uint32_t cb_mask_h_w, uint32_t origin_h, uint32_t origin_w) {
+    constexpr uint32_t TILE_H = 32;
+    constexpr uint32_t TILE_W = 32;
+
+    const bool do_mask_h = (origin_h % TILE_H) != 0;
+    const uint32_t mask_h = do_mask_h ? (origin_h % TILE_H) : TILE_H;
+
+    const bool do_mask_w = (origin_w % TILE_W) != 0;
+    const uint32_t mask_w = do_mask_w ? (origin_w % TILE_W) : TILE_W;
+
+    if (do_mask_h || do_mask_w) {
+        const uint32_t mask_tile_bytes = get_tile_size(cb_mask_h_w);
+        generate_mask_h_w(cb_mask_h_w, mask_h, mask_w, mask_tile_bytes);
+    }
+}
