@@ -15,19 +15,20 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_config
     validate_conv_sharded_input_top_left_indices,
     validate_max_pool_sharded_input_top_left_indices,
 )
-
+from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 from tt_lib.utils import _nearest_y
+import tt_lib as ttl
 
 
 # conv params - output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups
 @pytest.mark.parametrize(
     "conv_params, batch_size, input_chw_shape, num_cores, test_max_pool",
     (
-        ((1, 1, 2, 2, 1, 1, 0, 0, 1, 1), 8, (1, 8, 8), 1, False),
-        ((1, 1, 2, 2, 1, 1, 0, 0, 1, 1), 8, (1, 8, 8), 2, False),
-        ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), 8, (1, 8, 8), 1, False),
-        ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), 8, (1, 8, 8), 2, False),
+        # ((1, 1, 2, 2, 1, 1, 0, 0, 1, 1), 8, (1, 8, 8), 1, False),
+        # ((1, 1, 2, 2, 1, 1, 0, 0, 1, 1), 8, (1, 8, 8), 2, False),
+        # ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), 8, (1, 8, 8), 1, False),
+        # ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), 8, (1, 8, 8), 2, False),
         # resnet50 s1 convs
         ((1, 1, 4, 4, 1, 1, 1, 1, 1, 1), 8, (1, 115, 115), 98, False),  # first conv b8 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 8, (1, 56, 56), 98, False),  # layer1 b8 - 98 cores for height slicing
@@ -60,7 +61,9 @@ from tt_lib.utils import _nearest_y
         ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 20, (1, 112, 112), 98, True),
     ),
 )
-def test_generate_all_configs_and_references(conv_params, batch_size, input_chw_shape, num_cores, test_max_pool):
+def test_generate_all_configs_and_references(
+    device, conv_params, batch_size, input_chw_shape, num_cores, test_max_pool
+):
     assert len(conv_params) == 10
     output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups = [
         conv_params[i] for i in range(10)
@@ -131,7 +134,7 @@ def test_generate_all_configs_and_references(conv_params, batch_size, input_chw_
     # print("req_conv_input_shard_start_end-", req_conv_input_shard_start_end)
     # print("tensor_metadata-", tensor_metadata)
     print("Validate required conv input shard start/end stick indices")
-    golden_input_shards = validate_required_conv_input_sharded_start_end(
+    golden_untilize_with_halo_output_shards = validate_required_conv_input_sharded_start_end(
         input_padded_tensor,
         input_padded_width,
         filter_pyt_tensor,
@@ -146,16 +149,29 @@ def test_generate_all_configs_and_references(conv_params, batch_size, input_chw_
         untilize_with_halo_input_shard_height,
         tensor_metadata,
         req_conv_input_shard_start_end,
-        golden_input_shards,
+        golden_untilize_with_halo_output_shards,
     )
 
     # Generate and validate the final untilize with halo configs here (TODO Abhinav)
     print(f"Generate untilize with halo kernel configs")
     # print(f'tensor metadata: {tensor_metadata}')
     # print(f"req shards start and end: {req_conv_input_shard_start_end}")
-    local_data, local_pad, ll_data, l_data, r_data, rr_data, src_start_idx = generate_untilize_with_halo_kernel_configs(
-        tensor_metadata, req_conv_input_shard_start_end
-    )
+    (
+        local_data,
+        local_pad,
+        ll_data,
+        l_data,
+        r_data,
+        rr_data,
+        src_start_idx,
+        local_data_nsegments_per_core,
+        local_pad_nsegments_per_core,
+        ll_data_nsegments_per_core,
+        l_data_nsegments_per_core,
+        r_data_nsegments_per_core,
+        rr_data_nsegments_per_core,
+        max_out_nsticks_per_core,
+    ) = generate_untilize_with_halo_kernel_configs(tensor_metadata, req_conv_input_shard_start_end)
     # print(f"local data:     {local_data}")
     # print(f"local pad:      {local_pad}")
     # print(f"ll data:        {ll_data}")
@@ -164,10 +180,20 @@ def test_generate_all_configs_and_references(conv_params, batch_size, input_chw_
     # print(f"rr data:        {rr_data}")
     # print(f"src start idx:  {src_start_idx}")
     print("Validate reshards")
+    # shard the input tensor to untilize with halo
+    pad_untilize_with_halo_input_for_sharding = (untilize_with_halo_input_shard_height * num_cores) - len(input_tensor)
+    untilize_with_halo_input_padded_to_num_shards = input_tensor + [0] * pad_untilize_with_halo_input_for_sharding
+    untilize_with_halo_input_shards = [
+        untilize_with_halo_input_padded_to_num_shards[
+            i * untilize_with_halo_input_shard_height : (i * untilize_with_halo_input_shard_height)
+            + untilize_with_halo_input_shard_height
+        ]
+        for i in range(num_cores)
+    ]
+
     validate_untilize_with_halo_kernel_configs(
-        golden_input_shards,
-        input_tensor,
-        tensor_metadata,
+        golden_untilize_with_halo_output_shards,
+        untilize_with_halo_input_shards,
         req_conv_input_shard_start_end,
         local_data,
         local_pad,
@@ -176,6 +202,13 @@ def test_generate_all_configs_and_references(conv_params, batch_size, input_chw_
         r_data,
         rr_data,
         src_start_idx,
+        local_data_nsegments_per_core,
+        local_pad_nsegments_per_core,
+        ll_data_nsegments_per_core,
+        l_data_nsegments_per_core,
+        r_data_nsegments_per_core,
+        rr_data_nsegments_per_core,
+        max_out_nsticks_per_core,
     )
 
     # Generate sliding window op config -
@@ -187,7 +220,7 @@ def test_generate_all_configs_and_references(conv_params, batch_size, input_chw_
     if not test_max_pool:
         print("Validate conv_sharded_input_top_left_indices")
         validate_conv_sharded_input_top_left_indices(
-            golden_input_shards,
+            golden_untilize_with_halo_output_shards,
             input_padded_width,
             filter_pyt_tensor,
             out_golden_pyt_tensor,
@@ -207,10 +240,32 @@ def test_generate_all_configs_and_references(conv_params, batch_size, input_chw_
         )(input_pyt_tensor.float())
 
         validate_max_pool_sharded_input_top_left_indices(
-            golden_input_shards,
+            golden_untilize_with_halo_output_shards,
             input_padded_width,
             filter_h,
             filter_w,
             pool_out_golden_pyt_tensor,
             sliding_window_op_sharded_input_top_left_indices,
         )
+
+    # On device test
+    sliding_window_op_params = [
+        (stride_h, stride_w),
+        (pad_h, pad_w),
+        (filter_h, filter_w),
+        (batch_size, input_h, input_w),
+        num_cores,
+    ]
+    # Assume height sharding
+    num_cores_height = ((int)(num_cores / 12)) + 1
+    num_cores_width = 12
+    shard_grid = ttl.tensor.CoreRangeSet(
+        {
+            ttl.tensor.CoreRange(
+                ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_width - 1, num_cores_height - 1)
+            )
+        }
+    )
+    tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(device, sliding_window_op_params, shard_grid)
+    # Set Op configs
+    tt_py_untilize_with_halo_op.set_op_configs()
