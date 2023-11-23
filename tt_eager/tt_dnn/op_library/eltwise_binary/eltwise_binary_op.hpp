@@ -75,7 +75,7 @@ struct make_eltwise_binary_out {
      Tensor operator()(const Tensor& input_tensor_a, const Tensor& input_tensor_b, Tensor& output_tensor, std::optional<std::vector<UnaryWithParam>> fused_activations = std::nullopt) const {
          TT_ASSERT(input_tensor_a.shape() == input_tensor_b.shape(), "Input shapes must be the same!");
          TT_ASSERT(input_tensor_a.shape() == output_tensor.shape(), "Input and output shapes must be the same!");
-         return operation::run_with_autoformat(EltwiseBinary{binary_op_type, fused_activations, output_tensor.memory_config()}, {input_tensor_a, input_tensor_b, output_tensor}).at(0);
+         return operation::run_with_autoformat(EltwiseBinary{binary_op_type, fused_activations, output_tensor.memory_config(), input_tensor_a.dtype(), false}, {input_tensor_a, input_tensor_b, output_tensor}).at(0);
      }
  };
 
