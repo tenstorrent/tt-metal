@@ -83,19 +83,65 @@ def test_bert_sharded_LN_to_LN(in_LN_dtype, in_LN_mem_config, LN_gamma_beta_mem_
         memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         buffer_type=ttl.tensor.BufferType.L1,
     )
-    # LN
-    in0_shape = (1, 1, batch * 384, 1024)
-    M = in0_shape[2]
-    K = in0_shape[3]
-    LN_in0 = torch.rand(in0_shape) * 2 - 0.95
-    LN_in0_t = torch2tt_tensor(LN_in0, device, tt_memory_config=in_LN_mem_config, tt_dtype=in_LN_dtype)
-    LN_in0_t_shard = ttl.tensor.interleaved_to_sharded(
-        LN_in0_t,
+    # Selfout
+    M = 4608
+    K = 1024
+    N = 1024
+    in0_block_w, in0_block_h, out_block_h, out_block_w, out_subblock_h, out_subblock_w = get_block_subblock_dim(
+        grid_size, M, K, N
+    )
+
+    in0_shape = [1, 1, M, K]
+    in1_shape = [1, 1, K, N]
+    bias_shape = [1, 1, N]
+
+    selfout_in0 = torch.randn(in0_shape).bfloat16().float()
+    selfout_in1 = torch.randn(in1_shape).bfloat16().float()
+    selfout_bias = torch.randn(bias_shape).bfloat16().float()
+
+    selfout_in0_t = torch2tt_tensor(
+        selfout_in0, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+    )
+    selfout_in0_t = ttl.tensor.interleaved_to_sharded(
+        selfout_in0_t,
         grid_size,
         [M // grid_size[0], K // grid_size[1]],
         ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
         ttl.tensor.ShardOrientation.COL_MAJOR,
     )
+    selfout_in1_t = torch2tt_tensor(
+        selfout_in1, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+    )
+    selfout_bias_t = pad_by_zero(
+        selfout_bias, device, tt_memory_config=interleaved_mem_config_DRAM, tt_dtype=ttl.tensor.DataType.BFLOAT8_B
+    )[0]
+
+    program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        transpose_mcast=True,
+        fused_activation=None,
+    )
+
+    logger.info("Selfout")
+    out_selfout_t = ttl.operations.primary.matmul(
+        selfout_in0_t,
+        selfout_in1_t,
+        bias=selfout_bias_t,
+        program_config=program_config,
+        output_mem_config=sharded_mem_config,
+        math_fidelity=ttl.tensor.MathFidelity.LoFi,
+    )
+    logger.info("Selfout_done")
+    selfout_in0_t.deallocate()
+    # LN
+    in0_shape = (1, 1, batch * 384, 1024)
+    M = in0_shape[2]
+    K = in0_shape[3]
 
     LN_in1 = torch.rand(in0_shape) * 2 - 0.8
     LN_in1_t = torch2tt_tensor(LN_in1, device, tt_memory_config=in_LN_mem_config, tt_dtype=in_LN_dtype)
@@ -129,7 +175,7 @@ def test_bert_sharded_LN_to_LN(in_LN_dtype, in_LN_mem_config, LN_gamma_beta_mem_
 
     logger.info("LN")
     LN_out_t = ttl.operations.primary.add_layernorm(
-        LN_in0_t_shard,
+        out_selfout_t,
         LN_in1_t_shard,
         epsf,
         gamma_t,
@@ -139,7 +185,7 @@ def test_bert_sharded_LN_to_LN(in_LN_dtype, in_LN_mem_config, LN_gamma_beta_mem_
     )
     logger.info("LN_done")
 
-    LN_in0_t_shard.deallocate()
+    out_selfout_t.deallocate()
     LN_in1_t_shard.deallocate()
 
     # FF1 + GELU
@@ -315,10 +361,12 @@ def test_bert_sharded_LN_to_LN(in_LN_dtype, in_LN_mem_config, LN_gamma_beta_mem_
     logger.info("QKV_done")
 
     # compare results
+    ref_selfout = selfout_in0 @ selfout_in1 + selfout_bias
+
     # out_ln_t = ttl.tensor.sharded_to_interleaved(LN_out_t, interleaved_mem_config_DRAM)
     # out_ln = tt2torch_tensor(out_ln_t)
     ref_lnorm = torch.nn.functional.layer_norm(
-        LN_in0 + LN_in1, LN_in0.shape[-1:], gamma[:, :, 0:1, :].flatten(), beta[:, :, 0:1, :].flatten(), epsf
+        ref_selfout + LN_in1, ref_selfout.shape[-1:], gamma[:, :, 0:1, :].flatten(), beta[:, :, 0:1, :].flatten(), epsf
     )
     # passing, output = comp_pcc(out_ln, ref_lnorm, 0.98)
     # logger.info(output)
@@ -339,7 +387,7 @@ def test_bert_sharded_LN_to_LN(in_LN_dtype, in_LN_mem_config, LN_gamma_beta_mem_
     # LN_out2 = tt2torch_tensor(LN_out_t2)
     # print(LN_out2[0][0][0])
     ref_lnorm2 = torch.nn.functional.layer_norm(
-        ref_ff2 + ref_lnorm, LN_in0.shape[-1:], gamma2[:, :, 0:1, :].flatten(), beta2[:, :, 0:1, :].flatten(), epsf
+        ref_ff2 + ref_lnorm, ref_ff2.shape[-1:], gamma2[:, :, 0:1, :].flatten(), beta2[:, :, 0:1, :].flatten(), epsf
     )
     # passing, output = comp_pcc(LN_out2, ref_lnorm2, 0.99)
     # print(ref_lnorm2[0][0][0])
