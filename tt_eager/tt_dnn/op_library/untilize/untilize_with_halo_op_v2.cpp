@@ -22,30 +22,7 @@ namespace tt_metal {
 using range_t = std::array<int32_t, 2>;
 const int32_t NEIGHBORHOOD_DIST = 2;    // => ncores to left and ncores to right
 
-namespace untilize_with_halo_helpers {
-
-range_t calculate_in_range(const range_t& out_range, const PoolConfig& pc) {
-    // given out stick range, calculate corresponding window's center stick input coords
-    range_t in_range;
-    // start of the range
-    {
-        uint32_t out_w_i = out_range[0] % pc.out_w;
-        uint32_t out_h_i = out_range[0] / pc.out_w;
-        uint32_t in_w_i = out_w_i * pc.stride_w;
-        uint32_t in_h_i = out_h_i * pc.stride_h;
-        in_range[0] = in_h_i * pc.in_w + in_w_i;
-    }
-    // end of the range
-    {
-        uint32_t out_w_i = out_range[1] % pc.out_w;
-        uint32_t out_h_i = out_range[1] / pc.out_w;
-        // corresponding window's center stick input coords:
-        uint32_t in_w_i = out_w_i * pc.stride_w;
-        uint32_t in_h_i = out_h_i * pc.stride_h;
-        in_range[1] = in_h_i * pc.in_w + in_w_i;
-    }
-    return in_range;
-}
+namespace untilize_with_halo_v2_helpers {
 
 std::map<CoreCoord, CoreCoord> left_neighbor_core, right_neighbor_core;
 void init_neighbor_core_xy_mapping(CoreCoord grid_size, bool is_twod = false) {
@@ -101,7 +78,7 @@ void init_neighbor_core_xy_mapping(CoreCoord grid_size, bool is_twod = false) {
     }
 }
 
-} // namespace untilize_with_halo_helpers
+} // namespace untilize_with_halo_v2_helpers
 
 operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const Tensor& input_tensor,
@@ -145,7 +122,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t out_tile_size = detail::TileSize(out_df);
 
     auto grid_size = device->compute_with_storage_grid_size();
-    untilize_with_halo_helpers::init_neighbor_core_xy_mapping(grid_size, input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+    untilize_with_halo_v2_helpers::init_neighbor_core_xy_mapping(grid_size, input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
 
     uint32_t ncores_x = grid_size.x;
     uint32_t ncores_y = grid_size.y;
@@ -369,14 +346,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     for (uint32_t core = 0; core < ncores_height; ++ core) {
         CoreCoord core_coord = { core % ncores_x, core / ncores_x };    // logical
         // left neighbor args
-        if (untilize_with_halo_helpers::left_neighbor_core.count(core_coord) > 0) {
-            CoreCoord left_core = untilize_with_halo_helpers::left_neighbor_core.at(core_coord);
+        if (untilize_with_halo_v2_helpers::left_neighbor_core.count(core_coord) > 0) {
+            CoreCoord left_core = untilize_with_halo_v2_helpers::left_neighbor_core.at(core_coord);
             CoreCoord left_noc = device->worker_core_from_logical_core(left_core);
             writer_rt_args[4] = 1;
             writer_rt_args[5] = left_noc.x;
             writer_rt_args[6] = left_noc.y;
-            if (untilize_with_halo_helpers::left_neighbor_core.count(left_core) > 0) {
-                CoreCoord left_left_core = untilize_with_halo_helpers::left_neighbor_core.at(left_core);
+            if (untilize_with_halo_v2_helpers::left_neighbor_core.count(left_core) > 0) {
+                CoreCoord left_left_core = untilize_with_halo_v2_helpers::left_neighbor_core.at(left_core);
                 CoreCoord left_left_noc = device->worker_core_from_logical_core(left_left_core);
                 writer_rt_args[1] = 1;
                 writer_rt_args[2] = left_left_noc.x;
@@ -391,14 +368,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             writer_rt_args[4] = 0;
         }
         // right neighbor args
-        if (untilize_with_halo_helpers::right_neighbor_core.count(core_coord) > 0) {
-            CoreCoord right_core = untilize_with_halo_helpers::right_neighbor_core.at(core_coord);
+        if (untilize_with_halo_v2_helpers::right_neighbor_core.count(core_coord) > 0) {
+            CoreCoord right_core = untilize_with_halo_v2_helpers::right_neighbor_core.at(core_coord);
             CoreCoord right_noc = device->worker_core_from_logical_core(right_core);
             writer_rt_args[7] = 1;
             writer_rt_args[8] = right_noc.x;
             writer_rt_args[9] = right_noc.y;
-            if (untilize_with_halo_helpers::right_neighbor_core.count(right_core) > 0) {
-                CoreCoord right_right_core = untilize_with_halo_helpers::right_neighbor_core.at(right_core);
+            if (untilize_with_halo_v2_helpers::right_neighbor_core.count(right_core) > 0) {
+                CoreCoord right_right_core = untilize_with_halo_v2_helpers::right_neighbor_core.at(right_core);
                 CoreCoord right_right_noc = device->worker_core_from_logical_core(right_right_core);
                 writer_rt_args[10] = 1;
                 writer_rt_args[11] = right_right_noc.x;
