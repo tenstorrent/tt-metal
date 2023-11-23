@@ -16,11 +16,9 @@ namespace tt {
 
 namespace tt_metal {
 
-using unary_tensor_op_t = Tensor (const Tensor& a);
-using binary_tensor_op_t = Tensor (const Tensor& a, const Tensor& b);
-
-//addalpha(input, other, alpha) = input + (alpha * other)
 std::vector<Tensor> addalpha_bw(const Tensor& grad, const Tensor& input, const Tensor& other, float alpha, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
+std::vector<Tensor> unary_mul_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 } //namespace tt_metal
 
