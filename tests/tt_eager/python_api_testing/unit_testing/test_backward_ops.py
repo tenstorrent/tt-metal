@@ -19,9 +19,41 @@ from loguru import logger
         (torch.Size([1, 3, 320, 384])),
     ),
 )
+@pytest.mark.parametrize("on_device", [True, False])
 class TestBackwardOps:
+    @pytest.mark.parametrize("scalar", [0.05, 1.0, 0.5, 0.12])
+    def test_bw_unary_mul(self, input_shapes, scalar, on_device, device):
+        torch.manual_seed(0)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.unary_mul_bw(grad_tensor, input_tensor, scalar=scalar)
+        tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+
+        pyt_y = in_data * torch.tensor(scalar)
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor = in_data.grad
+
+        comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+        logger.info(comp_out)
+        assert comp_pass
+
+
     @pytest.mark.parametrize("alpha", [0.05, 1.0, 0.5, 0.12])
-    def test_bw_addalpha(self, input_shapes, alpha, device):
+    def test_bw_addalpha(self, input_shapes, alpha, on_device, device):
         torch.manual_seed(0)
         in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
         other_data = torch.randn(input_shapes, requires_grad=True).bfloat16()

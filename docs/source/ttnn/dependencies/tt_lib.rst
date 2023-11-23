@@ -737,3 +737,5 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.addalpha_bw
 
+.. autofunction:: tt_lib.tensor.unary_mul_bw
+
