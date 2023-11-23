@@ -36,7 +36,9 @@ def test_mistral_feed_forward_inference(pcc, model_location_generator, device, d
     model_args.WEIGHTS_DTYPE = dtype
     reference_model = FeedForward(args=model_args)
     reference_model.load_state_dict(state_dict)
-
+    output_mem_config = tt_lib.tensor.MemoryConfig(
+        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+    )
     tt_cache_path = "/mnt/MLPerf/tt_dnn-models/tt/Mistral/"
 
     tt_model = TtFeedForward(
@@ -44,6 +46,7 @@ def test_mistral_feed_forward_inference(pcc, model_location_generator, device, d
         device=device,
         base_address=base_address,
         tt_cache_path=tt_cache_path,
+        output_mem_config=output_mem_config,
     )
     input = torch.rand(1, 11, 4096)
     reference_output = reference_model(input)
