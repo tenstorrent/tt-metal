@@ -137,14 +137,6 @@ def get_model_config(model_config_str):
     model_config.update(dict(zip(OP_MEMCFG_KEYS, [mem_config] * len(OP_MEMCFG_KEYS))))
     model_config.update(dict(zip(OP_DTYPE_KEYS, [dtype] * len(OP_DTYPE_KEYS))))
 
-    model_config.update(
-        {
-            # MHA
-            "OP1_FUSED_QKV_MM_INPUT_MEMCFG": L1_MEMCFG_INTERLEAVED,
-            #
-        }
-    )
-
     # Layernorm Gamma Beta must always be BFLOAT16
     model_config.update(
         {

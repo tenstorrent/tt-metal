@@ -38,8 +38,30 @@ void py_module(py::module& m_transformers) {
         Performs the same matmul as attn_matmul, but fuses additional functionality for reading in in1. For in1, read num_tokens (rounded up to 32) from full cache along in1.shape()[2] (num_tokens must be > 0 and <= max_cache_len). For example, 64 tokens will be read for 32 < token_idx <= 64. Additional option to apply transpose_hw to in1 for pre-attention matmul with transpose_hw=true. For post-attention matmul, transpose_hw should be false.
     )doc");
 
-    m_transformers.def("scale_mask_softmax_in_place", &scale_mask_softmax_in_place,
-        "Performs a fused scale->attention_mask->softmax operation. Returns a reference to the input tensor modified in place.");
+    py::class_<SoftmaxDefaultProgramConfig>(m_transformers, "SoftmaxDefaultProgramConfig")
+        .def(py::init<>());
+
+    py::class_<SoftmaxShardedMultiCoreProgramConfig>(m_transformers, "SoftmaxShardedMultiCoreProgramConfig")
+        .def(
+            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, MathFidelity, DataType>(),
+            py::kw_only(),
+            py::arg("compute_with_storage_grid_size"),
+            py::arg("subblock_w").noconvert(),
+            py::arg("block_h").noconvert(),
+            py::arg("block_w").noconvert(),
+            py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
+            py::arg("im_data_format").noconvert()
+        );
+
+    m_transformers.def(
+        "scale_mask_softmax_in_place",
+        &scale_mask_softmax_in_place,
+        py::arg("input_tensor").noconvert(),
+        py::arg("scale").noconvert() = std::nullopt,
+        py::arg("mask").noconvert() = std::nullopt,
+        py::arg("program_config").noconvert() = SoftmaxDefaultProgramConfig{},
+        "Performs a fused scale->attention_mask->softmax operation. Returns a reference to the input tensor modified in place."
+        );
 }
 
 }  // namespace transformers
