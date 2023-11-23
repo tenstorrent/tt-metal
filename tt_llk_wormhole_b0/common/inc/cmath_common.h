@@ -200,6 +200,13 @@ inline void clear_addr_mod_base()
     TTI_SETC16(ADDR_MOD_SET_Base_ADDR32, 0); // clear addr mod base (use addr mods 0..3)
 }
 
+template <uint num_rows=8>
+inline void inc_dst_addr()
+{
+    static_assert(num_rows <= 15, "num_rows must be <= 15");
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, num_rows, 0, 0, p_setrwc::SET_D);
+}
+
 inline void math_dest_wait()
 {
     FWLOG0("XX math_full_dest_sync()->wait for whole dest available");
