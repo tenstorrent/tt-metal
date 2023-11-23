@@ -442,15 +442,88 @@ def generate_untilize_with_halo_kernel_configs(tensor_metadata: list, resharded_
     rr_data_start_and_size = []
     local_pad_start_and_size = []
     src_local_start_idx = []
+    local_pad_nsegments_per_core = []
+    ll_data_nsegments_per_core = []
+    l_data_nsegments_per_core = []
+    local_data_nsegments_per_core = []
+    r_data_nsegments_per_core = []
+    rr_data_nsegments_per_core = []
+    max_ll_data_nsegments_across_cores = 0
+    max_l_data_nsegments_across_cores = 0
+    max_local_data_nsegments_across_cores = 0
+    max_r_data_nsegments_across_cores = 0
+    max_rr_data_nsegments_across_cores = 0
+    max_local_pad_nsegments_across_cores = 0
+
     for i in range(ncores):
         ll_data_start_and_size.append(core_neighbor_data[i][NEIGHBORHOOD_DIST - 2])
+        ll_data_nsegments_per_core.append(len(core_neighbor_data[i][NEIGHBORHOOD_DIST - 2]))
+        max_ll_data_nsegments_across_cores = max(
+            max_ll_data_nsegments_across_cores, len(core_neighbor_data[i][NEIGHBORHOOD_DIST - 2])
+        )
+
         l_data_start_and_size.append(core_neighbor_data[i][NEIGHBORHOOD_DIST - 1])
+        l_data_nsegments_per_core.append(len(core_neighbor_data[i][NEIGHBORHOOD_DIST - 1]))
+        max_l_data_nsegments_across_cores = max(
+            max_l_data_nsegments_across_cores, len(core_neighbor_data[i][NEIGHBORHOOD_DIST - 1])
+        )
+
         local_data_start_and_size.append(core_neighbor_data[i][NEIGHBORHOOD_DIST])
+        local_data_nsegments_per_core.append(len(core_neighbor_data[i][NEIGHBORHOOD_DIST]))
+        max_local_data_nsegments_across_cores = max(
+            max_local_data_nsegments_across_cores, len(core_neighbor_data[i][NEIGHBORHOOD_DIST])
+        )
+
         r_data_start_and_size.append(core_neighbor_data[i][NEIGHBORHOOD_DIST + 1])
+        r_data_nsegments_per_core.append(len(core_neighbor_data[i][NEIGHBORHOOD_DIST + 1]))
+        max_r_data_nsegments_across_cores = max(
+            max_r_data_nsegments_across_cores, len(core_neighbor_data[i][NEIGHBORHOOD_DIST + 1])
+        )
+
         rr_data_start_and_size.append(core_neighbor_data[i][NEIGHBORHOOD_DIST + 2])
+        rr_data_nsegments_per_core.append(len(core_neighbor_data[i][NEIGHBORHOOD_DIST + 2]))
+        max_rr_data_nsegments_across_cores = max(
+            max_rr_data_nsegments_across_cores, len(core_neighbor_data[i][NEIGHBORHOOD_DIST + 2])
+        )
+
         local_pad_start_and_size.append(core_pad_start_and_size[i])
+        local_pad_nsegments_per_core.append(len(core_pad_start_and_size[i]))
+        max_local_pad_nsegments_across_cores = max(
+            max_local_pad_nsegments_across_cores, len(core_pad_start_and_size[i])
+        )
+
         src_local_start_idx.append(core_src_local_start_idx[i])
 
+    # Pad all config arrays to max nsegments since it needs to be sharded equally across cores
+    # Also, flatten the list of tuples
+    for i in range(ncores):
+        ll_data_start_and_size[i].extend(
+            [(0, 0)] * (max_ll_data_nsegments_across_cores - ll_data_nsegments_per_core[i])
+        )
+        ll_data_start_and_size[i] = [item for tuple_item in ll_data_start_and_size[i] for item in tuple_item]
+        l_data_start_and_size[i].extend([(0, 0)] * (max_l_data_nsegments_across_cores - l_data_nsegments_per_core[i]))
+        l_data_start_and_size[i] = [item for tuple_item in l_data_start_and_size[i] for item in tuple_item]
+        local_data_start_and_size[i].extend(
+            [(0, 0)] * (max_local_data_nsegments_across_cores - local_data_nsegments_per_core[i])
+        )
+        local_data_start_and_size[i] = [item for tuple_item in local_data_start_and_size[i] for item in tuple_item]
+        r_data_start_and_size[i].extend([(0, 0)] * (max_r_data_nsegments_across_cores - r_data_nsegments_per_core[i]))
+        r_data_start_and_size[i] = [item for tuple_item in r_data_start_and_size[i] for item in tuple_item]
+        rr_data_start_and_size[i].extend(
+            [(0, 0)] * (max_rr_data_nsegments_across_cores - rr_data_nsegments_per_core[i])
+        )
+        rr_data_start_and_size[i] = [item for tuple_item in rr_data_start_and_size[i] for item in tuple_item]
+        local_pad_start_and_size[i].extend(
+            [(0, 0)] * (max_local_pad_nsegments_across_cores - local_pad_nsegments_per_core[i])
+        )
+        local_pad_start_and_size[i] = [item for tuple_item in local_pad_start_and_size[i] for item in tuple_item]
+
+    max_out_nsticks_per_core = max(
+        [
+            resharded_start_and_end[core_id][1][1] - resharded_start_and_end[core_id][1][0] + 1
+            for core_id in range(ncores)
+        ]
+    )
     return (
         local_data_start_and_size,
         local_pad_start_and_size,
@@ -459,13 +532,19 @@ def generate_untilize_with_halo_kernel_configs(tensor_metadata: list, resharded_
         r_data_start_and_size,
         rr_data_start_and_size,
         src_local_start_idx,
+        local_data_nsegments_per_core,
+        local_pad_nsegments_per_core,
+        ll_data_nsegments_per_core,
+        l_data_nsegments_per_core,
+        r_data_nsegments_per_core,
+        rr_data_nsegments_per_core,
+        max_out_nsticks_per_core,
     )
 
 
 def validate_untilize_with_halo_kernel_configs(
     golden,
-    input_tensor,
-    tensor_metadata,
+    input_tensor_shards,
     resharded_start_and_end,
     local_data_start_and_size,
     local_pad_start_and_size,
@@ -474,19 +553,17 @@ def validate_untilize_with_halo_kernel_configs(
     r_send_start_and_size,
     rr_send_start_and_size,
     src_local_start_idx,
+    local_data_nsegments_per_core,
+    local_pad_nsegments_per_core,
+    ll_data_nsegments_per_core,
+    l_data_nsegments_per_core,
+    r_data_nsegments_per_core,
+    rr_data_nsegments_per_core,
+    max_out_nsticks_per_core,
 ):
     ## using the kernel configs, construct the resulting resharding for each core
     ncores = len(resharded_start_and_end)
-
-    ## collect the src start idx from tensor metadata
-    src_global_start_idx = {}
-    curr_global_idx = 0
-    for is_pad, src_core, src_local_idx in tensor_metadata:
-        if not is_pad:
-            if src_core not in src_global_start_idx:
-                src_global_start_idx[src_core] = curr_global_idx
-            curr_global_idx += 1
-    # print(f'START IDX: {src_global_start_idx}')
+    assert len(input_tensor_shards) == ncores
 
     max_size = 0
     for _, dst in resharded_start_and_end:
@@ -504,8 +581,6 @@ def validate_untilize_with_halo_kernel_configs(
 
     # print (f'RESHARD: {resharded_start_and_end}')
     for core in np.arange(ncores):
-        # input_tensor_start_offset = resharded_start_and_end[core][0][0]
-        input_tensor_start_offset = src_global_start_idx[core]
         local_data = local_data_start_and_size[core]
         local_pad = local_pad_start_and_size[core]
         ll_data = ll_send_start_and_size[core]
@@ -515,7 +590,9 @@ def validate_untilize_with_halo_kernel_configs(
         src_start_idx = src_local_start_idx[core]
 
         ## local pad
-        for dst_start, size in local_pad:
+        for local_pad_segment_idx in range(0, local_pad_nsegments_per_core[core] * 2, 2):
+            dst_start = local_pad[local_pad_segment_idx]
+            size = local_pad[local_pad_segment_idx + 1]
             dst_idx = dst_start
             while dst_idx < dst_start + size:
                 reshards[core][dst_idx] = pad_val
@@ -523,49 +600,60 @@ def validate_untilize_with_halo_kernel_configs(
 
         ## local data
         src_idx = src_start_idx[NEIGHBORHOOD_DIST]
-        for dst_start, size in local_data:
+        for local_data_segment_idx in range(0, local_data_nsegments_per_core[core] * 2, 2):
+            dst_start = local_data[local_data_segment_idx]
+            size = local_data[local_data_segment_idx + 1]
             dst_idx = dst_start
             while dst_idx < dst_start + size:
-                reshards[core][dst_idx] = input_tensor[src_idx + input_tensor_start_offset]  ## TODO: make global
+                reshards[core][dst_idx] = input_tensor_shards[core][src_idx]  ## TODO: make global
                 src_idx += 1
                 dst_idx += 1
 
         ## push ll_data
         src_idx = src_start_idx[NEIGHBORHOOD_DIST - 2]
-        for dst_start, size in ll_data:
+        for ll_data_segment_idx in range(0, ll_data_nsegments_per_core[core] * 2, 2):
+            dst_start = ll_data[ll_data_segment_idx]
+            size = ll_data[ll_data_segment_idx + 1]
             dst_idx = dst_start
             while dst_idx < dst_start + size:
-                reshards[core - 2][dst_idx] = input_tensor[src_idx + input_tensor_start_offset]
+                reshards[core - 2][dst_idx] = input_tensor_shards[core][src_idx]
                 src_idx += 1
                 dst_idx += 1
 
         ## push l_data
         src_idx = src_start_idx[NEIGHBORHOOD_DIST - 1]
-        for dst_start, size in l_data:
+        for l_data_segment_idx in range(0, l_data_nsegments_per_core[core] * 2, 2):
+            dst_start = l_data[l_data_segment_idx]
+            size = l_data[l_data_segment_idx + 1]
             dst_idx = dst_start
             while dst_idx < dst_start + size:
-                reshards[core - 1][dst_idx] = input_tensor[src_idx + input_tensor_start_offset]
+                reshards[core - 1][dst_idx] = input_tensor_shards[core][src_idx]
                 src_idx += 1
                 dst_idx += 1
 
         ## push r_data
         src_idx = src_start_idx[NEIGHBORHOOD_DIST + 1]
-        for dst_start, size in r_data:
+        for r_data_segment_idx in range(0, r_data_nsegments_per_core[core] * 2, 2):
+            dst_start = r_data[r_data_segment_idx]
+            size = r_data[r_data_segment_idx + 1]
             dst_idx = dst_start
             while dst_idx < dst_start + size:
-                reshards[core + 1][dst_idx] = input_tensor[src_idx + input_tensor_start_offset]
+                reshards[core + 1][dst_idx] = input_tensor_shards[core][src_idx]
                 src_idx += 1
                 dst_idx += 1
 
         ## push rr_data
         src_idx = src_start_idx[NEIGHBORHOOD_DIST + 2]
-        for dst_start, size in rr_data:
+        for rr_data_segment_idx in range(0, rr_data_nsegments_per_core[core] * 2, 2):
+            dst_start = rr_data[rr_data_segment_idx]
+            size = rr_data[rr_data_segment_idx + 1]
             dst_idx = dst_start
             while dst_idx < dst_start + size:
-                reshards[core + 2][dst_idx] = input_tensor[src_idx + input_tensor_start_offset]
+                reshards[core + 2][dst_idx] = input_tensor_shards[core][src_idx]
                 src_idx += 1
                 dst_idx += 1
 
+    assert max_out_nsticks_per_core == max([len(golden[core]) for core in range(ncores)])
     for core in np.arange(ncores):
         # print(f'OUTPUT CORE {core}: {reshards[core]}')
         # print(f'GOLDEN CORE {core}: {golden[core]}')
