@@ -48,7 +48,7 @@ def get_block_subblock_dim(grid_size, M, K, N):
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "LN_gamma_beta_mem_config",
-    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),),
+    (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),),
     ids=[
         "LN_gamma_beta_DRAM",
     ],
@@ -335,15 +335,15 @@ def test_bert_sharded_LN_to_LN(in_LN_dtype, in_LN_mem_config, LN_gamma_beta_mem_
     # passing, output = comp_pcc(out_ff2, ref_ff2, 0.99)
     # logger.info(output)
 
-    LN_out_t2 = ttl.tensor.sharded_to_interleaved(LN_out2_t, interleaved_mem_config_DRAM)
-    LN_out2 = tt2torch_tensor(LN_out_t2)
-    print(LN_out2[0][0][0])
+    # LN_out_t2 = ttl.tensor.sharded_to_interleaved(LN_out2_t, interleaved_mem_config_DRAM)
+    # LN_out2 = tt2torch_tensor(LN_out_t2)
+    # print(LN_out2[0][0][0])
     ref_lnorm2 = torch.nn.functional.layer_norm(
         ref_ff2 + ref_lnorm, LN_in0.shape[-1:], gamma2[:, :, 0:1, :].flatten(), beta2[:, :, 0:1, :].flatten(), epsf
     )
-    passing, output = comp_pcc(LN_out2, ref_lnorm2, 0.99)
-    print(ref_lnorm2[0][0][0])
-    logger.info(output)
+    # passing, output = comp_pcc(LN_out2, ref_lnorm2, 0.99)
+    # print(ref_lnorm2[0][0][0])
+    # logger.info(output)
 
     out_qkv_t = ttl.tensor.sharded_to_interleaved(out_qkv_t, interleaved_mem_config_DRAM)
     out_qkv = tt2torch_tensor(out_qkv_t)

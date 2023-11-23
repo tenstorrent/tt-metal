@@ -71,7 +71,13 @@ def run_bert_encoder_inference(
             tt_lib.tensor.Layout.ROW_MAJOR,
         )
         .to(tt_lib.tensor.Layout.TILE)
-        .to(device, model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"])
+        .to(
+            device,
+            tt_lib.tensor.MemoryConfig(
+                memory_layout=tt_lib.tensor.TensorMemoryLayout.INTERLEAVED,
+                buffer_type=tt_lib.tensor.BufferType.DRAM,
+            ),
+        )
     )
     tt_bert_encoder_input_sharded = tt_lib.tensor.interleaved_to_sharded(
         tt_bert_encoder_input,

@@ -14,10 +14,33 @@ namespace primary {
 
 using namespace tt_metal;
 
+namespace transformers {
+struct SoftmaxDefaultProgramConfig{
+    tt::stl::reflection::Attributes attributes() const { return {}; };
+};
+struct SoftmaxShardedMultiCoreProgramConfig {
+    CoreCoord compute_with_storage_grid_size;
+    std::size_t subblock_w;
+    std::size_t block_h;
+    std::size_t block_w;
+    MathFidelity math_fidelity;
+    DataType im_data_format;
+
+    tt::stl::reflection::Attributes attributes() const;
+};
+
+
+using SoftmaxProgramConfig = std::variant<
+    SoftmaxDefaultProgramConfig,
+    SoftmaxShardedMultiCoreProgramConfig
+>;
+}  // namespace transformers
+
 struct Softmax {
     const std::optional<float> scale;
     const bool inplace;
     const MemoryConfig output_mem_config;
+    const tt::operations::primary::transformers::SoftmaxProgramConfig program_config;
 
     void validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -43,7 +66,7 @@ namespace transformers {
 // tmp2 = bcast_add_w->h(tmp1, mask) ; shape of attn mask is [1,N,32,W]
 // y = softmax(tmp2)              ; r=result
 // If scale == 0.0f then just y = softmax(x) is computed
-Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> scale, std::optional<const Tensor> mask);
+Tensor scale_mask_softmax_in_place(Tensor& input_tensor, std::optional<float> scale = std::nullopt, std::optional<const Tensor> mask = std::nullopt, const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{});
 }  // namespace transformers
 
 }  // namespace primary
