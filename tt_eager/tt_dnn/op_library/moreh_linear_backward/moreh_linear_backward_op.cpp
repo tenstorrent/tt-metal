@@ -94,7 +94,7 @@ inline void moreh_linear_backward_validate(
     if (weight_grad) {
         // TODO: Add output transpose and remove transpose wh
         const auto& temp_weight_grad = moreh_matmul(input, output_grad, std::nullopt, true, false, output_mem_config);
-        const auto& transposed_weight_grad = transpose_wh(temp_weight_grad);
+        const auto& transposed_weight_grad = transpose(temp_weight_grad, 2, 3);
         operation::run(MorehSum{}, {transposed_weight_grad, weight_grad->get()});
         outputs.push_back(weight_grad->get());
     } else {

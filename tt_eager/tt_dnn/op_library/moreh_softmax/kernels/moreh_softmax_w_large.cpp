@@ -13,7 +13,6 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/softmax.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "debug_print.h"
 #include "tt_eager/tt_dnn/op_library/moreh_softmax/kernels/common_ckernels.hpp"
 
 namespace NAMESPACE {

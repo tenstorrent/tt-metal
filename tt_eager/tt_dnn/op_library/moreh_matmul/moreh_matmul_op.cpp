@@ -30,13 +30,6 @@ inline bool is_dot_forward(const Tensor& input, const Tensor& other) {
     return is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
 }
 
-////////////////////////////////////////////////////////////////////////////
-//                         Util
-////////////////////////////////////////////////////////////////////////////
-inline bool is_dot_forward(const Tensor& input, const Tensor& other) {
-    return is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
-}
-
 void MorehMatmul::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& other_tensor = input_tensors.at(1);

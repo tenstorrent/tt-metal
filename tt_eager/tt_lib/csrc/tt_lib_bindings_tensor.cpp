@@ -362,20 +362,6 @@ void TensorModule(py::module& m_tensor) {
         "Performs a moreh_matmul operation.
     )doc");
 
-    // moreh_linear
-    m_tensor.def("moreh_linear", &moreh_linear,
-        py::arg("input").noconvert(), py::arg("weight").noconvert(), py::arg("bias").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-        "Performs a moreh_linear operation.
-
-        .. csv-table::
-            :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-            "input", "Input tensor", "Tensor", "", "Yes"
-            "weight", "Input weight tensor", "Tensor", "", "Yes"
-            "bias", "Input bias tensor", "Tensor", "", "No"
-            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-    )doc");
-
     // groupnorm
     m_tensor.def(
         "groupnorm",
