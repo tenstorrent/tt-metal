@@ -582,10 +582,51 @@ Tensor convert_torch_tensor_to_tt_tensor(
 
                         py_tensor = torch.randn((1, 1, 32, 32))
                         tt_lib.tensor.Tensor(py_tensor)
-                )doc")
+                )doc"
+            )
             .def(
-                "deallocate",
-                [](Tensor &self, bool force) { return self.deallocate(force); },
+                py::init<>(
+                    [](const py::object& torch_tensor, std::optional<DataType> data_type,  Device *device, Layout layout, const MemoryConfig& mem_config,  ShardSpec shard_spec) {
+                        auto tensor = detail::convert_torch_tensor_to_tt_tensor(torch_tensor, data_type);
+                        auto layout_tensor = tensor.to(layout);
+                        return layout_tensor.to(device, mem_config, shard_spec);
+                    }
+                ),
+                py::arg("torch_tensor"),
+                py::arg("data_type") = std::nullopt,
+                py::arg("device").noconvert(),
+                py::arg("layout").noconvert(),
+                py::arg("mem_config").noconvert(),
+                py::arg("shard_spec").noconvert(),
+                py::return_value_policy::move,
+                R"doc(
+                    +--------------+---------------------+
+                    | Argument     | Description         |
+                    +==============+=====================+
+                    | torch_tensor | Pytorch Tensor      |
+                    +--------------+---------------------+
+                    | data_type    | TT Tensor data type |
+                    +--------------+---------------------+
+                    | device       | TT device ptr       |
+                    +--------------+---------------------+
+                    | layout       | TT layout           |
+                    +--------------+---------------------+
+                    | mem_config   | TT memory_config    |
+                    +--------------+---------------------+
+                    | shard_spec   | Shard Spec          |
+                    +--------------+---------------------+
+
+                    Example of creating a TT Tensor that uses torch.Tensor's storage as its own storage:
+
+                    .. code-block:: python
+
+                        py_tensor = torch.randn((1, 1, 32, 32))
+                        tt_lib.tensor.Tensor(py_tensor)
+                )doc"
+            )
+            .def("deallocate", [](Tensor &self, bool force) {
+                    return self.deallocate(force);
+                },
                 py::arg("force") = false,
                 R"doc(
                     Dellocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
