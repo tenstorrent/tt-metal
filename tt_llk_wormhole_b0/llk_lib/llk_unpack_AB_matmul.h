@@ -92,12 +92,15 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
 
 }
 
-template<bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
+template<bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void _llk_unpack_AB_matmul_hw_configure_(const std::uint32_t unpA_src_format, const std::uint32_t unpB_src_format, const std::uint32_t unpA_dst_format, const std::uint32_t unpB_dst_format,  const std::uint32_t unpA_face_r_dim = FACE_R_DIM, const std::uint32_t unpB_face_r_dim = FACE_R_DIM, const std::uint32_t within_face_16x16_transpose = 0, const std::uint32_t unpA_num_faces = 4, const std::uint32_t unpB_num_faces = 4, const std::uint32_t unpA_tile_size = 0, const std::uint32_t unpB_tile_size = 0) {
 
     constexpr bool is_row_pool = false;
+    constexpr bool stoch_rnd_en = (stoch_rnd_mode == StochRndType::All);
+    constexpr bool fpu_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Fpu);
+    constexpr bool pack_srnd_en = stoch_rnd_en ||(stoch_rnd_mode == StochRndType::Pack);
 
-    configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, stoch_rnd_mode>(
+    configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, fpu_srnd_en, pack_srnd_en>(
         unpA_src_format, 
         unpB_src_format, 
         unpA_dst_format, 

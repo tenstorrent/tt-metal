@@ -88,4 +88,20 @@ enum ReluType {
     MAX_THRESHOLD_RELU,
 };
 
+/*
+Stochastic rounding modes:
+    None: No stochastic rounding enabled, default rounding is round to nearest even.
+    Fpu: Enables stochastic rounding for every accumulation in the fpu
+    Pack: Enables stochastic rounding in both gasket and packer. Gasket rounding is in 
+    data format conversion stage from dest format to pack_src_format. Packer rounding
+    is in data format conversion stage from pack_src_format to pack_dst_format.
+    All: Enables fpu, pack and gasket rounding. 
+*/
+enum StochRndType {
+    None    = 0,
+    Fpu     = 1,
+    Pack    = 2,
+    All     = 0xf,
+};
+
 }  // namespace ckernel

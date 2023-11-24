@@ -188,7 +188,7 @@ namespace ckernel::unpacker
       cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, ALU_ACC_CTRL_INT8_math_enabled_MASK>(alu_payload.val);
    }
 
-   template<bool row_pool=false, bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
+   template<bool row_pool=false, bool is_fp32_dest_acc_en = false, bool fpu_srnd_en = false, bool pack_srnd_en = false>
    inline void configure_unpack_AB(
      const uint unpA_src_format, 
      const uint unpB_src_format, 
@@ -251,10 +251,9 @@ namespace ckernel::unpacker
       alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = int8_math_enabled;
       
       constexpr uint alu_stoch_rnd_mask = ALU_ROUNDING_MODE_Fpu_srnd_en_MASK | ALU_ROUNDING_MODE_Gasket_srnd_en_MASK | ALU_ROUNDING_MODE_Packer_srnd_en_MASK;
-      constexpr bool stoch_rnd_en = (stoch_rnd_mode == StochRndMode::All);
-      alu_payload.f.ALU_ROUNDING_MODE_Fpu_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndMode::Fpu);
-      alu_payload.f.ALU_ROUNDING_MODE_Gasket_srnd_en = stoch_rnd_en ||(stoch_rnd_mode == StochRndMode::Pack);
-      alu_payload.f.ALU_ROUNDING_MODE_Packer_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndMode::Pack);
+      alu_payload.f.ALU_ROUNDING_MODE_Fpu_srnd_en = fpu_srnd_en;
+      alu_payload.f.ALU_ROUNDING_MODE_Gasket_srnd_en = pack_srnd_en;
+      alu_payload.f.ALU_ROUNDING_MODE_Packer_srnd_en = pack_srnd_en;
 
       constexpr uint alu_mask = alu_format_mask | alu_dest_format_mask | alu_stoch_rnd_mask;
 
