@@ -60,12 +60,14 @@
 #include <cstdint>
 
 #include "ckernel_include.h"
-#include "tt_log.h"
 #include "tensix.h"
 #include "fw_debug.h"
-#include <l1_address_map.h>
 // #include <cstring>
+#if defined(PERF_DUMP) || DELAY_EN > 0
+#include <l1_address_map.h>
+#include "tt_log.h"
 #include "perf_lib/scratch_api.h"
+#endif
 
 namespace ckernel
 {
@@ -79,10 +81,10 @@ constexpr uint RESET_VAL = 0;
 constexpr uint KERNEL_IN_PROGRESS = 15;
 constexpr uint KERNEL_COMPLETE = 1;
 
-extern volatile uint tt_reg_ptr *reg_base;
-extern volatile uint tt_reg_ptr *pc_buf_base;
-extern volatile uint tt_reg_ptr *regfile;
-extern volatile uint tt_reg_ptr *instrn_buffer;
+extern volatile uint tt_reg_ptr *const reg_base;
+extern volatile uint tt_reg_ptr *const pc_buf_base;
+extern volatile uint tt_reg_ptr *const regfile;
+extern volatile uint tt_reg_ptr *const instrn_buffer;
 extern volatile uint tt_reg_ptr *mailbox_base[4];
 extern volatile uint tt_reg_ptr *dbg_event_scratch;
 extern volatile uint tt_reg_ptr *trisc_l1_mailbox;
@@ -100,8 +102,27 @@ const extern uint8_t mailbox_end;
 namespace internal {
 }
 
-void tensix_sync();
-void mop_sync();
+inline void tensix_sync()
+{
+    volatile uint foo = 0;
+    volatile uint *fooptr = &foo;
+    // Write to pc buffer to push all writes ahead of us.. otherwise, the pc buffer read can bypass older writes
+    pc_buf_base[1] = foo;
+
+    // Now read -- this read will block until we're idle
+    *fooptr = pc_buf_base[1];
+}
+
+inline void mop_sync()
+{
+    volatile uint foo = 0;
+    volatile uint *fooptr = &foo;
+    // Write to pc buffer to push all writes ahead of us.. otherwise, the pc buffer read can bypass older writes
+    pc_buf_base[2] = foo;
+
+    // Now read -- this read will block until mops are done
+    *fooptr = pc_buf_base[2];
+}
 
 inline void sync_regfile_write(const uint index);
 

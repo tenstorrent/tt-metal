@@ -16,10 +16,10 @@ namespace ckernel
 
 enum class ttRiscCores : std::uint32_t { Unpack = 0, Math = 1, Pack = 2, Brisc = 3, Nrisc = 4};
 
-volatile uint tt_reg_ptr *reg_base = reinterpret_cast<volatile uint *>(0xFFB10000);
-volatile uint tt_reg_ptr *pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
-volatile uint tt_reg_ptr *regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
-volatile uint tt_reg_ptr *instrn_buffer = reinterpret_cast<volatile uint *>(INSTRN_BUF_BASE);
+volatile uint tt_reg_ptr *const reg_base = reinterpret_cast<volatile uint *>(0xFFB10000);
+volatile uint tt_reg_ptr *const pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
+volatile uint tt_reg_ptr *const regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
+volatile uint tt_reg_ptr *const instrn_buffer = reinterpret_cast<volatile uint *>(INSTRN_BUF_BASE);
 volatile uint tt_reg_ptr *mailbox_base[4] = {
     reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX0_BASE), reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX1_BASE),
     reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX2_BASE), reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX3_BASE)
@@ -68,27 +68,6 @@ inline void reset_unpack_pack_sync() {
 
 volatile uint tt_l1_ptr * trisc_l1_mailbox = reinterpret_cast<volatile uint tt_l1_ptr *>(MAILBOX_ADDR);
 
-void tensix_sync()
-{
-    volatile uint foo = 0;
-    volatile uint *fooptr = &foo;
-    // Write to pc buffer to push all writes ahead of us.. otherwise, the pc buffer read can bypass older writes
-    pc_buf_base[1] = foo;
-
-    // Now read -- this read will block until we're idle
-    *fooptr = pc_buf_base[1];
-}
-
-void mop_sync()
-{
-    volatile uint foo = 0;
-    volatile uint *fooptr = &foo;
-    // Write to pc buffer to push all writes ahead of us.. otherwise, the pc buffer read can bypass older writes
-    pc_buf_base[2] = foo;
-
-    // Now read -- this read will block until mops are done
-    *fooptr = pc_buf_base[2];
-}
 
 inline bool ready_for_next_epoch() {         // place this through compiler into a section that is not going to overwritten
     return true;
