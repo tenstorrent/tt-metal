@@ -23,6 +23,7 @@
 
 #include "debug/status.h"
 #include "debug/sanitize_noc.h"
+#include "debug/dprint.h"
 
 extern uint8_t noc_index;
 
@@ -408,6 +409,14 @@ uint64_t get_l1_noc_addr(const uint32_t id, const uint32_t page_size, const uint
     addr = mulsi3(id >> LOG_BASE_2_OF_NUM_L1_BANKS, align(page_size, 32)) + bank_base_address + offset;
 #endif
 
+    addr += bank_to_l1_offset[bank_id];
+    uint32_t noc_xy = l1_bank_to_noc_xy[noc_index][bank_id];
+    uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
+    return noc_addr;
+}
+
+uint64_t get_l1_noc_addr_single_bank(uint32_t addr){
+    const uint32_t bank_id = 0; // first bank of any core
     addr += bank_to_l1_offset[bank_id];
     uint32_t noc_xy = l1_bank_to_noc_xy[noc_index][bank_id];
     uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
@@ -1538,6 +1547,7 @@ class Buffer {
         }
     }
     uint64_t get_noc_addr(const uint32_t id, const uint32_t offset = 0) {
+        uint64_t noc_addr = this->get_noc_addr_helper(id, this->page_size_, this->bank_base_address, offset);
         return this->get_noc_addr_helper(id, this->page_size_, this->bank_base_address, offset);
     }
 
@@ -1573,5 +1583,102 @@ class Buffer {
                 dst += this->page_size_;
             }
         }
+    }
+};
+
+FORCE_INLINE
+uint32_t min(uint32_t a, uint32_t b) { return (a < b) ? a: b; }
+
+#define NUM_ENTRIES_PER_SHARD 3
+class ShardedBuffer {
+   private:
+    uint32_t page_size_;
+    uint32_t num_cores_;
+    uint32_t l1_addr_;
+    volatile tt_l1_ptr uint32_t* base_command_addr_;
+    uint64_t get_noc_addr_(uint32_t core_id_x, uint32_t core_id_y, const uint32_t & l1_offset) {
+        uint64_t noc_addr =  get_noc_addr(core_id_x, core_id_y, this->l1_addr_ + l1_offset);
+        return noc_addr;
+    }
+
+   public:
+
+    ShardedBuffer(uint32_t page_size, uint32_t num_cores,  uint32_t addr, volatile tt_l1_ptr uint32_t* command_ptr) {
+
+        this->page_size_ = page_size;
+        this->num_cores_ = num_cores;
+        this->l1_addr_ = addr;
+        this->base_command_addr_ = command_ptr;
+    }
+
+    uint32_t page_size() { return this->page_size_; }
+
+
+    void noc_async_read_write_helper(const uint32_t &  addr, bool read, uint32_t num_pages, uint32_t page_id){
+        // will exit early when we have written enough
+        uint32_t num_pages_left = num_pages;
+
+        uint32_t core_id_start = 0;
+        uint32_t pages_start = 0;
+        uint32_t pages_end = 0;
+
+        //first get to correct core
+        for(uint32_t core_id = 0;  core_id < this->num_cores_; core_id++){
+            uint32_t num_pages_core = this->base_command_addr_[core_id*NUM_ENTRIES_PER_SHARD];
+            pages_end = pages_start + num_pages_core;
+            uint32_t core_id_x = this->base_command_addr_[core_id*NUM_ENTRIES_PER_SHARD + 1];
+            uint32_t core_id_y = this->base_command_addr_[core_id*NUM_ENTRIES_PER_SHARD + 2];
+
+            //first get to correct core
+            if(!(page_id >= pages_start && page_id < pages_end)){
+                pages_start = pages_end;
+                continue;
+            }
+            core_id_start = core_id;
+            break;
+        }
+
+        uint32_t flattened_page_id = page_id;
+
+        uint32_t host_page_id = 0;
+        for(uint32_t core_id = core_id_start;  core_id < this->num_cores_; core_id++){
+            uint32_t num_pages_core = this->base_command_addr_[core_id*NUM_ENTRIES_PER_SHARD];
+            pages_end = pages_start + num_pages_core;
+            uint32_t core_id_x = this->base_command_addr_[core_id*NUM_ENTRIES_PER_SHARD + 1];
+            uint32_t core_id_y = this->base_command_addr_[core_id*NUM_ENTRIES_PER_SHARD + 2];
+
+
+            //now curr_page_id pointing to beginning of section we want in this core
+            uint32_t num_pages_write_core = min(pages_end - flattened_page_id, num_pages_left);
+
+            //Writing at beginning of core
+            uint32_t core_page_id = (flattened_page_id - pages_start);
+            uint32_t core_offset = core_page_id * this->page_size_;
+            uint64_t noc_address = this->get_noc_addr_(core_id_x, core_id_y, core_offset);
+            uint32_t host_offset = host_page_id*this->page_size_;
+
+            if(!read){
+                noc_async_write(addr + host_offset, noc_address, num_pages_write_core*this->page_size_);
+            }
+            else{
+                noc_async_read(noc_address, addr + host_offset, num_pages_write_core*this->page_size_);
+            }
+            num_pages_left-= num_pages_write_core;
+            host_page_id += num_pages_write_core;
+            flattened_page_id += num_pages_write_core;
+            if(num_pages_left == 0){
+                break;
+            }
+            pages_start = pages_end;
+        }
+    }
+
+    void noc_async_write_buffer(uint32_t src,  const uint32_t page_id, const uint32_t num_pages) {
+        noc_async_read_write_helper(src, false, num_pages, page_id);
+    }
+
+
+    void noc_async_read_buffer(uint32_t dst, const uint32_t page_id, const uint32_t num_pages) {
+        noc_async_read_write_helper(dst, true, num_pages, page_id);
     }
 };

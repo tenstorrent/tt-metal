@@ -507,6 +507,20 @@ inline Tensor to_host(const Tensor &tensor) {
     return Tensor(OwnedStorage{output_buffer}, tensor.shape(), tensor.dtype(), tensor.layout());
 }
 
+template <typename T>
+inline Tensor to_host_sharded(const Tensor &tensor) {
+    TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
+    auto device_buffer = tensor.buffer();
+    auto device = tensor.device();
+    TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
+    uint32_t size_in_bytes = device_buffer->size();
+    std::vector<uint32_t> device_data;
+    ::detail::ReadFromBuffer(*device_buffer, device_data, true);
+    auto data_vec = unpack_uint32_vec<T>(device_data);
+    auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
+    return Tensor(OwnedStorage{output_buffer}, tensor.shape(), tensor.dtype(), tensor.layout());
+}
+
 
 template <typename T>
 inline Tensor to_device(const Tensor &tensor, Device *target_device, const MemoryConfig &memory_config) {
@@ -818,6 +832,24 @@ inline std::string to_string(const Tensor &tensor, Layout print_layout, bool pre
         },
         tensor.storage()
     );
+}
+
+
+template <typename T>
+Tensor extract_shard(const Tensor & tensor, const uint32_t & core_id){
+
+    auto buffer= tensor.buffer();
+    auto buffer_shard_shape = buffer->shard_shape();
+    std::array <uint32_t, 4> shard_shape_array = {1,1,buffer_shard_shape[0],buffer_shard_shape[1]};
+    Shape shard_shape(shard_shape_array);
+    std::vector<uint32_t> device_data;
+    ::detail::ReadShard(*buffer, device_data, core_id);
+
+
+    auto unpacked_data = tensor_impl::unpack_uint32_vec<T>(device_data);
+    auto output_buffer = owned_buffer::create<T>(std::move(unpacked_data));
+    return Tensor(OwnedStorage{output_buffer}, shard_shape, tensor.dtype(), tensor.layout());
+
 }
 
 

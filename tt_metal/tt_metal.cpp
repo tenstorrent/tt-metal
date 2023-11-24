@@ -281,7 +281,7 @@ namespace detail {
 
     }
 
-    void ReadFromDeviceSharded(const Buffer &buffer, std::vector<uint32_t> &host_buffer, std::optional<TensorMemoryLayout> override_layout){
+    void ReadFromDeviceSharded(const Buffer &buffer, std::vector<uint32_t> &host_buffer, std::optional<TensorMemoryLayout> override_layout, bool shard_order){
 
         TensorMemoryLayout buffer_layout;
         if(override_layout == std::nullopt)
@@ -318,16 +318,28 @@ namespace detail {
             auto core = cores[core_index];
             auto bank_id = core_bank_ids[core_index];
             auto host_page_id = host_page_ids[dev_page_id];
-            read_pages_to_host_helper(
-                device,
-                buffer,
-                host_buffer,
-                page_size,
-                host_page_id,
-                dev_page_id,
-                bank_id
-            );
-
+            if(!shard_order){
+                read_pages_to_host_helper(
+                    device,
+                    buffer,
+                    host_buffer,
+                    page_size,
+                    host_page_id,
+                    dev_page_id,
+                    bank_id
+                );
+            }
+            else{
+                read_pages_to_host_helper(
+                    device,
+                    buffer,
+                    host_buffer,
+                    page_size,
+                    dev_page_id,
+                    dev_page_id,
+                    bank_id
+                );
+            }
             #ifdef DEBUG_PRINT_SHARD
                 print_page(dev_page_id, core, host_page_id, noc_coordinates, absolute_address, bank_id,  page);
             #endif
@@ -336,7 +348,7 @@ namespace detail {
     }
 
 
-    void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer, std::optional<TensorMemoryLayout> override_layout) {
+    void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer, std::optional<TensorMemoryLayout> override_layout, bool shard_order) {
         ZoneScoped;
         detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ReadFromDevice");
 
@@ -347,7 +359,7 @@ namespace detail {
         }
         else if(is_sharded(buffer.buffer_layout())){
             TT_ASSERT(buffer.buffer_type() == BufferType::L1 && "Only L1 Buffers support sharding");
-            ReadFromDeviceSharded(buffer, host_buffer, std::nullopt);
+            ReadFromDeviceSharded(buffer, host_buffer, std::nullopt, shard_order);
         }
         else{
             TT_ASSERT(false && "Unsupported buffer layout");
@@ -355,7 +367,7 @@ namespace detail {
     }
 
 
-    void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
+    void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order) {
         Device *device = buffer.device();
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
@@ -365,7 +377,7 @@ namespace detail {
                 } else {
                     tt::Cluster::instance().l1_barrier(device->id());
                 }
-                ReadFromDevice(buffer, host_buffer, std::nullopt);
+                ReadFromDevice(buffer, host_buffer, std::nullopt, shard_order);
             } break;
             case BufferType::SYSTEM_MEMORY: {
                 TT_FATAL(false && "Reading from host memory is unsupported!");

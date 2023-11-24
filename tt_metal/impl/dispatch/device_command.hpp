@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <array>
+#include <vector>
 
 #include "dev_mem_map.h"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
@@ -15,7 +16,14 @@ class DeviceCommand {
 
     // Constants
     static constexpr uint32_t HUGE_PAGE_SIZE = 1024 * 1024 * 1024;
+    //TODO: investigate other num_cores
+    static constexpr uint32_t NUM_MAX_CORES = 108; //12 x 9
+    static constexpr uint32_t NUM_ENTRIES_PER_CORE = 3; //pages in shard, x, y
+    //static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER_UNSHARDED_PORTION = 20;
+    //static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER_SHARDED_PORTION = 448; //108 * 4 = 432 -> aligned to 32 = 448
+    //static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = NUM_ENTRIES_IN_COMMAND_HEADER_UNSHARDED_PORTION + NUM_ENTRIES_IN_COMMAND_HEADER_SHARDED_PORTION;
     static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = 20;
+    //static constexpr uint32_t NUM_ENTRIES_IN_DEVICE_COMMAND = 5632 + NUM_ENTRIES_IN_COMMAND_HEADER_SHARDED_PORTION;
     static constexpr uint32_t NUM_ENTRIES_IN_DEVICE_COMMAND = 5632;
     static constexpr uint32_t NUM_BYTES_IN_DEVICE_COMMAND = NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t);
     static constexpr uint32_t DATA_SECTION_ADDRESS = L1_UNRESERVED_BASE + NUM_BYTES_IN_DEVICE_COMMAND;
@@ -24,7 +32,8 @@ class DeviceCommand {
         (MEM_L1_SIZE - (NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t)) - L1_UNRESERVED_BASE);
     static constexpr uint32_t CONSUMER_DATA_BUFFER_SIZE = (PRODUCER_DATA_BUFFER_SIZE - NUM_BYTES_IN_DEVICE_COMMAND) / 2;
     static constexpr uint32_t DEVICE_COMMAND_DATA_ADDR = L1_UNRESERVED_BASE + NUM_BYTES_IN_DEVICE_COMMAND;
-    static constexpr uint32_t NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION = 6;
+    //static constexpr uint32_t NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION = 8;
+    static constexpr uint32_t NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION = 6 + NUM_MAX_CORES*NUM_ENTRIES_PER_CORE;
     static constexpr uint32_t NUM_POSSIBLE_BUFFER_TRANSFERS = 2;
 
     // Ensure any changes to this device command have asserts modified/extended
@@ -50,7 +59,8 @@ class DeviceCommand {
     static constexpr uint32_t num_go_signal_pages_idx = 15;
     static constexpr uint32_t data_size_idx = 16;
     static constexpr uint32_t producer_consumer_transfer_num_pages_idx = 17;
-
+    static constexpr uint32_t num_cores = 18;
+    static constexpr uint32_t core_entry_base = 20;
     void wrap();
 
     void finish();
@@ -73,11 +83,15 @@ class DeviceCommand {
 
     void set_num_pages(const uint32_t num_pages);
 
+    void set_num_cores(uint32_t num_cores);
+
     void set_num_pages(const DeviceCommand::TransferType transfer_type, const uint32_t num_pages);
 
     void set_data_size(const uint32_t data_size);
 
     void set_producer_consumer_transfer_num_pages(const uint32_t producer_consumer_transfer_num_pages);
+
+    //void set_shard_info(const uint32_t & core_id, const uint32_t & base_addr, const uint32_t & num_shards, const uint32_t & x, const uint32_t & y);
 
     uint32_t get_data_size() const;
 
@@ -87,7 +101,22 @@ class DeviceCommand {
         const uint32_t num_pages,
         const uint32_t padded_page_size,
         const uint32_t src_buf_type,
-        const uint32_t dst_buf_type);
+        const uint32_t dst_buf_type,
+        const uint32_t core_id_x=0,
+        const uint32_t core_id_y=0
+        );
+
+    void add_buffer_transfer_instruction_sharded(
+        const uint32_t src,
+        const uint32_t dst,
+        const uint32_t num_pages,
+        const uint32_t padded_page_size,
+        const uint32_t src_buf_type,
+        const uint32_t dst_buf_type,
+        const std::vector<uint32_t> num_pages_in_shard,
+        const std::vector<uint32_t> core_id_x,
+        const std::vector<uint32_t> core_id_y
+    );
 
     void write_program_entry(const uint32_t val);
 

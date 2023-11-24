@@ -132,6 +132,8 @@ class Buffer {
 
     uint64_t page_address(uint32_t bank_id, uint32_t page_index) const;
 
+    uint64_t core_address(uint32_t core_id) const;
+
     CoreRangeSet shard_grid() const {
         TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
         return shard_parameters_.value().shard_grid;

@@ -37,6 +37,7 @@ void DeviceCommand::set_producer_cb_num_pages(const uint32_t cb_num_pages) { thi
 void DeviceCommand::set_consumer_cb_num_pages(const uint32_t cb_num_pages) { this->desc[this->consumer_cb_num_pages_idx] = cb_num_pages; }
 
 void DeviceCommand::set_num_pages(uint32_t num_pages) { this->desc[this->num_pages_idx] = num_pages; }
+void DeviceCommand::set_num_cores(uint32_t num_cores) { this->desc[this->num_cores] = num_cores; }
 
 void DeviceCommand::set_num_pages(const DeviceCommand::TransferType transfer_type, const uint32_t num_pages) {
     switch (transfer_type) {
@@ -71,13 +72,56 @@ void DeviceCommand::add_buffer_transfer_instruction(
     const uint32_t num_pages,
     const uint32_t padded_page_size,
     const uint32_t src_buf_type,
-    const uint32_t dst_buf_type) {
+    const uint32_t dst_buf_type,
+    const uint32_t core_id_x,
+    const uint32_t core_id_y) {
     this->desc[this->buffer_transfer_idx] = src;
     this->desc[this->buffer_transfer_idx + 1] = dst;
     this->desc[this->buffer_transfer_idx + 2] = num_pages;
     this->desc[this->buffer_transfer_idx + 3] = padded_page_size;
     this->desc[this->buffer_transfer_idx + 4] = src_buf_type;
     this->desc[this->buffer_transfer_idx + 5] = dst_buf_type;
+    this->desc[this->buffer_transfer_idx + 6] = core_id_x;
+    this->desc[this->buffer_transfer_idx + 7] = core_id_y;
+    this->buffer_transfer_idx += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
+
+    this->desc[this->num_buffer_transfers_idx]++;
+    TT_ASSERT(
+        this->desc[this->num_buffer_transfers_idx] <= DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS,
+        "Surpassing the limit of {} on possible buffer transfers in a single command",
+        DeviceCommand::NUM_POSSIBLE_BUFFER_TRANSFERS);
+}
+
+
+void DeviceCommand::add_buffer_transfer_instruction_sharded(
+    const uint32_t src,
+    const uint32_t dst,
+    const uint32_t num_pages,
+    const uint32_t padded_page_size,
+    const uint32_t src_buf_type,
+    const uint32_t dst_buf_type,
+    const std::vector<uint32_t> num_pages_in_shard,
+    const std::vector<uint32_t> core_id_x,
+    const std::vector<uint32_t> core_id_y
+    ) {
+
+
+    TT_ASSERT(core_id_x.size() == core_id_y.size());
+    TT_ASSERT(core_id_x.size() == num_pages_in_shard.size());
+    auto num_shards = core_id_x.size();
+
+    uint32_t idx_offset = 0;
+    this->desc[this->buffer_transfer_idx + idx_offset++] = src;
+    this->desc[this->buffer_transfer_idx + idx_offset++] = dst;
+    this->desc[this->buffer_transfer_idx + idx_offset++] = num_pages;
+    this->desc[this->buffer_transfer_idx + idx_offset++] = padded_page_size;
+    this->desc[this->buffer_transfer_idx + idx_offset++] = src_buf_type;
+    this->desc[this->buffer_transfer_idx + idx_offset++] = dst_buf_type;
+    for(auto shard_id = 0; shard_id < num_shards; shard_id++){
+        this->desc[this->buffer_transfer_idx + idx_offset++] = num_pages_in_shard[shard_id];
+        this->desc[this->buffer_transfer_idx + idx_offset++] = core_id_x[shard_id];
+        this->desc[this->buffer_transfer_idx + idx_offset++] = core_id_y[shard_id];
+    }
     this->buffer_transfer_idx += DeviceCommand::NUM_ENTRIES_PER_BUFFER_TRANSFER_INSTRUCTION;
 
     this->desc[this->num_buffer_transfers_idx]++;

@@ -429,50 +429,15 @@ Tensor convert_torch_tensor_to_tt_tensor(
                         )
                 )doc")
             .def(
-                py::init<>(
-                    [](std::vector<float>&& data, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout, ShardSpec shard_spec) {
-                        auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
-                        return Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout, shard_spec);
-                    }
-                ),
-                py::return_value_policy::move,
-                R"doc(
-                    +---------------+---------------+
-                    | Argument      | Name          |
-                    +===============+===============+
-                    | arg0          | data          |
-                    +---------------+---------------+
-                    | arg1          | shape         |
-                    +---------------+---------------+
-                    | arg2          | data_type     |
-                    +---------------+---------------+
-                    | arg3          | layout        |
-                    +---------------+---------------+
-                    | arg4          | shard_spec    |
-                    +---------------+---------------+
-
-                    Example of creating a TT Tensor on host:
-
-                    .. code-block:: python
-
-                        py_tensor = torch.randn((1, 1, 32, 32))
-                        tt_lib.tensor.Tensor(
-                            py_tensor.reshape(-1).tolist(),
-                            py_tensor.size(),
-                            tt_lib.tensor.DataType.BFLOAT16,
-                            tt_lib.tensor.Layout.ROW_MAJOR,
-                            ShardSpec
-                        )
-                )doc"
-            )
-            .def(
-                py::init<>(
-                    [](std::vector<float>&& data, const std::array<uint32_t, 4>& shape, DataType data_type, Layout layout, Device *device) {
-                        auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
-                        auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
-                        return tensor.to(device, MemoryConfig{});
-                    }
-                ),
+                py::init<>([](std::vector<float> &&data,
+                              const std::array<uint32_t, 4> &shape,
+                              DataType data_type,
+                              Layout layout,
+                              Device *device) {
+                    auto owned_buffer = detail::create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
+                    auto tensor = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
+                    return tensor.to(device, MemoryConfig{});
+                }),
                 py::keep_alive<1, 6>(),
                 py::return_value_policy::move,
                 R"doc(
@@ -586,7 +551,12 @@ Tensor convert_torch_tensor_to_tt_tensor(
             )
             .def(
                 py::init<>(
-                    [](const py::object& torch_tensor, std::optional<DataType> data_type,  Device *device, Layout layout, const MemoryConfig& mem_config,  ShardSpec shard_spec) {
+                    [](const py::object& torch_tensor,
+                    std::optional<DataType> data_type,
+                    Device *device,
+                    Layout layout,
+                    const MemoryConfig& mem_config,
+                    ShardSpec shard_spec) {
                         auto tensor = detail::convert_torch_tensor_to_tt_tensor(torch_tensor, data_type);
                         auto layout_tensor = tensor.to(layout);
                         return layout_tensor.to(device, mem_config, shard_spec);
@@ -704,12 +674,40 @@ Tensor convert_torch_tensor_to_tt_tensor(
 
                     tt_tensor = tt_tensor.to(tt_device)
             )doc")
+            .def("extract_shard", [](const Tensor &self, const uint32_t & core_id) {
+                return self.extract_shard(core_id);
+            }, py::arg("core_id").noconvert(),
+                py::keep_alive<0, 2>(), R"doc(
+                Move TT Tensor from host device to TT accelerator device.
+
+                Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
+
+                If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
+
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+                | Argument  | Description                                     | Data type                  | Valid range           | Required |
+                +===========+=================================================+============================+=======================+==========+
+                | arg0      | Core who's shard we want                        | uint32_t                   | TT accelerator device | Yes      |
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+
+
+                .. code-block:: python
+
+                    tt_tensor = tt_tensor.to(tt_device)
+            )doc")
             .def("cpu", &Tensor::cpu, R"doc(
                 Move TT Tensor from TT accelerator device to host device.
 
                 .. code-block:: python
 
                     tt_tensor = tt_tensor.cpu()
+            )doc")
+            .def("cpu_sharded", &Tensor::cpu_sharded, R"doc(
+                Move TT Tensor from TT accelerator device to host device in sharded orientation.
+
+                .. code-block:: python
+
+                    tt_tensor = tt_tensor.cpu_sharded()
             )doc")
             .def("to", py::overload_cast<Layout>(&Tensor::to, py::const_), R"doc(
                 Convert TT Tensor to provided memory layout. Available layouts conversions are:

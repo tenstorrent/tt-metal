@@ -51,6 +51,8 @@ class Tensor {
 
         Tensor cpu() const;
 
+        Tensor cpu_sharded() const;
+
         Tensor unpad(const Shape &output_tensor_start, const Shape &output_tensor_end) const;
 
         Tensor pad_to_tile(float pad_value) const;
@@ -60,7 +62,8 @@ class Tensor {
         const std::string write_to_string(Layout print_layout = Layout::ROW_MAJOR, bool pretty_print = false) const;
         void print(Layout print_layout=Layout::ROW_MAJOR, bool pretty_print=false) const;
 
-        Tensor extract_shard(CoreCoord core) const;
+        Tensor extract_shard(const CoreCoord & core) const;
+        Tensor extract_shard(const uint32_t & core_id) const;
 
         // ======================================================================================
         //                                  Low Level APIs

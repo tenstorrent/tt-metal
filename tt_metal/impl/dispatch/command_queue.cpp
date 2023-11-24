@@ -28,6 +28,24 @@ uint32_t get_noc_unicast_encoding(CoreCoord coord) { return NOC_XY_ENCODING(NOC_
 
 uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
+void print_page_sysmem(uint32_t address,
+                const uint32_t & page_size){
+
+
+    std::vector<char> page;
+    page.reserve(page_size);
+    tt::Cluster::instance().read_sysmem((char*)page.data(), page_size, address, 0);
+
+    uint32_t num_words_per_page = page_size/sizeof(uint32_t);
+
+    uint32_t * page_word_ptr =  (uint32_t *)page.data();
+    std::cout << "0x";
+    for(uint32_t word_idx = 0; word_idx < num_words_per_page ; word_idx++){
+        std::cout << std::hex << page_word_ptr[word_idx] << std::dec;
+    }
+    std::cout << std::endl;
+}
+
 
 ProgramMap ConstructProgramMap(const Device* device, Program& program) {
     /*
@@ -311,19 +329,60 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
     this->device = device;
 }
 
+// EnqueueReadBufferCommandSection
+EnqueueReadBufferCommand::EnqueueReadBufferCommand(
+    Device* device, Buffer& buffer, void* dst, SystemMemoryWriter& writer, const uint32_t & core_id) :
+    dst(dst), writer(writer), buffer(buffer), core_id(core_id) {
+    this->device = device;
+}
+
+
 const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t dst_address) {
     DeviceCommand command;
 
     uint32_t padded_page_size = align(this->buffer.page_size(), 32);
-    uint32_t data_size_in_bytes = padded_page_size * this->buffer.num_pages();
+    uint32_t buffer_address = this->buffer.address();
+    uint32_t num_pages = this->buffer.num_pages();
+    if(is_sharded(this->buffer.buffer_layout())){
+        uint32_t num_cores = this->buffer.num_cores();
+        uint32_t shard_size = this->buffer.shard_size();
+        //TODO: for now all shards are same size of pages
+        std::vector<uint32_t> num_pages_in_shards(num_cores, shard_size);
+        std::vector<uint32_t> core_id_x;
+        core_id_x.reserve(num_cores);
+        std::vector<uint32_t> core_id_y;
+        core_id_y.reserve(num_cores);
+        auto all_cores = this->buffer.all_cores();
+        for(auto core: all_cores){
+            CoreCoord physical_core = device->worker_core_from_logical_core(core);
+            core_id_x.push_back(physical_core.x);
+            core_id_y.push_back(physical_core.y);
+        }
+        command.add_buffer_transfer_instruction_sharded(
+            buffer_address,
+            dst_address,
+            num_pages,
+            padded_page_size,
+            (uint32_t)this->buffer.buffer_type(),
+            uint32_t(BufferType::SYSTEM_MEMORY),
+            num_pages_in_shards,
+            core_id_x,
+            core_id_y
+        );
+    }
+    else{
+        command.add_buffer_transfer_instruction(
+            buffer_address,
+            dst_address,
+            num_pages,
+            padded_page_size,
+            (uint32_t)this->buffer.buffer_type(),
+            uint32_t(BufferType::SYSTEM_MEMORY));
 
-    command.add_buffer_transfer_instruction(
-        this->buffer.address(),
-        dst_address,
-        this->buffer.num_pages(),
-        padded_page_size,
-        (uint32_t)this->buffer.buffer_type(),
-        uint32_t(BufferType::SYSTEM_MEMORY));
+    }
+    uint32_t data_size_in_bytes = padded_page_size * num_pages;
+
+
 
     uint32_t consumer_cb_num_pages = (DeviceCommand::CONSUMER_DATA_BUFFER_SIZE / padded_page_size);
 
@@ -344,8 +403,19 @@ const DeviceCommand EnqueueReadBufferCommand::assemble_device_command(uint32_t d
     command.set_consumer_cb_size(consumer_cb_size);
     command.set_producer_cb_num_pages(producer_cb_num_pages);
     command.set_consumer_cb_num_pages(consumer_cb_num_pages);
-    command.set_num_pages(this->buffer.num_pages());
-    command.set_data_size(padded_page_size * this->buffer.num_pages());
+    command.set_num_pages(num_pages);
+    command.set_data_size(padded_page_size * num_pages);
+
+    if(is_sharded(this->buffer.buffer_layout())){
+        uint32_t num_cores = this->buffer.num_cores();
+        auto core_bank_indices = this->buffer.core_bank_indices();
+        command.set_num_cores(num_cores);
+
+    }
+    else{
+        command.set_num_cores(1);
+    }
+
 
     TT_ASSERT(padded_page_size <= consumer_cb_size, "Page is too large to fit in consumer buffer");
     return command;
@@ -358,6 +428,8 @@ void EnqueueReadBufferCommand::process() {
     const auto cmd = this->assemble_device_command(system_memory_temporary_storage_address);
 
     uint32_t num_pages = this->buffer.size() / this->buffer.page_size();
+    if(this->core_id.has_value())
+        num_pages = this->buffer.shard_size();
     uint32_t padded_page_size = align(this->buffer.page_size(), 32);
     uint32_t data_size_in_bytes = cmd.get_data_size();
     uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
@@ -376,25 +448,69 @@ EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
     TT_ASSERT(
         buffer.buffer_type() == BufferType::DRAM or buffer.buffer_type() == BufferType::L1,
         "Trying to write to an invalid buffer");
+    //TT_ASSERT(!is_sharded(buffer.buffer_layout()) && "If buffer is sharded requires bank id and page_id");
+    this->device = device;
+}
 
+// EnqueueWriteBufferCommand section
+EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
+    Device* device, Buffer& buffer, const void* src, SystemMemoryWriter& writer, const uint32_t & core_id) :
+    writer(writer), src(src), buffer(buffer), core_id(core_id) {
+    TT_ASSERT(
+        buffer.buffer_type() == BufferType::DRAM or buffer.buffer_type() == BufferType::L1,
+        "Trying to write to an invalid buffer");
     this->device = device;
 }
 
 const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t src_address) {
     DeviceCommand command;
-
+    uint32_t num_pages = this->buffer.num_pages();
+    uint32_t buffer_address = this->buffer.address();
     uint32_t padded_page_size = this->buffer.page_size();
     if (this->buffer.page_size() != this->buffer.size()) {
         padded_page_size = align(this->buffer.page_size(), 32);
     }
-    uint32_t data_size_in_bytes = padded_page_size * this->buffer.num_pages();
-    command.add_buffer_transfer_instruction(
+    if (is_sharded(this->buffer.buffer_layout())) {
+        uint32_t num_cores = this->buffer.num_cores();
+        uint32_t shard_size = this->buffer.shard_size();
+        //TODO: for now all shards are same size of pages
+        std::vector<uint32_t> num_pages_in_shards(num_cores, shard_size);
+        std::vector<uint32_t> core_id_x;
+        core_id_x.reserve(num_cores);
+        std::vector<uint32_t> core_id_y;
+        core_id_y.reserve(num_cores);
+        auto all_cores = this->buffer.all_cores();
+        for(auto core: all_cores){
+            CoreCoord physical_core = device->worker_core_from_logical_core(core);
+            // std::cout << "Physical core: " << physical_core.str() << std::endl;
+            core_id_x.push_back(physical_core.x);
+            core_id_y.push_back(physical_core.y);
+        }
+        command.add_buffer_transfer_instruction_sharded(
+            src_address,
+            buffer_address,
+            num_pages,
+            padded_page_size,
+            (uint32_t) BufferType::SYSTEM_MEMORY,
+            (uint32_t) this->buffer.buffer_type(),
+            num_pages_in_shards,
+            core_id_x,
+            core_id_y
+        );
+    }
+    else{
+        command.add_buffer_transfer_instruction(
         src_address,
-        this->buffer.address(),
-        this->buffer.num_pages(),
+        buffer_address,
+        num_pages,
         padded_page_size,
         (uint32_t) BufferType::SYSTEM_MEMORY,
         (uint32_t) this->buffer.buffer_type());
+    }
+
+
+    uint32_t data_size_in_bytes = padded_page_size * num_pages;
+
 
     uint32_t consumer_cb_num_pages = (DeviceCommand::CONSUMER_DATA_BUFFER_SIZE / padded_page_size);
 
@@ -414,8 +530,18 @@ const DeviceCommand EnqueueWriteBufferCommand::assemble_device_command(uint32_t 
     command.set_consumer_cb_size(consumer_cb_size);
     command.set_producer_cb_num_pages(producer_cb_num_pages);
     command.set_consumer_cb_num_pages(consumer_cb_num_pages);
-    command.set_num_pages(this->buffer.num_pages());
-    command.set_data_size(padded_page_size * this->buffer.num_pages());
+    command.set_num_pages(num_pages);
+    //command.set_num_cores(1);
+
+    if(is_sharded(this->buffer.buffer_layout())){
+        uint32_t num_cores = this->buffer.num_cores();
+        auto core_bank_indices = this->buffer.core_bank_indices();
+        command.set_num_cores(num_cores);
+    }
+    else{
+        command.set_num_cores(1);
+    }
+    command.set_data_size(padded_page_size * num_pages);
 
     TT_ASSERT(padded_page_size <= consumer_cb_size, "Page is too large to fit in consumer buffer");
 
@@ -444,6 +570,16 @@ void EnqueueWriteBufferCommand::process() {
     } else {
         this->writer.cq_write(this->src, data_size_in_bytes, system_memory_temporary_storage_address);
     }
+    uint32_t data;
+    tt::Cluster::instance().read_sysmem((char*)&data, sizeof(uint32_t), system_memory_temporary_storage_address, 0);
+    uint32_t padded_page_size = align(this->buffer.page_size(), 32);
+
+    //uint32_t page_id = 0;
+    //for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_in_bytes; sysmem_address_offset += padded_page_size) {
+    //    std::cout << "printing page " << page_id << std::endl;
+    //    print_page_sysmem(system_memory_temporary_storage_address + sysmem_address_offset, padded_page_size);
+    //    page_id++;
+    //}
 
     this->writer.cq_push_back(cmd_size);
 }
@@ -677,7 +813,23 @@ void send_dispatch_kernel_to_device(Device* device) {
         {"PRODUCER_NOC_X", std::to_string(producer_physical_core.x)},
         {"PRODUCER_NOC_Y", std::to_string(producer_physical_core.y)},
     };
+
+//    auto scratch_pad_debug_producer = CreateBuffer(device,
+//                        sizeof(uint32_t),
+//                        sizeof(uint32_t),
+//                        tt_metal::BufferType::L1);
+//
+//    auto scratch_pad_debug_consumer = CreateBuffer(device,
+//                        sizeof(uint32_t),
+//                        sizeof(uint32_t),
+//                        tt_metal::BufferType::L1);
+
     std::vector<uint32_t> dispatch_compile_args = {DEVICE_DATA.TENSIX_SOFT_RESET_ADDR};
+//    std::vector<uint32_t> dispatch_compile_args_producer = {DEVICE_DATA.TENSIX_SOFT_RESET_ADDR,
+//                                                        scratch_pad_debug_producer.address()};
+//    std::vector<uint32_t> dispatch_compile_args_consumer = {DEVICE_DATA.TENSIX_SOFT_RESET_ADDR,
+//                                                        scratch_pad_debug_consumer.address()};
+
     tt::tt_metal::CreateKernel(
         dispatch_program,
         "tt_metal/impl/dispatch/kernels/command_queue_producer.cpp",
@@ -747,6 +899,57 @@ void CommandQueue::enqueue_command(Command& command, bool blocking) {
     }
 }
 
+void print_page(const void * ptr, const uint32_t & page_index,
+                const uint32_t & page_size){
+    uint32_t num_words_per_page = page_size/sizeof(uint32_t);
+    std::cout << "Printing page: " << page_index << " 0x";
+    uint32_t * page_ptr = (uint32_t *)ptr + page_index*num_words_per_page;
+    for(uint32_t word_idx = 0; word_idx < num_words_per_page ; word_idx++){
+        std::cout << std::hex << page_ptr[word_idx] << std::dec;
+    }
+    std::cout << std::endl;
+}
+
+
+
+//TODO: Currently converting page ordering from interleaved to sharded and then doing contiguious read/write
+// Look into modifying command to do read/write of a page at a time to avoid doing copy
+void convert_interleaved_to_sharded_on_host(const void * host, const int num_pages,
+                                        const int page_size,
+                                        const std::vector<uint32_t>& page_map,
+                                        bool read=false) {
+
+    // std::cout << "PAGE SIZE: " << page_size << ", NUM PAGES: " << num_pages << std::endl;
+    const uint32_t size_in_bytes = num_pages * page_size;
+
+    std::vector<char> temp_array(size_in_bytes);
+    memcpy((char *)temp_array.data(), (char*)host, size_in_bytes);
+
+    const void * dst = host;
+    std::set<uint32_t> pages_seen;
+    for (uint32_t host_page_id = 0; host_page_id < num_pages; host_page_id++) {
+        auto dev_page_id = page_map[host_page_id];
+
+
+        // TODO(ntarafdar): Does it make sense for this runtime check to exist here?
+        // Can this not be determined prior?
+        TT_ASSERT(pages_seen.count(dev_page_id) == 0);
+        pages_seen.insert(dev_page_id);
+        if (read) {
+            memcpy((char* )dst + dev_page_id*page_size,
+                temp_array.data() + host_page_id*page_size,
+                page_size
+                );
+        }
+        else {
+            memcpy((char* )dst + host_page_id*page_size,
+                temp_array.data() + dev_page_id*page_size,
+                page_size
+                );
+        }
+    }
+}
+
 void CommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking) {
     ZoneScopedN("CommandQueue_read_buffer");
     TT_FATAL(blocking, "EnqueueReadBuffer only has support for blocking mode currently");
@@ -757,28 +960,29 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking)
     }
     tt::log_debug(tt::LogDispatch, "EnqueueReadBuffer");
 
-    EnqueueReadBufferCommand command(this->device, buffer, dst, this->sysmem_writer);
+        EnqueueReadBufferCommand command(this->device, buffer, dst, this->sysmem_writer);
+        this->enqueue_command(command, blocking);
+        uint32_t num_pages = buffer.size() / buffer.page_size();
+        uint32_t padded_page_size = align(buffer.page_size(), 32);
+        uint32_t data_size_in_bytes = padded_page_size * num_pages;
 
-    // TODO(agrebenisan): Provide support so that we can achieve non-blocking
-    // For now, make read buffer blocking since after the
-    // device moves data into the buffer we want to read out
-    // of, we then need to consume it into a vector. This
-    // is easiest way to bring this up
-    this->enqueue_command(command, blocking);
-
-    uint32_t num_pages = buffer.size() / buffer.page_size();
-    uint32_t padded_page_size = align(buffer.page_size(), 32);
-    uint32_t data_size_in_bytes = padded_page_size * num_pages;
-
-    if ((buffer.page_size() % 32) != 0) {
-        // If page size is not 32B-aligned, we cannot do a contiguous copy
-        uint32_t dst_address_offset = 0;
-        for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_in_bytes; sysmem_address_offset += padded_page_size) {
-            tt::Cluster::instance().read_sysmem((char*)dst + dst_address_offset, buffer.page_size(), command.read_buffer_addr + sysmem_address_offset, 0);
-            dst_address_offset += buffer.page_size();
+        if ((buffer.page_size() % 32) != 0) {
+            // If page size is not 32B-aligned, we cannot do a contiguous copy
+            uint32_t dst_address_offset = 0;
+            for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_in_bytes; sysmem_address_offset += padded_page_size) {
+                tt::Cluster::instance().read_sysmem((char*)dst + dst_address_offset, buffer.page_size(), command.read_buffer_addr + sysmem_address_offset, 0);
+                dst_address_offset += buffer.page_size();
+            }
+        } else {
+            tt::Cluster::instance().read_sysmem(dst, data_size_in_bytes, command.read_buffer_addr, 0);
         }
-    } else {
-        tt::Cluster::instance().read_sysmem(dst, data_size_in_bytes, command.read_buffer_addr, 0);
+
+
+    if(is_sharded(buffer.buffer_layout())){
+        convert_interleaved_to_sharded_on_host(dst, buffer.num_pages(),
+                                        buffer.page_size(),
+                                        buffer.dev_page_to_host_page_mapping(),
+                                        true);
     }
 }
 
@@ -791,6 +995,12 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool bl
         buffer.page_size() < MEM_L1_SIZE - DeviceCommand::DATA_SECTION_ADDRESS,
         "Buffer pages must fit within the command queue data section");
 
+    if (is_sharded(buffer.buffer_layout())) {
+        convert_interleaved_to_sharded_on_host(src, buffer.num_pages(),
+                                    buffer.page_size(),
+                                    buffer.dev_page_to_host_page_mapping());
+    }
+
     uint32_t write_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + buffer.size();
     if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + write_buffer_command_size >= DeviceCommand::HUGE_PAGE_SIZE) {
         TT_ASSERT(
@@ -801,8 +1011,6 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool bl
     }
     tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer");
 
-    // TODO(agrebenisan): This could just be a stack variable since we
-    // are just running in one thread
     EnqueueWriteBufferCommand command(this->device, buffer, src, this->sysmem_writer);
     this->enqueue_command(command, blocking);
 }
@@ -906,6 +1114,22 @@ void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& src,
     // TODO(agrebenisan): Move to deprecated
     detail::DispatchStateCheck(true);
     cq.enqueue_write_buffer(buffer, src.data(), blocking);
+}
+
+void print_pages(uint32_t * src, uint32_t num_words, uint32_t num_words_per_page){
+    uint32_t page_idx = 0;
+    for(uint32_t word_idx = 0; word_idx < num_words ; word_idx++){
+        if(word_idx % num_words_per_page == 0){
+            if(word_idx != 0)
+                std::cout << std::endl;
+            std::cout << "Printing page: " << page_idx << " 0x";
+            page_idx++;
+        }
+        std::cout << std::hex << src[word_idx] << std::dec;
+    }
+    std::cout << std::endl;
+
+
 }
 
 void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, void* dst, bool blocking) {

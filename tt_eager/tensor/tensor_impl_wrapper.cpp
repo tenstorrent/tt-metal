@@ -46,8 +46,31 @@ Tensor to_host_wrapper(const Tensor &tensor) {
     return to_host_map.at(tensor.dtype())(tensor);
 }
 
+
+Tensor to_extract_shard_wrapper(const Tensor &tensor, const uint32_t & core_id) {
+    const static std::map<DataType, std::function<Tensor(const Tensor &, const uint32_t &)>> to_host_map = {
+        {DataType::BFLOAT16, &extract_shard<bfloat16>},
+        {DataType::FLOAT32, &extract_shard<float>},
+        {DataType::UINT32, &extract_shard<uint32_t>},
+        {DataType::BFLOAT8_B, &extract_shard<uint32_t>},
+        {DataType::UINT16, &extract_shard<uint16_t>},
+    };
+    return to_host_map.at(tensor.dtype())(tensor, core_id);
+}
+
+Tensor to_host_wrapper_sharded(const Tensor &tensor) {
+    const static std::map<DataType, std::function<Tensor(const Tensor &)>> to_host_map = {
+        {DataType::BFLOAT16, &to_host_sharded<bfloat16>},
+        {DataType::FLOAT32, &to_host_sharded<float>},
+        {DataType::UINT32, &to_host_sharded<uint32_t>},
+        {DataType::BFLOAT8_B, &to_host_sharded<uint32_t>},
+        {DataType::UINT16, &to_host_sharded<uint16_t>},
+    };
+    return to_host_map.at(tensor.dtype())(tensor);
+}
+
 Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const MemoryConfig &mem_config) {
-    const static std::map<DataType, std::function<Tensor(const Tensor &, Device *, const MemoryConfig &)>>
+    const static std::unordered_map<DataType, std::function<Tensor(const Tensor &, Device *, const MemoryConfig &)>>
         to_device_map = {
             {DataType::BFLOAT16, &to_device<bfloat16>},
             {DataType::FLOAT32, &to_device<float>},
@@ -55,8 +78,6 @@ Tensor to_device_wrapper(const Tensor &tensor, Device *target_device, const Memo
             {DataType::UINT16, &to_device<uint16_t>},
             {DataType::BFLOAT8_B, &to_device<uint32_t>},
         };
-    TT_ASSERT((to_device_map.find(tensor.dtype()) != to_device_map.end())
-        && "Incorrect datatype");
     return to_device_map.at(tensor.dtype())(tensor, target_device, mem_config);
 }
 
@@ -74,7 +95,7 @@ Tensor to_device_wrapper_sharded(const Tensor &tensor, Device *target_device, co
 }
 
 Tensor to_layout_wrapper(const Tensor &tensor, Layout target_layout) {
-    const static std::map<DataType, std::function<Tensor(const Tensor &, Layout)>> to_layout_map = {
+    const static std::unordered_map<DataType, std::function<Tensor(const Tensor &, Layout)>> to_layout_map = {
         {DataType::BFLOAT16, &to_layout<bfloat16>},
         {DataType::FLOAT32, &to_layout<float>},
         {DataType::UINT32, &to_layout<uint32_t>},
@@ -85,7 +106,7 @@ Tensor to_layout_wrapper(const Tensor &tensor, Layout target_layout) {
 }
 
 Tensor pad_wrapper(const Tensor &tensor, const Shape &output_tensor_shape, const Shape &input_tensor_start, float pad_value) {
-    const static std::map<DataType, std::function<Tensor(const Tensor &, const Shape &, const Shape &, float)>>
+    const static std::unordered_map<DataType, std::function<Tensor(const Tensor &, const Shape &, const Shape &, float)>>
         pad_map = {
             {DataType::BFLOAT16, &pad<bfloat16>},
             {DataType::FLOAT32, &pad<float>},
@@ -97,7 +118,7 @@ Tensor pad_wrapper(const Tensor &tensor, const Shape &output_tensor_shape, const
 }
 
 Tensor unpad_wrapper(const Tensor &tensor, const Shape &output_tensor_start, const Shape &output_tensor_end) {
-    const static std::map<DataType, std::function<Tensor(const Tensor &, const Shape &, const Shape &)>> unpad_map = {
+    const static std::unordered_map<DataType, std::function<Tensor(const Tensor &, const Shape &, const Shape &)>> unpad_map = {
         {DataType::BFLOAT16, &unpad<bfloat16>},
         {DataType::FLOAT32, &unpad<float>},
         {DataType::UINT32, &unpad<uint32_t>},
@@ -108,7 +129,7 @@ Tensor unpad_wrapper(const Tensor &tensor, const Shape &output_tensor_start, con
 }
 
 std::string to_string_wrapper(const Tensor &tensor, Layout print_layout, bool pretty_print) {
-    const static std::map<DataType, std::function<std::string(const Tensor &, Layout, bool)>> to_string_map = {
+    const static std::unordered_map<DataType, std::function<std::string(const Tensor &, Layout, bool)>> to_string_map = {
         {DataType::BFLOAT16, &to_string<bfloat16>},
         {DataType::FLOAT32, &to_string<float>},
         {DataType::UINT32, &to_string<uint32_t>},

@@ -51,8 +51,24 @@ namespace tt::tt_metal{
         * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
         * | buffer      | Buffer to read data from                        | const Buffer &          |                                                  | Yes      |
         * | host_buffer | Buffer on host to copy data into                | std::vector<uint32_t> & |                                                  | Yes      |
+        * | shard_order | For a sharded buffer we can read in shard order | bool                    |                                                  | Yes      |
         */
-        void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer);
+        void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer, bool shard_order = false);
+
+
+        /**
+        * Copies data from a buffer into a host buffer
+        *
+        * Return value: void
+        *
+        * | Argument    | Description                                     | Data type               | Valid range                                      | Required |
+        * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
+        * | buffer      | Buffer to read data from                        | const Buffer &          |                                                  | Yes      |
+        * | host_buffer | Buffer on host to copy data into                | std::vector<uint32_t> & |                                                  | Yes      |
+        * | core_id     | ID of core                                      | const uint32_t &        |                                                  | Yes      |
+        */
+        void ReadShard(const Buffer &buffer, std::vector<uint32_t> &host_buffer, const uint32_t & core_id);
+
 
 
         /**
