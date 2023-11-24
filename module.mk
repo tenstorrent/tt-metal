@@ -2,6 +2,7 @@ CONFIG ?= assert
 ENABLE_PROFILER ?= 0
 ENABLE_TRACY ?= 0
 ENABLE_CODE_TIMERS ?= 0
+TTNN_ENABLE_LOGGING ?= 0
 # TODO: enable OUT to be per config (this impacts all scripts that run tests)
 # OUT ?= build_$(DEVICE_RUNNER)_$(CONFIG)
 OUT ?= $(TT_METAL_HOME)/build
@@ -114,6 +115,9 @@ hugepage-check:
 
 ifeq ($(ENABLE_PROFILER), 1)
 CFLAGS += -DPROFILER
+endif
+ifeq ($(TTNN_ENABLE_LOGGING), 1)
+CFLAGS += -DTTNN_ENABLE_LOGGING
 endif
 
 ifeq ($(ENABLE_TRACY), 1)

@@ -138,6 +138,8 @@ std::vector<Tensor> run_host_operation(const HostOperation& operation, const std
     return output_tensors;
 }
 
+inline const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
+
 std::vector<Tensor> run_device_operation(
     const DeviceOperation& operation,
     const std::vector<Tensor>& input_tensors,
@@ -208,15 +210,21 @@ std::vector<Tensor> run_device_operation(
                 detail::setup_profiler(operation, input_tensors, program);
             }
 
-            const char* TT_METAL_SLOW_DISPATCH_MODE = nullptr;
-            {
-                ZoneScopedN("Get Env Var");
-                TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-            }
-
-            if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+            if (USE_FAST_DISPATCH) {
+#ifndef TTNN_ENABLE_LOGGING
                 EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
-
+#else
+                const auto start{std::chrono::steady_clock::now()};
+                EnqueueProgram(*tt::tt_metal::detail::GLOBAL_CQ, program, false);
+                Finish(*tt::tt_metal::detail::GLOBAL_CQ);
+                const auto end{std::chrono::steady_clock::now()};
+                const std::chrono::duration<double> elapsed_seconds{end - start};
+                tt::log_info(
+                    tt::LogOp,
+                    "Program of Operation {:50} finished in {:15} seconds",
+                    operation.get_type_name(),
+                    elapsed_seconds.count());
+#endif
                 // Only need to dump device data when in dispatch mode
                 // LaunchKernel automatically dumps device data
                 op_profiler::dump_device_profiler_results(device, program);
