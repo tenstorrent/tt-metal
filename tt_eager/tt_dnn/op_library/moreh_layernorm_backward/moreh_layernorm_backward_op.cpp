@@ -69,13 +69,6 @@ std::vector<Tensor> MorehLayerNormBackwardInputGrad::create_output_tensors(
     return {};
 }
 
-tt::stl::reflection::Attributes MorehLayerNormBackwardInputGrad::attributes() const {
-    return {
-        {"normalized_dims", this->normalized_dims},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 operation::ProgramWithCallbacks MorehLayerNormBackwardInputGrad::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -135,13 +128,6 @@ std::vector<Tensor> MorehLayerNormBackwardGammaBetaGrad::create_output_tensors(
     const std::vector<Tensor>& input_tensors) const {
     // Inplace
     return {};
-}
-
-tt::stl::reflection::Attributes MorehLayerNormBackwardGammaBetaGrad::attributes() const {
-    return {
-        {"normalized_dims", this->normalized_dims},
-        {"output_mem_config", this->output_mem_config},
-    };
 }
 
 operation::ProgramWithCallbacks MorehLayerNormBackwardGammaBetaGrad::create_program(

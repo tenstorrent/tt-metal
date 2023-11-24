@@ -75,7 +75,10 @@ struct MorehSoftmaxBackward {
         const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
     MorehSoftmaxBackwardOpParallelizationStrategy get_parallelization_strategy(
         const std::vector<Tensor> &input_tensors) const;
-    tt::stl::reflection::Attributes attributes() const;
+    static constexpr auto attribute_names = std::make_tuple("dim", "output_mem_config");
+    const auto attribute_values() const {
+        return std::make_tuple(std::cref(this->dim), std::cref(this->output_mem_config));
+    }
 };
 
 // const ref prevents

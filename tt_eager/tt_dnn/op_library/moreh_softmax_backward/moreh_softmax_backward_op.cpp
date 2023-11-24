@@ -127,13 +127,6 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackward::get_parallel
     return this->strategy;
 }
 
-tt::stl::reflection::Attributes MorehSoftmaxBackward::attributes() const {
-    return {
-        {"dim", this->dim},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 Tensor moreh_softmax_backward(
     const Tensor& output_tensor,
     const Tensor& output_grad_tensor,

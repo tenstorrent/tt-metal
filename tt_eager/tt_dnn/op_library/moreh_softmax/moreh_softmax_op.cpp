@@ -119,13 +119,6 @@ MorehSoftmaxOpParallelizationStrategy MorehSoftmax::get_parallelization_strategy
     return this->strategy;
 }
 
-tt::stl::reflection::Attributes MorehSoftmax::attributes() const {
-    return {
-        {"dim", this->dim},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 Tensor moreh_softmax(
     const Tensor& input_tensor,
     uint32_t dim,

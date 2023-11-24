@@ -487,14 +487,6 @@ operation::ProgramWithCallbacks MorehLayerNorm::create_program(
     return moreh_layernorm_impl(input, this->normalized_dims, this->eps, output, gamma, beta, mean, rstd);
 }
 
-tt::stl::reflection::Attributes MorehLayerNorm::attributes() const {
-    return {
-        {"normalized_dims", this->normalized_dims},
-        {"eps", this->eps},
-        {"output_mem_config", this->output_mem_config},
-    };
-}
-
 Tensor moreh_layernorm(
     const Tensor& input,
     uint32_t normalized_dims,
