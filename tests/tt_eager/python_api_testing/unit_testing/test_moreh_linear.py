@@ -19,27 +19,12 @@ def get_bias_tensors(bias_shape, require_bias_grad, device):
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
 
     bias = torch.randint(-2, 3, bias_shape, dtype=cpu_dtype)
-    tt_bias = (
-        ttl.tensor.Tensor(bias.reshape(-1).tolist(), bias_shape, npu_dtype, cpu_layout)
-        .pad_to_tile(float("nan"))
-        .to(npu_layout)
-        .to(device)
-    )
+    tt_bias = ttl.tensor.Tensor(bias, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
 
     tt_bias_grad = None
     if require_bias_grad:
         bias_grad = torch.full(bias_shape, float("nan"), dtype=cpu_dtype)
-        tt_bias_grad = (
-            ttl.tensor.Tensor(
-                bias_grad.flatten().tolist(),
-                bias_shape,
-                npu_dtype,
-                cpu_layout,
-            )
-            .pad_to_tile(float("nan"))
-            .to(npu_layout)
-            .to(device)
-        )
+        tt_bias_grad = ttl.tensor.Tensor(bias_grad, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
 
     return tt_bias, bias, tt_bias_grad
 

@@ -31,17 +31,7 @@ def to_npu(
 ):
     if cpu_tensor is None:
         return None
-    npu_tensor = (
-        ttl.tensor.Tensor(
-            cpu_tensor.flatten().tolist(),
-            cpu_tensor.shape,
-            npu_dtype,
-            cpu_layout,
-        )
-        .pad_to_tile(float("nan"))
-        .to(npu_layout)
-        .to(device)
-    )
+    npu_tensor = ttl.tensor.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
     return npu_tensor
 
 

@@ -38,16 +38,7 @@ def test_softmin_for_dim_hw(shape_dim, device):
 
     x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
 
-    dev_x = (
-        ttl.tensor.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
     tt_cpu = F.softmin(x, dim)
     tt_npu = ttl.operations.primary.moreh_softmin(dev_x, dim)
@@ -81,16 +72,7 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, device):
 
     x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
 
-    dev_x = (
-        ttl.tensor.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    dev_x = ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
     tt_cpu = F.softmin(x, dim)
     strategy = (
@@ -131,12 +113,7 @@ def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, device):
     x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
 
     dev_x = (
-        ttl.tensor.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
+        ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16)
         .pad_to_tile(float("nan"))
         .to(ttl.tensor.Layout.TILE)
         .to(device)
@@ -179,15 +156,7 @@ def test_softmin_for_dim_nc(shape_dim, device):
     x = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
 
     dev_x = (
-        ttl.tensor.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
-        .pad_to_tile(float("7"))
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
+        ttl.tensor.Tensor(x, ttl.tensor.DataType.BFLOAT16).pad_to_tile(float("7")).to(ttl.tensor.Layout.TILE).to(device)
     )
 
     tt_cpu = F.softmin(x, dim)
@@ -234,28 +203,10 @@ def test_softmin_backward_for_dim_hw(shape_dim, device):
     )
 
     y = F.softmin(x, dim)
-    dev_y = (
-        ttl.tensor.Tensor(
-            y.reshape(-1).tolist(),
-            y.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    dev_y = ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
     dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
-    dev_dy = (
-        ttl.tensor.Tensor(
-            dy.reshape(-1).tolist(),
-            dy.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    dev_dy = ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
     y.backward(dy)
     tt_npu = ttl.operations.primary.moreh_softmin_backward(dev_y, dev_dy, dim)
@@ -294,28 +245,10 @@ def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, device):
     )
 
     y = F.softmin(x, dim)
-    dev_y = (
-        ttl.tensor.Tensor(
-            y.reshape(-1).tolist(),
-            y.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    dev_y = ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
     dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
-    dev_dy = (
-        ttl.tensor.Tensor(
-            dy.reshape(-1).tolist(),
-            dy.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
-        .to(ttl.tensor.Layout.TILE)
-        .to(device)
-    )
+    dev_dy = ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16).to(ttl.tensor.Layout.TILE).to(device)
 
     y.backward(dy)
     strategy = (
@@ -362,12 +295,7 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
 
     y = F.softmin(x, dim)
     dev_y = (
-        ttl.tensor.Tensor(
-            y.reshape(-1).tolist(),
-            y.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
+        ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16)
         .pad_to_tile(float("10"))
         .to(ttl.tensor.Layout.TILE)
         .to(device)
@@ -375,12 +303,7 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, device):
 
     dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
     dev_dy = (
-        ttl.tensor.Tensor(
-            dy.reshape(-1).tolist(),
-            dy.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
+        ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16)
         .pad_to_tile(float("20"))
         .to(ttl.tensor.Layout.TILE)
         .to(device)
@@ -429,12 +352,7 @@ def test_softmin_backward_for_dim_nc(shape_dim, device):
 
     y = F.softmin(x, dim)
     dev_y = (
-        ttl.tensor.Tensor(
-            y.reshape(-1).tolist(),
-            y.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
+        ttl.tensor.Tensor(y, ttl.tensor.DataType.BFLOAT16)
         .pad_to_tile(float("10"))
         .to(ttl.tensor.Layout.TILE)
         .to(device)
@@ -442,12 +360,7 @@ def test_softmin_backward_for_dim_nc(shape_dim, device):
 
     dy = torch.randint(low=0, high=4, size=(N * C * H * W,)).reshape((N, C, H, W)).to(torch.bfloat16)
     dev_dy = (
-        ttl.tensor.Tensor(
-            dy.reshape(-1).tolist(),
-            dy.shape,
-            ttl.tensor.DataType.BFLOAT16,
-            ttl.tensor.Layout.ROW_MAJOR,
-        )
+        ttl.tensor.Tensor(dy, ttl.tensor.DataType.BFLOAT16)
         .pad_to_tile(float("10"))
         .to(ttl.tensor.Layout.TILE)
         .to(device)
