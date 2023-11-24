@@ -9,22 +9,22 @@
 void kernel_main() {
     // READER
     // in1 mcast args
-    uint32_t in1_mcast_sender_noc_x             = get_arg_val<uint32_t>(0);
-    uint32_t in1_mcast_sender_noc_y             = get_arg_val<uint32_t>(1);
+    const uint32_t in1_mcast_sender_noc_x             = get_arg_val<uint32_t>(0);
+    const uint32_t in1_mcast_sender_noc_y             = get_arg_val<uint32_t>(1);
 
     // WRITER
     // out tensor args
-    uint32_t out_tensor_addr                    = get_arg_val<uint32_t>(2);
-    uint32_t out_tensor_start_tile_id           = get_arg_val<uint32_t>(3);
+    const uint32_t out_tensor_addr                    = get_arg_val<uint32_t>(2);
+    uint32_t out_tensor_start_tile_id                 = get_arg_val<uint32_t>(3);
 
     // padding args (WRITER)
-    uint32_t out_num_nonzero_subblocks_h        = get_arg_val<uint32_t>(4);
-    uint32_t out_last_subblock_h                = get_arg_val<uint32_t>(5);
-    uint32_t padded_block_tiles_h_skip          = get_arg_val<uint32_t>(6);
-    uint32_t out_num_nonzero_subblocks_w        = get_arg_val<uint32_t>(7);
-    uint32_t out_last_subblock_w                = get_arg_val<uint32_t>(8);
-    uint32_t padded_subblock_tiles_addr_skip    = get_arg_val<uint32_t>(9);
-    uint32_t padded_block_tiles_w_skip          = get_arg_val<uint32_t>(10);
+    const uint32_t out_num_nonzero_subblocks_h        = get_arg_val<uint32_t>(4);
+    const uint32_t out_last_subblock_h                = get_arg_val<uint32_t>(5);
+    const uint32_t padded_block_tiles_h_skip          = get_arg_val<uint32_t>(6);
+    const uint32_t out_num_nonzero_subblocks_w        = get_arg_val<uint32_t>(7);
+    const uint32_t out_last_subblock_w                = get_arg_val<uint32_t>(8);
+    const uint32_t padded_subblock_tiles_addr_skip    = get_arg_val<uint32_t>(9);
+    const uint32_t padded_block_tiles_w_skip          = get_arg_val<uint32_t>(10);
 
     // COMPILE TIME ARGS
     // interleaved accessor args
@@ -58,10 +58,10 @@ void kernel_main() {
     // Don't need batch; same as batch from READER args
 
     #ifdef FUSE_BIAS
-        // in3 block args
-        constexpr uint32_t in3_block_w                        = get_compile_time_arg_val(14);
+    // in3 block args
+    constexpr uint32_t in3_block_w                        = get_compile_time_arg_val(14);
 
-        constexpr uint32_t cb_id_in3 = 3;
+    constexpr uint32_t cb_id_in3 = 3;
     #endif
 
     // WRITER
@@ -87,8 +87,8 @@ void kernel_main() {
 
     const uint64_t in1_mcast_sender_semaphore_noc_addr = get_noc_addr(in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, in1_mcast_sender_semaphore_addr);
 
-    for (uint32_t b = 0; b < batch; b++) {
-        for(uint32_t block = 0; block < num_blocks; block++) {
+    for (uint32_t b = 0; b < batch; ++b) {
+        for(uint32_t block = 0; block < num_blocks; ++block) {
             // Operand 1
             cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
@@ -126,9 +126,9 @@ void kernel_main() {
         #ifndef OUT_SHARDED
         // WRITER
         uint32_t out_tensor_sbh_start_tile_id = out_tensor_start_tile_id;
-        for(uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h; sbh++) {
+        for(uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h; ++sbh) {
             uint32_t out_tensor_sbw_start_tile_id = out_tensor_sbh_start_tile_id;
-            for(uint32_t sbw = 0; sbw < out_num_nonzero_subblocks_w; sbw++) {
+            for(uint32_t sbw = 0; sbw < out_num_nonzero_subblocks_w; ++sbw) {
                 uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
 
                 uint32_t out_subblock_h_ = out_subblock_h;
@@ -145,9 +145,9 @@ void kernel_main() {
                 cb_wait_front(cb_id_out0, out_subblock_tile_count);
                 uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
-                for(uint32_t h = 0; h < out_subblock_h_; h++) {
+                for(uint32_t h = 0; h < out_subblock_h_; ++h) {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
-                    for(uint32_t w = 0; w < out_subblock_w_; w++) {
+                    for(uint32_t w = 0; w < out_subblock_w_; ++w) {
                         noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
 
                         l1_read_addr+=output_single_tile_size_bytes;

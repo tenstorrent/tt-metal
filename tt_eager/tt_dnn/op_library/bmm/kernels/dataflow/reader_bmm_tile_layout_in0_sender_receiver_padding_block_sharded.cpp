@@ -47,7 +47,7 @@ void kernel_main() {
     uint64_t remote_sender_noc_addrs[num_blocks];
     if constexpr(transpose_mcast) {
         uint32_t x = 0, y = 0;
-        for (uint32_t i = 0; i < num_blocks; i++) {
+        for (uint32_t i = 0; i < num_blocks; ++i) {
             remote_sender_noc_addrs[i] = get_noc_addr(in0_mcast_noc_x[x], in0_mcast_noc_y[y], in0_mcast_sender_semaphore_addr);
             ++y;
             if (y == num_y) {
@@ -57,7 +57,7 @@ void kernel_main() {
         }
     } else {
         uint32_t x = 0, y = 0;
-        for (uint32_t i = 0; i < num_blocks; i++) {
+        for (uint32_t i = 0; i < num_blocks; ++i) {
             remote_sender_noc_addrs[i] = get_noc_addr(in0_mcast_noc_x[x], in0_mcast_noc_y[y], in0_mcast_sender_semaphore_addr);
             ++x;
             if (x == num_x) {

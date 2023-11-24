@@ -49,7 +49,7 @@ void MAIN {
 
     mm_block_init(in0_cb_id, in1_cb_id, out_cb_id);
 
-    for (uint32_t b = 0; b < batch; b++){
+    for (uint32_t b = 0; b < batch; ++b){
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
 
@@ -60,7 +60,7 @@ void MAIN {
         }
         #endif
 
-        for(uint32_t block = 0; block < num_blocks; block++)
+        for(uint32_t block = 0; block < num_blocks; ++block)
         {
             bool last_out = block == (num_blocks-1);
             // Configure packer once for pack out without Bias
@@ -75,9 +75,9 @@ void MAIN {
             cb_wait_front(in1_cb_id, in1_block_num_tiles);
 
             uint32_t in0_index_subblock_offset = 0;
-            for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
+            for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
                 uint32_t in1_index_subblock_offset = 0;
-                for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
 
                     if (enable_reload) {
                         // Reconfigure input
@@ -102,7 +102,7 @@ void MAIN {
                     uint32_t in0_index = in0_index_subblock_offset; // offset into in0 block
                     uint32_t in1_index = in1_index_subblock_offset; // offset into in1 block
                     // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
-                    for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
+                    for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
                         // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                         // accumulation is done by iterating matmul_block across inner dim
                         // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
@@ -168,15 +168,15 @@ void MAIN {
         // reconfigure unpacker df for src B
         unpack_reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
         cb_wait_front(bias_cb_id, in1_per_core_w);
-        for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
+        for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
             uint32_t in1_index_subblock_offset = 0;
-            for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+            for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
                 // Redundant wait since we know data was just pushed
                 cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
                 tile_regs_acquire();
-                for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
+                for (uint32_t i = 0, j = 0; j < out_subblock_h; ++j) {
                     uint32_t bcast_tile_idx = in1_index_subblock_offset;
-                    for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
+                    for (uint32_t k = 0; k < out_subblock_w; ++k, ++i) {
                         add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, bcast_tile_idx, i);
                         bcast_tile_idx++;
                     }
@@ -191,7 +191,7 @@ void MAIN {
 
                 // sfpu activation
                 #ifdef SFPU_OP_INIT_ACTIVATION
-                for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
                     SFPU_OP_FUNC_ACTIVATION
                 }
                 tile_regs_commit();
@@ -200,7 +200,7 @@ void MAIN {
                 // Pack out to output buffer
                 cb_reserve_back(out_cb_id, out_subblock_num_tiles);
                 tile_regs_wait();
-                for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
                     pack_tile(i, out_cb_id);
                 }
                 tile_regs_release();

@@ -8,8 +8,8 @@
 
 void kernel_main() {
     // in0 mcast args
-    uint32_t in0_mcast_sender_noc_x             = get_arg_val<uint32_t>(0);
-    uint32_t in0_mcast_sender_noc_y             = get_arg_val<uint32_t>(1);
+    const uint32_t in0_mcast_sender_noc_x             = get_arg_val<uint32_t>(0);
+    const uint32_t in0_mcast_sender_noc_y             = get_arg_val<uint32_t>(1);
 
 
     // COMPILE TIME ARGS
@@ -29,8 +29,8 @@ void kernel_main() {
 
     const uint64_t in0_mcast_sender_semaphore_noc_addr = get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, in0_mcast_sender_semaphore_addr);
 
-    for (uint32_t b = 0; b < batch; b++) {
-        for(uint32_t block = 0; block < num_blocks; block++) {
+    for (uint32_t b = 0; b < batch; ++b) {
+        for(uint32_t block = 0; block < num_blocks; ++block) {
             // Operand 0
             cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 

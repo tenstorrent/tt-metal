@@ -5,33 +5,33 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "debug/dprint.h"
+
 void kernel_main() {
     // READER
     // in1 tensor args
-    uint32_t in1_tensor_addr                    = get_arg_val<uint32_t>(0);
-    uint32_t in1_tensor_start_tile_id           = get_arg_val<uint32_t>(1);
+    const uint32_t in1_tensor_addr                    = get_arg_val<uint32_t>(0);
+    uint32_t in1_tensor_start_tile_id                 = get_arg_val<uint32_t>(1);
     // in1 mcast args
-    uint32_t in1_mcast_dest_noc_start_x         = get_arg_val<uint32_t>(2);
-    uint32_t in1_mcast_dest_noc_start_y         = get_arg_val<uint32_t>(3);
-    uint32_t in1_mcast_dest_noc_end_x           = get_arg_val<uint32_t>(4);
-    uint32_t in1_mcast_dest_noc_end_y           = get_arg_val<uint32_t>(5);
+    const uint32_t in1_mcast_dest_noc_start_x         = get_arg_val<uint32_t>(2);
+    const uint32_t in1_mcast_dest_noc_start_y         = get_arg_val<uint32_t>(3);
+    const uint32_t in1_mcast_dest_noc_end_x           = get_arg_val<uint32_t>(4);
+    const uint32_t in1_mcast_dest_noc_end_y           = get_arg_val<uint32_t>(5);
 
     // WRITER
     // out tensor args
-    uint32_t out_tensor_addr                    = get_arg_val<uint32_t>(6);
-    uint32_t out_tensor_start_tile_id           = get_arg_val<uint32_t>(7);
+    const uint32_t out_tensor_addr                    = get_arg_val<uint32_t>(6);
+    uint32_t out_tensor_start_tile_id                 = get_arg_val<uint32_t>(7);
 
     // padding args (READER)
-    uint32_t last_block_w                       = get_arg_val<uint32_t>(8);
+    const uint32_t last_block_w                       = get_arg_val<uint32_t>(8);
     // padding args (WRITER)
-    uint32_t out_num_nonzero_subblocks_h        = get_arg_val<uint32_t>(9);
-    uint32_t out_last_subblock_h                = get_arg_val<uint32_t>(10);
-    uint32_t padded_block_tiles_h_skip          = get_arg_val<uint32_t>(11);
-    uint32_t out_num_nonzero_subblocks_w        = get_arg_val<uint32_t>(12);
-    uint32_t out_last_subblock_w                = get_arg_val<uint32_t>(13);
-    uint32_t padded_subblock_tiles_addr_skip    = get_arg_val<uint32_t>(14);
-    uint32_t padded_block_tiles_w_skip          = get_arg_val<uint32_t>(15);
+    const uint32_t out_num_nonzero_subblocks_h        = get_arg_val<uint32_t>(9);
+    const uint32_t out_last_subblock_h                = get_arg_val<uint32_t>(10);
+    const uint32_t padded_block_tiles_h_skip          = get_arg_val<uint32_t>(11);
+    const uint32_t out_num_nonzero_subblocks_w        = get_arg_val<uint32_t>(12);
+    const uint32_t out_last_subblock_w                = get_arg_val<uint32_t>(13);
+    const uint32_t padded_subblock_tiles_addr_skip    = get_arg_val<uint32_t>(14);
+    const uint32_t padded_block_tiles_w_skip          = get_arg_val<uint32_t>(15);
 
     // COMPILE TIME ARGS
     // interleaved accessor args
@@ -74,24 +74,24 @@ void kernel_main() {
     // Don't need batch; same as batch from READER args
 
     #ifdef FUSE_BIAS
-        // in3 mcast args
-        uint32_t in3_tensor_addr                    = get_arg_val<uint32_t>(16);
-        uint32_t in3_tensor_start_tile_id           = get_arg_val<uint32_t>(17);
+    // in3 mcast args
+    const uint32_t in3_tensor_addr                    = get_arg_val<uint32_t>(16);
+    const uint32_t in3_tensor_start_tile_id           = get_arg_val<uint32_t>(17);
 
-        constexpr bool in3_is_dram                            = get_compile_time_arg_val(24) == 1;
-        constexpr uint32_t in3_tensor_stride_w                = get_compile_time_arg_val(25);
+    constexpr bool in3_is_dram                            = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t in3_tensor_stride_w                = get_compile_time_arg_val(25);
 
-        constexpr uint32_t cb_id_in3 = 3;
-        const uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
-        const DataFormat bias_data_format = get_dataformat(cb_id_in3);
+    constexpr uint32_t cb_id_in3 = 3;
+    const uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
+    const DataFormat bias_data_format = get_dataformat(cb_id_in3);
 
-        uint32_t l1_write_addr_in3;
+    uint32_t l1_write_addr_in3;
 
-        const InterleavedAddrGenFast<in3_is_dram> s3 = {
-            .bank_base_address = in3_tensor_addr,
-            .page_size = bias_single_tile_size_bytes,
-            .data_format = bias_data_format
-        };
+    const InterleavedAddrGenFast<in3_is_dram> s3 = {
+        .bank_base_address = in3_tensor_addr,
+        .page_size = bias_single_tile_size_bytes,
+        .data_format = bias_data_format
+    };
     #endif
 
     constexpr uint32_t cb_id_in1 = 1;
@@ -143,9 +143,9 @@ void kernel_main() {
         0);
     #endif
 
-    for (uint32_t b = 0; b < batch; b++) {
+    for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
-        for(uint32_t block = 0; block < num_blocks; block++) {
+        for(uint32_t block = 0; block < num_blocks; ++block) {
             // Operand 1
             cb_reserve_back(cb_id_in1, in1_block_num_tiles);
             l1_write_addr_in1 = get_write_ptr(cb_id_in1);
@@ -155,9 +155,9 @@ void kernel_main() {
 
             // Copy in1 block into CB, as the default kernel
             uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_block_start_tile_id;
-            for(uint32_t h = 0; h < in1_block_h; h++) {
+            for(uint32_t h = 0; h < in1_block_h; ++h) {
                 uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
-                for(uint32_t w = 0; w < in1_block_w; w++) {
+                for(uint32_t w = 0; w < in1_block_w; ++w) {
                     if (w < last_block_w) {
                         noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
                     }
@@ -207,7 +207,7 @@ void kernel_main() {
 
                 // Copy in1 block into CB, as the default kernel
                 uint32_t in3_tensor_tile_id = in3_tensor_start_tile_id;
-                for(uint32_t w = 0; w < in1_block_w; w++) {
+                for(uint32_t w = 0; w < in1_block_w; ++w) {
                     if (w < last_block_w) {
                         noc_async_read_tile(in3_tensor_tile_id, s3, l1_write_addr_in3);
                     }
@@ -249,9 +249,9 @@ void kernel_main() {
         #ifndef OUT_SHARDED
         // WRITER
         uint32_t out_tensor_sbh_start_tile_id = out_tensor_start_tile_id;
-        for(uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h; sbh++) {
+        for(uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h; ++sbh) {
             uint32_t out_tensor_sbw_start_tile_id = out_tensor_sbh_start_tile_id;
-            for(uint32_t sbw = 0; sbw < out_num_nonzero_subblocks_w; sbw++) {
+            for(uint32_t sbw = 0; sbw < out_num_nonzero_subblocks_w; ++sbw) {
                 uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
 
                 uint32_t out_subblock_h_ = out_subblock_h;
@@ -268,9 +268,9 @@ void kernel_main() {
                 cb_wait_front(cb_id_out0, out_subblock_tile_count);
                 uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
-                for(uint32_t h = 0; h < out_subblock_h_; h++) {
+                for(uint32_t h = 0; h < out_subblock_h_; ++h) {
                     uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
-                    for(uint32_t w = 0; w < out_subblock_w_; w++) {
+                    for(uint32_t w = 0; w < out_subblock_w_; ++w) {
                         noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
 
                         l1_read_addr+=output_single_tile_size_bytes;
@@ -295,7 +295,6 @@ void kernel_main() {
         cb_wait_front(cb_id_out0, padded_block_tiles_h_skip);
         cb_pop_front(cb_id_out0, padded_block_tiles_h_skip);
         out_tensor_start_tile_id += MtNt;
-        DPRINT<<'a'<<ENDL();
         #endif
     }
 
