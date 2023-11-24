@@ -15,7 +15,7 @@ namespace tt::tt_metal::detail{
 
             Input tensor must have BFLOAT16 data type.
 
-            Output tensor will have BFLOAT16 data type.
+            Output tensors will have BFLOAT16 data type.
 
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
@@ -43,6 +43,24 @@ namespace tt::tt_metal::detail{
                     "scalar", "Scalar value", "float", "default to 1.0f", "No"
                     "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
             )doc");
+
+    m_tensor.def("mul_bw", &tt::tt_metal::mul_bw,
+        py::arg("grad").noconvert(), py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+                Performs backward operations for multiplication of two input tensors with given `grad`
+
+                Input tensors must have BFLOAT16 data type.
+
+                Output tensors will have BFLOAT16 data type.
+
+                .. csv-table::
+                    :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                    "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                    "input_a", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                    "input_b", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                    "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+            )doc");
+
     }
 
 }
