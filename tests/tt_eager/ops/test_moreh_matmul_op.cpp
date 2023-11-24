@@ -155,7 +155,8 @@ int main(int argc, char **argv) {
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = tt::numpy::random::random(shapea).to(Layout::TILE).to(device);
         Tensor b = diagonal(shapeb, 1.0f).to(Layout::TILE).to(device);
-        Tensor out_cpu = tt::operations::primary::moreh_matmul(a, b, std::nullopt, false, static_cast<bool>(transpose_b)).cpu();
+        Tensor out_cpu =
+            tt::operations::primary::moreh_matmul(a, b, std::nullopt, false, static_cast<bool>(transpose_b)).cpu();
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
@@ -188,13 +189,13 @@ int main(int argc, char **argv) {
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());
         // Capture system call errors that may have returned from driver/kernel
-        log_error(LogTest, "System error message: {}", std::strerror(errno));
+        TT_THROW("System error message: {}", std::strerror(errno));
     }
 
     if (pass) {
         log_info(LogTest, "Test Passed");
     } else {
-        log_error(LogTest, "Test Failed");
+        TT_THROW("Test Failed");
     }
 
     TT_ASSERT(pass);
