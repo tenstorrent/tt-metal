@@ -19,12 +19,14 @@ using namespace tt_metal;
 namespace transformers {
 
 operation::ProgramWithCallbacks multi_core_split_fused_qkv_and_split_heads(const Tensor &input_tensor, std::vector<Tensor> &output, CoreCoord compute_with_storage_grid_size);
+operation::ProgramWithCallbacks multi_core_split_fused_qkv_and_split_heads_sharded(const Tensor &input_tensor, std::vector<Tensor> &output, CoreCoord compute_with_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_concat_heads(const Tensor &input_tensor, Tensor &output_tensor, CoreCoord compute_with_storage_grid_size);
 operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size, DataType output_dtype);
 
 struct SplitFusedQKVAndSplitHeads {
     CoreCoord compute_with_storage_grid_size;
     MemoryConfig output_mem_config;
+    uint32_t num_heads;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
@@ -33,8 +35,8 @@ struct SplitFusedQKVAndSplitHeads {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-inline std::tuple<Tensor, Tensor, Tensor> split_fused_qkv_and_split_heads(const Tensor &input_tensor, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config) {
-    auto output_tensors = operation::run(SplitFusedQKVAndSplitHeads{compute_with_storage_grid_size, mem_config}, {input_tensor});
+inline std::tuple<Tensor, Tensor, Tensor> split_fused_qkv_and_split_heads(const Tensor &input_tensor, const CoreCoord& compute_with_storage_grid_size, const MemoryConfig& mem_config, const uint32_t num_heads = 16) {
+    auto output_tensors = operation::run(SplitFusedQKVAndSplitHeads{compute_with_storage_grid_size, mem_config, num_heads}, {input_tensor});
     return {output_tensors.at(0), output_tensors.at(1), output_tensors.at(2)};
 }
 

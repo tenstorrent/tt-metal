@@ -20,7 +20,11 @@ namespace transformers {
 
 void py_module(py::module& m_transformers) {
     m_transformers.def("split_fused_qkv_and_split_heads", &split_fused_qkv_and_split_heads,
-        py::arg().noconvert(), py::arg("compute_with_storage_grid_size").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg().noconvert(),
+        py::arg("compute_with_storage_grid_size"),
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("num_heads").noconvert() = 16,
+        R"doc(
         Splits [9, 1, 384, 3072] fused qkv matrix into 3 heads with shapes [9, 16, 384, 64], [9, 16, 64, 384], and [9, 16, 384, 64].
     )doc");
 
