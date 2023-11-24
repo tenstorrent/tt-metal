@@ -25,16 +25,30 @@ std::vector<Tensor> addalpha_bw(const Tensor& grad, const Tensor& input, const T
     return operation::decorate_as_composite(__func__, _addalpha_bw)(grad, input, other, alpha, output_mem_config);
 }
 
+
 std::vector<Tensor> _unary_mul_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = mul_unary(grad, scalar, output_mem_config);
     grad_tensor.push_back(result);
     return grad_tensor;
 }
-
 std::vector<Tensor> unary_mul_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _unary_mul_bw)(grad, input, scalar, output_mem_config);
+}
+
+
+std::vector<Tensor> _mul_bw(const Tensor& grad, const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_a = mul(grad, input_b, std::nullopt, output_mem_config);
+    grad_tensor.push_back(grad_a);
+    Tensor grad_b = mul(grad, input_a, std::nullopt, output_mem_config);
+    grad_tensor.push_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> mul_bw(const Tensor& grad, const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _mul_bw)(grad, input_a, input_b, output_mem_config);
 }
 
 }//namespace tt_metal
