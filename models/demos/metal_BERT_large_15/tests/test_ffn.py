@@ -26,19 +26,6 @@ class PytorchFeedForwardModel(torch.nn.Module):
         return self.ff2(self.ff1(x))
 
 
-def summarize_stats(t, name):
-    mean = t.mean()
-    std = t.std()
-    mag = t.norm()
-    max = t.max()
-    print(f"STATS FOR {name}")
-    print(f"mean {mean}")
-    print(f"std {std}")
-    print(f"mag {mag}")
-    print(f"max {max}")
-    print()
-
-
 def run_ffn_inference(
     device, model_version, batch, seq_len, pcc, model_config, tt_cache_path, model_location_generator
 ):
@@ -62,15 +49,25 @@ def run_ffn_inference(
 
     pad_ffn_input = pad_activation(ffn_input)
     tilized_ffn_input = tt_lib.tensor.Tensor(
-        pad_ffn_input.reshape(-1).tolist(),
-        pad_ffn_input.shape,
+        pad_ffn_input,
         model_config["OP12_LAYERNORM_OUTPUT_DTYPE"],
-        tt_lib.tensor.Layout.ROW_MAJOR,
     ).to(tt_lib.tensor.Layout.TILE)
-    tilized_ffn_input = tilized_ffn_input.to(device, model_config["OP12_LAYERNORM_OUTPUT_MEMCFG"])
+    if model_config["OP12_LAYERNORM_OUTPUT_MEMCFG"].is_sharded():
+        tilized_ffn_input = tilized_ffn_input.to(device)
+        tilized_ffn_input = tt_lib.tensor.interleaved_to_sharded(
+            tilized_ffn_input,
+            model_config["GRID_SIZE"],
+            model_config["SHARD_SIZE"],
+            model_config["OP12_LAYERNORM_OUTPUT_MEMCFG"].memory_layout,
+            model_config["SHARD_ORIENTATION"],
+        )
+    else:
+        tilized_ffn_input = tilized_ffn_input.to(device, model_config["OP12_LAYERNORM_OUTPUT_MEMCFG"])
 
-    tt_out = tt_ffn_model(tilized_ffn_input).cpu()
-    tt_out = tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch().reshape(tt_out.shape())
+    tt_out = tt_ffn_model(tilized_ffn_input)
+    if tt_out.is_sharded():
+        tt_out = tt_lib.tensor.sharded_to_interleaved(tt_out)
+    tt_out = tt_out.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
 
     passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")
@@ -95,6 +92,7 @@ def run_ffn_inference(
         (9, "BFLOAT16-L1"),
         (9, "MIXED_PRECISION_BATCH9"),
         (8, "MIXED_PRECISION_BATCH8"),
+        (12, "BFLOAT8_B-SHARDED_BATCH12"),
     ),
     ids=[
         "batch_9-BFLOAT8_B-DRAM",
@@ -103,6 +101,7 @@ def run_ffn_inference(
         "batch_9-BFLOAT16-L1",
         "batch_9-MIXED_PRECISION_BATCH9",
         "batch_8-MIXED_PRECISION_BATCH8",
+        "batch_12-BFLOAT8_B-SHARDED_BATCH12",
     ],
 )
 @pytest.mark.parametrize(

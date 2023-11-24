@@ -52,37 +52,52 @@ def run_mha_inference(
     # Prepare input
     torch.manual_seed(0)
     mha_input = (torch.rand(batch, 1, seq_len, hugging_face_reference_model.config.hidden_size) * 2) - 1
-    bert_attention_mask = torch.zeros(batch, 1, 1, seq_len)
-    extended_bert_attention_mask = torch.zeros(batch, 1, 32, seq_len)
+    bert_attention_mask = torch.randn(batch, 1, 1, seq_len)
     pytorch_out = pytorch_mha_model(mha_input.squeeze(1), bert_attention_mask).unsqueeze(1)
 
     pad_mha_input = pad_activation(mha_input)
     tt_mha_input = tt_lib.tensor.Tensor(
-        pad_mha_input.reshape(-1).tolist(),
-        pad_mha_input.shape,
+        pad_mha_input,
         model_config["OP1_FUSED_QKV_MM_INPUT_DTYPE"],
-        tt_lib.tensor.Layout.ROW_MAJOR,
     ).to(tt_lib.tensor.Layout.TILE)
-    tt_mha_input = tt_mha_input.to(device, model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"])
-
-    tt_bert_attention_mask = (
-        tt_lib.tensor.Tensor(
-            extended_bert_attention_mask.reshape(-1).tolist(),
-            extended_bert_attention_mask.shape,
-            model_config["OP8_SOFTMAX_ATTENTION_MASK_DTYPE"],
-            tt_lib.tensor.Layout.ROW_MAJOR,
+    if "OP1_FUSED_QKV_MM_INPUT_SHARDED_MEMCFG" in model_config:
+        tt_mha_input = tt_mha_input.to(device)
+        tt_mha_input = tt_lib.tensor.interleaved_to_sharded(
+            tt_mha_input,
+            model_config["GRID_SIZE"],
+            model_config["SHARD_SIZE"],
+            model_config["OP1_FUSED_QKV_MM_INPUT_SHARDED_MEMCFG"].memory_layout,
+            model_config["SHARD_ORIENTATION"],
         )
-        .to(tt_lib.tensor.Layout.TILE)
-        .to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
-    )
+    else:
+        tt_mha_input = tt_mha_input.to(device, model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"])
 
-    tt_out = tt_mha_model(tt_mha_input, tt_bert_attention_mask).cpu()
-    tt_out1 = tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch().reshape(tt_out.shape())
+    if model_config["OP9_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"].is_sharded():
+        extended_bert_attention_mask = bert_attention_mask.reshape(bert_attention_mask.shape[0], 1, -1, 32)
+        tt_bert_attention_mask = tt_lib.tensor.Tensor(
+            extended_bert_attention_mask,
+            model_config["OP8_SOFTMAX_ATTENTION_MASK_DTYPE"],
+        ).to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+    else:
+        extended_bert_attention_mask = pad_activation(bert_attention_mask)
+        tt_bert_attention_mask = (
+            tt_lib.tensor.Tensor(
+                extended_bert_attention_mask,
+                model_config["OP8_SOFTMAX_ATTENTION_MASK_DTYPE"],
+            )
+            .to(tt_lib.tensor.Layout.TILE)
+            .to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+        )
 
-    passing, output = comp_pcc(pytorch_out, tt_out1, pcc)
+    tt_out = tt_mha_model(tt_mha_input, tt_bert_attention_mask)
+    if tt_out.is_sharded():
+        tt_out = tt_lib.tensor.sharded_to_interleaved(tt_out)
+    tt_out = tt_out.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+    passing, output = comp_pcc(pytorch_out, tt_out, pcc)
     logger.info(f"Output {output}")
     _, output = comp_allclose(
-        pytorch_out, tt_out1, 0.5, 0.5
+        pytorch_out, tt_out, 0.5, 0.5
     )  # Only interested in reporting atol/rtol, using PCC for pass/fail
     logger.info(f"Output {output}")
     if not passing:
@@ -103,6 +118,7 @@ def run_mha_inference(
         (9, "BFLOAT16-L1"),
         (9, "MIXED_PRECISION_BATCH9"),
         (8, "MIXED_PRECISION_BATCH8"),
+        (12, "BFLOAT8_B-SHARDED_BATCH12"),
     ),
     ids=[
         "batch_9-BFLOAT8_B-DRAM",
@@ -111,6 +127,7 @@ def run_mha_inference(
         "batch_9-BFLOAT16-L1",
         "batch_9-MIXED_PRECISION_BATCH9",
         "batch_8-MIXED_PRECISION_BATCH8",
+        "batch_12-BFLOAT8_B-SHARDED_BATCH12",
     ],
 )
 @pytest.mark.parametrize(

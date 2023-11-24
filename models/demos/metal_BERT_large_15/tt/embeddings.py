@@ -8,10 +8,8 @@ import tt_lib as ttl
 from tt_lib.utils import pad_weight
 
 
-class TtEmbeddings(torch.nn.Module):
+class TtEmbeddings:
     def __init__(self, hugging_face_reference_model, device, model_config, tt_cache_path):
-        super().__init__()
-
         self.device = device
         self.model_config = model_config
         config = hugging_face_reference_model.config
@@ -79,15 +77,8 @@ class TtEmbeddings(torch.nn.Module):
         self.layerNorm_eps = config.layer_norm_eps
 
         self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
-        self.register_buffer("position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)))
-        self.register_buffer(
-            "token_type_ids",
-            torch.zeros(self.position_ids.size(), dtype=torch.long),
-            persistent=False,
-        )
-
-        # Disable dropout
-        self.eval()
+        self.position_ids = torch.arange(config.max_position_embeddings).expand((1, -1))
+        self.token_type_ids = torch.zeros(self.position_ids.size(), dtype=torch.long)
 
     def preprocess_embedding_inputs(
         self,
@@ -126,7 +117,7 @@ class TtEmbeddings(torch.nn.Module):
             "position_ids": position_ids_tt_tensor,
         }
 
-    def forward(
+    def __call__(
         self,
         input_ids: ttl.tensor.Tensor,
         token_type_ids: ttl.tensor.Tensor,
@@ -154,6 +145,9 @@ class TtEmbeddings(torch.nn.Module):
             inputs_plus_token_type_embeddings_tt_tensor = ttl.tensor.add(
                 inputs_embeds, token_type_embeddings, output_mem_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"]
             )
+            if not self.model_config["DEALLOC_INPUT_EMBEDS_AFTER_POSITION_EMBEDS"]:
+                inputs_embeds.deallocate()
+                token_type_embeddings.deallocate()
 
             position_embeddings_tt_tensor = ttl.tensor.embeddings(
                 position_ids,
@@ -163,8 +157,9 @@ class TtEmbeddings(torch.nn.Module):
                 output_mem_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
             )
             # Deallocate inputs_embeds and token_type_embeddings here to avoid having to move final output
-            inputs_embeds.deallocate()
-            token_type_embeddings.deallocate()
+            if self.model_config["DEALLOC_INPUT_EMBEDS_AFTER_POSITION_EMBEDS"]:
+                inputs_embeds.deallocate()
+                token_type_embeddings.deallocate()
             position_ids.deallocate()
 
             embeddings_tt_tensor_layerNorm = ttl.operations.primary.add_layernorm(
@@ -185,19 +180,3 @@ class TtEmbeddings(torch.nn.Module):
                 output_mem_config=self.model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"],
             )
         return embeddings_tt_tensor_layerNorm
-
-
-class PytorchEmbeddings(torch.nn.Module):
-    def __init__(self, hugging_face_reference_model):
-        super().__init__()
-        self.embeddings = hugging_face_reference_model.bert.embeddings
-
-        # Disable dropout
-        self.eval()
-
-    def forward(self, input_ids: torch.Tensor, token_type_ids: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.embeddings(input_ids=input_ids, token_type_ids=token_type_ids)
-
-
-def run_embeddings_inference():
-    return

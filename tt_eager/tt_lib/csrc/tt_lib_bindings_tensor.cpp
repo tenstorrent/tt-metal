@@ -387,7 +387,8 @@ void TensorModule(py::module &m_tensor) {
         py::arg("input").noconvert(), py::arg("weights").noconvert(),
         py::arg("split_weights").noconvert() = false,
         py::arg("tilized").noconvert() = false,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
         Returns specific indices of the embedding table specified by the input tensor
 
         .. csv-table::
@@ -396,7 +397,9 @@ void TensorModule(py::module &m_tensor) {
             "input", "Tensor containing rows we want", "UInt32 Tensor", "Each element greater than 0 and less than number of embeddings in table.  Shape [batch_size, 1, num_rows, 1]", "Yes"
             "weights", "Entire embedding table", "Tensor", "Tensor shape is [1,1, num_embeddings, num_columns]. Num_columns must be divisible by 32.", "Yes"
             "split_weights", "Parallelizing over weights (instead of input). Default is false", "Bool", "", "No"
-            "tilized", "Enable fused tilize on output. Default is true.", "Bool", "", "No"
+            "tilized", "Enable fused tilize on output. Default is true.", "Bool", "", "No",
+            "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+            "output_dtype", "DataType of output tensor", "DataType", "Default is weights dtype", "No"
     )doc");
 
 

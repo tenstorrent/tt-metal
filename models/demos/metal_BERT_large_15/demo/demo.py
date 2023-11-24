@@ -108,6 +108,17 @@ def run_bert_question_and_answering_inference_squadv2(
             if i < loop_count:
                 logger.info(f"BATCH: {i}")
                 batch_data = batch[0]
+                curr_batch_size = batch_data["input_ids"].shape[0]
+                if curr_batch_size < BATCH_SIZE:
+                    batch_data["input_ids"] = torch.nn.functional.pad(
+                        batch_data["input_ids"], (0, 0, 0, BATCH_SIZE - curr_batch_size)
+                    )
+                    batch_data["attention_mask"] = torch.nn.functional.pad(
+                        batch_data["attention_mask"], (0, 0, 0, BATCH_SIZE - curr_batch_size)
+                    )
+                    batch_data["token_type_ids"] = torch.nn.functional.pad(
+                        batch_data["token_type_ids"], (0, 0, 0, BATCH_SIZE - curr_batch_size)
+                    )
                 cpu_output = hugging_face_reference_model(**batch_data)
                 tt_attention_mask = tt_bert_model.model_attention_mask(**batch_data)
                 tt_lib.device.Synchronize()
@@ -119,7 +130,7 @@ def run_bert_question_and_answering_inference_squadv2(
                 # tt_output = tt_bert_model(*tt_batch)
                 tt_output = tt_bert_model(tt_embedding, tt_attention_mask)
 
-                tt_untilized_output = (
+                tt_output = (
                     tt_output.cpu()
                     .to(tt_lib.tensor.Layout.ROW_MAJOR)
                     .to_torch()
@@ -135,14 +146,18 @@ def run_bert_question_and_answering_inference_squadv2(
                     nlp,
                     references,
                     cpu_output,
-                    tt_untilized_output,
-                    BATCH_SIZE,
+                    tt_output,
+                    curr_batch_size,
                     question,
                     context,
                 )
                 pred_labels.extend(tt_predictions)
                 cpu_pred_labels.extend(cpu_predictions)
                 true_labels.extend(references)
+                del tt_attention_mask
+                del tt_embedding_inputs
+                del tt_embedding
+                del tt_output
             i += 1
         eval_score = squad_metric.compute(predictions=pred_labels, references=true_labels)
         cpu_eval_score = squad_metric.compute(predictions=cpu_pred_labels, references=true_labels)
@@ -380,11 +395,11 @@ def test_demo_squadv2(model_location_generator, device, use_program_cache, loop_
 
     return run_bert_question_and_answering_inference_squadv2(
         model_version="phiyodr/bert-large-finetuned-squad2",
-        batch=8,
+        batch=12,
         seq_len=384,
         return_attention_mask=True,
         return_token_type_ids=True,
-        model_config=get_model_config("MIXED_PRECISION_BATCH8"),
+        model_config=get_model_config("BFLOAT8_B-SHARDED_BATCH12"),
         tt_cache_path=get_tt_cache_path("phiyodr/bert-large-finetuned-squad2"),
         model_location_generator=model_location_generator,
         device=device,

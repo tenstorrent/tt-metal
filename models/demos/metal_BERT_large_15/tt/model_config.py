@@ -90,6 +90,7 @@ ACCEPTABLE_MODEL_CONFIG_STRS = (
     "BFLOAT16-L1",
     "MIXED_PRECISION_BATCH9",
     "MIXED_PRECISION_BATCH8",
+    "BFLOAT8_B-SHARDED_BATCH12",
 )
 
 
@@ -101,10 +102,6 @@ def pretty_print_model_config(model_config):
 
         elif key.endswith("DTYPE") or key.endswith("BOOL"):
             print_str.append(f"{key}: {val}")
-
-        else:
-            raise NotImplementedError("Unknown key: {key}!")
-
     return "\n".join(print_str)
 
 
@@ -114,6 +111,9 @@ def get_model_config(model_config_str):
         tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
     )
     L1_MEMCFG = tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1)
+    SHARDED_MEMCFG = tt_lib.tensor.MemoryConfig(
+        tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED, tt_lib.tensor.BufferType.L1
+    )
 
     # Set default dtype and mem_config based on model_config_str
     if model_config_str in (
@@ -129,7 +129,9 @@ def get_model_config(model_config_str):
     elif model_config_str in ("MIXED_PRECISION_BATCH9", "MIXED_PRECISION_BATCH8"):
         dtype = tt_lib.tensor.DataType.BFLOAT8_B
         mem_config = L1_MEMCFG
-
+    elif model_config_str in ("BFLOAT8_B-SHARDED_BATCH12"):
+        dtype = tt_lib.tensor.DataType.BFLOAT8_B
+        mem_config = SHARDED_MEMCFG
     else:
         raise NotImplementedError(f"Model config {model_config_str} is not supported!")
 
@@ -138,6 +140,7 @@ def get_model_config(model_config_str):
         "DEFAULT_DTYPE": dtype,
         "DEFAULT_MEMCFG": mem_config,
         "MOVE_ENCODER_OUTPUT_BOOL": False,
+        "DEALLOC_INPUT_EMBEDS_AFTER_POSITION_EMBEDS": False,
     }  # DEFAULT_MEMCFG also used to determine banking for tt_lib.device.InitializeDevice
     model_config.update(dict(zip(OP_MEMCFG_KEYS, [mem_config] * len(OP_MEMCFG_KEYS))))
     model_config.update(dict(zip(OP_DTYPE_KEYS, [dtype] * len(OP_DTYPE_KEYS))))
@@ -213,6 +216,7 @@ def get_model_config(model_config_str):
 
     elif model_config_str == "MIXED_PRECISION_BATCH8":
         new_config_values = {
+            "DEALLOC_INPUT_EMBEDS_AFTER_POSITION_EMBEDS": True,
             "MOVE_ENCODER_OUTPUT_BOOL": True,
             # MHA
             "OP1_FUSED_QKV_MM_INPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
@@ -227,6 +231,114 @@ def get_model_config(model_config_str):
             # After all encoders
             "QA_LINEAR_WEIGHTS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
             "QA_LINEAR_BIAS_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+        }
+        model_config.update(new_config_values)
+
+    elif model_config_str == "BFLOAT8_B-SHARDED_BATCH12":
+        grid_size = [12, 8]
+        new_config_values = {
+            "GRID_SIZE": grid_size,
+            "SHARD_SIZE": [384, 128],
+            "SHARD_ORIENTATION": tt_lib.tensor.ShardOrientation.COL_MAJOR,
+            "QKV_INTERLEAVED": 8,
+            "OP8_SOFTMAX_ATTENTION_MASK_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            "OP1_FUSED_QKV_MM_INPUT_SHARDED_MEMCFG": SHARDED_MEMCFG,
+            "OP1_FUSED_QKV_MM_INPUT_MEMCFG": L1_MEMCFG,
+            "OP8_SOFTMAX_ATTENTION_MASK_MEMCFG": L1_MEMCFG,
+            "INPUT_EMBEDDINGS_MEMCFG": L1_MEMCFG,
+            "OUTPUT_EMBEDDINGS_MEMCFG": L1_MEMCFG,
+            "QA_LINEAR_OUTPUT_MEMCFG": L1_MEMCFG,
+            "EMBEDDINGS_LAYERNORM_GAMMA_MEMCFG": DRAM_MEMCFG,
+            "EMBEDDINGS_LAYERNORM_BETA_MEMCFG": DRAM_MEMCFG,
+            "OP12_LAYERNORM_GAMMA_MEMCFG": DRAM_MEMCFG,
+            "OP12_LAYERNORM_BETA_MEMCFG": DRAM_MEMCFG,
+            "OP15_LAYERNORM_GAMMA_MEMCFG": DRAM_MEMCFG,
+            "OP15_LAYERNORM_BETA_MEMCFG": DRAM_MEMCFG,
+            "RESERVE_SPLIT_HEADS_SHAPE": [1, 1, 1, 153 * 1024 // 2],
+            "OP1_FUSED_QKV_MM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=6,
+                per_core_M=12,
+                per_core_N=12,
+                transpose_mcast=True,
+                fused_activation=None,
+            ),
+            "OP7_PRE_SOFTMAX_BMM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                in0_block_w=2,
+                out_subblock_h=1,
+                out_subblock_w=6,
+                per_core_M=24,
+                per_core_N=12,
+            ),
+            "OP9_POST_SOFTMAX_BMM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                in0_block_w=12,
+                out_subblock_h=4,
+                out_subblock_w=2,
+                per_core_M=24,
+                per_core_N=2,
+            ),
+            "OP11_SELFOUT_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                in0_block_w=4,
+                out_subblock_h=2,
+                out_subblock_w=4,
+                per_core_M=12,
+                per_core_N=4,
+                transpose_mcast=True,
+                fused_activation=None,
+            ),
+            "OP13_FF1_MM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=8,
+                per_core_M=12,
+                per_core_N=16,
+                transpose_mcast=True,
+                fused_activation=(tt_lib.tensor.FusibleActivation.GELU, True),
+            ),
+            "OP14_FF2_MM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                in0_block_w=16,
+                out_subblock_h=2,
+                out_subblock_w=4,
+                per_core_M=12,
+                per_core_N=4,
+                transpose_mcast=True,
+                fused_activation=None,
+            ),
+            "OP12_LAYERNORM_CONFIG": tt_lib.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                subblock_w=4,
+                block_h=12,
+                block_w=4,
+                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+                im_data_format=tt_lib.tensor.DataType.BFLOAT16,
+                out_data_format=dtype,
+                inplace=True,
+            ),
+            "OP15_LAYERNORM_CONFIG": tt_lib.operations.primary.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                subblock_w=4,
+                block_h=12,
+                block_w=4,
+                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+                im_data_format=tt_lib.tensor.DataType.BFLOAT16,
+                out_data_format=dtype,
+                inplace=True,
+            ),
+            "OP8_SOFTMAX_CONFIG": tt_lib.operations.primary.transformers.SoftmaxShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                subblock_w=6,
+                block_h=24,
+                block_w=12,
+                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+                im_data_format=tt_lib.tensor.DataType.BFLOAT16,
+            ),
         }
         model_config.update(new_config_values)
 
