@@ -1406,3 +1406,64 @@ def test_sharded_matmul_no_mcast(
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
     assert passing
+
+
+@pytest.mark.parametrize("in0_sharded, out_sharded", [[True, True], [False, False]], ids=["sharded", "unsharded"])
+@pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_concat_heads(
+    device,
+    in0_sharded,
+    out_sharded,
+    activations_dtype,
+    function_level_defaults,
+):
+    grid_size = (12, 8)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
+    num_cores = grid_size[0] * grid_size[1]
+    B = 12
+    num_heads = 16
+    seq_len = 384
+    head_dim = 64
+
+    in0_shape = [B, num_heads, seq_len, head_dim]
+
+    interleaved_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
+        buffer_type=ttl.tensor.BufferType.DRAM,
+    )
+    sharded_mem_config = ttl.tensor.MemoryConfig(
+        memory_layout=ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttl.tensor.BufferType.L1,
+    )
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+
+    in0_t = torch2tt_tensor(in0, device, tt_memory_config=interleaved_mem_config, tt_dtype=activations_dtype)
+
+    output_mem_config = sharded_mem_config if out_sharded else interleaved_mem_config
+
+    if in0_sharded:
+        in0_t = ttl.tensor.interleaved_to_sharded(
+            in0_t,
+            grid_size,
+            [B * num_heads * seq_len // num_cores, head_dim],
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttl.tensor.ShardOrientation.COL_MAJOR,
+        )
+
+    output_t = ttl.tensor.nlp_concat_heads(
+        in0_t,
+        output_mem_config=output_mem_config,
+    )
+    if out_sharded:
+        output_t = ttl.tensor.sharded_to_interleaved(output_t, interleaved_mem_config)
+
+    pt_out = torch.transpose(in0, -3, -2).reshape([B, 1, seq_len, num_heads * head_dim])
+
+    tt_out = tt2torch_tensor(output_t)
+
+    passing, output = comp_pcc(pt_out, tt_out)
+    logger.info(output)
+    assert passing
