@@ -1,3 +1,9 @@
+/*
+ * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+*/
+
 #pragma once
 #include "llk_io_unpack.h"
 #include "llk_param_structs.h"

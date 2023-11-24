@@ -79,55 +79,40 @@ inline void _llk_unpack_AB_matmul_init_(
     _llk_unpack_AB_matmul_mop_config_(transpose>0);
 }
 
-inline void _llk_unpack_AB_matmul_(
-    const std::uint32_t inputA, const std::uint32_t inputB, const std::uint32_t base_address_a, const std::uint32_t base_address_b,
-    const std::uint32_t unpA_src_format, const std::uint32_t unpB_src_format, const std::uint32_t tile_index_a, const std::uint32_t tile_index_b,
-    const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
+inline void _llk_unpack_AB_matmul_(const std::uint32_t address_a, const std::uint32_t address_b) {
 
     // Todo: do something with tile dim flags
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
-    for (std::uint32_t rt=0; rt<rt_dim; rt++) {
-        std::uint32_t offset_address_a = MUL_TILE_SIZE_AND_INDEX(unpA_src_format, (tile_index_a + rt*kt_dim));
-        std::uint32_t address_a = base_address_a + offset_address_a;
+    // Clear z/w start counters
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
-        for (std::uint32_t ct=0; ct<ct_dim; ct++) {
+    // Wait for free context
+    wait_for_next_context(2);
 
-            std::uint32_t offset_address_b = MUL_TILE_SIZE_AND_INDEX(unpB_src_format, (tile_index_b+ct));
-            std::uint32_t address_b = base_address_b + offset_address_b;
+    // Program srcA and srcB base addresses
+    if (0 == unp_cfg_context) {
+        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_b;
+        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_a;
+    } else {
+        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_b;
+        cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_a;
+    }
 
-            // Clear z/w start counters
-            TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    semaphore_post(semaphore::UNPACK_SYNC);  // Trisc::SEMPOST for context acquire
 
-            // Wait for free context
-            wait_for_next_context(2);
+    // Run MOP
+    mop_run(0, 2);
 
-            // Program srcA and srcB base addresses
-            if (0 == unp_cfg_context) {
-                cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_b;
-                cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_a;
-            } else {
-                cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_b;
-                cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_a;
-            }
+    // T6::SEMGET for context release
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
 
-            semaphore_post(semaphore::UNPACK_SYNC);  // Trisc::SEMPOST for context acquire
+    // Switch unpacker config context
+    switch_config_context(unp_cfg_context);
 
-            // Stall unpacker until pending CFG writes from Trisc have completed
-            // TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
-
-            // Run MOP
-            mop_run(0, 2);
-
-            // T6::SEMGET for context release
-            t6_semaphore_get(semaphore::UNPACK_SYNC);
-
-            // Switch unpacker config context
-            switch_config_context(unp_cfg_context);
-
-            #ifdef PERF_DUMP
-                first_unpack_recorded = true;
-            #endif
-        }    
-    }    
+    #ifdef PERF_DUMP
+        first_unpack_recorded = true;
+    #endif
+      
+    
 }
