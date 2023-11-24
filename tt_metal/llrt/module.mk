@@ -1,6 +1,4 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
-
-LLRT_LIB = $(LIBDIR)/libllrt.a
 LLRT_DEFINES =
 LLRT_INCLUDES = $(COMMON_INCLUDES) -I$(TT_METAL_HOME)/tt_metal/llrt
 LLRT_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
@@ -22,11 +20,7 @@ LLRT_DEPS = $(addprefix $(OBJDIR)/, $(LLRT_SRCS:.cpp=.d))
 -include $(LLRT_DEPS)
 
 # Each module has a top level target as the entrypoint which must match the subdir name
-llrt: $(LLRT_LIB)
-
-$(LLRT_LIB): $(COMMON_LIB) $(LLRT_OBJS) $(DEVICE_LIB)
-	@mkdir -p $(@D)
-	ar rcs -o $@ $(LLRT_OBJS)
+llrt: $(LLRT_OBJS) $(DEVICE_OBJS) $(COMMON_OBJS)
 
 $(OBJDIR)/tt_metal/llrt/%.o: tt_metal/llrt/%.cpp
 	@mkdir -p $(@D)
