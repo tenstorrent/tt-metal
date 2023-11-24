@@ -3,7 +3,7 @@
 'pytest --disable-warnings models/demos/resnet/demo/demo.py::test_demo_sample[8-models/demos/resnet/demo/images/]'
 ; where 8 is the batch size, and 'models/demos/resnet/demo/images/' is where the images are located. Our model supports batch size of 2 and 1 as well, however the demo focuses on batch size 8 which has the highest throughput among the three options. This demo includes preprocessing, postprocessing and inference time for batch size 8. The demo will run the images through the inference twice. First, to capture the compile time, and cache all the ops, Second, to capture the best inference time on TT hardware.
 + Our second demo is designed to run ImageNet dataset, run this with
-'pytest --disable-warnings models/demos/resnet/demo/demo.py::test_demo_imagenet[8, 400]'
+'pytest --disable-warnings models/demos/resnet/demo/demo.py::test_demo_imagenet[8-400]'
 ; again 8 refer to batch size here and 400 is number of iterations(batches), hence the model will process 400 batch of size 8, total of 3200 images.
 
 # Inputs
