@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cmath>
 #include <map>
 #include <optional>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -24,19 +22,6 @@ namespace operations {
 
 namespace primary {
 
-namespace {
-inline std::tuple<uint32_t, float, bool> get_p_decimal_p_is_negative(float norm_type) {
-    const auto ord = 1.0f / norm_type;
-    auto p = std::floor(ord);
-    auto decimal = ord - p;
-    const bool p_is_negative = p < 0.0f;
-    if (p_is_negative) {
-        p = -p;
-    }
-    return std::make_tuple(static_cast<uint32_t>(p), decimal, p_is_negative);
-}
-}  // namespace
-
 operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(
     const Tensor& tmp_pow_sum, float norm_type, const Tensor& total_norm) {
     ////////////////////////////////////////////////////////////////////////////
@@ -50,7 +35,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(
     ////////////////////////////////////////////////////////////////////////////
     const auto num_tiles = tmp_pow_sum.volume() / TILE_HW;
 
-    auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(norm_type);
+    auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(1.0f / norm_type);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -142,7 +127,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(
                                               const std::vector<Tensor>&) {
         const auto norm_type = static_cast<const MorehClipGradNormStep2*>(operation)->norm_type;
 
-        auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(norm_type);
+        auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(1.0f / norm_type);
 
         const auto input_address = input_tensors.at(0).buffer()->address();
         const auto output_address = input_tensors.at(1).buffer()->address();

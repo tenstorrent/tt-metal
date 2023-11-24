@@ -2,11 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cmath>
 #include <functional>
 #include <map>
 #include <optional>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -24,18 +22,6 @@ namespace tt {
 namespace operations {
 
 namespace primary {
-
-namespace {
-inline std::tuple<uint32_t, float, bool> get_p_decimal_p_is_negative(float norm_type) {
-    auto p = std::floor(norm_type);
-    auto decimal = norm_type - p;
-    const bool p_is_negative = p < 0.0f;
-    if (p_is_negative) {
-        p = -p;
-    }
-    return std::make_tuple(static_cast<uint32_t>(p), decimal, p_is_negative);
-}
-}  // namespace
 
 operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
     const std::vector<Tensor>& inputs,

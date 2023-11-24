@@ -24,6 +24,8 @@ namespace primary {
 
 using namespace tt_metal;
 
+std::tuple<uint32_t, float, bool> get_p_decimal_p_is_negative(float ord);
+
 struct MorehClipGradNormStep1 {
     float norm_type;
     uint32_t tile_offset_of_tmp_pow_sum;

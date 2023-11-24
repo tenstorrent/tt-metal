@@ -32,14 +32,25 @@ inline uint32_t get_num_device_cores(Device *device) {
 }
 }  // namespace
 
+std::tuple<uint32_t, float, bool> get_p_decimal_p_is_negative(float ord) {
+    auto p = std::floor(ord);
+    auto decimal = ord - p;
+    const bool p_is_negative = p < 0.0f;
+    if (p_is_negative) {
+        p = -p;
+    }
+    return std::make_tuple(static_cast<uint32_t>(p), decimal, p_is_negative);
+}
+
 void MorehClipGradNormStep1::validate(
     const std::vector<Tensor> &input_tensors,
     const std::vector<std::optional<const Tensor>> &optional_input_tensors) const {
-    for (const auto input : input_tensors) {
+    for (const auto &input : input_tensors) {
         check_tensor(input, "moreh_clip_grad_norm_step1");
     }
 
-    check_tensor(optional_input_tensors.at(0).value(), "moreh_clip_grad_norm_step1");
+    const auto &tmp_pow_sum = optional_input_tensors.at(0).value();
+    check_tensor(tmp_pow_sum, "moreh_clip_grad_norm_step1");
 };
 
 std::vector<Shape> MorehClipGradNormStep1::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
@@ -80,9 +91,11 @@ void moreh_clip_grad_norm_step1(const std::vector<Tensor> &inputs, float norm_ty
 }
 
 void MorehClipGradNormStep2::validate(const std::vector<Tensor> &input_tensors) const {
-    for (const auto input : input_tensors) {
-        check_tensor(input, "moreh_clip_grad_norm_step2");
-    }
+    const auto &tmp_pow_sum = input_tensors.at(0);
+    check_tensor(tmp_pow_sum, "moreh_clip_grad_norm_step2");
+
+    const auto &total_norm = input_tensors.at(1);
+    check_tensor(total_norm, "moreh_clip_grad_norm_step2");
 }
 
 std::vector<Shape> MorehClipGradNormStep2::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
@@ -103,11 +116,12 @@ void moreh_clip_grad_norm_step2(const Tensor &tmp_pow_sum, float norm_type, cons
 void MorehClipGradNormStep3::validate(
     const std::vector<Tensor> &input_tensors,
     const std::vector<std::optional<const Tensor>> &optional_input_tensors) const {
-    for (const auto input : input_tensors) {
+    for (const auto &input : input_tensors) {
         check_tensor(input, "moreh_clip_grad_norm_step3");
     }
 
-    check_tensor(optional_input_tensors.at(0).value(), "moreh_clip_grad_norm_step3");
+    const auto &clip_coef_clamped = optional_input_tensors.at(0).value();
+    check_tensor(clip_coef_clamped, "moreh_clip_grad_norm_step3");
 }
 
 std::vector<Shape> MorehClipGradNormStep3::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
@@ -190,9 +204,9 @@ Tensor moreh_clip_grad_norm_impl(
     bool error_if_nonfinite,
     const std::optional<std::reference_wrapper<const Tensor>> total_norm,
     const MemoryConfig &output_mem_config) {
-    // Create tmp_pow_sum[1, 1, Ht, Wt * total_num_inputs]
+    // Create tmp_pow_sum[1, 1, TILE_HEIGHT, TILE_WIDTH * total_num_inputs]
     const auto total_num_inputs = static_cast<uint32_t>(inputs.size());
-    Shape tmp_pow_sum_shape{1, 1, TILE_HEIGHT, total_num_inputs * TILE_WIDTH};
+    Shape tmp_pow_sum_shape{1, 1, TILE_HEIGHT, TILE_WIDTH * total_num_inputs};
     const auto &tmp_pow_sum =
         create_device_tensor(tmp_pow_sum_shape, inputs.at(0).dtype(), Layout::TILE, inputs.at(0).device());
 
@@ -202,8 +216,8 @@ Tensor moreh_clip_grad_norm_impl(
     }
 
     // Create total_norm[1, 1, 1, 1]
-    Padding padding = Padding({{0, 0}, {0, 0}, {0, TILE_HEIGHT - 1}, {0, TILE_WIDTH - 1}}, Padding::PadValue::Zero);
-    Shape total_norm_shape = Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}, padding);
+    Padding padding{{{0, 0}, {0, 0}, {0, TILE_HEIGHT - 1}, {0, TILE_WIDTH - 1}}, Padding::PadValue::Zero};
+    Shape total_norm_shape{{1, 1, TILE_HEIGHT, TILE_WIDTH}, padding};
     const auto &created_total_norm = create_device_tensor(
         total_norm_shape, inputs.at(0).dtype(), Layout::TILE, inputs.at(0).device(), output_mem_config);
 
