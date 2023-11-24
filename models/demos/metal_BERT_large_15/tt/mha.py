@@ -78,9 +78,8 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
         if num_heads == 1:
             return x
         else:
-            retval = tt_lib.operations.primary.transformers.concatenate_heads(
+            retval = tt_lib.tensor.nlp_concat_heads(
                 x,
-                tt_lib.tensor.CoreCoord(12, 9),
                 output_mem_config=model_config["OP10_CONCATENATE_ATTENTION_HEADS_OUTPUT_MEMCFG"],
             )
             return retval

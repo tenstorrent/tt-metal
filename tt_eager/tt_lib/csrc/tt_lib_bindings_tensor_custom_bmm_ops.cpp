@@ -127,11 +127,9 @@ namespace tt::tt_metal::detail
             py::arg().noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Shuffles [B, 1, S, 4672] fused qkv matrix into 3 heads with shapes [B, 71, S, 64], [B, 1, S, 64], and [B, 1, S, 64].
         )doc");
-        // TODO: Uplift nlp_concat_heads to support generic num_heads and head_dim
-        // This op should support arbitrary B and S divisible by 32 on DRAM; on L1, might error out due to space
         m_tensor.def("nlp_concat_heads", &nlp_concat_heads,
             py::arg().noconvert(), py::arg("output_mem_config") = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Shuffles [B, 71, S, 64] tensor into tensor with shape [B, 1, S, 4544].
+            Shuffles [B, num_heads, S, head_dim] tensor into tensor with shape [B, 1, S, num_heads * head_dim].
         )doc");
 
         // Custom Resnet matmuls
