@@ -5,6 +5,7 @@
 
 import torch
 from typing import Optional
+from functools import partial
 
 import tt_lib
 from models.demos.metal_BERT_large_15.tt.mha import TtMultiHeadAttentionModel
@@ -12,9 +13,8 @@ from models.demos.metal_BERT_large_15.tt.ffn import TtFeedForwardModel
 from tt_lib.utils import pad_weight
 
 
-class TtBertEncoder(torch.nn.Module):
+class TtBertEncoder:
     def __init__(self, config, encoder_idx, state_dict, device, model_config, tt_cache_path):
-        super().__init__()
         self.device = device
         self.model_config = model_config
 
@@ -138,44 +138,73 @@ class TtBertEncoder(torch.nn.Module):
 
         self.layer_norm_eps = config.layer_norm_eps
 
+        if "OP11_SELFOUT_CONFIG" in model_config:
+            self.selfout_matmul = partial(
+                tt_lib.operations.primary.matmul,
+                program_config=model_config["OP11_SELFOUT_CONFIG"],
+                output_mem_config=model_config["OP11_SELFOUT_OUTPUT_MEMCFG"],
+                output_dtype=model_config["OP11_SELFOUT_OUTPUT_DTYPE"],
+            )
+        else:
+            self.selfout_matmul = partial(
+                tt_lib.tensor.bert_large_selfout_matmul,
+                output_mem_config=model_config["OP11_SELFOUT_OUTPUT_MEMCFG"],
+                output_dtype=model_config["OP11_SELFOUT_OUTPUT_DTYPE"],
+            )
+        if "OP12_LAYERNORM_CONFIG" in model_config:
+            self.mha_layernorm = partial(
+                tt_lib.operations.primary.add_layernorm,
+                program_config=model_config["OP12_LAYERNORM_CONFIG"],
+                output_mem_config=model_config["OP12_LAYERNORM_OUTPUT_MEMCFG"],
+            )
+        else:
+            self.mha_layernorm = partial(
+                tt_lib.operations.primary.add_layernorm,
+                output_mem_config=model_config["OP12_LAYERNORM_OUTPUT_MEMCFG"],
+            )
+        if "OP15_LAYERNORM_CONFIG" in model_config:
+            self.ffn_layernorm = partial(
+                tt_lib.operations.primary.add_layernorm,
+                program_config=model_config["OP15_LAYERNORM_CONFIG"],
+                output_mem_config=model_config["OP15_LAYERNORM_OUTPUT_MEMCFG"],
+            )
+        else:
+            self.ffn_layernorm = partial(
+                tt_lib.operations.primary.add_layernorm,
+                output_mem_config=model_config["OP15_LAYERNORM_OUTPUT_MEMCFG"],
+            )
+
     def op11_mm_plus_bias(self, mha_res, attention_output_weight, attention_output_bias):
-        mha_out = tt_lib.tensor.bert_large_selfout_matmul(
+        mha_out = self.selfout_matmul(
             mha_res,
             attention_output_weight,
-            attention_output_bias,
-            output_mem_config=self.model_config["OP11_SELFOUT_OUTPUT_MEMCFG"],
-            output_dtype=self.model_config["OP11_SELFOUT_OUTPUT_DTYPE"],
+            bias=attention_output_bias,
         )
         return mha_out
 
     def op12_add_layernorm(self, activation, mha_out):
-        mha_out_add_and_norm = tt_lib.operations.primary.add_layernorm(
+        mha_out_add_and_norm = self.mha_layernorm(
             activation,
             mha_out,
             self.layer_norm_eps,
             self.mha_gamma,
             self.mha_beta,
-            output_mem_config=self.model_config["OP12_LAYERNORM_OUTPUT_MEMCFG"],
         )
         return mha_out_add_and_norm
 
     def op15_add_layernorm(self, mha_out_add_and_norm, ffn_out):
-        ffn_out_add_and_norm = tt_lib.operations.primary.add_layernorm(
+        ffn_out_add_and_norm = self.ffn_layernorm(
             mha_out_add_and_norm,
             ffn_out,
             self.layer_norm_eps,
             self.ffn_gamma,
             self.ffn_beta,
-            output_mem_config=self.model_config["OP15_LAYERNORM_OUTPUT_MEMCFG"],
         )
         return ffn_out_add_and_norm
 
-    def forward(
+    def __call__(
         self, activation: tt_lib.tensor.Tensor, attention_mask: Optional[tt_lib.tensor.Tensor] = None
     ) -> tt_lib.tensor.Tensor:
-        activation_shape = activation.shape()
-        assert activation_shape == [activation_shape[0], 1, 384, 1024], activation.shape()
-
         # MHA - OP1 - OP10 ------------------------------->
         mha_res = self.mha(activation, attention_mask)
         # Don't deallocate activations here since it is used by more ops

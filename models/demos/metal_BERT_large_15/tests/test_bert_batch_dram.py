@@ -130,6 +130,9 @@ def run_bert_question_and_answering_inference(
     tt_lib.device.Synchronize()
     profiler.end("first_model_run_with_compile", force_enable=True)
     del tt_out
+    del tt_embedding
+    del tt_attention_mask
+    del tt_embedding_inputs
 
     # Recreate inputs since activations were deallocated
     tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
@@ -231,6 +234,7 @@ def run_bert_question_and_answering_inference(
         (9, "BFLOAT16-L1"),
         (9, "MIXED_PRECISION_BATCH9"),
         (8, "MIXED_PRECISION_BATCH8"),
+        (12, "BFLOAT8_B-SHARDED_BATCH12"),
     ),
     ids=[
         "batch_9-BFLOAT8_B-DRAM",
@@ -239,6 +243,7 @@ def run_bert_question_and_answering_inference(
         "batch_9-BFLOAT16-L1",
         "batch_9-MIXED_PRECISION_BATCH9",
         "batch_8-MIXED_PRECISION_BATCH8",
+        "batch_12-BFLOAT8_B-SHARDED_BATCH12",
     ],
 )
 @pytest.mark.parametrize(
@@ -309,6 +314,7 @@ def test_bert_batch_dram(
         (9, "BFLOAT16-L1"),
         (9, "MIXED_PRECISION_BATCH9"),
         (8, "MIXED_PRECISION_BATCH8"),
+        (12, "BFLOAT8_B-SHARDED_BATCH12"),
     ),
     ids=[
         "batch_9-BFLOAT8_B-DRAM",
@@ -317,6 +323,7 @@ def test_bert_batch_dram(
         "batch_9-BFLOAT16-L1",
         "batch_9-MIXED_PRECISION_BATCH9",
         "batch_8-MIXED_PRECISION_BATCH8",
+        "batch_12-BFLOAT8_B-SHARDED_BATCH12",
     ],
 )
 @pytest.mark.parametrize(
@@ -378,8 +385,9 @@ def test_bert_batch_dram_with_program_cache(
         device,
     )
 
-    if batch == 8 and model_config_str == "MIXED_PRECISION_BATCH8":
+    if batch == 12 and model_config_str == "BFLOAT8_B-SHARDED_BATCH12":
+        assert tt_lib.program_cache.num_entries() == 19
+    elif batch == 8 and model_config_str == "MIXED_PRECISION_BATCH8":
         assert tt_lib.program_cache.num_entries() == 17
-
     else:
         assert tt_lib.program_cache.num_entries() == 16

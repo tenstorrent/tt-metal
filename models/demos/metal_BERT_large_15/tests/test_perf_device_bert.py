@@ -20,6 +20,7 @@ from tt_metal.tools.profiler.process_model_log import (
     [
         # [9, "BERT_LARGE-batch_9-MIXED_PRECISION_BATCH9", 70],
         [8, "BERT_LARGE-batch_8-MIXED_PRECISION_BATCH8", 160],
+        [12, "BERT_LARGE-batch_12-BFLOAT8_B-SHARDED_BATCH12", 160],
     ],
 )
 def test_perf_device_bare_metal(batch_size, test, expected_perf):

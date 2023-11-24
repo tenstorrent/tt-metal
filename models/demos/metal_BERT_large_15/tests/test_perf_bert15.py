@@ -20,14 +20,14 @@ from models.utility_functions import (
     is_e75,
 )
 
-BATCH_SIZE = 8
+BATCH_SIZE = 12
 model_version = "phiyodr/bert-large-finetuned-squad2"
 comments = "Large"
 seq_len = 384
 real_input = True
 attention_mask = True
 token_type_ids = True
-model_config_str = "MIXED_PRECISION_BATCH8"
+model_config_str = "BFLOAT8_B-SHARDED_BATCH12"
 
 
 def run_perf_bert15(expected_inference_time, expected_compile_time, model_location_generator, device):

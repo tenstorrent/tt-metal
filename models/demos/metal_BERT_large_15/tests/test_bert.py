@@ -157,6 +157,7 @@ def run_bert_question_and_answering_inference(
         (9, "BFLOAT16-L1"),
         (9, "MIXED_PRECISION_BATCH9"),
         (8, "MIXED_PRECISION_BATCH8"),
+        (12, "BFLOAT8_B-SHARDED_BATCH12"),
     ),
     ids=[
         "batch_9-BFLOAT8_B-DRAM",
@@ -165,6 +166,7 @@ def run_bert_question_and_answering_inference(
         "batch_9-BFLOAT16-L1",
         "batch_9-MIXED_PRECISION_BATCH9",
         "batch_8-MIXED_PRECISION_BATCH8",
+        "batch_12-BFLOAT8_B-SHARDED_BATCH12",
     ],
 )
 @pytest.mark.parametrize(

@@ -57,9 +57,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
     bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
     uint32_t last_dim = 3;
-    uint32_t element_size_in_bytes = 2; // size of float
-    if(!weights_dtype_is_bfloat16)
-        element_size_in_bytes = 1; //bfp8_b
+    uint32_t element_size_in_bytes = weights.element_size(); // size of float
 
     // row major, page size is last dim
     uint32_t single_page_size = weights.shape()[last_dim]*element_size_in_bytes;
@@ -107,17 +105,19 @@ operation::ProgramWithCallbacks embeddings_tilized(
     //Create Buffers
 
     uint32_t num_tiles_per_block = weights.shape()[3] / TILE_WIDTH;
-    tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(weights.dtype());
+    uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
+    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
+    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
     uint32_t src0_cb_index = 0;
-    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_tiles_per_block * single_tile_size, {{src0_cb_index, cb_data_format}})
-		.set_page_size(src0_cb_index, single_tile_size);
+    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_tiles_per_block * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
+		.set_page_size(src0_cb_index, input_single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t output_cb_index = 16; // output operands start at index 16
-    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_tiles_per_block * single_tile_size, {{output_cb_index, cb_data_format}})
-		.set_page_size(output_cb_index, single_tile_size);
+    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_tiles_per_block * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
+		.set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     bool weight_stick_size_is_power_of_two = is_power_of_two_at_least_32(single_page_size);
@@ -329,9 +329,7 @@ operation::ProgramWithCallbacks embeddings_rm(
     bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
 
     uint32_t last_dim = 3;
-    uint32_t element_size_in_bytes = 2; // size of float
-    if(!weights_dtype_is_bfloat16)
-        element_size_in_bytes = 1; //bfp8_b
+    uint32_t element_size_in_bytes = a.element_size();
 
     // row major, page size is last dim
     uint32_t single_page_size = weights.shape()[last_dim]*element_size_in_bytes;
@@ -535,14 +533,16 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const  {
     TT_FATAL(a.layout() == Layout::ROW_MAJOR);
     TT_FATAL(weights.layout() == Layout::ROW_MAJOR);
     TT_FATAL(a.dtype() == DataType::UINT32, "Input must be UIN32");
-    TT_FATAL(weights.dtype() == DataType::BFLOAT16 ||
-            weights.dtype() == DataType::BFLOAT8_B);
+    TT_FATAL(weights.dtype() == DataType::BFLOAT16);
 
 
     TT_FATAL(weights.shape()[0] == 1 && weights.shape()[1] == 1,
                 "First two dimensions for the weights must be 1");
     if(this->tilized){
+        TT_FATAL(a.shape()[2] % TILE_HEIGHT == 0);
         TT_FATAL(weights.shape()[3] % TILE_WIDTH == 0, "Number of columns in table must be factor of tile width");
+    } else {
+        TT_FATAL(this->output_dtype != DataType::BFLOAT8_B);
     }
     TT_FATAL(a.shape()[1] == 1 && a.shape()[3] == 1, "Only dim 0 && 2 for the input can be non 1");
 }
@@ -562,12 +562,12 @@ std::vector<Tensor> Embeddings::create_output_tensors(const std::vector<Tensor> 
     const auto& weight_tensor = input_tensors.at(1);
     if(!tilized){
     return operation::generic_create_output_tensors(*this, input_tensors,
-                                                weight_tensor.dtype(), Layout::ROW_MAJOR,
+                                                this->output_dtype, Layout::ROW_MAJOR,
                                                 this->output_mem_config);
     }
     else{
     return operation::generic_create_output_tensors(*this, input_tensors,
-                                                weight_tensor.dtype(), Layout::TILE,
+                                                this->output_dtype, Layout::TILE,
                                                 this->output_mem_config);
     }
 }
@@ -587,6 +587,7 @@ tt::stl::reflection::Attributes Embeddings::attributes() const {
         {"output_mem_config", this->output_mem_config},
         {"split_weights", this->split_weights},
         {"tilized", this->tilized},
+        {"output_dtype", this->output_dtype}
     };
 }
 
