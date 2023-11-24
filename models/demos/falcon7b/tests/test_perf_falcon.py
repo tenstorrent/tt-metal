@@ -334,13 +334,6 @@ def run_test_FalconCausalLM_end_to_end(
     logger.info(f"falcon {comment} inference time: {second_iter_time}")
     logger.info(f"falcon {comment} compile time: {compile_time}")
 
-    if does_pass:
-        logger.info("Falcon CausalLM Passed!")
-    else:
-        logger.warning("Falcon CausalLM Failed!")
-        # TODO: Fix PCC for decode and uncomment this
-        # assert does_pass, f"PCC value is lower than {pcc}"
-
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
