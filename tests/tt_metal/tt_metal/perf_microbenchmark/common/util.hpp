@@ -71,7 +71,7 @@ inline T calculate_average(const std::vector<T> &vec, bool skip_first_run = true
         return static_cast<T>(0);
     }
 
-    int index = (skip_first_run) ? (1) : (0);
+    int index = (skip_first_run && vec.size() != 1) ? (1) : (0);
     T sum = std::accumulate(vec.begin() + index, vec.end(), static_cast<T>(0));
     T average = sum / (vec.size() - index);
     return average;
