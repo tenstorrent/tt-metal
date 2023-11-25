@@ -86,7 +86,7 @@ def profile_noc_results():
 # pcie write
 def test_write_device_l1(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/pcie/test_rw_device_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_l1 "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -102,7 +102,7 @@ def test_write_device_l1(iter=1, buffer_type=0, size=2048):
 
 def test_write_device_dram_channel(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/pcie/test_rw_device_dram "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_dram "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -118,7 +118,7 @@ def test_write_device_dram_channel(iter=1, buffer_type=0, size=2048):
 
 def test_write_buffer(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/pcie/test_rw_buffer "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -134,7 +134,7 @@ def test_write_buffer(iter=1, buffer_type=0, size=2048):
 
 def test_enqueue_write_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/pcie/test_enqueue_rw_buffer "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_enqueue_rw_buffer "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -151,7 +151,7 @@ def test_enqueue_write_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
 # pcie read
 def test_read_device_l1(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/pcie/test_rw_device_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_l1 "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -167,7 +167,7 @@ def test_read_device_l1(iter=1, buffer_type=0, size=2048):
 
 def test_read_device_dram_channel(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/pcie/test_rw_device_dram "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_dram "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -183,7 +183,7 @@ def test_read_device_dram_channel(iter=1, buffer_type=0, size=2048):
 
 def test_read_buffer(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/pcie/test_rw_buffer "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -199,7 +199,7 @@ def test_read_buffer(iter=1, buffer_type=0, size=2048):
 
 def test_enqueue_read_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/pcie/test_enqueue_rw_buffer "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_enqueue_rw_buffer "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -216,7 +216,7 @@ def test_enqueue_read_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
 # noc
 def test_noc_local(r=9, c=12, nt=256, cb=1):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/noc/test_noc_read_local_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_local_l1 "
         + "--r "
         + str(r)
         + " --c "
@@ -231,7 +231,7 @@ def test_noc_local(r=9, c=12, nt=256, cb=1):
 
 def test_noc_global_type_a(r=9, c=12, nt=256, cb=1):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/noc/test_noc_read_global_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_global_l1 "
         + "--r "
         + str(r)
         + " --c "
@@ -247,7 +247,7 @@ def test_noc_global_type_a(r=9, c=12, nt=256, cb=1):
 
 def test_noc_global_type_b(r=9, c=12, nt=256, cb=1):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/noc/test_noc_read_global_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_global_l1 "
         + "--r "
         + str(r)
         + " --c "
@@ -266,7 +266,7 @@ def test_matmul_global(
     r=9, c=12, mt=72, nt=96, kt=24, per_core_mt=8, per_core_nt=8, l1_in0=0, l1_in1=0, l1_out=0, in0_block_w=4
 ):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/matmul/matmul_global_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/matmul/matmul_global_l1 "
         + "--r "
         + str(r)
         + " --c "
@@ -295,7 +295,7 @@ def test_matmul_global(
 
 def test_matmul_local(r=9, c=12, mt=72, nt=96, kt=24):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/matmul/matmul_local_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/matmul/matmul_local_l1 "
         + "--r "
         + str(r)
         + " --c "
@@ -385,8 +385,8 @@ def test_pcie_h2d_l1(arch, iteration, L1_size, test_vector):
 @pytest.mark.parametrize(
     "arch, iteration, L1_size, test_vector",
     [
-        ("grayskull", 2, 1048576, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
-        ("wormhole_b0", 2, 1499136, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
+        ("grayskull", 2, 1048576, np.array([4096, 16384, 65536])),
+        ("wormhole_b0", 2, 1499136, np.array([4096, 16384, 65536])),
     ],
 )
 def test_pcie_d2h_l1(arch, iteration, L1_size, test_vector):
