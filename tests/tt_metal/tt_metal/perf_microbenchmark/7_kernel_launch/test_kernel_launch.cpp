@@ -5,11 +5,13 @@
 #include <algorithm>
 #include <functional>
 #include <random>
+#include <vector>
 
 #include "common/bfloat16.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -26,6 +28,7 @@ using std::chrono::microseconds;
 //     --cores-c <number of cores in a column>
 //     --core-groups <number of core groups where each core group executes
 //                    different kernel binaries>
+//     --num-tests <count of tests>
 //     --bypass-check (set to bypass checking performance criteria fulfillment)
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -35,7 +38,7 @@ int main(int argc, char** argv) {
     }
 
     bool pass = true;
-    unsigned long elapsed_us;
+    std::vector<unsigned long> elapsed_us;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Initial Runtime Args Parse
@@ -44,6 +47,7 @@ int main(int argc, char** argv) {
     uint32_t num_cores_r = 0;
     uint32_t num_cores_c = 0;
     uint32_t num_core_groups;
+    uint32_t num_tests = 10;
     bool bypass_check = false;
     try {
         std::tie(num_cores_r, input_args) =
@@ -53,6 +57,9 @@ int main(int argc, char** argv) {
 
         std::tie(num_core_groups, input_args) =
             test_args::get_command_option_uint32_and_remaining_args(input_args, "--core-groups", 4);
+
+        std::tie(num_tests, input_args) =
+            test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-tests", 10);
 
         std::tie(bypass_check, input_args) =
             test_args::has_command_option_and_remaining_args(input_args, "--bypass-check");
@@ -175,13 +182,16 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::detail::CompileProgram(device, program);
 
-        auto t_begin = std::chrono::steady_clock::now();
-        EnqueueProgram(cq, program, false);
-        Finish(cq);
-        auto t_end = std::chrono::steady_clock::now();
-        elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
+        log_info(LogTest, "Num tests {}", num_tests);
+        for (uint32_t i = 0; i < num_tests; ++i) {
+            auto t_begin = std::chrono::steady_clock::now();
+            EnqueueProgram(cq, program, false);
+            Finish(cq);
+            auto t_end = std::chrono::steady_clock::now();
+            elapsed_us.push_back(duration_cast<microseconds>(t_end - t_begin).count());
 
-        log_info(LogTest, "Time elapsed for executing empty kernels: {}us", elapsed_us);
+            log_info(LogTest, "Time elapsed for executing empty kernels: {}us", elapsed_us[i]);
+        }
 
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
@@ -191,20 +201,27 @@ int main(int argc, char** argv) {
     }
 
     // Determine if it passes performance goal
+    auto avg_elapsed_us = calculate_average(elapsed_us);
     if (pass && bypass_check == false) {
         // goal is under 10us
         long target_us = 10;
 
-        if (elapsed_us > target_us) {
+        if (avg_elapsed_us > target_us) {
             pass = false;
             log_error(
                 LogTest,
                 "The kernel launch overhead does not meet the criteria. "
                 "Current: {}us, goal: <{}us",
-                elapsed_us,
+                avg_elapsed_us,
                 target_us);
         }
     }
+
+    // for csv
+    log_info("CSV_MICROBENCHMARK:test_kernel_launch");
+    log_info("CSV_INPUT:num-cores-r:{}:num-cores-c:{}:core-groups:{}", num_cores_r, num_cores_c, num_core_groups);
+    log_info("CSV_OUTPUT:ElapsedTime(us):{}", avg_elapsed_us);
+    log_info("CSV_RESULT:pass:{}", pass);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

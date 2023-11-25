@@ -5,12 +5,13 @@
 #include <algorithm>
 #include <functional>
 #include <random>
+#include <string>
 
 #include "common/bfloat16.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util_device_profiler.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -34,6 +35,7 @@ using std::chrono::microseconds;
 //                      0 for +x, 1 for -y, 2 for -x, and 3 for +y>
 //     --access-type <0 for read access, 1 for write access>
 //     --use-device-profiler (set to use device profiler for measurement)
+//     --num-tests <count of tests>
 //     --bypass-check (set to bypass checking performance criteria fulfillment)
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -43,7 +45,7 @@ int main(int argc, char** argv) {
     }
 
     bool pass = true;
-    double measured_bandwidth = 0;
+    std::vector<double> measured_bandwidth;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Initial Runtime Args Parse
@@ -54,8 +56,9 @@ int main(int argc, char** argv) {
     uint32_t num_tiles = 204800;
     uint32_t noc_index;
     uint32_t noc_direction = 0;
-    uint32_t access_type;
+    uint32_t access_type = 0;
     uint32_t tiles_per_transfer;
+    uint32_t num_tests = 10;
     bool use_device_profiler = false;
     bool bypass_check = false;
     try {
@@ -81,6 +84,9 @@ int main(int argc, char** argv) {
 
         std::tie(use_device_profiler, input_args) =
             test_args::has_command_option_and_remaining_args(input_args, "--use-device-profiler");
+
+        std::tie(num_tests, input_args) =
+            test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-tests", 10);
 
         std::tie(bypass_check, input_args) =
             test_args::has_command_option_and_remaining_args(input_args, "--bypass-check");
@@ -146,16 +152,14 @@ int main(int argc, char** argv) {
         uint32_t cb_src0_index = 0;
         uint32_t cb_src0_addr = L1_UNRESERVED_BASE;
         tt_metal::CircularBufferConfig cb_src0_config =
-            tt_metal::CircularBufferConfig(
-                cb_tiles * single_tile_size, {{cb_src0_index, tt::DataFormat::Float16_b}})
+            tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_src0_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_src0_index, single_tile_size);
         auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
         uint32_t cb_src1_index = 1;
         uint32_t cb_src1_addr = cb_src0_addr + cb_tiles * single_tile_size;
         tt_metal::CircularBufferConfig cb_src1_config =
-            tt_metal::CircularBufferConfig(
-                cb_tiles * single_tile_size, {{cb_src1_index, tt::DataFormat::Float16_b}})
+            tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_src1_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_src1_index, single_tile_size);
         auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
@@ -207,26 +211,29 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::detail::CompileProgram(device, program);
 
-        auto t_begin = std::chrono::steady_clock::now();
-        EnqueueProgram(cq, program, false);
-        Finish(cq);
-        auto t_end = std::chrono::steady_clock::now();
-        unsigned long elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
-        unsigned long elapsed_cc = clock_freq_mhz * elapsed_us;
+        log_info(LogTest, "Num tests {}", num_tests);
+        for (uint32_t i = 0; i < num_tests; ++i) {
+            auto t_begin = std::chrono::steady_clock::now();
+            EnqueueProgram(cq, program, false);
+            Finish(cq);
+            auto t_end = std::chrono::steady_clock::now();
+            unsigned long elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
+            unsigned long elapsed_cc = clock_freq_mhz * elapsed_us;
 
-        log_info(LogTest, "Time elapsed for NOC transfers: {}us ({}cycles)", elapsed_us, elapsed_cc);
+            log_info(LogTest, "Time elapsed for NOC transfers: {}us ({}cycles)", elapsed_us, elapsed_cc);
 
-        if (use_device_profiler) {
-            elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, program);
-            elapsed_us = (double)elapsed_cc / clock_freq_mhz;
-            log_info(LogTest, "Time elapsed using device profiler: {}us ({}cycles)", elapsed_us, elapsed_cc);
+            if (use_device_profiler) {
+                elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, program);
+                elapsed_us = (double)elapsed_cc / clock_freq_mhz;
+                log_info(LogTest, "Time elapsed using device profiler: {}us ({}cycles)", elapsed_us, elapsed_cc);
+            }
+
+            // total transfer amount per core = tile size * number of tiles
+            // NOC bandwidth = total transfer amount per core / elapsed clock cycle
+            measured_bandwidth.push_back((double)single_tile_size * num_tiles / elapsed_cc);
+
+            log_info(LogTest, "Measured NOC bandwidth: {:.3f}B/cc", measured_bandwidth[i]);
         }
-
-        // total transfer amount per core = tile size * number of tiles
-        // NOC bandwidth = total transfer amount per core / elapsed clock cycle
-        measured_bandwidth = (double)single_tile_size * num_tiles / elapsed_cc;
-
-        log_info(LogTest, "Measured NOC bandwidth: {:.3f}B/cc", measured_bandwidth);
 
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
@@ -236,21 +243,37 @@ int main(int argc, char** argv) {
     }
 
     // Determine if it passes performance goal
+    auto avg_measured_bandwidth = calculate_average(measured_bandwidth);
     if (pass && bypass_check == false) {
         // goal is 95% of theoretical peak using a single NOC channel
         // theoretical peak: 32bytes per clock cycle
         double target_bandwidth = 32.0 * 0.9;
-
-        if (measured_bandwidth < target_bandwidth) {
+        if (avg_measured_bandwidth < target_bandwidth) {
             pass = false;
             log_error(
                 LogTest,
                 "The NOC bandwidth does not meet the criteria. "
                 "Current: {:.3f}B/cc, goal: >={:.3f}B/cc",
-                measured_bandwidth,
+                avg_measured_bandwidth,
                 target_bandwidth);
         }
     }
+
+    // for csv
+    log_info("CSV_MICROBENCHMARK:test_noc_adjacent");
+    log_info(
+        "CSV_INPUT:num-cores-r:{}:num-cores-c:{}:num-tiles:{}:tiles-per-transfer:{}:noc-index:{}:noc-direction:{}:"
+        "access-type:{}:use-device-profiler:{}",
+        num_cores_r,
+        num_cores_c,
+        num_tiles,
+        tiles_per_transfer,
+        NOC_INDEXToString(static_cast<NOC_INDEX>(noc_index)),
+        NOC_DIRECTIONToString(static_cast<NOC_DIRECTION>(noc_direction)),
+        ACCESS_TYPEToString(static_cast<ACCESS_TYPE>(access_type)),
+        use_device_profiler);
+    log_info("CSV_OUTPUT:Bandwidth(B/cc):{:.3f}", avg_measured_bandwidth);
+    log_info("CSV_RESULT:pass:{}", pass);
 
     if (pass) {
         log_info(LogTest, "Test Passed");
@@ -258,7 +281,8 @@ int main(int argc, char** argv) {
         log_error(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    // skip for pytest
+    // TT_ASSERT(pass);
 
     return 0;
 }
