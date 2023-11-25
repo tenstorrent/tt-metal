@@ -13,7 +13,8 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util_device_profiler.hpp"
+#include "tt_metal/tools/profiler/op_profiler.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
 ////////////////////////////////////////////////////////////////////////////////
@@ -50,6 +51,7 @@ using namespace tt;
 //     --n <size in elements>
 //     --k <size in elements>
 //     --fast-dispatch (set to use fast dispatch mode)
+//     --num-tests <count of tests>
 //     --bypass-check (set to bypass checking performance criteria fulfillment)
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -157,11 +159,14 @@ int main(int argc, char** argv) {
         uint32_t M;
         uint32_t N;
         uint32_t K;
+        uint32_t num_tests = 10;
         bool fast_dispatch_mode = false;
         try {
             std::tie(M, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--m", 11264);
             std::tie(N, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--n", 3072);
             std::tie(K, input_args) = test_args::get_command_option_uint32_and_remaining_args(input_args, "--k", 768);
+            std::tie(num_tests, input_args) =
+                test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-tests", 10);
             std::tie(fast_dispatch_mode, input_args) =
                 test_args::has_command_option_and_remaining_args(input_args, "--fast-dispatch");
 
@@ -295,42 +300,53 @@ int main(int argc, char** argv) {
         constexpr long long tera_byte = 1000000000000LL;
         int tt_npu_clock = get_tt_npu_clock(device);
         double rpeak_tflops = get_tt_npu_rpeak_tflops(arch, grid_size, tt_npu_clock);
-        double rmax_tflops;
+        std::vector<double> rmax_tflops;
         unsigned long elapsed_us;
         uint64_t num_of_matmul_ops =
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);
         log_debug(LogTest, "number of matmul ops: {}", num_of_matmul_ops);
 
-        if (fast_dispatch_mode == false) {
-            log_debug(LogTest, "calling detail::LaunchProgram");
-            detail::LaunchProgram(device, program);
-            log_debug(LogTest, "detail::LaunchProgram done");
+        log_info(LogTest, "Num tests {}", num_tests);
+        for (uint32_t i = 0; i < num_tests; ++i) {
+            if (fast_dispatch_mode == false) {
+                log_debug(LogTest, "calling detail::LaunchProgram");
+                detail::LaunchProgram(device, program);
+                log_debug(LogTest, "detail::LaunchProgram done");
 
-            uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(device, program);
-            double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
-            auto execution_time = t0_to_any_riscfw_end * cycle_time;
-            rmax_tflops = static_cast<double>(num_of_matmul_ops) / execution_time / tera_byte;
+                uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(device, program);
+                double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
+                auto execution_time = t0_to_any_riscfw_end * cycle_time;
+                rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / execution_time / tera_byte);
 
-            log_debug(LogTest, "cycle time {:.8f}s", cycle_time);
-            log_debug(LogTest, "t0_to_any_riscfw_end {}", t0_to_any_riscfw_end);
-        } else {
-            log_debug(LogTest, "calling EnqueueProgram");
-            std::chrono::duration<double, std::nano> duration;
-            auto t_begin = std::chrono::high_resolution_clock::now();
-            EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
-            Finish(*::detail::GLOBAL_CQ);
-            log_debug(LogTest, "EnqueProgram done");
-            auto t_end = std::chrono::high_resolution_clock::now();
-            duration = t_end - t_begin;
-            rmax_tflops = static_cast<double>(num_of_matmul_ops) / duration.count() / 1000;
-            log_debug(LogTest, "time duration: {} ns, rmax_tflops {}", duration.count(), rmax_tflops);
+                log_debug(LogTest, "cycle time {:.8f}s", cycle_time);
+                log_debug(LogTest, "t0_to_any_riscfw_end {}", t0_to_any_riscfw_end);
+                log_info(
+                    LogTest,
+                    "time duration: {:.5}us ({}cycles) rmax_tflops {:.2f}",
+                    execution_time,
+                    t0_to_any_riscfw_end,
+                    rmax_tflops[i]);
+            } else {
+                log_debug(LogTest, "calling EnqueueProgram");
+                std::chrono::duration<double, std::nano> duration;
+                auto t_begin = std::chrono::high_resolution_clock::now();
+                EnqueueProgram(*::detail::GLOBAL_CQ, program, false);
+                Finish(*::detail::GLOBAL_CQ);
+                log_debug(LogTest, "EnqueProgram done");
+                auto t_end = std::chrono::high_resolution_clock::now();
+                duration = t_end - t_begin;
+                rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / duration.count() / 1000);
+                log_info(LogTest, "time duration: {:.5} ns, rmax_tflops {:.2f}", duration.count(), rmax_tflops[i]);
+            }
         }
 
-        double rmax_per_rpeak = rmax_tflops / rpeak_tflops;
+        auto avg_rmax_tflops = calculate_average(rmax_tflops);
+        double rmax_per_rpeak = avg_rmax_tflops / rpeak_tflops;
+        log_debug(LogTest, "rmax_tflops {}", rmax_tflops);
         log_info(
             LogTest,
-            "Rmax(TFLOPS) {:.3f}, Rpeak {:.3f}, Rmax / Rpeak {:.2f}%",
-            rmax_tflops,
+            "Avg Rmax(TFLOPS) {:.3f}, Rpeak {:.3f}, Rmax / Rpeak {:.2f}%",
+            avg_rmax_tflops,
             rpeak_tflops,
             rmax_per_rpeak * 100);
         bool performance_result = true;
@@ -367,6 +383,12 @@ int main(int argc, char** argv) {
 
         pass &= tt_metal::CloseDevice(device);
 
+        // for csv
+        log_info("CSV_MICROBENCHMARK:test_compute_mm");
+        log_info("CSV_INPUT:M:{}:N:{}:K:{}:fast-dispatch:{}", M, N, K, fast_dispatch_mode);
+        log_info("CSV_OUTPUT:RMax(TFLOPS):{:.2f}", avg_rmax_tflops);
+        log_info("CSV_RESULT:pass:{}", pass);
+
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
@@ -381,7 +403,8 @@ int main(int argc, char** argv) {
         log_error(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    // skip for pytest
+    // TT_ASSERT(pass);
 
     return 0;
 }

@@ -5,11 +5,14 @@
 #include <algorithm>
 #include <functional>
 #include <random>
+#include <string>
+#include <vector>
 
 #include "common/bfloat16.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -26,27 +29,32 @@ using std::chrono::microseconds;
 //   ./test_rw_buffer
 //     --buffer-type <0 for DRAM, 1 for L1>
 //     --transfer-size <size in bytes>
+//     --num-tests <count of tests>
 //     --bypass-check (set to bypass checking performance criteria fulfillment)
 ////////////////////////////////////////////////////////////////////////////////
 
 int main(int argc, char** argv) {
     bool pass = true;
     bool bypass_check = false;
-    double h2d_bandwidth = 0;
-    double d2h_bandwidth = 0;
+    std::vector<double> h2d_bandwidth;
+    std::vector<double> d2h_bandwidth;
+    int32_t buffer_type = 0;
+    uint32_t transfer_size;
 
     try {
         // Input arguments parsing
         std::vector<std::string> input_args(argv, argv + argc);
 
-        int32_t buffer_type = 0;
-        uint32_t transfer_size;
+        uint32_t num_tests = 10;
         try {
             std::tie(buffer_type, input_args) =
                 test_args::get_command_option_int32_and_remaining_args(input_args, "--buffer-type", 0);
 
             std::tie(transfer_size, input_args) = test_args::get_command_option_uint32_and_remaining_args(
                 input_args, "--transfer-size", 512 * 1024 * 1024);
+
+            std::tie(num_tests, input_args) =
+                test_args::get_command_option_uint32_and_remaining_args(input_args, "--num-tests", 10);
 
             std::tie(bypass_check, input_args) =
                 test_args::has_command_option_and_remaining_args(input_args, "--bypass-check");
@@ -78,34 +86,37 @@ int main(int argc, char** argv) {
             buffer_type == 0 ? "DRAM" : "L1",
             transfer_size);
 
-        // Execute application
-        {
-            auto t_begin = std::chrono::steady_clock::now();
-            EnqueueWriteBuffer(cq, buffer, src_vec, false);
-            Finish(cq);
-            auto t_end = std::chrono::steady_clock::now();
-            auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
-            h2d_bandwidth = (transfer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
-            log_info(
-                LogTest,
-                "EnqueueWriteBuffer to {} (H2D): {:.3f}ms, {:.3f}GB/s",
-                buffer_type == 0 ? "DRAM" : "L1",
-                elapsed_us / 1000.0,
-                h2d_bandwidth);
-        }
+        log_info(LogTest, "Num tests {}", num_tests);
+        for (uint32_t i = 0; i < num_tests; ++i) {
+            // Execute application
+            {
+                auto t_begin = std::chrono::steady_clock::now();
+                EnqueueWriteBuffer(cq, buffer, src_vec, false);
+                Finish(cq);
+                auto t_end = std::chrono::steady_clock::now();
+                auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
+                h2d_bandwidth.push_back((transfer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
+                log_info(
+                    LogTest,
+                    "EnqueueWriteBuffer to {} (H2D): {:.3f}ms, {:.3f}GB/s",
+                    buffer_type == 0 ? "DRAM" : "L1",
+                    elapsed_us / 1000.0,
+                    h2d_bandwidth[i]);
+            }
 
-        {
-            auto t_begin = std::chrono::steady_clock::now();
-            EnqueueReadBuffer(cq, buffer, result_vec, true);
-            auto t_end = std::chrono::steady_clock::now();
-            auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
-            d2h_bandwidth = (transfer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
-            log_info(
-                LogTest,
-                "EnqueueReadBuffer from {} (D2H): {:.3f}ms, {:.3f}GB/s",
-                buffer_type == 0 ? "DRAM" : "L1",
-                elapsed_us / 1000.0,
-                d2h_bandwidth);
+            {
+                auto t_begin = std::chrono::steady_clock::now();
+                EnqueueReadBuffer(cq, buffer, result_vec, true);
+                auto t_end = std::chrono::steady_clock::now();
+                auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
+                d2h_bandwidth.push_back((transfer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
+                log_info(
+                    LogTest,
+                    "EnqueueReadBuffer from {} (D2H): {:.3f}ms, {:.3f}GB/s",
+                    buffer_type == 0 ? "DRAM" : "L1",
+                    elapsed_us / 1000.0,
+                    d2h_bandwidth[i]);
+            }
         }
 
         // Validation & teardown
@@ -118,29 +129,40 @@ int main(int argc, char** argv) {
     }
 
     // Determine if it passes performance goal
+    auto avg_h2d_bandwidth = calculate_average(h2d_bandwidth);
+    auto avg_d2h_bandwidth = calculate_average(d2h_bandwidth);
     if (pass && bypass_check == false) {
         // goal is 70% of PCI-e Gen3 x16 for grayskull
         // TODO: check the theoritical peak of wormhole
         double target_bandwidth = 16.0 * 0.7;
 
-        if (h2d_bandwidth < target_bandwidth) {
+        if (avg_h2d_bandwidth < target_bandwidth) {
             pass = false;
             log_error(
                 LogTest,
                 "The host-to-device bandwidth does not meet the criteria. "
                 "Current: {:.3f}GB/s, goal: {:.3f}GB/s",
-                h2d_bandwidth,
+                avg_h2d_bandwidth,
                 target_bandwidth);
-        } else if (d2h_bandwidth < target_bandwidth) {
+        } else if (avg_d2h_bandwidth < target_bandwidth) {
             pass = false;
             log_error(
                 LogTest,
                 "The device-to-host bandwidth does not meet the criteria. "
                 "Current: {:.3f}GB/s, goal: {:.3f}GB/s",
-                d2h_bandwidth,
+                avg_d2h_bandwidth,
                 target_bandwidth);
         }
     }
+
+    // for csv
+    log_info("CSV_MICROBENCHMARK:test_rw_buffer");
+    log_info(
+        "CSV_INPUT:buffer-type:{}:transfer-size:{}",
+        BUFFER_TYPEToString(static_cast<BUFFER_TYPE>(buffer_type)),
+        transfer_size);
+    log_info("CSV_OUTPUT:H2D_Bandwidth(GB/s):{:.3f}:D2H_Bandwidth(GB/s):{:.3f}", avg_h2d_bandwidth, avg_d2h_bandwidth);
+    log_info("CSV_RESULT:pass:{}", pass);
 
     if (pass) {
         log_info(LogTest, "Test Passed");
@@ -148,7 +170,8 @@ int main(int argc, char** argv) {
         log_error(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
+    // skip for pytest
+    // TT_ASSERT(pass);
 
     return 0;
 }
