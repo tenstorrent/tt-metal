@@ -325,9 +325,6 @@ int main(int argc, char **argv) {
         log_error(LogTest, "Test Failed");
     }
 
-    // skip for pytest
-    // TT_ASSERT(pass);
-
     return 0;
 }
 

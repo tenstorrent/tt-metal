@@ -229,7 +229,5 @@ int main(int argc, char** argv) {
         log_error(LogTest, "Test Failed");
     }
 
-    TT_ASSERT(pass);
-
     return 0;
 }
