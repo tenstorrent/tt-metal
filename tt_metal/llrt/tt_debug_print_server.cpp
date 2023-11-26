@@ -254,15 +254,15 @@ bool DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                     sticky_setw  = (val & 0b10000000) ? (val&0b01111111) : 0; // top bit is sticky flag
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_SETP:
+                case DEBUG_PRINT_TYPEID_SETPRECISION:
                     stream << std::setprecision(*ptr);
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_FIXP:
+                case DEBUG_PRINT_TYPEID_FIXED:
                     stream << std::fixed;
                     TT_ASSERT(sz == 1);
                 break;
-                case DEBUG_PRINT_TYPEID_DEFFLOAT:
+                case DEBUG_PRINT_TYPEID_DEFAULTFLOAT:
                     stream << std::defaultfloat;
                     TT_ASSERT(sz == 1);
                 break;
