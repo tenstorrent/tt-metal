@@ -38,8 +38,8 @@ void kernel_main() {
     DPRINT << "TestConstCharStr";
     DPRINT << 'N' << 'C' << '{' << x << ',' << y << '}' << ENDL();
     DPRINT << SETW(test_width, false) << test_width_num << ENDL();
-    DPRINT << SETP(4) << 0.123456f << ENDL();
-    DPRINT << FIXP() << F32(0.12f) << ENDL();
+    DPRINT << SETPRECISION(4) << 0.123456f << ENDL();
+    DPRINT << FIXED() << F32(0.12f) << ENDL();
     DPRINT << BF16(0x3dfb) << ENDL(); // 0.12255859375
     for (uint32_t num = 0; num < num_chars; num++)
         DPRINT << '-';

@@ -55,7 +55,7 @@ void kernel_main() {
         .page_size = in1_tile_nbytes
     };
 
-    // DPRINT << FIXP() << SETW(32) << SETP(2);
+    // DPRINT << FIXED() << SETW(32) << SETPRECISION(2);
 
     // read bias first if defined
     #ifdef FUSE_BIAS
