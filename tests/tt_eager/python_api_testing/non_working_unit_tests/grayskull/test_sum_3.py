@@ -14,10 +14,10 @@ from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.common import set_dispatch_mode
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import reduce_sum_h as tt_reduce_sum_h
+from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import sum as tt_sum
 
 
-def run_reduce_sum_h_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
+def run_sum_3_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
     torch.manual_seed(data_seed)
     set_dispatch_mode(dispatch_mode)
 
@@ -28,10 +28,11 @@ def run_reduce_sum_h_test(input_shape, dtype, dlayout, in_mem_config, out_mem_co
     x_ref = x.detach().clone()
 
     # compute ref value
-    ref_value = pytorch_ops.reduce_sum(x_ref, dims=(-2,))
+    ref_value = pytorch_ops.sum(x_ref, dim=3)
 
-    tt_result = tt_reduce_sum_h(
+    tt_result = tt_sum(
         x=x,
+        dim=3,
         device=device,
         dtype=dtype,
         layout=dlayout,
@@ -73,6 +74,6 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode",
     (test_sweep_args),
 )
-def test_reduce_sum_h(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
+def test_sum_3(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
     random.seed(0)
-    run_reduce_sum_h_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device)
+    run_sum_3_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device)

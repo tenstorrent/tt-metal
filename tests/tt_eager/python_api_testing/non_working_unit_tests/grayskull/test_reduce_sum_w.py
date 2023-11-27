@@ -73,6 +73,6 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode",
     (test_sweep_args),
 )
-def test_reduce_sum_w_mul(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
+def test_reduce_sum_w(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
     random.seed(0)
     run_reduce_sum_w_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device)

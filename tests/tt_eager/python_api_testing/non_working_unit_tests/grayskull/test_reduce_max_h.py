@@ -73,6 +73,6 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode",
     (test_sweep_args),
 )
-def test_reduce_max_h_mul(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
+def test_reduce_max_h(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
     random.seed(0)
     run_reduce_max_h_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device)
