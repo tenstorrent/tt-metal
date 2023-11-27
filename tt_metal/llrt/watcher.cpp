@@ -149,7 +149,41 @@ static const char * get_sanity_riscv_name(CoreCoord core, const launch_msg_t *la
     return nullptr;
 }
 
-static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *launch_msg, int noc, const debug_sanitize_noc_addr_msg_t* san) {
+static string get_debug_status(CoreCoord core, const launch_msg_t *launch_msg, const debug_status_msg_t *debug_status) {
+
+    string out;
+
+    for (int cpu = 0; cpu < num_riscv_per_core; cpu++) {
+        for (int byte = 0; byte < num_status_bytes_per_riscv; byte++) {
+            char v = ((char *)&debug_status[cpu])[byte];
+            if (v == 0) break;
+            if (isprint(v)) {
+                out += v;
+            } else {
+                log_running_kernels(launch_msg);
+                TT_THROW("Watcher unexpected debug status on core {}, unprintable character {}",
+                          core.str(), (int)v);
+            }
+        }
+        if (cpu != num_riscv_per_core - 1) out += ',';
+    }
+
+    out += " ";
+    return out;
+}
+
+static void log_waypoint(CoreCoord core, const launch_msg_t *launch_msg, const debug_status_msg_t *debug_status) {
+    string out = get_debug_status(core, launch_msg, debug_status);
+    out = string("Last waypoint: ") + out;
+    log_info(out.c_str());
+}
+
+static void dump_noc_sanity_status(FILE *f,
+                                   CoreCoord core,
+                                   const launch_msg_t *launch_msg,
+                                   int noc,
+                                   const debug_sanitize_noc_addr_msg_t* san,
+                                   const debug_status_msg_t *debug_status) {
 
     char buf[256];
 
@@ -159,8 +193,11 @@ static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *
             san->len != DEBUG_SANITIZE_NOC_SENTINEL_OK_32 ||
             san->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_16) {
             log_running_kernels(launch_msg);
-            TT_THROW("Watcher unexpected noc debug state on core {}, reported valid got (addr,len,which)=({},{},{})",
-                      core.str(), san->addr, san->len, san->which);
+            log_waypoint(core, launch_msg, debug_status);
+            snprintf(buf,sizeof(buf),
+                     "Watcher unexpected noc debug state on core %s, reported valid got noc%d{0x%08lx, %d}",
+                     core.str().c_str(), san->which, san->addr, san->len);
+            TT_THROW(buf);
         }
         break;
     case DebugSanitizeNocInvalidL1:
@@ -168,6 +205,7 @@ static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *
         fflush(f);
         log_running_kernels(launch_msg);
         log_info("Watcher stopped the device due to bad NOC L1/reg address");
+        log_waypoint(core, launch_msg, debug_status);
         snprintf(buf, sizeof(buf), "On core %s: noc%d:%s{0x%08lx, %d}",
                  core.str().c_str(), noc, get_sanity_riscv_name(core, launch_msg, san->which), san->addr, san->len);
         TT_THROW(buf);
@@ -182,6 +220,7 @@ static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *
         fflush(f);
         log_info("Watcher stopped the device due to bad NOC unicast transaction");
         log_running_kernels(launch_msg);
+        log_waypoint(core, launch_msg, debug_status);
         snprintf(buf, sizeof(buf), "On core %s: noc%d:%s{(%02ld,%02ld) 0x%08lx, %d}",
                  core.str().c_str(),
                  noc,
@@ -203,6 +242,7 @@ static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *
         fflush(f);
         log_info("Watcher stopped the device due to bad NOC multicast transaction");
         log_running_kernels(launch_msg);
+        log_waypoint(core, launch_msg, debug_status);
         snprintf(buf, sizeof(buf), "On core %s: noc%d:%s{(%02ld,%02ld)-(%02ld,%02ld) 0x%08lx, %d}",
                  core.str().c_str(),
                  noc,
@@ -221,10 +261,14 @@ static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *
     }
 }
 
-static void dump_noc_sanity_status(FILE *f, CoreCoord core, const launch_msg_t *launch_msg, const debug_sanitize_noc_addr_msg_t *san) {
+static void dump_noc_sanity_status(FILE *f,
+                                   CoreCoord core,
+                                   const launch_msg_t *launch_msg,
+                                   const debug_sanitize_noc_addr_msg_t *san,
+                                   const debug_status_msg_t *debug_status) {
 
     for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
-        dump_noc_sanity_status(f, core, launch_msg, noc, &san[noc]);
+        dump_noc_sanity_status(f, core, launch_msg, noc, &san[noc], debug_status);
     }
 }
 
@@ -315,24 +359,10 @@ static void dump_run_mailboxes(FILE *f,
     fprintf(f, " ");
 }
 
-static void dump_debug_status(FILE *f, CoreCoord core, launch_msg_t *launch_msg, const debug_status_msg_t *debug_status) {
+static void dump_debug_status(FILE *f, CoreCoord core, const launch_msg_t *launch_msg, const debug_status_msg_t *debug_status) {
 
-    for (int cpu = 0; cpu < num_riscv_per_core; cpu++) {
-        for (int byte = 0; byte < num_status_bytes_per_riscv; byte++) {
-            char v = ((char *)&debug_status[cpu])[byte];
-            if (v == 0) break;
-            if (isprint(v)) {
-                fprintf(f, "%c", v);
-            } else {
-                log_running_kernels(launch_msg);
-                TT_THROW("Watcher unexpected debug status on core {}, unprintable character {}",
-                          core.str(), (int)v);
-            }
-        }
-        if (cpu != num_riscv_per_core - 1) fprintf(f, ",");
-    }
-
-    fprintf(f, " ");
+    string out = get_debug_status(core, launch_msg, debug_status);
+    fprintf(f, "%s ", out.c_str());
 }
 
 static void dump_sync_regs(FILE *f, WatcherDevice *wdev, CoreCoord core) {
@@ -398,7 +428,7 @@ static void dump_core(FILE *f, std::map<int, bool>& used_kernel_names, WatcherDe
         // Dump state only gathered if device is compiled w/ watcher
         dump_debug_status(f, core, &mbox_data->launch, mbox_data->debug_status);
         dump_l1_status(f, wdev, core,  &mbox_data->launch);
-        dump_noc_sanity_status(f, core, &mbox_data->launch, mbox_data->sanitize_noc);
+        dump_noc_sanity_status(f, core, &mbox_data->launch, mbox_data->sanitize_noc, mbox_data->debug_status);
     }
 
     // Dump state always available
