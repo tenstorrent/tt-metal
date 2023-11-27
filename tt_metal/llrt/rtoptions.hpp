@@ -19,6 +19,7 @@ namespace tt {
 namespace llrt {
 
 class RunTimeOptions {
+    bool watcher_enabled;
     int watcher_interval_ms;
     bool watcher_dump_all;
 
@@ -31,7 +32,7 @@ class RunTimeOptions {
 public:
     RunTimeOptions();
 
-    inline bool get_watcher_enabled() { return watcher_interval_ms != 0; }
+    inline bool get_watcher_enabled() { return watcher_enabled; }
     inline int get_watcher_interval() { return watcher_interval_ms; }
     inline int get_watcher_dump_all() { return watcher_dump_all; }
 
