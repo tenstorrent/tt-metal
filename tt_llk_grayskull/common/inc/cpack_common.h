@@ -155,12 +155,11 @@ namespace ckernel::packer
    }
 
    //reconfig the packer dst format
-   inline void reconfig_packer_data_format(const uint pack_dst_format)
+   inline void reconfig_packer_data_format(const uint pack_dst_format, const uint tile_size)
    {
       set_packer_config(pack_dst_format);
 
-      //regfile[p_gpr_pack::TILE_HEADER]   = GET_L1_TILE_SIZE((uint)pack_dst_format);
-      uint tile_header_0 = GET_L1_TILE_SIZE((uint)pack_dst_format);
+      uint tile_header_0 = tile_size;
       TT_SETDMAREG(0, (tile_header_0 & 0xffff), 0, LO_16(p_gpr_pack::TILE_HEADER));
       TT_SETDMAREG(0, ((tile_header_0 >> 16) & 0xffff), 0, HI_16(p_gpr_pack::TILE_HEADER));
 
@@ -172,7 +171,7 @@ namespace ckernel::packer
    }
    
    template <bool untilize = false>
-   inline void configure_pack(const uint pack_src_format, const uint pack_dst_format, uint relu_config = 0, bool skip_alu_format_set=false)
+   inline void configure_pack(const uint pack_src_format, const uint pack_dst_format, const uint tile_size, uint relu_config = 0, bool skip_alu_format_set=false)
    {
       // Get pointer to registers for current state ID
       volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
@@ -272,7 +271,7 @@ namespace ckernel::packer
          cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32+i] = 0x0;
       }	 
 
-      regfile[p_gpr_pack::TILE_HEADER]   = GET_L1_TILE_SIZE((uint)pack_dst_format);
+      regfile[p_gpr_pack::TILE_HEADER]   = tile_size;
       regfile[p_gpr_pack::TILE_HEADER+1] = 0;
       regfile[p_gpr_pack::TILE_HEADER+2] = 0;
       regfile[p_gpr_pack::TILE_HEADER+3] = 0;

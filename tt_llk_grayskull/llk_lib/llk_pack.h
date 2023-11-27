@@ -72,15 +72,15 @@ inline void _llk_pack_mop_config_() {
 }
 
 template <bool untilize = false>
-inline void _llk_pack_hw_configure_(const uint pack_src_format, const uint pack_dst_format, const uint relu_config) {
-    configure_pack<untilize>(pack_src_format, pack_dst_format, relu_config);
+inline void _llk_pack_hw_configure_(const uint pack_src_format, const uint pack_dst_format, const uint tile_size, const uint relu_config) {
+    configure_pack<untilize>(pack_src_format, pack_dst_format, tile_size, relu_config);
 }
 
 // FIXME: Remove once edge mask spec is defined
 template <bool untilize = false, PoolType type, ReduceDim dim>
-inline void _llk_pack_reduce_hw_configure_(const uint pack_src_format, const uint pack_dst_format, const uint relu_config) {
+inline void _llk_pack_reduce_hw_configure_(const uint pack_src_format, const uint pack_dst_format, const uint tile_size, const uint relu_config) {
     
-    configure_pack<untilize>(pack_src_format, pack_dst_format, relu_config);
+    configure_pack<untilize>(pack_src_format, pack_dst_format, tile_size, relu_config);
     
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 

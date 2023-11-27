@@ -159,18 +159,18 @@ inline void _llk_pack_debug_dump_seek_(std::uint8_t offset) {
 }
 
 template<bool is_fp32_dest_acc_en = false /* unused */, bool is_tile_dim_reconfig_en = false /* unused */, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor /* unused */>
-inline void _llk_pack_reconfig_data_format_(const std::uint32_t pack_dst_format) {
+inline void _llk_pack_reconfig_data_format_(const std::uint32_t pack_dst_format, const std::uint32_t tile_size) {
     if(pack_dst_format != (uint)DataFormat::Invalid) {
-        reconfig_packer_data_format(pack_dst_format);
+        reconfig_packer_data_format(pack_dst_format, tile_size);
     }
 }
 
 template<bool is_fp32_dest_acc_en = false /* unused */, bool is_tile_dim_reconfig_en = false /* unused */, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor /* unused */>
-inline void _llk_pack_reconfig_data_format_(const std::uint32_t old_pack_dst_format, const std::uint32_t new_pack_dst_format) {
+inline void _llk_pack_reconfig_data_format_(const std::uint32_t old_pack_dst_format, const std::uint32_t new_pack_dst_format, const std::uint32_t new_tile_size) {
     if((old_pack_dst_format != new_pack_dst_format)
        && (old_pack_dst_format != (uint)DataFormat::Invalid) 
        && (new_pack_dst_format != (uint)DataFormat::Invalid)) {
-        reconfig_packer_data_format(new_pack_dst_format);
+        reconfig_packer_data_format(new_pack_dst_format, new_tile_size);
     }
 }
 

@@ -53,7 +53,7 @@ inline void _llk_unpack_untilize_hw_configure_(const std::uint32_t unpack_src_fo
     );
 }
 
-inline void _llk_unpack_untilize_init_(const std::uint32_t face_r_dim, std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format) {
+inline void _llk_unpack_untilize_init_(const std::uint32_t face_r_dim, std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t tile_size) {
     
     std::uint32_t unpA_ch1_x_stride = (uint) (unpack_dst_format&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
     std::uint32_t unpA_ch1_y_stride = FACE_R_DIM*unpA_ch1_x_stride;
@@ -100,7 +100,7 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t face_r_dim, std::uint
     TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
     unp_cfg_context = 0;
        
-    std::uint32_t tile_size_words = GET_L1_TILE_SIZE(unpack_src_format);
+    const std::uint32_t tile_size_words = tile_size;
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size_words), 0, LO_16(p_gpr_unpack::TILE_SIZE));
     TT_SETDMAREG(0, UPPER_HALFWORD(tile_size_words), 0, HI_16(p_gpr_unpack::TILE_SIZE));
     _llk_unpack_untilize_mop_config_(); 

@@ -99,6 +99,39 @@ enum StochRndType {
     All     = 0xf,
 };
 
+template <bool headerless = false>
+constexpr static std::int32_t MUL_TILE_SIZE_AND_INDEX(uint format, uint index) {
+    switch (format&0x1F) {
+        case ((uint8_t)DataFormat::Float32): return ((index<<8)+(!headerless)*(index<<1));
+        case ((uint8_t)DataFormat::Float16):
+        case ((uint8_t)DataFormat::Float16_b): return ((index<<7)+(!headerless)*(index<<1));
+        case ((uint8_t)DataFormat::Bfp8):
+        case ((uint8_t)DataFormat::Bfp8_b): return ((index<<6)+(index<<2)+(!headerless)*(index<<1));
+        case ((uint8_t)DataFormat::Bfp4):
+        case ((uint8_t)DataFormat::Bfp4_b): return ((index<<5)+(index<<2)+(!headerless)*(index<<1));
+        case ((uint8_t)DataFormat::Bfp2):
+        case ((uint8_t)DataFormat::Bfp2_b): return ((index<<4)+(index<<2)+(!headerless)*(index<<1));
+        //Keep default as Lf8?
+        default: return ((index<<6)+(!headerless)*(index<<1));
+    };
+}
+
+template <bool headerless = false>
+constexpr static std::int32_t GET_L1_TILE_SIZE(uint format) {
+    switch (format&0x1F) {
+        case ((uint8_t)DataFormat::Float32): return ((4096>>4)+(!headerless)*(32>>4));
+        case ((uint8_t)DataFormat::Float16):
+        case ((uint8_t)DataFormat::Float16_b): return ((2048>>4)+(!headerless)*(32>>4));
+        case ((uint8_t)DataFormat::Bfp8):
+        case ((uint8_t)DataFormat::Bfp8_b): return ((1024>>4)+(64>>4)+(!headerless)*(32>>4));
+        case ((uint8_t)DataFormat::Bfp4):
+        case ((uint8_t)DataFormat::Bfp4_b): return ((512>>4)+(64>>4)+(!headerless)*(32>>4));
+        case ((uint8_t)DataFormat::Bfp2):
+        case ((uint8_t)DataFormat::Bfp2_b): return ((256>>4)+(64>>4)+(!headerless)*(32>>4));
+        default: return ((1024>>4)+(!headerless)*(32>>4));
+    };
+}
+
 enum SfpuType {
     tanh,
     hardtanh,
