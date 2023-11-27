@@ -51,6 +51,18 @@ std::vector<Tensor> mul_bw(const Tensor& grad, const Tensor& input_a, const Tens
     return operation::decorate_as_composite(__func__, _mul_bw)(grad, input_a, input_b, output_mem_config);
 }
 
+
+std::vector<Tensor> _exp_bw(const Tensor& grad, const Tensor& exp_result, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = mul(grad, exp_result, std::nullopt, output_mem_config);
+    grad_tensor.push_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> exp_bw(const Tensor& grad, const Tensor& exp_result, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _exp_bw)(grad, exp_result, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
