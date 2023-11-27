@@ -11,8 +11,8 @@
 'pytest --disable-warnings models/demos/resnet/demo/demo.py::test_demo_sample[8-path/to/your/images]'.
 + You must put at least 8 images in your directory, and if more images located in your directory, 8 of them will randomly be picked. In this demo we assume images come from ImageNet dataset, if your images are from a different source you might have to modify the preprocessing part of the demo.
 
+## Details
 
-# Details
-+ The entry point to metal resnet model is 'ResNet' in 'metalResNetBlock50.py'. The model picks up certain configs and weights from TorchVision pretrained model. We have used 'torchvision.models.ResNet50_Weights.IMAGENET1K_V1' version from TorchVision as our reference.
-Our ImageProcessor on other hand is based on 'microsoft/resnet-50' from hugginface.
++ The entry point to metal resnet model is `ResNet` in `metalResNetBlock50.py`. The model picks up certain configs and weights from TorchVision pretrained model. We have used `torchvision.models.ResNet50_Weights.IMAGENET1K_V1` version from TorchVision as our reference.
+Our ImageProcessor on other hand is based on `microsoft/resnet-50` from huggingface.
 + For the second demo (ImageNet), the demo will load the images from ImageNet batch by batch. When executed, the first iteration (batch) will always be slower since the iteration includes the compilation as well. Afterwards, each iterations take only miliseconds. For exact performance measurements please check out the first demo.
