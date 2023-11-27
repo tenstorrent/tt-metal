@@ -4,18 +4,24 @@ import numpy as np
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 
 
-def construct_2d_padded_tensor_list(input_tensor, pad_metadata):
+def construct_2d_padded_tensor_list(input_tensor, input_nchw_shape, pad_metadata):
     # Construct the padded tensor using pad_metadata
     input_padded_tensor = []
     input_tensor_idx = 0
-
+    assert len(input_nchw_shape) == 4
+    input_n, input_c, input_h, input_w = [input_nchw_shape[i] for i in range(4)]
+    # Permute input tensor from nchw shape to nhwc shape
+    input_tensor_nchw = np.reshape(input_tensor, input_nchw_shape)
+    input_tensor_nhwc = np.transpose(input_tensor_nchw, (0, 2, 3, 1))
+    input_tensor_nhwc = np.reshape(input_tensor_nhwc, (np.prod(input_nchw_shape)))
     for i in range(len(pad_metadata)):
-        if pad_metadata[i]:
-            input_padded_tensor.append(0)
-        else:
-            assert input_tensor_idx < len(input_tensor)
-            input_padded_tensor.append(input_tensor[input_tensor_idx])
-            input_tensor_idx += 1
+        for c in range(input_c):
+            if pad_metadata[i]:
+                input_padded_tensor.append(0)
+            else:
+                assert input_tensor_idx < len(input_tensor_nhwc)
+                input_padded_tensor.append(input_tensor_nhwc[input_tensor_idx])
+                input_tensor_idx += 1
     return input_padded_tensor
 
 
@@ -92,36 +98,42 @@ def validate_data_top_left_indices_and_pad_medata(
         conv_params[i] for i in range(10)
     ]
     input_n, input_c, input_h, input_w = list(input_pyt_tensor.size())
-    # TODO: add sanity checks to validata filter_pyt_tensor shape
-    assert input_c == 1  # Ref done for channel size = 1
+    filter_k, filter_c, filter_h, filter_w = list(filter_pyt_tensor.size())
+    assert input_c == filter_c
+
+    # permute filter tensor to be channels last - kchw --> khwc
+    filter_pyt_tensor_khwc = torch.permute(filter_pyt_tensor, (0, 2, 3, 1))
 
     input_padded_width = input_w + (2 * pad_w)
     input_padded_height = input_h + (2 * pad_h)
-    input_padded_volume = input_n * input_padded_height * input_padded_width
-    assert len(pad_metadata) == input_padded_volume
-    input_padded_tensor = construct_2d_padded_tensor_list(input_pyt_tensor.reshape(-1).tolist(), pad_metadata)
+    input_padded_volume = input_n * input_c * input_padded_height * input_padded_width
+    assert len(pad_metadata) == input_n * input_padded_height * input_padded_width
+    input_padded_tensor = construct_2d_padded_tensor_list(
+        input_pyt_tensor.reshape(-1).tolist(), list(input_pyt_tensor.size()), pad_metadata
+    )
     assert len(input_padded_tensor) == input_padded_volume
-    input_padded_pyt_tensor = torch.tensor(input_padded_tensor).reshape(
-        [1, input_n * input_padded_height, input_padded_width]
+    input_padded_pyt_tensor_nhwc = torch.tensor(input_padded_tensor).reshape(
+        [input_n * input_padded_height, input_padded_width, input_c]
     )
     output_tensor = []
     # run conv over padded tensor using data_top_left_indices
-    for i in data_top_left_indices:
-        i_bh = (int)(i / input_padded_width)
-        i_w = (int)(i % input_padded_width)
-        output_tensor.append(
-            torch.dot(
-                input_padded_pyt_tensor[:, i_bh : i_bh + filter_h, i_w : i_w + filter_w].reshape(-1),
-                filter_pyt_tensor.reshape(-1),
+    for k in range(filter_k):
+        for i in data_top_left_indices:
+            i_bh = (int)(i / input_padded_width)
+            i_w = (int)(i % input_padded_width)
+            output_tensor.append(
+                torch.dot(
+                    input_padded_pyt_tensor_nhwc[i_bh : i_bh + filter_h, i_w : i_w + filter_w, :].reshape(-1),
+                    filter_pyt_tensor_khwc[k, :, :, :].reshape(-1),
+                )
             )
-        )
 
     output_pyt_tensor = torch.tensor(output_tensor)
     assert np.prod(output_pyt_tensor.size()) == np.prod(out_golden_pyt_tensor.size())
-    output_pyt_tensor = torch.reshape(output_pyt_tensor, out_golden_pyt_tensor.size())
-
+    # permute output golden pytorch tensor from nchw to cnhw shape
+    out_golden_pyt_tensor_cnhw = torch.permute(out_golden_pyt_tensor, (1, 0, 2, 3))
     # compare to pytorch
-    passing_pcc, output_pcc = comp_equal(out_golden_pyt_tensor, output_pyt_tensor)
+    passing_pcc, output_pcc = comp_equal(out_golden_pyt_tensor_cnhw.reshape(-1), output_pyt_tensor.reshape(-1))
     print("Passing=", passing_pcc)
     print("Output pcc=", output_pcc)
     assert passing_pcc
@@ -179,8 +191,8 @@ def decompose_conv_into_shards_and_generate_tensor_metadata(
 def validate_required_conv_input_sharded_start_end(
     # Padded input tensor
     input_padded_tensor,
-    # 2d padded tensor width
-    input_padded_width,  # need this to get offset within sliding window
+    # Padded input tensor shape
+    input_nchw_padded_shape,
     # Filter pytorch tensor
     filter_pyt_tensor,
     # Conv golden output tensor to compare against
@@ -190,53 +202,84 @@ def validate_required_conv_input_sharded_start_end(
     # Validate this config -
     req_conv_input_shard_start_end,
 ):
+    filter_k = filter_pyt_tensor.size()[0]
+    filter_c = filter_pyt_tensor.size()[1]
     filter_h = filter_pyt_tensor.size()[2]
     filter_w = filter_pyt_tensor.size()[3]
-    assert filter_pyt_tensor.size()[0] == 1 and filter_pyt_tensor.size()[1] == 1
-    assert len(data_top_left_indices) == np.prod(list(out_golden_pyt_tensor.size()))
 
+    output_n = out_golden_pyt_tensor.size()[0]
+    output_c = out_golden_pyt_tensor.size()[1]
+    output_h = out_golden_pyt_tensor.size()[2]
+    output_w = out_golden_pyt_tensor.size()[3]
+    assert len(data_top_left_indices) == output_n * output_h * output_w
+    # reshape input padded tensor to 2d shape - [c, nhw]
+    assert len(input_nchw_padded_shape) == 4
+    input_n, input_c, input_padded_height, input_padded_width = [input_nchw_padded_shape[i] for i in range(4)]
+    input_2d_padded_tensor = np.reshape(
+        input_padded_tensor, (input_n * input_padded_height * input_padded_width, input_c)
+    )
+    assert filter_c == input_c
+    assert output_n == input_n
+    assert output_c == filter_k
+
+    # permute filter tensor to be channels last - kchw --> khwc
+    filter_pyt_tensor_khwc = torch.permute(filter_pyt_tensor, (0, 2, 3, 1))
     # Validate req_conv_input_shard_start_end. First, generate conv input shards
     conv_input_shards = []
     for item in req_conv_input_shard_start_end:
         req_conv_input_shard_start, req_conv_input_shard_end = item[1]
         req_conv_input_shard_size = req_conv_input_shard_end - req_conv_input_shard_start + 1
         assert req_conv_input_shard_size <= 65535  # max uint16 value
-        conv_input_shards.append(input_padded_tensor[req_conv_input_shard_start : req_conv_input_shard_end + 1])
+        conv_input_shards.append(input_2d_padded_tensor[req_conv_input_shard_start : req_conv_input_shard_end + 1, :])
+
     # Perform conv on input shards one at a time, and compare against output. Use data_top_left_indices (global) to perform the conv operation.
-    output_stick = 0
+    output_stick_global = 0
     for input_shard_idx, item in enumerate(req_conv_input_shard_start_end):
         assert input_shard_idx < len(conv_input_shards)
         conv_output_shard_start, conv_output_shard_end = item[0]
         req_conv_input_shard_start, req_conv_input_shard_end = item[1]
         # sanity check that the first item in the shard is at the top left position of sliding window
-        assert output_stick < len(data_top_left_indices)
-        assert req_conv_input_shard_start == data_top_left_indices[output_stick]
+        assert output_stick_global < len(data_top_left_indices)
+        assert req_conv_input_shard_start == data_top_left_indices[output_stick_global]
         output_shard = []
         output_shard_size = conv_output_shard_end - conv_output_shard_start + 1
-        for o in range(output_shard_size):
-            assert output_stick < len(data_top_left_indices)
-            input_top_left_position_stick = data_top_left_indices[output_stick]
-            assert input_top_left_position_stick >= req_conv_input_shard_start
-            input_shard_stick_local_idx = input_top_left_position_stick - req_conv_input_shard_start
-            conv_input_window = []
-            for fh in range(filter_h):
-                for fw in range(filter_w):
-                    assert input_shard_stick_local_idx + fw < len(conv_input_shards[input_shard_idx])
-                    conv_input_window.append(conv_input_shards[input_shard_idx][input_shard_stick_local_idx + fw])
-                input_shard_stick_local_idx += input_padded_width
-            output_val = np.dot(conv_input_window, filter_pyt_tensor.reshape(-1).tolist())
-            output_shard.append(output_val)
-            output_stick += 1
+        for k in range(filter_k):
+            output_stick = output_stick_global
+            for o in range(output_shard_size):
+                assert output_stick < len(data_top_left_indices)
+                input_top_left_position_stick = data_top_left_indices[output_stick]
+                assert input_top_left_position_stick >= req_conv_input_shard_start
+                input_shard_stick_local_idx = input_top_left_position_stick - req_conv_input_shard_start
+                conv_input_window = []
+                for fh in range(filter_h):
+                    for fw in range(filter_w):
+                        assert input_shard_stick_local_idx + fw < len(conv_input_shards[input_shard_idx])
+                        conv_input_window.append(
+                            conv_input_shards[input_shard_idx][input_shard_stick_local_idx + fw, :]
+                        )
+                    input_shard_stick_local_idx += input_padded_width
+                output_val = np.dot(
+                    np.array(conv_input_window).flatten(), filter_pyt_tensor_khwc[k, :, :, :].reshape(-1).tolist()
+                )
+                output_shard.append(output_val)
+                output_stick += 1
+        output_stick_global = output_stick
+        output_pyt_shard = torch.tensor(output_shard).reshape((filter_k, output_shard_size))
         # compare output shard with golden output pytorch tensor
-        output_pyt_shard = torch.tensor(output_shard)
+        # permute output golden pytorch tensor from nchw to cnhw shape
+        out_golden_pyt_tensor_cnhw = torch.permute(out_golden_pyt_tensor, (1, 0, 2, 3))
+        # reshape cnhw to 2d shape = [c, nhw]
+        out_golden_pyt_tensor_cnhw = torch.reshape(
+            out_golden_pyt_tensor_cnhw, (output_c, output_n * output_h * output_w)
+        )
         assert (
             output_pyt_shard.size()
-            == out_golden_pyt_tensor.reshape(-1)[conv_output_shard_start : conv_output_shard_end + 1].size()
+            == out_golden_pyt_tensor_cnhw[:, conv_output_shard_start : conv_output_shard_end + 1].size()
         )
         # print("out_golden_shard=", out_golden_pyt_tensor.reshape(-1)[conv_output_shard_start : conv_output_shard_end + 1])
         # print("out_shard=", output_pyt_shard)
         passing_pcc, output_pcc = comp_equal(
-            out_golden_pyt_tensor.reshape(-1)[conv_output_shard_start : conv_output_shard_end + 1], output_pyt_shard
+            out_golden_pyt_tensor_cnhw[:, conv_output_shard_start : conv_output_shard_end + 1], output_pyt_shard
         )
         # print("Passing=", passing_pcc)
         # print("Output pcc=", output_pcc)
@@ -247,23 +290,34 @@ def validate_required_conv_input_sharded_start_end(
 
 
 def validate_tensor_metadata(
-    input_tensor, input_shard_size, tensor_metadata, req_conv_input_shard_start_end, golden_conv_input_shards
+    input_tensor,
+    input_nchw_shape,
+    input_shard_size,
+    tensor_metadata,
+    req_conv_input_shard_start_end,
+    golden_conv_input_shards,
 ):
     # input tensor is unpadded
+    # Permute input tensor from nchw shape to nhwc shape and reshape to 2d shape - [nhw, c]
+    assert len(input_nchw_shape) == 4
+    input_n, input_c, input_h, input_w = [input_nchw_shape[i] for i in range(4)]
+    input_nhw_size = input_n * input_h * input_w
+    input_tensor = np.reshape(input_tensor, input_nchw_shape)
+    input_tensor_nhwc = np.transpose(input_tensor, (0, 2, 3, 1))
+    input_tensor_nhwc = np.reshape(input_tensor_nhwc, (input_n * input_h * input_w, input_c))
     # construct unpadded input tensor shards
     unpadded_input_tensor_shards = []
     num_shards = len(req_conv_input_shard_start_end)
     unpadded_input_tensor_shard_start = 0
     for i in range(num_shards):
-        unpadded_input_tensor_shard_end = min(unpadded_input_tensor_shard_start + input_shard_size, len(input_tensor))
-        assert unpadded_input_tensor_shard_start < len(input_tensor) and unpadded_input_tensor_shard_end <= len(
-            input_tensor
+        unpadded_input_tensor_shard_end = min(unpadded_input_tensor_shard_start + input_shard_size, input_nhw_size)
+        assert unpadded_input_tensor_shard_start < len(input_tensor_nhwc) and unpadded_input_tensor_shard_end <= len(
+            input_tensor_nhwc
         )
         unpadded_input_tensor_shards.append(
-            input_tensor[unpadded_input_tensor_shard_start:unpadded_input_tensor_shard_end]
+            input_tensor_nhwc[unpadded_input_tensor_shard_start:unpadded_input_tensor_shard_end, :]
         )
         unpadded_input_tensor_shard_start += input_shard_size
-
     # Validate tensor_metadata
     # Construct conv input shard using tensor_metadata and req_conv_input_shard_start_end indices. Then, compare against golden conv input shards
     conv_input_shards = []
@@ -276,16 +330,15 @@ def validate_tensor_metadata(
             assert idx < len(tensor_metadata)
             pad = tensor_metadata[idx][0]
             if pad:
-                conv_input_shard.append(0)
+                conv_input_shard.append([0] * input_c)
             else:
                 core_id = tensor_metadata[idx][1]
                 core_local_idx = tensor_metadata[idx][2]
                 assert core_id < len(unpadded_input_tensor_shards)
                 assert core_local_idx < len(unpadded_input_tensor_shards[core_id])
-                conv_input_shard.append(unpadded_input_tensor_shards[core_id][core_local_idx])
-        # print("golden_conv_input_shard=", golden_conv_input_shards[shard_idx])
-        # print("conv_input_shard=", conv_input_shard)
-        assert conv_input_shard == golden_conv_input_shards[shard_idx]
+                conv_input_shard.append(unpadded_input_tensor_shards[core_id][core_local_idx, :])
+        assert (conv_input_shard == golden_conv_input_shards[shard_idx]).all()
+    return unpadded_input_tensor_shards
 
 
 NEIGHBORHOOD_DIST = 2  ## ll, l, r, rr
@@ -565,7 +618,8 @@ def validate_untilize_with_halo_kernel_configs(
     ## using the kernel configs, construct the resulting resharding for each core
     ncores = len(resharded_start_and_end)
     assert len(input_tensor_shards) == ncores
-
+    assert len(golden) == ncores
+    input_c = len(golden[0][0])
     max_size = 0
     for _, dst in resharded_start_and_end:
         start = dst[0]
@@ -578,7 +632,7 @@ def validate_untilize_with_halo_kernel_configs(
     for core in np.arange(ncores):
         dst_range = resharded_start_and_end[core][1]
         curr_size = dst_range[1] - dst_range[0] + 1
-        reshards[core] = torch.zeros([curr_size])
+        reshards[core] = np.zeros([curr_size, input_c], dtype=int)
 
     # print (f'RESHARD: {resharded_start_and_end}')
     for core in np.arange(ncores):
@@ -589,14 +643,13 @@ def validate_untilize_with_halo_kernel_configs(
         r_data = r_send_start_and_size[core]
         rr_data = rr_send_start_and_size[core]
         src_start_idx = src_local_start_idx[core]
-
         ## local pad
         for local_pad_segment_idx in range(0, local_pad_nsegments_per_core[core] * 2, 2):
             dst_start = local_pad[local_pad_segment_idx]
             size = local_pad[local_pad_segment_idx + 1]
             dst_idx = dst_start
             while dst_idx < dst_start + size:
-                reshards[core][dst_idx] = pad_val
+                reshards[core][dst_idx] = [pad_val] * input_c
                 dst_idx += 1
 
         ## local data
@@ -606,7 +659,7 @@ def validate_untilize_with_halo_kernel_configs(
             size = local_data[local_data_segment_idx + 1]
             dst_idx = dst_start
             while dst_idx < dst_start + size:
-                reshards[core][dst_idx] = input_tensor_shards[core][src_idx]  ## TODO: make global
+                reshards[core][dst_idx] = input_tensor_shards[core][src_idx, :]  ## TODO: make global
                 src_idx += 1
                 dst_idx += 1
 
@@ -617,7 +670,7 @@ def validate_untilize_with_halo_kernel_configs(
             size = ll_data[ll_data_segment_idx + 1]
             dst_idx = dst_start
             while dst_idx < dst_start + size:
-                reshards[core - 2][dst_idx] = input_tensor_shards[core][src_idx]
+                reshards[core - 2][dst_idx] = input_tensor_shards[core][src_idx, :]
                 src_idx += 1
                 dst_idx += 1
 
@@ -628,7 +681,7 @@ def validate_untilize_with_halo_kernel_configs(
             size = l_data[l_data_segment_idx + 1]
             dst_idx = dst_start
             while dst_idx < dst_start + size:
-                reshards[core - 1][dst_idx] = input_tensor_shards[core][src_idx]
+                reshards[core - 1][dst_idx] = input_tensor_shards[core][src_idx, :]
                 src_idx += 1
                 dst_idx += 1
 
@@ -639,7 +692,7 @@ def validate_untilize_with_halo_kernel_configs(
             size = r_data[r_data_segment_idx + 1]
             dst_idx = dst_start
             while dst_idx < dst_start + size:
-                reshards[core + 1][dst_idx] = input_tensor_shards[core][src_idx]
+                reshards[core + 1][dst_idx] = input_tensor_shards[core][src_idx, :]
                 src_idx += 1
                 dst_idx += 1
 
@@ -650,7 +703,7 @@ def validate_untilize_with_halo_kernel_configs(
             size = rr_data[rr_data_segment_idx + 1]
             dst_idx = dst_start
             while dst_idx < dst_start + size:
-                reshards[core + 2][dst_idx] = input_tensor_shards[core][src_idx]
+                reshards[core + 2][dst_idx] = input_tensor_shards[core][src_idx, :]
                 src_idx += 1
                 dst_idx += 1
 
@@ -658,4 +711,4 @@ def validate_untilize_with_halo_kernel_configs(
     for core in np.arange(ncores):
         # print(f'OUTPUT CORE {core}: {reshards[core]}')
         # print(f'GOLDEN CORE {core}: {golden[core]}')
-        assert list(reshards[core]) == golden[core]
+        assert (reshards[core] == golden[core]).all()
