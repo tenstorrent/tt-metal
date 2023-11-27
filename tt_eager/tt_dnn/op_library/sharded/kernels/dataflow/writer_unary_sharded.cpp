@@ -6,9 +6,9 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    const uint32_t num_units = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
 
-    cb_wait_front(cb_id_out, num_tiles);
+    cb_wait_front(cb_id_out, num_units);
 }

@@ -27,8 +27,11 @@ from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_ze
 @pytest.mark.parametrize(
     "shard_orientation", [ttl.tensor.ShardOrientation.ROW_MAJOR, ttl.tensor.ShardOrientation.COL_MAJOR]
 )
-@pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
-def test_sharded_tile(device, input_shape, shard_size, shard_scheme, shard_orientation, dtype, function_level_defaults):
+@pytest.mark.parametrize("input_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.parametrize("output_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+def test_sharded_tile(
+    device, input_shape, shard_size, shard_scheme, shard_orientation, input_dtype, output_dtype, function_level_defaults
+):
     grid_size = device.compute_with_storage_grid_size()
     input_size = torch.Size(input_shape)
     num_cores = 98
@@ -42,7 +45,7 @@ def test_sharded_tile(device, input_shape, shard_size, shard_scheme, shard_orien
         ttl.tensor.Tensor(
             x.reshape(-1).tolist(),
             x.shape,
-            dtype,
+            input_dtype,
             ttl.tensor.Layout.ROW_MAJOR,
         )
         .to(ttl.tensor.Layout.TILE)
@@ -55,7 +58,9 @@ def test_sharded_tile(device, input_shape, shard_size, shard_scheme, shard_orien
         )
     )
 
-    yt = ttl.tensor.interleaved_to_sharded(xt, grid_size, shard_size, shard_scheme, shard_orientation)
+    yt = ttl.tensor.interleaved_to_sharded(
+        xt, grid_size, shard_size, shard_scheme, shard_orientation, output_dtype=output_dtype
+    )
 
     zt = ttl.tensor.sharded_to_interleaved(
         yt,
@@ -63,13 +68,14 @@ def test_sharded_tile(device, input_shape, shard_size, shard_scheme, shard_orien
             memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
             buffer_type=ttl.tensor.BufferType.L1,
         ),
+        output_dtype=input_dtype,
     )
 
     tt_og = xt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
     tt_got_back = zt.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
 
-    if dtype == ttl.tensor.DataType.BFLOAT16:
+    if input_dtype == output_dtype:
         passing, output = comp_equal(tt_og, tt_got_back)
     else:
         passing, output = comp_pcc(tt_og, tt_got_back, 0.999)

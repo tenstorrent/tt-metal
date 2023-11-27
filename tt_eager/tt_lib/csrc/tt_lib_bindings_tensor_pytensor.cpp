@@ -1001,6 +1001,15 @@ Tensor convert_torch_tensor_to_tt_tensor(
 
             )doc")
             .def(
+                "is_sharded", [](const Tensor &self) { return self.is_sharded(); }, R"doc(
+                Check if TT Tensor is sharded.
+
+                .. code-block:: python
+
+                    is_sharded = tt_tensor.is_sharded()
+
+            )doc")
+            .def(
                 "dtype", [](const Tensor &self) { return self.dtype(); }, R"doc(
                 Get dtype of TT Tensor.
 
