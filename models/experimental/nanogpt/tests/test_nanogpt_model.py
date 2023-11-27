@@ -2,10 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+import tt_lib
 import pytest
 
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
+from models.experimental.nanogpt.nanogpt_utils import get_tt_cache_path, store_weights
+from pathlib import Path
+import os
 
 from loguru import logger
 import models.experimental.nanogpt.tt.nanogpt_model as nanogpt_model
@@ -13,17 +16,18 @@ import models.experimental.nanogpt.tt.nanogpt_model as nanogpt_model
 from models.utility_functions import tt_to_torch_tensor, comp_allclose, comp_pcc
 
 
-
+@pytest.mark.parametrize(
+    "dtype",
+    (tt_lib.tensor.DataType.BFLOAT16,),
+)
 @pytest.mark.parametrize(
     "pcc, prompt",
-    ((0.99, "Hello, my dog is a little"),),
+    ((0.98, "Hello, my dog is a little"),),
 )
-def test_nanogpt_model_real(device, pcc, prompt, reset_seeds):
-
+def test_nanogpt_model_real(device, pcc, prompt, dtype, reset_seeds):
     # Prepare input
     model_hf = GPT2LMHeadModel.from_pretrained("gpt2")
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    sd = model_hf.state_dict()
     model_hf.eval()
 
     inputs = tokenizer(prompt, return_tensors="pt", padding=False)
@@ -33,7 +37,17 @@ def test_nanogpt_model_real(device, pcc, prompt, reset_seeds):
 
     config = model_hf.config
 
-    tt_model = nanogpt_model.TtGPT(config, sd, device)
+    base_address = ""
+    model_version = "gpt2"
+    tt_cache_path = get_tt_cache_path(model_version)
+
+    if (
+        tt_cache_path == (str(Path(f"models/experimental/nanogpt/datasets/{model_version}")) + "/")
+        and len(os.listdir(f"models/experimental/nanogpt/datasets/{model_version}")) < 320
+    ):
+        store_weights(model_version=model_version, file_name=tt_cache_path, dtype=dtype, base_address=base_address)
+
+    tt_model = nanogpt_model.TtGPT(config, device, tt_cache_path, dtype)
 
     tt_out = tt_model.forward(inputs.input_ids)
 
