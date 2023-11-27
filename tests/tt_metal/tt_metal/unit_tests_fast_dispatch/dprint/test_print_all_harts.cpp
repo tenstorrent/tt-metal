@@ -4,7 +4,7 @@
 
 #include "command_queue_fixture.hpp"
 #include "common/bfloat16.hpp"
-#include "llrt/tt_debug_print_server.hpp"
+#include "impl/debug/dprint_server.hpp"
 #include "gtest/gtest.h"
 #include "test_utils.hpp"
 #include "tt_metal/detail/tt_metal.hpp"

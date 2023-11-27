@@ -18,7 +18,7 @@
 * to initialize the read/write pointers to 0 only once.
 * It is also needed to empty the print buffer, otherwise device code will stall waiting on the host to flush it.
 *
-* Use llrt/tt_debug_print_server.h APIs to start the host-side print server.
+* Use impl/debug/dprint_server.h APIs to start the host-side print server.
 *
 */
 
@@ -30,7 +30,7 @@
 // So there are some not fully decoupled dependencies in this header.
 #include "risc_common.h"
 #endif
-#include "hostdevcommon/debug_print_common.h"
+#include "hostdevcommon/dprint_common.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 
 #include "dprint_buffer.h"

@@ -10,7 +10,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
-#include "llrt/tt_debug_print_server.hpp"
+#include "impl/debug/dprint_server.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

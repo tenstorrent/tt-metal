@@ -23,7 +23,7 @@
 // This file contains helper functions to do layout transformations (tilize, untilize) and
 // to compute the address map for copying activations from DRAM to L1
 #include "tt_metal/llrt/test_libs/conv_pattern.hpp"
-#include "llrt/tt_debug_print_server.hpp"
+#include "impl/debug/dprint_server.hpp"
 using namespace tt;
 using namespace tt::constants;
 

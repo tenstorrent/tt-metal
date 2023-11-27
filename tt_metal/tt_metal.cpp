@@ -9,7 +9,7 @@
 #include <string>
 
 #include "tt_metal/host_api.hpp"
-#include "llrt/tt_debug_print_server.hpp"
+#include "impl/debug/dprint_server.hpp"
 #include "dev_msgs.h"
 
 #include "tools/profiler/profiler.hpp"

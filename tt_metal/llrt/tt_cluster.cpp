@@ -11,7 +11,7 @@
 #include <string>
 
 #include "device_data.hpp"
-#include "hostdevcommon/debug_print_common.h"
+#include "hostdevcommon/dprint_common.h"
 #include "rtoptions.hpp"
 #include "third_party/umd/device/tt_silicon_driver_common.hpp"
 #include "tools/profiler/profiler.hpp"

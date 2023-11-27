@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "hostdevcommon/debug_print_common.h"
+#include "hostdevcommon/dprint_common.h"
 
 
 struct SliceRange {

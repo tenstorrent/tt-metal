@@ -184,7 +184,7 @@ If you are using a machine with bare metal machine specs, please use
 ## Debugging tips
 
 - To print within a kernel the following must be added:
-  - In the C++ python binding API file: `#include "tt_metal/llrt/tt_debug_print_server.hpp"`
+  - In the C++ python binding API file: `#include "tt_metal/impl/debug/dprint_server.hpp"`
   - In the same file, before launching your kernel : `    tt_start_debug_print_server(<device>, {<pci slot>}, {{<physical core coordinates>}});`
   - Note for core 0,0 it is 1,1
   - You can get the physical core given a logical core with the following call: `device->worker_core_from_logical_core(<logical_core>);`
