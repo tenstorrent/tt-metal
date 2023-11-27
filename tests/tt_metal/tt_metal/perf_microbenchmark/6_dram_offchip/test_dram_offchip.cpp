@@ -51,7 +51,7 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
 template <typename T>
 std::vector<T> slice(std::vector<T> const &v, int m, int n);
 
-std::tuple<tt_metal::Program, tt_metal::KernelID, uint32_t> create_program(
+std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::Device *device,
     const CoreRangeSet &all_cores,
     const uint32_t &num_reqs_at_a_time,
@@ -69,7 +69,7 @@ bool assign_runtime_args_to_program(
     const CoreRangeSet &core_group_2,
     const uint32_t &num_tiles_per_core_group_1,
     const uint32_t &num_tiles_per_core_group_2,
-    const tt_metal::KernelID &kernel,
+    const tt_metal::KernelHandle &kernel,
     const uint32_t &input_buffer_addr,
     const uint32_t &num_reqs_at_a_time,
     const uint32_t &single_tile_size,
@@ -355,7 +355,7 @@ std::vector<T> slice(std::vector<T> const &v, int m, int n) {
     return vec;
 }
 
-std::tuple<tt_metal::Program, tt_metal::KernelID, uint32_t> create_program(
+std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::Device *device,
     const CoreRangeSet &all_cores,
     const uint32_t &num_reqs_at_a_time,
@@ -396,7 +396,7 @@ bool assign_runtime_args_to_program(
     const CoreRangeSet &core_group_2,
     const uint32_t &num_tiles_per_core_group_1,
     const uint32_t &num_tiles_per_core_group_2,
-    const tt_metal::KernelID &kernel,
+    const tt_metal::KernelHandle &kernel,
     const uint32_t &input_buffer_addr,
     const uint32_t &num_reqs_at_a_time,
     const uint32_t &single_tile_size,
