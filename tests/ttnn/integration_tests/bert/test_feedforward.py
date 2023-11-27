@@ -9,8 +9,8 @@ import torch.nn.functional as F
 
 import ttnn
 
-from models.experimental.functional_bert.torch_functional_bert import torch_feedforward as torch_model
-from models.experimental.functional_bert.ttnn_functional_bert import ttnn_feedforward as ttnn_model
+from models.experimental.functional_bert.reference.torch_functional_bert import torch_feedforward as torch_model
+from models.experimental.functional_bert.tt.ttnn_functional_bert import ttnn_feedforward as ttnn_model
 from models.utility_functions import torch_random
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
