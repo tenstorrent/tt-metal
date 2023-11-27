@@ -48,7 +48,7 @@ def ttnn_optimized_multi_head_attention(
     ttnn.free(query)
     ttnn.free(key)
 
-    attention_probs = ttnn.nlp.attention_softmax(attention_scores, attention_mask=attention_mask, head_size=head_size)
+    attention_probs = ttnn.nlp.attention_softmax_(attention_scores, attention_mask=attention_mask, head_size=head_size)
 
     context_layer = ttnn.matmul(
         attention_probs,
