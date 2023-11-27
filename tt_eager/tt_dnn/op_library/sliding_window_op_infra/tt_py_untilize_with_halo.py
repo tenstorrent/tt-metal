@@ -91,6 +91,9 @@ class TTPyUntilizeWithHalo(TTPyOp):
         self.local_data_src_start_offsets_per_core = [src_start_idx[core_id][2] for core_id in range(num_cores_nhw)]
         self.r_data_src_start_offsets_per_core = [src_start_idx[core_id][3] for core_id in range(num_cores_nhw)]
         self.rr_data_src_start_offsets_per_core = [src_start_idx[core_id][4] for core_id in range(num_cores_nhw)]
+        self.height_sharded_mem_config = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
+        )
 
         def gen_config_tt_tensors(config_list_uint16):
             if len(config_list_uint16) == 0:
@@ -112,14 +115,13 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 config_size,  # = num_cores * local_data_nsegments * 2
             )
             torch_tensor = torch.tensor(config_list).reshape(config_tensor_shape)
-            mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
             shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
             shard_halo = False
             shard_spec = ttl.tensor.ShardSpec(self.shard_grid, config_shard_shape, shard_orientation, shard_halo)
 
             # tt_tensor = ttl.tensor.Tensor(config_list, config_tensor_shape, ttl.tensor.DataType.UINT32, ttl.tensor.Layout.ROW_MAJOR).to(self.device, mem_config, shard_spec)
             tt_tensor = ttl.tensor.Tensor(torch_tensor, ttl.tensor.DataType.UINT32).to(
-                self.device, mem_config, shard_spec
+                self.device, self.height_sharded_mem_config, shard_spec
             )
 
             tt_tensor_cpu = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
@@ -135,3 +137,29 @@ class TTPyUntilizeWithHalo(TTPyOp):
         self.rr_data_tensor = gen_config_tt_tensors(rr_data)
 
         return
+
+    def run_forward(self, x):
+        x = ttl.tensor.untilize_with_halo_v2(
+            x,
+            self.local_pad_tensor,
+            self.ll_data_tensor,
+            self.l_data_tensor,
+            self.local_data_tensor,
+            self.r_data_tensor,
+            self.rr_data_tensor,
+            0xF7FF,  ## pad_val
+            self.sliding_window_op_params[4],
+            self.max_out_nsticks_per_core,
+            self.local_pad_nsegments_per_core,
+            self.ll_data_nsegments_per_core,
+            self.l_data_nsegments_per_core,
+            self.local_data_nsegments_per_core,
+            self.r_data_nsegments_per_core,
+            self.rr_data_nsegments_per_core,
+            self.local_data_src_start_offsets_per_core,
+            self.ll_data_src_start_offsets_per_core,
+            self.l_data_src_start_offsets_per_core,
+            self.r_data_nsegments_per_core,
+            self.rr_data_nsegments_per_core,
+            self.height_sharded_mem_config,
+        )
