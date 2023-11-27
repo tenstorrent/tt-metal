@@ -431,42 +431,33 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
-        auto& src_cb_config = GetCircularBufferConfig(program, src_cb);
-        src_cb_config.set_globally_allocated_address(*src_buffer);
-
-        auto& dst_cb_config = GetCircularBufferConfig(program, out_cb);
-        dst_cb_config.set_globally_allocated_address(*dst_buffer);
+        UpdateDynamicCircularBufferAddress(program, src_cb, *src_buffer);
+        UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
 
         // kernel config data
         if (local_pad_ss_exists) {
             auto local_pad_ss_buffer = input_tensors.at(1).buffer();
-            auto& local_pad_ss_cb_config = GetCircularBufferConfig(program, local_pad_ss_cb);
-            local_pad_ss_cb_config.set_globally_allocated_address(*local_pad_ss_buffer);
+            UpdateDynamicCircularBufferAddress(program, local_pad_ss_cb, *local_pad_ss_buffer);
         }
         if (ll_data_ss_exists) {
             auto ll_data_ss_buffer = input_tensors.at(2).buffer();
-            auto& ll_data_ss_cb_config = GetCircularBufferConfig(program, ll_data_ss_cb);
-            ll_data_ss_cb_config.set_globally_allocated_address(*ll_data_ss_buffer);
+            UpdateDynamicCircularBufferAddress(program, ll_data_ss_cb, *ll_data_ss_buffer);
         }
         if (l_data_ss_exists) {
             auto l_data_ss_buffer = input_tensors.at(3).buffer();
-            auto& l_data_ss_cb_config = GetCircularBufferConfig(program, l_data_ss_cb);
-            l_data_ss_cb_config.set_globally_allocated_address(*l_data_ss_buffer);
+            UpdateDynamicCircularBufferAddress(program, l_data_ss_cb, *l_data_ss_buffer);
         }
         if (local_data_ss_exists) {
             auto local_data_ss_buffer = input_tensors.at(4).buffer();
-            auto& local_data_ss_cb_config = GetCircularBufferConfig(program, local_data_ss_cb);
-            local_data_ss_cb_config.set_globally_allocated_address(*local_data_ss_buffer);
+            UpdateDynamicCircularBufferAddress(program, local_data_ss_cb, *local_data_ss_buffer);
         }
         if (r_data_ss_exists) {
             auto r_data_ss_buffer = input_tensors.at(5).buffer();
-            auto& r_data_ss_cb_config = GetCircularBufferConfig(program, r_data_ss_cb);
-            r_data_ss_cb_config.set_globally_allocated_address(*r_data_ss_buffer);
+            UpdateDynamicCircularBufferAddress(program, r_data_ss_cb, *r_data_ss_buffer);
         }
         if (rr_data_ss_exists) {
             auto rr_data_ss_buffer = input_tensors.at(6).buffer();
-            auto& rr_data_ss_cb_config = GetCircularBufferConfig(program, rr_data_ss_cb);
-            rr_data_ss_cb_config.set_globally_allocated_address(*rr_data_ss_buffer);
+            UpdateDynamicCircularBufferAddress(program, rr_data_ss_cb, *rr_data_ss_buffer);
         }
     };
 

@@ -16,7 +16,7 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.sliding_window_op_config
     validate_max_pool_sharded_input_top_left_indices,
 )
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc, comp_pcc
 from tt_lib.utils import _nearest_y
 import tt_lib as ttl
 
@@ -269,3 +269,27 @@ def test_generate_all_configs_and_references(
     tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(device, sliding_window_op_params, shard_grid)
     # Set Op configs
     tt_py_untilize_with_halo_op.set_op_configs()
+    memory_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    untilize_with_halp_input_tt_tensor = ttl.tensor.Tensor(input_pyt_tensor, ttl.tensor.DataType.UINT32).to(
+        device, memory_config
+    )
+    # Run forward
+    untilize_with_halo_output_tt_tensor = tt_py_untilize_with_halo_op.run_forward(untilize_with_halp_input_tt_tensor)
+
+    # Compare against golden untilize with halo output
+    untilize_with_halo_output_pyt_tensor = untilize_with_halo_output_tt_tensor.cpu().to_torch()
+    golden_untilize_with_halo_output = [item for sublist in golden_untilize_with_halo_output_shards for item in sublist]
+    golden_untilize_with_halo_output_pyt_tensor = torch.Tensor(golden_untilize_with_halo_output)
+    passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(
+        golden_untilize_with_halo_output_pyt_tensor,
+        untilize_with_halo_output_pyt_tensor,
+        rtol=1e-1,
+        atol=1e-3,
+        pcc=0.9999,
+    )
+    print("Passing=", passing_allclose_and_pcc)
+    print("Output info=", output_info)
+    passing_pcc, _ = comp_pcc(
+        golden_untilize_with_halo_output_pyt_tensor, untilize_with_halo_output_pyt_tensor, pcc=0.999
+    )
+    assert passing_pcc
