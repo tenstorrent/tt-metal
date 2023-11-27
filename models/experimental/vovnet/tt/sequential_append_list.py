@@ -8,7 +8,6 @@ from typing import List
 
 import tt_lib
 
-from tt_lib.fallback_ops import fallback_ops
 from models.experimental.vovnet.tt.separable_conv_norm_act import (
     TtSeparableConvNormAct,
 )
@@ -55,5 +54,5 @@ class TtSequentialAppendList(nn.Sequential):
                 concat_list.append(module(x))
             else:
                 concat_list.append(module(concat_list[-1]))
-        x = fallback_ops.concat(concat_list, dim=1)
+        x = tt_lib.tensor.concat(concat_list, dim=1)
         return x

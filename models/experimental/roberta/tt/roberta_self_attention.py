@@ -127,8 +127,9 @@ class TtRobertaSelfAttention(nn.Module):
         elif past_key_value is not None:
             key_layer = self.transpose_for_scores(self.key_linear(hidden_states))
             value_layer = self.transpose_for_scores(self.value_linear(hidden_states))
-            key_layer = fallback_ops.concat([past_key_value[0], key_layer], dim=2)
-            value_layer = fallback_ops.concat([past_key_value[1], value_layer], dim=2)
+            dim = 2
+            key_layer = tt_lib.tensor.concat([past_key_value[0], key_layer], dim)
+            value_layer = tt_lib.tensor.concat([past_key_value[1], value_layer], dim)
         else:
             key_layer = self.transpose_for_scores(self.key_linear(hidden_states))
             value_layer = self.transpose_for_scores(self.value_linear(hidden_states))

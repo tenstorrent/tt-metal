@@ -85,4 +85,4 @@ class TtSSDregressionhead(nn.Module):
             result = torch_to_tt_tensor_rm(result, self.device)
             all_results.append(result)
 
-        return fallback_ops.concat(all_results, 2)
+        return tt_lib.tensor.concat(all_results, 2)

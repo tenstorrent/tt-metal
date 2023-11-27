@@ -85,4 +85,4 @@ class TtSSDclassificationhead(nn.Module):
             )
             all_results.append(result)
 
-        return fallback_ops.concat(all_results, 2)
+        return tt_lib.tensor.concat(all_results, 2)
