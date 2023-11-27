@@ -129,11 +129,17 @@ class TTPyUntilizeWithHalo(TTPyOp):
             assert all(torch_tensor.reshape(-1) == torch_tensor_after_round_trip.reshape(-1))
             return tt_tensor
 
+        print("gen local data config tt tensor")
         self.local_data_tensor = gen_config_tt_tensors(local_data)
+        print("gen local pad config tt tensor")
         self.local_pad_tensor = gen_config_tt_tensors(local_pad)
+        print("gen ll data config tt tensor")
         self.ll_data_tensor = gen_config_tt_tensors(ll_data)
+        print("gen l data config tt tensor")
         self.l_data_tensor = gen_config_tt_tensors(l_data)
+        print("gen r data config tt tensor")
         self.r_data_tensor = gen_config_tt_tensors(r_data)
+        print("gen rr data config tt tensor")
         self.rr_data_tensor = gen_config_tt_tensors(rr_data)
 
         return
