@@ -105,10 +105,10 @@ def attention_softmax_(
     scaler = 1 / (head_size**0.5)
 
     if attention_mask is not None:
-        output_tensor = ttl.operations.primary.transformers.scale_mask_softmax_in_place(
+        ttl.operations.primary.transformers.scale_mask_softmax_in_place(
             input_tensor._tensor, scaler, attention_mask._tensor
         )
-        return Tensor(output_tensor)
+        return input_tensor
     else:
         raise RuntimeError("Cannot apply divide by sqrt(head_size) using in-place version!")
 
