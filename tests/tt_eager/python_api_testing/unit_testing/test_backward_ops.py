@@ -93,6 +93,35 @@ class TestBackwardOps:
         logger.info(comp_out_b)
         assert comp_pass_a & comp_pass_b
 
+    def test_bw_unary_assign(self, input_shapes, device):
+        torch.manual_seed(0)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.unary_assign_bw(grad_tensor, input_tensor)
+        tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+
+        pyt_y = torch.clone(in_data)
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor = in_data.grad
+
+        comp_pass, _ = comparison_funcs.comp_equal(golden_output_tensor, tt_output_tensor)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+        logger.info(comp_out)
+        assert comp_pass
+
     @pytest.mark.parametrize("alpha", [0.05, 1.0, 0.5, 0.12])
     def test_bw_addalpha(self, input_shapes, alpha, device):
         torch.manual_seed(0)
@@ -166,7 +195,6 @@ class TestBackwardOps:
         logger.info(comp_out)
         assert comp_pass
 
-        
     @pytest.mark.parametrize("value", [0.05, 1.0, 0.5, 0.12])
     def test_bw_addcmul(self, input_shapes, value, device):
         torch.manual_seed(0)
