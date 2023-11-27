@@ -14,14 +14,14 @@ import transformers
 
 import ttnn
 
-from models.experimental.functional_bert.ttnn_functional_bert import (
+from models.experimental.functional_bert.tt.ttnn_functional_bert import (
     ttnn_bert_for_question_answering,
 )
 
-from models.experimental.functional_bert.ttnn_optimized_functional_bert import (
+from models.experimental.functional_bert.tt.ttnn_optimized_functional_bert import (
     ttnn_optimized_bert_for_question_answering,
 )
-from models.experimental.functional_bert.torch_functional_bert import (
+from models.experimental.functional_bert.reference.torch_functional_bert import (
     torch_bert_for_question_answering,
 )
 from ttnn.model_preprocessing import (

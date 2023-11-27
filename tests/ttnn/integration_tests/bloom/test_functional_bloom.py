@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.experimental.functional_bloom import torch_functional_bloom, ttnn_functional_bloom
+from models.experimental.functional_bloom.reference import torch_functional_bloom
+from models.experimental.functional_bloom.tt import ttnn_functional_bloom
 from transformers import BloomForCausalLM, BloomTokenizerFast
 import pytest
 import torch
