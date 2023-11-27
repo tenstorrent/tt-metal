@@ -19,7 +19,7 @@ enum class UnaryOpType {
     EXP = 0, RECIP = 1, GELU = 2, RELU = 3, SQRT = 4, SIGMOID = 5, LOG = 6, TANH = 7, LOG2 = 8, LOG10 = 9, SIN = 10, COS = 11,
     ABS=12, SIGN=13, SQUARE=14, EQZ = 15, NEZ = 16, GTZ = 17, LTZ = 18, GEZ = 19, LEZ = 20, RELU_MAX = 21, RELU_MIN = 22, POWER = 23, LEAKY_RELU = 24, ELU = 25, EXP2 = 26, HEAVISIDE = 27,
     EXPM1 = 28, SIGNBIT = 29, ASIN = 30, ACOS = 31, RSQRT = 32, RELU6 = 33, ATAN = 34, ERF = 35, ERFC = 36, ISINF = 37, ISPOSINF = 38, ISNEGINF = 39, ISNAN = 40, LOGICAL_NOT_UNARY = 41, ISFINITE = 42,
-    ERFINV = 43, I0 = 44, TAN = 45, RSUB = 46, RDIV = 47, SILU = 48
+    ERFINV = 43, I0 = 44, TAN = 45, RSUB = 46, RDIV = 47, SILU = 48, IDENTITY = 49
 };
 
 template <typename T>
@@ -149,7 +149,7 @@ constexpr auto elu = make_eltwise_unary_with_param<UnaryOpType::ELU>{};
 constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>{};
 constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};
 constexpr auto silu = make_eltwise_unary<UnaryOpType::SILU>{};
-
+constexpr auto identity = make_eltwise_unary<UnaryOpType::IDENTITY>{};
 
 inline Tensor exp(const Tensor &input_tensor, bool fast_and_approx=false, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
    return make_eltwise_unary_with_param<UnaryOpType::EXP>{}(input_tensor, fast_and_approx, output_mem_config);

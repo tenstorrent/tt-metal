@@ -40,7 +40,7 @@ if is_wormhole_b0():
 class TestEltwiseUnary:
     @pytest.mark.parametrize(
         "fn_kind",
-        ["relu", "sigmoid", "square", "tanh", "relu6", "add1", "deg2rad", "rad2deg", "silu"],
+        ["relu", "sigmoid", "square", "tanh", "relu6", "add1", "deg2rad", "rad2deg", "silu", "identity"],
     )
     def test_run_eltwise_unary_ops(
         self,

@@ -67,6 +67,9 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string,std::string>
         case UnaryOpType::LEAKY_RELU:
             defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
             break;
+        case UnaryOpType::IDENTITY:
+            defines["SFPU_OP_IDENTITY_INCLUDE"] = "1";
+            break;
         case UnaryOpType::RDIV:
             break;
         case UnaryOpType::RSUB:
@@ -178,6 +181,8 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, stri
             op_init_and_name = {"tan_tile_init();", fmt::format("tan_tile({});", idst)}; break;
         case UnaryOpType::SILU:
             op_init_and_name = {"silu_tile_init();", fmt::format("silu_tile({});", idst)}; break;
+        case UnaryOpType::IDENTITY:
+            op_init_and_name = {"identity_tile_init();", fmt::format("identity_tile({});", idst)}; break;
         case UnaryOpType::RELU6:
             op_init_and_name = {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)}; break;
         default: TT_ASSERT(false && "Undefined non-parametrized op type");

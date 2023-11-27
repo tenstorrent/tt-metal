@@ -516,6 +516,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_rsub,
         "pytorch_op": pytorch_ops.eltwise_rsub,
     },
+    "eltwise-identity": {
+        "tt_lib_op": tt_lib_ops.eltwise_identity,
+        "pytorch_op": pytorch_ops.eltwise_identity,
+    },
     # Eltwise binary
     "eltwise-ne": {
         "tt_lib_op": tt_lib_ops.eltwise_ne,
