@@ -120,7 +120,10 @@ env pytest models/demos/falcon7b/tests/test_falcon_end_to_end.py::test_FalconCau
 
 env pytest models/experimental/mnist/tests -k mnist_inference
 
-env pytest models/experimental/nanogpt/tests -k nanogpt_model_real
+env pytest models/experimental/nanogpt/tests -k nanogpt_attention
+env pytest models/experimental/nanogpt/tests -k nanogpt_block
+env pytest models/experimental/nanogpt/tests -k nanogpt_mlp
+env pytest models/experimental/nanogpt/tests -k nanogpt_model
 
 env pytest models/experimental/mistral/tests/test_mistral_attention.py
 
