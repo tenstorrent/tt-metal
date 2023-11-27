@@ -182,6 +182,22 @@ std::vector<Tensor> tan_bw(const Tensor& grad, const Tensor& tan_result, const M
     return operation::decorate_as_composite(__func__, _tan_bw)(grad, tan_result, output_mem_config);
 }
 
+std::vector<Tensor> _addcdiv_bw(const Tensor& grad, const Tensor& input, const Tensor& tensor1, const Tensor& tensor2, float value, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.push_back(grad);
+    Tensor grad_a = mul(mul_unary(grad, value, output_mem_config), recip(tensor2, output_mem_config));
+    grad_tensor.push_back(grad_a);
+    Tensor tmp = mul(mul_unary(neg(grad, output_mem_config), value, output_mem_config), tensor1, std::nullopt, output_mem_config);
+    Tensor grad_b = mul(tmp, recip(square(tensor2, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.push_back(grad_b);
+
+    return grad_tensor;
+}
+std::vector<Tensor> addcdiv_bw(const Tensor& grad, const Tensor& input, const Tensor& tensor1, const Tensor& tensor2, float value, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _addcdiv_bw)(grad, input, tensor1, tensor2, value, output_mem_config);
+}
+
 
 }//namespace tt_metal
 
