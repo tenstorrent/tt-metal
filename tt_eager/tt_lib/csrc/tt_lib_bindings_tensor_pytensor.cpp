@@ -55,6 +55,13 @@ Tensor convert_torch_tensor_to_tt_tensor(
     }
 
     switch (data_type) {
+        case DataType::UINT16: {
+            if (not torch_dtype.equal(torch.attr("int32"))) {
+                borrow_storage = false;
+                contiguous_torch_tensor = contiguous_torch_tensor.attr("to")(torch.attr("int16"));
+            }
+            break;
+        }
         case DataType::UINT32: {
             if (not torch_dtype.equal(torch.attr("int32"))) {
                 borrow_storage = false;
@@ -87,6 +94,21 @@ Tensor convert_torch_tensor_to_tt_tensor(
     auto on_destruction_callback = [tensor = contiguous_torch_tensor] { tensor.dec_ref(); };
 
     switch (data_type) {
+        case DataType::UINT16: {
+            auto data_ptr =
+                reinterpret_cast<uint16_t *>(py::cast<std::size_t>(contiguous_torch_tensor.attr("data_ptr")()));
+            auto num_elements = py::cast<std::size_t>(contiguous_torch_tensor.attr("numel")());
+            if (borrow_storage) {
+                auto storage = BorrowedStorage(
+                    borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
+                return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+            } else {
+                std::vector<uint16_t> uint16_t_vector(data_ptr, data_ptr + num_elements);
+                auto buffer = owned_buffer::create<uint16_t>(std::move(uint16_t_vector));
+                auto storage = OwnedStorage{std::move(buffer)};
+                return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR);
+            }
+        }
         case DataType::UINT32: {
             auto data_ptr =
                 reinterpret_cast<uint32_t *>(py::cast<std::size_t>(contiguous_torch_tensor.attr("data_ptr")()));
@@ -208,6 +230,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
         }
 
         const auto tt_dtype_to_torch_dtype = std::map<DataType, py::object> {
+            {DataType::UINT16, torch.attr("int16")}, // TODO(arakhmati): add DataType::INT16
             {DataType::UINT32, torch.attr("int32")}, // TODO(arakhmati): add DataType::INT32
             {DataType::FLOAT32, torch.attr("float32")},
             {DataType::BFLOAT16, torch.attr("bfloat16")},

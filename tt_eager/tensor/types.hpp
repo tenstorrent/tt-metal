@@ -31,7 +31,8 @@ enum class DataType {
     BFLOAT16 = 0,
     FLOAT32 = 1,
     UINT32 = 2,
-    BFLOAT8_B = 3
+    BFLOAT8_B = 3,
+    UINT16 = 4,
 };
 
 enum class StorageType {
@@ -145,10 +146,10 @@ bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b);
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b);
 
 using OwnedBuffer = std::variant<
+    owned_buffer::Buffer<uint16_t>,
     owned_buffer::Buffer<uint32_t>,
     owned_buffer::Buffer<float>,
-    owned_buffer::Buffer<bfloat16>
->;
+    owned_buffer::Buffer<bfloat16>>;
 struct OwnedStorage {
     OwnedBuffer buffer;
 
@@ -167,10 +168,10 @@ struct DeviceStorage {
 };
 
 using BorrowedBuffer = std::variant<
+    borrowed_buffer::Buffer<uint16_t>,
     borrowed_buffer::Buffer<uint32_t>,
     borrowed_buffer::Buffer<float>,
-    borrowed_buffer::Buffer<bfloat16>
->;
+    borrowed_buffer::Buffer<bfloat16>>;
 struct BorrowedStorage {
     BorrowedBuffer buffer;
     std::function<void()> on_creation_callback = []{};

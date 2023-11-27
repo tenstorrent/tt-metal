@@ -13,10 +13,11 @@ namespace tensor_impl {
 
 std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
     switch (dtype) {
+        case DataType::BFLOAT8_B: os << "bfloat8_b"; break;
         case DataType::BFLOAT16: os << "bfloat16"; break;
         case DataType::FLOAT32: os << "float32"; break;
+        case DataType::UINT16: os << "uint16"; break;
         case DataType::UINT32: os << "uint32"; break;
-        case DataType::BFLOAT8_B: os << "bfloat8_b"; break;
         default: throw std::invalid_argument("Unknown data type");
     }
     return os;
