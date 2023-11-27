@@ -737,6 +737,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.addcmul_bw
 
+.. autofunction:: tt_lib.tensor.addcdiv_bw
+
 .. autofunction:: tt_lib.tensor.unary_mul_bw
 
 .. autofunction:: tt_lib.tensor.unary_add_bw
@@ -750,7 +752,6 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.sqrt_bw
 
 .. autofunction:: tt_lib.tensor.mul_bw
-
 
 .. autofunction:: tt_lib.tensor.add_bw
 
