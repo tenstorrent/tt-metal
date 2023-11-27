@@ -273,6 +273,14 @@ def test_generate_all_configs_and_references(
     untilize_with_halp_input_tt_tensor = ttl.tensor.Tensor(input_pyt_tensor, ttl.tensor.DataType.UINT32).to(
         device, memory_config
     )
+    grid_size_binary = device.compute_with_storage_grid_size()
+    untilize_with_halp_input_tt_tensor = ttl.tensor.interleaved_to_sharded(
+        untilize_with_halp_input_tt_tensor,
+        grid_size_binary,
+        [input_size_to_shard_evenly // num_cores, 32],
+        ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttl.tensor.ShardOrientation.ROW_MAJOR,
+    )
     # Run forward
     untilize_with_halo_output_tt_tensor = tt_py_untilize_with_halo_op.run_forward(untilize_with_halp_input_tt_tensor)
 
