@@ -184,6 +184,7 @@ void TensorModule(py::module &m_tensor) {
         }, "Whether tensor data is interleaved across multiple DRAM channels"
         )
         .def_readonly("buffer_type", &MemoryConfig::buffer_type, "Buffer type to store tensor data. Can be DRAM or L1")
+        .def_readonly("memory_layout", &MemoryConfig::memory_layout, "Memory layout of tensor data.")
         .def(py::self == py::self)
         .def(py::self != py::self);
 
