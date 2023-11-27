@@ -95,6 +95,19 @@ std::vector<Tensor> unary_assign_bw(const Tensor& grad, const Tensor& input, con
 }
 
 
+std::vector<Tensor> _unary_div_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor scalar_t = full_like(input, scalar, output_mem_config);
+    Tensor result = mul(grad, recip(scalar_t, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.push_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> unary_div_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _unary_div_bw)(grad, input, scalar, output_mem_config);
+}
+
+
 }//namespace tt_metal
 
 }//namespace tt
