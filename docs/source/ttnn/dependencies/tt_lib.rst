@@ -741,3 +741,5 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.mul_bw
 
+.. autofunction:: tt_lib.tensor.exp_bw
+
