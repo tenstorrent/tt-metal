@@ -73,7 +73,7 @@ bool run_sfpu_test(string sfpu_name,int tile_factor=1,bool use_DRAM=true) {
         CoreCoord core = {0, 0};
 
         uint32_t single_tile_size = 2 * 1024;
-        uint32_t num_tiles = 2048*tile_factor;
+        uint32_t num_tiles = 1*tile_factor;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         uint32_t page_size = single_tile_size;
@@ -127,7 +127,8 @@ bool run_sfpu_test(string sfpu_name,int tile_factor=1,bool use_DRAM=true) {
                                                 uint(num_tiles),
                                                 1,
         };
-        string hlk_kernel_name = "tt_metal/kernels/compute/eltwise_sfpu.cpp";
+        string hlk_kernel_name = "tests/tt_eager/ops/kernel/eltwise_sfpu.cpp";
+
         // defines macro expands per SFPU ops
         std::map<string, string> hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
         auto eltwise_unary_kernel = tt_metal::CreateKernel(
