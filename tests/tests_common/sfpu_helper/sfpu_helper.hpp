@@ -70,6 +70,10 @@ float ref_abs(float x) {
     return std::abs(x);
 }
 
+float ref_identity(float x) {
+    return x;
+}
+
 vector<uint32_t> sfpu(const vector<uint32_t> &src, std::function<float(float)> sfpu_func) {
     vector<uint32_t> dst;
 
@@ -157,7 +161,8 @@ static std::vector<string> sfpu_op =
      "tanh",
      "sign",
      "abs",
-     "square"
+     "square",
+     "identity"
     };
 
 const map<string, std::function<float(float)>> sfpu_op_to_function = {
@@ -173,7 +178,8 @@ const map<string, std::function<float(float)>> sfpu_op_to_function = {
     {"tanh",        ref_tanh},
     {"sign",        ref_sign},
     {"abs",         ref_abs},
-    {"square",      ref_square}
+    {"square",      ref_square},
+    {"identity",    ref_identity}
 };
 
 const map<string, std::function<vector<uint32_t>(uint32_t num_bytes, int seed)>> sfpu_op_to_init_func = {
@@ -189,7 +195,8 @@ const map<string, std::function<vector<uint32_t>(uint32_t num_bytes, int seed)>>
     {"tanh",        create_random_vector_of_bfloat16_1_1},
     {"sign",        create_random_vector_of_bfloat16_1_1},
     {"abs",         create_random_vector_of_bfloat16_1_1},
-    {"square",      create_random_vector_of_bfloat16_1_1}
+    {"square",      create_random_vector_of_bfloat16_1_1},
+    {"identity",      create_random_vector_of_bfloat16_1_1}
 };
 
 const map<string, std::function<bool(float a, float b)>> sfpu_op_to_comparison_function = {
@@ -205,5 +212,6 @@ const map<string, std::function<bool(float a, float b)>> sfpu_op_to_comparison_f
     {"tanh", is_close_rtol_0p175_atol_0p1},
     {"sign", is_close_rtol_0p175_atol_0p1},
     {"abs",  is_close_rtol_0p175_atol_0p1},
-    {"square", is_close_rtol_0p175_atol_0p1}
+    {"square", is_close_rtol_0p175_atol_0p1},
+    {"identity", is_close_rtol_0p175_atol_0p1}
 };

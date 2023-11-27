@@ -729,3 +729,5 @@ Other Operations
 .. autofunction:: tt_lib.tensor.repeat_interleave
 
 .. autofunction:: tt_lib.tensor.power_fp
+
+.. autofunction:: tt_lib.tensor.identity
