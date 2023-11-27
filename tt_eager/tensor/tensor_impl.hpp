@@ -53,12 +53,17 @@ template <typename DataType, template<typename> typename BufferType>
 constexpr inline std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType<DataType>& data_to_pack) {
     if constexpr (std::is_same_v<DataType, uint32_t>) {
         return std::vector(std::begin(data_to_pack), std::end(data_to_pack));
-    }
-    else if constexpr (std::is_same_v<DataType, bfloat16>) {
+    } else if constexpr (std::is_same_v<DataType, uint16_t>) {
+        std::vector<uint32_t> output;
+        for (auto index = 0; index < data_to_pack.size(); index += 2) {
+            auto value = data_to_pack[index] << 16 + data_to_pack[index + 1];
+            output.push_back(value);
+        }
+        return output;
+    } else if constexpr (std::is_same_v<DataType, bfloat16>) {
         auto bfloat16_vec = std::vector(std::begin(data_to_pack), std::end(data_to_pack));
         return pack_bfloat16_vec_into_uint32_vec(bfloat16_vec);
-    }
-    else if constexpr (std::is_same_v<DataType, float>) {
+    } else if constexpr (std::is_same_v<DataType, float>) {
         std::vector<uint32_t> uint32_data;
         assert(data_to_pack.size() % 2 == 0);
         for (auto i = 0; i < data_to_pack.size(); i += 2) {
@@ -79,11 +84,16 @@ template <typename DataType>
 constexpr inline std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t> &data_to_unpack) {
     if constexpr (std::is_same_v<DataType, uint32_t>) {
         return data_to_unpack;
-    }
-    else if constexpr (std::is_same_v<DataType, bfloat16>) {
+    } else if constexpr (std::is_same_v<DataType, uint16_t>) {
+        std::vector<DataType> output;
+        for (auto index = 0; index < data_to_unpack.size(); index++) {
+            output.push_back(data_to_unpack[index] >> 16 & 0xFF);
+            output.push_back(data_to_unpack[index] & 0xFF);
+        }
+        return output;
+    } else if constexpr (std::is_same_v<DataType, bfloat16>) {
         return unpack_uint32_vec_into_bfloat16_vec(data_to_unpack);
-    }
-    else if constexpr (std::is_same_v<DataType, float>) {
+    } else if constexpr (std::is_same_v<DataType, float>) {
         std::vector<float> float_data;
         for (auto i = 0; i < data_to_unpack.size(); i++) {
             auto unpacked = unpack_two_bfloat16_from_uint32(data_to_unpack[i]);

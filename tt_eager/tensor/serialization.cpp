@@ -54,16 +54,16 @@ OwnedStorage load_owned_storage(ifstream& input_stream, DataType data_type) {
     if (data_type == DataType::UINT32 or data_type == DataType::BFLOAT8_B) {
         using T = std::uint32_t;
         return load_owned_storage<T>(input_stream);
-    }
-    else if (data_type == DataType::FLOAT32) {
+    } else if (data_type == DataType::UINT16) {
+        using T = std::uint16_t;
+        return load_owned_storage<T>(input_stream);
+    } else if (data_type == DataType::FLOAT32) {
         using T = float;
         return load_owned_storage<T>(input_stream);
-    }
-    else if (data_type == DataType::BFLOAT16) {
+    } else if (data_type == DataType::BFLOAT16) {
         using T = bfloat16;
         return load_owned_storage<T>(input_stream);
-    }
-    else {
+    } else {
         TT_THROW("Unsupported DataType");
     }
 }
