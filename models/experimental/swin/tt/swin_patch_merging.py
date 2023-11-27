@@ -83,7 +83,7 @@ class TtSwinPatchMerging(nn.Module):
         input_feature_2 = torch_to_tt_tensor_rm(input_feature_2, self.device)
         input_feature_3 = torch_to_tt_tensor_rm(input_feature_3, self.device)
 
-        input_feature = fallback_ops.concat(
+        input_feature = tt_lib.tensor.concat(
             [input_feature_0, input_feature_1, input_feature_2, input_feature_3], -1
         )
 
