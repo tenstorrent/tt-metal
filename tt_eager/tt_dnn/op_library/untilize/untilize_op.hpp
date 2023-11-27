@@ -100,17 +100,17 @@ struct UntilizeWithHaloV2 {
     const uint32_t pad_val_;
     const uint32_t ncores_height_;
     const uint32_t max_out_nsticks_per_core_;
-    const std::vector<uint32_t> local_pad_nsegments_per_core_;
-    const std::vector<uint32_t> ll_data_nsegments_per_core_;
-    const std::vector<uint32_t> l_data_nsegments_per_core_;
-    const std::vector<uint32_t> local_data_nsegments_per_core_;
-    const std::vector<uint32_t> r_data_nsegments_per_core_;
-    const std::vector<uint32_t> rr_data_nsegments_per_core_;
-    const std::vector<uint32_t> local_data_src_start_offsets_per_core_;
-    const std::vector<uint32_t> ll_data_src_start_offsets_per_core_;
-    const std::vector<uint32_t> l_data_src_start_offsets_per_core_;
-    const std::vector<uint32_t> r_data_src_start_offsets_per_core_;
-    const std::vector<uint32_t> rr_data_src_start_offsets_per_core_;
+    const std::vector<int32_t> local_pad_nsegments_per_core_;
+    const std::vector<int32_t> ll_data_nsegments_per_core_;
+    const std::vector<int32_t> l_data_nsegments_per_core_;
+    const std::vector<int32_t> local_data_nsegments_per_core_;
+    const std::vector<int32_t> r_data_nsegments_per_core_;
+    const std::vector<int32_t> rr_data_nsegments_per_core_;
+    const std::vector<int32_t> local_data_src_start_offsets_per_core_;
+    const std::vector<int32_t> ll_data_src_start_offsets_per_core_;
+    const std::vector<int32_t> l_data_src_start_offsets_per_core_;
+    const std::vector<int32_t> r_data_src_start_offsets_per_core_;
+    const std::vector<int32_t> rr_data_src_start_offsets_per_core_;
     const MemoryConfig out_mem_config_;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
@@ -153,17 +153,17 @@ Tensor untilize_with_halo_v2(const Tensor& input_tensor,
                              const uint32_t pad_val,
                              const uint32_t ncores_height,
                              const uint32_t max_out_nsticks_per_core,
-                             const std::vector<uint32_t>& local_pad_nsegments_per_core,
-                             const std::vector<uint32_t>& ll_data_nsegments_per_core,
-                             const std::vector<uint32_t>& l_data_nsegments_per_core,
-                             const std::vector<uint32_t>& local_data_nsegments_per_core,
-                             const std::vector<uint32_t>& r_data_nsegments_per_core,
-                             const std::vector<uint32_t>& rr_data_nsegments_per_core,
-                             const std::vector<uint32_t>& local_data_src_start_offsets_per_core,
-                             const std::vector<uint32_t>& ll_data_src_start_offsets_per_core,
-                             const std::vector<uint32_t>& l_data_src_start_offsets_per_core,
-                             const std::vector<uint32_t>& r_data_src_start_offsets_per_core,
-                             const std::vector<uint32_t>& rr_data_src_start_offsets_per_core,
+                             const std::vector<int32_t>& local_pad_nsegments_per_core,
+                             const std::vector<int32_t>& ll_data_nsegments_per_core,
+                             const std::vector<int32_t>& l_data_nsegments_per_core,
+                             const std::vector<int32_t>& local_data_nsegments_per_core,
+                             const std::vector<int32_t>& r_data_nsegments_per_core,
+                             const std::vector<int32_t>& rr_data_nsegments_per_core,
+                             const std::vector<int32_t>& local_data_src_start_offsets_per_core,
+                             const std::vector<int32_t>& ll_data_src_start_offsets_per_core,
+                             const std::vector<int32_t>& l_data_src_start_offsets_per_core,
+                             const std::vector<int32_t>& r_data_src_start_offsets_per_core,
+                             const std::vector<int32_t>& rr_data_src_start_offsets_per_core,
                              const MemoryConfig& mem_config);
 
 namespace untilize_helpers {
