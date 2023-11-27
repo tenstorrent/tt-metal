@@ -1035,6 +1035,9 @@ def eltwise_rsub(x, *args, **kwargs):
     dim = kwargs["factor"]
     return torch.sub(dim, x)
 
+def eltwise_identity(x, *args, **kwargs):
+    return x
+
 
 def eltwise_rdiv(x, *args, **kwargs):
     dim = kwargs["factor"]
