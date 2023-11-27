@@ -12,16 +12,14 @@ from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     run_conv_on_device_wrapper,
-    is_conv_supported_on_device
+    is_conv_supported_on_device,
 )
 
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
     # Pad to 'same' shape outputs
     if d > 1:
-        k = (
-            d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]
-        )  # actual kernel-size
+        k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]  # actual kernel-size
     if p is None:
         p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
     return p
@@ -92,9 +90,7 @@ class TtYolov5Conv2D(torch.nn.Module):
         if self.conv_on_device:
             x = self.conv(x)
             x = x + self.conv_bias
-            x = torch2tt_tensor(
-                x, self.device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-            )
+            x = torch2tt_tensor(x, self.device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
         else:
             x = self.conv(x)
 
@@ -121,9 +117,7 @@ class TtYolov5Conv(torch.nn.Module):
         super().__init__()
 
         self.device = device
-        self.conv = TtYolov5Conv2D(
-            state_dict, f"{base_address}.conv", device, c1, c2, k, s, p, g, d
-        )
+        self.conv = TtYolov5Conv2D(state_dict, f"{base_address}.conv", device, c1, c2, k, s, p, g, d)
 
         self.act = act
 
