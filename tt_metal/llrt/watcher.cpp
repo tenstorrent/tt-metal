@@ -25,11 +25,6 @@ namespace llrt {
 namespace watcher {
 
 
-// XXXX TODO(PGK) get these from soc
-#define NOC_DRAM_ADDR_BASE 0
-#define NOC_DRAM_ADDR_SIZE 1073741824
-#define NOC_DRAM_ADDR_END (NOC_DRAM_ADDR_BASE + NOC_DRAM_ADDR_SIZE)
-
 #define DEBUG_VALID_L1_ADDR(a, l) (((a) >= MEM_L1_BASE) && ((a) + (l) <= MEM_L1_BASE + MEM_L1_SIZE))
 
 // what's the size of the NOC<n> address space?  using 0x1000 for now
@@ -40,7 +35,7 @@ namespace watcher {
      (((a) >= NOC1_REGS_START_ADDR) && ((a) < NOC1_REGS_START_ADDR + 0x1000)) || \
      ((a) == RISCV_DEBUG_REG_SOFT_RESET_0))
 #define DEBUG_VALID_WORKER_ADDR(a, l) (DEBUG_VALID_L1_ADDR(a, l) || (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
-#define DEBUG_VALID_DRAM_ADDR(a, l) (((a) >= NOC_DRAM_ADDR_BASE) && ((a) + (l) <= NOC_DRAM_ADDR_END))
+#define DEBUG_VALID_DRAM_ADDR(a, l, b, e) (((a) >= b) && ((a) + (l) <= e))
 
 #define DEBUG_VALID_ETH_ADDR(a, l) (((a) >= MEM_ETH_BASE) && ((a) + (l) < MEM_ETH_BASE + MEM_ETH_SIZE))
 
@@ -546,7 +541,10 @@ static void watcher_sanitize_host_noc(const char* what,
     if (coord_found_p(soc_d.get_pcie_cores(), core)) {
         TT_THROW("Host watcher: bad {} NOC coord {}", what, core.str());
     } else if (coord_found_p(soc_d.get_dram_cores(), core)) {
-        if (!DEBUG_VALID_DRAM_ADDR(addr, lbytes)) {
+        uint64_t dram_addr_base = 0;
+        uint64_t dram_addr_size = soc_d.dram_core_size;
+        uint64_t dram_addr_end = dram_addr_size - dram_addr_base;
+        if (!DEBUG_VALID_DRAM_ADDR(addr, lbytes, dram_addr_base, dram_addr_end)) {
             print_stack_trace();
             TT_THROW("Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
         }
