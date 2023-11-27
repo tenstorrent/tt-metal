@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "command_queue_fixture.hpp"
 #include "gtest/gtest.h"
-#include "llrt/tt_debug_print_server.hpp"
+#include "impl/debug/dprint_server.hpp"
 #include "test_utils.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"

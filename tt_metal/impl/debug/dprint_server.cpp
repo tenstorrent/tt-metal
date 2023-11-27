@@ -9,15 +9,15 @@
 #include <iomanip>
 #include <chrono>
 #include <set>
-#include "llrt.hpp"
+#include "llrt/llrt.hpp"
 #include "common/logger.hpp"
 
-#include "tt_debug_print_server.hpp"
-#include "tt_cluster.hpp"
-#include "rtoptions.hpp"
+#include "dprint_server.hpp"
+#include "llrt/tt_cluster.hpp"
+#include "llrt/rtoptions.hpp"
 
 #include "hostdevcommon/common_runtime_address_map.h"
-#include "hostdevcommon/debug_print_common.h"
+#include "hostdevcommon/dprint_common.h"
 
 using std::uint32_t;
 using std::int32_t;

@@ -6,7 +6,7 @@
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "llrt/tt_debug_print_server.hpp"
+#include "impl/debug/dprint_server.hpp"
 #include "tt_metal/third_party/umd/device/util.hpp"
 
 #include "common/utils.hpp"

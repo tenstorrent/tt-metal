@@ -16,7 +16,7 @@
 
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tools/profiler/profiler.hpp"
-#include "llrt/tt_debug_print_server.hpp"
+#include "tt_metal/impl/debug/dprint_server.hpp"
 
 namespace tt::tt_metal {
 

@@ -13,7 +13,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/llrt/tt_debug_print_server.hpp"
+#include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 

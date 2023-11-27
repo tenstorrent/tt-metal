@@ -9,7 +9,7 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"
-#include "llrt/tt_debug_print_server.hpp"
+#include "impl/debug/dprint_server.hpp"
 #include "build_kernels_for_riscv/build_kernels_for_riscv.hpp"
 #include "common/utils.hpp"
 #include "tt_metal/detail/tt_metal.hpp"

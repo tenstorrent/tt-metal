@@ -7,7 +7,7 @@
 #include <cstring>
 
 #include "rtoptions.hpp"
-#include "tt_debug_print_server.hpp"
+#include "impl/debug/dprint_server.hpp"
 
 using std::vector;
 

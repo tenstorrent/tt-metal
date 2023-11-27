@@ -13,7 +13,7 @@
 
 #include "llrt/llrt.hpp"
 
-#include "llrt/tt_debug_print_server.hpp"
+#include "impl/debug/dprint_server.hpp"
 
 
 //////////////////////////////////////////////////////////////////////////////////////////
