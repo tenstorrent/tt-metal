@@ -16,7 +16,8 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, con
     // TODO: use enums from profiler_common.h
     enum BufferIndex { BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START };
     enum TimerDataIndex { TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE };
-    auto worker_cores_used_in_program = device->worker_cores_from_logical_cores(program.logical_cores());
+    auto worker_cores_used_in_program =
+        device->worker_cores_from_logical_cores(program.logical_cores()[CoreType::WORKER]);
     auto device_id = device->id();
     uint64_t min_cycle = -1;
     uint64_t max_cycle = 0;
