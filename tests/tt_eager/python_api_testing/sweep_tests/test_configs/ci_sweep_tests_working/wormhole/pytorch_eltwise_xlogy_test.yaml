@@ -9,6 +9,7 @@ test-list:
         num-samples: 64
       datagen:
         function: gen_rand
+        dtype: bfloat16
         args:
           low: 0.001
           high: 100
@@ -33,6 +34,7 @@ test-list:
         num-samples: 64
       datagen:
         function: gen_rand
+        dtype: bfloat16
         args:
           low: 0.001
           high: 100
