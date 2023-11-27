@@ -94,7 +94,6 @@ def matmul(
     input_tensor_a: Tensor,
     input_tensor_b: Tensor,
     *,
-    bias: Optional[Tensor] = None,
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
     dtype: Optional[DataType] = None,
     core_grid: Optional[Tuple[int, int]] = None,
@@ -276,8 +275,6 @@ def matmul(
         ttl_input_tensor_a = input_tensor_a._tensor
         ttl_input_tensor_b = input_tensor_b._tensor
         if is_batched:
-            if bias is not None:
-                raise RuntimeError("Bias must be None")
             ttl_output_tensor = ttl.operations.primary.matmul(
                 ttl_input_tensor_a,
                 ttl_input_tensor_b,
@@ -293,11 +290,9 @@ def matmul(
                 output_dtype=dtype,
             )
         else:
-            ttl_bias = bias._tensor if bias is not None else None
             ttl_output_tensor = ttl.operations.primary.matmul(
                 ttl_input_tensor_a,
                 ttl_input_tensor_b,
-                bias=ttl_bias,
                 program_config=ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
                     in0_block_w=in0_block_w,  # k
@@ -315,8 +310,6 @@ def matmul(
         output_tensor = Tensor(ttl_output_tensor)
 
     elif height_a == 1 and width_b == 1:  # dot product
-        if bias is not None:
-            raise RuntimeError("Bias must be None")
         input_tensor_b = reshape(input_tensor_b, tuple(input_tensor_b.shape[:-2] + [width_b, height_b]))
 
         ttl_input_tensor_a = input_tensor_a._tensor
@@ -341,9 +334,6 @@ def matmul(
         output_shape = (32,)
 
     elif _shape_is_broadcastable(input_shape_a, input_shape_b):
-        if bias is not None:
-            raise RuntimeError("Bias must be None")
-
         if width_a != height_b:
             raise RuntimeError("The width of the first tensor must be equal to the height of the second tensor")
         if all(x == 1 for x in batch_shape_b):
@@ -361,6 +351,208 @@ def matmul(
 
     else:
         raise RuntimeError("These tensors cannot be broadcasted")
+
+    if output_tensor.shape != output_shape:
+        output_tensor = reshape(output_tensor, output_shape)
+    return output_tensor
+
+
+def linear(
+    input_tensor_a: Tensor,
+    input_tensor_b: Tensor,
+    *,
+    bias: Optional[Tensor] = None,
+    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
+    dtype: Optional[DataType] = None,
+    core_grid: Optional[Tuple[int, int]] = None,
+    activation: Optional[str] = None,
+) -> Tensor:
+    """
+    linear(input_tensor_a: Tensor, input_tensor_b: Tensor, *, bias: Optional[Tensor] = None, memory_config: MemoryConfig=DRAM_MEMORY_CONFIG, dtype: Optional[DataType] = None, core_grid: Optional[Tuple[int, int]] = None, activation: Optional[str] = None) -> Tensor
+
+    Returns the linear transformation of the inputs
+
+    Arguments:
+        * :attr:`input_tensor_a` (Tensor): the first tensor to be multiplied
+        * :attr:`input_tensor_b` (Tensor): the second tensor to be multiplied
+
+    Example::
+        >>> # batched matrix x broadcasted matrix
+        >>> activations = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
+        >>> weights = ttnn.to_device(ttnn.from_torch(torch.randn((32, 128), dtype=torch.bfloat16)), device)
+        >>> bias = ttnn.to_device(ttnn.from_torch(torch.randn((128,), dtype=torch.bfloat16)), device)
+        >>> output = torch.linear(activations, weights, bias=bias)
+        >>> print(output.shape)
+        [10, 64, 128]
+    """
+
+    if dtype is None:
+        dtype = input_tensor_a.dtype
+
+    input_shape_a = input_tensor_a.shape
+    input_shape_b = input_tensor_b.shape
+    output_shape = tuple(input_shape_a[:-1] + input_shape_b[-1:])
+
+    if not isinstance(input_tensor_a, Tensor):
+        raise RuntimeError("Expected first argument to be a ttnn.Tensor")
+    if not isinstance(input_tensor_b, Tensor):
+        raise RuntimeError("Expected second argument to be a ttnn.Tensor")
+
+    if input_tensor_a._tensor.storage_type() != ttl.tensor.StorageType.DEVICE:
+        raise RuntimeError("input_tensor_a must be on device!")
+
+    if input_tensor_b._tensor.storage_type() != ttl.tensor.StorageType.DEVICE:
+        raise RuntimeError("input_tensor_b must be on device!")
+
+    # The idea is to make the shapes "possibly" broadcastable.
+    if len(input_tensor_a.shape) > MAX_RANK:
+        raise RuntimeError("There is currently no support for ranks greater than 4.")
+
+    if len(input_shape_b) > MAX_RANK:
+        raise RuntimeError(f"There is currently no support for ranks greater than {MAX_RANK}.")
+
+    if len(input_shape_a) == 1:
+        batch_shape_a = []
+        height_a = 1
+        (width_a,) = input_shape_a
+    else:
+        *batch_shape_a, height_a, width_a = input_shape_a
+
+    if len(input_shape_b) == 1:
+        batch_shape_b = []
+        (height_b,) = input_shape_b
+        width_b = 1
+    else:
+        *batch_shape_b, height_b, width_b = input_shape_b
+
+    input_tensor_a = reshape(input_tensor_a, tuple(batch_shape_a + [height_a, width_a]))
+    input_tensor_b = reshape(input_tensor_b, tuple(batch_shape_b + [height_b, width_b]))
+
+    input_tensor_a = _reshape_to_4D(input_tensor_a)
+    input_tensor_b = _reshape_to_4D(input_tensor_b)
+
+    if width_a != height_b:
+        raise RuntimeError("The width of the first tensor must be equal to the height of the second tensor")
+
+    m_size = height_a
+    k_size = width_a
+    n_size = width_b
+
+    ttl_input_tensor_a = input_tensor_a._tensor
+    ttl_input_tensor_b = input_tensor_b._tensor
+
+    if core_grid != None:
+        if m_size % TILE_SIZE != 0 or k_size % TILE_SIZE != 0:
+            raise TypeError("The last two dimensions of the first tensor must be a multiple of 32")
+
+        if k_size % TILE_SIZE != 0 or n_size % TILE_SIZE != 0:
+            raise TypeError("The last two dimensions of the second tensor must be a multiple of 32")
+
+        batch_size = math.prod(batch_shape_a)
+        is_batched = math.prod(batch_shape_b) > 1
+
+        if is_batched:
+            per_core_M = int(math.ceil((m_size / TILE_SIZE)))
+            per_core_N = int(math.ceil((n_size / TILE_SIZE)))
+            in0_block_w = 1  # TODO(arakhmati): Can it be more than 1 without running out of memory?
+        else:
+            per_core_M = int(math.ceil(((batch_size * m_size) / TILE_SIZE) / core_grid[0]))
+            per_core_N = int(math.ceil(n_size / TILE_SIZE / core_grid[1]))
+            in0_block_w = 4  # TODO(arakhmati): What is a good starting point?
+            while (k_size // TILE_SIZE) % in0_block_w != 0:
+                in0_block_w -= 1
+
+        subblocks = [
+            (2, 4),
+            (4, 2),
+            (1, 8),
+            (8, 1),
+            (1, 7),
+            (7, 1),
+            (2, 3),
+            (3, 2),
+            (1, 6),
+            (6, 1),
+            (1, 5),
+            (5, 1),
+            (2, 2),
+            (1, 4),
+            (4, 1),
+            (1, 3),
+            (3, 1),
+            (1, 2),
+            (2, 1),
+            (1, 1),
+        ]
+        for out_subblock_h, out_subblock_w in subblocks:
+            if per_core_M % out_subblock_h == 0 and per_core_N % out_subblock_w == 0:
+                break
+
+        # logger.info(
+        #     f"is_batched={is_batched}, per_core_M={per_core_M}, per_core_N={per_core_N}, in0_block_w={in0_block_w}, out_subblock_h={out_subblock_h}, out_subblock_w={out_subblock_w}"
+        # )
+        if is_batched:
+            if bias is not None:
+                raise RuntimeError("bias must be None")
+            if activation is not None:
+                raise RuntimeError("activations must be None")
+            ttl_output_tensor = ttl.operations.primary.matmul(
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                program_config=ttl.operations.primary.MatmulMultiCoreReuseProgramConfig(
+                    compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                    in0_block_w=in0_block_w,  # k
+                    out_subblock_h=out_subblock_h,  # m
+                    out_subblock_w=out_subblock_w,  # n
+                    per_core_M=per_core_M,
+                    per_core_N=per_core_N,
+                ),
+                output_mem_config=memory_config,
+                output_dtype=dtype,
+            )
+        else:
+            ttl_bias = bias._tensor if bias is not None else None
+            if activation == "gelu":
+                fused_activation = (ttl.tensor.FusibleActivation.GELU, True)
+            elif activation is None:
+                fused_activation = None
+            else:
+                raise RuntimeError(f"{activation} is not supported as activation function")
+
+            ttl_output_tensor = ttl.operations.primary.matmul(
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                bias=ttl_bias,
+                program_config=ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+                    in0_block_w=in0_block_w,  # k
+                    out_subblock_h=out_subblock_h,  # m
+                    out_subblock_w=out_subblock_w,  # n
+                    per_core_M=per_core_M,
+                    per_core_N=per_core_N,
+                    transpose_mcast=False,
+                    fused_activation=fused_activation,
+                ),
+                output_mem_config=memory_config,
+                output_dtype=dtype,
+            )
+
+        output_tensor = Tensor(ttl_output_tensor)
+
+    else:
+        if activation is not None:
+            raise RuntimeError("activations must be None")
+
+        ttl_bias = bias._tensor if bias is not None else None
+        ttl_output_tensor = ttl.operations.primary.matmul(
+            ttl_input_tensor_a,
+            ttl_input_tensor_b,
+            bias=ttl_bias,
+            output_mem_config=memory_config,
+            output_dtype=dtype,
+        )
+
+        output_tensor = Tensor(ttl_output_tensor)
 
     if output_tensor.shape != output_shape:
         output_tensor = reshape(output_tensor, output_shape)

@@ -18,7 +18,7 @@ def ttnn_optimized_multi_head_attention(
 ):
     batch_size, *_ = hidden_states.shape
 
-    fused_qkv_output = ttnn.matmul(
+    fused_qkv_output = ttnn.linear(
         hidden_states,
         fused_qkv_weight,
         bias=fused_qkv_bias,
@@ -65,7 +65,7 @@ def ttnn_optimized_multi_head_attention(
         core_grid=(batch_size, num_cores_x),
     )
 
-    self_output = ttnn.matmul(
+    self_output = ttnn.linear(
         context_layer,
         self_output_weight,
         bias=self_output_bias,
@@ -78,66 +78,28 @@ def ttnn_optimized_multi_head_attention(
     return self_output
 
 
-def ttnn_optimized_feedforward(hidden_states, ff1_weight, ff1_bias, ff2_weight, ff2_bias):
-    import tt_lib as ttl
+def ttnn_optimized_feedforward(hidden_states, ff1_weight, ff1_bias, ff2_weight, ff2_bias, num_cores_x=12):
+    batch_size, *_ = hidden_states.shape
 
-    batch_size, sequence_size, hidden_size = hidden_states.shape
-
-    hidden_states = ttnn.reshape(hidden_states, (batch_size, 1, sequence_size, hidden_size))
-    ff1_weight = ttnn.reshape(ff1_weight, (1, 1, hidden_size, hidden_size * 4))
-    ff1_bias = ttnn.reshape(ff1_bias, (1, 1, 32, hidden_size * 4))
-    ff2_weight = ttnn.reshape(ff2_weight, (1, 1, hidden_size * 4, hidden_size))
-    ff2_bias = ttnn.reshape(ff2_bias, (1, 1, 32, hidden_size))
-
-    hidden_states = hidden_states._tensor
-    ff1_weight = ff1_weight._tensor
-    ff1_bias = ff1_bias._tensor
-    ff2_weight = ff2_weight._tensor
-    ff2_bias = ff2_bias._tensor
-
-    ff1_output = ttl.operations.primary.matmul(
+    num_cores_x = 12
+    ff1_output = ttnn.linear(
         hidden_states,
         ff1_weight,
         bias=ff1_bias,
-        program_config=(
-            ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(12, batch_size),
-                in0_block_w=4,
-                out_subblock_h=6,
-                out_subblock_w=1,
-                per_core_M=12,
-                per_core_N=11,
-                transpose_mcast=False,
-                fused_activation=(ttl.tensor.FusibleActivation.GELU, True),
-            )
-        ),
-        output_mem_config=ttnn.L1_MEMORY_CONFIG,
-        output_dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+        core_grid=(batch_size, num_cores_x),
+        activation="gelu",
     )
 
-    ff2_output = ttl.operations.primary.matmul(
+    ff2_output = ttnn.linear(
         ff1_output,
         ff2_weight,
         bias=ff2_bias,
-        program_config=(
-            ttl.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(12, batch_size),
-                in0_block_w=4,
-                out_subblock_h=6,
-                out_subblock_w=1,
-                per_core_M=12,
-                per_core_N=3,
-                transpose_mcast=False,
-                fused_activation=None,
-            )
-        ),
-        output_mem_config=ttnn.L1_MEMORY_CONFIG,
-        output_dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        core_grid=(batch_size, num_cores_x),
     )
-    ff1_output.deallocate()
-
-    ff2_output = ttnn.Tensor(ff2_output)
-    ff2_output = ttnn.reshape(ff2_output, (batch_size, sequence_size, hidden_size))
 
     return ff2_output
 
@@ -249,8 +211,6 @@ def ttnn_optimized_bert_for_question_answering(
     num_encoders,
     head_size,
 ):
-    import tt_lib as ttl
-
     bert_output = ttnn_optimized_bert(
         input_ids,
         token_type_ids,
@@ -260,27 +220,11 @@ def ttnn_optimized_bert_for_question_answering(
         head_size=head_size,
     )
 
-    qa_outputs = bert_output
-    qa_outputs_weight = parameters["qa_outputs.weight"]
-    qa_outputs_bias = parameters["qa_outputs.bias"]
-
-    batch_size, sequence_size, hidden_size = qa_outputs.shape
-    qa_outputs = ttnn.reshape(qa_outputs, (batch_size, 1, sequence_size, hidden_size))
-    qa_outputs_weight = ttnn.reshape(qa_outputs_weight, (1, 1, hidden_size, 32))
-    qa_outputs_bias = ttnn.reshape(qa_outputs_bias, (1, 1, 32, 32))
-
-    qa_outputs = qa_outputs._tensor
-    qa_outputs_weight = qa_outputs_weight._tensor
-    qa_outputs_bias = qa_outputs_bias._tensor
-
-    qa_outputs = ttl.operations.primary.matmul(
-        qa_outputs,
-        qa_outputs_weight,
-        bias=qa_outputs_bias,
-        output_mem_config=ttnn.L1_MEMORY_CONFIG,
+    qa_outputs = ttnn.linear(
+        bert_output,
+        parameters["qa_outputs.weight"],
+        bias=parameters["qa_outputs.bias"],
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-
-    qa_outputs = ttnn.Tensor(qa_outputs)
-    qa_outputs = ttnn.reshape(qa_outputs, (batch_size, sequence_size, 32))
 
     return qa_outputs

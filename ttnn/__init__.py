@@ -35,6 +35,7 @@ from ttnn.core import (
     enable_program_cache,
     # math operations
     matmul,
+    linear,
     add,
     sub,
     subtract,
