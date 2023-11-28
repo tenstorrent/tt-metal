@@ -14,6 +14,10 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
+const std::string golden_output =
+R"(Printing int from arg: 0
+Printing int from arg: 2)";
+
 TEST_F(CommandQueueWithDPrintFixture, TestPrintMuting) {
     bool pass = true;
 
@@ -30,7 +34,7 @@ TEST_F(CommandQueueWithDPrintFixture, TestPrintMuting) {
 
     // This tests prints only on a single core
     constexpr CoreCoord core = {0, 0}; // Print on first core only
-    KernelID brisc_print_kernel_id = CreateKernel(
+    KernelHandle brisc_print_kernel_id = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/print_one_int.cpp",
         core,
@@ -63,9 +67,9 @@ TEST_F(CommandQueueWithDPrintFixture, TestPrintMuting) {
 
     // Check the print log against golden output.
     EXPECT_TRUE(
-        FilesAreIdentical(
+        FilesMatchesString(
             CommandQueueWithDPrintFixture::dprint_file_name,
-            "tests/tt_metal/tt_metal/unit_tests_fast_dispatch/dprint/test_print_muting_golden.txt"
+            golden_output
         )
     );
 }

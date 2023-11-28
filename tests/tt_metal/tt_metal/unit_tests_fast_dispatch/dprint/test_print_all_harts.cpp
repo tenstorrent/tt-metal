@@ -16,6 +16,106 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
+const std::string golden_output =
+R"(Test Debug Print: Data0
+Basic Types:
+101-1.618@0.122559
+SETPRECISION/FIXED/DEFAULTFLOAT:
+3.1416
+3.14159012
+3.141590118
+SETW (sticky):
+    123456    123456
+SETW (non-sticky):
+    123456123456
+HEX/OCT/DEC:
+1e240361100123456
+SLICE:
+TILE: (
+  0.122558594 0.127929688 0.490234375 0.51171875
+  0.245117188 0.255859375 0.98046875 1.0234375
+  1.9609375 2.046875 7.84375 8.1875
+  3.921875 4.09375 15.6875 16.375
+
+  ptr=122880)
+Test Debug Print: Unpack
+Basic Types:
+101-1.61800337@0.122558594
+SETPRECISION/FIXED/DEFAULTFLOAT:
+3.1416
+3.14159012
+3.141590118
+SETW (sticky):
+    123456    123456
+SETW (non-sticky):
+    123456123456
+HEX/OCT/DEC:
+1e240361100123456
+SLICE:
+TILE: (
+  0.122558594 0.127929688 0.490234375 0.51171875
+  0.245117188 0.255859375 0.98046875 1.0234375
+  1.9609375 2.046875 7.84375 8.1875
+  3.921875 4.09375 15.6875 16.375
+
+  ptr=122880)
+Test Debug Print: Math
+Basic Types:
+101-1.61800337@0.122558594
+SETPRECISION/FIXED/DEFAULTFLOAT:
+3.1416
+3.14159012
+3.141590118
+SETW (sticky):
+    123456    123456
+SETW (non-sticky):
+    123456123456
+HEX/OCT/DEC:
+1e240361100123456
+SLICE:
+Test Debug Print: Pack
+Basic Types:
+101-1.61800337@0.122558594
+SETPRECISION/FIXED/DEFAULTFLOAT:
+3.1416
+3.14159012
+3.141590118
+SETW (sticky):
+    123456    123456
+SETW (non-sticky):
+    123456123456
+HEX/OCT/DEC:
+1e240361100123456
+SLICE:
+TILE: (
+  0.122558594 0.127929688 0.490234375 0.51171875
+  0.245117188 0.255859375 0.98046875 1.0234375
+  1.9609375 2.046875 7.84375 8.1875
+  3.921875 4.09375 15.6875 16.375
+
+  ptr=122880)
+Test Debug Print: Data1
+Basic Types:
+101-1.61800337@0.122558594
+SETPRECISION/FIXED/DEFAULTFLOAT:
+3.1416
+3.14159012
+3.141590118
+SETW (sticky):
+    123456    123456
+SETW (non-sticky):
+    123456123456
+HEX/OCT/DEC:
+1e240361100123456
+SLICE:
+TILE: (
+  0.122558594 0.127929688 0.490234375 0.51171875
+  0.245117188 0.255859375 0.98046875 1.0234375
+  1.9609375 2.046875 7.84375 8.1875
+  3.921875 4.09375 15.6875 16.375
+
+  ptr=122880))";
+
 TEST_F(CommandQueueWithDPrintFixture, TestPrintFromAllHarts) {
     bool pass = true;
 
@@ -38,7 +138,7 @@ TEST_F(CommandQueueWithDPrintFixture, TestPrintFromAllHarts) {
         buffer_size,
         {{src0_cb_index, tt::DataFormat::RawUInt32}}
     ).set_page_size(src0_cb_index, buffer_size);
-    CircularBufferID cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     // Three different kernels to mirror typical usage and some previously
     // failing test cases, although all three kernels simply print.
@@ -70,9 +170,9 @@ TEST_F(CommandQueueWithDPrintFixture, TestPrintFromAllHarts) {
 
     // Check that the expected print messages are in the log file
     EXPECT_TRUE(
-        FilesAreIdentical(
+        FilesMatchesString(
             CommandQueueWithDPrintFixture::dprint_file_name,
-            "tests/tt_metal/tt_metal/unit_tests_fast_dispatch/dprint/test_print_all_harts_golden.txt"
+            golden_output
         )
     );
 }

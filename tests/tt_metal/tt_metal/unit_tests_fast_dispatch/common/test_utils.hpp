@@ -62,26 +62,32 @@ inline bool FileContainsAllStrings(string file_name, vector<string> &must_contai
     return false;
 }
 
-// Checkes whether two files are identical.
-inline bool FilesAreIdentical(string file_name_a, string file_name_b) {
-    // Open each file
-    std::fstream file_a, file_b;
-    if (!OpenFile(file_name_a, file_a, std::fstream::in))
+// Checkes whether a given file matches a golden string.
+inline bool FilesMatchesString(string file_name, const string& expected) {
+    // Open the input file.
+    std::fstream file;
+    if (!OpenFile(file_name, file, std::fstream::in)) {
+        tt::log_info(
+            tt::LogTest,
+            "Test Error: file {} could not be opened.",
+            file_name
+        );
         return false;
-    if (!OpenFile(file_name_b, file_b, std::fstream::in))
-        return false;
+    }
+
+    // Read the expected string into a stream
+    std::istringstream expect_stream(expected);
 
     // Go through line-by-line
     string line_a, line_b;
     int line_num = 1;
-    while (getline(file_a, line_a) && getline(file_b, line_b)) {
+    while (getline(file, line_a) && getline(expect_stream, line_b)) {
         if (line_a != line_b) {
             tt::log_info(
                 tt::LogTest,
-                "Test Error: Line {} of {} and {} did not match:\n\t{}\n\t{}",
+                "Test Error: Line {} of {} did not match expected:\n\t{}\n\t{}",
                 line_num,
-                file_name_a,
-                file_name_b,
+                file_name,
                 line_a,
                 line_b
             );
@@ -90,26 +96,24 @@ inline bool FilesAreIdentical(string file_name_a, string file_name_b) {
         line_num++;
     }
 
-    // Make sure that there's no lines left over in either file
-    if (getline(file_a, line_a)) {
+    // Make sure that there's no lines left over in either stream
+    if (getline(file, line_a)) {
         tt::log_info(
             tt::LogTest,
-            "Test Error: file {} has more lines than file {}",
-            file_name_a,
-            file_name_b
+            "Test Error: file {} has more lines than expected.",
+            file_name
         );
         return false;
     }
-    if (getline(file_b, line_b)) {
+    if (getline(expect_stream, line_b)) {
         tt::log_info(
             tt::LogTest,
-            "Test Error: file {} has more lines than file {}",
-            file_name_b,
-            file_name_a
+            "Test Error: file {} has less lines than expectes.",
+            file_name
         );
         return false;
     }
 
-    // If no checks failed, then the files match
+    // If no checks failed, then the file matches expected.
     return true;
 }
