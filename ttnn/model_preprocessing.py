@@ -4,6 +4,7 @@
 
 from dataclasses import dataclass
 import pathlib
+import shutil
 from typing import Optional
 
 from loguru import logger
@@ -49,51 +50,61 @@ def pad_tensor(tensor, height_multiple=TILE_HEIGHT, width_multiple=TILE_WIDTH):
     return tensor
 
 
-def preprocess_linear_weight(parameters_config, weight):
+def preprocess_linear_weight(weight, *, dtype):
     weight = weight.T.contiguous()
-    weight = ttnn.from_torch(weight, dtype=parameters_config.linear_weight_dtype)
+    weight = ttnn.from_torch(weight, dtype=dtype)
     weight = pad_tensor(weight)
     weight = ttnn.to_layout(weight, ttnn.TILE_LAYOUT)
     return weight
 
 
-def preprocess_linear_bias(parameters_config, bias):
+def preprocess_linear_bias(bias, *, dtype):
     bias = bias.reshape((1, -1))
-    bias = ttnn.from_torch(bias, dtype=parameters_config.linear_bias_dtype)
+    bias = ttnn.from_torch(bias, dtype=dtype)
     bias = pad_tensor(bias)
     bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT)
     return bias
 
 
-def preprocess_layernorm_parameter(parameters_config, parameter):
+def preprocess_layernorm_parameter(parameter, *, dtype):
     parameter = parameter.reshape((1, -1))
-    parameter = ttnn.from_torch(parameter, dtype=parameters_config.layernorm_parameter_dtype)
+    parameter = ttnn.from_torch(parameter, dtype=dtype)
     parameter = pad_tensor(parameter)
     parameter = ttnn.to_layout(parameter, ttnn.TILE_LAYOUT)
     return parameter
 
 
-def preprocess_embedding_weight(parameters_config, weight):
-    weight = ttnn.from_torch(weight, dtype=parameters_config.embedding_weight_dtype)
+def preprocess_embedding_weight(weight, *, dtype):
+    weight = weight[None, None, :, :]
+    weight = ttnn.from_torch(weight, dtype=dtype)
     return weight
 
 
-def default_preprocessor(parameters_config, torch_model, full_name):
+def default_preprocessor(parameters_config: ParametersConfig, torch_model, full_name):
     parameters = {}
     if isinstance(torch_model, torch.nn.Linear):
-        parameters[f"{full_name}weight"] = preprocess_linear_weight(parameters_config, torch_model.weight)
+        parameters[f"{full_name}weight"] = preprocess_linear_weight(
+            torch_model.weight, dtype=parameters_config.linear_weight_dtype
+        )
         if torch_model.bias is not None:
-            parameters[f"{full_name}bias"] = preprocess_linear_bias(parameters_config, torch_model.bias)
+            parameters[f"{full_name}bias"] = preprocess_linear_bias(
+                torch_model.bias, dtype=parameters_config.linear_bias_dtype
+            )
     elif isinstance(torch_model, torch.nn.LayerNorm):
-        parameters[f"{full_name}weight"] = preprocess_layernorm_parameter(parameters_config, torch_model.weight)
-        parameters[f"{full_name}bias"] = preprocess_layernorm_parameter(parameters_config, torch_model.bias)
+        parameters[f"{full_name}weight"] = preprocess_layernorm_parameter(
+            torch_model.weight, dtype=parameters_config.layernorm_parameter_dtype
+        )
+        parameters[f"{full_name}bias"] = preprocess_layernorm_parameter(
+            torch_model.bias, dtype=parameters_config.layernorm_parameter_dtype
+        )
     elif isinstance(torch_model, torch.nn.Embedding):
-        parameters[f"{full_name}weight"] = preprocess_embedding_weight(parameters_config, torch_model.weight)
+        parameters[f"{full_name}weight"] = preprocess_embedding_weight(
+            torch_model.weight, dtype=parameters_config.embedding_weight_dtype
+        )
     return parameters
 
 
 def _preprocess_model_parameters(
-    model_name,
     parameters_config,
     torch_model,
     *,
@@ -128,7 +139,6 @@ def _preprocess_model_parameters(
         if use_default_preprocessor:
             if not is_to_be_converted(child, full_name):
                 child_parameters = _preprocess_model_parameters(
-                    model_name,
                     parameters_config,
                     child,
                     prefix=full_name,
@@ -142,7 +152,6 @@ def _preprocess_model_parameters(
                     parameters.update(default_preprocessor_parameters)
                 else:
                     child_parameters = _preprocess_model_parameters(
-                        model_name,
                         parameters_config,
                         child,
                         prefix=full_name,
@@ -156,8 +165,10 @@ def _preprocess_model_parameters(
 
 def _load_parameters(model_cache_path: pathlib.Path) -> dict:
     parameters = {}
-    logger.info(f"Loading model weights from cache: {model_cache_path}")
     for file_name in model_cache_path.glob("*"):
+        if file_name.name == "version.txt":
+            continue
+
         extension = file_name.suffix
         name = file_name.stem
         if extension == ".bin":
@@ -185,36 +196,72 @@ def _dump_parameters(model_cache_path: pathlib.Path, parameters: dict) -> None:
 
 def preprocess_model_parameters(
     model_name,
+    version,
     parameters_config,
-    torch_model,
     *,
+    initialize_model,
     prefix="",
-    is_to_be_converted,
+    is_to_be_converted=None,
     custom_preprocessor=None,
     device: Optional[ttnn.Device] = None,
-    use_model_cache: bool = False,
 ):
     model_cache_path = ttnn.MODEL_CACHE_PATH / model_name
+    version_file_path = model_cache_path / "version.txt"
 
-    if use_model_cache and model_cache_path.exists():
-        parameters = _load_parameters(model_cache_path)
+    cache_exists = model_cache_path.exists()
+    if cache_exists:
+        if version_file_path.exists():
+            with open(version_file_path) as f:
+                cached_version = f.readline()
+        else:
+            cached_version = None
+
+        version_matches = version == cached_version
     else:
+        version_matches = False
+
+    if cache_exists and version_matches:
+        logger.info(f'Loading model weights from cache: {model_cache_path}  (version "{version}")')
+        parameters = _load_parameters(model_cache_path)
+        logger.info(f'Loaded model weights from cache: {model_cache_path}  (version "{version}")')
+    else:
+        if initialize_model is None:
+            raise RuntimeError(f'Cached weights for the model {model_name} (version "{version}") don\'t exist')
+
+        logger.info(f'Saving model weights to cache: {model_cache_path} (version "{version}")')
+
+        if is_to_be_converted is None:
+
+            def is_to_be_converted(*args, **kwargs):
+                return True
+
+        torch_model = initialize_model()
         parameters = _preprocess_model_parameters(
-            model_name,
             parameters_config,
             torch_model,
             prefix=prefix,
             is_to_be_converted=is_to_be_converted,
             custom_preprocessor=custom_preprocessor,
         )
-        if use_model_cache:
-            _dump_parameters(model_cache_path, parameters)
+
+        # TODO: use temporary directory
+        if model_cache_path.exists():
+            shutil.rmtree(model_cache_path)
+
+        _dump_parameters(model_cache_path, parameters)
+
+        with open(version_file_path, "w") as f:
+            f.write(version)
+
+        logger.info(f'Saved model weights to cache: {model_cache_path} (version "{version}")')
 
     if device is not None:
+        logger.info(f'Moving model weights to device: {model_cache_path} (version "{version}")')
         for name, parameter in list(parameters.items()):
             if isinstance(parameter, ttnn.Tensor):
                 parameters[name] = ttnn.to_device(parameter, device)
             else:
                 parameters[name] = parameter
+        logger.info(f'Moved model weights to device: {model_cache_path} (version "{version}")')
 
     return parameters

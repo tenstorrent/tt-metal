@@ -17,7 +17,7 @@ def test_free(device, h, w):
     input_tensor = ttnn.from_torch(torch_input_tensor)
 
     with pytest.raises(RuntimeError) as exception:
-        ttnn.free(input_tensor)
+        ttnn.deallocate(input_tensor)
     assert "Cannot deallocate tensor with borrowed storage!" in str(exception.value)
 
     input_tensor = ttnn.to_device(input_tensor, device)
@@ -27,7 +27,7 @@ def test_free(device, h, w):
     # (If reshape operation changes, then this test might need to be updated)
     output_tensor_reference = ttnn.reshape(output_tensor, (1, 1, h, w))
 
-    ttnn.free(output_tensor)
+    ttnn.deallocate(output_tensor)
     with pytest.raises(RuntimeError) as exception:
         print(output_tensor_reference)
     assert "Buffer must be allocated on device!" in str(exception.value)

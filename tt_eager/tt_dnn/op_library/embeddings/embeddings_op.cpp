@@ -506,7 +506,7 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     const auto &weights = input_tensors.at(1);
     TT_FATAL(a.layout() == Layout::ROW_MAJOR);
     TT_FATAL(weights.layout() == Layout::ROW_MAJOR);
-    TT_FATAL(a.dtype() == DataType::UINT32, "Input must be UIN32");
+    TT_FATAL(a.dtype() == DataType::UINT32, "Input must be UINT32");
     TT_FATAL(weights.dtype() == DataType::BFLOAT16);
 
     TT_FATAL(weights.shape()[0] == 1 && weights.shape()[1] == 1, "First two dimensions for the weights must be 1");
