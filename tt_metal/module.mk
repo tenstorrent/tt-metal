@@ -12,7 +12,7 @@ TT_METAL_LIB = $(LIBDIR)/libtt_metal.a
 else
 TT_METAL_LIB = $(LIBDIR)/libtt_metal.so
 endif
-TT_METAL_LDFLAGS = $(LDFLAGS)
+TT_METAL_LDFLAGS = $(LDFLAGS) -ltt_metal_detail -ltt_metal_impl -lprofiler -lllrt -ldevice -lbuild_kernels_for_riscv -lcommon
 TT_METAL_INCLUDES = $(COMMON_INCLUDES)
 TT_METAL_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
 
@@ -30,15 +30,13 @@ TT_METAL_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_SRCS:.cpp=.d))
 # Each module has a top level target as the entrypoint which must match the subdir name
 tt_metal: $(TT_METAL_LIB) tools
 
-TT_METAL_AND_DEPS_OBJS = $(COMMON_OBJS) $(TT_METAL_OBJS) $(DEVICE_OBJS) $(TT_METAL_IMPL_OBJS) $(TT_METAL_DETAIL_OBJS) $(LLRT_OBJS) $(BUILD_KERNELS_FOR_RISCV_OBJS) $(PROFILER_OBJS) $(TRACY_OBJS)
-
 ifeq ($(TT_METAL_CREATE_STATIC_LIB), 1)
 # If production build, release all of tt_metal as a full static library for later build with Eager wheel
-$(TT_METAL_LIB): $(TT_METAL_AND_DEPS_OBJS)
+$(TT_METAL_LIB): $(COMMON_OBJS) $(TT_METAL_OBJS) $(DEVICE_OBJS) $(TT_METAL_IMPL_OBJS) $(TT_METAL_DETAIL_OBJS) $(LLRT_OBJS) $(BUILD_KERNELS_FOR_RISCV_OBJS) $(PROFILER_OBJS)
 	@mkdir -p $(LIBDIR)
 	ar rcs -o $@ $^
 else
-$(TT_METAL_LIB): $(TT_METAL_AND_DEPS_OBJS)
+$(TT_METAL_LIB): $(TT_METAL_OBJS) $(COMMON_LIB) $(DEVICE_LIB) $(TT_METAL_IMPL_LIB) $(TT_METAL_DETAIL_LIB) $(LLRT_LIB) $(BUILD_KERNELS_FOR_RISCV_LIB) $(PROFILER_LIB)
 	@mkdir -p $(LIBDIR)
 	$(CXX) $(TT_METAL_CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $^ $(TT_METAL_LDFLAGS)
 endif
