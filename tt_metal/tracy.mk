@@ -1,4 +1,6 @@
+TRACY_LIB = $(LIBDIR)/libtracy.so
 TRACY_INCLUDES = -I$(TT_METAL_HOME)/tt_metal/third_party/tracy/public/tracy/
+TRACY_LDFLAGS = $(LDFLAGS)
 TRACY_DEFINES = -DTRACY_NO_CONTEXT_SWITCH
 
 #TRACY_DEFINES = -DTRACY_SAMPLING_HZ=40000 -DTRACY_NO_SYSTEM_TRACING  -DTRACY_NO_CALLSTACK -DTRACY_NO_CALLSTACK_INLINES
@@ -10,7 +12,11 @@ TRACY_DEPS = $(addprefix $(OBJDIR)/, $(TRACY_SRCS:.cpp=.d))
 
 -include $(TRACY_DEPS)
 
-tracy: $(TRACY_OBJS)
+tracy: $(TRACY_LIB)
+
+$(TRACY_LIB): $(TRACY_OBJS)
+	@mkdir -p $(LIBDIR)
+	$(CXX) $(CFLAGS) $(CXXFLAGS) $(SHARED_LIB_FLAGS) -o $@ $^ $(TRACY_LDFLAGS)
 
 $(OBJDIR)/tt_metal/third_party/tracy/public/%.o: tt_metal/third_party/tracy/public/%.cpp
 	@mkdir -p $(@D)
