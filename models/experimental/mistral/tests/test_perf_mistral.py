@@ -41,7 +41,6 @@ def run_perf_mistral(expected_inference_time, expected_compile_time, device, mod
 
     mistral_path = model_location_generator("mistral-7B-v0.1", model_subdir="Mistral")
     tokenizer = Tokenizer(str(Path(mistral_path) / "tokenizer.model"))
-    state_dict = torch.load(mistral_path / "consolidated.00.pth")
     base_address = f""
     with open(mistral_path / "params.json", "r") as f:
         model_args = TtModelArgs(**json.loads(f.read()))
@@ -58,7 +57,6 @@ def run_perf_mistral(expected_inference_time, expected_compile_time, device, mod
     tt_cache_path = "/mnt/MLPerf/tt_dnn-models/tt/Mistral/"
     tt_model = TtTransformer(
         args=model_args,
-        state_dict=state_dict,
         device=device,
         base_address=base_address,
         tt_cache_path=tt_cache_path,

@@ -25,7 +25,6 @@ class TtTransformer(nn.Module):
         self,
         args: TtModelArgs,
         device=None,
-        state_dict=None,
         base_address=None,
         tt_cache_path=None,
     ):
@@ -34,11 +33,10 @@ class TtTransformer(nn.Module):
         self.vocab_size = args.vocab_size
         self.n_layers = args.n_layers
         self.device = device
-        self.state_dict = state_dict
         self.base_address = base_address
         assert self.vocab_size > 0
 
-        embedding_weights = state_dict["tok_embeddings.weight"]
+        embedding_weights = torch.load(tt_cache_path + "tok_embeddings.weight.pt")
         self.tok_embeddings = nn.Embedding(args.vocab_size, args.dim, _weight=embedding_weights)
 
         self.layers = torch.nn.ModuleList(
