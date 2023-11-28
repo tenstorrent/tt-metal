@@ -108,12 +108,10 @@ def run_bert_question_and_answering_inference(
 
     profiler.start("attention_mask_preprocessing")
     tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
-    tt_lib.device.Synchronize()
     profiler.end("attention_mask_preprocessing")
 
     profiler.start("embedding_input_preprocessing")
     tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
-    tt_lib.device.Synchronize()
     profiler.end("embedding_input_preprocessing")
 
     profiler.start("hugging_face_reference_model")
@@ -125,9 +123,12 @@ def run_bert_question_and_answering_inference(
 
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
+    tt_attention_mask = tt_attention_mask.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+    tt_embedding_inputs = {
+        key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"]) for (key, value) in tt_embedding_inputs.items()
+    }
     tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
-    tt_out = tt_bert_model(tt_embedding, tt_attention_mask)
-    tt_lib.device.Synchronize()
+    tt_out = tt_bert_model(tt_embedding, tt_attention_mask).cpu()
     profiler.end("first_model_run_with_compile", force_enable=True)
     del tt_out
     del tt_embedding
@@ -147,16 +148,19 @@ def run_bert_question_and_answering_inference(
     print(f"Running BERT model for perf measurement")
 
     profiler.start(f"model_run_{PERF_CNT}_times_for_inference")
+    tt_attention_mask = tt_attention_mask.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+    tt_embedding_inputs = {
+        key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"]) for (key, value) in tt_embedding_inputs.items()
+    }
     tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
-    tt_out = tt_bert_model(tt_embedding, tt_attention_mask)
-    tt_lib.device.Synchronize()
+    tt_out = tt_bert_model(tt_embedding, tt_attention_mask).cpu()
     profiler.end(f"model_run_{PERF_CNT}_times_for_inference", PERF_CNT)
 
     # output postprocessing
     profiler.start("processing_output_to_string")
 
     tt_untilized_output = (
-        tt_out.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
+        tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
     )
 
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)

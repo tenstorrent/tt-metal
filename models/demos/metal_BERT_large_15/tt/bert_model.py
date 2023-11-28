@@ -126,17 +126,13 @@ class TtBertBatchDram:
                 tt_attention_mask = tt_lib.tensor.Tensor(
                     extended_attention_mask,
                     self.model_config["OP8_SOFTMAX_ATTENTION_MASK_DTYPE"],
-                ).to(self.device, self.model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+                )
             else:
                 extended_attention_mask = pad_activation(extended_attention_mask)
-                tt_attention_mask = (
-                    tt_lib.tensor.Tensor(
-                        extended_attention_mask,
-                        self.model_config["OP8_SOFTMAX_ATTENTION_MASK_DTYPE"],
-                    )
-                    .to(tt_lib.tensor.Layout.TILE)
-                    .to(self.device, self.model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
-                )
+                tt_attention_mask = tt_lib.tensor.Tensor(
+                    extended_attention_mask,
+                    self.model_config["OP8_SOFTMAX_ATTENTION_MASK_DTYPE"],
+                ).to(tt_lib.tensor.Layout.TILE)
         else:
             tt_attention_mask = attention_mask
         return tt_attention_mask
