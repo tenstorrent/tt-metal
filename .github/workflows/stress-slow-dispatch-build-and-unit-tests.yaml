@@ -14,11 +14,8 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          # run slow dispatch on BM only for now because resources are limited
-          # so we want to ensure fast dispatch runs as stably as possible, which
-          # is best achieved by running on VM
-          {arch: grayskull, runs-on: ["stress-grayskull", "self-reset"], fw: "fw-date-2023-06-28", machine-type: "bare_metal"},
-          {arch: wormhole_b0, runs-on: ["stress-wormhole_b0", "self-reset"], fw: "fw-date-2023-08-08", machine-type: "bare_metal"},
+          {arch: grayskull, runs-on: ["stress-grayskull", "cloud-virtual-machine"], fw: "fw-date-2023-06-28", machine-type: "virtual_machine"},
+          {arch: wormhole_b0, runs-on: ["stress-wormhole_b0", "cloud-virtual-machine"], fw: "fw-date-2023-08-08", machine-type: "virtual_machine"},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
