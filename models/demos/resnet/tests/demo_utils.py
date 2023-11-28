@@ -7,6 +7,7 @@ import torch
 import os
 import glob
 from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
+from datasets import load_dataset
 
 
 class InputExample(object):
@@ -65,6 +66,28 @@ def get_data_loader(input_loc, batch_size):
                 yield examples
                 del examples
                 examples = []
+
+    def loader_hf():
+        examples = []
+        for f1 in files:
+            examples.append(
+                InputExample(
+                    image=f1["image"],
+                    label=f1["label"],
+                )
+            )
+            if len(examples) == batch_size:
+                yield examples
+                del examples
+                examples = []
+
+    if len(files) == 0:
+        files_raw = iter(load_dataset("imagenet-1k", split="validation", use_auth_token=True, streaming=True))
+        files = []
+        sample_count = 3500
+        for _ in range(sample_count):
+            files.append(next(files_raw))
+        return loader_hf()
 
     return loader()
 
