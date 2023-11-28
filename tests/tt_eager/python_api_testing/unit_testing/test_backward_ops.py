@@ -39,7 +39,7 @@ class TestBackwardOps:
 
         in_data.retain_grad()
 
-        pyt_y = torch.mul(in_data, torch.tensor(scalar))
+        pyt_y = in_data * torch.tensor(scalar)
 
         pyt_y.backward(gradient=grad_data)
 
@@ -195,8 +195,15 @@ class TestBackwardOps:
         logger.info(comp_out)
         assert comp_pass
 
-    @pytest.mark.parametrize("alpha", [1.0])
-    def test_bw_unary_add(self, input_shapes, alpha, device):
+    @pytest.mark.parametrize(
+        "exponent",
+        [
+            0.0,
+            1.0,
+            2.0,
+        ],
+    )
+    def test_bw_unary_pow(self, input_shapes, exponent, device):
         torch.manual_seed(0)
         in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
         grad_data = torch.randn(input_shapes).bfloat16()
@@ -209,12 +216,12 @@ class TestBackwardOps:
             tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
         )
 
-        tt_output_tensor_on_device = tt_lib.tensor.unary_add_bw(grad_tensor, input_tensor, alpha=alpha)
+        tt_output_tensor_on_device = tt_lib.tensor.unary_pow_bw(grad_tensor, input_tensor, exponent=exponent)
         tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
 
         in_data.retain_grad()
 
-        pyt_y = torch.add(in_data, torch.tensor(alpha))
+        pyt_y = torch.pow(in_data, exponent)
 
         pyt_y.backward(gradient=grad_data)
 

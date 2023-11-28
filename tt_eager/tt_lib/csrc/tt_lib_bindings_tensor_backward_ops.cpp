@@ -78,6 +78,14 @@ namespace tt::tt_metal::detail{
                     "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
             )doc");
 
+    m_tensor.def("unary_pow_bw", &tt::tt_metal::unary_pow_bw,
+        py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("exponent") = 1.0f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Performs backward operations for power with given ``grad`` and ``exponent`` where exponent value is greater than 1.
+
+                "exponent", "Exponent value", "integer", "default to 1", "Yes"
+            )doc");
+
+
     m_tensor.def("mul_bw", &tt::tt_metal::mul_bw,
             py::arg("grad").noconvert(), py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
                 Performs backward operations for multiplication of two input tensors with given ``grad``
