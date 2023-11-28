@@ -90,19 +90,24 @@ class TTPyUntilizeWithHalo(TTPyOp):
         self.l_data_src_start_offsets_per_core = [src_start_idx[core_id][1] for core_id in range(num_cores_nhw)]
         self.local_data_src_start_offsets_per_core = [src_start_idx[core_id][2] for core_id in range(num_cores_nhw)]
         self.r_data_src_start_offsets_per_core = [src_start_idx[core_id][3] for core_id in range(num_cores_nhw)]
+        # print(f'r_data_src_start_offset: {self.r_data_src_start_offsets_per_core}')
         self.rr_data_src_start_offsets_per_core = [src_start_idx[core_id][4] for core_id in range(num_cores_nhw)]
         self.height_sharded_mem_config = ttl.tensor.MemoryConfig(
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
         )
 
-        def gen_config_tt_tensors(config_list_uint16):
+        def gen_config_tt_tensors(config_list_uint16, toprint=False):
             if len(config_list_uint16) == 0:
                 # return dummy tensor
-                return ttl.tensor.Tensor([0], [1, 1, 1, 1], ttl.tensor.DataType.FLOAT32, ttl.tensor.Layout.ROW_MAJOR)
+                return ttl.tensor.Tensor(
+                    [0.0, 0.0], [1, 1, 1, 2], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, self.device
+                )
             config_list = []
             for i in range(0, len(config_list_uint16), 2):
                 pstr = struct.pack("HH", config_list_uint16[i], config_list_uint16[i + 1])
                 packedint = struct.unpack("I", pstr)
+                if toprint:
+                    print(f"{config_list_uint16[i]},{config_list_uint16[i+1]} -> {packedint}")
                 config_list.append(packedint)
             config_size = len(config_list)
             assert config_size % num_cores_nhw == 0
@@ -125,6 +130,8 @@ class TTPyUntilizeWithHalo(TTPyOp):
             )
 
             tt_tensor_cpu = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+            if toprint:
+                tt_tensor_cpu.print()
             torch_tensor_after_round_trip = tt_tensor_cpu.to_torch().reshape(config_tensor_shape)
             assert all(torch_tensor.reshape(-1) == torch_tensor_after_round_trip.reshape(-1))
             return tt_tensor
@@ -138,14 +145,14 @@ class TTPyUntilizeWithHalo(TTPyOp):
         print("gen l data config tt tensor")
         self.l_data_tensor = gen_config_tt_tensors(l_data)
         print("gen r data config tt tensor")
-        self.r_data_tensor = gen_config_tt_tensors(r_data)
+        self.r_data_tensor = gen_config_tt_tensors(r_data, toprint=False)
         print("gen rr data config tt tensor")
         self.rr_data_tensor = gen_config_tt_tensors(rr_data)
 
         return
 
     def run_forward(self, x):
-        x = ttl.tensor.untilize_with_halo_v2(
+        return ttl.tensor.untilize_with_halo_v2(
             x,
             self.local_pad_tensor,
             self.ll_data_tensor,
@@ -153,7 +160,8 @@ class TTPyUntilizeWithHalo(TTPyOp):
             self.local_data_tensor,
             self.r_data_tensor,
             self.rr_data_tensor,
-            0xF7FF,  ## pad_val
+            0x0,  ## pad val
+            # 0xF7FF,  ## pad_val
             self.sliding_window_op_params[4],
             self.max_out_nsticks_per_core,
             self.local_pad_nsegments_per_core,
@@ -165,7 +173,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
             self.local_data_src_start_offsets_per_core,
             self.ll_data_src_start_offsets_per_core,
             self.l_data_src_start_offsets_per_core,
-            self.r_data_nsegments_per_core,
-            self.rr_data_nsegments_per_core,
+            self.r_data_src_start_offsets_per_core,
+            self.rr_data_src_start_offsets_per_core,
             self.height_sharded_mem_config,
         )
