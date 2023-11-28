@@ -15,6 +15,207 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
+const std::string golden_output =
+R"(TestConstCharStrNC{0,0}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{0,0}
++++++++++++++++
+TestConstCharStrNC{1,0}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{1,0}
++++++++++++++++
+TestConstCharStrNC{2,0}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{2,0}
++++++++++++++++
+TestConstCharStrNC{3,0}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{3,0}
++++++++++++++++
+TestConstCharStrNC{4,0}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{4,0}
++++++++++++++++
+TestConstCharStrNC{0,1}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{0,1}
++++++++++++++++
+TestConstCharStrNC{1,1}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{1,1}
++++++++++++++++
+TestConstCharStrNC{2,1}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{2,1}
++++++++++++++++
+TestConstCharStrNC{3,1}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{3,1}
++++++++++++++++
+TestConstCharStrNC{4,1}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{4,1}
++++++++++++++++
+TestConstCharStrNC{0,2}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{0,2}
++++++++++++++++
+TestConstCharStrNC{1,2}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{1,2}
++++++++++++++++
+TestConstCharStrNC{2,2}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{2,2}
++++++++++++++++
+TestConstCharStrNC{3,2}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{3,2}
++++++++++++++++
+TestConstCharStrNC{4,2}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{4,2}
++++++++++++++++
+TestConstCharStrNC{0,3}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{0,3}
++++++++++++++++
+TestConstCharStrNC{1,3}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{1,3}
++++++++++++++++
+TestConstCharStrNC{2,3}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{2,3}
++++++++++++++++
+TestConstCharStrNC{3,3}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{3,3}
++++++++++++++++
+TestConstCharStrNC{4,3}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{4,3}
++++++++++++++++
+TestConstCharStrNC{0,4}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{0,4}
++++++++++++++++
+TestConstCharStrNC{1,4}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{1,4}
++++++++++++++++
+TestConstCharStrNC{2,4}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{2,4}
++++++++++++++++
+TestConstCharStrNC{3,4}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{3,4}
++++++++++++++++
+TestConstCharStrNC{4,4}
+   2
+0.1235
+0.1200
+0.1226
+----------
+TestStrBR{4,4}
++++++++++++++++)";
 TEST_F(CommandQueueWithDPrintFixture, TestPrintRaiseWait) {
     // This test is a fast dispatch test.
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
@@ -94,9 +295,9 @@ try{
 
     // Check the print log against golden output.
     EXPECT_TRUE(
-        FilesAreIdentical(
+        FilesMatchesString(
             CommandQueueWithDPrintFixture::dprint_file_name,
-            "tests/tt_metal/tt_metal/unit_tests_fast_dispatch/dprint/test_raise_wait_golden.txt"
+            golden_output
         )
     );
 } catch (std::exception& e) {

@@ -1,2 +1,0 @@
-Printing int from arg: 0
-Printing int from arg: 2
