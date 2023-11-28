@@ -36,7 +36,7 @@ def ttnn_optimized_multi_head_attention(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         core_grid=(batch_size, num_cores_x),
     )
-    ttnn.free(fused_qkv_output)
+    ttnn.deallocate(fused_qkv_output)
 
     attention_scores = ttnn.matmul(
         query,
@@ -45,8 +45,8 @@ def ttnn_optimized_multi_head_attention(
         dtype=ttnn.bfloat16,
         core_grid=(batch_size, num_cores_x),
     )
-    ttnn.free(query)
-    ttnn.free(key)
+    ttnn.deallocate(query)
+    ttnn.deallocate(key)
 
     attention_probs = ttnn.nlp.attention_softmax_(attention_scores, attention_mask=attention_mask, head_size=head_size)
 
@@ -57,12 +57,12 @@ def ttnn_optimized_multi_head_attention(
         dtype=ttnn.bfloat8_b,
         core_grid=(batch_size, num_cores_x),
     )
-    ttnn.free(attention_probs)
+    ttnn.deallocate(attention_probs)
+    ttnn.deallocate(value)
 
     context_layer = ttnn.nlp.concatenate_heads(
         context_layer,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        core_grid=(batch_size, num_cores_x),
     )
 
     self_output = ttnn.linear(
@@ -73,7 +73,7 @@ def ttnn_optimized_multi_head_attention(
         dtype=ttnn.bfloat16,
         core_grid=(batch_size, num_cores_x),
     )
-    ttnn.free(context_layer)
+    ttnn.deallocate(context_layer)
 
     return self_output
 
@@ -100,6 +100,7 @@ def ttnn_optimized_feedforward(hidden_states, ff1_weight, ff1_bias, ff2_weight, 
         dtype=ttnn.bfloat16,
         core_grid=(batch_size, num_cores_x),
     )
+    ttnn.deallocate(ff1_output)
 
     return ff2_output
 
@@ -129,8 +130,8 @@ def ttnn_optimized_bert_encoder(
         bias=parameters[f"bert.encoder.layer.{encoder_index}.attention.output.LayerNorm.bias"],
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    ttnn.free(hidden_states)
-    ttnn.free(multi_head_attention_output)
+    ttnn.deallocate(hidden_states)
+    ttnn.deallocate(multi_head_attention_output)
 
     feedforward_output = ttnn_optimized_feedforward(
         multi_head_attention_add_and_layer_norm_output,
@@ -147,8 +148,8 @@ def ttnn_optimized_bert_encoder(
         bias=parameters[f"bert.encoder.layer.{encoder_index}.output.LayerNorm.bias"],
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    ttnn.free(multi_head_attention_add_and_layer_norm_output)
-    ttnn.free(feedforward_output)
+    ttnn.deallocate(multi_head_attention_add_and_layer_norm_output)
+    ttnn.deallocate(feedforward_output)
 
     return feedforward_add_and_layer_norm_output
 
@@ -165,18 +166,22 @@ def ttnn_optimized_bert(
     import tt_lib as ttl
 
     word_embeddings = ttnn.embedding(
-        input_ids, parameters["bert.embeddings.word_embeddings.weight"], layout=ttnn.TILE_LAYOUT
+        input_ids,
+        parameters["bert.embeddings.word_embeddings.weight"],
+        layout=ttnn.TILE_LAYOUT,
     )
-    ttnn.free(input_ids)
+    ttnn.deallocate(input_ids)
 
     token_type_embeddings = ttnn.embedding(
-        token_type_ids, parameters["bert.embeddings.token_type_embeddings.weight"], layout=ttnn.TILE_LAYOUT
+        token_type_ids,
+        parameters["bert.embeddings.token_type_embeddings.weight"],
+        layout=ttnn.TILE_LAYOUT,
     )
-    ttnn.free(token_type_ids)
+    ttnn.deallocate(token_type_ids)
 
     embeddings = word_embeddings + token_type_embeddings
-    ttnn.free(word_embeddings)
-    ttnn.free(token_type_embeddings)
+    ttnn.deallocate(word_embeddings)
+    ttnn.deallocate(token_type_embeddings)
 
     encoder_input = ttnn.experimental.layer_norm(
         embeddings,
@@ -184,11 +189,10 @@ def ttnn_optimized_bert(
         bias=parameters[f"bert.embeddings.LayerNorm.bias"],
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    ttnn.free(embeddings)
+    ttnn.deallocate(embeddings)
 
     encoder_output = None
     for encoder_index in range(num_encoders):
-        encoder_input = ttnn.Tensor(ttl.tensor.move(encoder_input._tensor))
         encoder_output = ttnn_optimized_bert_encoder(
             encoder_input,
             attention_mask,
@@ -196,9 +200,9 @@ def ttnn_optimized_bert(
             encoder_index=encoder_index,
             head_size=head_size,
         )
+        encoder_output = ttnn.reallocate(encoder_output)
         encoder_input = encoder_output
 
-    encoder_output = ttnn.Tensor(ttl.tensor.move(encoder_output._tensor))
     return encoder_output
 
 

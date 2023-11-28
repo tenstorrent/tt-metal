@@ -53,3 +53,22 @@ def test_reshape_in_4D(device, n, c, h, w):
     tt_output = ttnn.to_torch(tt_output)
 
     assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.skip(reason="Issue #4007")
+def test_permute_reshape(device):
+    input_shape = (1, 4, 64, 32)
+    output_shape = (1, 64, 128)
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_output = torch.permute(torch_input, (0, 2, 1, 3))
+    torch_output = torch.reshape(torch_output, output_shape)
+
+    tt_input = ttnn.from_torch(torch_input)
+    tt_input = ttnn.to_device(tt_input, device)
+    tt_output = ttnn.permute(tt_input, (0, 2, 1, 3))
+    tt_output = ttnn.reshape(tt_input, output_shape)
+    tt_output = ttnn.from_device(tt_output)
+    tt_output = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_output, tt_output, 0.9999)

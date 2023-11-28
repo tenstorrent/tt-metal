@@ -20,11 +20,11 @@ def exp(input_tensor: Tensor) -> Tensor:
     return Tensor(output_tensor)
 
 
-def gelu(input_tensor: Tensor) -> Tensor:
+def gelu(input_tensor: Tensor, fast_and_approx=True) -> Tensor:
     original_shape = tuple(input_tensor.shape)
     input_tensor = _reshape_to_4D(input_tensor)
     ttl_input_tensor = input_tensor._tensor
-    output_tensor = ttl.tensor.gelu(ttl_input_tensor)
+    output_tensor = ttl.tensor.gelu(ttl_input_tensor, fast_and_approx=fast_and_approx)
     output_tensor = Tensor(output_tensor)
     output_tensor = reshape(output_tensor, original_shape)
     return output_tensor

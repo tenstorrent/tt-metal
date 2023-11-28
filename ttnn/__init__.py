@@ -21,7 +21,8 @@ from ttnn.tensor import (
     to_device,
     from_device,
     to_layout,
-    free,
+    deallocate,
+    reallocate,
     load_tensor,
     dump_tensor,
 )

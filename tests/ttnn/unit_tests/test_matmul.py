@@ -72,6 +72,7 @@ def test_matmul_with_matched_width_height_from_1D(device, k, n):
     assert_with_pcc(torch_output, tt_output, 0.99)
 
 
+@pytest.mark.skip(reason="ttnn.reshape doesn't support reshaping the input tensors used in this test")
 @pytest.mark.parametrize("w", [(4), (2)])
 def test_matmul_does_dot_product(device, w):
     torch.manual_seed(0)

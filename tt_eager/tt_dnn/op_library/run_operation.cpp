@@ -101,9 +101,6 @@ constexpr op_profiler::OpType get_profiler_operation_type() {
 
 template <typename Function>
 constexpr auto decorate_operation(const Function& function) {
-#ifndef DEBUG
-    return function;
-#else
     return [function]<typename Operation, typename... Args>(const Operation& operation, Args&&... args) {
         const auto start{std::chrono::steady_clock::now()};
 
@@ -112,13 +109,18 @@ constexpr auto decorate_operation(const Function& function) {
         auto output_tensors = function(operation, args...);
 
         const auto end{std::chrono::steady_clock::now()};
-        const std::chrono::duration<double> elapsed_seconds{end - start};
-        tt::log_debug(
-            tt::LogOp, "Operation {:50} finished in {:15} seconds", operation.get_type_name(), elapsed_seconds.count());
 
+#ifdef TTNN_ENABLE_LOGGING
+        const std::chrono::duration<double> elapsed_seconds{end - start};
+        tt::log_info(
+            tt::LogOp,
+            "Operation {:100} finished in {:15} seconds",
+            operation.get_type_name(),
+            elapsed_seconds.count());
+
+#endif
         return output_tensors;
     };
-#endif
 }
 std::vector<Tensor> run_host_operation(const HostOperation& operation, const std::vector<Tensor>& input_tensors) {
     ZoneScoped;
@@ -221,7 +223,7 @@ std::vector<Tensor> run_device_operation(
                 const std::chrono::duration<double> elapsed_seconds{end - start};
                 tt::log_info(
                     tt::LogOp,
-                    "Program of Operation {:50} finished in {:15} seconds",
+                    "Program   {:100} finished in {:15} seconds",
                     operation.get_type_name(),
                     elapsed_seconds.count());
 #endif

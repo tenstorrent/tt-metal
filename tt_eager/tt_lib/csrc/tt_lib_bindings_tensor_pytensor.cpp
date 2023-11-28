@@ -318,9 +318,6 @@ Tensor convert_torch_tensor_to_tt_tensor(
         m_tensor.def(
             "decorate_external_operation",
             [](const py::function &function, std::optional<std::string> function_name) -> py::function {
-#ifndef DEBUG
-                return function;
-#else
                 return py::cpp_function(std::function([function, function_name](
                                                           const py::args &args, const py::kwargs &kwargs) {
                     const auto start{std::chrono::steady_clock::now()};
@@ -330,16 +327,17 @@ Tensor convert_torch_tensor_to_tt_tensor(
 
                     auto output_tensors = function(*args, **kwargs);
                     const auto end{std::chrono::steady_clock::now()};
+#ifdef TTNN_ENABLE_LOGGING
                     const std::chrono::duration<double> elapsed_seconds{end - start};
-                    tt::log_debug(
+                    tt::log_info(
                         tt::LogOp,
-                        "Operation {:50} finished in {:15} seconds",
+                        "Operation {:100} finished in {:15} seconds",
                         op.get_type_name(),
                         elapsed_seconds.count());
+#endif
 
                     return output_tensors;
                 }));
-#endif
             },
             py::arg("function").noconvert(),
             py::arg("function_name").noconvert() = std::nullopt,

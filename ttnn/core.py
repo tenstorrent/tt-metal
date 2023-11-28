@@ -80,6 +80,8 @@ def _shape_is_broadcastable(input_shape_a, input_shape_b):
 
 # TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
 def _reshape_to_4D(tensor):
+    if len(tensor.shape) == 4:
+        return tensor
     if len(tensor.shape) > 4:
         raise RuntimeError("Tensor cannot have more than 4 dimensions!")
     num_missing_dims = 4 - len(tensor.shape)
@@ -541,7 +543,7 @@ def linear(
 
     else:
         if activation is not None:
-            raise RuntimeError("activations must be None")
+            raise RuntimeError("activation must be None")
 
         ttl_bias = bias._tensor if bias is not None else None
         ttl_output_tensor = ttl.operations.primary.matmul(
@@ -559,7 +561,13 @@ def linear(
     return output_tensor
 
 
-def add(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, alpha: Union[int, float] = 1) -> Tensor:
+def add(
+    input_tensor_a: Tensor,
+    input_tensor_b: Union[Tensor, int, float],
+    *,
+    alpha: Union[int, float] = 1,
+    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
+) -> Tensor:
     """
     add(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, alpha: Union[int, float]=1) -> Tensor
 
@@ -590,6 +598,14 @@ def add(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, al
     if not isinstance(input_tensor_a, Tensor):
         raise TypeError("Expected first argument to be a ttnn.Tensor")
 
+    # Swap tensors if input_tensor_a needs to be broadcasted to input_tensor_b
+    if (
+        isinstance(input_tensor_a, Tensor)
+        and isinstance(input_tensor_b, Tensor)
+        and math.prod(input_tensor_a.shape) < math.prod(input_tensor_b.shape)
+    ):
+        input_tensor_a, input_tensor_b = input_tensor_b, input_tensor_a
+
     original_shape = tuple(input_tensor_a.shape)
     input_tensor_a = _reshape_to_4D(input_tensor_a)
     ttl_input_tensor_a = input_tensor_a._tensor
@@ -598,7 +614,13 @@ def add(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, al
         raise RuntimeError("input_tensor_a must be on device!")
 
     if _is_scalar(input_tensor_b):
-        output_tensor = Tensor(ttl.tensor.add_unary(ttl_input_tensor_a, input_tensor_b * alpha))
+        output_tensor = Tensor(
+            ttl.tensor.add_unary(
+                ttl_input_tensor_a,
+                input_tensor_b * alpha,
+                output_mem_config=memory_config,
+            )
+        )
         return reshape(output_tensor, original_shape)
     elif isinstance(input_tensor_b, Tensor):
         input_shape_b = input_tensor_b._tensor.shape_without_padding()
@@ -618,35 +640,63 @@ def add(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, al
 
     ttl_input_tensor_b = input_tensor_b._tensor
     if alpha != 1:
-        ttl_input_tensor_b = ttl.tensor.mul_unary(ttl_input_tensor_b, alpha)
+        ttl_input_tensor_b = ttl.tensor.mul_unary(
+            ttl_input_tensor_b,
+            alpha,
+            output_mem_config=memory_config,
+        )
 
     if height_b == 1 and width_b == 1:
         output_tensor = Tensor(
             ttl.tensor.bcast(
-                ttl_input_tensor_a, ttl_input_tensor_b, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.HW
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                ttl.tensor.BcastOpMath.ADD,
+                ttl.tensor.BcastOpDim.HW,
+                output_mem_config=memory_config,
             )
         )
     elif height_b == 1:
         output_tensor = Tensor(
             ttl.tensor.bcast(
-                ttl_input_tensor_a, ttl_input_tensor_b, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.H
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                ttl.tensor.BcastOpMath.ADD,
+                ttl.tensor.BcastOpDim.H,
+                output_mem_config=memory_config,
             )
         )
     elif width_b == 1:
         output_tensor = Tensor(
             ttl.tensor.bcast(
-                ttl_input_tensor_a, ttl_input_tensor_b, ttl.tensor.BcastOpMath.ADD, ttl.tensor.BcastOpDim.W
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                ttl.tensor.BcastOpMath.ADD,
+                ttl.tensor.BcastOpDim.W,
+                output_mem_config=memory_config,
             )
         )
     else:
-        output_tensor = Tensor(ttl.tensor.add(ttl_input_tensor_a, ttl_input_tensor_b))
+        output_tensor = Tensor(
+            ttl.tensor.add(
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
 
     output_tensor = reshape(output_tensor, original_shape)
     return output_tensor
 
 
-def sub(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, alpha: Union[int, float] = 1) -> Tensor:
-    """
+def sub(
+    input_tensor_a: Tensor,
+    input_tensor_b: Union[Tensor, int, float],
+    *,
+    alpha: Union[int, float] = 1,
+    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
+) -> Tensor:
+    r"""
     sub(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, alpha: Union[int, float]=1) -> Tensor:
 
     Subtracts :attr:`input_tensor_b`, scaled by :attr:`alpha`, from :attr:`input_tensor_a`.
@@ -682,7 +732,13 @@ def sub(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, al
         raise RuntimeError("input_tensor_a must be on device!")
 
     if _is_scalar(input_tensor_b):
-        output_tensor = Tensor(ttl.tensor.sub_unary(ttl_input_tensor_a, input_tensor_b * alpha))
+        output_tensor = Tensor(
+            ttl.tensor.sub_unary(
+                ttl_input_tensor_a,
+                input_tensor_b * alpha,
+                output_mem_config=memory_config,
+            )
+        )
         return reshape(output_tensor, original_shape)
     elif isinstance(input_tensor_b, Tensor):
         input_tensor_b = _reshape_to_4D(input_tensor_b)
@@ -696,7 +752,11 @@ def sub(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, al
     input_shape_b = ttl_input_tensor_b.shape()
 
     if alpha != 1:
-        ttl_input_tensor_b = ttl.tensor.mul_unary(ttl_input_tensor_b, alpha)
+        ttl_input_tensor_b = ttl.tensor.mul_unary(
+            ttl_input_tensor_b,
+            alpha,
+            output_mem_config=memory_config,
+        )
 
     if len(input_shape_b) == 1:
         height_b = 1
@@ -707,30 +767,48 @@ def sub(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, al
     if height_b == 1 and width_b == 1:
         output_tensor = Tensor(
             ttl.tensor.bcast(
-                ttl_input_tensor_a, ttl_input_tensor_b, ttl.tensor.BcastOpMath.SUB, ttl.tensor.BcastOpDim.HW
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                ttl.tensor.BcastOpMath.SUB,
+                ttl.tensor.BcastOpDim.HW,
+                output_mem_config=memory_config,
             )
         )
     elif height_b == 1:
         output_tensor = Tensor(
             ttl.tensor.bcast(
-                ttl_input_tensor_a, ttl_input_tensor_b, ttl.tensor.BcastOpMath.SUB, ttl.tensor.BcastOpDim.H
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                ttl.tensor.BcastOpMath.SUB,
+                ttl.tensor.BcastOpDim.H,
+                output_mem_config=memory_config,
             )
         )
     elif width_b == 1:
         output_tensor = Tensor(
             ttl.tensor.bcast(
-                ttl_input_tensor_a, ttl_input_tensor_b, ttl.tensor.BcastOpMath.SUB, ttl.tensor.BcastOpDim.W
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                ttl.tensor.BcastOpMath.SUB,
+                ttl.tensor.BcastOpDim.W,
+                output_mem_config=memory_config,
             )
         )
     else:
-        output_tensor = Tensor(ttl.tensor.sub(ttl_input_tensor_a, ttl_input_tensor_b))
+        output_tensor = Tensor(
+            ttl.tensor.sub(
+                ttl_input_tensor_a,
+                ttl_input_tensor_b,
+                output_mem_config=memory_config,
+            )
+        )
 
     output_tensor = reshape(output_tensor, original_shape)
     return output_tensor
 
 
-def mul(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor:
-    """
+def mul(input_tensor_a: Tensor, input_tensor_b: Tensor, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
+    r"""
     mul(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
 
     Multiples :attr:`input_tensor_a` and :attr:`input_tensor_b` element-wise.
@@ -767,7 +845,16 @@ def mul(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor:
         raise RuntimeError("input_tensor_a must be on device!")
 
     if _is_scalar(input_tensor_b):
-        return reshape(Tensor(ttl.tensor.mul_unary(ttl_input_tensor_a, input_tensor_b)), original_shape)
+        return reshape(
+            Tensor(
+                ttl.tensor.mul_unary(
+                    ttl_input_tensor_a,
+                    input_tensor_b,
+                    output_mem_config=memory_config,
+                )
+            ),
+            original_shape,
+        )
     elif not isinstance(input_tensor_b, Tensor):
         raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
 
@@ -780,7 +867,11 @@ def mul(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor:
         return reshape(
             Tensor(
                 ttl.tensor.bcast(
-                    ttl_input_tensor_a, ttl_input_tensor_b, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.HW
+                    ttl_input_tensor_a,
+                    ttl_input_tensor_b,
+                    ttl.tensor.BcastOpMath.MUL,
+                    ttl.tensor.BcastOpDim.HW,
+                    output_mem_config=memory_config,
                 ),
                 original_shape,
             )
@@ -789,7 +880,11 @@ def mul(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor:
         return reshape(
             Tensor(
                 ttl.tensor.bcast(
-                    ttl_input_tensor_a, ttl_input_tensor_b, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.H
+                    ttl_input_tensor_a,
+                    ttl_input_tensor_b,
+                    ttl.tensor.BcastOpMath.MUL,
+                    ttl.tensor.BcastOpDim.H,
+                    output_mem_config=memory_config,
                 )
             ),
             original_shape,
@@ -798,17 +893,24 @@ def mul(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor:
         return reshape(
             Tensor(
                 ttl.tensor.bcast(
-                    ttl_input_tensor_a, ttl_input_tensor_b, ttl.tensor.BcastOpMath.MUL, ttl.tensor.BcastOpDim.W
+                    ttl_input_tensor_a,
+                    ttl_input_tensor_b,
+                    ttl.tensor.BcastOpMath.MUL,
+                    ttl.tensor.BcastOpDim.W,
+                    output_mem_config=memory_config,
                 )
             ),
             original_shape,
         )
 
-    return reshape(Tensor(ttl.tensor.mul(ttl_input_tensor_a, ttl_input_tensor_b)), original_shape)
+    return reshape(
+        Tensor(ttl.tensor.mul(ttl_input_tensor_a, ttl_input_tensor_b, output_mem_config=memory_config)),
+        original_shape,
+    )
 
 
 def tanh(input_tensor: Tensor) -> Tensor:
-    """
+    r"""
     mul(input_tensor: Tensor) -> Tensor
 
     Applies tanh to :attr:`input_tensor` element-wise.
@@ -857,7 +959,7 @@ Tensor.__rmul__ = mul
 
 # Data Transformations
 def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
-    """
+    r"""
     reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor
 
     Reshape :attr:`input_tensor` into :attr:`shape`.
@@ -880,18 +982,19 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
 
     ttl_input_tensor = input_tensor._tensor
 
-    if input_tensor.shape == shape:
+    if tuple(input_tensor.shape) == shape:
         return input_tensor
 
     def ttnn_reshape(ttl_input_tensor, shape):
         return Tensor(ttl_input_tensor.reshape(shape))
 
+    # TODO(arakhmati): figure out how to early return when layout is ROW_MAJOR using ttnn_reshape
+    """
     if input_tensor.layout == ROW_MAJOR_LAYOUT:
-        # TODO(arakhmati): figure out how to make this work
-        if input_tensor.shape != [1, 64, 4, 32] and input_tensor.shape != [8, 384, 16, 64]:
-            return ttl.tensor.decorate_external_operation(ttnn_reshape, function_name="ttnn.reshape")(
-                ttl_input_tensor, shape
-            )
+        return ttl.tensor.decorate_external_operation(ttnn_reshape, function_name="ttnn.reshape")(
+            ttl_input_tensor, shape
+        )
+    """
 
     if input_tensor.layout == TILE_LAYOUT:
         *_, old_height, old_width = input_tensor.shape
@@ -914,19 +1017,27 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
         def torch_reshape(tensor, shape):
             return tensor.reshape(shape).contiguous()
 
-        device = ttl_input_tensor.device()
-        tensor = to_layout(input_tensor, ROW_MAJOR_LAYOUT)
-        tensor = from_device(tensor)
-        tensor = to_torch(tensor)
-        tensor = torch_reshape(tensor, shape)
-        tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.reshape")(tensor, shape)
-        tensor = from_torch(tensor, input_tensor.dtype)
-        tensor = to_device(tensor, device)
+        if input_tensor.is_on_device:
+            device = ttl_input_tensor.device()
+            tensor = to_layout(input_tensor, ROW_MAJOR_LAYOUT)
+            tensor = from_device(tensor)
+            tensor = to_torch(tensor)
+            tensor = torch_reshape(tensor, shape)
+            tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.reshape")(tensor, shape)
+            tensor = from_torch(tensor, input_tensor.dtype)
+            tensor = to_device(tensor, device)
+        else:
+            tensor = to_layout(input_tensor, ROW_MAJOR_LAYOUT)
+            tensor = to_torch(tensor)
+            tensor = torch_reshape(tensor, shape)
+            tensor = ttl.tensor.decorate_external_operation(torch_reshape, function_name="torch.reshape")(tensor, shape)
+            tensor = from_torch(tensor, input_tensor.dtype)
+
         return tensor
 
 
 def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
-    """
+    r"""
     permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor
 
     Permutes :attr:`input_tensor` using :attr:`order`.
@@ -969,8 +1080,8 @@ def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
         return tensor
 
 
-def softmax(input_tensor: Tensor, dim: int) -> Tensor:
-    """
+def softmax(input_tensor: Tensor, dim: int, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
+    r"""
     softmax(input_tensor: Tensor, dim: int) -> Tensor
 
     Compute softmax over :attr:`input_tensor` along :attr:`dim`.
@@ -995,7 +1106,7 @@ def softmax(input_tensor: Tensor, dim: int) -> Tensor:
         raise RuntimeError("Softmax can only operate on the last dimension.")
 
     ttl_input_tensor = input_tensor._tensor
-    ttl_output_tensor = ttl.tensor.softmax(ttl_input_tensor)
+    ttl_output_tensor = ttl.tensor.softmax(ttl_input_tensor, output_mem_config=memory_config)
     return Tensor(ttl_output_tensor)
 
 
@@ -1006,8 +1117,8 @@ def embedding(
     layout: Layout = ROW_MAJOR_LAYOUT,
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
 ):
-    """
-    embedding(input_tensor: ttnn.Tensor, weights: ttnn.Tensor) -> None
+    r"""
+    embedding(inxput_tensor: ttnn.Tensor, weights: ttnn.Tensor) -> None
 
     Retrieves word embeddings using input_tensor. The input_tensor is a list of indices, and the embedding matrix, and the output is the corresponding word embeddings.
 
@@ -1034,14 +1145,14 @@ def embedding(
 
     """
     if len(input_tensor.shape) != 2:
-        raise RuntimeError("Input Tensor must have strictly 2 dimensions!")
-    if len(weights.shape) != 2:
-        raise RuntimeError("Weight Tensor must have strictly 2 dimensions!")
+        raise RuntimeError("Input Tensor must have rank of 2!")
+    if len(weights.shape) not in {2, 4}:
+        raise RuntimeError("Weight Tensor must either have rank of 2 or 4!")
 
     *_, hidden_embedding_dim = tuple(weights.shape)
     weights = _reshape_to_4D(weights)
 
-    *_, batch_size, sentence_size = input_tensor.shape
+    batch_size, sentence_size = input_tensor.shape
     input_tensor = reshape(input_tensor, shape=(batch_size, 1, 1, sentence_size))
 
     tilized = layout == TILE_LAYOUT
