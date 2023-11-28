@@ -10,6 +10,8 @@
 #include "transformers/module.hpp"
 #include "tt_dnn/op_library/bmm/bmm_op.hpp"
 #include "tt_dnn/op_library/layernorm/layernorm_op.hpp"
+#include "tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
+#include "tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
 #include "tt_dnn/op_library/softmax/softmax_op.hpp"
@@ -343,6 +345,34 @@ void py_module(py::module& m_primary) {
         "Performs a moreh_matmul_backward operation.
     )doc");
 
+    m_primary.def(
+        "moreh_layernorm",
+        &moreh_layernorm,
+        py::arg("input").noconvert(),
+        py::arg("normalized_dims").noconvert(),
+        py::arg("eps").noconvert() = 1e-5f,
+        py::arg("gamma").noconvert() = std::nullopt,
+        py::arg("beta").noconvert() = std::nullopt,
+        py::kw_only(),
+        py::arg("mean").noconvert() = std::nullopt,
+        py::arg("rstd").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a moreh_layernorm operation.");
+    m_primary.def(
+        "moreh_layernorm_backward",
+        &moreh_layernorm_backward,
+        py::arg("output_grad").noconvert(),
+        py::arg("input").noconvert(),
+        py::arg("mean").noconvert(),
+        py::arg("rstd").noconvert(),
+        py::arg("normalized_dims").noconvert(),
+        py::kw_only(),
+        py::arg("gamma").noconvert() = std::nullopt,
+        py::arg("input_grad").noconvert() = std::nullopt,
+        py::arg("gamma_grad").noconvert() = std::nullopt,
+        py::arg("beta_grad").noconvert() = std::nullopt,
+        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        "Performs a moreh_layernorm_backward operation.");
     // softmax
     m_primary.def(
         "softmax_in_place",
