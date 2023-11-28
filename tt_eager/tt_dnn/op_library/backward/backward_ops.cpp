@@ -170,6 +170,19 @@ std::vector<Tensor> tanh_bw(const Tensor& grad, const Tensor& input, const Memor
 {
     return operation::decorate_as_composite(__func__, _tanh_bw)(grad, input, output_mem_config);
 }
+
+std::vector<Tensor> _tan_bw(const Tensor& grad, const Tensor& tan_result, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = mul(grad, add1(power(tan_result, 2, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.push_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> tan_bw(const Tensor& grad, const Tensor& tan_result, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _tan_bw)(grad, tan_result, output_mem_config);
+}
+
+
 }//namespace tt_metal
 
 }//namespace tt
