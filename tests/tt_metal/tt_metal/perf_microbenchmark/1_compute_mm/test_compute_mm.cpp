@@ -13,7 +13,6 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
@@ -342,7 +341,6 @@ int main(int argc, char** argv) {
 
         auto avg_rmax_tflops = calculate_average(rmax_tflops);
         double rmax_per_rpeak = avg_rmax_tflops / rpeak_tflops;
-        log_debug(LogTest, "rmax_tflops {}", rmax_tflops);
         log_info(
             LogTest,
             "Avg Rmax(TFLOPS) {:.3f}, Rpeak {:.3f}, Rmax / Rpeak {:.2f}%",
