@@ -752,3 +752,5 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.add_bw
 
 .. autofunction:: tt_lib.tensor.exp_bw
+
+.. autofunction:: tt_lib.tensor.unary_pow_bw
