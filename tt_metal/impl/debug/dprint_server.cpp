@@ -27,6 +27,7 @@ using std::endl;
 using std::setw;
 using std::flush;
 using std::tuple;
+using std::set;
 
 #define CAST_U8P(p) reinterpret_cast<uint8_t*>(p)
 
@@ -477,27 +478,52 @@ void tt_start_debug_print_server(
 
         tt::Cluster::instance().reset_debug_print_server_buffers();
 
-        // Using an invalid core can hang the chip, sanitize
-        // TODO(PGK)
+        // A set of all valid worker cores, used for checking the user input.
+        auto compare_coords = [](const CoreCoord& a, const CoreCoord& b){
+            if (a.x < b.x)
+                return true;
+            else if (a.x == b.x)
+                return (a.y < b.y);
+            else
+                return false;
+        };
+        set<CoreCoord, decltype(compare_coords)> all_worker_cores(compare_coords);
+        CoreCoord logical_grid_size = get_grid_size();
+        for (uint32_t x = 0; x < logical_grid_size.x; x++) {
+            for (uint32_t y = 0; y < logical_grid_size.y; y++) {
+                CoreCoord logical_coord(x, y);
+                CoreCoord worker_core = worker_from_logical(logical_coord);
+                all_worker_cores.insert(worker_core);
+            }
+        }
 
         // Core range depends on whether dprint_all_cores flag is set.
-        vector<CoreCoord> cores;
+        vector<CoreCoord> print_cores_sanitized;
         if (tt::llrt::OptionsG.get_dprint_all_cores()) {
-            CoreCoord logical_grid_size = get_grid_size();
-            for (uint32_t x = 0; x < logical_grid_size.x; x++) {
-                for (uint32_t y = 0; y < logical_grid_size.y; y++) {
-                    CoreCoord logical_coord(x, y);
-                    CoreCoord worker_core = worker_from_logical(logical_coord);
-                    cores.push_back(worker_core);
+            // Print from all worker cores, cores returned here are guaranteed to be valid.
+            print_cores_sanitized = vector<CoreCoord>(all_worker_cores.begin(), all_worker_cores.end());
+        } else {
+            // Only print from the cores specified by the user.
+            vector<CoreCoord> print_cores = tt::llrt::OptionsG.get_dprint_cores();
+
+            // We should also validate that the cores the user specified are valid worker cores.
+            for (auto core : print_cores) {
+                if (all_worker_cores.count(core) > 0) {
+                    print_cores_sanitized.push_back(core);
+                } else {
+                    log_info(
+                        tt::LogDevice,
+                        "TT_METAL_DPRINT_CORES included worker core ({}, {}), which is not a valid coordinate. This coordinate will be ignored by the dprint server.",
+                        core.x,
+                        core.y
+                    );
                 }
             }
-        } else {
-            cores = tt::llrt::OptionsG.get_dprint_cores();
         }
 
         DebugPrintServerContext* ctx = new DebugPrintServerContext(
             tt::llrt::OptionsG.get_dprint_chip_ids(),
-            cores,
+            print_cores_sanitized,
             tt::llrt::OptionsG.get_dprint_riscv_mask(),
             tt::llrt::OptionsG.get_dprint_file_name()
         );
