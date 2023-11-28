@@ -103,9 +103,9 @@ def run_perf_resnet(
         predicted_labels = []
         profiler.start(third_key)
 
-        weka_is_on = 1
+        weka_is_on = True
         if len(image_examples) == 0:
-            weka_is_on = 0
+            weka_is_on = False
             files_raw = iter(load_dataset("imagenet-1k", split="validation", use_auth_token=True, streaming=True))
             image_examples = []
             sample_count = 3500

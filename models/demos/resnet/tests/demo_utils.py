@@ -87,6 +87,7 @@ def get_data_loader(input_loc, batch_size):
         sample_count = 3500
         for _ in range(sample_count):
             files.append(next(files_raw))
+        del files_raw
         return loader_hf()
 
     return loader()
