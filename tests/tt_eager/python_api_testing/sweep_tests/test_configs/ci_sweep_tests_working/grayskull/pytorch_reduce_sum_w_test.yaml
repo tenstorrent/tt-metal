@@ -1,6 +1,6 @@
 ---
 test-list:
-  - sum-0:
+  - reduce-sum-w:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -18,15 +18,18 @@ test-list:
           low: 0
           high: 100
       comparison:
-        function: comp_pcc
+        function: comp_allclose
+        args:
+          rtol: 0
+          atol: 0.1
       args-gen: gen_dtype_layout_device
-      output-file: sum_0_sweep.csv
+      output-file: reduce_sum_w_sweep.csv
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM"]
-  - sum-0:
+  - reduce-sum-w:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [6, 12, 256, 256]
@@ -44,9 +47,12 @@ test-list:
           low: 0
           high: 100
       comparison:
-        function: comp_pcc
+        function: comp_allclose
+        args:
+          rtol: 0
+          atol: 0.1
       args-gen: gen_dtype_layout_device
-      output-file: sum_0_sweep.csv
+      output-file: reduce_sum_w_sweep.csv
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]

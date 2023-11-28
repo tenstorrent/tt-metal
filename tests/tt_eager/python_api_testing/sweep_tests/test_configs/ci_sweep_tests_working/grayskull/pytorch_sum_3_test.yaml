@@ -1,6 +1,6 @@
 ---
 test-list:
-  - reduce-max-h:
+  - sum-3:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -12,22 +12,21 @@ test-list:
         TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
-        function: gen_rand_along_dim
+        function: gen_checkerboard
         dtype: bfloat16
         args:
-          low: -100
+          low: 0
           high: 100
-          dim: -2
       comparison:
-        function: comp_equal
+        function: comp_pcc
       args-gen: gen_dtype_layout_device
-      output-file: reduce_max_h_sweep.csv
+      output-file: sum_3_sweep.csv
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM"]
-  - reduce-max-h:
+  - sum-3:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [6, 12, 256, 256]
@@ -39,18 +38,17 @@ test-list:
         TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
-        function: gen_rand_along_dim
+        function: gen_checkerboard
         dtype: bfloat16
         args:
-          low: -100
+          low: 0
           high: 100
-          dim: -2
       comparison:
-        function: comp_equal
+        function: comp_pcc
       args-gen: gen_dtype_layout_device
-      output-file: reduce_max_h_sweep.csv
+      output-file: sum_3_sweep.csv
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM"]
