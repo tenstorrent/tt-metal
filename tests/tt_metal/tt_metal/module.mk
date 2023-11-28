@@ -28,6 +28,7 @@ TT_METAL_TESTS += \
 		 tests/tt_metal/perf_microbenchmark/3_pcie_transfer/test_rw_buffer \
 		 tests/tt_metal/perf_microbenchmark/6_dram_offchip/test_dram_offchip \
 		 tests/tt_metal/perf_microbenchmark/7_kernel_launch/test_kernel_launch \
+		 tests/tt_metal/perf_microbenchmark/noc/test_noc_unicast_vs_multicast_to_single_core_latency \
 		 tests/tt_metal/test_add_two_ints \
 		 tests/tt_metal/test_compile_args \
 		 tests/tt_metal/test_eltwise_binary \
