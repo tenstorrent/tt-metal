@@ -195,7 +195,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     // local_pad_start_and_size
     pagesize = *std::max(local_pad_nsegments_per_core.cbegin(), local_pad_nsegments_per_core.cend());
     bool local_pad_ss_exists = pagesize > 0;
-    CircularBufferID local_pad_ss_cb = 0;
+    CBHandle local_pad_ss_cb = 0;
     if (local_pad_ss_exists) {
         Buffer *local_pad_ss_buffer = local_pad_start_and_size.buffer();
         auto local_pad_ss_cb_config = CircularBufferConfig(pagesize * 1, {{local_pad_ss_cb_id, kernel_config_df}})
@@ -207,7 +207,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     // ll_data_start_and_size
     pagesize = *std::max(ll_data_nsegments_per_core.cbegin(), ll_data_nsegments_per_core.cend());
     bool ll_data_ss_exists = pagesize > 0;
-    CircularBufferID ll_data_ss_cb = 0;
+    CBHandle ll_data_ss_cb = 0;
     if (ll_data_ss_exists) {
         Buffer *ll_data_ss_buffer = ll_data_start_and_size.buffer();
         auto ll_data_ss_cb_config = CircularBufferConfig(pagesize * 1, {{ll_data_ss_cb_id, kernel_config_df}})
@@ -219,7 +219,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     // l_data_start_and_size
     pagesize = *std::max(l_data_nsegments_per_core.cbegin(), l_data_nsegments_per_core.cend());
     bool l_data_ss_exists = pagesize > 0;
-    CircularBufferID l_data_ss_cb = 0;
+    CBHandle l_data_ss_cb = 0;
     if (l_data_ss_exists) {
         Buffer *l_data_ss_buffer = l_data_start_and_size.buffer();
         auto l_data_ss_cb_config = CircularBufferConfig(pagesize * 1, {{l_data_ss_cb_id, kernel_config_df}})
@@ -231,7 +231,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     // local_data_start_and_size
     pagesize = *std::max(local_data_nsegments_per_core.cbegin(), local_data_nsegments_per_core.cend());
     bool local_data_ss_exists = pagesize > 0;
-    CircularBufferID local_data_ss_cb = 0;
+    CBHandle local_data_ss_cb = 0;
     if (local_data_ss_exists) {
         Buffer *local_data_ss_buffer = local_data_start_and_size.buffer();
         auto local_data_ss_cb_config = CircularBufferConfig(pagesize * 1, {{local_data_ss_cb_id, kernel_config_df}})
@@ -243,7 +243,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     // r_data_start_and_size
     pagesize = *std::max(r_data_nsegments_per_core.cbegin(), r_data_nsegments_per_core.cend());
     bool r_data_ss_exists = pagesize > 0;
-    CircularBufferID r_data_ss_cb = 0;
+    CBHandle r_data_ss_cb = 0;
     if (r_data_ss_exists) {
         Buffer *r_data_ss_buffer = r_data_start_and_size.buffer();
         auto r_data_ss_cb_config = CircularBufferConfig(pagesize * 1, {{r_data_ss_cb_id, kernel_config_df}})
@@ -255,7 +255,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     // rr_data_start_and_size
     pagesize = *std::max(rr_data_nsegments_per_core.cbegin(), rr_data_nsegments_per_core.cend());
     bool rr_data_ss_exists = pagesize > 0;
-    CircularBufferID rr_data_ss_cb = 0;
+    CBHandle rr_data_ss_cb = 0;
     if (rr_data_ss_exists) {
         Buffer *rr_data_ss_buffer = rr_data_start_and_size.buffer();
         auto rr_data_ss_cb_config = CircularBufferConfig(pagesize * 1, {{rr_data_ss_cb_id, kernel_config_df}})
@@ -269,7 +269,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     // reader kernel
     std::vector<uint32_t> reader_ct_args = { src_cb_id };
-    KernelID reader_kernel_id = CreateKernel(
+    KernelHandle reader_kernel_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
@@ -292,7 +292,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         pad_val,
         shard_shape[1],         // pad stick length == output stick size in nelems
         out_stick_nbytes };     // output stick size in bytes
-    KernelID writer_kernel_id = CreateKernel(
+    KernelHandle writer_kernel_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_sharded_with_halo_v2.cpp",
         all_cores,
@@ -305,7 +305,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     std::vector<uint32_t> compute_ct_args = {
         nblocks_per_core,
         ntiles_per_block };
-    KernelID untilize_kernel_id = CreateKernel(
+    KernelHandle untilize_kernel_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
         all_cores,
