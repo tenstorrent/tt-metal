@@ -463,10 +463,6 @@ void Program::validate_circular_buffer_region(const Device *device) const {
     // Only compute with storage cores can have CBs and all compute with storage cores will have the same bank offset
     const std::vector<uint32_t> &bank_ids = device->bank_ids_from_logical_core(*device->compute_cores.begin());
     std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
-    if (not lowest_address.has_value()) {
-        // No L1 buffers exist
-        return;
-    }
     uint32_t max_l1_size = device->l1_size_per_core();
 
     for (const CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
@@ -474,7 +470,7 @@ void Program::validate_circular_buffer_region(const Device *device) const {
         if (cb_region_end > max_l1_size) {
             TT_THROW("Statically allocated circular buffers on core range {} grow to {} B which is beyond max L1 size of {} B", cb_allocator.core_range.str(), cb_region_end, max_l1_size);
         }
-        if (lowest_address.value() < cb_region_end) {
+        if (lowest_address.has_value() and lowest_address.value() < cb_region_end) {
             TT_THROW("Statically allocated circular buffers in program {} clash with L1 buffers on core range {}. L1 buffer allocated at {} and static circular buffer region ends at {}", this->id, cb_allocator.core_range.str(), lowest_address.value(), cb_region_end);
         }
     }
