@@ -49,7 +49,6 @@ constexpr static uint32_t NUM_BYTES_PER_SEND_LOG2 = 4;
 FORCE_INLINE
 void reset_erisc_info() {
     erisc_info->bytes_sent = 0;
-    erisc_info->bytes_received = 0;
 }
 
 FORCE_INLINE
@@ -101,7 +100,8 @@ void eth_send_bytes(uint32_t src_addr, uint32_t dst_addr, uint32_t num_bytes) {
 FORCE_INLINE
 void eth_wait_for_receiver_done() {
     eth_send_packet(0, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, 1);
-    while (erisc_info->bytes_received != erisc_info->bytes_sent) {
+    while (erisc_info->bytes_sent != 0) {
+        risc_context_switch();
     }
 }
 
@@ -120,6 +120,7 @@ void eth_wait_for_receiver_done() {
 FORCE_INLINE
 void eth_wait_for_bytes(uint32_t num_bytes) {
     while (erisc_info->bytes_sent != num_bytes) {
+        risc_context_switch();
     }
 }
 
@@ -134,15 +135,12 @@ void eth_wait_for_bytes(uint32_t num_bytes) {
  */
 FORCE_INLINE
 void eth_receiver_done() {
-    erisc_info->bytes_received = erisc_info->bytes_sent;
-    eth_send_packet(
-        0, ((uint32_t)(&(erisc_info->bytes_received))) >> 4, ((uint32_t)(&(erisc_info->bytes_received))) >> 4, 1);
-    reset_erisc_info();
+    erisc_info->bytes_sent = 0;
+    eth_send_packet(0, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, 1);
 }
 
 FORCE_INLINE
 void eth_send_and_wait_for_receiver_done(uint32_t src_addr, uint32_t dst_addr, uint32_t num_bytes) {
-    reset_erisc_info();
     eth_send_bytes(src_addr, dst_addr, num_bytes);
     eth_wait_for_receiver_done();
 }
