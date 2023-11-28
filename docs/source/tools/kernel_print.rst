@@ -17,8 +17,11 @@ To generate kernel debug prints on the device:
     #include "debug/dprint.h"  // required in all kernels using DPRINT
 
     void kernel_main() {
-        DPRINT << 5 << ENDL();
-        DPRINT << "this is a string" << 1 << SETW(8) << F32(2.2f) << ENDL();
+        // Direct printing is supported for const char*/char/uint32_t/float
+        DPRINT << "Test string" << 'a' << 5 << 0.123456f << ENDL();
+        // BF16 type printing is supported via a macro
+        uint16_t my_bf16_val = 0x3dfb; // Equivalent to 0.122559
+        DPRINT << BF16(my_bf16_val) << ENDL();
 
         // The following prints only occur on a particular RISCV core:
         DPRINT_MATH(DPRINT << "this is the math kernel" << ENDL());
@@ -35,6 +38,17 @@ To generate kernel debug prints on the device:
             SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
             DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(0, 0, sr, true, false) << ENDL();
         }
+
+        // dprint.h includes macros for a subset of std::ios and std::iomanip functionality:
+        // SETPRECISION macro has the same behaviour as std::setprecision
+        DPRINT << SETPRECISION(5) << 0.123456f << ENDL();
+        // FIXED and DEFAULTFLOAT macros have the same behaviour as std::fixed and std::defaultfloat
+        DPRINT << FIXED() << 0.123456f << DEFAULTFLOAT() << 0.123456f << ENDL();
+        // SETW macro is the same as std::setw, but with an optional sticky flag (default true)
+        DPRINT << "SETW (sticky): " << SETW(10) << 1 << 2 << ENDL();
+        DPRINT << "SETW (non-sticky): " << SETW(10, false) << 1 << 2 << ENDL();
+        // HEX/DEC/OCT macros corresponding to std::hex/std::dec/std::oct
+        DPRINT << HEX() << 15 << DEC() << 15 << OCT() << 15 << ENDL();
     }
 
 The ``TSLICE`` macros support printing tile contents with a given sample count, starting index and stride.  The
