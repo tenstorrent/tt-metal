@@ -182,6 +182,9 @@ inline void _init_sigmoid_()
 template <bool APPROXIMATION_MODE>
 inline void _init_gelu_() 
 {
+    uint imm0;
+    uint imm1;
+    uint imm2;
     imm0 = 0x18FF;
     imm1 = (APPROXIMATION_MODE)? 0x212C : 0x2010;
     imm2 = 0xFF00;
