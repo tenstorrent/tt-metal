@@ -121,18 +121,21 @@ def run_bert_question_and_answering_inference_squadv2(
                     )
                 cpu_output = hugging_face_reference_model(**batch_data)
                 tt_attention_mask = tt_bert_model.model_attention_mask(**batch_data)
-                tt_lib.device.Synchronize()
                 tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**batch_data)
-                tt_lib.device.Synchronize()
+
+                tt_attention_mask = tt_attention_mask.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+                tt_embedding_inputs = {
+                    key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"])
+                    for (key, value) in tt_embedding_inputs.items()
+                }
                 tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
 
                 # tt_batch = tt_bert_model.model_preprocessing(**batch_data)
                 # tt_output = tt_bert_model(*tt_batch)
-                tt_output = tt_bert_model(tt_embedding, tt_attention_mask)
+                tt_output = tt_bert_model(tt_embedding, tt_attention_mask).cpu()
 
                 tt_output = (
-                    tt_output.cpu()
-                    .to(tt_lib.tensor.Layout.ROW_MAJOR)
+                    tt_output.to(tt_lib.tensor.Layout.ROW_MAJOR)
                     .to_torch()
                     .reshape(BATCH_SIZE, 1, seq_len, -1)
                     .to(torch.float32)
@@ -245,12 +248,10 @@ def run_bert_question_and_answering_inference(
     profiler.start(f"processing_input_two")
     profiler.start("attention_mask_preprocessing")
     tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
-    tt_lib.device.Synchronize()
     profiler.end("attention_mask_preprocessing")
 
     profiler.start("embedding_input_preprocessing")
     tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
-    tt_lib.device.Synchronize()
     profiler.end("embedding_input_preprocessing")
     profiler.end(f"processing_input_two")
 
@@ -263,45 +264,50 @@ def run_bert_question_and_answering_inference(
 
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
+    tt_attention_mask = tt_attention_mask.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+    tt_embedding_inputs = {
+        key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"]) for (key, value) in tt_embedding_inputs.items()
+    }
     tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
-    tt_out = tt_bert_model(tt_embedding, tt_attention_mask)
-    tt_lib.device.Synchronize()
+    tt_out = tt_bert_model(tt_embedding, tt_attention_mask).cpu()
     profiler.end("first_model_run_with_compile", force_enable=True)
-    tt_out.deallocate()
     del tt_out
 
     # Recreate inputs since activations were deallocated
     tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
     tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
-    tt_lib.device.Synchronize()
 
     profiler.enable()
     enable_persistent_kernel_cache()
 
     ##### Run Forward on TT Model Start
     profiler.start(f"model_run_for_inference")
+    tt_attention_mask = tt_attention_mask.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+    tt_embedding_inputs = {
+        key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"]) for (key, value) in tt_embedding_inputs.items()
+    }
     tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
-    tt_out = tt_bert_model(tt_embedding, tt_attention_mask)
-    tt_lib.device.Synchronize()
+    tt_out = tt_bert_model(tt_embedding, tt_attention_mask).cpu()
     profiler.end(f"model_run_for_inference")
 
     # running in a loop
     for i in range(NUM_RUNS):
         tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
         tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
-        tt_lib.device.Synchronize()
+        tt_attention_mask = tt_attention_mask.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+        tt_embedding_inputs = {
+            key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"])
+            for (key, value) in tt_embedding_inputs.items()
+        }
         tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
-        _tt_out = tt_bert_model(tt_embedding, tt_attention_mask)
-        tt_lib.device.Synchronize()
-        _tt_out.deallocate()
-        del _tt_out
+        _tt_out = tt_bert_model(tt_embedding, tt_attention_mask).cpu()
 
     ##### Output Postprocessing Start
     profiler.start("processing_output_to_string")
 
     # convert TT Tensor returned from GS device to Torch tensor
     tt_untilized_output = (
-        tt_out.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
+        tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
     )
     # extract logits for start and end of answer string
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)

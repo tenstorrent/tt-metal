@@ -77,18 +77,20 @@ def run_perf_bert15(expected_inference_time, expected_compile_time, model_locati
 
         profiler.start(first_attention_mask_key)
         tt_attention_mask = tt_model.model_attention_mask(**inputs)
-        tt_lib.device.Synchronize()
         profiler.end(first_attention_mask_key, force_enable=True)
 
         profiler.start(first_embedding_key)
         tt_embedding_inputs = tt_model.embeddings.preprocess_embedding_inputs(**inputs)
-        tt_lib.device.Synchronize()
         profiler.end(first_embedding_key, force_enable=True)
 
         profiler.start(first_run_key)
+        tt_attention_mask = tt_attention_mask.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+        tt_embedding_inputs = {
+            key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"])
+            for (key, value) in tt_embedding_inputs.items()
+        }
         tt_embedding = tt_model.model_embedding(**tt_embedding_inputs)
-        tt_output = tt_model(tt_embedding, tt_attention_mask)
-        tt_lib.device.Synchronize()
+        tt_output = tt_model(tt_embedding, tt_attention_mask).cpu()
         profiler.end(first_run_key, force_enable=True)
 
         del tt_output
@@ -100,13 +102,16 @@ def run_perf_bert15(expected_inference_time, expected_compile_time, model_locati
 
         profiler.start(second_embedding_key)
         tt_embedding_inputs = tt_model.embeddings.preprocess_embedding_inputs(**inputs)
-        tt_lib.device.Synchronize()
         profiler.end(second_embedding_key, force_enable=True)
 
         profiler.start(second_run_key)
+        tt_attention_mask = tt_attention_mask.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+        tt_embedding_inputs = {
+            key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"])
+            for (key, value) in tt_embedding_inputs.items()
+        }
         tt_embedding = tt_model.model_embedding(**tt_embedding_inputs)
-        tt_output = tt_model(tt_embedding, tt_attention_mask)
-        tt_lib.device.Synchronize()
+        tt_output = tt_model(tt_embedding, tt_attention_mask).cpu()
         profiler.end(second_run_key, force_enable=True)
 
         del tt_output

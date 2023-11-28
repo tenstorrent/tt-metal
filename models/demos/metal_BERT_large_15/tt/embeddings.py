@@ -94,13 +94,9 @@ class TtEmbeddings:
         seq_length = input_shape[1]
         input_ids_shape = (batch_size, 1, 1, seq_length)
         input_ids_torch = torch.reshape(input_ids, input_ids_shape)
-        input_tt_tensor = ttl.tensor.Tensor(input_ids_torch, ttl.tensor.DataType.UINT32).to(
-            self.device, self.model_config["INPUT_EMBEDDINGS_MEMCFG"]
-        )
+        input_tt_tensor = ttl.tensor.Tensor(input_ids_torch, ttl.tensor.DataType.UINT32)
         token_type_ids_torch = torch.reshape(token_type_ids, input_ids_shape)
-        token_type_ids_tt_tensor = ttl.tensor.Tensor(token_type_ids_torch, ttl.tensor.DataType.UINT32).to(
-            self.device, self.model_config["INPUT_EMBEDDINGS_MEMCFG"]
-        )
+        token_type_ids_tt_tensor = ttl.tensor.Tensor(token_type_ids_torch, ttl.tensor.DataType.UINT32)
         position_ids_tt_tensor = None
         if position_ids is None:
             position_ids = self.position_ids[:, past_key_values_length : seq_length + past_key_values_length]
@@ -108,9 +104,7 @@ class TtEmbeddings:
         if self.position_embedding_type == "absolute":
             position_ids_torch = torch.reshape(position_ids, (1, 1, seq_length))
             position_ids_torch = position_ids_torch.unsqueeze(0).repeat(batch_size, 1, 1, 1)
-            position_ids_tt_tensor = ttl.tensor.Tensor(position_ids_torch, ttl.tensor.DataType.UINT32).to(
-                self.device, self.model_config["INPUT_EMBEDDINGS_MEMCFG"]
-            )
+            position_ids_tt_tensor = ttl.tensor.Tensor(position_ids_torch, ttl.tensor.DataType.UINT32)
         return {
             "input_ids": input_tt_tensor,
             "token_type_ids": token_type_ids_tt_tensor,

@@ -40,7 +40,7 @@ Tensor data_transfer_to_host(const Tensor &input_tensor) {
 void DataTransferToDevice::validate(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     switch (input_tensor.layout()) {
-        case Layout::ROW_MAJOR: TT_FATAL(input_tensor.shape()[3] % 2 == 0); break;
+        case Layout::ROW_MAJOR: TT_FATAL(input_tensor.shape()[-1] * input_tensor.element_size() % sizeof(uint32_t) == 0); break;
         default: break;
     }
 }

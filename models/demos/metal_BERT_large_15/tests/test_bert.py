@@ -99,19 +99,21 @@ def run_bert_question_and_answering_inference(
             bert_input = bert_input.reshape(batch, seq_len)
 
     tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
-    tt_lib.device.Synchronize()
 
     tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
-    tt_lib.device.Synchronize()
 
     pytorch_out = hugging_face_reference_model(**bert_input)
 
+    tt_attention_mask = tt_attention_mask.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+    tt_embedding_inputs = {
+        key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"]) for (key, value) in tt_embedding_inputs.items()
+    }
+
     tt_embedding = tt_bert_model.model_embedding(**tt_embedding_inputs)
-    tt_out = tt_bert_model(tt_embedding, tt_attention_mask)
-    tt_lib.device.Synchronize()
+    tt_out = tt_bert_model(tt_embedding, tt_attention_mask).cpu()
 
     tt_untilized_output = (
-        tt_out.cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
+        tt_out.to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch().reshape(batch, 1, seq_len, -1).to(torch.float32)
     )
 
     tt_start_logits = tt_untilized_output[..., :, 0].squeeze(1)
