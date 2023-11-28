@@ -123,7 +123,7 @@ endif
 
 ifeq ($(ENABLE_TRACY), 1)
 CFLAGS += -DTRACY_ENABLE -fno-omit-frame-pointer -fPIC
-LDFLAGS += -rdynamic
+LDFLAGS += -ltracy -rdynamic
 endif
 
 LIBS_TO_BUILD =
@@ -135,11 +135,9 @@ LIBS_TO_BUILD += \
 endif
 
 LIBS_TO_BUILD += \
-	common \
-	build_kernels_for_riscv \
+	tracy \
 	set_up_kernels \
 	umd_device \
-	llrt \
 	tools \
 	tt_metal \
 	tracy \
