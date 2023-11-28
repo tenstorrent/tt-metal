@@ -1,7 +1,7 @@
 TT_LIB_LIB = $(LIBDIR)/libtt_lib_csrc.so
 TT_LIB_DEFINES =
 TT_LIB_INCLUDES = $(TT_EAGER_INCLUDES) $(shell python3-config --includes) -Itt_metal/third_party/pybind11/include
-TT_LIB_LDFLAGS = -ltt_dnn -ldtx -ltensor -ltt_metal -lyaml-cpp $(LDFLAGS)
+TT_LIB_LDFLAGS = -ltt_dnn -ldtx -ltensor -ltt_metal -lyaml-cpp -ltracy -lhwloc $(LDFLAGS)
 TT_LIB_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast  -fno-var-tracking
 
 TT_LIB_SRCS = \
