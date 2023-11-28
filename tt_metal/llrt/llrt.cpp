@@ -303,23 +303,32 @@ CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
 namespace internal_ {
 
 static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
+    if (is_ethernet_core(core, chip_id)) {
+        const auto &readback_vec =
+            read_hex_vec_from_core(chip_id, core, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG, sizeof(uint32_t));
+        return (readback_vec[0] == 0);
+    } else {
+        std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
+            constexpr int RUN_MAILBOX_BOGUS = 3;
+            std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
+            // read a single uint32_t even though launch.run is smaller than that
+            run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address & ~0x3, sizeof(uint32_t));
+            uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, run) & 3));
+            if (run != run_state && run != RUN_MSG_DONE) {
+                fprintf(
+                    stderr,
+                    "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n",
+                    run,
+                    run_state,
+                    RUN_MSG_DONE);
+                TT_FATAL(run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE);
+            }
 
-    std::function<bool(uint64_t)> get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
-        constexpr int RUN_MAILBOX_BOGUS = 3;
-        std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
-        // read a single uint32_t even though launch.run is smaller than that
-        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address & ~0x3, sizeof(uint32_t));
-        uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, run) & 3));
-        if (run != run_state && run != RUN_MSG_DONE) {
-            fprintf(stderr, "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n", run, run_state, RUN_MSG_DONE);
-            TT_FATAL(
-                run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE);
-        }
+            return run == RUN_MSG_DONE;
+        };
 
-        return run == RUN_MSG_DONE;
-    };
-
-    return get_mailbox_is_done(GET_MAILBOX_ADDRESS_HOST(launch.run));
+        return get_mailbox_is_done(GET_MAILBOX_ADDRESS_HOST(launch.run));
+    }
 }
 
 void wait_until_cores_done(chip_id_t device_id,
@@ -341,13 +350,7 @@ void wait_until_cores_done(chip_id_t device_id,
         for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {
             const auto &phys_core = *it;
 
-            bool is_done = false;
-            if (is_ethernet_core(phys_core, device_id)) {
-                // TODO: add same RUN_MSG_DONE check for eth cores
-                is_done = true;
-            } else {
-                is_done = llrt::internal_::check_if_riscs_on_specified_core_done(device_id, phys_core, run_state);
-            }
+            bool is_done = llrt::internal_::check_if_riscs_on_specified_core_done(device_id, phys_core, run_state);
 
             if (is_done) {
                 log_debug(tt::LogMetal, "Phys cores just done: {}", phys_core.str());
