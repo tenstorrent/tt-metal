@@ -88,8 +88,7 @@ LDFLAGS ?= $(CONFIG_LDFLAGS) -Wl,-rpath,$(PREFIX)/lib -L$(LIBDIR)/tools -L$(LIBD
 	-lboost_system \
 	-lboost_regex \
 	-lpthread \
-	-latomic \
-	-lhwloc
+	-latomic
 SHARED_LIB_FLAGS = -shared -fPIC
 STATIC_LIB_FLAGS = -fPIC
 ifeq ($(findstring clang,$(CC)),clang)
@@ -146,7 +145,6 @@ LIBS_TO_BUILD += \
 	tt_eager
 
 # These must be in dependency order (enforces no circular deps)
-include $(UMD_HOME)/device/module.mk
 include $(TT_METAL_HOME)/tt_metal/common/common.mk
 include $(TT_METAL_HOME)/tt_metal/module.mk
 include $(TT_METAL_HOME)/tt_eager/module.mk
