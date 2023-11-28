@@ -50,7 +50,6 @@ def test_mistral_transformer_inference(pcc, model_location_generator, device, dt
 
     tt_model = TtTransformer(
         args=model_args,
-        state_dict=state_dict,
         device=device,
         base_address=base_address,
         tt_cache_path=tt_cache_path,

@@ -92,6 +92,9 @@ def cache_weights_in_weka(model_location_generator, device, dtype, reset_seeds):
     # initial weights are stored in "models/experimental/mistral/weights/" and moved to weka path
     file_name = "models/experimental/mistral/weights/"
     for key, value in state_dict.items():
+        if "tok_embeddings" in key:
+            torch.save(value, file_name + str(key) + ".pt")
+            continue
         if len(value.shape) == 1:
             value = value.unsqueeze(0).unsqueeze(0).unsqueeze(0)
         else:
