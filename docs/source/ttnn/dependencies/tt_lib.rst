@@ -749,6 +749,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.div_bw
 
+.. autofunction:: tt_lib.tensor.sqrt_bw
+
 .. autofunction:: tt_lib.tensor.mul_bw
 
 .. autofunction:: tt_lib.tensor.add_bw
