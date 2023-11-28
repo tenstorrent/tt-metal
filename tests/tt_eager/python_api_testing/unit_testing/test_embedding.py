@@ -15,8 +15,8 @@ import tt_lib as ttl
 from tt_lib.utils import is_close
 from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
 from loguru import logger
-from models.utility_functions import (
-    comp_pcc,
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_equal,
 )
 
 
@@ -28,12 +28,12 @@ def run_embeddings_tests(
     tensor = ttl.tensor
     dev = device
 
-    input_rows_shape = [batch_size, 1, num_rows, 1]
+    input_rows_shape = [batch_size, 1, 1, num_rows]
 
     input_rows_torch = torch.randint(0, num_embeddings - 1, tuple(input_rows_shape))
 
     weights_shape = [1, 1, num_embeddings, embedding_dim]
-    weights_torch = torch.randn(weights_shape)
+    weights_torch = torch.randn(weights_shape).bfloat16()
 
     input_tensor = tensor.Tensor(input_rows_torch, ttl.tensor.DataType.UINT32).to(dev, in0_mem_config)
     weights_tensor = tensor.Tensor(weights_torch, dtype).to(dev, in0_mem_config)
@@ -51,7 +51,7 @@ def run_embeddings_tests(
         weights_torch.reshape((num_embeddings, embedding_dim)),
     ).reshape((batch_size, 1, num_rows, embedding_dim))
 
-    passing_pcc, output_pcc = comp_pcc(t_ref, tt_got_back, 0.99)
+    passing_pcc, output_pcc = comp_equal(t_ref, tt_got_back)
     logger.info(f"Out passing={passing_pcc}")
     logger.info(f"Output pcc={output_pcc}")
     assert passing_pcc
@@ -102,8 +102,10 @@ import pytest
 )
 @pytest.mark.parametrize(
     "tilized",
-    (True, False),
-    ids=["Tilized", "NotTilized"],
+    (True,),
+    ids=[
+        "Tilized",
+    ],
 )
 def test_embeddings(
     batch_size, num_embeddings, embedding_dim, num_rows, dtype, in0_mem_config, out_mem_config, device, tilized

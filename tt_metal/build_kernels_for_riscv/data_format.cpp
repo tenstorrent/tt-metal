@@ -71,7 +71,8 @@ DataFormat check_consistent_format_within_operand(DataFormat data_format[NUM_OPE
     for (int i = 0; i < NUM_OPERANDS; i++) {
         // Special case where Float32 can pair with any exponent precision, skip checking
         if ((data_format[i] == DataFormat::Float32) || (data_format[i] == DataFormat::RawUInt32)
-        || (data_format[i] == DataFormat::RawUInt16) || (data_format[i] == DataFormat::RawUInt8)) {
+        || (data_format[i] == DataFormat::RawUInt16) || (data_format[i] == DataFormat::RawUInt8)
+        || (data_format[i] == DataFormat::UInt16) || (data_format[i] == DataFormat::UInt32)) {
             continue;
         }
 

@@ -56,9 +56,8 @@ void kernel_main() {
     #define weights_is_dram get_compile_time_arg_val(1) == 1
     #define out_is_dram get_compile_time_arg_val(2) == 1
     constexpr uint32_t page_size = get_compile_time_arg_val(3);
-    constexpr uint32_t inter_input_l1_addr      = get_compile_time_arg_val(4);
-    constexpr uint32_t inter_weights_l1_addr      = get_compile_time_arg_val(5);
-
+    constexpr uint32_t cb_id_inter_weights = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_id_inter_input = get_compile_time_arg_val(5);
 
     const InterleavedAddrGen<in_is_dram> input_rows_0 = {
         .bank_base_address = input_dram_buffer_src_addr, .page_size = sizeof(uint32_t)};
@@ -66,8 +65,10 @@ void kernel_main() {
         .bank_base_address = weights_dram_buffer_src_addr , .page_size = page_size};
     const InterleavedAddrGen<out_is_dram> out_0 = {
         .bank_base_address = output_dram_buffer_dst_addr , .page_size = page_size};
-
-
+    cb_reserve_back(cb_id_inter_input, 1);
+    uint32_t inter_input_l1_addr = get_write_ptr(cb_id_inter_input);
+    cb_reserve_back(cb_id_inter_weights, 1);
+    uint32_t inter_weights_l1_addr = get_write_ptr(cb_id_inter_weights);
 
     embeddings_<in_is_dram, weights_is_dram, out_is_dram>(
                             embeddings_per_core,

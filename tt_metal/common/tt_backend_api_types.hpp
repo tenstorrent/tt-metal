@@ -55,6 +55,7 @@ inline std::ostream& operator<<(std::ostream& os, const DataFormat& format) {
         case DataFormat::Int8: os << "Int8"; break;
         case DataFormat::Lf8: os << "Lf8"; break;
         case DataFormat::UInt16: os << "UInt16"; break;
+        case DataFormat::UInt32: os << "UInt32"; break;
         case DataFormat::RawUInt8: os << "RawUInt8"; break;
         case DataFormat::RawUInt16: os << "RawUInt16"; break;
         case DataFormat::RawUInt32: os << "RawUInt32"; break;
