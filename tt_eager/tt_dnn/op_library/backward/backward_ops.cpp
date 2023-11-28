@@ -41,6 +41,19 @@ std::vector<Tensor> unary_mul_bw(const Tensor& grad, const Tensor& input, float 
     return operation::decorate_as_composite(__func__, _unary_mul_bw)(grad, input, scalar, output_mem_config);
 }
 
+std::vector<Tensor> _unary_pow_bw(const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor power_input = power(input, exponent - 1, output_mem_config);
+
+    Tensor result = mul_unary(power_input, exponent, output_mem_config);
+    Tensor final_result = mul(result, grad, std::nullopt, output_mem_config);
+    grad_tensor.push_back(final_result);
+    return grad_tensor;
+}
+std::vector<Tensor> unary_pow_bw(const Tensor& grad, const Tensor& input, float exponent, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _unary_pow_bw)(grad, input, exponent, output_mem_config);
+}
 
 std::vector<Tensor> _unary_add_bw(const Tensor& grad, const Tensor& input, float alpha, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
