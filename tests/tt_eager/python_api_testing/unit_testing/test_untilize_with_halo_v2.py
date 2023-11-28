@@ -3,9 +3,11 @@ import torch
 import numpy
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_config_generation_and_validation import (
     trace_conv_to_generate_data_top_left_indices_and_pad_metadata,
-    validate_data_top_left_indices_and_pad_medata,
+    construct_input_padded_tensor,
+    validate_input_padded_tensor_and_data_top_left_indices_and_pad_metadata,
     decompose_conv_into_shards_and_generate_tensor_metadata,
-    validate_required_conv_input_sharded_start_end,
+    construct_utwh_output_shards,
+    validate_utwh_output_shards_and_req_conv_input_shard_start_end,
     validate_tensor_metadata,
     generate_untilize_with_halo_kernel_configs,
     validate_untilize_with_halo_kernel_configs,
@@ -44,18 +46,18 @@ def plot_diff(vals, fid, nsticks, stick_len):
         # ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), 8, (1, 8, 8), 1, False),
         # ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), 8, (1, 8, 8), 2, False),
         # resnet50 s1 convs
-        ((32, 32, 4, 4, 1, 1, 1, 1, 1, 1), 8, (32, 115, 115), 98, False),  # first conv b8 - 98 cores for height slicing
+        ((32, 32, 4, 4, 1, 1, 0, 0, 1, 1), 8, (32, 115, 115), 98, False),  # first conv b8 - 98 cores for height slicing
         ((32, 32, 3, 3, 1, 1, 1, 1, 1, 1), 8, (32, 56, 56), 98, False),  # layer1 b8 - 98 cores for height slicing
         ((64, 64, 3, 3, 1, 1, 1, 1, 1, 1), 8, (64, 56, 56), 98, False),  # layer1 b8 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 8, (1, 28, 28), 98, False),  # layer2 b8 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 8, (1, 14, 14), 10, False),  # layer3 b8 - 10 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 8, (1, 7, 7), 7, False),  # layer4 b8 - 7 cores for height slicing
-        ((1, 1, 4, 4, 1, 1, 1, 1, 1, 1), 16, (1, 115, 115), 98, False),  # first conv b16 - 98 cores for height slicing
+        ((1, 1, 4, 4, 1, 1, 0, 0, 1, 1), 16, (1, 115, 115), 98, False),  # first conv b16 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 16, (1, 56, 56), 98, False),  # layer1 b16 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 16, (1, 28, 28), 98, False),  # layer2 b16 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 16, (1, 14, 14), 11, False),  # layer3 b16 - 11 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 16, (1, 7, 7), 9, False),  # layer4 b16 - 9 cores for height slicing
-        ((1, 1, 4, 4, 1, 1, 1, 1, 1, 1), 20, (1, 115, 115), 98, False),  # first conv b16 - 98 cores for height slicing
+        ((1, 1, 4, 4, 1, 1, 0, 0, 1, 1), 20, (1, 115, 115), 98, False),  # first conv b16 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 20, (1, 56, 56), 98, False),  # layer1 b20 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 20, (1, 28, 28), 98, False),  # layer2 b20 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 20, (1, 14, 14), 12, False),  # layer3 b20 - 12 cores for height slicing
@@ -101,7 +103,7 @@ def test_generate_all_configs_and_references(
 
     input_size_to_shard_evenly = _nearest_y(input_nhw_size, num_cores * 32)
     untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores)
-    output_size_to_shard_evenly = _nearest_y(conv_output_nhw_size, num_cores)
+    output_size_to_shard_evenly = _nearest_y(conv_output_nhw_size, num_cores * 32)
     conv_output_shard_height = (int)(output_size_to_shard_evenly / num_cores)
 
     print("untilize with halo input shard height=", untilize_with_halo_input_shard_height)
@@ -134,10 +136,8 @@ def test_generate_all_configs_and_references(
     # # print("Pad meta data -", pad_metadata)
 
     # run trace conv reference to validate pad_metadata and data_top_left_indices
-    print("Validate pad_metadata and data_top_left_indices.")
-    input_padded_tensor = validate_data_top_left_indices_and_pad_medata(
-        input_pyt_tensor, filter_pyt_tensor, out_golden_pyt_tensor, pad_metadata, data_top_left_indices, conv_params
-    )
+    print("Construct input padded tensor")
+    input_padded_tensor = construct_input_padded_tensor(input_pyt_tensor, pad_metadata)
     # print (f'input_padded_tensor: {input_padded_tensor}')
 
     # Generate more configs -
@@ -156,14 +156,10 @@ def test_generate_all_configs_and_references(
     )
     # print("req_conv_input_shard_start_end-", req_conv_input_shard_start_end)
     # print("tensor_metadata-", tensor_metadata)
-    print("Validate required conv input shard start/end stick indices")
-    golden_untilize_with_halo_output_shards = validate_required_conv_input_sharded_start_end(
-        input_padded_tensor,
-        [batch_size, input_c, input_padded_height, input_padded_width],
-        filter_pyt_tensor,
-        out_golden_pyt_tensor,
-        data_top_left_indices,
-        req_conv_input_shard_start_end,
+    print("Construct reference utwh output shards")
+    input_nchw_padded_shape = [batch_size, input_c, input_padded_height, input_padded_width]
+    golden_untilize_with_halo_output_shards = construct_utwh_output_shards(
+        input_padded_tensor, input_nchw_padded_shape, req_conv_input_shard_start_end
     )
 
     # On device test
@@ -192,7 +188,6 @@ def test_generate_all_configs_and_references(
 
     # construct op object and set op configs
     tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(device, sliding_window_op_params, shard_grid)
-    tt_py_untilize_with_halo_op.set_op_configs()
 
     input_pyt_tensor = torch.reshape(
         torch.permute(input_pyt_tensor, [0, 2, 3, 1]), [1, 1, batch_size * input_h * input_w, input_c]
@@ -216,7 +211,7 @@ def test_generate_all_configs_and_references(
         ttl.tensor.ShardOrientation.ROW_MAJOR,
     )
     # Run forward
-    untilize_with_halo_output_tt_tensor = tt_py_untilize_with_halo_op.run_forward(untilize_with_halp_input_tt_tensor)
+    untilize_with_halo_output_tt_tensor = tt_py_untilize_with_halo_op(untilize_with_halp_input_tt_tensor)
 
     # Compare against golden untilize with halo output
     untilize_with_halo_output_pyt_tensor = untilize_with_halo_output_tt_tensor.cpu().to_torch()

@@ -90,14 +90,23 @@ def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(conv_params, i
     return pad_metadata, data_top_left_indices
 
 
-def validate_data_top_left_indices_and_pad_medata(
-    input_pyt_tensor, filter_pyt_tensor, out_golden_pyt_tensor, pad_metadata, data_top_left_indices, conv_params
+def construct_input_padded_tensor(input_pyt_tensor, pad_metadata):
+    return construct_2d_padded_tensor_list(
+        input_pyt_tensor.reshape(-1).tolist(), list(input_pyt_tensor.size()), pad_metadata
+    )
+
+
+def validate_input_padded_tensor_and_data_top_left_indices_and_pad_metadata(
+    input_padded_tensor,
+    input_nchw_shape,
+    pad_h,
+    pad_w,
+    filter_pyt_tensor,
+    out_golden_pyt_tensor,
+    pad_metadata,
+    data_top_left_indices,
 ):
-    assert len(conv_params) == 10
-    output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups = [
-        conv_params[i] for i in range(10)
-    ]
-    input_n, input_c, input_h, input_w = list(input_pyt_tensor.size())
+    input_n, input_c, input_h, input_w = input_nchw_shape
     filter_k, filter_c, filter_h, filter_w = list(filter_pyt_tensor.size())
     assert input_c == filter_c
 
@@ -107,38 +116,32 @@ def validate_data_top_left_indices_and_pad_medata(
     input_padded_width = input_w + (2 * pad_w)
     input_padded_height = input_h + (2 * pad_h)
     input_padded_volume = input_n * input_c * input_padded_height * input_padded_width
-    assert len(pad_metadata) == input_n * input_padded_height * input_padded_width
-    input_padded_tensor = construct_2d_padded_tensor_list(
-        input_pyt_tensor.reshape(-1).tolist(), list(input_pyt_tensor.size()), pad_metadata
-    )
     assert len(input_padded_tensor) == input_padded_volume
-    # input_padded_pyt_tensor_nhwc = torch.tensor(input_padded_tensor).reshape(
-    #     [input_n * input_padded_height, input_padded_width, input_c]
-    # )
-    # output_tensor = []
-    # # run conv over padded tensor using data_top_left_indices
-    # for k in range(filter_k):
-    #     for i in data_top_left_indices:
-    #         i_bh = (int)(i / input_padded_width)
-    #         i_w = (int)(i % input_padded_width)
-    #         output_tensor.append(
-    #             torch.dot(
-    #                 input_padded_pyt_tensor_nhwc[i_bh : i_bh + filter_h, i_w : i_w + filter_w, :].reshape(-1),
-    #                 filter_pyt_tensor_khwc[k, :, :, :].reshape(-1),
-    #             )
-    #         )
+    input_padded_pyt_tensor_nhwc = torch.tensor(input_padded_tensor).reshape(
+        [input_n * input_padded_height, input_padded_width, input_c]
+    )
+    output_tensor = []
+    # run conv over padded tensor using data_top_left_indices
+    for k in range(filter_k):
+        for i in data_top_left_indices:
+            i_bh = (int)(i / input_padded_width)
+            i_w = (int)(i % input_padded_width)
+            output_tensor.append(
+                torch.dot(
+                    input_padded_pyt_tensor_nhwc[i_bh : i_bh + filter_h, i_w : i_w + filter_w, :].reshape(-1),
+                    filter_pyt_tensor_khwc[k, :, :, :].reshape(-1),
+                )
+            )
 
-    # output_pyt_tensor = torch.tensor(output_tensor)
-    # assert np.prod(output_pyt_tensor.size()) == np.prod(out_golden_pyt_tensor.size())
-    # # permute output golden pytorch tensor from nchw to cnhw shape
-    # out_golden_pyt_tensor_cnhw = torch.permute(out_golden_pyt_tensor, (1, 0, 2, 3))
-    # # compare to pytorch
-    # passing_pcc, output_pcc = comp_equal(out_golden_pyt_tensor_cnhw.reshape(-1), output_pyt_tensor.reshape(-1))
-    # print("Passing=", passing_pcc)
-    # print("Output pcc=", output_pcc)
-    # assert passing_pcc
-
-    return input_padded_tensor
+    output_pyt_tensor = torch.tensor(output_tensor)
+    assert np.prod(output_pyt_tensor.size()) == np.prod(out_golden_pyt_tensor.size())
+    # permute output golden pytorch tensor from nchw to cnhw shape
+    out_golden_pyt_tensor_cnhw = torch.permute(out_golden_pyt_tensor, (1, 0, 2, 3))
+    # compare to pytorch
+    passing_pcc, output_pcc = comp_equal(out_golden_pyt_tensor_cnhw.reshape(-1), output_pyt_tensor.reshape(-1))
+    print("Passing=", passing_pcc)
+    print("Output pcc=", output_pcc)
+    assert passing_pcc
 
 
 def decompose_conv_into_shards_and_generate_tensor_metadata(
@@ -154,6 +157,11 @@ def decompose_conv_into_shards_and_generate_tensor_metadata(
     req_conv_input_shard_start_end = []  # start and end indices refer to global padded input tensor
     conv_output_start_stick = 0
     for core_id in range(num_cores):
+        if conv_output_start_stick >= len(data_top_left_indices):
+            print("core_id=", core_id)
+            print("conv_output_start_stick=", conv_output_start_stick)
+            print("len(data_top_left_indices)=", len(data_top_left_indices))
+            print("conv_output_shard_height=", conv_output_shard_height)
         assert conv_output_start_stick < len(data_top_left_indices)
         req_conv_input_shard_start_stick = data_top_left_indices[conv_output_start_stick]
         conv_output_end_stick = min(conv_output_start_stick + conv_output_shard_height, len(data_top_left_indices)) - 1
@@ -188,9 +196,30 @@ def decompose_conv_into_shards_and_generate_tensor_metadata(
     return req_conv_input_shard_start_end, tensor_metadata
 
 
-def validate_required_conv_input_sharded_start_end(
+def construct_utwh_output_shards(
     # Padded input tensor
     input_padded_tensor,
+    # Padded input tensor shape
+    input_nchw_padded_shape,
+    # config to construct shards
+    req_conv_input_shard_start_end,
+):
+    # reshape input padded tensor to 2d shape - [nhw, c]
+    assert len(input_nchw_padded_shape) == 4
+    input_n, input_c, input_padded_height, input_padded_width = [input_nchw_padded_shape[i] for i in range(4)]
+    input_2d_padded_tensor = np.reshape(
+        input_padded_tensor, (input_n * input_padded_height * input_padded_width, input_c)
+    )
+    utwh_output_shards = []
+    for item in req_conv_input_shard_start_end:
+        req_conv_input_shard_start, req_conv_input_shard_end = item[1]
+        req_conv_input_shard_size = req_conv_input_shard_end - req_conv_input_shard_start + 1
+        assert req_conv_input_shard_size <= 65535  # max uint16 value
+        utwh_output_shards.append(input_2d_padded_tensor[req_conv_input_shard_start : req_conv_input_shard_end + 1, :])
+    return utwh_output_shards
+
+
+def validate_utwh_output_shards_and_req_conv_input_shard_start_end(
     # Padded input tensor shape
     input_nchw_padded_shape,
     # Filter pytorch tensor
@@ -199,6 +228,8 @@ def validate_required_conv_input_sharded_start_end(
     out_golden_pyt_tensor,
     # Input indices corresponding to top left position of sliding window. Used to perform conv operation.
     data_top_left_indices,
+    # validate utwh output shards
+    utwh_output_shards,
     # Validate this config -
     req_conv_input_shard_start_end,
 ):
@@ -212,82 +243,69 @@ def validate_required_conv_input_sharded_start_end(
     output_h = out_golden_pyt_tensor.size()[2]
     output_w = out_golden_pyt_tensor.size()[3]
     assert len(data_top_left_indices) == output_n * output_h * output_w
-    # reshape input padded tensor to 2d shape - [c, nhw]
     assert len(input_nchw_padded_shape) == 4
     input_n, input_c, input_padded_height, input_padded_width = [input_nchw_padded_shape[i] for i in range(4)]
-    input_2d_padded_tensor = np.reshape(
-        input_padded_tensor, (input_n * input_padded_height * input_padded_width, input_c)
-    )
     assert filter_c == input_c
     assert output_n == input_n
     assert output_c == filter_k
 
     # permute filter tensor to be channels last - kchw --> khwc
     filter_pyt_tensor_khwc = torch.permute(filter_pyt_tensor, (0, 2, 3, 1))
-    # Validate req_conv_input_shard_start_end. First, generate conv input shards
-    conv_input_shards = []
-    for item in req_conv_input_shard_start_end:
+
+    # Perform conv on input shards one at a time, and compare against output. Use data_top_left_indices (global) to perform the conv operation.
+    output_stick_global = 0
+    for input_shard_idx, item in enumerate(req_conv_input_shard_start_end):
+        assert input_shard_idx < len(utwh_output_shards)
+        conv_output_shard_start, conv_output_shard_end = item[0]
         req_conv_input_shard_start, req_conv_input_shard_end = item[1]
-        req_conv_input_shard_size = req_conv_input_shard_end - req_conv_input_shard_start + 1
-        assert req_conv_input_shard_size <= 65535  # max uint16 value
-        conv_input_shards.append(input_2d_padded_tensor[req_conv_input_shard_start : req_conv_input_shard_end + 1, :])
+        # sanity check that the first item in the shard is at the top left position of sliding window
+        assert output_stick_global < len(data_top_left_indices)
+        assert req_conv_input_shard_start == data_top_left_indices[output_stick_global]
+        output_shard = []
+        output_shard_size = conv_output_shard_end - conv_output_shard_start + 1
+        for k in range(filter_k):
+            output_stick = output_stick_global
+            for o in range(output_shard_size):
+                assert output_stick < len(data_top_left_indices)
+                input_top_left_position_stick = data_top_left_indices[output_stick]
+                assert input_top_left_position_stick >= req_conv_input_shard_start
+                input_shard_stick_local_idx = input_top_left_position_stick - req_conv_input_shard_start
+                conv_input_window = []
+                for fh in range(filter_h):
+                    for fw in range(filter_w):
+                        assert input_shard_stick_local_idx + fw < len(utwh_output_shards[input_shard_idx])
+                        conv_input_window.append(
+                            utwh_output_shards[input_shard_idx][input_shard_stick_local_idx + fw, :]
+                        )
+                    input_shard_stick_local_idx += input_padded_width
+                output_val = np.dot(
+                    np.array(conv_input_window).flatten(), filter_pyt_tensor_khwc[k, :, :, :].reshape(-1).tolist()
+                )
+                output_shard.append(output_val)
+                output_stick += 1
+        output_stick_global = output_stick
+        output_pyt_shard = torch.tensor(output_shard).reshape((filter_k, output_shard_size))
+        # compare output shard with golden output pytorch tensor
+        # permute output golden pytorch tensor from nchw to cnhw shape
+        out_golden_pyt_tensor_cnhw = torch.permute(out_golden_pyt_tensor, (1, 0, 2, 3))
+        # reshape cnhw to 2d shape = [c, nhw]
+        out_golden_pyt_tensor_cnhw = torch.reshape(
+            out_golden_pyt_tensor_cnhw, (output_c, output_n * output_h * output_w)
+        )
+        assert (
+            output_pyt_shard.size()
+            == out_golden_pyt_tensor_cnhw[:, conv_output_shard_start : conv_output_shard_end + 1].size()
+        )
+        # print("out_golden_shard=", out_golden_pyt_tensor.reshape(-1)[conv_output_shard_start : conv_output_shard_end + 1])
+        # print("out_shard=", output_pyt_shard)
+        passing_pcc, output_pcc = comp_equal(
+            out_golden_pyt_tensor_cnhw[:, conv_output_shard_start : conv_output_shard_end + 1], output_pyt_shard
+        )
+        # print("Passing=", passing_pcc)
+        # print("Output pcc=", output_pcc)
+        assert passing_pcc
 
-    # # Perform conv on input shards one at a time, and compare against output. Use data_top_left_indices (global) to perform the conv operation.
-    # output_stick_global = 0
-    # for input_shard_idx, item in enumerate(req_conv_input_shard_start_end):
-    #     assert input_shard_idx < len(conv_input_shards)
-    #     conv_output_shard_start, conv_output_shard_end = item[0]
-    #     req_conv_input_shard_start, req_conv_input_shard_end = item[1]
-    #     # sanity check that the first item in the shard is at the top left position of sliding window
-    #     assert output_stick_global < len(data_top_left_indices)
-    #     assert req_conv_input_shard_start == data_top_left_indices[output_stick_global]
-    #     output_shard = []
-    #     output_shard_size = conv_output_shard_end - conv_output_shard_start + 1
-    #     for k in range(filter_k):
-    #         output_stick = output_stick_global
-    #         for o in range(output_shard_size):
-    #             assert output_stick < len(data_top_left_indices)
-    #             input_top_left_position_stick = data_top_left_indices[output_stick]
-    #             assert input_top_left_position_stick >= req_conv_input_shard_start
-    #             input_shard_stick_local_idx = input_top_left_position_stick - req_conv_input_shard_start
-    #             conv_input_window = []
-    #             for fh in range(filter_h):
-    #                 for fw in range(filter_w):
-    #                     assert input_shard_stick_local_idx + fw < len(conv_input_shards[input_shard_idx])
-    #                     conv_input_window.append(
-    #                         conv_input_shards[input_shard_idx][input_shard_stick_local_idx + fw, :]
-    #                     )
-    #                 input_shard_stick_local_idx += input_padded_width
-    #             output_val = np.dot(
-    #                 np.array(conv_input_window).flatten(), filter_pyt_tensor_khwc[k, :, :, :].reshape(-1).tolist()
-    #             )
-    #             output_shard.append(output_val)
-    #             output_stick += 1
-    #     output_stick_global = output_stick
-    #     output_pyt_shard = torch.tensor(output_shard).reshape((filter_k, output_shard_size))
-    #     # compare output shard with golden output pytorch tensor
-    #     # permute output golden pytorch tensor from nchw to cnhw shape
-    #     out_golden_pyt_tensor_cnhw = torch.permute(out_golden_pyt_tensor, (1, 0, 2, 3))
-    #     # reshape cnhw to 2d shape = [c, nhw]
-    #     out_golden_pyt_tensor_cnhw = torch.reshape(
-    #         out_golden_pyt_tensor_cnhw, (output_c, output_n * output_h * output_w)
-    #     )
-    #     assert (
-    #         output_pyt_shard.size()
-    #         == out_golden_pyt_tensor_cnhw[:, conv_output_shard_start : conv_output_shard_end + 1].size()
-    #     )
-    #     # print("out_golden_shard=", out_golden_pyt_tensor.reshape(-1)[conv_output_shard_start : conv_output_shard_end + 1])
-    #     # print("out_shard=", output_pyt_shard)
-    #     passing_pcc, output_pcc = comp_equal(
-    #         out_golden_pyt_tensor_cnhw[:, conv_output_shard_start : conv_output_shard_end + 1], output_pyt_shard
-    #     )
-    #     # print("Passing=", passing_pcc)
-    #     # print("Output pcc=", output_pcc)
-    #     assert passing_pcc
-
-    # We have validated conv_input_shards, return it so it can be used for supsequent references as golden reference
-    # print(f"conv_input_shards: {conv_input_shards}")
-    return conv_input_shards
+    return
 
 
 def validate_tensor_metadata(
