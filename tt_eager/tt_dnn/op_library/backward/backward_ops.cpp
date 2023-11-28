@@ -108,6 +108,20 @@ std::vector<Tensor> unary_div_bw(const Tensor& grad, const Tensor& input, float 
 }
 
 
+std::vector<Tensor> _div_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor grad_a = mul(grad, recip(other, output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.push_back(grad_a);
+    Tensor grad_b = mul(mul(neg(grad, output_mem_config), input, std::nullopt, output_mem_config), recip(square(other, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.push_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> div_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _div_bw)(grad, input, other, output_mem_config);
+}
+
+
 }//namespace tt_metal
 
 }//namespace tt
