@@ -1,6 +1,6 @@
 ---
 test-list:
-  - eltwise-relu_min:
+  - eltwise-polyval:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -13,19 +13,20 @@ test-list:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
+        dtype: bfloat16
         args:
           low: -100
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_relu_min_args
+      args-gen: gen_polyval_args
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
-      output-file: eltwise_relu_min_sweep.csv
-  - eltwise-relu_min:
+      output-file: eltwise_polyval_sweep.csv
+  - eltwise-polyval:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [6, 12, 256, 256]
@@ -38,15 +39,16 @@ test-list:
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
         function: gen_rand
+        dtype: bfloat16
         args:
           low: -100
           high: 100
       comparison:
         function: comp_pcc
-      args-gen: gen_relu_min_args
+      args-gen: gen_polyval_args
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
         buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM"]
-      output-file: eltwise_relu_min_sweep.csv
+      output-file: eltwise_polyval_sweep.csv
