@@ -16,5 +16,6 @@ class TTPyOp(ABC):
     def get_l1_buffer_stats(self):
         pass
 
-    def run_forward(self):
+    @abstractmethod
+    def __call__(self):
         pass
