@@ -67,6 +67,7 @@ Tensor to_device_wrapper_sharded(const Tensor &tensor, Device *target_device, co
         {DataType::BFLOAT16, &to_device_sharded<bfloat16>},
         {DataType::FLOAT32, &to_device_sharded<float>},
         {DataType::UINT32, &to_device_sharded<uint32_t>},
+        {DataType::UINT16, &to_device_sharded<uint16_t>},
         {DataType::BFLOAT8_B, &to_device_sharded<uint32_t>}
     };
     return to_device_map.at(tensor.dtype())(tensor, target_device, mem_config, shard_spec);

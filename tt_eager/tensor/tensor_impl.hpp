@@ -61,7 +61,7 @@ constexpr inline std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType
     } else if constexpr (std::is_same_v<DataType, uint16_t>) {
         std::vector<uint32_t> output;
         for (auto index = 0; index < data_to_pack.size(); index += 2) {
-            auto value = data_to_pack[index] << 16 + data_to_pack[index + 1];
+            auto value = data_to_pack[index] << 16 | data_to_pack[index + 1];
             output.push_back(value);
         }
         return output;
