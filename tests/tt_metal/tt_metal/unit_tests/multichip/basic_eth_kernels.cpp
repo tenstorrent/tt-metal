@@ -9,11 +9,9 @@
 #include <functional>
 #include <random>
 
-#include "device_fixture.hpp"
 #include "n300_device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
@@ -36,8 +34,15 @@ const size_t get_rand_32_byte_aligned_address(const size_t& base, const size_t& 
     return (((rand() % word_size) << 5) + base);
 }
 
-// Read from chip's worker core or dram L1 to ethernet L1 and check correctness
-// Ethernet does not send
+/*
+ *                                         ███╗░░██╗░█████╗░░█████╗░
+ *                                         ████╗░██║██╔══██╗██╔══██╗
+ *                                         ██╔██╗██║██║░░██║██║░░╚═╝
+ *                                         ██║╚████║██║░░██║██║░░██╗
+ *                                         ██║░╚███║╚█████╔╝╚█████╔╝
+ *                                         ╚═╝░░╚══╝░╚════╝░░╚════╝░
+ */
+
 bool reader_kernel_no_send(
     tt_metal::Device* device,
     const size_t& byte_size,
@@ -52,16 +57,20 @@ bool reader_kernel_no_send(
     auto input_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
     uint32_t dram_byte_address = input_dram_buffer.address();
     auto dram_noc_xy = input_dram_buffer.noc_coordinates();
+    auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_reader_core);
     log_debug(
         tt::LogTest,
-        "Reading from noc {} addr {} to ethernet core {} addr {}",
+        "Device {}: reading {} bytes from dram {} addr {} to ethernet core {} addr {}",
+        device->id(),
+        byte_size,
         dram_noc_xy.str(),
         dram_byte_address,
         eth_reader_core.str(),
         eth_l1_byte_address);
+
     auto eth_reader_kernel = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/unit_tests/erisc/direct_reader_dram_to_l1.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_reader_dram_to_l1.cpp",
         eth_reader_core,
         tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
 
@@ -74,7 +83,7 @@ bool reader_kernel_no_send(
 
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
-    llrt::write_hex_vec_to_core(device->id(), eth_reader_core, all_zeros, eth_l1_byte_address);
+    llrt::write_hex_vec_to_core(device->id(), eth_noc_xy, all_zeros, eth_l1_byte_address);
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -90,19 +99,137 @@ bool reader_kernel_no_send(
 
     tt_metal::detail::LaunchProgram(device, program);
 
-    std::vector<uint32_t> readback_vec;
-    // tt_metal::ReadFromBuffer(l1_buffer, dest_core_data);
-    tt_metal::detail::ReadFromDeviceL1(device, eth_reader_core, eth_l1_byte_address, byte_size, readback_vec);
+    auto readback_vec = llrt::read_hex_vec_from_core(device->id(), eth_noc_xy, eth_l1_byte_address, byte_size);
     pass &= (readback_vec == inputs);
-    for (const auto& v : readback_vec) {
-        std::cout << v << std::endl;
-    }
     if (not pass) {
-        std::cout << "Mismatch at Core: " << eth_reader_core.str() << std::endl;
+        std::cout << "Mismatch at Core: " << eth_noc_xy.str() << std::endl;
     }
     return pass;
 }
 
+bool writer_kernel_no_receive(
+    tt_metal::Device* device,
+    const size_t& byte_size,
+    const size_t& eth_l1_byte_address,
+    const CoreCoord& eth_writer_core) {
+    bool pass = true;
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Application Setup
+    ////////////////////////////////////////////////////////////////////////////
+    tt_metal::Program program = tt_metal::Program();
+
+    auto output_dram_buffer = CreateBuffer(device, byte_size, byte_size, tt_metal::BufferType::DRAM);
+    uint32_t dram_byte_address = output_dram_buffer.address();
+    auto dram_noc_xy = output_dram_buffer.noc_coordinates();
+    auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_writer_core);
+    log_debug(
+        tt::LogTest,
+        "Device {}: writing {} bytes from ethernet core {} addr {} to dram {} addr {}",
+        device->id(),
+        byte_size,
+        eth_writer_core.str(),
+        eth_l1_byte_address,
+        dram_noc_xy.str(),
+        dram_byte_address);
+
+    auto eth_writer_kernel = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/direct_writer_l1_to_dram.cpp",
+        eth_writer_core,
+        tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Compile and Execute Application
+    ////////////////////////////////////////////////////////////////////////////
+
+    auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
+    llrt::write_hex_vec_to_core(device->id(), eth_noc_xy, inputs, eth_l1_byte_address);
+
+    // Clear expected value at ethernet L1 address
+    std::vector<uint32_t> all_zeros(inputs.size(), 0);
+    tt_metal::detail::WriteToBuffer(output_dram_buffer, inputs);
+
+    tt_metal::SetRuntimeArgs(
+        program,
+        eth_writer_kernel,
+        eth_writer_core,
+        {
+            (uint32_t)dram_byte_address,
+            (uint32_t)dram_noc_xy.x,
+            (uint32_t)dram_noc_xy.y,
+            (uint32_t)byte_size,
+            (uint32_t)eth_l1_byte_address,
+        });
+
+    tt_metal::detail::LaunchProgram(device, program);
+
+    auto readback_vec = llrt::read_hex_vec_from_core(device->id(), eth_noc_xy, eth_l1_byte_address, byte_size);
+    pass &= (readback_vec == inputs);
+    if (not pass) {
+        std::cout << "Mismatch at Core: " << dram_noc_xy.str() << std::endl;
+    }
+    return pass;
+}
+
+TEST_F(N300DeviceFixture, EthKernelsNocReadNoSend) {
+    const auto& device_0 = devices_.at(0);
+    const auto& device_1 = devices_.at(1);
+
+    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+
+    for (const auto& eth_core : device_0->get_active_ethernet_cores()) {
+        ASSERT_TRUE(
+            unit_tests::erisc::kernels::reader_kernel_no_send(device_0, WORD_SIZE, src_eth_l1_byte_address, eth_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+            device_0, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+            device_0, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
+    }
+
+    for (const auto& eth_core : device_1->get_active_ethernet_cores()) {
+        ASSERT_TRUE(
+            unit_tests::erisc::kernels::reader_kernel_no_send(device_1, WORD_SIZE, src_eth_l1_byte_address, eth_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+            device_1, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+            device_1, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
+    }
+}
+
+TEST_F(N300DeviceFixture, EthKernelsNocWriteNoReceive) {
+    const auto& device_0 = devices_.at(0);
+    const auto& device_1 = devices_.at(1);
+
+    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + WORD_SIZE;
+
+    for (const auto& eth_core : device_0->get_active_ethernet_cores()) {
+        ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
+            device_0, WORD_SIZE, src_eth_l1_byte_address, eth_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
+            device_0, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
+            device_0, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
+    }
+
+    for (const auto& eth_core : device_1->get_active_ethernet_cores()) {
+        ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
+            device_1, WORD_SIZE, src_eth_l1_byte_address, eth_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
+            device_1, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
+        ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
+            device_1, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
+    }
+}
+
+/*
+ *
+ *                                         ███████╗████████╗██╗░░██╗
+ *                                         ██╔════╝╚══██╔══╝██║░░██║
+ *                                         █████╗░░░░░██║░░░███████║
+ *                                         ██╔══╝░░░░░██║░░░██╔══██║
+ *                                         ███████╗░░░██║░░░██║░░██║
+ *                                         ╚══════╝░░░╚═╝░░░╚═╝░░╚═╝
+ */
 bool eth_direct_sender_receiver_kernels(
     tt_metal::Device* sender_device,
     tt_metal::Device* receiver_device,

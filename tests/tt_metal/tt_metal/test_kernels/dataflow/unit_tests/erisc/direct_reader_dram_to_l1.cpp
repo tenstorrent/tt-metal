@@ -16,7 +16,6 @@ void kernel_main() {
     std::uint32_t dram_src_noc_y = get_arg_val<uint32_t>(2);
     std::uint32_t dram_buffer_size = get_arg_val<uint32_t>(3);
     std::uint32_t local_eth_l1_addr_base = get_arg_val<uint32_t>(4);
-    std::uint32_t remote_eth_l1_addr_base = get_arg_val<uint32_t>(5);
 
     std::uint32_t dram_buffer_src_addr = dram_buffer_src_addr_base;
     // DRAM NOC src address

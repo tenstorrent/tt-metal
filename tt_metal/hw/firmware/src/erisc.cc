@@ -3,24 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "eth_l1_address_map.h"
+#include "ethernet/dataflow_api.h"
 #include "noc_nonblocking_api.h"
 #include "noc_parameters.h"
 #include "risc_attribs.h"
 #include "tt_eth_api.h"
-struct erisc_info_t {
-  volatile uint32_t num_bytes;
-  volatile uint32_t mode;
-  volatile uint32_t unused_arg0;
-  volatile uint32_t unused_arg1;
-  volatile uint32_t bytes_sent;
-  volatile uint32_t reserved_0_;
-  volatile uint32_t reserved_1_;
-  volatile uint32_t reserved_2_;
-};
-inline void RISC_POST_STATUS(uint32_t status) {
-    volatile uint32_t *ptr = (volatile uint32_t *)(NOC_CFG(ROUTER_CFG_2));
-    ptr[0] = status;
-}
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,14 +18,6 @@ void ApplicationHandler(void) __attribute__((__section__(".init")));
 #ifdef __cplusplus
 }
 #endif
-
-volatile erisc_info_t *erisc_info = (erisc_info_t *)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
-extern uint32_t __erisc_jump_table;
-volatile uint32_t *flag_disable = (uint32_t *)(eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
-
-void (*rtos_context_switch_ptr)();
-volatile uint32_t *RtosTable =
-    (volatile uint32_t *)&__erisc_jump_table;  // Rtos Jump Table. Runtime application needs rtos function handles.;
 
 
 void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
