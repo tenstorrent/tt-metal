@@ -118,6 +118,17 @@ std::vector<Tensor> unary_assign_bw(const Tensor& grad, const Tensor& input, con
     return operation::decorate_as_composite(__func__, _unary_assign_bw)(grad, input, output_mem_config);
 }
 
+std::vector<Tensor> _sqrt_bw(const Tensor& grad, const Tensor& sqrt_result, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = mul(grad, recip(mul_unary(sqrt_result, 2.0, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    grad_tensor.push_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> sqrt_bw(const Tensor& grad, const Tensor& sqrt_result, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _sqrt_bw)(grad, sqrt_result, output_mem_config);
+}
+
 
 std::vector<Tensor> _unary_div_bw(const Tensor& grad, const Tensor& input, float scalar, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
