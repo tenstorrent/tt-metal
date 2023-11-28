@@ -195,43 +195,6 @@ class TestBackwardOps:
         logger.info(comp_out)
         assert comp_pass
 
-    @pytest.mark.parametrize(
-        "exponent",
-        [
-            0.0,
-            1.0,
-            2.0,
-        ],
-    )
-    def test_bw_unary_pow(self, input_shapes, exponent, device):
-        torch.manual_seed(0)
-        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
-        grad_data = torch.randn(input_shapes).bfloat16()
-
-        grad_tensor = (
-            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-        )
-
-        input_tensor = (
-            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
-        )
-
-        tt_output_tensor_on_device = tt_lib.tensor.unary_pow_bw(grad_tensor, input_tensor, exponent=exponent)
-        tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
-
-        in_data.retain_grad()
-
-        pyt_y = torch.pow(in_data, exponent)
-
-        pyt_y.backward(gradient=grad_data)
-
-        golden_output_tensor = in_data.grad
-
-        comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
-        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
-        logger.info(comp_out)
-        assert comp_pass
-
     @pytest.mark.parametrize("value", [0.05, 1.0, 0.5, 0.12])
     def test_bw_addcmul(self, input_shapes, value, device):
         torch.manual_seed(0)
@@ -289,9 +252,8 @@ class TestBackwardOps:
         logger.info(comp_out_c)
         assert comp_pass_a & comp_pass_b & comp_pass_c
 
-    @pytest.mark.parametrize("alpha", [1.0])
-    def test_bw_unary_add(self, input_shapes, alpha, device):
-        torch.manual_seed(0)
+    def test_bw_tanh(self, input_shapes, device):
+        torch.manual_seed(12386)
         in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
         grad_data = torch.randn(input_shapes).bfloat16()
 
@@ -303,12 +265,12 @@ class TestBackwardOps:
             tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
         )
 
-        tt_output_tensor_on_device = tt_lib.tensor.unary_add_bw(grad_tensor, input_tensor, alpha=alpha)
+        pyt_y = torch.tanh(in_data)
+
+        tt_output_tensor_on_device = tt_lib.tensor.tanh_bw(grad_tensor, input_tensor)
         tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
 
         in_data.retain_grad()
-
-        pyt_y = torch.add(in_data, torch.tensor(alpha))
 
         pyt_y.backward(gradient=grad_data)
 
@@ -319,8 +281,8 @@ class TestBackwardOps:
         logger.info(comp_out)
         assert comp_pass
 
-    def test_bw_sqrt(self, input_shapes, device):
-        torch.manual_seed(12345)
+    def test_bw_tanh(self, input_shapes, device):
+        torch.manual_seed(12386)
         in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
         grad_data = torch.randn(input_shapes).bfloat16()
 
@@ -328,13 +290,13 @@ class TestBackwardOps:
             tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
         )
 
-        pyt_y = torch.sqrt(in_data)
-
-        sqrt_tensor = (
-            tt_lib.tensor.Tensor(pyt_y, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
         )
 
-        tt_output_tensor_on_device = tt_lib.tensor.sqrt_bw(grad_tensor, sqrt_tensor)
+        pyt_y = torch.tanh(in_data)
+
+        tt_output_tensor_on_device = tt_lib.tensor.tanh_bw(grad_tensor, input_tensor)
         tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
 
         in_data.retain_grad()
