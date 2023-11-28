@@ -1,6 +1,5 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
 
-include $(UMD_HOME)/device/module.mk
 include $(TT_METAL_HOME)/tt_metal/tracy.mk
 
 COMMON_INCLUDES = $(BASE_INCLUDES)
@@ -23,7 +22,6 @@ ifeq ("$(ARCH_NAME)", "wormhole")
   COMMON_INCLUDES+= -I$(UMD_HOME)/src/firmware/riscv/wormhole
 endif
 
-COMMON_LIB = $(LIBDIR)/libcommon.a
 COMMON_DEFINES =
 COMMON_INCLUDES += -I$(TT_METAL_HOME)/tt_metal/common/.
 COMMON_CFLAGS = $(CFLAGS) -Werror
@@ -37,11 +35,7 @@ COMMON_DEPS = $(addprefix $(OBJDIR)/, $(COMMON_SRCS:.cpp=.d))
 -include $(COMMON_DEPS)
 
 # Each module has a top level target as the entrypoint which must match the subdir name
-common: $(COMMON_LIB)
-
-$(COMMON_LIB): umd_device $(TRACY_LIB) $(COMMON_OBJS)
-	@mkdir -p $(@D)
-	ar rcs -o $@ $(COMMON_OBJS) $(TRACY_LIB)
+common: $(COMMON_OBJS) umd_device $(TRACY_OBJS)
 
 $(OBJDIR)/tt_metal/common/%.o: tt_metal/common/%.cpp
 	@mkdir -p $(@D)
