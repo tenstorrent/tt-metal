@@ -24,6 +24,7 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_WATCHER: 60
     environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
