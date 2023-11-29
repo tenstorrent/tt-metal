@@ -95,6 +95,12 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.cpp \
 	tt_eager/tt_dnn/op_library/layernorm/multi_core/layernorm_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/layernorm/layernorm_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_bmm/moreh_bmm_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_linear/moreh_linear_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_linear_backward/moreh_linear_backward_op.cpp \
+	tt_eager/tt_dnn/op_library/moreh_linear_backward/bias_backward_h/moreh_bias_backward_multi_core_h.cpp \
+	tt_eager/tt_dnn/op_library/moreh_linear_backward/bias_backward_hw/moreh_bias_backward_single_core_hw.cpp \
 	tt_eager/tt_dnn/op_library/moreh_matmul/multi_core/moreh_matmul_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.cpp \
 	tt_eager/tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.cpp \
