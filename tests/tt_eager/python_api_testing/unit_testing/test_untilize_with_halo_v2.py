@@ -298,4 +298,4 @@ def test_generate_all_configs_and_references(
     passing_pcc, _ = comp_pcc(
         golden_untilize_with_halo_output_pyt_tensor, untilize_with_halo_output_pyt_tensor, pcc=0.999
     )
-    # assert passing_pcc
+    assert passing_pcc
