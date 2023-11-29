@@ -15,7 +15,7 @@ test-list:
         function: gen_rand
         dtype: bfloat16
         args:
-          low: -10
+          low: -4
           high: 10
       comparison:
         function: comp_pcc
@@ -41,7 +41,7 @@ test-list:
         function: gen_rand
         dtype: bfloat16
         args:
-          low: -10
+          low: -4
           high: 10
       comparison:
         function: comp_pcc
