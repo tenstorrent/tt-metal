@@ -48,7 +48,7 @@ def get_batch(data_loader, image_processor):
     return images, labels
 
 
-def get_data_loader(input_loc, batch_size):
+def get_data_loader(input_loc, batch_size, iterations):
     img_dir = input_loc + "/"
     data_path = os.path.join(img_dir, "*G")
     files = glob.glob(data_path)
@@ -84,7 +84,7 @@ def get_data_loader(input_loc, batch_size):
     if len(files) == 0:
         files_raw = iter(load_dataset("imagenet-1k", split="validation", use_auth_token=True, streaming=True))
         files = []
-        sample_count = 3500
+        sample_count = batch_size * iterations
         for _ in range(sample_count):
             files.append(next(files_raw))
         del files_raw
