@@ -13,12 +13,10 @@ inline void print_test_data() {
     DPRINT << SETPRECISION(5) << my_float << ENDL();
     DPRINT << SETPRECISION(9) << my_float << ENDL();
     DPRINT << FIXED();
-    // See issue #3990, disable this line for now until it's fixed.
-    // DPRINT << SETPRECISION(5) << my_float << ENDL();
+    DPRINT << SETPRECISION(5) << my_float << ENDL();
     DPRINT << SETPRECISION(9) << my_float << ENDL();
     DPRINT << DEFAULTFLOAT();
-    DPRINT << "SETW (sticky):\n" << SETW(10) << my_int << my_int << ENDL();
-    DPRINT << "SETW (non-sticky):\n" << SETW(10, false) << my_int << my_int << ENDL();
+    DPRINT << "SETW:\n" << SETW(10) << my_int << my_int << SETW(4) << "ab" << ENDL();
     DPRINT << "HEX/OCT/DEC:\n" << HEX() << my_int << OCT() << my_int << DEC() << my_int << ENDL();
     DPRINT << "SLICE:\n";
 // See issue #3970, disable TSLICE printing for math for now.

@@ -19,12 +19,6 @@ R"(Printing int from arg: 0
 Printing int from arg: 2)";
 
 TEST_F(CommandQueueWithDPrintFixture, TestPrintMuting) {
-    bool pass = true;
-
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
-
     // Device already set up by gtest fixture.
     Device *device = this->device_;
 

@@ -23,11 +23,10 @@ Basic Types:
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
+3.14159
 3.141590118
-SETW (sticky):
-    123456    123456
-SETW (non-sticky):
-    123456123456
+SETW:
+    123456123456  ab
 HEX/OCT/DEC:
 1e240361100123456
 SLICE:
@@ -44,11 +43,10 @@ Basic Types:
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
+3.14159
 3.141590118
-SETW (sticky):
-    123456    123456
-SETW (non-sticky):
-    123456123456
+SETW:
+    123456123456  ab
 HEX/OCT/DEC:
 1e240361100123456
 SLICE:
@@ -65,11 +63,10 @@ Basic Types:
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
+3.14159
 3.141590118
-SETW (sticky):
-    123456    123456
-SETW (non-sticky):
-    123456123456
+SETW:
+    123456123456  ab
 HEX/OCT/DEC:
 1e240361100123456
 SLICE:
@@ -79,11 +76,10 @@ Basic Types:
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
+3.14159
 3.141590118
-SETW (sticky):
-    123456    123456
-SETW (non-sticky):
-    123456123456
+SETW:
+    123456123456  ab
 HEX/OCT/DEC:
 1e240361100123456
 SLICE:
@@ -100,11 +96,10 @@ Basic Types:
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
+3.14159
 3.141590118
-SETW (sticky):
-    123456    123456
-SETW (non-sticky):
-    123456123456
+SETW:
+    123456123456  ab
 HEX/OCT/DEC:
 1e240361100123456
 SLICE:
@@ -117,12 +112,6 @@ TILE: (
   ptr=122880))";
 
 TEST_F(CommandQueueWithDPrintFixture, TestPrintFromAllHarts) {
-    bool pass = true;
-
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
-
     // Device already set up by gtest fixture.
     Device *device = this->device_;
 
