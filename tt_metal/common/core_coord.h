@@ -409,6 +409,29 @@ inline std::vector<CoreCoord> grid_to_cores(uint32_t num_cores, uint32_t grid_si
     return cores;
 }
 
+inline std::vector<CoreCoord> grid_to_cores(CoreCoord start, CoreCoord end, bool row_wise=false) {
+    std::vector<CoreCoord> cores;
+    auto num_cores_x = (end.x+1) - start.x;
+    auto num_cores_y = (end.y+1) - start.y;
+    uint32_t num_cores = num_cores_x * num_cores_y;
+    cores.reserve(num_cores);
+    if (row_wise) {
+        for(uint32_t j = start.y; j < (end.y + 1); j++) {
+          for(uint32_t i = start.x; i < (end.x + 1); i++) {
+            cores.push_back({i, j});
+          }
+        }
+
+    } else {
+        for(uint32_t i = start.x; i < (end.x + 1); i++) {
+          for(uint32_t j = start.y; j < (end.y + 1); j++) {
+            cores.push_back({i, j});
+          }
+        }
+    }
+    return cores;
+}
+
 
 // Noop cores are appended at the end with no guarantees on ordering
 inline std::vector<CoreCoord> grid_to_cores_with_noop(const uint32_t bbox_x, const uint32_t bbox_y, const uint32_t grid_size_x, const uint32_t grid_size_y, const bool row_wise=false) {
@@ -453,22 +476,15 @@ inline std::vector<CoreCoord> corerange_to_cores(const CoreRangeSet crs, std::op
 
   uint32_t num_total_cores = 0;
   std::vector <CoreCoord> all_cores;
+  uint32_t offset = 0;
+
   for(auto core_range : crs.ranges()){
       auto start_coord = core_range.start;
       auto end_coord = core_range.end;
-      auto num_cores_x = (end_coord.x+1) - start_coord.x;
-      auto num_cores_y = (end_coord.y+1) - start_coord.y;
-
-      uint32_t num_curr_cores = num_cores_x * num_cores_y;
-      if(max_cores.has_value()){
-        num_curr_cores = std::min(max_cores.value() - num_total_cores,
-                          (uint32_t)num_cores_x * (uint32_t)num_cores_y);
-
-      }
-      auto cores = grid_to_cores(num_curr_cores, num_cores_x, num_cores_y, row_wise);
-      num_total_cores += num_curr_cores;
+      auto cores = grid_to_cores(start_coord, end_coord, row_wise);
       all_cores.insert(all_cores.end(), cores.begin(), cores.end());
   }
+
 
   return all_cores;
 
