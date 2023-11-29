@@ -20,6 +20,7 @@ from models.utility_functions import (
 )
 from models.demos.resnet.tests.demo_utils import get_data
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
+from datasets import load_dataset
 
 model_config = {
     "MATH_FIDELITY": tt_lib.tensor.MathFidelity.HiFi2,
@@ -101,8 +102,21 @@ def run_perf_resnet(
         reference_labels = []
         predicted_labels = []
         profiler.start(third_key)
+
+        weka_is_on = True
+        if len(image_examples) == 0:
+            weka_is_on = False
+            files_raw = iter(load_dataset("imagenet-1k", split="validation", use_auth_token=True, streaming=True))
+            image_examples = []
+            sample_count = batch_size * iterations
+            for _ in range(sample_count):
+                image_examples.append(next(files_raw))
+
         for i in range(iterations):
-            input_image = image_examples[i].image
+            if weka_is_on:
+                input_image = image_examples[i].image
+            else:
+                input_image = image_examples[i]["image"]
             if input_image.mode == "L":
                 input_image = input_image.convert(mode="RGB")
             input = image_processor(input_image, return_tensors="pt")
@@ -114,7 +128,10 @@ def run_perf_resnet(
                 prediction = tt_output[j][0][0].argmax()
                 prediction = prediction.item()
                 predicted_labels.append(prediction)
-                reference_labels.append(image_examples[i].label)
+                if weka_is_on:
+                    reference_labels.append(image_examples[i].label)
+                else:
+                    reference_labels.append(image_examples[i]["label"])
         predicted_labels = np.array(predicted_labels)
         reference_labels = np.array(reference_labels)
         accuracy = np.mean(predicted_labels == reference_labels)
