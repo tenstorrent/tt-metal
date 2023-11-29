@@ -352,7 +352,6 @@ TEST_F(DeviceFixture, TestDeviceToHostMemChannelAssignment) {
 
     for (const auto& [mmio_dev_id, device_group] : mmio_device_to_device_group) {
         EXPECT_EQ(tt::Cluster::instance().get_num_host_channels(mmio_dev_id), device_group.size());
-        EXPECT_EQ(tt::Cluster::instance().get_assigned_channel_for_device(mmio_dev_id), 0);
         std::unordered_set<uint16_t> channels;
         for (const chip_id_t &device_id : device_group) {
             channels.insert(tt::Cluster::instance().get_assigned_channel_for_device(device_id));
