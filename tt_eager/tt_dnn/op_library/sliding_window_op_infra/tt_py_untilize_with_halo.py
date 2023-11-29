@@ -146,57 +146,93 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
             )
 
-            def gen_config_tt_tensors(config_list_uint16, toprint=False):
+            # def gen_config_tt_tensors(config_list_uint16, toprint=False):
+            #     if len(config_list_uint16) == 0:
+            #         # return dummy tensor
+            #         return ttl.tensor.Tensor(
+            #             [0.0, 0.0], [1, 1, 1, 2], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, device
+            #         )
+            #     config_list = []
+            #     for i in range(0, len(config_list_uint16), 2):
+            #         pstr = struct.pack("HH", config_list_uint16[i], config_list_uint16[i + 1])
+            #         packedint = struct.unpack("I", pstr)
+            #         if toprint:
+            #             print(f"{config_list_uint16[i]},{config_list_uint16[i+1]} -> {packedint}")
+            #         config_list.append(packedint)
+            #     config_size = len(config_list)
+            #     assert config_size % num_cores_nhw == 0
+            #     shard_config_size = (int)(config_size / num_cores_nhw)
+            #     config_shard_shape = [1, shard_config_size]  # = local_data_nsegments * 2
+            #     config_tensor_shape = (
+            #         1,
+            #         1,
+            #         1,
+            #         config_size,  # = num_cores * local_data_nsegments * 2
+            #     )
+            #     torch_tensor = torch.tensor(config_list).reshape(config_tensor_shape)
+            #     shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
+            #     shard_halo = False
+            #     shard_spec = ttl.tensor.ShardSpec(shard_grid, config_shard_shape, shard_orientation, shard_halo)
+
+            #     tt_tensor = ttl.tensor.Tensor(torch_tensor, ttl.tensor.DataType.UINT32).to(
+            #         device, height_sharded_mem_config, shard_spec
+            #     )
+
+            #     tt_tensor_cpu = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+            #     if toprint:
+            #         tt_tensor_cpu.print()
+            #     torch_tensor_after_round_trip = tt_tensor_cpu.to_torch().reshape(config_tensor_shape)
+            #     assert all(torch_tensor.reshape(-1) == torch_tensor_after_round_trip.reshape(-1))
+            #     return tt_tensor
+
+            def gen_config_tt_tensors_uint16(config_list_uint16, toprint=False):
                 if len(config_list_uint16) == 0:
                     # return dummy tensor
                     return ttl.tensor.Tensor(
-                        [0.0, 0.0], [1, 1, 1, 2], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, device
+                        [0, 0], [1, 1, 1, 2], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, device
                     )
-                config_list = []
-                for i in range(0, len(config_list_uint16), 2):
-                    pstr = struct.pack("HH", config_list_uint16[i], config_list_uint16[i + 1])
-                    packedint = struct.unpack("I", pstr)
-                    if toprint:
-                        print(f"{config_list_uint16[i]},{config_list_uint16[i+1]} -> {packedint}")
-                    config_list.append(packedint)
-                config_size = len(config_list)
+                assert len(config_list_uint16) % 2 == 0
+                config_size = len(config_list_uint16)
                 assert config_size % num_cores_nhw == 0
-                shard_config_size = (int)(config_size / num_cores_nhw)
-                config_shard_shape = [1, shard_config_size]  # = local_data_nsegments * 2
+                shard_config_size = config_size // num_cores_nhw
+                config_shard_shape = [1, shard_config_size]
                 config_tensor_shape = (
                     1,
                     1,
                     1,
-                    config_size,  # = num_cores * local_data_nsegments * 2
+                    config_size,
                 )
-                torch_tensor = torch.tensor(config_list).reshape(config_tensor_shape)
+                torch_tensor = torch.tensor(config_list_uint16, dtype=torch.short).reshape(config_tensor_shape)
                 shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
                 shard_halo = False
                 shard_spec = ttl.tensor.ShardSpec(shard_grid, config_shard_shape, shard_orientation, shard_halo)
 
-                tt_tensor = ttl.tensor.Tensor(torch_tensor, ttl.tensor.DataType.UINT32).to(
+                tt_tensor = ttl.tensor.Tensor(torch_tensor, ttl.tensor.DataType.UINT16).to(
                     device, height_sharded_mem_config, shard_spec
                 )
 
-                tt_tensor_cpu = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-                if toprint:
-                    tt_tensor_cpu.print()
-                torch_tensor_after_round_trip = tt_tensor_cpu.to_torch().reshape(config_tensor_shape)
-                assert all(torch_tensor.reshape(-1) == torch_tensor_after_round_trip.reshape(-1))
+                ## validate
+                tt_tensor_cpu = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(config_tensor_shape)
+                print(f"INPUT TENSOR:\n{torch_tensor}")
+                print(f"VALIDATE TENSOR:\n{tt_tensor_cpu}")
+                equality = torch_tensor.reshape(-1) == tt_tensor_cpu.reshape(-1)
+                print(f"{equality}")
+                assert all(equality)
+
                 return tt_tensor
 
             print("gen local data config tt tensor")
-            local_data_tensor = gen_config_tt_tensors(local_data)
+            local_data_tensor = gen_config_tt_tensors_uint16(local_data)
             print("gen local pad config tt tensor")
-            local_pad_tensor = gen_config_tt_tensors(local_pad)
+            local_pad_tensor = gen_config_tt_tensors_uint16(local_pad)
             print("gen ll data config tt tensor")
-            ll_data_tensor = gen_config_tt_tensors(ll_data)
+            ll_data_tensor = gen_config_tt_tensors_uint16(ll_data)
             print("gen l data config tt tensor")
-            l_data_tensor = gen_config_tt_tensors(l_data)
+            l_data_tensor = gen_config_tt_tensors_uint16(l_data)
             print("gen r data config tt tensor")
-            r_data_tensor = gen_config_tt_tensors(r_data)
+            r_data_tensor = gen_config_tt_tensors_uint16(r_data)
             print("gen rr data config tt tensor")
-            rr_data_tensor = gen_config_tt_tensors(rr_data)
+            rr_data_tensor = gen_config_tt_tensors_uint16(rr_data)
 
             cls.static_kernel_configs_cache_map[sliding_window_op_params_hash] = {
                 "local_pad_tensor": local_pad_tensor,

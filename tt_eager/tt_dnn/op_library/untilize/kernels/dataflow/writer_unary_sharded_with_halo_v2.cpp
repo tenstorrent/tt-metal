@@ -38,22 +38,10 @@ inline void push_to_neighbor_async(uint32_t noc_x,
                                    uint32_t in_l1_addr,
                                    uint32_t out_l1_addr,
                                    uint32_t stick_nbytes) {
-    // volatile tt_l1_ptr uint16_t* data_ss = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(data_ss_cb_id));
-    // for (uint32_t i = 0; i < 2 * data_nsegments; i += 2) {
-    //     uint32_t dst_addr = out_l1_addr + data_ss[i];
-    //     uint32_t seg_nbytes = (uint32_t) data_ss[i + 1] * stick_nbytes;
-    //     noc_async_write(in_l1_addr, get_noc_addr(noc_x, noc_y, dst_addr), seg_nbytes);
-    //     in_l1_addr += seg_nbytes;
-    // }
-    volatile tt_l1_ptr uint32_t* data_ss = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(data_ss_cb_id));
-    for (uint32_t i = 0; i < data_nsegments; ++ i) {
-        uint32_t start_and_size = data_ss[i];
-        uint16_t dst_start = (uint16_t) ((start_and_size << 16) >> 16);
-        uint16_t dst_size = (uint16_t) (start_and_size >> 16);
-        // DPRINT << "DST: " << (uint) dst_start << ENDL();
-        // DPRINT << "SZ: " << (uint) dst_size << ENDL();
-        uint32_t dst_addr = out_l1_addr + (uint32_t) dst_start * stick_nbytes;
-        uint32_t seg_nbytes = (uint32_t) dst_size * stick_nbytes;
+    volatile tt_l1_ptr uint16_t* data_ss = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(data_ss_cb_id));
+    for (uint32_t i = 0; i < 2 * data_nsegments; i += 2) {
+        uint32_t seg_nbytes = data_ss[i] * stick_nbytes;
+        uint32_t dst_addr = out_l1_addr + data_ss[i + 1] * stick_nbytes;
         noc_async_write(in_l1_addr, get_noc_addr(noc_x, noc_y, dst_addr), seg_nbytes);
         in_l1_addr += seg_nbytes;
     }
@@ -116,8 +104,8 @@ void kernel_main() {
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
 
-    DPRINT << "IN:" << ENDL();
-    print_sticks(in_base_l1_addr, 0, 300, 32);
+    // DPRINT << "IN:" << ENDL();
+    // print_sticks(in_base_l1_addr, 0, 300, 32);
 
     uint32_t in_l1_addr = in_base_l1_addr;
 
@@ -125,29 +113,15 @@ void kernel_main() {
     if (local_pad_nsegments > 0) {
         // cb_wait_front(local_pad_ss_cb_id, 1);
         uint32_t local_pad_ss_l1_addr = get_read_ptr(local_pad_ss_cb_id);
-        // volatile tt_l1_ptr uint16_t* local_pad_ss = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_pad_ss_l1_addr);
-        // for (int32_t i = 0; i < 2 * local_pad_nsegments; i += 2) {
-        //     uint32_t dst_addr = out_base_l1_addr + local_pad_ss[i];
-        //     uint32_t size = (uint32_t) local_pad_ss[i + 1] * stick_nbytes;
-        //     DPRINT << "DST: " << dst_addr << ENDL();
-        //     DPRINT << "SZ: " << size << ENDL();
-        //     noc_async_read(padding_noc_addr, dst_addr, size);
-        // }
-        volatile tt_l1_ptr uint32_t* local_pad_ss = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_pad_ss_l1_addr);
-        for (int32_t i = 0; i < local_pad_nsegments; ++ i) {
-            uint32_t start_and_size = local_pad_ss[i];
-            uint16_t dst_start = (uint16_t) ((start_and_size << 16) >> 16);
-            uint16_t dst_size = (uint16_t) (start_and_size >> 16);
-            // DPRINT << "SS: " << start_and_size << ENDL();
-            // DPRINT << "DST: " << (uint) dst_start << ENDL();
-            // DPRINT << "SZ: " << (uint) dst_size << ENDL();
-            uint32_t dst_addr = out_base_l1_addr + (uint32_t) dst_start * stick_nbytes;
-            for (int32_t j = 0; j < dst_size; ++ j) {
+        volatile tt_l1_ptr uint16_t* local_pad_ss = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_pad_ss_l1_addr);
+        for (int32_t i = 0; i < 2 * local_pad_nsegments; i += 2) {
+            uint32_t dst_size = local_pad_ss[i];
+            uint32_t dst_addr = out_base_l1_addr + local_pad_ss[i + 1] * stick_nbytes;
+            for (uint32_t j = 0; j < dst_size; ++ j) {
                 noc_async_read(padding_noc_addr, dst_addr, stick_nbytes);
                 dst_addr += stick_nbytes;
             }
         }
-        // print_sticks(out_base_l1_addr, 0, 60, 32);
     }
 
     // then insert all local data
@@ -155,22 +129,12 @@ void kernel_main() {
         // cb_wait_front(local_data_ss_cb_id, 1);
         in_l1_addr = in_base_l1_addr + local_data_src_start_offset;
         uint32_t local_data_ss_l1_addr = get_read_ptr(local_data_ss_cb_id);
-        // volatile tt_l1_ptr uint16_t* local_data_ss = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_data_ss_l1_addr);
-        // for (int32_t i = 0; i < 2 * local_data_nsegments; i += 2) {
-        //     uint32_t dst_addr = out_base_l1_addr + local_data_ss[i];
-        //     uint32_t size = (uint32_t) local_data_ss[i + 1] * stick_nbytes;
-        //     noc_async_read(get_noc_addr(in_l1_addr), dst_addr, size);
-        //     in_l1_addr += size;
-        // }
-        volatile tt_l1_ptr uint32_t* local_data_ss = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_data_ss_l1_addr);
-        for (int32_t i = 0; i < local_data_nsegments; ++ i) {
-            uint32_t start_and_size = local_data_ss[i];
-            uint16_t dst_start = (uint16_t) ((start_and_size << 16) >> 16);
-            uint16_t dst_size = (uint16_t) (start_and_size >> 16);
-            uint32_t dst_addr = out_base_l1_addr + (uint32_t) dst_start * stick_nbytes;
-            uint32_t size = (uint32_t) dst_size * stick_nbytes;
-            noc_async_read(get_noc_addr(in_l1_addr), dst_addr, size);
-            in_l1_addr += size;
+        volatile tt_l1_ptr uint16_t* local_data_ss = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_data_ss_l1_addr);
+        for (int32_t i = 0; i < 2 * local_data_nsegments; i += 2) {
+            uint32_t dst_size = local_data_ss[i] * stick_nbytes;
+            uint32_t dst_addr = out_base_l1_addr + local_data_ss[i + 1] * stick_nbytes;
+            noc_async_read(get_noc_addr(in_l1_addr), dst_addr, dst_size);
+            in_l1_addr += dst_size;
         }
     }
 
@@ -195,6 +159,6 @@ void kernel_main() {
     noc_async_read_barrier();
     noc_async_write_barrier();
 
-    DPRINT << "OUT:" << ENDL();
-    print_sticks(out_base_l1_addr, 0, 500, 32);
+    // DPRINT << "OUT:" << ENDL();
+    // print_sticks(out_base_l1_addr, 0, 500, 32);
 }
