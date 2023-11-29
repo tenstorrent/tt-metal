@@ -12,6 +12,7 @@
 #include "tensor/owned_buffer_functions.hpp"
 
 
+
 namespace tt {
 
 namespace tt_metal {
@@ -51,6 +52,7 @@ std::vector<Tensor> tan_bw(const Tensor& grad, const Tensor& tan_result, const M
 
 std::vector<Tensor> where_bw(const Tensor& grad, const Tensor& condition, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+std::vector<Tensor> fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 } //namespace tt_metal
 
