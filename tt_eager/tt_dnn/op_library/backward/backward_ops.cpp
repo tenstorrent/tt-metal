@@ -198,6 +198,22 @@ std::vector<Tensor> addcdiv_bw(const Tensor& grad, const Tensor& input, const Te
     return operation::decorate_as_composite(__func__, _addcdiv_bw)(grad, input, tensor1, tensor2, value, output_mem_config);
 }
 
+std::vector<Tensor> _where_bw(const Tensor& grad, const Tensor& condition, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_zero = zeros_like(grad, output_mem_config);
+    Tensor grad_a = where(condition, grad, t_zero, output_mem_config);
+    grad_tensor.push_back(grad_a);
+    Tensor grad_b = where(condition, t_zero, grad, output_mem_config);
+    grad_tensor.push_back(grad_b);
+
+    return grad_tensor;
+}
+std::vector<Tensor> where_bw(const Tensor& grad, const Tensor& condition, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _where_bw)(grad, condition, input, other, output_mem_config);
+}
+
+
 
 }//namespace tt_metal
 
