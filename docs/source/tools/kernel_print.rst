@@ -27,7 +27,7 @@ Note that the core coordinates are currently physical NOC coordinates (not logic
 To generate kernel debug prints on the device, include the ``debug/dprint.h`` header and use the APIs defined there.
 And example with the different features available is shown below:
 
-.. code-block::
+.. code-block:: c++
 
     #include "debug/dprint.h"  // required in all kernels using DPRINT
 
@@ -64,7 +64,7 @@ to the current CB read or write pointer. This means that for printing a tile rea
 ``DPRINT`` call has to occur between the ``cb_wait_front`` and ``cb_pop_front`` calls. For printing a tile from the
 back of the CB, the ``DPRINT`` call has to occur between the ``cb_reserve_back`` and ``cb_push_back`` calls.
 
-.. code-block::
+.. code-block:: sh
 
     #include "debug/dprint.h"  // required in all kernels using DPRINT
 
