@@ -40,7 +40,12 @@ inline const uint32_t get_operand_narrow_tile(const std::uint32_t operand_id)
    return 0;
 }
 
-inline const std::vector<uint32_t> get_operand_tile_dims(const std::uint32_t operand_id)
+inline const uint32_t get_operand_tile_r_dim(const std::uint32_t operand_id)
 {
-   return {32, 32};
+   return 32;
+}
+
+inline const uint32_t get_operand_tile_c_dim(const std::uint32_t operand_id)
+{
+   return 32;
 }
