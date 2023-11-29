@@ -10,6 +10,7 @@
 #include "metal_compile_time_args.h"
 #include "risc_attribs.h"
 #include "hostdevcommon/common_runtime_address_map.h"
+#include "hostdevcommon/kernel_structs.h"
 
 extern uint32_t __ldm_bss_start[];
 extern uint32_t __ldm_bss_end[];

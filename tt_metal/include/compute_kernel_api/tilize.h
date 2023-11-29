@@ -37,11 +37,7 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
     PACK(( llk_pack_dest_init<SyncHalf, DstTileFaceLayout::RowMajor, false>() ));
 
     UNPACK(( llk_setup_operands() ));
-    #ifdef ARCH_GRAYSKULL
     UNPACK(( llk_unpack_tilize_hw_configure_disaggregated(icb) ));
-    #else
-    UNPACK(( llk_unpack_tilize_hw_configure_disaggregated<>(icb, block) ));
-    #endif
     UNPACK(( llk_unpack_tilize_init(icb, block) ));
 }
 

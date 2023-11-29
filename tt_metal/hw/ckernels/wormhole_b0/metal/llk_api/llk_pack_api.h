@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -17,7 +21,7 @@
 * LLK PACK
 *************************************************************************/
 
-template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor, bool write_tile_header = true>
+template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
 inline void llk_pack_mop_config(const uint32_t output) {
 
     const std::uint32_t output_id = get_output_id(output);
@@ -26,7 +30,7 @@ inline void llk_pack_mop_config(const uint32_t output) {
     const bool partial_face = get_output_partial_face(output_id) && IS_BFP_FORMAT((uint)pack_dst_format[output_id]);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_mop_config_<untilize, zero_output, FaceLayout, write_tile_header>(
+    _llk_pack_mop_config_<untilize, zero_output, FaceLayout, false>(
         pack_dst_format[output_id],
         face_r_dim,
         num_faces,
@@ -94,7 +98,7 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
     llk_pack_reduce_hw_configure<untilize, type, dim, is_fp32_dest_acc_en>(&llk_pack_params);
 }
 
-template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor, bool write_tile_header = true>
+template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
 inline void llk_pack_init(const std::uint32_t pack_output = 0) {
 
     const std::uint32_t output_id = get_output_id(pack_output);
@@ -103,7 +107,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 0) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
-    _llk_pack_init_<untilize, zero_output, FaceLayout, write_tile_header>(
+    _llk_pack_init_<untilize, zero_output, FaceLayout, false>(
         pack_dst_format[output_id],
         face_r_dim,
         num_faces,
@@ -237,7 +241,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     );
 }
 
-template <bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor, bool write_tile_header = true>
+template <bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
     std::uint32_t old_output_id = get_output_id(old_output);
     std::uint32_t new_output_id = get_output_id(new_output);
@@ -248,7 +252,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
         llk_pack_reconfig_data_format<is_fp32_dest_acc_en, is_tile_dim_reconfig_en, FaceLayout>(new_output);
     } else if constexpr (is_tile_dim_reconfig_en) {
         // Same format but different tile dims
-        llk_pack_mop_config<false, false, FaceLayout, write_tile_header>(new_output);
+        llk_pack_mop_config<false, false, FaceLayout, false>(new_output);
     }
 }
 
