@@ -199,10 +199,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t r_data_ss_cb_id = CB::c_in6;
     uint32_t rr_data_ss_cb_id = CB::c_in7;
 
-    // DataFormat kernel_config_df = DataFormat::UInt16;
-    // DataFormat kernel_config_df = DataFormat::UInt32;
-    DataFormat kernel_config_df = DataFormat::RawUInt32;
-    uint32_t config_nbytes = datum_size(kernel_config_df);
+    DataFormat kernel_config_df = DataFormat::RawUInt16;        // NOTE: UInt16 is not supported for CB types
+    uint32_t config_nbytes = datum_size(kernel_config_df) * 2;  // each config is a pair "start, size", so double the size
     uint32_t pagesize = 0;
 
     // local_pad_start_and_size
@@ -211,6 +209,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     bool local_pad_ss_exists = pagesize > 0;
     CBHandle local_pad_ss_cb = 0;
     if (local_pad_ss_exists) {
+        TT_ASSERT(local_pad_start_and_size.dtype() == DataType::UINT16);
         log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", local_pad_ss_cb_id, 1, pagesize);
         Buffer *local_pad_ss_buffer = local_pad_start_and_size.buffer();
         auto local_pad_ss_cb_config = CircularBufferConfig(pagesize * 1, {{local_pad_ss_cb_id, kernel_config_df}})
@@ -225,6 +224,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     bool ll_data_ss_exists = pagesize > 0;
     CBHandle ll_data_ss_cb = 0;
     if (ll_data_ss_exists) {
+        TT_ASSERT(ll_data_start_and_size.dtype() == DataType::UINT16);
         log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", ll_data_ss_cb_id, 1, pagesize);
         Buffer *ll_data_ss_buffer = ll_data_start_and_size.buffer();
         auto ll_data_ss_cb_config = CircularBufferConfig(pagesize * 1, {{ll_data_ss_cb_id, kernel_config_df}})
@@ -239,6 +239,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     bool l_data_ss_exists = pagesize > 0;
     CBHandle l_data_ss_cb = 0;
     if (l_data_ss_exists) {
+        TT_ASSERT(l_data_start_and_size.dtype() == DataType::UINT16);
         log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", l_data_ss_cb_id, 1, pagesize);
         Buffer *l_data_ss_buffer = l_data_start_and_size.buffer();
         auto l_data_ss_cb_config = CircularBufferConfig(pagesize * 1, {{l_data_ss_cb_id, kernel_config_df}})
@@ -253,6 +254,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     bool local_data_ss_exists = pagesize > 0;
     CBHandle local_data_ss_cb = 0;
     if (local_data_ss_exists) {
+    TT_ASSERT(local_data_start_and_size.dtype() == DataType::UINT16);
         log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", local_data_ss_cb_id, 1, pagesize);
         Buffer *local_data_ss_buffer = local_data_start_and_size.buffer();
         auto local_data_ss_cb_config = CircularBufferConfig(pagesize * 1, {{local_data_ss_cb_id, kernel_config_df}})
@@ -267,6 +269,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     bool r_data_ss_exists = pagesize > 0;
     CBHandle r_data_ss_cb = 0;
     if (r_data_ss_exists) {
+        TT_ASSERT(r_data_start_and_size.dtype() == DataType::UINT16);
         log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", r_data_ss_cb_id, 1, pagesize);
         Buffer *r_data_ss_buffer = r_data_start_and_size.buffer();
         auto r_data_ss_cb_config = CircularBufferConfig(pagesize * 1, {{r_data_ss_cb_id, kernel_config_df}})
@@ -281,6 +284,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     bool rr_data_ss_exists = pagesize > 0;
     CBHandle rr_data_ss_cb = 0;
     if (rr_data_ss_exists) {
+        TT_ASSERT(rr_data_start_and_size.dtype() == DataType::UINT16);
         log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", rr_data_ss_cb_id, 1, pagesize);
         Buffer *rr_data_ss_buffer = rr_data_start_and_size.buffer();
         auto rr_data_ss_cb_config = CircularBufferConfig(pagesize * 1, {{rr_data_ss_cb_id, kernel_config_df}})
