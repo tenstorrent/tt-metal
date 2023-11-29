@@ -146,6 +146,7 @@ enum SfpuType
   i0,
   silu,
   mask,
+  negative,
   unused
 };
 

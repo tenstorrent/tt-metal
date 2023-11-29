@@ -185,6 +185,7 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
         sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
+	    sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"]="1";
 
