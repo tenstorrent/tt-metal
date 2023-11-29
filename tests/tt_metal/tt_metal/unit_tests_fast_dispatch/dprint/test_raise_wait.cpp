@@ -217,11 +217,6 @@ TestConstCharStrNC{4,4}
 TestStrBR{4,4}
 +++++++++++++++)";
 TEST_F(CommandQueueWithDPrintFixture, TestPrintRaiseWait) {
-    // This test is a fast dispatch test.
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
-try{
     // Device already set up by gtest fixture.
     Device *device = this->device_;
 
@@ -300,7 +295,4 @@ try{
             golden_output
         )
     );
-} catch (std::exception& e) {
-    TT_THROW("Exception: {}", e.what());
-}
 }

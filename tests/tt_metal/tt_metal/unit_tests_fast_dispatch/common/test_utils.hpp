@@ -108,7 +108,7 @@ inline bool FilesMatchesString(string file_name, const string& expected) {
     if (getline(expect_stream, line_b)) {
         tt::log_info(
             tt::LogTest,
-            "Test Error: file {} has less lines than expectes.",
+            "Test Error: file {} has less lines than expected.",
             file_name
         );
         return false;

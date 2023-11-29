@@ -74,10 +74,7 @@ struct DEFAULTFLOAT { char tmp; } ATTR_PACK; // Analog of cout << std::defaultfl
 struct HEX  { char tmp; } ATTR_PACK; // Analog of cout << std::hex
 struct OCT  { char tmp; } ATTR_PACK; // Analog of cout << std::oct
 struct DEC  { char tmp; } ATTR_PACK; // Analog of cout << std::dec
-struct SETW {
-    char w;
-    SETW(char wa, bool sticky = true) { w = wa; if (sticky) w |= 0b10000000; }
-} ATTR_PACK; // Analog of cout << std::setw(), defaults to sticky TODO(AP): 2 chars didn't work
+struct SETW { char w; SETW(char w) : w(w) {} } ATTR_PACK; // Analog of cout << std::setw()
 
 // These primitives are intended for ordering debug prints
 // A possible use here is to synchronize debug print order between cores/harts

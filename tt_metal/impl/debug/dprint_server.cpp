@@ -201,7 +201,6 @@ bool DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
     uint32_t wpos = from_dev[0], rpos = from_dev[1];
     uint32_t counter = 0;
     uint32_t sigval = 0;
-    uint32_t sticky_setw = 0; // std::setw is not sticky by default, we have to implement it manually
     char val = 0;
     ostream& stream = (mute_print_server_)? null_stream : *stream_;
     if (rpos < wpos) {
@@ -251,8 +250,7 @@ bool DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                 break;
                 case DEBUG_PRINT_TYPEID_SETW:
                     val = CAST_U8P(ptr)[0];
-                    stream << setw(val & 0b01111111); // low 7 bits are setw value
-                    sticky_setw  = (val & 0b10000000) ? (val&0b01111111) : 0; // top bit is sticky flag
+                    stream << setw(val);
                     TT_ASSERT(sz == 1);
                 break;
                 case DEBUG_PRINT_TYPEID_SETPRECISION:
@@ -280,17 +278,14 @@ bool DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                     TT_ASSERT(sz == 1);
                 break;
                 case DEBUG_PRINT_TYPEID_UINT32:
-                    if (sticky_setw) stream << setw(sticky_setw);
                     stream << *reinterpret_cast<uint32_t*>(ptr);
                     TT_ASSERT(sz == 4);
                 break;
                 case DEBUG_PRINT_TYPEID_FLOAT32:
-                    if (sticky_setw) stream << setw(sticky_setw);
                     stream << *reinterpret_cast<float*>(ptr);
                     TT_ASSERT(sz == 4);
                 break;
                 case DEBUG_PRINT_TYPEID_BFLOAT16:
-                    if (sticky_setw) stream << setw(sticky_setw);
                     stream << bfloat16_to_float(*reinterpret_cast<uint16_t*>(ptr));
                     TT_ASSERT(sz == 2);
                 break;
@@ -320,7 +315,6 @@ bool DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                     }
                 break;
                 case DEBUG_PRINT_TYPEID_INT32:
-                    if (sticky_setw) stream << setw(sticky_setw);
                     stream << *reinterpret_cast<int32_t*>(ptr);
                     TT_ASSERT(sz == 4);
                 break;

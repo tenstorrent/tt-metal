@@ -37,7 +37,7 @@ void kernel_main() {
     // with .rodata alignment for non-multiple of 4 strings.
     DPRINT << "TestConstCharStr";
     DPRINT << 'N' << 'C' << '{' << x << ',' << y << '}' << ENDL();
-    DPRINT << SETW(test_width, false) << test_width_num << ENDL();
+    DPRINT << SETW(test_width) << test_width_num << ENDL();
     DPRINT << SETPRECISION(4) << 0.123456f << ENDL();
     DPRINT << FIXED() << F32(0.12f) << ENDL();
     DPRINT << BF16(0x3dfb) << ENDL(); // 0.12255859375
