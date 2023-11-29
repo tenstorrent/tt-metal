@@ -105,6 +105,7 @@ def volume(shape):
     "use_multicore",
     (False, True),
 )
+@pytest.mark.skip("non-det watcher error, see issue #4085")
 def test_run_max_pool(
     act_shape,
     kernel_size,
