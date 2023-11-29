@@ -577,3 +577,52 @@ class TestBackwardOps:
         _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
         logger.info(comp_out)
         assert comp_pass
+
+    def test_bw_where(self, input_shapes, device):
+        torch.manual_seed(0)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        other_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        grad_data = torch.randn(input_shapes).bfloat16()
+        condition_data = torch.randn(input_shapes).bool()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        condition_tensor = (
+            tt_lib.tensor.Tensor(condition_data, tt_lib.tensor.DataType.BFLOAT16)
+            .to(tt_lib.tensor.Layout.TILE)
+            .to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        other_tensor = (
+            tt_lib.tensor.Tensor(other_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.where_bw(grad_tensor, condition_tensor, input_tensor, other_tensor)
+        tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_output_tensor_b = tt_output_tensor_on_device[1].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+        other_data.retain_grad()
+
+        pyt_y = torch.where(condition_data, in_data, other_data)
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor_a = in_data.grad
+        golden_output_tensor_b = other_data.grad
+
+        comp_pass_a, _ = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a, 0.99)
+        _, comp_out_a = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_a, tt_output_tensor_a)
+
+        comp_pass_b, _ = comparison_funcs.comp_pcc(golden_output_tensor_b, tt_output_tensor_b, 0.99)
+        _, comp_out_b = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_b, tt_output_tensor_b)
+
+        logger.info(comp_out_a)
+        logger.info(comp_out_b)
+        assert comp_pass_a & comp_pass_b
