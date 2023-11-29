@@ -23,11 +23,10 @@ inline void llk_math_matmul_init(
 
     const bool partial_face = get_operand_partial_face(in0_id);
 
-    const auto unpack_tile_dims = get_operand_tile_dims(in0_id);
-    const std::uint32_t in0_tile_r_dim = unpack_tile_dims[ckernel::TileDim::R_IDX];
-    const std::uint32_t in0_tile_c_dim = unpack_tile_dims[ckernel::TileDim::C_IDX];
-    const std::uint32_t in1_tile_r_dim = unpack_tile_dims[ckernel::TileDim::R_IDX];
-    const std::uint32_t in1_tile_c_dim = unpack_tile_dims[ckernel::TileDim::C_IDX];
+    const std::uint32_t in0_tile_r_dim = get_operand_tile_r_dim(in0_id);
+    const std::uint32_t in0_tile_c_dim = get_operand_tile_c_dim(in0_id);
+    const std::uint32_t in1_tile_r_dim = get_operand_tile_r_dim(in1_id);
+    const std::uint32_t in1_tile_c_dim = get_operand_tile_c_dim(in1_id);
 
 #ifdef ARCH_GRAYSKULL
     _llk_math_matmul_init_<NUM_FIDELITY_PHASES, FaceLayout>(
