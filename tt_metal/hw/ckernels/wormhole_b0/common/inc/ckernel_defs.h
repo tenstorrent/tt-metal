@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "llk_defs.h"
 #include "ckernel_ops.h"
 #include "tensix_types.h"
 

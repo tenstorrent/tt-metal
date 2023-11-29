@@ -91,3 +91,9 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
         narrow_tile
     );
 }
+
+inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c_tiles) {
+    for (std::uint32_t tile_index = 0; tile_index < block_c_tiles; tile_index++) {
+        llk_unpack_tilize(operand, tile_index, block_c_tiles);
+    }
+}
