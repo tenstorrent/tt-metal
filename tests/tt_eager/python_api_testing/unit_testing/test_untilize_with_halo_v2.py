@@ -46,7 +46,7 @@ def plot_diff(vals, fid, nsticks, stick_len):
         # resnet50 s1 convs
         ((32, 32, 4, 4, 1, 1, 1, 1, 1, 1), 8, (32, 115, 115), 98, False),  # first conv b8 - 98 cores for height slicing
         ((32, 32, 3, 3, 1, 1, 1, 1, 1, 1), 8, (32, 56, 56), 98, False),  # layer1 b8 - 98 cores for height slicing
-        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 8, (1, 56, 56), 98, False),  # layer1 b8 - 98 cores for height slicing
+        ((64, 64, 3, 3, 1, 1, 1, 1, 1, 1), 8, (64, 56, 56), 98, False),  # layer1 b8 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 8, (1, 28, 28), 98, False),  # layer2 b8 - 98 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 8, (1, 14, 14), 10, False),  # layer3 b8 - 10 cores for height slicing
         ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 8, (1, 7, 7), 7, False),  # layer4 b8 - 7 cores for height slicing
@@ -108,13 +108,14 @@ def test_generate_all_configs_and_references(
     print("conv_output_shard_height=", conv_output_shard_height)
 
     # Initialize tensor with data
-    # Inserting sequential integer data
-    for val in range(1, input_volume + 1):
-        input_tensor.append(val % 3136)
-    input_pyt_tensor = torch.tensor(input_tensor, dtype=torch.bfloat16)
-    # input_pyt_tensor = torch.rand(input_volume, dtype=torch.bfloat16)
+
+    # # Inserting sequential integer data
+    # for val in range(1, input_volume + 1):
+    #     input_tensor.append(val % 3136)
+    # input_pyt_tensor = torch.tensor(input_tensor, dtype=torch.bfloat16)
+    input_pyt_tensor = torch.rand(input_volume, dtype=torch.bfloat16)
     input_pyt_tensor = torch.reshape(input_pyt_tensor, input_nchw_shape)
-    # Initializing filters with all 1s
+
     # filter_pyt_tensor = torch.full((output_channels, input_channels, filter_h, filter_w), 1., dtype=torch.bfloat16)
     filter_pyt_tensor = torch.rand((output_channels, input_channels, filter_h, filter_w), dtype=torch.bfloat16)
     # run conv pytorch
@@ -165,102 +166,6 @@ def test_generate_all_configs_and_references(
         req_conv_input_shard_start_end,
     )
 
-    # print("Validate tensor metadata")
-    # untilize_with_halo_input_shards = validate_tensor_metadata(
-    #     input_tensor,
-    #     input_nchw_shape,
-    #     untilize_with_halo_input_shard_height,
-    #     tensor_metadata,
-    #     req_conv_input_shard_start_end,
-    #     golden_untilize_with_halo_output_shards,
-    # )
-
-    # # Generate and validate the final untilize with halo configs here
-    # print(f"Generate untilize with halo kernel configs")
-    # # print(f'tensor metadata: {tensor_metadata}')
-    # # print(f"req shards start and end: {req_conv_input_shard_start_end}")
-    # (
-    #     local_data,
-    #     local_pad,
-    #     ll_data,
-    #     l_data,
-    #     r_data,
-    #     rr_data,
-    #     src_start_idx,
-    #     local_data_nsegments_per_core,
-    #     local_pad_nsegments_per_core,
-    #     ll_data_nsegments_per_core,
-    #     l_data_nsegments_per_core,
-    #     r_data_nsegments_per_core,
-    #     rr_data_nsegments_per_core,
-    #     max_out_nsticks_per_core,
-    # ) = generate_untilize_with_halo_kernel_configs(tensor_metadata, req_conv_input_shard_start_end)
-    # # print(f"local data:     {local_data}")
-    # # print(f"local pad:      {local_pad}")
-    # # print(f"ll data:        {ll_data}")
-    # # print(f"l data:         {l_data}")
-    # # print(f"r data:         {r_data}")
-    # # print(f"rr data:        {rr_data}")
-    # # print(f"src start idx:  {src_start_idx}")
-    # print("Validate reshards")
-
-    # validate_untilize_with_halo_kernel_configs(
-    #     golden_untilize_with_halo_output_shards,
-    #     untilize_with_halo_input_shards,
-    #     req_conv_input_shard_start_end,
-    #     local_data,
-    #     local_pad,
-    #     ll_data,
-    #     l_data,
-    #     r_data,
-    #     rr_data,
-    #     src_start_idx,
-    #     local_data_nsegments_per_core,
-    #     local_pad_nsegments_per_core,
-    #     ll_data_nsegments_per_core,
-    #     l_data_nsegments_per_core,
-    #     r_data_nsegments_per_core,
-    #     rr_data_nsegments_per_core,
-    #     max_out_nsticks_per_core,
-    # )
-
-    # # Generate sliding window op config -
-    # print("Generate sliding window op configs - top left positioned indices for input shards")
-    # sliding_window_op_sharded_input_top_left_indices = generate_sliding_window_op_sharded_input_top_left_indices(
-    #     data_top_left_indices, req_conv_input_shard_start_end
-    # )
-
-    # if not test_max_pool:
-    #     print("Validate conv_sharded_input_top_left_indices")
-    #     validate_conv_sharded_input_top_left_indices(
-    #         golden_untilize_with_halo_output_shards,
-    #         input_padded_width,
-    #         filter_pyt_tensor,
-    #         out_golden_pyt_tensor,
-    #         sliding_window_op_sharded_input_top_left_indices,
-    #     )
-    # else:
-    #     print("Validate pool_sharded_input_top_left_indices")
-    #     # run max pool pytorch to get golden output
-    #     assert filter_h == filter_w and stride_h == stride_w and pad_h == pad_w
-    #     pool_out_golden_pyt_tensor = torch.nn.MaxPool2d(
-    #         filter_h,
-    #         stride=stride_h,
-    #         padding=pad_h,
-    #         dilation=1,
-    #         return_indices=False,
-    #         ceil_mode=False,
-    #     )(input_pyt_tensor.float())
-
-    #     validate_max_pool_sharded_input_top_left_indices(
-    #         golden_untilize_with_halo_output_shards,
-    #         input_padded_width,
-    #         filter_h,
-    #         filter_w,
-    #         pool_out_golden_pyt_tensor,
-    #         sliding_window_op_sharded_input_top_left_indices,
-    #     )
-
     # On device test
     sliding_window_op_params = [
         (stride_h, stride_w),
@@ -270,15 +175,20 @@ def test_generate_all_configs_and_references(
         num_cores,
     ]
     # Assume height sharding
-    num_cores_height = ((int)(num_cores / 12)) + 1
     num_cores_width = 12
-    shard_grid = ttl.tensor.CoreRangeSet(
-        {
-            ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_width - 1, num_cores_height - 1)
-            )
-        }
+    num_cores_height = num_cores // num_cores_width
+    core_range_1 = ttl.tensor.CoreRange(
+        ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_width - 1, num_cores_height - 1)
     )
+    num_cores_last = num_cores % num_cores_width
+    core_range_2 = None
+    if num_cores_last > 0:
+        core_range_2 = ttl.tensor.CoreRange(
+            ttl.tensor.CoreCoord(0, num_cores_height), ttl.tensor.CoreCoord(num_cores_last - 1, num_cores_height)
+        )
+        shard_grid = ttl.tensor.CoreRangeSet({core_range_1, core_range_2})
+    else:
+        shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
 
     # construct op object and set op configs
     tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(device, sliding_window_op_params, shard_grid)
@@ -372,7 +282,7 @@ def test_generate_all_configs_and_references(
             pcc=0.9999,
         )
         print(f"Core {i}, Passing={passing_allclose_and_pcc}, Output={output_info}")
-        if i > 94:
+        if i > 100:
             output_shard = torch.reshape(torch.Tensor(output_shard), (-1, 32))[0 : out_shard_nsticks_per_core[i]]
             golden_shard = torch.reshape(torch.Tensor(golden_shard), (-1, 32))[0 : out_shard_nsticks_per_core[i]]
             print(f"CORE {i}:")
