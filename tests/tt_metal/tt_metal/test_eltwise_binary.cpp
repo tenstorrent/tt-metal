@@ -37,7 +37,7 @@ int main(int argc, char** argv) {
     tt_metal::Device* device = tt_metal::CreateDevice(device_id);
 
 
-    CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
+    CommandQueue& cq = detail::GetCommandQueue(device);
 
     Program programs[] = {tt_metal::CreateProgram(), tt_metal::CreateProgram(), tt_metal::CreateProgram()};
 

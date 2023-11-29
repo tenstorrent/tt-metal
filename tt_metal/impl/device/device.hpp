@@ -10,6 +10,7 @@
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/jit_build/build.hpp"
+#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "dev_msgs.h"
 
@@ -22,6 +23,7 @@ enum class BufferType;
 class Buffer;
 class Program;
 class JitBuildEnv;
+class CommandQueue;
 
 using on_close_device_callback = std::function<void ()>;
 
@@ -180,6 +182,11 @@ class Device {
     JitBuildEnv build_env_;
     JitBuildStateSet firmware_build_states_;
     JitBuildStateSet kernel_build_states_;
+
+    // SystemMemoryWriter is the interface to the hardware command queue
+    std::unique_ptr<SystemMemoryWriter> sysmem_writer;
+    // Allows access to sysmem_writer
+    friend class CommandQueue;
 
     std::set<CoreCoord> compute_cores;
     std::set<CoreCoord> storage_only_cores_;

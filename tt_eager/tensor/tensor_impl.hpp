@@ -425,7 +425,7 @@ std::vector<T> read_data_from_device(const Tensor &tensor, uint32_t size_in_byte
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         std::vector<T> device_data;
         device_data.resize(size_in_bytes / sizeof(T));
-        EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, *device_buffer, device_data.data(), true);
+        EnqueueReadBuffer(tt::tt_metal::detail::GetCommandQueue(tensor.device()), *device_buffer, device_data.data(), true);
         return device_data;
     } else {
         std::vector<uint32_t> device_data;
@@ -442,7 +442,7 @@ inline void write_data_to_device_buffer(const BufferType<T>& data_to_write, Devi
 
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        EnqueueWriteBuffer(*tt::tt_metal::detail::GLOBAL_CQ, *buffer, std::begin(data_to_write), false);
+        EnqueueWriteBuffer(tt::tt_metal::detail::GetCommandQueue(buffer->device()), *buffer, std::begin(data_to_write), false);
     } else {
         auto uint32_data = pack_vec_into_uint32_vec<T>(data_to_write);
         ::detail::WriteToBuffer(*buffer, uint32_data);

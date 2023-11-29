@@ -92,8 +92,8 @@ class Cluster {
     void write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
     void read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
 
-    void write_sysmem(const void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const;
-    void read_sysmem(void *mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id) const;
+    void write_sysmem(const void* mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const;
+    void read_sysmem(void *mem_ptr, uint32_t size_in_bytes, uint64_t addr, chip_id_t src_device_id, uint16_t channel) const;
 
     int get_device_aiclk(const chip_id_t &chip_id) const;
 
@@ -124,6 +124,17 @@ class Cluster {
     // Returns connected ethernet core on the other chip
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const;
 
+    // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
+    chip_id_t get_associated_mmio_device(chip_id_t device_id) const {
+        return this->device_to_mmio_device_.at(device_id);
+    }
+
+    uint16_t get_assigned_channel_for_device(chip_id_t device_id) const {
+        return this->device_to_host_mem_channel_.at(device_id);
+    }
+
+    uint32_t get_tensix_soft_reset_addr() const;
+
    private:
     Cluster();
     ~Cluster();
@@ -132,6 +143,7 @@ class Cluster {
     void generate_cluster_descriptor();
     void initialize_device_drivers();
     void assert_risc_reset();
+    void assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids);
     void open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids, const bool &skip_driver_allocs = false);
     void start_driver(chip_id_t mmio_device_id, tt_device_params &device_params) const;
 
@@ -159,6 +171,17 @@ class Cluster {
     std::unordered_map<chip_id_t, std::set<chip_id_t>> devices_grouped_by_assoc_mmio_device_;
     // Save mapping of device id to associated MMIO device id for fast lookup
     std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_device_;
+
+    // Currently, each device is mapped to its own channel in host memory to enable fast dispatch
+    // Channels are unique within a group of devices all controlled by a particular MMIO device
+    // For example:
+    //      Two N300 cards where MMIO device IDs are 0, 1 and R chips are 2, 3
+    //      0 L controls 2 R and 1 L controls 3 R then, device_to_host_mem_channel_:
+    //          0 -> 0
+    //          2 -> 1
+    //          1 -> 0
+    //          3 -> 1
+    std::unordered_map<chip_id_t, uint16_t> device_to_host_mem_channel_;
 
     tt_device_dram_address_params dram_address_params = {
         DRAM_BARRIER_BASE

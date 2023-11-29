@@ -1,0 +1,60 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <memory>
+
+#include "command_queue_fixture.hpp"
+#include "command_queue_test_utils.hpp"
+#include "gtest/gtest.h"
+#include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+
+using namespace tt::tt_metal;
+
+namespace host_tests {
+
+TEST_F(MultiCommandQueueFixture, TestAccessCommandQueue) {
+    for (unsigned int device_id = 0; device_id < num_devices_; device_id++) {
+        EXPECT_NO_THROW(detail::GetCommandQueue(devices_[device_id]));
+    }
+}
+
+TEST_F(BasicFastDispatchFixture, TestCannotAccessCommandQueueForClosedDevice) {
+    const unsigned int device_id = 0;
+    Device* device = CreateDevice(device_id);
+    EXPECT_NO_THROW(detail::GetCommandQueue(device));
+    CloseDevice(device);
+    EXPECT_ANY_THROW(detail::GetCommandQueue(device));
+}
+
+TEST_F(MultiCommandQueueFixture, TestDirectedLoopbackToUniqueHugepage) {
+    std::unordered_map<chip_id_t, std::vector<uint32_t>> golden_data;
+
+    const uint32_t byte_size = 2048 * 16;
+    const uint64_t address = 0;
+
+    for (chip_id_t device_id = 0; device_id < num_devices_; device_id++) {
+        std::vector<uint32_t> data =
+            tt::test_utils::generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
+
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
+        tt::Cluster::instance().write_sysmem(data.data(), data.size() * sizeof(uint32_t), address, mmio_device_id, channel);
+
+        golden_data[device_id] = data;
+    }
+
+    std::vector<uint32_t> readback_data;
+    readback_data.resize(byte_size / sizeof(uint32_t));
+    for (chip_id_t device_id = 0; device_id < num_devices_; device_id++) {
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
+        tt::Cluster::instance().read_sysmem(&readback_data, byte_size, address, mmio_device_id, channel);
+        EXPECT_EQ(readback_data, golden_data.at(device_id));
+    }
+}
+
+}   // namespace host_tests

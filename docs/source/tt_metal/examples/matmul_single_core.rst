@@ -85,7 +85,7 @@ core at (0, 0).
 
 .. code-block:: cpp
 
-    CommandQueue& cq = *detail::GLOBAL_CQ;
+    CommandQueue& cq = detail::GetCommandQueue(device);
     Program program{};
     CoreRange core = {.start={0, 0}, .end={0, 0}};
 

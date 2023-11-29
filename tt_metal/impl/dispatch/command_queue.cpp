@@ -5,7 +5,6 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 
 #include "debug_tools.hpp"
-#include "device_data.hpp"
 #include "noc/noc_parameters.h"
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -731,84 +730,15 @@ void EnqueueWrapCommand::process() {
 
 EnqueueCommandType EnqueueWrapCommand::type() { return this->type_; }
 
-// Sending dispatch kernel. TODO(agrebenisan): Needs a refactor
-void send_dispatch_kernel_to_device(Device* device) {
-    ZoneScoped;
-    // Ideally, this should be some separate API easily accessible in
-    // TT-metal, don't like the fact that I'm writing this from scratch
-
-    Program dispatch_program = CreateProgram();
-    auto dispatch_cores = device->dispatch_cores().begin();
-    CoreCoord producer_logical_core = *dispatch_cores++;
-    CoreCoord consumer_logical_core = *dispatch_cores;
-
-    CoreCoord producer_physical_core = device->worker_core_from_logical_core(producer_logical_core);
-    CoreCoord consumer_physical_core = device->worker_core_from_logical_core(consumer_logical_core);
-
-    std::map<string, string> producer_defines = {
-        {"IS_DISPATCH_KERNEL", ""},
-        {"CONSUMER_NOC_X", std::to_string(consumer_physical_core.x)},
-        {"CONSUMER_NOC_Y", std::to_string(consumer_physical_core.y)},
-    };
-    std::map<string, string> consumer_defines = {
-        {"PRODUCER_NOC_X", std::to_string(producer_physical_core.x)},
-        {"PRODUCER_NOC_Y", std::to_string(producer_physical_core.y)},
-    };
-
-
-    std::vector<uint32_t> dispatch_compile_args = {DEVICE_DATA.TENSIX_SOFT_RESET_ADDR};
-
-    tt::tt_metal::CreateKernel(
-        dispatch_program,
-        "tt_metal/impl/dispatch/kernels/command_queue_producer.cpp",
-        producer_logical_core,
-        tt::tt_metal::DataMovementConfig {
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = dispatch_compile_args,
-            .defines = producer_defines});
-
-    tt::tt_metal::CreateKernel(
-        dispatch_program,
-        "tt_metal/impl/dispatch/kernels/command_queue_consumer.cpp",
-        consumer_logical_core,
-        tt::tt_metal::DataMovementConfig {
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = dispatch_compile_args,
-            .defines = consumer_defines});
-
-    tt::tt_metal::CreateSemaphore(dispatch_program, producer_logical_core, 2);
-    tt::tt_metal::CreateSemaphore(dispatch_program, consumer_logical_core, 0);
-
-    detail::CompileProgram(device, dispatch_program);
-    tt::tt_metal::detail::ConfigureDeviceWithProgram(device, dispatch_program);
-
-    uint32_t fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;
-    vector<uint32_t> fifo_addr_vector = {fifo_addr};
-    tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_READ_PTR, fifo_addr_vector);
-    tt::tt_metal::detail::WriteToDeviceL1(device, producer_logical_core, CQ_WRITE_PTR, fifo_addr_vector);
-
-    tt::Cluster::instance().l1_barrier(device->id());
-
-    const std::tuple<uint32_t, uint32_t> tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(device->id(), device->worker_core_from_logical_core(*device->dispatch_cores().begin()))).value();
-    auto [tlb_offset, tlb_size] = tlb_data;
-
-    launch_msg_t msg = dispatch_program.kernels_on_core(producer_logical_core)->launch_msg;
-
-    // TODO(pkeller): Should use detail::LaunchProgram once we have a mechanism to avoid running all RISCs
-    tt::llrt::write_launch_msg_to_core(device->id(), producer_physical_core, &msg);
-    tt::llrt::write_launch_msg_to_core(device->id(), consumer_physical_core, &msg);
-}
-
 // CommandQueue section
-CommandQueue::CommandQueue(Device* device): sysmem_writer(device) {
+CommandQueue::CommandQueue(Device* device) {
     vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
     pointers[0] = CQ_START >> 4;
 
-    tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), 0, 0);
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+    tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), 0, mmio_device_id, channel);
 
-    send_dispatch_kernel_to_device(device);
     this->device = device;
 }
 
@@ -864,27 +794,30 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking)
     ZoneScopedN("CommandQueue_read_buffer");
     TT_FATAL(blocking, "EnqueueReadBuffer only has support for blocking mode currently");
     uint32_t read_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + buffer.size();
-    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + read_buffer_command_size >= DeviceCommand::HUGE_PAGE_SIZE) {
+    if ((this->device->sysmem_writer->cq_write_interface.fifo_wr_ptr << 4) + read_buffer_command_size >= DeviceCommand::HUGE_PAGE_SIZE) {
         TT_ASSERT(read_buffer_command_size <= DeviceCommand::HUGE_PAGE_SIZE - CQ_START, "EnqueueReadBuffer command is too large");
         this->wrap();
     }
     tt::log_debug(tt::LogDispatch, "EnqueueReadBuffer");
 
-    EnqueueReadBufferCommand command(this->device, buffer, dst, this->sysmem_writer);
+    EnqueueReadBufferCommand command(this->device, buffer, dst, *this->device->sysmem_writer);
     this->enqueue_command(command, blocking);
     uint32_t num_pages = buffer.size() / buffer.page_size();
     uint32_t padded_page_size = align(buffer.page_size(), 32);
     uint32_t data_size_in_bytes = padded_page_size * num_pages;
 
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device->id());
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
+
     if ((buffer.page_size() % 32) != 0) {
         // If page size is not 32B-aligned, we cannot do a contiguous copy
         uint32_t dst_address_offset = 0;
         for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_in_bytes; sysmem_address_offset += padded_page_size) {
-            tt::Cluster::instance().read_sysmem((char*)dst + dst_address_offset, buffer.page_size(), command.read_buffer_addr + sysmem_address_offset, 0);
+            tt::Cluster::instance().read_sysmem((char*)dst + dst_address_offset, buffer.page_size(), command.read_buffer_addr + sysmem_address_offset, mmio_device_id, channel);
             dst_address_offset += buffer.page_size();
         }
     } else {
-        tt::Cluster::instance().read_sysmem(dst, data_size_in_bytes, command.read_buffer_addr, 0);
+        tt::Cluster::instance().read_sysmem(dst, data_size_in_bytes, command.read_buffer_addr, mmio_device_id, channel);
     }
 
 
@@ -914,7 +847,7 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool bl
     }
 
     uint32_t write_buffer_command_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + buffer.size();
-    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + write_buffer_command_size >= DeviceCommand::HUGE_PAGE_SIZE) {
+    if ((this->device->sysmem_writer->cq_write_interface.fifo_wr_ptr << 4) + write_buffer_command_size >= DeviceCommand::HUGE_PAGE_SIZE) {
         TT_ASSERT(
             write_buffer_command_size <= DeviceCommand::HUGE_PAGE_SIZE - CQ_START,
             "EnqueueWriteBuffer command is too large: {}",
@@ -923,7 +856,7 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool bl
     }
     tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer");
 
-    EnqueueWriteBufferCommand command(this->device, buffer, src, this->sysmem_writer);
+    EnqueueWriteBufferCommand command(this->device, buffer, src, *this->device->sysmem_writer);
     this->enqueue_command(command, blocking);
 }
 
@@ -964,7 +897,7 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
     uint32_t host_data_and_device_command_size =
         DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + (host_data_num_pages * DeviceCommand::PROGRAM_PAGE_SIZE);
 
-    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + host_data_and_device_command_size >=
+    if ((this->device->sysmem_writer->cq_write_interface.fifo_wr_ptr << 4) + host_data_and_device_command_size >=
         DeviceCommand::HUGE_PAGE_SIZE) {
         TT_ASSERT(
             host_data_and_device_command_size <= DeviceCommand::HUGE_PAGE_SIZE - CQ_START, "EnqueueProgram command size too large");
@@ -974,7 +907,7 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
     EnqueueProgramCommand command(this->device,
         *this->program_to_buffer.at(program_id),
         this->program_to_dev_map.at(program_id),
-        this->sysmem_writer,
+        *this->device->sysmem_writer,
         program,
         stall);
 
@@ -983,19 +916,22 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
 
 void CommandQueue::finish() {
     ZoneScopedN("CommandQueue_finish");
-    if ((this->sysmem_writer.cq_write_interface.fifo_wr_ptr << 4) + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND >=
+    if ((this->device->sysmem_writer->cq_write_interface.fifo_wr_ptr << 4) + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND >=
         DeviceCommand::HUGE_PAGE_SIZE) {
         this->wrap();
     }
     tt::log_debug(tt::LogDispatch, "Finish");
 
-    FinishCommand command(this->device, this->sysmem_writer);
+    FinishCommand command(this->device, *this->device->sysmem_writer);
     this->enqueue_command(command, false);
+
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device->id());
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
 
     // We then poll to check that we're done.
     uint32_t finish;
     do {
-        tt::Cluster::instance().read_sysmem(&finish, 4, HOST_CQ_FINISH_PTR, 0);
+        tt::Cluster::instance().read_sysmem(&finish, 4, HOST_CQ_FINISH_PTR, mmio_device_id, channel);
 
         // There's also a case where the device can be hung due to an unanswered DPRINT WAIT and
         // a full print buffer. Poll the print server for this case and throw if it happens.
@@ -1006,13 +942,13 @@ void CommandQueue::finish() {
 
     // Reset this value to 0 before moving on
     finish = 0;
-    tt::Cluster::instance().write_sysmem(&finish, 4, HOST_CQ_FINISH_PTR, 0);
+    tt::Cluster::instance().write_sysmem(&finish, 4, HOST_CQ_FINISH_PTR, mmio_device_id, channel);
 }
 
 void CommandQueue::wrap() {
     ZoneScopedN("CommandQueue_wrap");
     tt::log_debug(tt::LogDispatch, "EnqueueWrap");
-    EnqueueWrapCommand command(this->device, this->sysmem_writer);
+    EnqueueWrapCommand command(this->device, *this->device->sysmem_writer);
     this->enqueue_command(command, false);
 }
 

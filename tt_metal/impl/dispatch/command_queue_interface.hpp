@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/common/base.hpp"
-#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/llrt/llrt.hpp"
 
@@ -11,7 +10,9 @@ using namespace tt::tt_metal;
 
 inline uint32_t get_cq_rd_ptr(chip_id_t chip_id) {
     uint32_t recv;
-    tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_READ_PTR, chip_id);
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(chip_id);
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(chip_id);
+    tt::Cluster::instance().read_sysmem(&recv, sizeof(uint32_t), HOST_CQ_READ_PTR, mmio_device_id, channel);
     return recv;
 }
 
@@ -34,25 +35,30 @@ struct SystemMemoryCQWriteInterface {
 
 class SystemMemoryWriter {
    private:
-    Device* device;
+    chip_id_t device_id;
     // Data required for fast writes to write pointer location
     // in prefetch core's L1
     // const std::tuple<uint32_t, uint32_t> tlb_data;
     const uint32_t m_dma_buf_size;
     const std::function<void(uint32_t, uint32_t, const uint8_t*, uint32_t)> fast_write_callable;
+    const std::set<CoreCoord> dispatch_cores;
+    const std::function<CoreCoord (CoreCoord)>worker_from_logical_callable;
     uint32_t byte_addr;
     char* hugepage_start;
 
    public:
     SystemMemoryCQWriteInterface cq_write_interface;
-    SystemMemoryWriter(Device* device) :
-        m_dma_buf_size(tt::Cluster::instance().get_m_dma_buf_size(device->id())),
-        hugepage_start((char*) tt::Cluster::instance().host_dma_address(0, device->id(), 0)),
+    SystemMemoryWriter(chip_id_t device_id, const std::set<CoreCoord> &dev_dispatch_cores, const std::function<CoreCoord (CoreCoord)> &worker_from_logical) :
+        device_id(device_id),
+        m_dma_buf_size(tt::Cluster::instance().get_m_dma_buf_size(device_id)),
+        hugepage_start(
+            (char*) tt::Cluster::instance().host_dma_address(0, tt::Cluster::instance().get_associated_mmio_device(device_id), tt::Cluster::instance().get_assigned_channel_for_device(device_id))),
         fast_write_callable(
-            tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device->id())) {
+            tt::Cluster::instance().get_fast_pcie_static_tlb_write_callable(device_id)),
+        dispatch_cores(dev_dispatch_cores),
+        worker_from_logical_callable(worker_from_logical) {
 
-        this->device = device;
-        const std::tuple<uint32_t, uint32_t> tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(device->id(), this->device->worker_core_from_logical_core(*device->dispatch_cores().begin()))).value();
+        const std::tuple<uint32_t, uint32_t> tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(device_id, this->worker_from_logical_callable(*this->dispatch_cores.begin()))).value();
         auto [tlb_offset, tlb_size] = tlb_data;
         this->byte_addr = tlb_offset + CQ_WRITE_PTR % tlb_size;
     }
@@ -65,7 +71,7 @@ class SystemMemoryWriter {
         uint32_t rd_ptr;
         uint32_t rd_toggle;
         do {
-            rd_ptr_and_toggle = get_cq_rd_ptr(this->device->id());
+            rd_ptr_and_toggle = get_cq_rd_ptr(this->device_id);
             rd_ptr = rd_ptr_and_toggle & 0x7fffffff;
             rd_toggle = rd_ptr_and_toggle >> 31;
 
@@ -79,18 +85,19 @@ class SystemMemoryWriter {
     }
 
     // Ideally, data should be an array or pointer, but vector for time-being
+    // TODO ALMEET: MEASURE THIS
     void cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr) const {
         // There is a 50% overhead if hugepage_start is not made static.
         // Eventually when we want to have multiple hugepages, we may need to template
         // the sysmem writer to get this optimization.
-        static char* hugepage_start = this->hugepage_start;
+        /*static*/ char* hugepage_start = this->hugepage_start;
         void* user_scratchspace = hugepage_start + write_ptr;
         memcpy(user_scratchspace, data, size_in_bytes);
     }
 
     void send_write_ptr() const {
         static CoreCoord dispatch_core =
-            this->device->worker_core_from_logical_core(*this->device->dispatch_cores().begin());
+            this->worker_from_logical_callable(*this->dispatch_cores.begin());
 
         uint32_t write_ptr_and_toggle =
             this->cq_write_interface.fifo_wr_ptr | (this->cq_write_interface.fifo_wr_toggle << 31);
