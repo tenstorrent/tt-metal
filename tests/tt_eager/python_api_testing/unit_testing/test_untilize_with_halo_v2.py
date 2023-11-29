@@ -192,7 +192,7 @@ def test_generate_all_configs_and_references(
     input_pyt_tensor = torch.reshape(
         torch.permute(input_pyt_tensor, [0, 2, 3, 1]), [1, 1, batch_size * input_h * input_w, input_c]
     )
-    print(f"INPUT SHAPE: {input_pyt_tensor.shape}")
+    # print(f"INPUT SHAPE: {input_pyt_tensor.shape}")
 
     memory_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
     untilize_with_halp_input_tt_tensor = (
@@ -227,8 +227,8 @@ def test_generate_all_configs_and_references(
         if max_out_shard_nsticks < size:
             max_out_shard_nsticks = size
         i += 1
-    print(f"MAX_OUT_SHARD_NSTICKS: {max_out_shard_nsticks}")
-    print(f"OUT_SHARD_NSTICKS_PER_CORE: {out_shard_nsticks_per_core}")
+    # print(f"MAX_OUT_SHARD_NSTICKS: {max_out_shard_nsticks}")
+    # print(f"OUT_SHARD_NSTICKS_PER_CORE: {out_shard_nsticks_per_core}")
     for i in range(len(golden_untilize_with_halo_output_shards)):
         start, end = req_conv_input_shard_start_end[i][1]
         pad_size = max_out_shard_nsticks - (end - start + 1)
@@ -266,9 +266,9 @@ def test_generate_all_configs_and_references(
         golden_shard = golden_untilize_with_halo_output_pyt_tensor[
             i * max_out_shard_nsticks * input_c : (i + 1) * max_out_shard_nsticks * input_c
         ]
-        print(
-            f"Core {i} ({core_x},{core_y}), GOLDEN sum = {torch.sum(golden_shard)}, OUTPUT sum = {torch.sum(output_shard)}"
-        )
+        # print(
+        #     f"Core {i} ({core_x},{core_y}), GOLDEN sum = {torch.sum(golden_shard)}, OUTPUT sum = {torch.sum(output_shard)}"
+        # )
         passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(
             golden_shard,
             output_shard,
@@ -277,14 +277,15 @@ def test_generate_all_configs_and_references(
             pcc=0.9999,
         )
         print(f"Core {i}, Passing={passing_allclose_and_pcc}, Output={output_info}")
-        if i > 100:
-            output_shard = torch.reshape(torch.Tensor(output_shard), (-1, 32))[0 : out_shard_nsticks_per_core[i]]
-            golden_shard = torch.reshape(torch.Tensor(golden_shard), (-1, 32))[0 : out_shard_nsticks_per_core[i]]
-            print(f"CORE {i}:")
-            print(f"OUTPUT: {output_shard}")
-            print(f"GOLDEN: {golden_shard}")
-            diff = torch.abs(golden_shard - output_shard)
-            plot_diff(diff, i, out_shard_nsticks_per_core[i], input_c)
+        ## for debugging:
+        # if i > 100:
+        #     output_shard = torch.reshape(torch.Tensor(output_shard), (-1, 32))[0 : out_shard_nsticks_per_core[i]]
+        #     golden_shard = torch.reshape(torch.Tensor(golden_shard), (-1, 32))[0 : out_shard_nsticks_per_core[i]]
+        #     print(f"CORE {i}:")
+        #     print(f"OUTPUT: {output_shard}")
+        #     print(f"GOLDEN: {golden_shard}")
+        #     diff = torch.abs(golden_shard - output_shard)
+        #     plot_diff(diff, i, out_shard_nsticks_per_core[i], input_c)
 
     passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(
         golden_untilize_with_halo_output_pyt_tensor,
