@@ -27,7 +27,7 @@ def test_perf_device_bare_metal(batch_size, test, expected_perf):
     subdir = "bert"
     num_iterations = 4
     margin = 0.03
-    command = f"pytest models/demos/metal_BERT_large_15/tests/test_bert.py::test_bert[{test}]"
+    command = f"pytest models/demos/metal_BERT_large_11/tests/test_bert.py::test_bert[{test}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     duration_cols = [col + " DURATION [ns]" for col in cols]
     samples_cols = [col + " SAMPLES/S" for col in cols]

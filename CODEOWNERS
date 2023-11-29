@@ -101,12 +101,9 @@ tests/ttnn/ @eyonland @arakhmati
 
 # models
 models/ @boris-drazic @farbabi
-tests/python_api_testing/models/conv_on_device_utils*.py @tt-nshanker
-tests/python_api_testing/models/bert_large_performant @tt-aho @TT-BrianLiu
-tests/python_api_testing/models/metal_BERT_large_15 @tt-aho @TT-BrianLiu
 models/conv_on_device_utils*.py @tt-nshanker
 models/bert_large_performant @tt-aho @TT-BrianLiu
-models/metal_BERT_large_15 @tt-aho @TT-BrianLiu
+models/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 
 # docs
 # docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim

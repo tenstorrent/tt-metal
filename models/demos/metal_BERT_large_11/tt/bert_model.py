@@ -9,8 +9,8 @@ from loguru import logger
 
 import tt_lib
 
-from models.demos.metal_BERT_large_15.tt.embeddings import TtEmbeddings
-from models.demos.metal_BERT_large_15.tt.bert_encoder import TtBertEncoder
+from models.demos.metal_BERT_large_11.tt.embeddings import TtEmbeddings
+from models.demos.metal_BERT_large_11.tt.bert_encoder import TtBertEncoder
 
 from tt_lib.utils import pad_activation, pad_weight
 
@@ -121,17 +121,17 @@ class TtBertBatchDram:
             extended_attention_mask = torch.clamp(
                 extended_attention_mask, -100000
             )  # Limit neg value that goes into exp
-            if self.model_config["OP9_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"].is_sharded():
+            if self.model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"].is_sharded():
                 extended_attention_mask = extended_attention_mask.reshape(extended_attention_mask.shape[0], 1, -1, 32)
                 tt_attention_mask = tt_lib.tensor.Tensor(
                     extended_attention_mask,
-                    self.model_config["OP8_SOFTMAX_ATTENTION_MASK_DTYPE"],
+                    self.model_config["OP4_SOFTMAX_ATTENTION_MASK_DTYPE"],
                 )
             else:
                 extended_attention_mask = pad_activation(extended_attention_mask)
                 tt_attention_mask = tt_lib.tensor.Tensor(
                     extended_attention_mask,
-                    self.model_config["OP8_SOFTMAX_ATTENTION_MASK_DTYPE"],
+                    self.model_config["OP4_SOFTMAX_ATTENTION_MASK_DTYPE"],
                 ).to(tt_lib.tensor.Layout.TILE)
         else:
             tt_attention_mask = attention_mask

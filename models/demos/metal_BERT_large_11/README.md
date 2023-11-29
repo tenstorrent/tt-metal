@@ -2,11 +2,11 @@
 
 ## How to Run
 
-Use `pytest --disable-warnings models/demos/metal_BERT_large_15/demo/demo.py::test_demo[models/demos/metal_BERT_large_15/demo/input_data.json-1]` to run the demo.
+Use `pytest --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py::test_demo[models/demos/metal_BERT_large_11/demo/input_data.json-1]` to run the demo.
 
-If you wish to run the demo with a different input use `pytest --disable-warnings models/demos/metal_BERT_large_15/demo/demo.py::test_demo[address_to_your_json_file.json-1]`. This file is expected to have exactly 8 inputs.
+If you wish to run the demo with a different input use `pytest --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py::test_demo[address_to_your_json_file.json-1]`. This file is expected to have exactly 8 inputs.
 
-Our second demo is designed to run SQuADV2 dataset, run this with `pytest --disable-warnings models/demos/metal_BERT_large_15/demo/demo.py::test_demo_squadv2`.
+Our second demo is designed to run SQuADV2 dataset, run this with `pytest --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py::test_demo_squadv2`.
 
 ## Inputs
 

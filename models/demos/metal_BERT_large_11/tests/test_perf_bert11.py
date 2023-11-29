@@ -10,8 +10,8 @@ from transformers import BertForQuestionAnswering, BertTokenizer
 
 import tt_lib
 
-from models.demos.metal_BERT_large_15.tt.bert_model import TtBertBatchDram
-from models.demos.metal_BERT_large_15.tt.model_config import get_model_config, get_tt_cache_path
+from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
+from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
 from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
@@ -30,7 +30,7 @@ token_type_ids = True
 model_config_str = "BFLOAT8_B-SHARDED_BATCH12"
 
 
-def run_perf_bert15(
+def run_perf_bert11(
     expected_inference_time, expected_compile_time, inference_iterations, model_location_generator, device
 ):
     model_config = get_model_config(model_config_str)
@@ -85,7 +85,7 @@ def run_perf_bert15(
         profiler.end(first_embedding_key, force_enable=True)
 
         profiler.start(first_run_key)
-        tt_attention_mask = tt_attention_mask_host.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+        tt_attention_mask = tt_attention_mask_host.to(device, model_config["OP4_SOFTMAX_ATTENTION_MASK_MEMCFG"])
         tt_embedding_inputs = {
             key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"])
             for (key, value) in tt_embedding_inputs_host.items()
@@ -101,7 +101,7 @@ def run_perf_bert15(
 
         profiler.start(second_run_accum_key)
         # First input to device
-        tt_attention_mask = tt_attention_mask_host.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+        tt_attention_mask = tt_attention_mask_host.to(device, model_config["OP4_SOFTMAX_ATTENTION_MASK_MEMCFG"])
         tt_embedding_inputs = {
             key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"])
             for (key, value) in tt_embedding_inputs_host.items()
@@ -110,7 +110,7 @@ def run_perf_bert15(
         for _ in range(inference_iterations - 1):
             tt_embedding = tt_model.model_embedding(**tt_embedding_inputs)
             tt_output = tt_model(tt_embedding, tt_attention_mask)
-            tt_attention_mask = tt_attention_mask_host.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+            tt_attention_mask = tt_attention_mask_host.to(device, model_config["OP4_SOFTMAX_ATTENTION_MASK_MEMCFG"])
             tt_embedding_inputs = {
                 key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"])
                 for (key, value) in tt_embedding_inputs_host.items()
@@ -133,7 +133,7 @@ def run_perf_bert15(
     cpu_time = profiler.get(cpu_key)
 
     prep_report(
-        model_name="bert15",
+        model_name="bert11",
         batch_size=BATCH_SIZE,
         inference_and_compile_time=first_iter_time,
         inference_time=second_iter_time,
@@ -143,8 +143,8 @@ def run_perf_bert15(
         inference_time_cpu=cpu_time,
     )
     compile_time = first_iter_time - second_iter_time
-    logger.info(f"bert15 inference time: {second_iter_time}")
-    logger.info(f"bert15 compile time: {compile_time}")
+    logger.info(f"bert11 inference time: {second_iter_time}")
+    logger.info(f"bert11 compile time: {compile_time}")
 
 
 @pytest.mark.models_performance_virtual_machine
@@ -163,7 +163,7 @@ def test_perf_virtual_machine(
     if is_e75(device):
         pytest.skip("Bert large 15 is not supported on E75")
 
-    run_perf_bert15(
+    run_perf_bert11(
         expected_inference_time, expected_compile_time, inference_iterations, model_location_generator, device
     )
 
@@ -184,6 +184,6 @@ def test_perf_bare_metal(
     if is_e75(device):
         pytest.skip("Bert large 15 is not supported on E75")
 
-    run_perf_bert15(
+    run_perf_bert11(
         expected_inference_time, expected_compile_time, inference_iterations, model_location_generator, device
     )

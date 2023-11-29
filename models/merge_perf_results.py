@@ -34,7 +34,7 @@ available_models = [
     "Falcon_prefill_kv_cache_len=0_seq_len=256_num_layers=32_config=L1-bf16",
     "T5",
     "VGG",
-    "bert15",
+    "bert11",
     "bloom",
     "deit",
     "llama",
@@ -44,11 +44,10 @@ available_models = [
     "whisper",
 ]
 
+
 def merge_perf_files():
     mypath = "./"
-    csvfiles = [
-        f for f in listdir(mypath) if isfile(join(mypath, f)) and f"{today}.csv" in f
-    ]
+    csvfiles = [f for f in listdir(mypath) if isfile(join(mypath, f)) and f"{today}.csv" in f]
 
     repo = git.Repo(search_parent_directories=True)
 
@@ -70,9 +69,6 @@ def merge_perf_files():
         merge_res.write(f"{row}\n")
 
     merge_res.close()
-
-
-
 
 
 def check_results():
@@ -121,9 +117,7 @@ def check_results():
                 f"{model_name} compile time is too slow with {model_compile}, expected {model_expected_compile}"
             )
         if model_inference > model_expected_inference:
-            slow_inference.append(
-                (model_name, model_inference, model_expected_inference)
-            )
+            slow_inference.append((model_name, model_inference, model_expected_inference))
             logger.error(
                 f"{model_name} inference  time is too slow with {model_inference}, expected {model_expected_inference}"
             )

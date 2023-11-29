@@ -24,7 +24,7 @@ run_perf_models() {
 
     env pytest models/demos/resnet/tests -m $pipeline_type
 
-    env pytest models/demos/metal_BERT_large_15/tests -m $pipeline_type
+    env pytest models/demos/metal_BERT_large_11/tests -m $pipeline_type
 
     env pytest models/experimental/deit/tests -m $pipeline_type
 
@@ -43,7 +43,7 @@ run_device_perf_models() {
 
     env pytest models/demos/resnet/tests -m $pipeline_type
 
-    env pytest models/demos/metal_BERT_large_15/tests -m $pipeline_type
+    env pytest models/demos/metal_BERT_large_11/tests -m $pipeline_type
 }
 
 main() {
