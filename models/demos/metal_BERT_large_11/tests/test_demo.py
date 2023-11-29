@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.demos.metal_BERT_large_15.demo.demo import test_demo as demo_json
-from models.demos.metal_BERT_large_15.demo.demo import test_demo_squadv2 as demo_squadv2
+from models.demos.metal_BERT_large_11.demo.demo import test_demo as demo_json
+from models.demos.metal_BERT_large_11.demo.demo import test_demo_squadv2 as demo_squadv2
 import pytest
 from loguru import logger
 from models.utility_functions import is_e75
@@ -11,7 +11,7 @@ from models.utility_functions import is_e75
 
 @pytest.mark.parametrize(
     "input_path",
-    (("models/demos/metal_BERT_large_15/demo/input_data.json"),),
+    (("models/demos/metal_BERT_large_11/demo/input_data.json"),),
     ids=["default_input"],
 )
 def test_demo(input_path, model_location_generator, device, use_program_cache):

@@ -42,7 +42,7 @@ for details.
 You can also check our demos for
 `ResNet <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/resnet>`_
 and
-`BERT <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/metal_BERT_large_15>`_.
+`BERT <https://github.com/tenstorrent-metal/tt-metal/tree/main/models/demos/metal_BERT_large_11>`_.
 
 3. ttnn Tutorial: Multi-Head Attention (Simple)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

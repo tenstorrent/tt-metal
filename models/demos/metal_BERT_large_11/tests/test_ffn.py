@@ -12,8 +12,8 @@ import tt_lib
 
 from tt_lib.utils import pad_activation
 from models.utility_functions import comp_pcc, comp_allclose
-from models.demos.metal_BERT_large_15.tt.model_config import get_model_config, get_tt_cache_path
-from models.demos.metal_BERT_large_15.tt.ffn import TtFeedForwardModel
+from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
+from models.demos.metal_BERT_large_11.tt.ffn import TtFeedForwardModel
 
 
 class PytorchFeedForwardModel(torch.nn.Module):
@@ -50,19 +50,19 @@ def run_ffn_inference(
     pad_ffn_input = pad_activation(ffn_input)
     tilized_ffn_input = tt_lib.tensor.Tensor(
         pad_ffn_input,
-        model_config["OP12_LAYERNORM_OUTPUT_DTYPE"],
+        model_config["OP8_LAYERNORM_OUTPUT_DTYPE"],
     ).to(tt_lib.tensor.Layout.TILE)
-    if model_config["OP12_LAYERNORM_OUTPUT_MEMCFG"].is_sharded():
+    if model_config["OP8_LAYERNORM_OUTPUT_MEMCFG"].is_sharded():
         tilized_ffn_input = tilized_ffn_input.to(device)
         tilized_ffn_input = tt_lib.tensor.interleaved_to_sharded(
             tilized_ffn_input,
             model_config["GRID_SIZE"],
             model_config["SHARD_SIZE"],
-            model_config["OP12_LAYERNORM_OUTPUT_MEMCFG"].memory_layout,
+            model_config["OP8_LAYERNORM_OUTPUT_MEMCFG"].memory_layout,
             model_config["SHARD_ORIENTATION"],
         )
     else:
-        tilized_ffn_input = tilized_ffn_input.to(device, model_config["OP12_LAYERNORM_OUTPUT_MEMCFG"])
+        tilized_ffn_input = tilized_ffn_input.to(device, model_config["OP8_LAYERNORM_OUTPUT_MEMCFG"])
 
     tt_out = tt_ffn_model(tilized_ffn_input)
     if tt_out.is_sharded():

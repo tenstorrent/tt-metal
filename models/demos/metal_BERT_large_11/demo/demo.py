@@ -17,8 +17,8 @@ from models.utility_functions import (
 )
 
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
-from models.demos.metal_BERT_large_15.tt.model_config import get_model_config, get_tt_cache_path
-from models.demos.metal_BERT_large_15.tt.bert_model import TtBertBatchDram
+from models.demos.metal_BERT_large_11.tt.model_config import get_model_config, get_tt_cache_path
+from models.demos.metal_BERT_large_11.tt.bert_model import TtBertBatchDram
 
 from models.datasets.dataset_squadv2 import squadv2_1K_samples_input, squadv2_answer_decode_batch
 
@@ -123,7 +123,7 @@ def run_bert_question_and_answering_inference_squadv2(
                 tt_attention_mask = tt_bert_model.model_attention_mask(**batch_data)
                 tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**batch_data)
 
-                tt_attention_mask = tt_attention_mask.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+                tt_attention_mask = tt_attention_mask.to(device, model_config["OP4_SOFTMAX_ATTENTION_MASK_MEMCFG"])
                 tt_embedding_inputs = {
                     key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"])
                     for (key, value) in tt_embedding_inputs.items()
@@ -264,7 +264,7 @@ def run_bert_question_and_answering_inference(
 
     # Use force enable to only record this profiler call while others are disabled
     profiler.start("first_model_run_with_compile", force_enable=True)
-    tt_attention_mask = tt_attention_mask.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+    tt_attention_mask = tt_attention_mask.to(device, model_config["OP4_SOFTMAX_ATTENTION_MASK_MEMCFG"])
     tt_embedding_inputs = {
         key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"]) for (key, value) in tt_embedding_inputs.items()
     }
@@ -282,7 +282,7 @@ def run_bert_question_and_answering_inference(
 
     ##### Run Forward on TT Model Start
     profiler.start(f"model_run_for_inference")
-    tt_attention_mask = tt_attention_mask.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+    tt_attention_mask = tt_attention_mask.to(device, model_config["OP4_SOFTMAX_ATTENTION_MASK_MEMCFG"])
     tt_embedding_inputs = {
         key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"]) for (key, value) in tt_embedding_inputs.items()
     }
@@ -294,7 +294,7 @@ def run_bert_question_and_answering_inference(
     for i in range(NUM_RUNS):
         tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
         tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
-        tt_attention_mask = tt_attention_mask.to(device, model_config["OP8_SOFTMAX_ATTENTION_MASK_MEMCFG"])
+        tt_attention_mask = tt_attention_mask.to(device, model_config["OP4_SOFTMAX_ATTENTION_MASK_MEMCFG"])
         tt_embedding_inputs = {
             key: value.to(device, model_config["INPUT_EMBEDDINGS_MEMCFG"])
             for (key, value) in tt_embedding_inputs.items()
@@ -362,7 +362,7 @@ def run_bert_question_and_answering_inference(
 
 @pytest.mark.parametrize(
     "input_path, NUM_RUNS",
-    (("models/demos/metal_BERT_large_15/demo/input_data.json", 1),),
+    (("models/demos/metal_BERT_large_11/demo/input_data.json", 1),),
 )
 def test_demo(
     input_path,
@@ -374,7 +374,7 @@ def test_demo(
     disable_persistent_kernel_cache()
     disable_compilation_reports()
 
-    tt_lib.profiler.set_profiler_location(f"metal_BERT_large_15")
+    tt_lib.profiler.set_profiler_location(f"metal_BERT_large_11")
 
     return run_bert_question_and_answering_inference(
         model_version="phiyodr/bert-large-finetuned-squad2",

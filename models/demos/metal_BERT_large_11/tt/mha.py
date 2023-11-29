@@ -34,37 +34,37 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
             output_mem_config=model_config["OP1_FUSED_QKV_MM_OUTPUT_MEMCFG"],
             output_dtype=model_config["OP1_FUSED_QKV_MM_OUTPUT_DTYPE"],
         )
-    if "OP7_PRE_SOFTMAX_BMM_CONFIG" in model_config:
+    if "OP3_PRE_SOFTMAX_BMM_CONFIG" in model_config:
         pre_softmax_bmm = partial(
             tt_lib.operations.primary.matmul,
-            program_config=model_config["OP7_PRE_SOFTMAX_BMM_CONFIG"],
-            output_mem_config=model_config["OP7_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
-            output_dtype=model_config["OP7_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
+            program_config=model_config["OP3_PRE_SOFTMAX_BMM_CONFIG"],
+            output_mem_config=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+            output_dtype=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
         )
     else:
         pre_softmax_bmm = partial(
             tt_lib.tensor.bert_large_pre_softmax_bmm,
-            output_mem_config=model_config["OP7_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
-            output_dtype=model_config["OP7_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
+            output_mem_config=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+            output_dtype=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
         )
-    if "OP9_POST_SOFTMAX_BMM_CONFIG" in model_config:
+    if "OP5_POST_SOFTMAX_BMM_CONFIG" in model_config:
         post_softmax_bmm = partial(
             tt_lib.operations.primary.matmul,
-            program_config=model_config["OP9_POST_SOFTMAX_BMM_CONFIG"],
-            output_mem_config=model_config["OP9_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
-            output_dtype=model_config["OP9_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
+            program_config=model_config["OP5_POST_SOFTMAX_BMM_CONFIG"],
+            output_mem_config=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+            output_dtype=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
         )
     else:
         post_softmax_bmm = partial(
             tt_lib.tensor.bert_large_post_softmax_bmm,
-            output_mem_config=model_config["OP9_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
-            output_dtype=model_config["OP9_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
+            output_mem_config=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+            output_dtype=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
         )
 
-    if "OP8_SOFTMAX_CONFIG" in model_config:
+    if "OP4_SOFTMAX_CONFIG" in model_config:
         softmax = partial(
             tt_lib.operations.primary.transformers.scale_mask_softmax_in_place,
-            program_config=model_config["OP8_SOFTMAX_CONFIG"],
+            program_config=model_config["OP4_SOFTMAX_CONFIG"],
         )
     else:
         softmax = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place
@@ -72,7 +72,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     split_fused_qkv_and_split_heads = partial(
         tt_lib.operations.primary.transformers.split_fused_qkv_and_split_heads,
         compute_with_storage_grid_size=model_config.get("GRID_SIZE", device.compute_with_storage_grid_size()),
-        output_mem_config=model_config["OP2TO6_SPLIT_QKV_HEADS_OUTPUT_MEMCFG"],
+        output_mem_config=model_config["OP2_SPLIT_QKV_HEADS_OUTPUT_MEMCFG"],
     )
 
     def op1_qkv_fused(activation, qkv_weight, qkv_bias):
@@ -83,7 +83,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
         )
         return qkv
 
-    def op2to6_create_qkv_heads(qkv):
+    def op2_create_qkv_heads(qkv):
         (
             q_heads,
             kt_heads,
@@ -93,14 +93,14 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
         )
         return q_heads, kt_heads, v_heads
 
-    def op7_bmm(Q_heads, K_T_heads):
+    def op3_bmm(Q_heads, K_T_heads):
         qkt = pre_softmax_bmm(
             Q_heads,
             K_T_heads,
         )
         return qkt
 
-    def op8_scale_mask_softmax(qkt, attention_mask):
+    def op4_scale_mask_softmax(qkt, attention_mask):
         # Attention scores computation
 
         # Input and output tensors of this fused op is: [9, 1, 6144, 384] instead of [9, 16, 384, 384]
@@ -112,7 +112,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
 
         return attention_scores
 
-    def op9_bmm(attention_scores, V_heads):
+    def op5_bmm(attention_scores, V_heads):
         weighted_activation = post_softmax_bmm(
             attention_scores,
             V_heads,
@@ -120,13 +120,13 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
 
         return weighted_activation
 
-    def op10_unmake_attention_heads(x):
+    def op6_unmake_attention_heads(x):
         if num_heads == 1:
             return x
         else:
             retval = tt_lib.tensor.nlp_concat_heads(
                 x,
-                output_mem_config=model_config["OP10_CONCATENATE_ATTENTION_HEADS_OUTPUT_MEMCFG"],
+                output_mem_config=model_config["OP6_CONCATENATE_ATTENTION_HEADS_OUTPUT_MEMCFG"],
             )
             return retval
 
@@ -145,21 +145,21 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
             temp.deallocate()
         # activation.deallocate()
 
-        Q_heads, K_T_heads, V_heads = op2to6_create_qkv_heads(qkv)
+        Q_heads, K_T_heads, V_heads = op2_create_qkv_heads(qkv)
         qkv.deallocate()
 
-        qkt = op7_bmm(Q_heads, K_T_heads)
+        qkt = op3_bmm(Q_heads, K_T_heads)
         Q_heads.deallocate()
         K_T_heads.deallocate()
 
-        attention_scores = op8_scale_mask_softmax(qkt, attention_mask)
+        attention_scores = op4_scale_mask_softmax(qkt, attention_mask)
         # Should be a no-op deallocate since it was moved?
         # qkt.deallocate()
-        weighted_activation = op9_bmm(attention_scores, V_heads)
+        weighted_activation = op5_bmm(attention_scores, V_heads)
         attention_scores.deallocate()
         V_heads.deallocate()
 
-        res = op10_unmake_attention_heads(
+        res = op6_unmake_attention_heads(
             weighted_activation
         )  # [N, num heads, seq len, hid size / num heads] -> [N, seq len, hid size]
         weighted_activation.deallocate()
