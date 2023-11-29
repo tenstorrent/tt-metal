@@ -482,7 +482,18 @@ inline std::vector<CoreCoord> corerange_to_cores(const CoreRangeSet crs, std::op
       auto start_coord = core_range.start;
       auto end_coord = core_range.end;
       auto cores = grid_to_cores(start_coord, end_coord, row_wise);
-      all_cores.insert(all_cores.end(), cores.begin(), cores.end());
+      if(max_cores.has_value()){
+        if(all_cores.size() + cores.size() > max_cores.value()){
+          uint32_t num_cores_to_add = max_cores.value() - all_cores.size();
+          all_cores.insert(all_cores.end(), cores.begin(), cores.begin() + num_cores_to_add);
+        }
+        else{
+          all_cores.insert(all_cores.end(), cores.begin(), cores.end());
+        }
+      }
+      else{
+        all_cores.insert(all_cores.end(), cores.begin(), cores.end());
+      }
   }
 
 
