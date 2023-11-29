@@ -930,6 +930,22 @@ inline void calculate_silu()
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_mask()
+{
+    bool exponent_size_8 = true;
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat mask = dst_reg[32];
+        v_if(sfpu_is_fp16_zero(mask, exponent_size_8)) {
+            dst_reg[0] = 0;
+        }
+        v_endif;
+        dst_reg++;
+    }
+}
+
+
 template <SfpuType operation, bool APPROXIMATION_MODE, int SfpuType_PARAM=0, int ITERATIONS=8>
 inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0)
 {
@@ -1023,6 +1039,12 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     }
     else if constexpr (operation == SfpuType::silu) {
         calculate_silu<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::mask) {
+        calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
+    }
+    else if constexpr (operation == SfpuType::negative) {
+        calculate_negative<APPROXIMATION_MODE, ITERATIONS>();
     }
 }
 

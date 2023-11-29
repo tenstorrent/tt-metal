@@ -1000,6 +1000,10 @@ inline void calculate_sfpu(uint param0 = 0, uint param1 = 0, uint param2 = 0, ui
     else if constexpr (operation == SfpuType::mask) {
         calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
     }
+    else if constexpr (operation == SfpuType::negative) {
+        calculate_negative<APPROXIMATION_MODE, ITERATIONS>();
+    }
+
     //erf, erfc are dispatched directly.
 }
 

@@ -48,6 +48,10 @@
 #include "compute_kernel_api/eltwise_unary/erfinv.h"
 #endif
 
+#if SFPU_OP_NEG_INCLUDE
+#include "compute_kernel_api/eltwise_unary/negative.h"
+#endif
+
 #if SFPU_OP_TRIG_FAMILY_INCLUDE
 #include "compute_kernel_api/eltwise_unary/trigonometry.h"
 #endif
