@@ -948,12 +948,12 @@ def is_grayskull():
     return "grayskull" in ARCH_NAME
 
 
-def skip_for_wormhole_b0():
-    return pytest.mark.skipif(is_wormhole_b0(), reason="not working for Wormhole B0")
+def skip_for_wormhole_b0(reason_str="not working for Wormhole B0"):
+    return pytest.mark.skipif(is_wormhole_b0(), reason=reason_str)
 
 
-def skip_for_grayskull():
-    return pytest.mark.skipif(is_grayskull(), reason="not working for Grayskull")
+def skip_for_grayskull(reason_str="not working for Grayskull"):
+    return pytest.mark.skipif(is_grayskull(), reason=reason_str)
 
 
 def ttl_complex_2_torch_complex(tt_tensor):
