@@ -1,5 +1,4 @@
 # Every variable in subdir must be prefixed with subdir (emulating a namespace)
-DTX_LIB = $(LIBDIR)/libdtx.a
 DTX_DEFINES =
 DTX_INCLUDES = $(TT_EAGER_INCLUDES)
 DTX_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
@@ -34,11 +33,7 @@ DTX_DEPS = $(addprefix $(OBJDIR)/, $(DTX_SRCS:.cpp=.d))
 -include $(DTX_DEPS)
 
 # Each module has a top level target as the entrypoint which must match the subdir name
-tt_eager/dtx: $(DTX_LIB)
-
-$(DTX_LIB): $(COMMON_LIB) $(TT_METAL_LIB) $(TENSOR_LIB) $(DTX_OBJS)
-	@mkdir -p $(@D)
-	ar rcs -o $@ $(DTX_OBJS)
+tt_eager/dtx: $(DTX_OBJS) $(TENSOR_OBJS)
 
 $(OBJDIR)/tt_eager/dtx/%.o: tt_eager/dtx/%.cpp
 	@mkdir -p $(@D)

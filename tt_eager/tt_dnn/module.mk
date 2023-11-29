@@ -179,7 +179,6 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/fold/fold_op.cpp \
 	tt_eager/tt_dnn/op_library/fold/single_core/fold_op_single_core.cpp \
 
-TT_DNN_LIB = $(LIBDIR)/libtt_dnn.a
 TT_DNN_DEFINES =
 TT_DNN_INCLUDES = $(TT_EAGER_INCLUDES)
 TT_DNN_CFLAGS = $(CFLAGS) -Werror -Wno-int-to-pointer-cast
@@ -190,11 +189,7 @@ TT_DNN_DEPS = $(addprefix $(OBJDIR)/, $(TT_DNN_SRCS:.cpp=.d))
 -include $(TT_DNN_DEPS)
 
 # Each module has a top level target as the entrypoint which must match the subdir name
-tt_eager/tt_dnn: $(TT_DNN_LIB)
-
-$(TT_DNN_LIB): $(COMMON_LIB) $(DTX_LIB) $(TT_DNN_OBJS)
-	@mkdir -p $(LIBDIR)
-	ar rcs -o $@ $(TT_DNN_OBJS)
+tt_eager/tt_dnn: $(TT_DNN_OBJS) $(DTX_OBJS)
 
 $(OBJDIR)/tt_eager/tt_dnn/%.o: tt_eager/tt_dnn/%.cpp
 	@mkdir -p $(@D)
