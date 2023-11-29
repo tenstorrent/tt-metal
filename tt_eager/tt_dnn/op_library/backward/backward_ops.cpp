@@ -4,6 +4,7 @@
 
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/backward/backward_ops.hpp"
+#include "tt_dnn/op_library/reduce/reduce_op.hpp"
 #include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_dnn/op_library/math.hpp"
@@ -235,6 +236,18 @@ std::vector<Tensor> _max_bw(const Tensor& grad, const Tensor& input, const Tenso
 std::vector<Tensor> max_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _max_bw)(grad, input, other, output_mem_config);
+}
+
+
+std::vector<Tensor> _fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = zeros_like(grad, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _fill_zero_bw)(grad, output_mem_config);
 }
 
 }//namespace tt_metal
