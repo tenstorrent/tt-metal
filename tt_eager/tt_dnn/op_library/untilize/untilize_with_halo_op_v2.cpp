@@ -97,7 +97,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const Tensor& r_data_start_and_size,
     const Tensor& rr_data_start_and_size,
     const uint32_t pad_val,
-    const uint32_t ncores_height,
+    const uint32_t ncores_nhw,
     const uint32_t max_out_nsticks_per_core,
     const std::vector<int32_t>& local_pad_nsegments_per_core,
     const std::vector<int32_t>& ll_data_nsegments_per_core,
@@ -143,7 +143,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         ncores = core_range.end.x - core_range.start.x + 1;
         ncores_width = core_range.end.y - core_range.start.y + 1;
     }
-    TT_ASSERT(ncores_height == ncores);
+    TT_ASSERT(ncores_nhw == ncores);
 
     auto shard_shape = input_tensor.shard_spec().value().shard_shape;
     uint32_t ntiles_per_block = shard_shape[1] / TILE_WIDTH;
@@ -385,7 +385,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     log_debug(LogOp, "rr_data_nsegments: {}", rr_data_nsegments_per_core);
     log_debug(LogOp, "rr_data_src_start_offsets: {}", rr_data_src_start_offsets_per_core);
 
-    for (uint32_t core = 0; core < ncores_height; ++ core) {
+    for (uint32_t core = 0; core < ncores_nhw; ++ core) {
         CoreCoord core_coord = { core % ncores_x, core / ncores_x };    // logical
         // left neighbor args
         if (untilize_with_halo_v2_helpers::left_neighbor_core.count(core_coord) > 0) {
@@ -575,7 +575,7 @@ std::vector<Shape> UntilizeWithHaloV2::compute_output_shapes(const std::vector<T
     Shape output_shape = input_shape;
 
     uint32_t nbatch = input_shape[0];
-    uint32_t total_nsticks = ncores_height_ * max_out_nsticks_per_core_;
+    uint32_t total_nsticks = ncores_nhw_ * max_out_nsticks_per_core_;
 
     // output_shape[0] remains same
     // output_shape[1] remains same
@@ -585,7 +585,7 @@ std::vector<Shape> UntilizeWithHaloV2::compute_output_shapes(const std::vector<T
 
     log_debug(LogOp, "output_shape: [{} {} {} {}]", output_shape[0], output_shape[1], output_shape[2], output_shape[3]);
     log_debug(LogOp, "max_out_nsticks_per_core: {}", max_out_nsticks_per_core_);
-    log_debug(LogOp, "ncores_height: {}", ncores_height_);
+    log_debug(LogOp, "ncores_nhw: {}", ncores_nhw_);
 
     return {output_shape};
 }
@@ -597,14 +597,14 @@ std::vector<Tensor> UntilizeWithHaloV2::create_output_tensors(const std::vector<
     auto shard_spec = input_tensor.shard_spec().value();
     auto output_shape = this->compute_output_shapes(input_tensors).at(0);
 
-    TT_ASSERT(ncores_height_ == input_tensor.shape()[0] * input_tensor.shape()[2] / shard_spec.shard_shape[0]);
+    TT_ASSERT(ncores_nhw_ == input_tensor.shape()[0] * input_tensor.shape()[2] / shard_spec.shard_shape[0]);
 
     if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         auto core_range = *(shard_spec.shard_grid.ranges().begin());
-        TT_ASSERT(ncores_height_ == core_range.end.x - core_range.start.x + 1);
+        TT_ASSERT(ncores_nhw_ == core_range.end.x - core_range.start.x + 1);
     }
     auto out_shard_spec = shard_spec;
-    out_shard_spec.shard_shape[0] = output_shape[0] * div_up(output_shape[2], ncores_height_);
+    out_shard_spec.shard_shape[0] = output_shape[0] * div_up(output_shape[2], ncores_nhw_);
     out_shard_spec.halo = true;
     return {create_sharded_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), out_mem_config_, out_shard_spec)};
 }
@@ -627,7 +627,7 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(const std::ve
                                               r_data_start_and_size,
                                               rr_data_start_and_size,
                                               pad_val_,
-                                              ncores_height_,
+                                              ncores_nhw_,
                                               max_out_nsticks_per_core_,
                                               local_pad_nsegments_per_core_,
                                               ll_data_nsegments_per_core_,
@@ -651,7 +651,7 @@ Tensor untilize_with_halo_v2(const Tensor& input_tensor,
                              const Tensor& r_data_start_and_size,
                              const Tensor& rr_data_start_and_size,
                              const uint32_t pad_val,
-                             const uint32_t ncores_height,
+                             const uint32_t ncores_nhw,
                              const uint32_t max_out_nsticks_per_core,
                              const std::vector<int32_t>& local_pad_nsegments_per_core,
                              const std::vector<int32_t>& ll_data_nsegments_per_core,
@@ -667,9 +667,9 @@ Tensor untilize_with_halo_v2(const Tensor& input_tensor,
                              const MemoryConfig& mem_config) {
     TT_ASSERT(input_tensor.memory_config().is_sharded());
     TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
-    TT_ASSERT(ncores_height == local_data_nsegments_per_core.size());
-    // NOTE: for HEIGHT_SHARDED, ncores_height == ncores
-    //       for BLOCK_SHARDED, ncores_height is just the ncores along height dim (last tensor dim is split along width)
+    TT_ASSERT(ncores_nhw == local_data_nsegments_per_core.size());
+    // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
+    //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along width)
 
     // auto input_shape = input_tensor.shape();
     // auto input_shard_shape = input_tensor.shard_spec().value().shard_shape;
@@ -684,7 +684,7 @@ Tensor untilize_with_halo_v2(const Tensor& input_tensor,
 
     return operation::run_without_autoformat(UntilizeWithHaloV2{
                                                 pad_val,
-                                                ncores_height,
+                                                ncores_nhw,
                                                 max_out_nsticks_per_core,
                                                 local_pad_nsegments_per_core,
                                                 ll_data_nsegments_per_core,

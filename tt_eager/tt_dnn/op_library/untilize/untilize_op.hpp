@@ -98,7 +98,7 @@ Tensor untilize_with_halo(const Tensor &a, const uint32_t pad_val, const uint32_
 
 struct UntilizeWithHaloV2 {
     const uint32_t pad_val_;
-    const uint32_t ncores_height_;
+    const uint32_t ncores_nhw_;
     const uint32_t max_out_nsticks_per_core_;
     const std::vector<int32_t> local_pad_nsegments_per_core_;
     const std::vector<int32_t> ll_data_nsegments_per_core_;
@@ -120,7 +120,7 @@ struct UntilizeWithHaloV2 {
 
     static constexpr auto attribute_names = std::make_tuple(
         "pad_val_",
-        "ncores_height_",
+        "ncores_nhw_",
         "max_out_nsticks_per_core_",
         "local_pad_nsegments_per_core_",
         "ll_data_nsegments_per_core_",
@@ -132,7 +132,7 @@ struct UntilizeWithHaloV2 {
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(pad_val_),
-            std::cref(ncores_height_),
+            std::cref(ncores_nhw_),
             std::cref(max_out_nsticks_per_core_),
             std::cref(local_pad_nsegments_per_core_),
             std::cref(ll_data_nsegments_per_core_),
@@ -151,7 +151,7 @@ Tensor untilize_with_halo_v2(const Tensor& input_tensor,
                              const Tensor& r_data_start_and_size,
                              const Tensor& rr_data_start_and_size,
                              const uint32_t pad_val,
-                             const uint32_t ncores_height,
+                             const uint32_t ncores_nhw,
                              const uint32_t max_out_nsticks_per_core,
                              const std::vector<int32_t>& local_pad_nsegments_per_core,
                              const std::vector<int32_t>& ll_data_nsegments_per_core,
