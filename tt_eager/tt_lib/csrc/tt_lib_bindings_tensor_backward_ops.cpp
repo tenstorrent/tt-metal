@@ -90,7 +90,7 @@ namespace tt::tt_metal::detail{
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "input", "Tensor addcmul_bw is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input", "Tensor addcmul is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "tensor1", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "tensor2", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "value", "Value", "float", "default to 1.0f", "No"
@@ -157,7 +157,7 @@ namespace tt::tt_metal::detail{
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "input", "Tensor addcdiv_bw is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input", "Tensor addcdiv is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "tensor1", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "tensor2", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "value", "Value", "float", "default to 1.0f", "No"
@@ -260,7 +260,43 @@ namespace tt::tt_metal::detail{
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "input", "Tensor div_bw is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input", "Tensor div is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "other", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+    m_tensor.def("max_bw", &tt::tt_metal::max_bw,
+            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Performs backward operations for maximum of ``other`` with given ``grad``.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensors will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input", "Tensor max is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "other", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
+        )doc");
+
+    m_tensor.def("where_bw", &tt::tt_metal::where_bw,
+            py::arg("grad").noconvert(), py::arg("condition").noconvert(), py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Performs backward operations for where selected from either ``input`` or ``other``, depending on ``condition`` with given ``grad``.
+            When condition True (nonzero), yield grad, otherwise yield zero's.
+
+            Input tensor must have BFLOAT16 data type.
+
+            Output tensors will have BFLOAT16 data type.
+
+            .. csv-table::
+                :header: "Argument", "Description", "Data type", "Valid range", "Required"
+
+                "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "condition", "Tensor", "Bool", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "other", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
