@@ -146,45 +146,6 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
             )
 
-            # def gen_config_tt_tensors(config_list_uint16, toprint=False):
-            #     if len(config_list_uint16) == 0:
-            #         # return dummy tensor
-            #         return ttl.tensor.Tensor(
-            #             [0.0, 0.0], [1, 1, 1, 2], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, device
-            #         )
-            #     config_list = []
-            #     for i in range(0, len(config_list_uint16), 2):
-            #         pstr = struct.pack("HH", config_list_uint16[i], config_list_uint16[i + 1])
-            #         packedint = struct.unpack("I", pstr)
-            #         if toprint:
-            #             print(f"{config_list_uint16[i]},{config_list_uint16[i+1]} -> {packedint}")
-            #         config_list.append(packedint)
-            #     config_size = len(config_list)
-            #     assert config_size % num_cores_nhw == 0
-            #     shard_config_size = (int)(config_size / num_cores_nhw)
-            #     config_shard_shape = [1, shard_config_size]  # = local_data_nsegments * 2
-            #     config_tensor_shape = (
-            #         1,
-            #         1,
-            #         1,
-            #         config_size,  # = num_cores * local_data_nsegments * 2
-            #     )
-            #     torch_tensor = torch.tensor(config_list).reshape(config_tensor_shape)
-            #     shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
-            #     shard_halo = False
-            #     shard_spec = ttl.tensor.ShardSpec(shard_grid, config_shard_shape, shard_orientation, shard_halo)
-
-            #     tt_tensor = ttl.tensor.Tensor(torch_tensor, ttl.tensor.DataType.UINT32).to(
-            #         device, height_sharded_mem_config, shard_spec
-            #     )
-
-            #     tt_tensor_cpu = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
-            #     if toprint:
-            #         tt_tensor_cpu.print()
-            #     torch_tensor_after_round_trip = tt_tensor_cpu.to_torch().reshape(config_tensor_shape)
-            #     assert all(torch_tensor.reshape(-1) == torch_tensor_after_round_trip.reshape(-1))
-            #     return tt_tensor
-
             def gen_config_tt_tensors_uint16(config_list_uint16, toprint=False):
                 if len(config_list_uint16) == 0:
                     # return dummy tensor
@@ -213,11 +174,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
 
                 ## validate
                 tt_tensor_cpu = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(config_tensor_shape)
-                print(f"INPUT TENSOR:\n{torch_tensor}")
-                print(f"VALIDATE TENSOR:\n{tt_tensor_cpu}")
-                equality = torch_tensor.reshape(-1) == tt_tensor_cpu.reshape(-1)
-                print(f"{equality}")
-                assert all(equality)
+                assert all(torch_tensor.reshape(-1) == tt_tensor_cpu.reshape(-1))
 
                 return tt_tensor
 
