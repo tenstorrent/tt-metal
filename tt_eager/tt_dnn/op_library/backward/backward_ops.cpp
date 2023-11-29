@@ -173,7 +173,7 @@ std::vector<Tensor> tanh_bw(const Tensor& grad, const Tensor& input, const Memor
 
 std::vector<Tensor> _tan_bw(const Tensor& grad, const Tensor& tan_result, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor result = mul(grad, add1(power(tan_result, 2, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
+    Tensor result = mul(grad, add1(square(tan_result, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.push_back(result);
     return grad_tensor;
 }
