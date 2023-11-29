@@ -213,7 +213,29 @@ std::vector<Tensor> where_bw(const Tensor& grad, const Tensor& condition, const 
     return operation::decorate_as_composite(__func__, _where_bw)(grad, condition, input, other, output_mem_config);
 }
 
+std::vector<Tensor> _max_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    Tensor zeros_t = zeros_like(input, output_mem_config);
+    std::vector<Tensor> grad_tensor;
 
+    Tensor t_scale_grad = mul_unary(grad, 0.5, output_mem_config);
+    //op_type=unary_op_type, .param=static_cast<float>(param)}}, output_mem_config
+    Tensor t_sub_oi = sub(other, input, std::nullopt, output_mem_config);
+    Tensor t_sub_gtz = gtz(t_sub_oi,output_mem_config);
+    Tensor t_sub_eqz = eqz(t_sub_oi,output_mem_config);
+    Tensor t_sub_gtz_io = ltz(t_sub_oi,output_mem_config);
+    Tensor t_alternate = where(t_sub_eqz, t_scale_grad, zeros_t, output_mem_config);
+    Tensor grad_other = add(where(t_sub_gtz, grad, zeros_t, output_mem_config),
+                            t_alternate, std::nullopt, output_mem_config);
+    Tensor grad_input = add(where(t_sub_gtz_io, grad, zeros_t, output_mem_config),
+                            t_alternate, std::nullopt, output_mem_config);
+    grad_tensor.push_back(grad_input);
+    grad_tensor.push_back(grad_other);
+    return grad_tensor;
+}
+std::vector<Tensor> max_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _max_bw)(grad, input, other, output_mem_config);
+}
 
 }//namespace tt_metal
 

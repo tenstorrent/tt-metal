@@ -753,6 +753,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.mul_bw
 
+.. autofunction:: tt_lib.tensor.max_bw
+
 .. autofunction:: tt_lib.tensor.add_bw
 
 .. autofunction:: tt_lib.tensor.tan_bw
