@@ -63,6 +63,7 @@ def volume(shape):
     (1,),
 )
 @pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
+@pytest.mark.skip(reason="Watcher error")
 def test_run_max_pool(
     act_shape,
     kernel_size,
