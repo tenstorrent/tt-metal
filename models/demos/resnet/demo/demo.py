@@ -53,7 +53,7 @@ def run_resnet_imagenet_inference(
     # load inputs
     logger.info("ImageNet-1k validation Dataset")
     input_loc = str(model_location_generator("ImageNet_data"))
-    data_loader = get_data_loader(input_loc, batch_size)
+    data_loader = get_data_loader(input_loc, batch_size, iterations)
 
     # Create TT Model Start
     # this will move weights to device
