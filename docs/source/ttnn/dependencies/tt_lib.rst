@@ -763,5 +763,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.unary_pow_bw
 
-.. autofunction:: tt_lib.tensor.tanh_bw
+.. autofunction:: tt_lib.tensor.where_bw
 
+.. autofunction:: tt_lib.tensor.tanh_bw
