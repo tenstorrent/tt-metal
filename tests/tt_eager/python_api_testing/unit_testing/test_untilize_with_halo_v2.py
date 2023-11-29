@@ -46,32 +46,44 @@ def plot_diff(vals, fid, nsticks, stick_len):
         # ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), 8, (1, 8, 8), 1, False),
         # ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), 8, (1, 8, 8), 2, False),
         # resnet50 s1 convs
-        ((32, 32, 4, 4, 1, 1, 0, 0, 1, 1), 8, (32, 115, 115), 98, False),  # first conv b8 - 98 cores for height slicing
+        ((64, 16, 4, 4, 1, 1, 0, 0, 1, 1), 8, (16, 115, 115), 98, False),  # first conv b8 - 98 cores for height slicing
         ((32, 32, 3, 3, 1, 1, 1, 1, 1, 1), 8, (32, 56, 56), 98, False),  # layer1 b8 - 98 cores for height slicing
         ((64, 64, 3, 3, 1, 1, 1, 1, 1, 1), 8, (64, 56, 56), 98, False),  # layer1 b8 - 98 cores for height slicing
-        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 8, (1, 28, 28), 98, False),  # layer2 b8 - 98 cores for height slicing
-        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 8, (1, 14, 14), 10, False),  # layer3 b8 - 10 cores for height slicing
-        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 8, (1, 7, 7), 7, False),  # layer4 b8 - 7 cores for height slicing
-        ((1, 1, 4, 4, 1, 1, 0, 0, 1, 1), 16, (1, 115, 115), 98, False),  # first conv b16 - 98 cores for height slicing
-        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 16, (1, 56, 56), 98, False),  # layer1 b16 - 98 cores for height slicing
-        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 16, (1, 28, 28), 98, False),  # layer2 b16 - 98 cores for height slicing
-        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 16, (1, 14, 14), 11, False),  # layer3 b16 - 11 cores for height slicing
-        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 16, (1, 7, 7), 9, False),  # layer4 b16 - 9 cores for height slicing
-        ((1, 1, 4, 4, 1, 1, 0, 0, 1, 1), 20, (1, 115, 115), 98, False),  # first conv b16 - 98 cores for height slicing
-        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 20, (1, 56, 56), 98, False),  # layer1 b20 - 98 cores for height slicing
-        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 20, (1, 28, 28), 98, False),  # layer2 b20 - 98 cores for height slicing
-        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 20, (1, 14, 14), 12, False),  # layer3 b20 - 12 cores for height slicing
-        ((1, 1, 3, 3, 1, 1, 1, 1, 1, 1), 20, (1, 7, 7), 11, False),  # layer4 b20 - 11 cores for height slicing
+        ((128, 128, 3, 3, 1, 1, 1, 1, 1, 1), 8, (128, 28, 28), 98, False),  # layer2 b8 - 98 cores for height slicing
+        ((256, 256, 3, 3, 1, 1, 1, 1, 1, 1), 8, (256, 14, 14), 10, False),  # layer3 b8 - 10 cores for height slicing
+        ((512, 512, 3, 3, 1, 1, 1, 1, 1, 1), 8, (512, 7, 7), 7, False),  # layer4 b8 - 7 cores for height slicing
+        (
+            (64, 16, 4, 4, 1, 1, 0, 0, 1, 1),
+            16,
+            (16, 115, 115),
+            98,
+            False,
+        ),  # first conv b16 - 98 cores for height slicing
+        ((64, 64, 3, 3, 1, 1, 1, 1, 1, 1), 16, (64, 56, 56), 98, False),  # layer1 b16 - 98 cores for height slicing
+        ((128, 128, 3, 3, 1, 1, 1, 1, 1, 1), 16, (128, 28, 28), 98, False),  # layer2 b16 - 98 cores for height slicing
+        ((256, 256, 3, 3, 1, 1, 1, 1, 1, 1), 16, (256, 14, 14), 11, False),  # layer3 b16 - 11 cores for height slicing
+        ((512, 512, 3, 3, 1, 1, 1, 1, 1, 1), 16, (512, 7, 7), 9, False),  # layer4 b16 - 9 cores for height slicing
+        (
+            (64, 16, 4, 4, 1, 1, 0, 0, 1, 1),
+            20,
+            (16, 115, 115),
+            98,
+            False,
+        ),  # first conv b16 - 98 cores for height slicing
+        ((64, 64, 3, 3, 1, 1, 1, 1, 1, 1), 20, (64, 56, 56), 98, False),  # layer1 b20 - 98 cores for height slicing
+        ((128, 128, 3, 3, 1, 1, 1, 1, 1, 1), 20, (128, 28, 28), 98, False),  # layer2 b20 - 98 cores for height slicing
+        ((256, 256, 3, 3, 1, 1, 1, 1, 1, 1), 20, (256, 14, 14), 12, False),  # layer3 b20 - 12 cores for height slicing
+        ((512, 512, 3, 3, 1, 1, 1, 1, 1, 1), 20, (512, 7, 7), 11, False),  # layer4 b20 - 11 cores for height slicing
         # resnet50 s2 convs
-        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 8, (1, 56, 56), 98, False),  # layer2 b8 - 98 cores for height slicing
-        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 8, (1, 28, 28), 10, False),  # layer3 b8 - 10 cores for height slicing
-        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 8, (1, 14, 14), 7, False),  # layer4 b8 - 7 cores for height slicing
-        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 16, (1, 56, 56), 98, False),  # layer2 b16 - 98 cores for height slicing
-        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 16, (1, 28, 28), 11, False),  # layer3 b16 - 11 cores for height slicing
-        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 16, (1, 14, 14), 9, False),  # layer3 b16 - 9 cores for height slicing
-        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 20, (1, 56, 56), 98, False),  # layer2 b20 - 98 cores for height slicing
-        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 20, (1, 28, 28), 12, False),  # layer3 b20 - 12 cores for height slicing
-        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 20, (1, 14, 14), 11, False),  # layer3 b20 - 11 cores for height slicing
+        ((128, 128, 3, 3, 2, 2, 1, 1, 1, 1), 8, (128, 56, 56), 98, False),  # layer2 b8 - 98 cores for height slicing
+        ((256, 256, 3, 3, 2, 2, 1, 1, 1, 1), 8, (256, 28, 28), 10, False),  # layer3 b8 - 10 cores for height slicing
+        ((512, 512, 3, 3, 2, 2, 1, 1, 1, 1), 8, (512, 14, 14), 7, False),  # layer4 b8 - 7 cores for height slicing
+        ((128, 1, 3, 3, 2, 2, 1, 1, 1, 1), 16, (128, 56, 56), 98, False),  # layer2 b16 - 98 cores for height slicing
+        ((256, 256, 3, 3, 2, 2, 1, 1, 1, 1), 16, (256, 28, 28), 11, False),  # layer3 b16 - 11 cores for height slicing
+        ((512, 512, 3, 3, 2, 2, 1, 1, 1, 1), 16, (512, 14, 14), 9, False),  # layer3 b16 - 9 cores for height slicing
+        ((128, 128, 3, 3, 2, 2, 1, 1, 1, 1), 20, (128, 56, 56), 98, False),  # layer2 b20 - 98 cores for height slicing
+        ((256, 256, 3, 3, 2, 2, 1, 1, 1, 1), 20, (256, 28, 28), 12, False),  # layer3 b20 - 12 cores for height slicing
+        ((512, 512, 3, 3, 2, 2, 1, 1, 1, 1), 20, (512, 14, 14), 11, False),  # layer3 b20 - 11 cores for height slicing
         # resnet50 maxpool
         ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 8, (1, 112, 112), 98, True),
         ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 16, (1, 112, 112), 98, True),
@@ -117,14 +129,10 @@ def test_generate_all_configs_and_references(
     # input_pyt_tensor = torch.tensor(input_tensor, dtype=torch.bfloat16)
     input_pyt_tensor = torch.rand(input_volume, dtype=torch.bfloat16)
     input_pyt_tensor = torch.reshape(input_pyt_tensor, input_nchw_shape)
-
-    # filter_pyt_tensor = torch.full((output_channels, input_channels, filter_h, filter_w), 1., dtype=torch.bfloat16)
-    filter_pyt_tensor = torch.rand((output_channels, input_channels, filter_h, filter_w), dtype=torch.bfloat16)
-    # run conv pytorch
-    out_golden_pyt_tensor = torch.nn.functional.conv2d(
-        input_pyt_tensor, filter_pyt_tensor, stride=(stride_h, stride_w), padding=(pad_h, pad_w)
-    )
-    # print(f'output golden pyt tensor: {out_golden_pyt_tensor}')
+    # Pad channels to nearest 32
+    input_pyt_tensor = torch.nn.functional.pad(input_pyt_tensor, (0, 0, 0, 0, 0, _nearest_y(input_c, 32) - input_c))
+    input_nchw_shape = list(input_pyt_tensor.shape)
+    input_padded_c = input_nchw_shape[1]
     input_padded_width = input_w + 2 * pad_w
     input_padded_height = input_h + 2 * pad_h
     # Generate following configs by tracing conv -
@@ -157,10 +165,11 @@ def test_generate_all_configs_and_references(
     # print("req_conv_input_shard_start_end-", req_conv_input_shard_start_end)
     # print("tensor_metadata-", tensor_metadata)
     print("Construct reference utwh output shards")
-    input_nchw_padded_shape = [batch_size, input_c, input_padded_height, input_padded_width]
+    input_nchw_padded_shape = [input_nchw_shape[0], input_nchw_shape[1], input_padded_height, input_padded_width]
     golden_untilize_with_halo_output_shards = construct_utwh_output_shards(
         input_padded_tensor, input_nchw_padded_shape, req_conv_input_shard_start_end
     )
+    # golden_untilize_with_halo_output_shards shape = 3d ls[# of shards, shard height=utwh_output_nhw_shard, shard width=output_c]
 
     # On device test
     sliding_window_op_params = [
@@ -190,13 +199,15 @@ def test_generate_all_configs_and_references(
     tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(device, sliding_window_op_params, shard_grid)
 
     input_pyt_tensor = torch.reshape(
-        torch.permute(input_pyt_tensor, [0, 2, 3, 1]), [1, 1, batch_size * input_h * input_w, input_c]
+        torch.permute(input_pyt_tensor, [0, 2, 3, 1]), [1, 1, batch_size * input_h * input_w, input_padded_c]
     )
     # print(f"INPUT SHAPE: {input_pyt_tensor.shape}")
 
     memory_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    input_padded_to_tile_shape = [1, 1, _nearest_y(batch_size * input_h * input_w, num_cores * 32), input_padded_c]
     untilize_with_halp_input_tt_tensor = (
         ttl.tensor.Tensor(input_pyt_tensor, ttl.tensor.DataType.BFLOAT16)
+        .pad(input_padded_to_tile_shape, (0, 0, 0, 0), 0)
         .to(ttl.tensor.Layout.TILE)
         .to(device, memory_config)
     )
@@ -206,7 +217,7 @@ def test_generate_all_configs_and_references(
     untilize_with_halp_input_tt_tensor = ttl.tensor.interleaved_to_sharded(
         untilize_with_halp_input_tt_tensor,
         grid_size_binary,
-        [input_size_to_shard_evenly // num_cores, input_c],
+        [input_size_to_shard_evenly // num_cores, input_padded_c],
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         ttl.tensor.ShardOrientation.ROW_MAJOR,
     )
@@ -232,7 +243,7 @@ def test_generate_all_configs_and_references(
     for i in range(len(golden_untilize_with_halo_output_shards)):
         start, end = req_conv_input_shard_start_end[i][1]
         pad_size = max_out_shard_nsticks - (end - start + 1)
-        pad_vec = numpy.full([pad_size, input_c], 0)
+        pad_vec = numpy.full([pad_size, input_padded_c], 0)
         # print(f"{golden_untilize_with_halo_output_shards[i].shape}")
         golden_untilize_with_halo_output_shards[i] = numpy.append(
             golden_untilize_with_halo_output_shards[i], pad_vec, axis=0
@@ -261,10 +272,10 @@ def test_generate_all_configs_and_references(
         core_x = i % 12
         core_y = i // 12
         output_shard = untilize_with_halo_output_pyt_tensor[
-            i * max_out_shard_nsticks * input_c : (i + 1) * max_out_shard_nsticks * input_c
+            i * max_out_shard_nsticks * input_padded_c : (i + 1) * max_out_shard_nsticks * input_padded_c
         ]
         golden_shard = golden_untilize_with_halo_output_pyt_tensor[
-            i * max_out_shard_nsticks * input_c : (i + 1) * max_out_shard_nsticks * input_c
+            i * max_out_shard_nsticks * input_padded_c : (i + 1) * max_out_shard_nsticks * input_padded_c
         ]
         # print(
         #     f"Core {i} ({core_x},{core_y}), GOLDEN sum = {torch.sum(golden_shard)}, OUTPUT sum = {torch.sum(output_shard)}"
@@ -285,7 +296,7 @@ def test_generate_all_configs_and_references(
         #     print(f"OUTPUT: {output_shard}")
         #     print(f"GOLDEN: {golden_shard}")
         #     diff = torch.abs(golden_shard - output_shard)
-        #     plot_diff(diff, i, out_shard_nsticks_per_core[i], input_c)
+        #     plot_diff(diff, i, out_shard_nsticks_per_core[i], input_padded_c)
 
     passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(
         golden_untilize_with_halo_output_pyt_tensor,
@@ -299,4 +310,6 @@ def test_generate_all_configs_and_references(
     passing_pcc, _ = comp_pcc(
         golden_untilize_with_halo_output_pyt_tensor, untilize_with_halo_output_pyt_tensor, pcc=0.999
     )
+    # Clear the static cache map
+    TTPyUntilizeWithHalo.static_kernel_configs_cache_map = {}
     assert passing_pcc
