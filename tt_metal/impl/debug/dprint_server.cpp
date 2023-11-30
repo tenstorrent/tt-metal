@@ -83,7 +83,8 @@ struct DebugPrintServerContext {
 
         stop_print_server_ = false;
         mute_print_server_ = false;
-        new_data_processed_ = false;
+        new_data_last_iter_ = false;
+        server_killed_due_to_hang_ = false;
         print_server_thread_ = new std::thread(
             [this, chip_ids, cores, hart_mask] { thread_poll(chip_ids, cores, hart_mask); }
         );
@@ -116,9 +117,14 @@ struct DebugPrintServerContext {
         // TODO(dma): once we have access to the device is there a way we can poll the device to
         // check whether more print data is coming?
         do {
+            // No need to await if the server was killed already due to a hang.
+            if (server_killed_due_to_hang_)
+                break;
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        } while (hart_waiting_on_signal_.size() > 0 || new_data_processed_);
+        } while (hart_waiting_on_signal_.size() > 0 || new_data_last_iter_);
     }
+
+    bool print_hang_detected() { return server_killed_due_to_hang_; }
 
 private:
 
@@ -129,8 +135,11 @@ private:
     std::atomic<bool> mute_print_server_;
     // Flag for signalling whether the print server thread has recently processed data (and is
     // therefore likely to continue processing data in the next round of polling).
-    std::atomic<bool> new_data_processed_;
+    std::atomic<bool> new_data_last_iter_;
     std::thread* print_server_thread_;
+
+    // A flag to signal to the main thread if the print server detected a print-based hang.
+    bool server_killed_due_to_hang_;
 
     std::ofstream* outfile_ = nullptr; // non-cout
     std::ostream* stream_ = nullptr; // either == outfile_ or is &cout
@@ -142,7 +151,12 @@ private:
     std::set<uint32_t> raised_signals_;
 
     void thread_poll(const vector<int>& chip_ids, const vector<CoreCoord>& cores, uint32_t hart_mask);
-    bool peek_flush_one_hart_nonblocking(int chip_id, const CoreCoord& core, int hart_index);
+    bool peek_flush_one_hart_nonblocking(
+        int chip_id,
+        const CoreCoord& core,
+        int hart_index,
+        bool new_data_this_iter
+    );
 };
 
 static void print_tile_slice(ostream& stream, uint8_t* ptr, int hart_id) {
@@ -210,7 +224,12 @@ bool check_init_magic_cleared(int chip_id, const CoreCoord& core, int hart_id) {
 // Peeks a specified hart for any debug prints present in the buffer and flushes it, printing the
 // contents out to host-side stream. Returns true if some data was read out, and false if no new
 // print data was present on the device.
-bool DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const CoreCoord& core, int hart_id) {
+bool DebugPrintServerContext::peek_flush_one_hart_nonblocking(
+    int chip_id,
+    const CoreCoord& core,
+    int hart_id,
+    bool new_data_this_iter
+) {
     // compute the buffer address for the requested hart
     uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
 
@@ -226,7 +245,45 @@ bool DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
     uint32_t counter = 0;
     uint32_t sigval = 0;
     char val = 0;
+
+    // If the print server is muted, dump the output to a null stream instead.
     ostream& stream = (mute_print_server_)? null_stream : *stream_;
+
+    // Check whether this hart is currently waiting on a WAIT to be fulfilled.
+    tuple<uint32_t, uint32_t, uint32_t> hart_key {core.x, core.y, hart_id};
+    if (hart_waiting_on_signal_.count(hart_key) > 0) {
+        // Check if the signal the hart is wairint for has been raised.
+        uint32_t wait_signal = hart_waiting_on_signal_[hart_key];
+        if (raised_signals_.count(wait_signal) > 0) {
+            // The signal has been raised, we can continue.
+            hart_waiting_on_signal_.erase(hart_key);
+        } else {
+            // This hart is still waiting. This is fine as long as the print server (and therefore
+            // the device) is still making progress. Unfortunetaly there's no way to check if the
+            // print server is full because the next print that would overflow the buffer spins the
+            // device until the buffer has more space, but checking for any new prints seems to work
+            // for cases so far.
+            if (!new_data_this_iter && !new_data_last_iter_) {
+                // If no progress was made on both sides, then it could be an invalid wait
+                // condition, which could cause a deadlock. Print a warning and set a flag to close
+                // the print server in this case.
+                string core_str = "core (" + to_string(core.x) + "," + to_string(core.y) +
+                    ") riscv " + to_string(hart_id);
+                string error_str = "DPRINT server timed out on " +
+                    core_str +
+                    ", waiting on a RAISE signal: " +
+                    to_string(wait_signal) + "\n";
+                stream << error_str << flush;
+                log_warning(tt::LogMetal, "Debug Print Server encountered an error: {}", error_str);
+                server_killed_due_to_hang_ = true;
+                return false;
+            }
+
+            // Since it's still waiting, return false here since no data was read.
+            return false;
+        }
+    }
+
     if (rpos < wpos) {
         // Now read the entire buffer
         from_dev = tt::llrt::read_hex_vec_from_core(chip_id, core, base_addr, PRINT_BUFFER_SIZE);
@@ -404,12 +461,12 @@ void DebugPrintServerContext::thread_poll(
         if (stop_print_server_) {
             // If the stop signal was received, exit the print server thread, but wait for any
             // existing prints to be wrapped up first.
-            if (hart_waiting_on_signal_.size() == 0 && !new_data_processed_)
+            if (hart_waiting_on_signal_.size() == 0 && !new_data_last_iter_)
                 break;
         }
 
         // Flag for whether any new print data was found in this round of polling.
-        bool new_print_data = false;
+        bool new_data_this_iter = false;
         for (auto chip: chip_ids) {
             for (auto core: cores) {
                 for (int hart_index = 0; hart_index < DPRINT_NRISCVS; hart_index++) {
@@ -417,31 +474,25 @@ void DebugPrintServerContext::thread_poll(
                         if (!check_init_magic_cleared(chip, core, hart_index))
                             continue;
 
-                        // Make sure that this core is not waiting on a raise signal to continue
-                        // printing.
-                        tuple<uint32_t, uint32_t, uint32_t> hart_key {core.x, core.y, hart_index};
-                        if (hart_waiting_on_signal_.count(hart_key) > 0) {
-                            uint32_t wait_signal = hart_waiting_on_signal_[hart_key];
-                            if (raised_signals_.count(wait_signal) > 0) {
-                                // The signal this hart is waiting for has been raised, it's not
-                                // waiting anymore.
-                                hart_waiting_on_signal_.erase(hart_key);
-                            } else {
-                                // Not raised yet, keep waiting.
-                                continue;
-                            }
-                        }
+                        new_data_this_iter |= peek_flush_one_hart_nonblocking(
+                            chip,
+                            core,
+                            hart_index,
+                            new_data_this_iter
+                        );
 
-                        new_print_data |= peek_flush_one_hart_nonblocking(chip, core, hart_index);
+                        // If this read detected a print hang, stop processing prints.
+                        if (server_killed_due_to_hang_)
+                            return;
                     }
                 }
             }
         }
 
         // Signal whether the print server is currently processing data.
-        new_data_processed_ = new_print_data;
+        new_data_last_iter_ = new_data_this_iter;
         // Sleep for a few ms if no data was processed.
-        if (!new_print_data)
+        if (!new_data_last_iter_)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
@@ -489,6 +540,11 @@ void tt_await_debug_print_server() {
     }
 }
 
+bool tt_print_hang_detected() {
+    return (DebugPrintServerContext::inst != nullptr)
+        && (DebugPrintServerContext::inst->print_hang_detected());
+}
+
 // The print server is not valid without alive Cluster and tt_device
 void tt_start_debug_print_server(
     std::function<CoreCoord ()>get_grid_size,
@@ -533,7 +589,7 @@ void tt_start_debug_print_server(
                 if (all_worker_cores.count(core) > 0) {
                     print_cores_sanitized.push_back(core);
                 } else {
-                    log_info(
+                    log_warning(
                         tt::LogDevice,
                         "TT_METAL_DPRINT_CORES included worker core ({}, {}), which is not a valid coordinate. This coordinate will be ignored by the dprint server.",
                         core.x,

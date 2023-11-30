@@ -11,6 +11,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
+#include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 #include "dev_msgs.h"
 #include <algorithm> // for copy() and assign()
@@ -876,6 +877,12 @@ void CommandQueue::finish() {
     uint32_t finish;
     do {
         tt::Cluster::instance().read_sysmem(&finish, 4, HOST_CQ_FINISH_PTR, 0);
+
+        // There's also a case where the device can be hung due to an unanswered DPRINT WAIT and
+        // a full print buffer. Poll the print server for this case and finish if it happens.
+        if (tt_print_hang_detected()) {
+            break;
+        }
     } while (finish != 1);
 
     // Reset this value to 0 before moving on
