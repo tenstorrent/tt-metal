@@ -378,11 +378,11 @@ def test_demo(
 
     return run_bert_question_and_answering_inference(
         model_version="phiyodr/bert-large-finetuned-squad2",
-        batch=8,
+        batch=12,
         seq_len=384,
         return_attention_mask=True,
         return_token_type_ids=True,
-        model_config=get_model_config("MIXED_PRECISION_BATCH8"),
+        model_config=get_model_config("BFLOAT8_B-SHARDED_BATCH12"),
         tt_cache_path=get_tt_cache_path("phiyodr/bert-large-finetuned-squad2"),
         NUM_RUNS=NUM_RUNS,
         input_path=input_path,

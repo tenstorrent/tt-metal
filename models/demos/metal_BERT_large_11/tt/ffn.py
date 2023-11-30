@@ -4,7 +4,6 @@
 
 
 import torch
-from functools import partial
 
 import tt_lib
 from tt_lib.utils import pad_weight
@@ -25,51 +24,55 @@ def feed_forward(
     # ff1_weighta = [1, 1, 1024, 4096]
     # output = [1, 9, 384, 4096]
     if "OP9_FF1_MM_CONFIG" in model_config:
-        ff1_matmul = partial(
-            tt_lib.operations.primary.matmul,
-            program_config=model_config["OP9_FF1_MM_CONFIG"],
-            output_mem_config=model_config["OP9_FF1_MM_OUTPUT_MEMCFG"],
-            output_dtype=model_config["OP9_FF1_MM_OUTPUT_DTYPE"],
-        )
+
+        def op9_MM_bias_gelu(activation, ff1_weighta, ff1_biasa):
+            output_plus_bias_act = tt_lib.operations.primary.matmul(
+                activation,
+                ff1_weighta,
+                bias=ff1_biasa,
+                program_config=model_config["OP9_FF1_MM_CONFIG"],
+                output_mem_config=model_config["OP9_FF1_MM_OUTPUT_MEMCFG"],
+                output_dtype=model_config["OP9_FF1_MM_OUTPUT_DTYPE"],
+            )
+            return output_plus_bias_act
+
     else:
-        ff1_matmul = partial(
-            tt_lib.tensor.bert_large_ff1_matmul,
-            fused_activation=(tt_lib.tensor.FusibleActivation.GELU, True),
-            output_mem_config=model_config["OP9_FF1_MM_OUTPUT_MEMCFG"],
-            output_dtype=model_config["OP9_FF1_MM_OUTPUT_DTYPE"],
-        )
+
+        def op9_MM_bias_gelu(activation, ff1_weighta, ff1_biasa):
+            output_plus_bias_act = tt_lib.tensor.bert_large_ff1_matmul(
+                activation,
+                ff1_weighta,
+                bias=ff1_biasa,
+                fused_activation=(tt_lib.tensor.FusibleActivation.GELU, True),
+                output_mem_config=model_config["OP9_FF1_MM_OUTPUT_MEMCFG"],
+                output_dtype=model_config["OP9_FF1_MM_OUTPUT_DTYPE"],
+            )
+            return output_plus_bias_act
+
     if "OP10_FF2_MM_CONFIG" in model_config:
-        ff2_matmul = partial(
-            tt_lib.operations.primary.matmul,
-            program_config=model_config["OP10_FF2_MM_CONFIG"],
-            output_mem_config=model_config["OP10_FF2_MM_OUTPUT_MEMCFG"],
-            output_dtype=model_config["OP10_FF2_MM_OUTPUT_DTYPE"],
-        )
+
+        def op10_MM_bias(activation, ff2_weighta, ff2_biasa):
+            output_plus_bias = tt_lib.operations.primary.matmul(
+                activation,
+                ff2_weighta,
+                bias=ff2_biasa,
+                program_config=model_config["OP10_FF2_MM_CONFIG"],
+                output_mem_config=model_config["OP10_FF2_MM_OUTPUT_MEMCFG"],
+                output_dtype=model_config["OP10_FF2_MM_OUTPUT_DTYPE"],
+            )
+            return output_plus_bias
+
     else:
-        ff2_matmul = partial(
-            tt_lib.tensor.bert_large_ff2_matmul,
-            output_mem_config=model_config["OP10_FF2_MM_OUTPUT_MEMCFG"],
-            output_dtype=model_config["OP10_FF2_MM_OUTPUT_DTYPE"],
-        )
 
-    def op9_MM_bias_gelu(activation, ff1_weighta, ff1_biasa):
-        output_plus_bias_act = ff1_matmul(
-            activation,
-            ff1_weighta,
-            bias=ff1_biasa,
-        )
-        return output_plus_bias_act
-
-    # activation = [1, 9, 384, 4096]
-    # ff2_weighta = [1, 1, 4096, 1024]
-    # output = [1, 9, 384, 1024]
-    def op10_MM_bias(activation, ff2_weighta, ff2_biasa):
-        output_plus_bias = ff2_matmul(
-            activation,
-            ff2_weighta,
-            bias=ff2_biasa,
-        )
-        return output_plus_bias
+        def op10_MM_bias(activation, ff2_weighta, ff2_biasa):
+            output_plus_bias = tt_lib.tensor.bert_large_ff2_matmul(
+                activation,
+                ff2_weighta,
+                bias=ff2_biasa,
+                output_mem_config=model_config["OP10_FF2_MM_OUTPUT_MEMCFG"],
+                output_dtype=model_config["OP10_FF2_MM_OUTPUT_DTYPE"],
+            )
+            return output_plus_bias
 
     def feed_forward_(activation: tt_lib.tensor.Tensor) -> tt_lib.tensor.Tensor:
         ff1_output_plus_bias_act = op9_MM_bias_gelu(activation, ff1_weighta, ff1_biasa)

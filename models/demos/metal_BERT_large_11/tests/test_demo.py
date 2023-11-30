@@ -20,13 +20,17 @@ def test_demo(input_path, model_location_generator, device, use_program_cache):
 
     expected_answers = {
         0: "scientific archaeology",
-        1: "Richard I of Normandy",
+        1: "Richard I",
         2: "males",
-        3: "The Huguenots adapted quickly and often married outside their immediate French communities,",
+        3: "married outside their immediate French communities,",
         4: "biostratigraphers",
         5: "chemotaxis,",
         6: "1992,",
         7: "statocyst,",
+        8: "color field paintings",
+        9: "paranoia",
+        10: "six months earlier.",
+        11: "large head and neck",
     }
     NUM_RUNS = 1000
     measurements, answers = demo_json(input_path, NUM_RUNS, model_location_generator, device, use_program_cache)
