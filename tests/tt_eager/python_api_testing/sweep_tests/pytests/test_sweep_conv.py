@@ -101,6 +101,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
     return passing_pcc
 
 
+@pytest.mark.skip("Watcher error, see issue #4088")
 def test_sweep_conv_tt(device):
     torch.manual_seed(27182)
     test_bench = generate_conv_tb()
