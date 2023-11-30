@@ -20,16 +20,16 @@ struct erisc_info_t {
     volatile uint32_t unused_arg0;
     volatile uint32_t unused_arg1;
     volatile uint32_t bytes_sent;
-    volatile uint32_t reserved_0_;
-    volatile uint32_t reserved_1_;
-    volatile uint32_t reserved_2_;
+    uint32_t reserved_0_;
+    uint32_t reserved_1_;
+    uint32_t reserved_2_;
     volatile uint32_t bytes_received;
-    volatile uint32_t reserved_3_;
-    volatile uint32_t reserved_4_;
-    volatile uint32_t reserved_5_;
+    uint32_t reserved_3_;
+    uint32_t reserved_4_;
+    uint32_t reserved_5_;
 };
 
-volatile erisc_info_t *erisc_info = (erisc_info_t *)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+erisc_info_t *erisc_info = (erisc_info_t *)(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
 volatile uint32_t *flag_disable = (uint32_t *)(eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
 
 extern uint32_t __erisc_jump_table;
@@ -42,9 +42,6 @@ void __attribute__((section("code_l1"))) risc_context_switch() {
     rtos_context_switch_ptr();
     ncrisc_noc_counters_init();
 }
-
-constexpr static uint32_t NUM_BYTES_PER_SEND = 16;  // internal optimization, requires testing
-constexpr static uint32_t NUM_BYTES_PER_SEND_LOG2 = 4;
 
 FORCE_INLINE
 void reset_erisc_info() {
@@ -80,10 +77,17 @@ void check_and_context_switch() {
  * | num_bytes         | Size of data transfer in bytes, must be multiple of 16  | uint32_t | 0..256kB | True     |
  */
 FORCE_INLINE
-void eth_send_bytes(uint32_t src_addr, uint32_t dst_addr, uint32_t num_bytes) {
-    uint32_t num_loops = num_bytes >> NUM_BYTES_PER_SEND_LOG2;
-    for (uint32_t i = 0; i < num_loops; i++) {
-        eth_send_packet(0, i + (src_addr >> 4), i + (dst_addr >> 4), 1);
+void eth_send_bytes(
+    uint32_t src_addr,
+    uint32_t dst_addr,
+    uint32_t num_bytes,
+    uint32_t num_bytes_per_send = 16,
+    uint32_t num_bytes_per_send_word_size = 1) {
+    uint32_t num_bytes_sent = 0;
+    while (num_bytes_sent < num_bytes) {
+        eth_send_packet(
+            0, ((num_bytes_sent + src_addr) >> 4), ((num_bytes_sent + dst_addr) >> 4), num_bytes_per_send_word_size);
+        num_bytes_sent += num_bytes_per_send;
     }
     erisc_info->bytes_sent += num_bytes;
 }
@@ -137,10 +141,4 @@ FORCE_INLINE
 void eth_receiver_done() {
     erisc_info->bytes_sent = 0;
     eth_send_packet(0, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, 1);
-}
-
-FORCE_INLINE
-void eth_send_and_wait_for_receiver_done(uint32_t src_addr, uint32_t dst_addr, uint32_t num_bytes) {
-    eth_send_bytes(src_addr, dst_addr, num_bytes);
-    eth_wait_for_receiver_done();
 }
