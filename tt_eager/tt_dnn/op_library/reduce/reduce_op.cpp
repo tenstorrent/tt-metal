@@ -215,7 +215,13 @@ Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_
     constexpr float scaler1 = 1.0;
 
     if ( dim == 3 ) {
+      if (is_arch_whb0(input_tensor.device()->arch())) {
+        Tensor output = transpose(input_tensor, -1, -2, output_mem_config);
+        output = sum(output, 2, output_mem_config);
+        return transpose(output, -1, -2, output_mem_config);
+      } else {
         return reduce(input_tensor, ReduceOpMath::SUM, ReduceOpDim::W, scaler1, output_mem_config);
+      }
     } else if ( dim == 2 ) {
         return reduce(input_tensor, ReduceOpMath::SUM, ReduceOpDim::H, scaler1, output_mem_config);
     }
