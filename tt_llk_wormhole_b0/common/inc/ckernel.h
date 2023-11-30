@@ -60,12 +60,12 @@
 #include <cstdint>
 
 #include "ckernel_include.h"
+#include "tt_log.h"
 #include "tensix.h"
 #include "fw_debug.h"
 // #include <cstring>
 #if defined(PERF_DUMP) || DELAY_EN > 0
 #include <l1_address_map.h>
-#include "tt_log.h"
 #include "perf_lib/scratch_api.h"
 #endif
 
