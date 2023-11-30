@@ -30,12 +30,11 @@ class TTPyUntilizeWithHalo(TTPyOp):
     # sliding window op params: tuple(stride_hw: tuple(int, int), pad_hw: tuple(int, int), window_hw: tuple(int, int), input_nhw: tuple(int, int, int), num_cores_nhw: int)
     static_kernel_configs_cache_map = {}
 
-    def __init__(self, device, sliding_window_op_params, shard_grid):
+    def __init__(self, device, sliding_window_op_params):
         self.sliding_window_op_params = sliding_window_op_params
-        self.shard_grid = shard_grid
         self.device = device
         sliding_window_op_params_hash = _get_hash_from_sliding_window_op_params(sliding_window_op_params)
-        self.set_op_configs(device, sliding_window_op_params_hash, sliding_window_op_params, shard_grid)
+        self.set_op_configs(device, sliding_window_op_params_hash, sliding_window_op_params)
         assert sliding_window_op_params_hash in TTPyUntilizeWithHalo.static_kernel_configs_cache_map
         utwh_kernel_configs = TTPyUntilizeWithHalo.static_kernel_configs_cache_map[sliding_window_op_params_hash]
         height_sharded_mem_config = ttl.tensor.MemoryConfig(
@@ -72,7 +71,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
 
     # override abstract methods from base class TTPyOp
     @classmethod
-    def set_op_configs(cls, device, sliding_window_op_params_hash, sliding_window_op_params, shard_grid):
+    def set_op_configs(cls, device, sliding_window_op_params_hash, sliding_window_op_params):
         if sliding_window_op_params_hash not in cls.static_kernel_configs_cache_map:
             # TODO: nitika - clean up params data structure
             assert len(sliding_window_op_params) == 6
@@ -145,6 +144,33 @@ class TTPyUntilizeWithHalo(TTPyOp):
             height_sharded_mem_config = ttl.tensor.MemoryConfig(
                 ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
             )
+
+            block_sharding = num_cores_nhw == num_cores_w
+            if not block_sharding:
+                assert num_cores_w == 12
+                num_cores_height_excluding_remainder_last_row = num_cores_nhw // num_cores_w
+                assert num_cores_h >= num_cores_height_excluding_remainder_last_row
+                core_range_1 = ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0),
+                    ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_height_excluding_remainder_last_row - 1),
+                )
+                num_cores_last = num_cores_nhw % num_cores_w
+                core_range_2 = None
+                if num_cores_last > 0:
+                    assert num_cores_h == num_cores_height_excluding_remainder_last_row + 1
+                    core_range_2 = ttl.tensor.CoreRange(
+                        ttl.tensor.CoreCoord(0, num_cores_height_excluding_remainder_last_row),
+                        ttl.tensor.CoreCoord(num_cores_last - 1, num_cores_height_excluding_remainder_last_row),
+                    )
+                    shard_grid = ttl.tensor.CoreRangeSet({core_range_1, core_range_2})
+                else:
+                    assert num_cores_h == num_cores_height_excluding_remainder_last_row
+                    shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
+            else:
+                core_range = ttl.tensor.CoreRange(
+                    ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1)
+                )
+                shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
 
             def gen_config_tt_tensors_uint16(config_list_uint16, toprint=False):
                 if len(config_list_uint16) == 0:

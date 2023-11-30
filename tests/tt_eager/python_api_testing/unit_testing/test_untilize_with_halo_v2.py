@@ -346,35 +346,9 @@ def test_generate_all_configs_and_references(
         num_cores_nhw,
     ]
     num_cores_w, num_cores_h = grid_size
-    block_sharding = num_cores_nhw == num_cores_w
-    if not block_sharding:
-        assert num_cores_w == 12
-        num_cores_height_excluding_remainder_last_row = num_cores_nhw // num_cores_w
-        assert num_cores_h >= num_cores_height_excluding_remainder_last_row
-        core_range_1 = ttl.tensor.CoreRange(
-            ttl.tensor.CoreCoord(0, 0),
-            ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_height_excluding_remainder_last_row - 1),
-        )
-        num_cores_last = num_cores_nhw % num_cores_w
-        core_range_2 = None
-        if num_cores_last > 0:
-            assert num_cores_h == num_cores_height_excluding_remainder_last_row + 1
-            core_range_2 = ttl.tensor.CoreRange(
-                ttl.tensor.CoreCoord(0, num_cores_height_excluding_remainder_last_row),
-                ttl.tensor.CoreCoord(num_cores_last - 1, num_cores_height_excluding_remainder_last_row),
-            )
-            shard_grid = ttl.tensor.CoreRangeSet({core_range_1, core_range_2})
-        else:
-            assert num_cores_h == num_cores_height_excluding_remainder_last_row
-            shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
-    else:
-        core_range = ttl.tensor.CoreRange(
-            ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1)
-        )
-        shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
 
     # construct op object and set op configs
-    tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(device, sliding_window_op_params, shard_grid)
+    tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(device, sliding_window_op_params)
 
     input_pyt_tensor = torch.reshape(
         torch.permute(input_pyt_tensor, [0, 2, 3, 1]), [1, 1, batch_size * input_h * input_w, input_padded_c]

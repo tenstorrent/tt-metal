@@ -17,6 +17,7 @@ from models.demos.resnet.tt.metalResnetBlock50 import (
 )
 
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_conv import TTPyConv
+from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
 
 # hardcoding matmul config for 1x1 convs
 # key: mm act height, mm act width, mm weight width
@@ -654,7 +655,8 @@ def test_resnet50_conv(
             )
 
         # Untilize with halo concat
-        conv_input_on_device = tt_lib.tensor.untilize_with_halo(conv_input_on_device, 0x0, N, H, W, 1, in_mem_config)
+        tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(device, sliding_window_op_params)
+        conv_input_on_device = tt_py_untilize_with_halo_op(conv_input_on_device)
 
         # Conv with new reader for sharded untilized with halo inputs
         output_on_device = conv(conv_input_on_device)
@@ -684,6 +686,7 @@ def test_resnet50_conv(
         out_result = torch.transpose(out_result, 1, 2)
 
         TTPyConv.static_kernel_configs_cache_map = {}
+        TTPyUntilizeWithHalo.static_kernel_configs_cache_map = {}
 
         # Compare baseline against golden
         assert out_result_baseline.shape == out_golden.shape
