@@ -355,7 +355,7 @@ def test_generate_all_configs_and_references(
     )
     # print(f"INPUT SHAPE: {input_pyt_tensor.shape}")
 
-    memory_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+    memory_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     input_padded_to_tile_shape = [1, 1, _nearest_y(batch_size * input_h * input_w, num_cores_nhw * 32), input_padded_c]
     untilize_with_halp_input_tt_tensor = (
         ttl.tensor.Tensor(input_pyt_tensor, ttl.tensor.DataType.BFLOAT16)

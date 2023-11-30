@@ -170,25 +170,34 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 core_range = ttl.tensor.CoreRange(
                     ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1)
                 )
-                shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
+                shard_grid = ttl.tensor.CoreRangeSet({core_range})
 
-            def gen_config_tt_tensors_uint16(config_list_uint16, toprint=False):
-                if len(config_list_uint16) == 0:
+            def gen_config_tt_tensors_uint16(config_list_uint16: list, toprint=False):
+                config_size = len(config_list_uint16)
+                if config_size == 0:
                     # return dummy tensor
                     return ttl.tensor.Tensor(
                         [0, 0], [1, 1, 1, 2], ttl.tensor.DataType.BFLOAT16, ttl.tensor.Layout.ROW_MAJOR, device
                     )
-                assert len(config_list_uint16) % 2 == 0
-                config_size = len(config_list_uint16)
+                assert config_size % 2 == 0  ## each config is a tuple of (start, size)
                 assert config_size % num_cores_nhw == 0
+
                 shard_config_size = config_size // num_cores_nhw
                 config_shard_shape = [1, shard_config_size]
+
+                if block_sharding:
+                    config_list_uint16 *= num_cores_h
+                    config_size *= num_cores_h
+
                 config_tensor_shape = (
                     1,
                     1,
                     1,
                     config_size,
                 )
+
+                print(f"config list size = {config_size}")
+
                 torch_tensor = torch.tensor(config_list_uint16, dtype=torch.short).reshape(config_tensor_shape)
                 shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
                 shard_halo = False
