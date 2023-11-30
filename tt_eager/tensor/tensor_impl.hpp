@@ -87,8 +87,8 @@ constexpr inline std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t> &
     } else if constexpr (std::is_same_v<DataType, uint16_t>) {
         std::vector<DataType> output;
         for (auto index = 0; index < data_to_unpack.size(); index++) {
-            output.push_back(data_to_unpack[index] >> 16 & 0xFF);
-            output.push_back(data_to_unpack[index] & 0xFF);
+            output.push_back(data_to_unpack[index] >> 16);
+            output.push_back(data_to_unpack[index] & 0xFFFF);
         }
         return output;
     } else if constexpr (std::is_same_v<DataType, bfloat16>) {

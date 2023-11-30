@@ -42,7 +42,8 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
                     page_size = constants::TILE_HW * size_of_element;
                 }
                 break;
-                case DataType::UINT32: {
+                case DataType::UINT32:
+                case DataType::UINT16: {
                     uint32_t size_of_element = element_size_bytes_wrapper(dtype);
                     page_size = constants::TILE_HW * size_of_element;
                 }
@@ -94,21 +95,21 @@ void validate_on_device_dtype_and_layout(Device *device, DataType dtype, Layout 
     // TODO: Get supported layout and dtypes from device
     auto supported_dtype = [&dtype]() {
         TT_ASSERT(
-            (dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::UINT32) &&
-            "Only BFLOAT16 , BFLOAT8_B or UINT32 is supported on device!"
+            (dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::UINT32 || dtype == DataType::UINT16) &&
+            "Only BFLOAT16, BFLOAT8_B, UINT32, or UINT16 is supported on device!"
         );
     };
     auto supported_layout = [&dtype, &layout]() {
         switch (dtype) {
             case DataType::UINT32:
-                break;
+            case DataType::UINT16:
             case DataType::BFLOAT16:
                 break;
             case DataType::BFLOAT8_B:
                 TT_ASSERT(layout == Layout::TILE && "Only TILE layout is supported for BFLOAT8_B dtype!");
                 break;
             default:
-                TT_ASSERT(false && "Only BFLOAT16 or BFLOAT8_B is supported on device!");
+                TT_ASSERT(false && "Only BFLOAT16, BFLOAT8_B, UINT32, or UINT16 is supported on device!");
                 break;
             }
     };

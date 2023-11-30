@@ -25,6 +25,7 @@ tt_dtype_to_torch_dtype = {
     "tt_dtype",
     [
         ttl.tensor.DataType.UINT32,
+        ttl.tensor.DataType.UINT16,
         ttl.tensor.DataType.FLOAT32,
         ttl.tensor.DataType.BFLOAT16,
     ],
@@ -38,7 +39,12 @@ def test_tensor_conversion_between_torch_and_tt(shape, tt_dtype, device):
         torch_tensor = torch.rand(shape, dtype=dtype)
 
     tt_tensor = ttl.tensor.Tensor(torch_tensor, tt_dtype)
-    if tt_dtype in {ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B}:
+    if tt_dtype in {
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.DataType.BFLOAT8_B,
+        ttl.tensor.DataType.UINT32,
+        ttl.tensor.DataType.UINT16,
+    }:
         tt_tensor = tt_tensor.to(device)
         tt_tensor = tt_tensor.cpu()
 
