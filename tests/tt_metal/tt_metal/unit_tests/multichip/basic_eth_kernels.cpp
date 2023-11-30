@@ -147,7 +147,7 @@ bool writer_kernel_no_receive(
 
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
-    tt_metal::detail::WriteToBuffer(output_dram_buffer, inputs);
+    tt_metal::detail::WriteToBuffer(output_dram_buffer, all_zeros);
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -163,7 +163,7 @@ bool writer_kernel_no_receive(
 
     tt_metal::detail::LaunchProgram(device, program);
 
-    auto readback_vec = llrt::read_hex_vec_from_core(device->id(), eth_noc_xy, eth_l1_byte_address, byte_size);
+    auto readback_vec = llrt::read_hex_vec_from_core(device->id(), dram_noc_xy, dram_byte_address, byte_size);
     pass &= (readback_vec == inputs);
     if (not pass) {
         std::cout << "Mismatch at Core: " << dram_noc_xy.str() << std::endl;
@@ -200,7 +200,7 @@ TEST_F(N300DeviceFixture, EthKernelsNocWriteNoReceive) {
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
-    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + WORD_SIZE;
+    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
     for (const auto& eth_core : device_0->get_active_ethernet_cores()) {
         ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
@@ -515,7 +515,6 @@ bool eth_hung_kernels(
 }  // namespace unit_tests::erisc::kernels
 
 TEST_F(N300DeviceFixture, EthKernelsDirectSendChip0ToChip1) {
-    GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
@@ -560,7 +559,6 @@ TEST_F(N300DeviceFixture, EthKernelsDirectSendChip0ToChip1) {
 }
 
 TEST_F(N300DeviceFixture, EthKernelsDirectSendChip1ToChip0) {
-    GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
@@ -605,7 +603,6 @@ TEST_F(N300DeviceFixture, EthKernelsDirectSendChip1ToChip0) {
 }
 
 TEST_F(N300DeviceFixture, EthKernelsBidirectionalDirectSend) {
-    GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
@@ -690,8 +687,39 @@ TEST_F(N300DeviceFixture, EthKernelsBidirectionalDirectSend) {
     }
 }
 
+TEST_F(N300DeviceFixture, EthKernelsRepeatedDirectSends) {
+    const auto& device_0 = devices_.at(0);
+    const auto& device_1 = devices_.at(1);
+
+    const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+
+    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+        CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
+        for (int i = 0; i < 10; i++) {
+            ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+                device_0,
+                device_1,
+                WORD_SIZE,
+                src_eth_l1_byte_address + WORD_SIZE * i,
+                dst_eth_l1_byte_address + WORD_SIZE * i,
+                sender_core,
+                receiver_core));
+        }
+        for (int i = 0; i < 10; i++) {
+            ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+                device_1,
+                device_0,
+                WORD_SIZE,
+                src_eth_l1_byte_address + WORD_SIZE * i,
+                dst_eth_l1_byte_address + WORD_SIZE * i,
+                receiver_core,
+                sender_core));
+        }
+    }
+}
+
 TEST_F(N300DeviceFixture, EthKernelsRandomDirectSendTests) {
-    GTEST_SKIP();
     srand(0);
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);

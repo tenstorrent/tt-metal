@@ -26,6 +26,6 @@ struct address_map {
   static constexpr std::uint32_t FW_VERSION_ADDR = 0;
 
   static constexpr std::int32_t ERISC_BARRIER_BASE = 0;
-  static constexpr std::int32_t MAX_L1_LOADING_SIZE = 0;
+  static constexpr std::int32_t MAX_L1_LOADING_SIZE = 1;
 };
 }  // namespace llk
