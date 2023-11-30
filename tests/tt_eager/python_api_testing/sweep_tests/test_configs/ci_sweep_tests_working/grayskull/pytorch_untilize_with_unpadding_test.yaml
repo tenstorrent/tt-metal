@@ -18,7 +18,7 @@ test-list:
           low: -100
           high: 100
       comparison:
-        function: comp_equal
+        function: comp_pcc
       args-gen: gen_untilize_with_unpadding_args
       output-file: untilize_with_unpadding_sweep.csv
       args:

@@ -16,7 +16,7 @@ test-list:
           probabilityones: 0.7
         dtype: bfloat16
       comparison:
-        function: comp_equal
+        function: comp_pcc
       args-gen: gen_dtype_layout_device
       output-file: eltwise_where_sweep.csv
       args:
@@ -41,7 +41,7 @@ test-list:
           high: 100
         dtype: bfloat16
       comparison:
-        function: comp_equal
+        function: comp_pcc
       args-gen: gen_dtype_layout_device
       output-file: eltwise_where_sweep.csv
       args:
