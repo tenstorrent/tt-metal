@@ -237,7 +237,8 @@ bool eth_direct_sender_receiver_kernels(
     const size_t& src_eth_l1_byte_address,
     const size_t& dst_eth_l1_byte_address,
     const CoreCoord& eth_sender_core,
-    const CoreCoord& eth_receiver_core) {
+    const CoreCoord& eth_receiver_core,
+    uint32_t num_bytes_per_send = 16) {
     bool pass = true;
     log_debug(
         tt::LogTest,
@@ -274,7 +275,10 @@ bool eth_direct_sender_receiver_kernels(
         sender_program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
         eth_sender_core,
-        tt_metal::experimental::EthernetConfig{.eth_mode = tt_metal::Eth::SENDER, .noc = tt_metal::NOC::NOC_0});
+        tt_metal::experimental::EthernetConfig{
+            .eth_mode = tt_metal::Eth::SENDER,
+            .noc = tt_metal::NOC::NOC_0,
+            .compile_args = {uint32_t(num_bytes_per_send), uint32_t(num_bytes_per_send >> 4)}});
 
     tt_metal::SetRuntimeArgs(
         sender_program,
@@ -760,6 +764,57 @@ TEST_F(N300DeviceFixture, EthKernelsRandomDirectSendTests) {
             dst_eth_l1_byte_address,
             sender_core,
             receiver_core));
+    }
+}
+TEST_F(N300DeviceFixture, EthKernelsRandomEthPacketSizeDirectSendTests) {
+    srand(0);
+    const auto& device_0 = devices_.at(0);
+    const auto& device_1 = devices_.at(1);
+
+    std::map<std::tuple<int, CoreCoord>, std::tuple<int, CoreCoord>> connectivity = {};
+    for (const auto& sender_core : device_0->get_active_ethernet_cores()) {
+        const auto& receiver_core = device_0->get_connected_ethernet_core(sender_core);
+        connectivity.insert({{0, sender_core}, receiver_core});
+    }
+    for (const auto& sender_core : device_1->get_active_ethernet_cores()) {
+        const auto& receiver_core = device_1->get_connected_ethernet_core(sender_core);
+        connectivity.insert({{1, sender_core}, receiver_core});
+    }
+    std::vector<uint32_t> num_bytes_per_send_test_vals = {
+        16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
+    for (const auto& num_bytes_per_send : num_bytes_per_send_test_vals) {
+        log_info(tt::LogTest, "Random eth send tests with {} bytes per packet", num_bytes_per_send);
+        for (int i = 0; i < 10; i++) {
+            auto it = connectivity.begin();
+            std::advance(it, rand() % (connectivity.size()));
+
+            const auto& send_chip = devices_.at(std::get<0>(it->first));
+            CoreCoord sender_core = std::get<1>(it->first);
+            const auto& receiver_chip = devices_.at(std::get<0>(it->second));
+            CoreCoord receiver_core = std::get<1>(it->second);
+
+            const size_t src_eth_l1_byte_address = unit_tests::erisc::kernels::get_rand_32_byte_aligned_address(
+                eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
+                eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - 65536);
+            const size_t dst_eth_l1_byte_address = unit_tests::erisc::kernels::get_rand_32_byte_aligned_address(
+                eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
+                eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - 65536);
+
+            int max_words = (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE -
+                             std::max(src_eth_l1_byte_address, dst_eth_l1_byte_address)) /
+                            num_bytes_per_send;
+            int num_words = rand() % max_words + 1;
+
+            ASSERT_TRUE(unit_tests::erisc::kernels::eth_direct_sender_receiver_kernels(
+                send_chip,
+                receiver_chip,
+                num_bytes_per_send * num_words,
+                src_eth_l1_byte_address,
+                dst_eth_l1_byte_address,
+                sender_core,
+                receiver_core,
+                num_bytes_per_send));
+        }
     }
 }
 
