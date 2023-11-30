@@ -20,7 +20,7 @@ template <bool APPROXIMATION_MODE>
 inline void relu_min(uint uint_threshold)
 {
     vFloat threshold = Converter::to_float(uint_threshold);
-    for (int d = 0; d < WHB0_ITERATIONS; d++)
+    for (int d = 0; d < 8; d++)
     {
         vFloat a = dst_reg[0];
         v_if(a < threshold) {
@@ -37,7 +37,7 @@ template <bool APPROXIMATION_MODE>
 inline void relu_max(uint uint_threshold)
 {
     vFloat threshold = Converter::to_float(uint_threshold);
-    for (int d = 0; d < WHB0_ITERATIONS; d++)
+    for (int d = 0; d < 8; d++)
     {
         vFloat a = dst_reg[0];
         v_if(a > threshold) {
@@ -62,7 +62,7 @@ inline void calculate_lrelu(uint slope)
     vFloat s = c_slope.f;
 
     #pragma GCC unroll 0
-    for (int d = 0; d < WHB0_ITERATIONS; d++) {
+    for (int d = 0; d < 8; d++) {
         vFloat v = dst_reg[0];
 
         v_if (v < 0.0f) {

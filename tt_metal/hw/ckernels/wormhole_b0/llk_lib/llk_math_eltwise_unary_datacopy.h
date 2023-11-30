@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #pragma once
 
 #include "ckernel_include.h"
@@ -19,7 +20,7 @@ inline void eltwise_unary_configure_addrmod();
 template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, DstSync Dst = DstSync::SyncFull, bool is_fp32_dest_acc_en = false, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format) {
 
-    if (unpack_to_dest && math::is_32bit_input(src_format, dst_format)) {
+    if (unpack_to_dest && is_32bit_input(src_format, dst_format)) {
         math_unpack_to_dest_math_ready();
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32, true>(dst_index);
         math::math_unpack_to_dest_tile_ready();

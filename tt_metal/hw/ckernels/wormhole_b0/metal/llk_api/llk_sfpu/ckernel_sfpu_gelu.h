@@ -89,16 +89,16 @@ template <bool APPROXIMATION_MODE>
 void gelu_init() {
     vConstFloatPrgm0 = 0.5f;
     if constexpr (APPROXIMATION_MODE) {
-        sfpu_load_imm32(0,0x37E7322B);
-        //sfpu_load_imm32(4,0xB122A3AE);
-        sfpu_load_imm32(4,0xB12286D8);
+        _sfpu_load_imm32_(0,0x37E7322B);
+        //_sfpu_load_imm32_(4,0xB122A3AE);
+        _sfpu_load_imm32_(4,0xB12286D8);
 
 
-        sfpu_load_imm32(1,0x38E138F3);
-        sfpu_load_imm32(5,0xB437B479);
+        _sfpu_load_imm32_(1,0x38E138F3);
+        _sfpu_load_imm32_(5,0xB437B479);
 
-        sfpu_load_imm32(2,0x38003852);
-        sfpu_load_imm32(6,0x7c00afa4);
+        _sfpu_load_imm32_(2,0x38003852);
+        _sfpu_load_imm32_(6,0x7c00afa4);
     }
 }
 

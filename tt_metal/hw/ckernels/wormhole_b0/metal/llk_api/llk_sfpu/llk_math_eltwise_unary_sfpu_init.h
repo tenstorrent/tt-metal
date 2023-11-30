@@ -30,16 +30,41 @@ inline void llk_math_eltwise_unary_sfpu_init(void (*func)()) {
 
 template <SfpuType sfpu_op, bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_init(
-    uint param0 = 0, uint param1 = 0, uint param2 = 0, uint param3 = 0, uint param4 = 0, uint param5 = 0) {
+    const uint param0 = 0, const uint param1 = 0, const uint param2 = 0, const uint param3 = 0, const uint param4 = 0, const uint param5 = 0) {
+    _llk_math_eltwise_unary_sfpu_init_();
 
-    _llk_math_eltwise_unary_sfpu_init_<sfpu_op, APPROXIMATE>(
-        param0,
-        param1,
-        param2,
-        param3,
-        param4,
-        param5
-    );
+    switch (sfpu_op) {
+        case SfpuType::reciprocal:
+            sfpu::_init_reciprocal_<APPROXIMATE>();
+            break;
+        case SfpuType::exponential:
+            sfpu::_init_exponential_<APPROXIMATE>();
+            break;
+        case SfpuType::log:
+            sfpu::_init_log_<APPROXIMATE>();
+            break;
+        case SfpuType::sqrt:
+            sfpu::_init_sqrt_<APPROXIMATE>();
+            break;
+        case SfpuType::tanh:
+        case SfpuType::tanh_derivative:
+            sfpu::_init_tanh_<APPROXIMATE>();
+            break;
+        case SfpuType::sigmoid:
+            sfpu::_init_sigmoid_<APPROXIMATE>();
+            break;
+        case SfpuType::gelu_derivative:
+            sfpu::_init_gelu_derivative_<APPROXIMATE>();
+            break;
+        case SfpuType::gelu:
+            sfpu::_init_gelu_<APPROXIMATE>();
+            break;
+        case SfpuType::dropout:
+            sfpu::_init_dropout_(param2);
+            break;
+        default:
+            break;
+    }
 }
 
 }

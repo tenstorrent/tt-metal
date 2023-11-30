@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #pragma once
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -49,7 +50,7 @@ inline void _llk_unpack_A_mop_config_(const bool transpose_of_faces, const std::
         static constexpr uint srcb_clear_z = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001); // set srcB ch0_z = 0
     #endif
 
-    if (unpack_to_dest && unpacker::is_32bit_input(unpack_src_format, unpack_dst_format)) {
+    if (unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format)) {
         const uint32_t outerloop = num_faces;
         constexpr uint32_t innerloop = 1;
         ckernel_template tmp(outerloop, innerloop, unpack_srca_to_dest);
@@ -136,10 +137,13 @@ inline void _llk_unpack_A_mop_config_(const bool transpose_of_faces, const std::
     }
 }
 
-template <bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
+template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void _llk_unpack_A_hw_configure_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM,  const std::uint32_t within_face_16x16_transpose = 0, const std::uint32_t num_faces = 4) {
     constexpr bool is_row_pool = false;
-    configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, stoch_rnd_mode>(
+    constexpr bool stoch_rnd_en = (stoch_rnd_mode == StochRndType::All);
+    constexpr bool fpu_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Fpu);
+    constexpr bool pack_srnd_en = stoch_rnd_en ||(stoch_rnd_mode == StochRndType::Pack);
+    configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, fpu_srnd_en, pack_srnd_en>(
         unpack_src_format,
         unpack_src_format,
         unpack_dst_format,
@@ -154,7 +158,7 @@ inline void _llk_unpack_A_hw_configure_(const std::uint32_t unpack_src_format, c
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE, bool unpack_to_dest = false>
 inline void _llk_unpack_A_init_(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const std::uint32_t unpack_src_format = 0, const std::uint32_t unpack_dst_format = 0) {
     constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_B;
-    config_face_dim<false, UNP_SEL>(face_r_dim);
+    config_unpacker_x_end<UNP_SEL>(face_r_dim);
     _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(transpose_of_faces>0, num_faces, unpack_src_format, unpack_dst_format);
 }
 
@@ -195,7 +199,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const bool transpose_of_
     }
 
     if constexpr (unpack_to_dest) {
-        if (unpacker::is_32bit_input(unpack_src_format, unpack_dst_format)) {
+        if (is_32bit_input(unpack_src_format, unpack_dst_format)) {
             set_dst_write_addr(unp_cfg_context, unpack_dst_format);
             wait_for_dest_available();
         }
@@ -208,7 +212,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const bool transpose_of_
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 
     if (unpack_to_dest) {
-        if (unpacker::is_32bit_input(unpack_src_format, unpack_dst_format)) {
+        if (is_32bit_input(unpack_src_format, unpack_dst_format)) {
             unpack_to_dest_tile_done(unp_cfg_context);
         }
     }

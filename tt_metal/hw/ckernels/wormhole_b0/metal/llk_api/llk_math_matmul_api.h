@@ -40,7 +40,7 @@ inline void llk_math_matmul_init(
         rt_dim,
         kt_dim);
 #else
-    _llk_math_matmul_init_<NUM_FIDELITY_PHASES>(
+    _llk_math_matmul_init_<NUM_FIDELITY_PHASES, DstTileFaceLayout::RowMajor>(
         in0_tile_r_dim,
         in0_tile_c_dim,
         in1_tile_r_dim,
@@ -63,6 +63,6 @@ inline void llk_math_matmul(
 #ifdef ARCH_GRAYSKULL
     _llk_math_matmul_<NUM_FIDELITY_PHASES, FaceLayout>(dst_index, transpose, ct_dim, rt_dim, kt_dim);
 #else
-    _llk_math_matmul_<NUM_FIDELITY_PHASES>(dst_index, transpose, ct_dim, rt_dim, kt_dim);
+    _llk_math_matmul_<NUM_FIDELITY_PHASES, DstTileFaceLayout::RowMajor>(dst_index, transpose, ct_dim, rt_dim, kt_dim);
 #endif
 }

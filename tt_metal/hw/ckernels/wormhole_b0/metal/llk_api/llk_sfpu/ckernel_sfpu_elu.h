@@ -28,7 +28,7 @@ inline void calculate_elu(uint slope)
     vFloat s = c_slope.f;
 
     #pragma GCC unroll 0
-    for (int d = 0; d < WHB0_ITERATIONS; d++) {
+    for (int d = 0; d < 8; d++) {
         vFloat v = dst_reg[0];
 
         v_if (v < 0.0f) {

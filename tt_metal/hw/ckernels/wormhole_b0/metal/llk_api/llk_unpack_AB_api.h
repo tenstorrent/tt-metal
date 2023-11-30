@@ -10,7 +10,7 @@
  * LLK UNPACK AB
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
+template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_AB_hw_configure(
     const llk_unpack_AB_params_t *unpack_AB_params, const int within_face_16x16_transpose = 0) {
     // In0 -> unpA
@@ -34,7 +34,7 @@ inline void llk_unpack_AB_hw_configure(
         num_faces);
 }
 
-template <bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
+template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_AB_hw_configure_disaggregated(
     const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const int within_face_16x16_transpose = 0) {
     const llk_unpack_AB_params_t unpack_AB_params = {.unpA_operand = unpA_operand, .unpB_operand = unpB_operand};

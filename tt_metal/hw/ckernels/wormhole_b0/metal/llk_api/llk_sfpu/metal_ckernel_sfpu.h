@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "llk_sfpu_types.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu.h"
 #include "ckernel.h"
@@ -338,7 +339,7 @@ inline void calculate_comp(uint exponent_size_8)
 
 	//a[i] == 0
 	if constexpr(COMP_MODE == SfpuType::equal_zero) {
-	    v_if (sfpu_is_fp16_zero(v, exponent_size_8)) {
+	    v_if (_sfpu_is_fp16_zero_(v, exponent_size_8)) {
 	      v = one;
 	    } v_else {
 	      v = zero;
@@ -348,7 +349,7 @@ inline void calculate_comp(uint exponent_size_8)
 
 	//a[i] != 0
 	if constexpr(COMP_MODE == SfpuType::not_equal_zero) {
-	    v_if (sfpu_is_fp16_zero(v, exponent_size_8)) {
+	    v_if (_sfpu_is_fp16_zero_(v, exponent_size_8)) {
 	      v = zero;
 	    } v_else {
 	      v = one;
@@ -770,6 +771,21 @@ inline void calculate_silu()
         v_endif;
         result = val * result;
         dst_reg[0] = result;
+        dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_mask()
+{
+    bool exponent_size_8 = true;
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat mask = dst_reg[32];
+        v_if(sfpu_is_fp16_zero(mask, exponent_size_8)) {
+            dst_reg[0] = 0;
+        }
+        v_endif;
         dst_reg++;
     }
 }

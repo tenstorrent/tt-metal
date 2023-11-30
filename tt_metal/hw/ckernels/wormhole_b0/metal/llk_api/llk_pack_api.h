@@ -272,3 +272,36 @@ inline void llk_pack_reduce_mask_config() {
 inline void llk_pack_reduce_mask_clear() {
     _llk_pack_reduce_mask_clear_();
 }
+
+// FIXME-WH-UPLIFT
+template <ReduceDim dim, bool at_kernel_start = false, bool revert=false, bool is_fp32_dest_acc_en = false>
+inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
+
+    const bool untilize = false;
+    if constexpr (at_kernel_start) {
+
+        const std::uint32_t output_id = get_output_id(icb_out);
+        const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+        const std::uint32_t num_faces = get_output_num_faces(output_id);
+        const bool partial_face = get_output_partial_face(output_id);
+        const bool narrow_tile = get_output_narrow_tile(output_id);
+        const std::uint32_t tile_size = cb_interface[output_id].fifo_page_size;
+        const llk_relu_config_u relu_config = {.f = {.ApplyRelu = (std::uint32_t)ReluType::NO_RELU, .Threshold = 0,}};
+
+        _llk_pack_hw_configure_<untilize, is_fp32_dest_acc_en>(
+            pack_src_format[output_id],
+            pack_dst_format[output_id],
+            tile_size,
+            face_r_dim,
+            num_faces,
+            partial_face,
+            narrow_tile,
+            relu_config.val
+        );
+    } else {
+        TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
+        tensix_sync();
+    }
+
+    _llk_pack_reduce_mask_config_<untilize, dim>();
+}

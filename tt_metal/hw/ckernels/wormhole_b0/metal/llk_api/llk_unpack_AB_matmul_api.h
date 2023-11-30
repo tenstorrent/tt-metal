@@ -10,7 +10,7 @@
  * LLK UNPACK AB MATMUL
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
+template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_t *unpack_AB_params) {
     const bool transpose_xy_srca = unpack_AB_params->transpose_xy_srca;
 
@@ -41,7 +41,7 @@ inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_
         cb_interface[unpB_operand_id].fifo_page_size);
 }
 
-template <bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
+template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_AB_matmul_hw_configure_disaggregated(
     const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const std::uint32_t transpose_xy_srca = 0) {
     const llk_unpack_AB_matmul_params_t unpack_AB_matmul_params = {

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #pragma once
 
 #include "ckernel.h"
@@ -180,13 +181,13 @@ namespace ckernel::unpacker
        while (semaphore_read(semaphore::UNPACK_SYNC) > 0) {}
    }
 
-   inline void enalbe_int8_fpu_math() {
+   inline void enable_int8_fpu_math() {
       alu_config_u alu_payload = {.val = 0};
       alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = 1;
       cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, ALU_ACC_CTRL_INT8_math_enabled_MASK>(alu_payload.val);
    }
 
-   template<bool row_pool=false, bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
+   template<bool row_pool=false, bool is_fp32_dest_acc_en = false, bool fpu_srnd_en = false, bool pack_srnd_en = false>
    inline void configure_unpack_AB(
      const uint unpA_src_format,
      const uint unpB_src_format,
@@ -249,10 +250,9 @@ namespace ckernel::unpacker
       alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = int8_math_enabled;
 
       constexpr uint alu_stoch_rnd_mask = ALU_ROUNDING_MODE_Fpu_srnd_en_MASK | ALU_ROUNDING_MODE_Gasket_srnd_en_MASK | ALU_ROUNDING_MODE_Packer_srnd_en_MASK;
-      constexpr bool stoch_rnd_en = (stoch_rnd_mode == StochRndMode::All);
-      alu_payload.f.ALU_ROUNDING_MODE_Fpu_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndMode::Fpu);
-      alu_payload.f.ALU_ROUNDING_MODE_Gasket_srnd_en = stoch_rnd_en ||(stoch_rnd_mode == StochRndMode::Pack);
-      alu_payload.f.ALU_ROUNDING_MODE_Packer_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndMode::Pack);
+      alu_payload.f.ALU_ROUNDING_MODE_Fpu_srnd_en = fpu_srnd_en;
+      alu_payload.f.ALU_ROUNDING_MODE_Gasket_srnd_en = pack_srnd_en;
+      alu_payload.f.ALU_ROUNDING_MODE_Packer_srnd_en = pack_srnd_en;
 
       constexpr uint alu_mask = alu_format_mask | alu_dest_format_mask | alu_stoch_rnd_mask;
 
@@ -348,28 +348,47 @@ namespace ckernel::unpacker
       reset_config_context();
    }
 
-   template <bool INSERT_FENCE=false, std::uint32_t UNP_SEL = p_setadc::UNP_AB>
-   inline void config_face_dim(const uint32_t face_r_dim)
+   template <std::uint32_t UNP_SEL = p_setadc::UNP_AB>
+   inline void config_unpacker_x_end(const uint32_t face_r_dim)
    {
       switch (face_r_dim) {
          case 1:
             TTI_SETADCXX(UNP_SEL, 1*FACE_C_DIM-1, 0x0);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16);
             break;
          case 2:
             TTI_SETADCXX(UNP_SEL, 2*FACE_C_DIM-1, 0x0);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_2x16);
             break;
          case 4:
             TTI_SETADCXX(UNP_SEL, 4*FACE_C_DIM-1, 0x0);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_4x16);
             break;
          case 8:
             TTI_SETADCXX(UNP_SEL, 8*FACE_C_DIM-1, 0x0);
-            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_8x16);
             break;
          default:
             TTI_SETADCXX(UNP_SEL, FACE_R_DIM*FACE_C_DIM-1, 0x0);
+            break;
+      }
+   }
+
+   template <bool INSERT_FENCE=false, std::uint32_t UNP_SEL = p_setadc::UNP_AB>
+   inline void config_unpacker_0_face_dim(const uint32_t face_r_dim)
+   {
+      //tile x dim registers are only for unpacker 0
+      static_assert(UNP_SEL != p_setadc::UNP_B);
+      switch (face_r_dim) {
+         case 1:
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16);
+            break;
+         case 2:
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_2x16);
+            break;
+         case 4:
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_4x16);
+            break;
+         case 8:
+            TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_8x16);
+            break;
+         default:
             TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_16x16);
             break;
       }

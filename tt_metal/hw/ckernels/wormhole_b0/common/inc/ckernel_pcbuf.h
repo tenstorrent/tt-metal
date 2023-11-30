@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #pragma once
 
 // Functions for encoding and decoding PC buffer writes
