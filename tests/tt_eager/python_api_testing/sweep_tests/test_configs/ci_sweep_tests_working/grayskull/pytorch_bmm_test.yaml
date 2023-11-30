@@ -22,6 +22,7 @@ test-list:
         args:
           low: -100
           high: 100
+        dtype: bfloat16
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device
@@ -53,6 +54,7 @@ test-list:
         args:
           low: -100
           high: 100
+        dtype: bfloat16
       comparison:
         function: comp_pcc
       args-gen: gen_dtype_layout_device

@@ -17,7 +17,7 @@ def run_eltwise_relu_min_tests(
 ):
     torch.manual_seed(data_seed)
 
-    x = torch.Tensor(size=input_shape).uniform_(-100, 100)
+    x = torch.Tensor(size=input_shape).uniform_(-100, 100).to(torch.bfloat16)
     x_ref = x.detach().clone()
 
     # get referent value

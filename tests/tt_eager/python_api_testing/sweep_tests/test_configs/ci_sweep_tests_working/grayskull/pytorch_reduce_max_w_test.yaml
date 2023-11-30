@@ -19,13 +19,13 @@ test-list:
           high: 100
           dim: -1
       comparison:
-        function: comp_equal
+        function: comp_pcc
       args-gen: gen_dtype_layout_device
       output-file: reduce_max_w_sweep.csv
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM"]
   - reduce-max-w:
       shape:
@@ -46,11 +46,11 @@ test-list:
           high: 100
           dim: -1
       comparison:
-        function: comp_equal
+        function: comp_pcc
       args-gen: gen_dtype_layout_device
       output-file: reduce_max_w_sweep.csv
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM"]

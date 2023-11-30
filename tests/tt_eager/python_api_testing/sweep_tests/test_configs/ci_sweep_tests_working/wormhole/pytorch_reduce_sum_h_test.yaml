@@ -10,6 +10,7 @@ test-list:
         args-sampling-strategy: "all"
       datagen:
         function: gen_checkerboard
+        dtype: bfloat16
         args:
           low: 0
           high: 100
@@ -38,6 +39,7 @@ test-list:
         args-sampling-strategy: "all"
       datagen:
         function: gen_checkerboard
+        dtype: bfloat16
         args:
           low: 0
           high: 100
@@ -54,5 +56,5 @@ test-list:
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM"]

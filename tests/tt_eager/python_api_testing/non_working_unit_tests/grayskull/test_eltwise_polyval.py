@@ -16,9 +16,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_pol
 def run_eltwise_polyval_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, coeffs, data_seed, device):
     torch.manual_seed(data_seed)
 
-    coeffs = coeffs
+    coeffs = [torch.Tensor([x]).to(torch.bfloat16).item() for x in coeffs]
 
-    x = torch.Tensor(size=input_shape).uniform_(-100, 100)
+    x = torch.Tensor(size=input_shape).uniform_(-100, 100).to(torch.bfloat16)
     x_ref = x.detach().clone()
 
     # get referent value

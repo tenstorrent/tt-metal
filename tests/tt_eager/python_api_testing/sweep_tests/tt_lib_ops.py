@@ -1702,6 +1702,7 @@ def eltwise_rsub(
 
     return tt2torch_tensor(t1)
 
+
 @setup_host_and_device
 def eltwise_identity(
     x,
@@ -2168,7 +2169,10 @@ def embeddings(x, y, *args, device, dtype, layout, input_mem_config, output_mem_
     num_rows = x_shape[2]
     embedding_dim = y_shape[3]
 
-    t0 = ttl.tensor.Tensor(x, dtype[0]).to(device, input_mem_config[0])
+    x_ref = x.detach().clone()
+
+    t0 = torch.clamp(x_ref, min=0, max=y.shape[-2] - 1)
+    t0 = ttl.tensor.Tensor(t0, dtype[0]).to(device, input_mem_config[0])
 
     t1 = ttl.tensor.Tensor(y, dtype[1]).to(device, input_mem_config[1])
 

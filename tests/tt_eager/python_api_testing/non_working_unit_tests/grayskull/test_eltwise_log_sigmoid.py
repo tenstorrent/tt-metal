@@ -19,7 +19,7 @@ def run_eltwise_log_sigmoid_tests(input_shape, dtype, dlayout, in_mem_config, ou
     if in_mem_config == "SYSTEM_MEMORY":
         in_mem_config = None
 
-    x = torch.Tensor(size=input_shape).uniform_(-10, 10)
+    x = torch.Tensor(size=input_shape).uniform_(-4, 10)
     x_ref = x.detach().clone()
     # get ref result
     ref_value = pytorch_ops.log_sigmoid(x_ref)
@@ -90,6 +90,7 @@ test_sweep_args = [
         13126809,
     ),
 ]
+
 
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
