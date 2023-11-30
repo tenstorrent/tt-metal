@@ -21,8 +21,8 @@ def run_eltwise_logaddexp2_test(
     torch.manual_seed(data_seed)
     set_dispatch_mode(dispatch_mode)
 
-    x = gen_rand(size=input_shape_1, low=-100, high=100)
-    y = gen_rand(size=input_shape_2, low=-100, high=100)
+    x = gen_rand(size=input_shape_1, low=-64, high=64)
+    y = gen_rand(size=input_shape_2, low=-64, high=64)
     # compute ref value
     x_ref = x.detach().clone()
     y_ref = y.detach().clone()

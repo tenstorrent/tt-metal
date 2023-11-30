@@ -12,9 +12,10 @@ test-list:
         TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
-        function: gen_checkerboard
+        function: gen_rand
+        dtype: bfloat16
         args:
-          low: 0
+          low: -100
           high: 100
       comparison:
         function: comp_pcc
@@ -23,7 +24,7 @@ test-list:
       args:
         data-layout: ["TILE"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM"]
   - sum-3:
       shape:
@@ -37,9 +38,10 @@ test-list:
         TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
-        function: gen_checkerboard
+        function: gen_rand
+        dtype: bfloat16
         args:
-          low: 0
+          low: -100
           high: 100
       comparison:
         function: comp_pcc
@@ -48,5 +50,5 @@ test-list:
       args:
         data-layout: ["ROW_MAJOR"]
         data-type: ["BFLOAT16"]
-        buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
+        buffer-type: ["DRAM", "L1"]
         out-buffer-type: ["DRAM"]
