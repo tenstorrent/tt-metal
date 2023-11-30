@@ -27,17 +27,18 @@ void kernel_main() {
         .data_format = data_format
     };
 
-    uint32_t tile_id = start_id;
+    uint32_t curr_tile_id = start_id;
     cb_reserve_back(cb_id_in0, block_num_tiles);
     uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
     for (uint32_t h = 0; h < block_height_tiles; h++) {
+        uint32_t tile_id = curr_tile_id;
         for (uint32_t w = 0; w < block_width_tiles; w++) {
             noc_async_read_tile(tile_id, s, l1_write_addr);
             tile_id++;
             l1_write_addr += tile_bytes;
             noc_async_read_barrier();
         }
-        tile_id += input_width_offset_tiles;
+        curr_tile_id += input_width_offset_tiles;
     }
     cb_push_back(cb_id_in0, block_num_tiles);
 }
