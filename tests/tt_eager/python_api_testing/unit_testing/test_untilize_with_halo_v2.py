@@ -39,59 +39,222 @@ def plot_diff(vals, fid, nsticks, stick_len):
 
 # conv params - output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups
 @pytest.mark.parametrize(
-    "conv_params, batch_size, input_chw_shape, num_cores, test_max_pool",
+    "conv_params, batch_size, input_chw_shape, num_cores_nhw, grid_size, test_max_pool",
     (
         # ((1, 1, 2, 2, 1, 1, 0, 0, 1, 1), 8, (1, 8, 8), 1, False),
         # ((1, 1, 2, 2, 1, 1, 0, 0, 1, 1), 8, (1, 8, 8), 2, False),
         # ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), 8, (1, 8, 8), 1, False),
         # ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), 8, (1, 8, 8), 2, False),
         # resnet50 s1 convs
-        ((64, 16, 4, 4, 1, 1, 0, 0, 1, 1), 8, (16, 115, 115), 98, False),  # first conv b8 - 98 cores for height slicing
-        ((32, 32, 3, 3, 1, 1, 1, 1, 1, 1), 8, (32, 56, 56), 98, False),  # layer1 b8 - 98 cores for height slicing
-        ((64, 64, 3, 3, 1, 1, 1, 1, 1, 1), 8, (64, 56, 56), 98, False),  # layer1 b8 - 98 cores for height slicing
-        ((128, 128, 3, 3, 1, 1, 1, 1, 1, 1), 8, (128, 28, 28), 98, False),  # layer2 b8 - 98 cores for height slicing
-        ((256, 256, 3, 3, 1, 1, 1, 1, 1, 1), 8, (256, 14, 14), 10, False),  # layer3 b8 - 10 cores for height slicing
-        ((512, 512, 3, 3, 1, 1, 1, 1, 1, 1), 8, (512, 7, 7), 7, False),  # layer4 b8 - 7 cores for height slicing
+        (
+            (64, 16, 4, 4, 1, 1, 0, 0, 1, 1),
+            8,
+            (16, 115, 115),
+            98,
+            (12, 9),
+            False,
+        ),  # first conv b8 - 98 cores for height slicing
+        (
+            (32, 32, 3, 3, 1, 1, 1, 1, 1, 1),
+            8,
+            (32, 56, 56),
+            98,
+            (12, 9),
+            False,
+        ),  # layer1 b8 - 98 cores for height slicing
+        (
+            (64, 64, 3, 3, 1, 1, 1, 1, 1, 1),
+            8,
+            (64, 56, 56),
+            98,
+            (12, 9),
+            False,
+        ),  # layer1 b8 - 98 cores for height slicing
+        (
+            (128, 128, 3, 3, 1, 1, 1, 1, 1, 1),
+            8,
+            (128, 28, 28),
+            98,
+            (12, 9),
+            False,
+        ),  # layer2 b8 - 98 cores for height slicing
+        (
+            (256, 256, 3, 3, 1, 1, 1, 1, 1, 1),
+            8,
+            (256, 14, 14),
+            10,
+            (10, 8),
+            False,
+        ),  # layer3 b8 - 10 cores for height slicing
+        (
+            (512, 512, 3, 3, 1, 1, 1, 1, 1, 1),
+            8,
+            (512, 7, 7),
+            7,
+            (7, 8),
+            False,
+        ),  # layer4 b8 - 7 cores for height slicing
         (
             (64, 16, 4, 4, 1, 1, 0, 0, 1, 1),
             16,
             (16, 115, 115),
             98,
+            (12, 9),
             False,
         ),  # first conv b16 - 98 cores for height slicing
-        ((64, 64, 3, 3, 1, 1, 1, 1, 1, 1), 16, (64, 56, 56), 98, False),  # layer1 b16 - 98 cores for height slicing
-        ((128, 128, 3, 3, 1, 1, 1, 1, 1, 1), 16, (128, 28, 28), 98, False),  # layer2 b16 - 98 cores for height slicing
-        ((256, 256, 3, 3, 1, 1, 1, 1, 1, 1), 16, (256, 14, 14), 11, False),  # layer3 b16 - 11 cores for height slicing
-        ((512, 512, 3, 3, 1, 1, 1, 1, 1, 1), 16, (512, 7, 7), 9, False),  # layer4 b16 - 9 cores for height slicing
+        (
+            (64, 64, 3, 3, 1, 1, 1, 1, 1, 1),
+            16,
+            (64, 56, 56),
+            98,
+            (12, 9),
+            False,
+        ),  # layer1 b16 - 98 cores for height slicing
+        (
+            (128, 128, 3, 3, 1, 1, 1, 1, 1, 1),
+            16,
+            (128, 28, 28),
+            98,
+            (12, 9),
+            False,
+        ),  # layer2 b16 - 98 cores for height slicing
+        (
+            (256, 256, 3, 3, 1, 1, 1, 1, 1, 1),
+            16,
+            (256, 14, 14),
+            11,
+            (11, 8),
+            False,
+        ),  # layer3 b16 - 11 cores for height slicing
+        (
+            (512, 512, 3, 3, 1, 1, 1, 1, 1, 1),
+            16,
+            (512, 7, 7),
+            9,
+            (9, 8),
+            False,
+        ),  # layer4 b16 - 9 cores for height slicing
         (
             (64, 16, 4, 4, 1, 1, 0, 0, 1, 1),
             20,
             (16, 115, 115),
             98,
+            (12, 9),
             False,
         ),  # first conv b16 - 98 cores for height slicing
-        ((64, 64, 3, 3, 1, 1, 1, 1, 1, 1), 20, (64, 56, 56), 98, False),  # layer1 b20 - 98 cores for height slicing
-        ((128, 128, 3, 3, 1, 1, 1, 1, 1, 1), 20, (128, 28, 28), 98, False),  # layer2 b20 - 98 cores for height slicing
-        ((256, 256, 3, 3, 1, 1, 1, 1, 1, 1), 20, (256, 14, 14), 12, False),  # layer3 b20 - 12 cores for height slicing
-        ((512, 512, 3, 3, 1, 1, 1, 1, 1, 1), 20, (512, 7, 7), 11, False),  # layer4 b20 - 11 cores for height slicing
+        (
+            (64, 64, 3, 3, 1, 1, 1, 1, 1, 1),
+            20,
+            (64, 56, 56),
+            98,
+            (12, 9),
+            False,
+        ),  # layer1 b20 - 98 cores for height slicing
+        (
+            (128, 128, 3, 3, 1, 1, 1, 1, 1, 1),
+            20,
+            (128, 28, 28),
+            98,
+            (12, 9),
+            False,
+        ),  # layer2 b20 - 98 cores for height slicing
+        (
+            (256, 256, 3, 3, 1, 1, 1, 1, 1, 1),
+            20,
+            (256, 14, 14),
+            12,
+            (12, 8),
+            False,
+        ),  # layer3 b20 - 12 cores for height slicing
+        (
+            (512, 512, 3, 3, 1, 1, 1, 1, 1, 1),
+            20,
+            (512, 7, 7),
+            11,
+            (11, 8),
+            False,
+        ),  # layer4 b20 - 11 cores for height slicing
         # resnet50 s2 convs
-        ((128, 128, 3, 3, 2, 2, 1, 1, 1, 1), 8, (128, 56, 56), 98, False),  # layer2 b8 - 98 cores for height slicing
-        ((256, 256, 3, 3, 2, 2, 1, 1, 1, 1), 8, (256, 28, 28), 10, False),  # layer3 b8 - 10 cores for height slicing
-        ((512, 512, 3, 3, 2, 2, 1, 1, 1, 1), 8, (512, 14, 14), 7, False),  # layer4 b8 - 7 cores for height slicing
-        ((128, 1, 3, 3, 2, 2, 1, 1, 1, 1), 16, (128, 56, 56), 98, False),  # layer2 b16 - 98 cores for height slicing
-        ((256, 256, 3, 3, 2, 2, 1, 1, 1, 1), 16, (256, 28, 28), 11, False),  # layer3 b16 - 11 cores for height slicing
-        ((512, 512, 3, 3, 2, 2, 1, 1, 1, 1), 16, (512, 14, 14), 9, False),  # layer3 b16 - 9 cores for height slicing
-        ((128, 128, 3, 3, 2, 2, 1, 1, 1, 1), 20, (128, 56, 56), 98, False),  # layer2 b20 - 98 cores for height slicing
-        ((256, 256, 3, 3, 2, 2, 1, 1, 1, 1), 20, (256, 28, 28), 12, False),  # layer3 b20 - 12 cores for height slicing
-        ((512, 512, 3, 3, 2, 2, 1, 1, 1, 1), 20, (512, 14, 14), 11, False),  # layer3 b20 - 11 cores for height slicing
+        (
+            (128, 128, 3, 3, 2, 2, 1, 1, 1, 1),
+            8,
+            (128, 56, 56),
+            98,
+            (12, 9),
+            False,
+        ),  # layer2 b8 - 98 cores for height slicing
+        (
+            (256, 256, 3, 3, 2, 2, 1, 1, 1, 1),
+            8,
+            (256, 28, 28),
+            10,
+            (10, 8),
+            False,
+        ),  # layer3 b8 - 10 cores for height slicing
+        (
+            (512, 512, 3, 3, 2, 2, 1, 1, 1, 1),
+            8,
+            (512, 14, 14),
+            7,
+            (7, 8),
+            False,
+        ),  # layer4 b8 - 7 cores for height slicing
+        (
+            (128, 128, 3, 3, 2, 2, 1, 1, 1, 1),
+            16,
+            (128, 56, 56),
+            98,
+            (12, 9),
+            False,
+        ),  # layer2 b16 - 98 cores for height slicing
+        (
+            (256, 256, 3, 3, 2, 2, 1, 1, 1, 1),
+            16,
+            (256, 28, 28),
+            11,
+            (11, 8),
+            False,
+        ),  # layer3 b16 - 11 cores for height slicing
+        (
+            (512, 512, 3, 3, 2, 2, 1, 1, 1, 1),
+            16,
+            (512, 14, 14),
+            9,
+            (9, 8),
+            False,
+        ),  # layer3 b16 - 9 cores for height slicing
+        (
+            (128, 128, 3, 3, 2, 2, 1, 1, 1, 1),
+            20,
+            (128, 56, 56),
+            98,
+            (12, 9),
+            False,
+        ),  # layer2 b20 - 98 cores for height slicing
+        (
+            (256, 256, 3, 3, 2, 2, 1, 1, 1, 1),
+            20,
+            (256, 28, 28),
+            12,
+            (12, 8),
+            False,
+        ),  # layer3 b20 - 12 cores for height slicing
+        (
+            (512, 512, 3, 3, 2, 2, 1, 1, 1, 1),
+            20,
+            (512, 14, 14),
+            11,
+            (11, 8),
+            False,
+        ),  # layer3 b20 - 11 cores for height slicing
         # resnet50 maxpool
-        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 8, (1, 112, 112), 98, True),
-        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 16, (1, 112, 112), 98, True),
-        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 20, (1, 112, 112), 98, True),
+        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 8, (1, 112, 112), 98, (12, 9), True),
+        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 16, (1, 112, 112), 98, (12, 9), True),
+        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 20, (1, 112, 112), 98, (12, 9), True),
     ),
 )
 def test_generate_all_configs_and_references(
-    device, conv_params, batch_size, input_chw_shape, num_cores, test_max_pool
+    device, conv_params, batch_size, input_chw_shape, num_cores_nhw, grid_size, test_max_pool
 ):
     assert len(conv_params) == 10
     output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups = [
@@ -113,13 +276,15 @@ def test_generate_all_configs_and_references(
     conv_output_w = ((int)((input_w + (2 * pad_w) - filter_w) / stride_w)) + 1
     conv_output_nhw_size = batch_size * conv_output_h * conv_output_w
 
-    input_size_to_shard_evenly = _nearest_y(input_nhw_size, num_cores * 32)
-    untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores)
-    output_size_to_shard_evenly = _nearest_y(conv_output_nhw_size, num_cores * 32)
-    conv_output_shard_height = (int)(output_size_to_shard_evenly / num_cores)
+    input_size_to_shard_evenly = _nearest_y(input_nhw_size, num_cores_nhw * 32)
+    untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores_nhw)
+    output_size_to_shard_evenly = _nearest_y(conv_output_nhw_size, num_cores_nhw * 32)
+    conv_output_shard_height = (int)(output_size_to_shard_evenly / num_cores_nhw)
 
     print("untilize with halo input shard height=", untilize_with_halo_input_shard_height)
     print("conv_output_shard_height=", conv_output_shard_height)
+    print("grid_size=", grid_size)
+    print("num_cores_nhw=", num_cores_nhw)
 
     # Initialize tensor with data
 
@@ -158,7 +323,7 @@ def test_generate_all_configs_and_references(
         input_padded_width,
         conv_output_shard_height,
         untilize_with_halo_input_shard_height,
-        num_cores,
+        num_cores_nhw,
         filter_h,
         filter_w,
     )
@@ -177,22 +342,35 @@ def test_generate_all_configs_and_references(
         (pad_h, pad_w),
         (filter_h, filter_w),
         (batch_size, input_h, input_w),
-        num_cores,
+        grid_size,
+        num_cores_nhw,
     ]
-    # Assume height sharding
-    num_cores_width = 12
-    num_cores_height = num_cores // num_cores_width
-    core_range_1 = ttl.tensor.CoreRange(
-        ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_width - 1, num_cores_height - 1)
-    )
-    num_cores_last = num_cores % num_cores_width
-    core_range_2 = None
-    if num_cores_last > 0:
-        core_range_2 = ttl.tensor.CoreRange(
-            ttl.tensor.CoreCoord(0, num_cores_height), ttl.tensor.CoreCoord(num_cores_last - 1, num_cores_height)
+    num_cores_w, num_cores_h = grid_size
+    block_sharding = num_cores_nhw == num_cores_w
+    if not block_sharding:
+        assert num_cores_w == 12
+        num_cores_height_excluding_remainder_last_row = num_cores_nhw // num_cores_w
+        assert num_cores_h >= num_cores_height_excluding_remainder_last_row
+        core_range_1 = ttl.tensor.CoreRange(
+            ttl.tensor.CoreCoord(0, 0),
+            ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_height_excluding_remainder_last_row - 1),
         )
-        shard_grid = ttl.tensor.CoreRangeSet({core_range_1, core_range_2})
+        num_cores_last = num_cores_nhw % num_cores_w
+        core_range_2 = None
+        if num_cores_last > 0:
+            assert num_cores_h == num_cores_height_excluding_remainder_last_row + 1
+            core_range_2 = ttl.tensor.CoreRange(
+                ttl.tensor.CoreCoord(0, num_cores_height_excluding_remainder_last_row),
+                ttl.tensor.CoreCoord(num_cores_last - 1, num_cores_height_excluding_remainder_last_row),
+            )
+            shard_grid = ttl.tensor.CoreRangeSet({core_range_1, core_range_2})
+        else:
+            assert num_cores_h == num_cores_height_excluding_remainder_last_row
+            shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
     else:
+        core_range = ttl.tensor.CoreRange(
+            ttl.tensor.CoreCoord(0, 0), ttl.tensor.CoreCoord(num_cores_w - 1, num_cores_h - 1)
+        )
         shard_grid = ttl.tensor.CoreRangeSet({core_range_1})
 
     # construct op object and set op configs
@@ -204,7 +382,7 @@ def test_generate_all_configs_and_references(
     # print(f"INPUT SHAPE: {input_pyt_tensor.shape}")
 
     memory_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
-    input_padded_to_tile_shape = [1, 1, _nearest_y(batch_size * input_h * input_w, num_cores * 32), input_padded_c]
+    input_padded_to_tile_shape = [1, 1, _nearest_y(batch_size * input_h * input_w, num_cores_nhw * 32), input_padded_c]
     untilize_with_halp_input_tt_tensor = (
         ttl.tensor.Tensor(input_pyt_tensor, ttl.tensor.DataType.BFLOAT16)
         .pad(input_padded_to_tile_shape, (0, 0, 0, 0), 0)
@@ -217,7 +395,7 @@ def test_generate_all_configs_and_references(
     untilize_with_halp_input_tt_tensor = ttl.tensor.interleaved_to_sharded(
         untilize_with_halp_input_tt_tensor,
         grid_size_binary,
-        [input_size_to_shard_evenly // num_cores, input_padded_c],
+        [input_size_to_shard_evenly // num_cores_nhw, input_padded_c],
         ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
         ttl.tensor.ShardOrientation.ROW_MAJOR,
     )
