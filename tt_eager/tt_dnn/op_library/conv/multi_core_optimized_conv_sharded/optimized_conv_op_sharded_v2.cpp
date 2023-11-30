@@ -562,7 +562,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     bool fully_buffer_weights = false;
     uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles / conv_act_c_blocks;
     // TODO: This flag should be set in kernel logic but need this for create_CB
-    if (a.memory_config().is_sharded() && weight_size_h == 3 && weight_size_w == 3 && stride_h == 1 && weight_width_sliced) {
+    if (a.memory_config().is_sharded() and weight_size_h == 3 and weight_size_w == 3 and (stride_h == 1 or stride_h == 2) and weight_width_sliced) {
         // If conv_act_c_blocks > 1 and we have 2D conv with sharded input, we always read entire 3x3 window before pushing in reader/writer
         // TODO: Generalize this to not make this assumption
         read_3x3_window_in_inner_loop = true;
@@ -628,7 +628,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     } else {
         compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
         // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
-        if (weight_size_h == 3 && weight_size_w == 3 && stride_h == 1) {
+        if (weight_size_h == 3 and weight_size_w == 3 and (stride_h == 1 or stride_h == 2)) {
             reader_with_indices = true;
             // 2D conv
             if (weight_width_sliced) {

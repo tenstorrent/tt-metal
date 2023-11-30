@@ -1401,7 +1401,7 @@ Tensor untilize_with_halo(const Tensor &input_tensor_a, const uint32_t pad_val, 
         TT_ASSERT(input_tensor_a.shard_spec().value().shard_orientation == ShardOrientation::COL_MAJOR);
         TT_ASSERT(all_cores.ranges().size() == 1);
         auto core_range = *(all_cores.ranges().begin());
-        ncores = core_range.end.y - core_range.start.y + 1;
+        ncores = core_range.end.x - core_range.start.x + 1;
         in_nsticks_per_core = input_tensor_a.shard_spec().value().shard_shape[0];
     }
 
