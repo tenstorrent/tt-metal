@@ -84,8 +84,9 @@ void kernel_main() {
         cq_wait_front();
 
         // Read in command
-        uint64_t src_noc_addr = pcie_core_noc_encoding | (cq_read_interface.fifo_rd_ptr << 4);
-        noc_async_read(src_noc_addr, COMMAND_START_ADDR, DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
+        uint32_t rd_ptr = (cq_read_interface.fifo_rd_ptr << 4);
+        uint64_t src_noc_addr = pcie_core_noc_encoding | rd_ptr;
+        noc_async_read(src_noc_addr, COMMAND_START_ADDR, min(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, DeviceCommand::HUGE_PAGE_SIZE - rd_ptr));
         noc_async_read_barrier();
 
         // Producer information
