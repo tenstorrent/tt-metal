@@ -19,7 +19,7 @@ inline void calculate_i0()
 {
     #pragma GCC unroll 0
 
-    for (int d = 0; d < WHB0_ITERATIONS; d++)
+    for (int d = 0; d < 8; d++)
     {
         vFloat result = 0.0f;
         vFloat input = dst_reg[0];

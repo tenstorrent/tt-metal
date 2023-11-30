@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #pragma once
 
 #include "risc_attribs.h"
@@ -35,6 +36,9 @@
 #define OVERLAY_DECOUPLE 0
 #endif
 
+#ifdef LLK_TB_TEST
+#include "kernel_slowdown_config.h"
+#endif
 
 #ifndef INSERT_UNPACK_DELAY
 #define INSERT_UNPACK_DELAY 0
@@ -56,10 +60,13 @@
 
 #include "ckernel_include.h"
 #include "tensix.h"
-#include "debug/fw_debug.h"
-#include "eth_l1_address_map.h"
-#include "hostdevcommon/common_runtime_address_map.h"
+#include "fw_debug.h"
 // #include <cstring>
+#if defined(PERF_DUMP) || DELAY_EN > 0
+#include <l1_address_map.h>
+#include "tt_log.h"
+#include "perf_lib/scratch_api.h"
+#endif
 
 namespace ckernel
 {
@@ -73,10 +80,10 @@ constexpr uint RESET_VAL = 0;
 constexpr uint KERNEL_IN_PROGRESS = 15;
 constexpr uint KERNEL_COMPLETE = 1;
 
-extern volatile uint tt_reg_ptr * reg_base;
-extern volatile uint tt_reg_ptr * pc_buf_base;
-extern volatile uint tt_reg_ptr * regfile;
-extern volatile uint tt_reg_ptr * instrn_buffer;
+extern volatile uint tt_reg_ptr *reg_base;
+extern volatile uint tt_reg_ptr *pc_buf_base;
+extern volatile uint tt_reg_ptr *regfile;
+extern volatile uint tt_reg_ptr *instrn_buffer;
 extern volatile uint tt_reg_ptr *mailbox_base[4];
 extern volatile uint tt_reg_ptr *dbg_event_scratch;
 extern volatile uint tt_reg_ptr *trisc_l1_mailbox;

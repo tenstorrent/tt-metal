@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #pragma once
 
 #include "ckernel.h"
@@ -187,8 +188,8 @@ inline void _llk_pack_reduce_mask_config_() {
 
     // We initialize PCK_EDGE_OFFSET_SEC0 mask to clear out all the datums in the row
     pack_edge_offset.f.mask = 0x0;
-    uint32_t row_set_mapping_1;
-    uint32_t edge_offset_sec1_mask;
+    uint32_t row_set_mapping_1 = 0;
+    uint32_t edge_offset_sec1_mask = 0;
 
     if constexpr (dim == ReduceDim::REDUCE_ROW) {
         // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
@@ -222,6 +223,24 @@ inline void _llk_pack_reduce_mask_config_() {
         } else {
             // TILE_ROW_SET_MAPPING_1 configuration sets only first row to use PCK_EDGE_OFFSET_SEC1 mask
             row_set_mapping_1 = 0x00000001; // each packer packs 1x16 row
+        }
+    } else if constexpr (dim == ReduceDim::REDUCE_SCALAR) {
+                // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
+        edge_offset_sec1_mask = 0x0001;
+        if constexpr (untilize) {
+            pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack1 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack2 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack3 = 1;
+            row_set_mapping_1 = 0x00000005;
+        } else {
+            // Packer 0 and 2 will use TILE_ROW_SET_MAPPING_1, while packer 1 and 3 will keep using
+            // TILE_ROW_SET_MAPPING_0 configuration which is the default one
+            pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+            pack_edge_offset.f.tile_row_set_select_pack2 = 1;
+
+            // TILE_ROW_SET_MAPPING_1 configuration sets all rows to use PCK_EDGE_OFFSET_SEC1 mask
+            row_set_mapping_1 = 0x00000001;
         }
     }
 

@@ -19,7 +19,7 @@ template <bool APPROXIMATION_MODE>
 inline void calculate_logical_not_unary()
 {
     #pragma GCC unroll 0
-    for (int d = 0; d < WHB0_ITERATIONS; d++) {
+    for (int d = 0; d < 8; d++) {
         vFloat v = dst_reg[0];
         v_if (v == 0) {
             dst_reg[0] = 1.0f;

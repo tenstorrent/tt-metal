@@ -13,7 +13,7 @@ template <bool is_fp32_dest_acc_en = false>
 inline void llk_unpack_untilize_hw_configure(const llk_unpack_A_params_t *unpack_untilize_params) {
     constexpr bool is_row_pool = false;
     constexpr bool within_face_16x16_transpose = false;
-    constexpr StochRndMode stoch_rnd_mode = StochRndMode::None;
+    constexpr StochRndType stoch_rnd_mode = StochRndType::None;
 
     const uint32_t unpA_operand_id = get_operand_id(unpack_untilize_params->unpA_operand);
     const uint32_t unpA_num_faces = 4;

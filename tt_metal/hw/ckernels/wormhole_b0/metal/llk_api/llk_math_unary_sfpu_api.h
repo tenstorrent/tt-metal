@@ -13,36 +13,6 @@ namespace ckernel {
 * LLK ELTWISE UNARY SFPU
 *************************************************************************/
 
-template <SfpuType sfpu_op, bool APPROXIMATE, DstSync Dst = DstSync::SyncFull, bool IS_INT_SFPU_EN=false>
-inline void llk_math_eltwise_unary_sfpu(
-    uint dst_index,
-    int vector_mode = (int)Dim::RC,
-    uint param0 = 0,
-    uint param1 = 0,
-    uint param2 = 0,
-    uint param3 = 0,
-    uint param4 = 0,
-    uint param5 = 0) {
-
-    const std::uint32_t operand_id = get_operand_id(0);
-    const std::uint32_t num_faces = get_operand_num_faces(0);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
-
-    _llk_math_eltwise_unary_sfpu_<sfpu_op, APPROXIMATE, Dst, IS_INT_SFPU_EN>(
-        face_r_dim,
-        num_faces,
-        dst_index,
-        vector_mode,
-        param0,
-        param1,
-        param2,
-        param3,
-        param4,
-        param5
-    );
-}
-
-
 // New LLK SFPU APIs
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_rsqrt(uint dst_index) {

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #pragma once
 
 #include "llk_defs.h"
@@ -67,24 +68,6 @@ enum PackSelMask
     PACK_23=0xC
 };
 
-/*
-Stochastic rounding modes:
-    None: No stochastic rounding enabled, default rounding is round to nearest even.
-    Fpu: Enables stochastic rounding for every accumulation in the fpu
-    Pack: Enables stochastic rounding in both gasket and packer. Gasket rounding is in
-    data format conversion stage from dest format to pack_src_format. Packer rounding
-    is in data format conversion stage from pack_src_format to pack_dst_format.
-    All: Enables fpu, pack and gasket rounding.
-*/
-enum class StochRndMode : std::uint8_t
-{
-    None    = 0,
-    Fpu     = 1,
-    Pack    = 2,
-    All     = 0xf,
-    Invalid = 0xff,
-};
-
 constexpr std::uint32_t FACE_HEIGHT = 16;
 constexpr std::uint32_t FACE_WIDTH  = 16;
 constexpr std::uint32_t TILE_HEIGHT = 32;
@@ -107,78 +90,6 @@ static_assert((DEST_NUM_TILES_FP16 & (DEST_NUM_TILES_FP16 - 1)) == 0);
 // For instructions that address lower/upper 16 bits of a register
 #define LO_16(REG) (2 * (REG))
 #define HI_16(REG) (2 * (REG) + 1)
-
-
-/*
-constexpr static std::int32_t MUL_TILE_SIZE_AND_INDEX(uint format, uint index) {
-    switch (format&0xF) {
-        case ((uint8_t)DataFormat::Float32): return ((index<<8)+(index<<1));
-        case ((uint8_t)DataFormat::Float16):
-        case ((uint8_t)DataFormat::Float16_b): return ((index<<7)+(index<<1));
-        case ((uint8_t)DataFormat::Bfp8):
-        case ((uint8_t)DataFormat::Bfp8_b): return ((index<<6)+(index<<2)+(index<<1));
-        case ((uint8_t)DataFormat::Bfp4):
-        case ((uint8_t)DataFormat::Bfp4_b): return ((index<<5)+(index<<2)+(index<<1));
-        case ((uint8_t)DataFormat::Bfp2):
-        case ((uint8_t)DataFormat::Bfp2_b): return ((index<<4)+(index<<2)+(index<<1));
-        case ((uint8_t)DataFormat::Int8):
-        case ((uint8_t)DataFormat::Lf8): return ((index<<6)+(index<<1));
-        //Keep default as Bfp8?
-        default: return ((index<<6)+(index<<2)+(index<<1));
-    };
-}
-
-constexpr static std::int32_t MUL_DEST_TILE_SIZE_AND_INDEX(uint format, uint index) {
-    switch (format&0xF) {
-        case ((uint8_t)DataFormat::Float32): return (index<<12);
-        case ((uint8_t)DataFormat::Float16):
-        case ((uint8_t)DataFormat::Float16_b): return (index<<11);
-        case ((uint8_t)DataFormat::Bfp8):
-        case ((uint8_t)DataFormat::Bfp8_b): return (index<<10);
-        case ((uint8_t)DataFormat::Bfp4):
-        case ((uint8_t)DataFormat::Bfp4_b): return (index<<9);
-        case ((uint8_t)DataFormat::Bfp2):
-        case ((uint8_t)DataFormat::Bfp2_b): return (index<<8);
-        case ((uint8_t)DataFormat::Int8):
-        case ((uint8_t)DataFormat::Lf8): return (index<<10);
-        default: return (index<<10);
-    };
-}
-
-constexpr static std::int32_t GET_L1_TILE_SIZE(uint format) {
-    switch (format&0xF) {
-        case ((uint8_t)DataFormat::Float32): return ((4096>>4)+(32>>4));
-        case ((uint8_t)DataFormat::Float16):
-        case ((uint8_t)DataFormat::Float16_b): return ((2048>>4)+(32>>4));
-        case ((uint8_t)DataFormat::Bfp8):
-        case ((uint8_t)DataFormat::Bfp8_b): return ((1024>>4)+(64>>4)+(32>>4));
-        case ((uint8_t)DataFormat::Bfp4):
-        case ((uint8_t)DataFormat::Bfp4_b): return ((512>>4)+(64>>4)+(32>>4));
-        case ((uint8_t)DataFormat::Bfp2):
-        case ((uint8_t)DataFormat::Bfp2_b): return ((256>>4)+(64>>4)+(32>>4));
-        case ((uint8_t)DataFormat::Int8):
-        case ((uint8_t)DataFormat::Lf8): return ((1024>>4)+(32>>4));
-        default: return ((1024>>4)+(64>>4)+(32>>4));
-    };
-}
-
-constexpr static std::int32_t GET_DEST_TILE_BYTE_SIZE(uint format) {
-    switch (format&0xF) {
-        case ((uint8_t)DataFormat::Float32): return 4096;
-        case ((uint8_t)DataFormat::Float16):
-        case ((uint8_t)DataFormat::Float16_b): return 2048;
-        case ((uint8_t)DataFormat::Bfp8):
-        case ((uint8_t)DataFormat::Bfp8_b): return 1024;
-        case ((uint8_t)DataFormat::Bfp4):
-        case ((uint8_t)DataFormat::Bfp4_b): return 512;
-        case ((uint8_t)DataFormat::Bfp2):
-        case ((uint8_t)DataFormat::Bfp2_b): return 256;
-        case ((uint8_t)DataFormat::Int8):
-        case ((uint8_t)DataFormat::Lf8): return 1024;
-        default: return 1024;
-    };
-}
-*/
 
 constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(uint format) {
     switch (format&0xF) {
@@ -242,7 +153,5 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(uint format, uint datum_count) {
 
 #define LOWER_HALFWORD(x) ((x) & 0xFFFF)
 #define UPPER_HALFWORD(x) ((x) >> 16)
-
-constexpr int WHB0_ITERATIONS = 8;
 
 } // namespace ckernel

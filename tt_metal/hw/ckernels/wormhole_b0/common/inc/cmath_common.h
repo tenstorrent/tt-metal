@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #pragma once
 
 //#include "kernel_types.h"
 #include "ckernel.h"
 #include "ckernel_template.h"
+#include "ckernel_sfpu.h"
 #include "ckernel_globals.h"
 #include "llk_defs.h"
 
@@ -197,6 +199,13 @@ inline void clear_addr_mod_base()
     TTI_SETC16(ADDR_MOD_SET_Base_ADDR32, 0); // clear addr mod base (use addr mods 0..3)
 }
 
+template <uint num_rows=8>
+inline void inc_dst_addr()
+{
+    static_assert(num_rows <= 15, "num_rows must be <= 15");
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, num_rows, 0, 0, p_setrwc::SET_D);
+}
+
 inline void math_dest_wait()
 {
     FWLOG0("XX math_full_dest_sync()->wait for whole dest available");
@@ -228,6 +237,16 @@ inline constexpr bool is_32bit_input(const std::uint32_t src_format, const std::
     const uint output_df = dst_format;
     return ((input_df == (uint)DataFormat::Int32)  || (input_df == (uint)DataFormat::Float32)) &&
            ((output_df == (uint)DataFormat::Int32) || (output_df == (uint)DataFormat::Float32));
+}
+
+inline constexpr int get_math_num_fidelity_phases(const int math_fidelity_desc)
+{
+    return (math_fidelity_desc & 0x7);
+}
+
+inline constexpr int get_math_fidelity_increment(const int math_fidelity_desc)
+{
+    return ((math_fidelity_desc >> 3) & 0x1) + 1;
 }
 
 } // namespace ckernel::math

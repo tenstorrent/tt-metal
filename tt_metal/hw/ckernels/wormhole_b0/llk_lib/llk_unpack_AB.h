@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #pragma once
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -70,10 +71,13 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces=false, cons
 
 }
 
-template <bool is_fp32_dest_acc_en = false, StochRndMode stoch_rnd_mode = StochRndMode::None>
+template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
 inline void _llk_unpack_AB_hw_configure_(const std::uint32_t unpA_src_format, const std::uint32_t unpB_src_format, const std::uint32_t unpA_dst_format, const std::uint32_t unpB_dst_format,  const std::uint32_t face_r_dim = FACE_R_DIM,  const std::uint32_t within_face_16x16_transpose = 0, const std::uint32_t num_faces = 4) {
     constexpr bool is_row_pool = false;
-    configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, stoch_rnd_mode>(
+    constexpr bool stoch_rnd_en = (stoch_rnd_mode == StochRndType::All);
+    constexpr bool fpu_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Fpu);
+    constexpr bool pack_srnd_en = stoch_rnd_en ||(stoch_rnd_mode == StochRndType::Pack);
+    configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, fpu_srnd_en, pack_srnd_en>(
         unpA_src_format,
         unpB_src_format,
         unpA_dst_format,
@@ -91,7 +95,7 @@ inline void _llk_unpack_AB_init_(const std::uint32_t face_r_dim=FACE_R_DIM, cons
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose); // transpose within the face
 
     constexpr std::uint32_t UNP_SEL = p_setadc::UNP_AB;
-    config_face_dim<false, UNP_SEL>(face_r_dim);
+    config_unpacker_x_end<UNP_SEL>(face_r_dim);
 
     _llk_unpack_AB_mop_config_<BType>(transpose>0, num_faces, narrow_tile); // transpose of faces 0,2,1,3
 }

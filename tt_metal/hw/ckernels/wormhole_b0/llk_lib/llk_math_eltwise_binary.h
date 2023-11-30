@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #pragma once
 #include "ckernel_include.h"
 #include "ckernel_template.h"
@@ -209,7 +210,7 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
 }
 
 
-template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type>
+template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type, std::uint32_t FIDELITY_INCREMENT>
 inline void eltwise_binary_configure_addrmod() {
     // Use srcA for data movement
     if constexpr (
@@ -240,7 +241,7 @@ inline void eltwise_binary_configure_addrmod() {
             .srca = {.incr = 0, .clr = 1},
             .srcb = {.incr = 0, .clr = 1},
             .dest = {.incr = 0, .clr = 0, .cr = 1},
-            .fidelity = {.incr = 1}}
+            .fidelity = {.incr = FIDELITY_INCREMENT}}
             .set(ADDR_MOD_2);
 
         addr_mod_t{
@@ -330,15 +331,18 @@ inline void eltwise_binary_configure_mop(const std::uint32_t acc_to_dest = 0, co
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
-    int NUM_FIDELITY_PHASES = 0,
+    int MATH_FIDELITY_DESC = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_math_eltwise_binary_init_(const std::uint32_t num_faces, const std::uint32_t transpose, const std::uint32_t acc_to_dest) {
 
-    eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type>();
+    constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
+    constexpr int MATH_FIDELITY_INCREMENT = get_math_fidelity_increment(MATH_FIDELITY_DESC);
+
+    eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, MATH_FIDELITY_INCREMENT>();
 
     if constexpr (
         (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
-        eltwise_binary_configure_mop<eltwise_binary_type, src_b_bcast_type, NUM_FIDELITY_PHASES, binary_reuse_dest>(acc_to_dest, num_faces);
+        eltwise_binary_configure_mop<eltwise_binary_type, src_b_bcast_type, MATH_FIDELITY_PHASES, binary_reuse_dest>(acc_to_dest, num_faces);
     } else {
         FWASSERT("Unsupported op!", false);
     }

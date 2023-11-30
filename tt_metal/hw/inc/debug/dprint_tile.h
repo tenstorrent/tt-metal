@@ -5,7 +5,7 @@
 #pragma once
 
 #include "hostdevcommon/dprint_common.h"
-
+#include "llk_io.h"
 
 struct SliceRange {
     // A slice object encoding semantics of np.slice(h0:h1:hs, w0:w1:ws)
