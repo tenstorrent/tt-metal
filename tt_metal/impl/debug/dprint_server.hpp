@@ -81,3 +81,13 @@ Note that this function does not actually check whether the device will continue
 data, it only checks whether the print server is currently processing print data.
 */
 void tt_await_debug_print_server();
+
+/**
+@brief Check whether a print hang has been detected by the print server.
+
+The print server tries to determine if a core is stalled due to the combination of (1) a WAIT
+print command and (2) no new print data coming through. An invalid WAIT command and the print
+buffer filling up afterwards can cause the core to spin forever. In this case this function will
+return true and the print server will be terminated.
+*/
+bool tt_print_hang_detected();
