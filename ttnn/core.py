@@ -1042,12 +1042,11 @@ def embedding(
     weights = _reshape_to_4D(weights)
 
     *_, batch_size, sentence_size = input_tensor.shape
-    input_tensor = reshape(input_tensor, shape=(batch_size, 1, sentence_size, 1))
+    input_tensor = reshape(input_tensor, shape=(batch_size, 1, 1, sentence_size))
 
-    split_weights = False
     tilized = layout == TILE_LAYOUT
     embeddings = Tensor(
-        ttl.tensor.embeddings(input_tensor._tensor, weights._tensor, split_weights, tilized, memory_config)
+        ttl.tensor.embeddings(input_tensor._tensor, weights._tensor, tilized, output_mem_config=memory_config)
     )
     embeddings = reshape(embeddings, shape=(batch_size, sentence_size, hidden_embedding_dim))
 

@@ -121,6 +121,8 @@ void TensorModule(py::module &m_tensor) {
     py::implicitly_convertible<std::pair<UnaryOpType, int>, UnaryWithParam>();
     py::implicitly_convertible<std::pair<UnaryOpType, bool>, UnaryWithParam>();
 
+    detail::export_enum<EmbeddingsType>(m_tensor);
+
     auto py_core_coord = py::class_<CoreCoord>(m_tensor, "CoreCoord", R"doc(
         Class defining core coordinate
     )doc");
@@ -385,8 +387,9 @@ void TensorModule(py::module &m_tensor) {
     // input embeddings
     m_tensor.def("embeddings", &embeddings,
         py::arg("input").noconvert(), py::arg("weights").noconvert(),
-        py::arg("split_weights").noconvert() = false,
         py::arg("tilized").noconvert() = false,
+        py::arg("embeddings_type").noconvert() = EmbeddingsType::GENERIC,
+        py::arg("pad_token").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("output_dtype").noconvert() = std::nullopt, R"doc(
         Returns specific indices of the embedding table specified by the input tensor
@@ -396,8 +399,9 @@ void TensorModule(py::module &m_tensor) {
 
             "input", "Tensor containing rows we want", "UInt32 Tensor", "Each element greater than 0 and less than number of embeddings in table.  Shape [batch_size, 1, num_rows, 1]", "Yes"
             "weights", "Entire embedding table", "Tensor", "Tensor shape is [1,1, num_embeddings, num_columns]. Num_columns must be divisible by 32.", "Yes"
-            "split_weights", "Parallelizing over weights (instead of input). Default is false", "Bool", "", "No"
             "tilized", "Enable fused tilize on output. Default is true.", "Bool", "", "No",
+            "embeddings_type", "Version of optimized embeddings to run. PADDED requires passing pad_token. BINARY expects the indices to only be 0, 1 and weights to have 2 rows", "EmbeddingsType", "GENERIC, PADDED, BINARY", "No"
+            "pad_token", "pad_token used in token ids", "uint32_t", "Default is None", "No"
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
             "output_dtype", "DataType of output tensor", "DataType", "Default is weights dtype", "No"
     )doc");

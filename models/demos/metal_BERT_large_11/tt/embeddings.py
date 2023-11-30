@@ -5,7 +5,7 @@
 from typing import List, Optional, Tuple, Union
 import torch
 import tt_lib as ttl
-from tt_lib.utils import pad_weight
+from models.utility_functions import torch2tt_tensor
 
 
 class TtEmbeddings:
@@ -15,6 +15,7 @@ class TtEmbeddings:
         config = hugging_face_reference_model.config
         state_dict = hugging_face_reference_model.state_dict()
         self.embedding_dim = config.hidden_size
+        self.pad_token = config.pad_token_id
 
         base_address = "bert.embeddings"
         if tt_cache_path is not None:
@@ -49,30 +50,45 @@ class TtEmbeddings:
                 )
             ).to(device, self.model_config["EMBEDDINGS_LAYERNORM_BETA_MEMCFG"])
         else:
-            self.word_embeddings_weight = ttl.tensor.Tensor(
-                pad_weight(state_dict[f"{base_address}.word_embeddings.weight"]),
+            self.word_embeddings_weight = torch2tt_tensor(
+                state_dict[f"{base_address}.word_embeddings.weight"],
+                device,
+                ttl.tensor.Layout.ROW_MAJOR,
+                model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
                 model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
-            ).to(device, model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
+            )
 
-            self.position_embeddings_weight = ttl.tensor.Tensor(
-                pad_weight(state_dict[f"{base_address}.position_embeddings.weight"]),
+            self.position_embeddings_weight = torch2tt_tensor(
+                state_dict[f"{base_address}.position_embeddings.weight"],
+                device,
+                ttl.tensor.Layout.ROW_MAJOR,
+                model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
                 model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
-            ).to(device, model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
+            )
 
-            self.token_type_embeddings_weight = ttl.tensor.Tensor(
-                pad_weight(state_dict[f"{base_address}.token_type_embeddings.weight"]),
+            self.token_type_embeddings_weight = torch2tt_tensor(
+                state_dict[f"{base_address}.token_type_embeddings.weight"],
+                device,
+                ttl.tensor.Layout.ROW_MAJOR,
+                model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
                 model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
-            ).to(device, model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"])
+            )
 
-            self.layerNorm_gamma = ttl.tensor.Tensor(
+            self.layerNorm_gamma = torch2tt_tensor(
                 state_dict[f"{base_address}.LayerNorm.weight"].reshape([1, 1, -1, 32]),
+                device,
+                ttl.tensor.Layout.ROW_MAJOR,
+                model_config["EMBEDDINGS_LAYERNORM_GAMMA_MEMCFG"],
                 model_config["EMBEDDINGS_LAYERNORM_GAMMA_DTYPE"],
-            ).to(device, model_config["EMBEDDINGS_LAYERNORM_GAMMA_MEMCFG"])
+            )
 
-            self.layerNorm_beta = ttl.tensor.Tensor(
+            self.layerNorm_beta = torch2tt_tensor(
                 state_dict[f"{base_address}.LayerNorm.bias"].reshape([1, 1, -1, 32]),
+                device,
+                ttl.tensor.Layout.ROW_MAJOR,
+                model_config["EMBEDDINGS_LAYERNORM_BETA_MEMCFG"],
                 model_config["EMBEDDINGS_LAYERNORM_BETA_DTYPE"],
-            ).to(device, model_config["EMBEDDINGS_LAYERNORM_BETA_MEMCFG"])
+            )
 
         self.layerNorm_eps = config.layer_norm_eps
 
@@ -120,8 +136,9 @@ class TtEmbeddings:
         inputs_embeds = ttl.tensor.embeddings(
             input_ids,
             self.word_embeddings_weight,
-            split_weights=False,
             tilized=True,
+            embeddings_type=ttl.tensor.EmbeddingsType.PADDED,
+            pad_token=self.pad_token,
             output_mem_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
         )
         input_ids.deallocate()
@@ -129,8 +146,8 @@ class TtEmbeddings:
         token_type_embeddings = ttl.tensor.embeddings(
             token_type_ids,
             self.token_type_embeddings_weight,
-            split_weights=False,
             tilized=True,
+            embeddings_type=ttl.tensor.EmbeddingsType.BINARY,
             output_mem_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
         )
         token_type_ids.deallocate()
@@ -146,8 +163,8 @@ class TtEmbeddings:
             position_embeddings_tt_tensor = ttl.tensor.embeddings(
                 position_ids,
                 self.position_embeddings_weight,
-                split_weights=False,
                 tilized=True,
+                embeddings_type=ttl.tensor.EmbeddingsType.GENERIC,
                 output_mem_config=self.model_config["OUTPUT_EMBEDDINGS_MEMCFG"],
             )
             # Deallocate inputs_embeds and token_type_embeddings here to avoid having to move final output

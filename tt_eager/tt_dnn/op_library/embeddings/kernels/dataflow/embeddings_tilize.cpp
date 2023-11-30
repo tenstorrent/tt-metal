@@ -5,12 +5,11 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    std::uint32_t batch_offset = get_arg_val<uint32_t>(0);
-    std::uint32_t weights_offset = get_arg_val<uint32_t>(1);
-    std::uint32_t num_blocks      = get_arg_val<uint32_t>(2);
-    std::uint32_t input_dram_buffer_src_addr  = get_arg_val<uint32_t>(3);
-    std::uint32_t weights_dram_buffer_src_addr  = get_arg_val<uint32_t>(4);
-
+    const std::uint32_t input_dram_buffer_src_addr  = get_arg_val<uint32_t>(0);
+    const std::uint32_t weights_dram_buffer_src_addr  = get_arg_val<uint32_t>(1);
+    const std::uint32_t batch_offset = get_arg_val<uint32_t>(2);
+    const std::uint32_t weights_offset = get_arg_val<uint32_t>(3);
+    const std::uint32_t num_blocks      = get_arg_val<uint32_t>(4);
 
     #define in_is_dram get_compile_time_arg_val(0) == 1
     #define in_stick_size_is_power_of_two get_compile_time_arg_val(1) == 1
@@ -48,19 +47,64 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
+    constexpr uint32_t cb_id_in2 = 2;
 
     constexpr uint32_t tile_height = 32;
 
-    uint64_t base_src_noc_addr[tile_height];
+    #if defined PADDED
+    const std::uint32_t pad_token  = get_arg_val<uint32_t>(5);
+    uint64_t pad_noc_addr;
+    {
+        cb_reserve_back(cb_id_in2, 1);
+        uint32_t local_pad_addr = get_write_ptr(cb_id_in2);
+        uint64_t src_noc_addr = get_noc_addr(pad_token, weights);
+        noc_async_read(src_noc_addr, local_pad_addr, weight_stick_size);
+        noc_async_read_barrier();
+        pad_noc_addr = get_noc_addr(local_pad_addr);
+    }
+    #elif defined BINARY
+    uint64_t zero_noc_addr, one_noc_addr;
+    {
+        cb_reserve_back(cb_id_in2, 2);
+        uint32_t local_write_addr = get_write_ptr(cb_id_in2);
+        uint64_t src_noc_addr = get_noc_addr(0, weights);
+        noc_async_read(src_noc_addr, local_write_addr, weight_stick_size);
+        zero_noc_addr = get_noc_addr(local_write_addr);
+
+        local_write_addr += weight_stick_size;
+        src_noc_addr = get_noc_addr(1, weights);
+        noc_async_read(src_noc_addr, local_write_addr, weight_stick_size);
+        one_noc_addr = get_noc_addr(local_write_addr);
+
+        noc_async_read_barrier();
+    }
+    #endif
 
     cb_reserve_back(cb_id_in1, 1);
     uint32_t input_l1_addr = get_write_ptr(cb_id_in1);
     volatile tt_l1_ptr uint32_t* input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_l1_addr);
-    auto read_tiles = [&input_l1_ptr, &weights] (const uint32_t& num_tiles, const uint32_t& width_size) {
+
+    auto read_tiles = [&] (const uint32_t& num_tiles, const uint32_t& width_size) {
         cb_reserve_back(cb_id_in0, num_tiles);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        for (uint32_t k = 0; k < tile_height; k++) {
-            uint64_t src_noc_addr = get_noc_addr(input_l1_ptr[k], weights);
+        for (uint32_t k = 0; k < tile_height; ++k) {
+            uint64_t src_noc_addr;
+            uint32_t token = input_l1_ptr[k];
+            #if defined PADDED
+            if (token == pad_token) {
+                src_noc_addr = pad_noc_addr;
+            } else {
+                src_noc_addr = get_noc_addr(token, weights);
+            }
+            #elif defined BINARY
+            if (token == 0) {
+                src_noc_addr = zero_noc_addr;
+            } else {
+                src_noc_addr = one_noc_addr;
+            }
+            #else
+            src_noc_addr = get_noc_addr(token, weights);
+            #endif
             noc_async_read(src_noc_addr, l1_write_addr, width_size);
             l1_write_addr += width_size;
         }
