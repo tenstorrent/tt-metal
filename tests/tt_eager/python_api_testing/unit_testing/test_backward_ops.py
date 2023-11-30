@@ -669,7 +669,8 @@ class TestBackwardOps:
         logger.info(comp_out_b)
         assert comp_pass_a & comp_pass_b
 
-    # Pytorch referrence
+
+    # Pytorch Reference
     # - name: fill.Scalar(Tensor self, Scalar value) -> Tensor
     #   self: zeros_like(grad)
     #   result: at::fill(self_t, 0)
@@ -680,10 +681,9 @@ class TestBackwardOps:
         grad_tensor = (
             tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
         )
-
+        tt_output_tensor_on_device = tt_lib.tensor.fill_zero_bw(grad_tensor)
         pyt_y = torch.zeros_like(grad_data)
 
-        tt_output_tensor_on_device = tt_lib.tensor.fill_zero_bw(grad_tensor)
         tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
 
         golden_output_tensor = pyt_y
@@ -692,3 +692,33 @@ class TestBackwardOps:
         _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
         logger.info(comp_out)
         assert comp_pass
+
+
+    # Pytorch Reference
+    # - name: fill.Tensor(Tensor self, Tensor value) -> Tensor
+    #   self: zeros_like(grad)
+    #   value: grad.sum()
+    #   result: at::fill(self_t, value_t)
+    def test_bw_fill(self, input_shapes, device):
+        torch.manual_seed(12386)
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        pyt_y = torch.zeros_like(grad_data)
+
+        grad_sum = grad_data.sum()
+        pyt_y.fill_(grad_sum)
+
+        tt_output_tensor_on_device = tt_lib.tensor.fill_bw(grad_tensor)
+
+        tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        tt_output_tensor = tt_output_tensor / tt_output_tensor.numel()
+        golden_output_tensor = pyt_y / pyt_y.numel()
+
+        comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+        logger.info(comp_out)

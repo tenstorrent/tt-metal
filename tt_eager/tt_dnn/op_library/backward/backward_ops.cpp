@@ -238,7 +238,6 @@ std::vector<Tensor> max_bw(const Tensor& grad, const Tensor& input, const Tensor
     return operation::decorate_as_composite(__func__, _max_bw)(grad, input, other, output_mem_config);
 }
 
-
 std::vector<Tensor> _fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = zeros_like(grad, output_mem_config);
@@ -248,6 +247,21 @@ std::vector<Tensor> _fill_zero_bw(const Tensor& grad, const MemoryConfig& output
 std::vector<Tensor> fill_zero_bw(const Tensor& grad, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _fill_zero_bw)(grad, output_mem_config);
+}
+
+std::vector<Tensor> _fill_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor val = grad;
+    for(int rank = val.shape().rank()-1; rank >=0; rank--)
+        val = sum(val, rank, output_mem_config);
+    Tensor result = zeros_like(grad, output_mem_config);
+    result = bcast(result, val,  BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> fill_bw(const Tensor& grad, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _fill_bw)(grad, output_mem_config);
 }
 
 }//namespace tt_metal
