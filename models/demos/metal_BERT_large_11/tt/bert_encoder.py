@@ -139,66 +139,59 @@ class TtBertEncoder:
         self.layer_norm_eps = config.layer_norm_eps
 
         if "OP7_SELFOUT_CONFIG" in model_config:
-            self.selfout_matmul = partial(
-                tt_lib.operations.primary.matmul,
-                program_config=model_config["OP7_SELFOUT_CONFIG"],
-                output_mem_config=model_config["OP7_SELFOUT_OUTPUT_MEMCFG"],
-                output_dtype=model_config["OP7_SELFOUT_OUTPUT_DTYPE"],
-            )
-        else:
-            self.selfout_matmul = partial(
-                tt_lib.tensor.bert_large_selfout_matmul,
-                output_mem_config=model_config["OP7_SELFOUT_OUTPUT_MEMCFG"],
-                output_dtype=model_config["OP7_SELFOUT_OUTPUT_DTYPE"],
-            )
-        if "OP8_LAYERNORM_CONFIG" in model_config:
-            self.mha_layernorm = partial(
-                tt_lib.operations.primary.add_layernorm,
-                program_config=model_config["OP8_LAYERNORM_CONFIG"],
-                output_mem_config=model_config["OP8_LAYERNORM_OUTPUT_MEMCFG"],
-            )
-        else:
-            self.mha_layernorm = partial(
-                tt_lib.operations.primary.add_layernorm,
-                output_mem_config=model_config["OP8_LAYERNORM_OUTPUT_MEMCFG"],
-            )
-        if "OP11_LAYERNORM_CONFIG" in model_config:
-            self.ffn_layernorm = partial(
-                tt_lib.operations.primary.add_layernorm,
-                program_config=model_config["OP11_LAYERNORM_CONFIG"],
-                output_mem_config=model_config["OP11_LAYERNORM_OUTPUT_MEMCFG"],
-            )
-        else:
-            self.ffn_layernorm = partial(
-                tt_lib.operations.primary.add_layernorm,
-                output_mem_config=model_config["OP11_LAYERNORM_OUTPUT_MEMCFG"],
-            )
 
-    def op7_mm_plus_bias(self, mha_res, attention_output_weight, attention_output_bias):
-        mha_out = self.selfout_matmul(
-            mha_res,
-            attention_output_weight,
-            bias=attention_output_bias,
+            def op7_mm_plus_bias(mha_res, attention_output_weight, attention_output_bias):
+                mha_out = tt_lib.operations.primary.matmul(
+                    mha_res,
+                    attention_output_weight,
+                    bias=attention_output_bias,
+                    program_config=model_config["OP7_SELFOUT_CONFIG"],
+                    output_mem_config=model_config["OP7_SELFOUT_OUTPUT_MEMCFG"],
+                    output_dtype=model_config["OP7_SELFOUT_OUTPUT_DTYPE"],
+                )
+                return mha_out
+
+        else:
+
+            def op7_mm_plus_bias(mha_res, attention_output_weight, attention_output_bias):
+                mha_out = tt_lib.tensor.bert_large_selfout_matmul(
+                    mha_res,
+                    attention_output_weight,
+                    bias=attention_output_bias,
+                    output_mem_config=model_config["OP7_SELFOUT_OUTPUT_MEMCFG"],
+                    output_dtype=model_config["OP7_SELFOUT_OUTPUT_DTYPE"],
+                )
+                return mha_out
+
+        self.op7_mm_plus_bias = op7_mm_plus_bias
+        self.mha_ln_program_config = model_config.get(
+            "OP8_LAYERNORM_CONFIG", tt_lib.operations.primary.LayerNormDefaultProgramConfig()
         )
-        return mha_out
+        self.ffn_ln_program_config = model_config.get(
+            "OP11_LAYERNORM_CONFIG", tt_lib.operations.primary.LayerNormDefaultProgramConfig()
+        )
 
     def op8_add_layernorm(self, activation, mha_out):
-        mha_out_add_and_norm = self.mha_layernorm(
+        mha_out_add_and_norm = tt_lib.operations.primary.add_layernorm(
             activation,
             mha_out,
             self.layer_norm_eps,
             self.mha_gamma,
             self.mha_beta,
+            program_config=self.mha_ln_program_config,
+            output_mem_config=self.model_config["OP8_LAYERNORM_OUTPUT_MEMCFG"],
         )
         return mha_out_add_and_norm
 
     def op11_add_layernorm(self, mha_out_add_and_norm, ffn_out):
-        ffn_out_add_and_norm = self.ffn_layernorm(
+        ffn_out_add_and_norm = tt_lib.operations.primary.add_layernorm(
             mha_out_add_and_norm,
             ffn_out,
             self.layer_norm_eps,
             self.ffn_gamma,
             self.ffn_beta,
+            program_config=self.ffn_ln_program_config,
+            output_mem_config=self.model_config["OP11_LAYERNORM_OUTPUT_MEMCFG"],
         )
         return ffn_out_add_and_norm
 

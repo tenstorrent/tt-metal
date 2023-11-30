@@ -10,7 +10,6 @@ from typing import Optional
 import tt_lib
 from tt_lib.utils import pad_weight
 from models.utility_functions import torch2tt_tensor
-from functools import partial
 
 
 def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
@@ -22,83 +21,70 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
     reserve_split_heads_shape = model_config.get("RESERVE_SPLIT_HEADS_SHAPE", None)
 
     if "OP1_FUSED_QKV_MM_CONFIG" in model_config:
-        qkv_matmul = partial(
-            tt_lib.operations.primary.matmul,
-            program_config=model_config["OP1_FUSED_QKV_MM_CONFIG"],
-            output_mem_config=model_config["OP1_FUSED_QKV_MM_OUTPUT_MEMCFG"],
-            output_dtype=model_config["OP1_FUSED_QKV_MM_OUTPUT_DTYPE"],
-        )
-    else:
-        qkv_matmul = partial(
-            tt_lib.tensor.bert_large_fused_qkv_matmul,
-            output_mem_config=model_config["OP1_FUSED_QKV_MM_OUTPUT_MEMCFG"],
-            output_dtype=model_config["OP1_FUSED_QKV_MM_OUTPUT_DTYPE"],
-        )
-    if "OP3_PRE_SOFTMAX_BMM_CONFIG" in model_config:
-        pre_softmax_bmm = partial(
-            tt_lib.operations.primary.matmul,
-            program_config=model_config["OP3_PRE_SOFTMAX_BMM_CONFIG"],
-            output_mem_config=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
-            output_dtype=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
-        )
-    else:
-        pre_softmax_bmm = partial(
-            tt_lib.tensor.bert_large_pre_softmax_bmm,
-            output_mem_config=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
-            output_dtype=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
-        )
-    if "OP5_POST_SOFTMAX_BMM_CONFIG" in model_config:
-        post_softmax_bmm = partial(
-            tt_lib.operations.primary.matmul,
-            program_config=model_config["OP5_POST_SOFTMAX_BMM_CONFIG"],
-            output_mem_config=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
-            output_dtype=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
-        )
-    else:
-        post_softmax_bmm = partial(
-            tt_lib.tensor.bert_large_post_softmax_bmm,
-            output_mem_config=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
-            output_dtype=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
-        )
 
-    if "OP4_SOFTMAX_CONFIG" in model_config:
-        softmax = partial(
-            tt_lib.operations.primary.transformers.scale_mask_softmax_in_place,
-            program_config=model_config["OP4_SOFTMAX_CONFIG"],
-        )
+        def op1_qkv_fused(activation, qkv_weight, qkv_bias):
+            qkv = tt_lib.operations.primary.matmul(
+                activation,
+                qkv_weight,
+                bias=qkv_bias,
+                program_config=model_config["OP1_FUSED_QKV_MM_CONFIG"],
+                output_mem_config=model_config["OP1_FUSED_QKV_MM_OUTPUT_MEMCFG"],
+                output_dtype=model_config["OP1_FUSED_QKV_MM_OUTPUT_DTYPE"],
+            )
+            return qkv
+
     else:
-        softmax = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place
 
-    split_fused_qkv_and_split_heads = partial(
-        tt_lib.operations.primary.transformers.split_fused_qkv_and_split_heads,
-        compute_with_storage_grid_size=model_config.get("GRID_SIZE", device.compute_with_storage_grid_size()),
-        output_mem_config=model_config["OP2_SPLIT_QKV_HEADS_OUTPUT_MEMCFG"],
-    )
+        def op1_qkv_fused(activation, qkv_weight, qkv_bias):
+            qkv = tt_lib.tensor.bert_large_fused_qkv_matmul(
+                activation,
+                qkv_weight,
+                bias=qkv_bias,
+                output_mem_config=model_config["OP1_FUSED_QKV_MM_OUTPUT_MEMCFG"],
+                output_dtype=model_config["OP1_FUSED_QKV_MM_OUTPUT_DTYPE"],
+            )
+            return qkv
 
-    def op1_qkv_fused(activation, qkv_weight, qkv_bias):
-        qkv = qkv_matmul(
-            activation,
-            qkv_weight,
-            bias=qkv_bias,
-        )
-        return qkv
+    grid_size = model_config.get("GRID_SIZE", device.compute_with_storage_grid_size())
 
     def op2_create_qkv_heads(qkv):
         (
             q_heads,
             kt_heads,
             v_heads,
-        ) = split_fused_qkv_and_split_heads(
+        ) = tt_lib.operations.primary.transformers.split_fused_qkv_and_split_heads(
             qkv,
+            compute_with_storage_grid_size=grid_size,
+            output_mem_config=model_config["OP2_SPLIT_QKV_HEADS_OUTPUT_MEMCFG"],
         )
         return q_heads, kt_heads, v_heads
 
-    def op3_bmm(Q_heads, K_T_heads):
-        qkt = pre_softmax_bmm(
-            Q_heads,
-            K_T_heads,
-        )
-        return qkt
+    if "OP3_PRE_SOFTMAX_BMM_CONFIG" in model_config:
+
+        def op3_bmm(Q_heads, K_T_heads):
+            qkt = tt_lib.operations.primary.matmul(
+                Q_heads,
+                K_T_heads,
+                program_config=model_config["OP3_PRE_SOFTMAX_BMM_CONFIG"],
+                output_mem_config=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+                output_dtype=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
+            )
+            return qkt
+
+    else:
+
+        def op3_bmm(Q_heads, K_T_heads):
+            qkt = tt_lib.tensor.bert_large_pre_softmax_bmm(
+                Q_heads,
+                K_T_heads,
+                output_mem_config=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+                output_dtype=model_config["OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE"],
+            )
+            return qkt
+
+    softmax_program_config = model_config.get(
+        "OP4_SOFTMAX_CONFIG", tt_lib.operations.primary.transformers.SoftmaxDefaultProgramConfig()
+    )
 
     def op4_scale_mask_softmax(qkt, attention_mask):
         # Attention scores computation
@@ -107,7 +93,9 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
         # No-op reshapes are handled within pre-softmax (op 7) and post-softmax bmms (op 9)
         shape = qkt.shape()
         qkt = qkt.reshape(shape[0], 1, shape[1] * shape[2], shape[3])
-        attention_scores = softmax(qkt, freciprocal_of_sqrt_hidden_dim, attention_mask)
+        attention_scores = tt_lib.operations.primary.transformers.scale_mask_softmax_in_place(
+            qkt, freciprocal_of_sqrt_hidden_dim, attention_mask, program_config=softmax_program_config
+        )
         attention_scores = attention_scores.reshape(shape)
 
         return attention_scores
@@ -119,6 +107,31 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
         )
 
         return weighted_activation
+
+    if "OP5_POST_SOFTMAX_BMM_CONFIG" in model_config:
+
+        def op5_bmm(attention_scores, V_heads):
+            weighted_activation = tt_lib.operations.primary.matmul(
+                attention_scores,
+                V_heads,
+                program_config=model_config["OP5_POST_SOFTMAX_BMM_CONFIG"],
+                output_mem_config=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+                output_dtype=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
+            )
+
+            return weighted_activation
+
+    else:
+
+        def op5_bmm(attention_scores, V_heads):
+            weighted_activation = tt_lib.tensor.bert_large_post_softmax_bmm(
+                attention_scores,
+                V_heads,
+                output_mem_config=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_MEMCFG"],
+                output_dtype=model_config["OP5_POST_SOFTMAX_BMM_OUTPUT_DTYPE"],
+            )
+
+            return weighted_activation
 
     def op6_unmake_attention_heads(x):
         if num_heads == 1:
