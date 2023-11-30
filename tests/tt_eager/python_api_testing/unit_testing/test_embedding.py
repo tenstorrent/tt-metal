@@ -2,18 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-from pathlib import Path
-import sys
-import time
-import os
 
+import pytest
 import torch
 
 import tt_lib as ttl
 
-from tt_lib.utils import is_close
-from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
+from models.utility_functions import skip_for_wormhole_b0
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
@@ -21,7 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 
 
 def run_embeddings_tests(
-    batch_size, num_embeddings, embedding_dim, num_rows, dtype, in0_mem_config, out_mem_config, device, fused=False
+    batch_size, num_embeddings, embedding_dim, num_rows, dtype, in0_mem_config, out_mem_config, device, tilized=False
 ):
     torch.manual_seed(1234)
 
@@ -38,9 +33,9 @@ def run_embeddings_tests(
     input_tensor = tensor.Tensor(input_rows_torch, ttl.tensor.DataType.UINT32).to(dev, in0_mem_config)
     weights_tensor = tensor.Tensor(weights_torch, dtype).to(dev, in0_mem_config)
 
-    ttz = tensor.embeddings(input_tensor, weights_tensor, False, fused, out_mem_config)
+    ttz = tensor.embeddings(input_tensor, weights_tensor, tilized, output_mem_config=out_mem_config)
 
-    if fused:
+    if tilized:
         tt_data = ttz.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
     else:
         tt_data = ttz.cpu().to_torch()
@@ -55,9 +50,6 @@ def run_embeddings_tests(
     logger.info(f"Out passing={passing_pcc}")
     logger.info(f"Output pcc={output_pcc}")
     assert passing_pcc
-
-
-import pytest
 
 
 @skip_for_wormhole_b0()

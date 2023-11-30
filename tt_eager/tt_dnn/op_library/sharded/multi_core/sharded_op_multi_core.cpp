@@ -339,8 +339,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, {num_units_per_shard});
 
     uint32_t curr_idx_h = 0, curr_idx_w = 0;
-    const auto cores =
-        grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation) for (const auto& core : cores) {
+    const auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
+    for (const auto& core : cores) {
         if (input.layout() == Layout::TILE) {
             uint32_t shard_height = num_units_per_shard_height;
             uint32_t shard_width = num_units_per_shard_width;
