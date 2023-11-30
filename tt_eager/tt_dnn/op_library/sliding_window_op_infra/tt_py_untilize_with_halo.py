@@ -19,11 +19,10 @@ def _get_hash_from_sliding_window_op_params(sliding_window_op_params):
     pad_h, pad_w = sliding_window_op_params[1]
     filter_h, filter_w = sliding_window_op_params[2]
     batch_size, input_h, input_w = sliding_window_op_params[3]
-    num_cores_nhw = sliding_window_op_params[4]
+    num_cores_w, num_cores_h = sliding_window_op_params[4]
+    num_cores_nhw = sliding_window_op_params[5]
 
-    return (
-        f"{stride_h}_{stride_w}_{pad_h}_{pad_w}_{filter_h}_{filter_w}_{batch_size}_{input_h}_{input_w}_{num_cores_nhw}"
-    )
+    return f"{stride_h}_{stride_w}_{pad_h}_{pad_w}_{filter_h}_{filter_w}_{batch_size}_{input_h}_{input_w}_{num_cores_w}_{num_cores_h}_{num_cores_nhw}"
 
 
 class TTPyUntilizeWithHalo(TTPyOp):
@@ -53,7 +52,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 utwh_kernel_configs["r_data_tensor"],
                 utwh_kernel_configs["rr_data_tensor"],
                 0x0,  ## pad_val
-                self.sliding_window_op_params[4],
+                self.sliding_window_op_params[5],
                 utwh_kernel_configs["max_out_nsticks_per_core"],
                 utwh_kernel_configs["local_pad_nsegments_per_core"],
                 utwh_kernel_configs["ll_data_nsegments_per_core"],
@@ -76,12 +75,13 @@ class TTPyUntilizeWithHalo(TTPyOp):
     def set_op_configs(cls, device, sliding_window_op_params_hash, sliding_window_op_params, shard_grid):
         if sliding_window_op_params_hash not in cls.static_kernel_configs_cache_map:
             # TODO: nitika - clean up params data structure
-            assert len(sliding_window_op_params) == 5
+            assert len(sliding_window_op_params) == 6
             stride_h, stride_w = sliding_window_op_params[0]
             pad_h, pad_w = sliding_window_op_params[1]
             window_h, window_w = sliding_window_op_params[2]
             input_n, input_h, input_w = sliding_window_op_params[3]
-            num_cores_nhw = sliding_window_op_params[4]
+            num_cores_w, num_cores_h = sliding_window_op_params[4]
+            num_cores_nhw = sliding_window_op_params[5]
             assert num_cores_nhw > 0
             # TODO: send input_nhw_shape to generate functions (no need for C)
             # output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups
