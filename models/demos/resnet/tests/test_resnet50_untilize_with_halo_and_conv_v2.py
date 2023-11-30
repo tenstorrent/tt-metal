@@ -407,7 +407,7 @@ hardcoded_conv_blocking_and_parallelization_config = {
         (64, 64, 56, 56, 3, 3, 1, 1, 1, 1),
         # layer2
         # (512, 256, 56, 56, 1, 1, 2, 2, 0, 0), # not supported yet
-        # (128, 128, 56, 56, 3, 3, 2, 2, 1, 1), # not supported yet
+        (128, 128, 56, 56, 3, 3, 2, 2, 1, 1),
         (128, 128, 28, 28, 3, 3, 1, 1, 1, 1),
         # layer3
         # (256, 256, 28, 28, 3, 3, 2, 2, 1, 1), # not supported yet
@@ -451,7 +451,7 @@ def test_resnet50_conv(
     pad_w,
 ):
     interleaved_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
+        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
     )
 
     for i in range(1):  # increase num of iterations to test op caching
@@ -636,7 +636,7 @@ def test_resnet50_conv(
                 conv_input_on_device,
                 grid_size,
                 [
-                    act_block_h_datums,
+                    per_core_out_matrix_h,
                     weight_block_w_datums,
                 ],  # act_block_w_datums may include reads of multiple pixels in window
                 tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
@@ -647,7 +647,7 @@ def test_resnet50_conv(
                 conv_input_on_device,
                 grid_size,
                 [
-                    per_core_out_matrix_h,
+                    per_core_out_matrix_h * stride_h * stride_w,
                     weight_block_w_datums,
                 ],  # act_block_w_datums may include reads of multiple pixels in window
                 tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
