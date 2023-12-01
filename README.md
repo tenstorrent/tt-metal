@@ -6,8 +6,8 @@
          * [Installing dependencies on Ubuntu (before accelerator-level)](#installing-dependencies-on-ubuntu-before-accelerator-level)
       * [Installing accelerator-level dependencies](#installing-accelerator-level-dependencies)
          * [Installing TTKMD (kernel-mode driver)](#installing-ttkmd-kernel-mode-driver)
-         * [Installing tt-smi](#installing-tt-smi)
          * [Installing tt-flash firmware](#installing-tt-flash-firmware)
+         * [Installing tt-smi](#installing-tt-smi)
       * [Installing system-level dependencies (after accelerator-level dependencies)](#installing-system-level-dependencies-after-accelerator-level-dependencies)
          * [Installing dependencies on Ubuntu (after accelerator-level)](#installing-dependencies-on-ubuntu-after-accelerator-level)
       * [Installing developer dependencies](#installing-developer-dependencies)
@@ -89,14 +89,14 @@ You must have the following accelerator-level dependencies:
 For Grayskull:
 
 - At least 1 unharvested E150 attached to a PCIe x16 slot
-- TTKMD (Tenstorrent kernel-mode driver) v1.23
-- ``tt-flash`` acclerator firmware 2023-06-28
+- TTKMD (Tenstorrent kernel-mode driver) v1.26
+- ``tt-flash`` acclerator firmware fw_pack-80.4.0.0_acec1267.tar.gz
 - ``tt-smi`` tt-smi_2023-06-16-0283a02404487eea or above
 
 For Wormhole B0:
 
 - At least 1 N150 or N300 attached via PCIe
-- TTKMD (Tenstorrent kernel-mode driver) v1.23
+- TTKMD (Tenstorrent kernel-mode driver) v1.26
 - ``tt-flash`` acclerator firmware 2023-08-08 (7.D)
 - ``tt-smi`` tt-smi-8.6.0.0_2023-08-22-492ad2b9ef82a243 or above
 
@@ -104,101 +104,21 @@ The instructions for installing TTKMD, `tt-flash`, and `tt-smi` follow.
 
 #### Installing TTKMD (kernel-mode driver)
 
-The following instructions assume <VERSION> is the version of the TTKMD which
-you are installing.
-
-1. Go to the latest [SysEng releases
-   page](https://github.com/tenstorrent-metal/tt-metal-sys-eng-packages/releases)
-   and download the appropriate TTKMD installer for **your particular architecture** (ex.
-   Grayskull, Wormhole etc.).
-
-2. Transfer the TTKMD installer to your machine. If it's a remote machine that
-   you connect to via SSH, you will require something like SCP or rsync,
-   outside of the scope of this document.
-
-3. Modify permissions to execute the bash file, execute it, then reboot.
-
-```
-sudo chmod u+x ~/install_ttkmd_<VERSION>.bash && sudo ~/install_ttkmd_<VERSION>.bash && sudo reboot now
-```
-
-4. Upon completion of reboot, check that the KMD is installed by grepping for it.
-
-```
-dkms status | grep tenstorrent
-```
-
-You should see output like:
-
-```
-tenstorrent, <VERSION>, 5.4.0-162-generic, x86_64: installed
-```
-
-where `<VERSION>` is replaced by the version of the KMD that you installed.
-
-#### Installing `tt-smi`
-
-1. Go to the latest [SysEng releases
-   page](https://github.com/tenstorrent-metal/tt-metal-sys-eng-packages/releases)
-   and download the appropriate `tt-smi` executable for **your particular architecture** (ex.
-   Grayskull, Wormhole etc.).
-
-Generally, because `tt-smi` is external software that's always improved, the
-latest version for your particular architecture is sufficient.
-
-2. Transfer `tt-smi` to your machine. If it's a remote machine that you connect to via SSH, you will require something like SCP or rsync, outside of the scope of this document.
-
-3. Move `tt-smi` to an appropriate location in your `$PATH` and make it executable. For example, if your `$PATH` contains `/usr/local/bin`,
-
-```
-sudo cp ~/tt-smi /usr/local/bin/tt-smi
-sudo chmod ugo+x /usr/local/bin/tt-smi
-```
-
-4. Test out your `tt-smi` installation:
-
-```
-tt-smi
-```
-
-5. You can then use `Ctrl+C` to exit the application.
+Please refer to the Tenstorrent [tt-kmd](https://github.com/tenstorrent/tt-kmd) page to get the specific version you need and install.
 
 #### Installing `tt-flash` firmware
 
-1. Go to the latest [SysEng releases
-   page](https://github.com/tenstorrent-metal/tt-metal-sys-eng-packages/releases)
-   and download the appropriate `tt-flash` installer for **your particular architecture** (ex.
-   Grayskull, Wormhole etc.).
+Please refer to the Tenstorrent [tt-flash](https://github.com/tenstorrent/tt-flash) page to get the tt-flash tool.
 
-2. Transfer the `tt-flash` installer to your machine. If it's a remote machine that you connect to via SSH, you will require something like SCP or rsync, outside of the scope of this document.
+You will need to flash your accelerator with the specific version of firmware blob you are looking to install.
 
-3. Modify permissions to execute the flash installer and then install it. Note that flash installers may have arbitrary file names from release, so we will be using `<FLASH_FILE>` as a placeholder for the sake of these instructions.
+The firmware blob for Grayskull should be available [here](https://github.com/tenstorrent/tt-firmware-gs).
 
-```
-sudo chmod u+x ~/<FLASH_FILE> && sudo ~/<FLASH_FILE>
-```
+#### Installing `tt-smi`
 
-If the installer detects a newer firmware but you would like to install a specific older one, you may try the `--force` option:
+Please refer to the Tenstorrent [tt-smi](https://github.com/tenstorrent/tt-smi) page to get the specific version you need and install.
 
-```
-sudo ~/<FLASH_FILE> --force
-```
-
-4. Reset the card to recognize the new firmware.
-
-If you have a Grayskull card, you must reboot to reset:
-
-```
-sudo reboot now
-```
-
-If you have a Wormhole card, you may use warm reset via `tt-smi`:
-
-```
-tt-smi -wr all wait
-```
-
-5. If you are a developer, you should also go through the [section](#installing-developer-dependencies), in addition to any system-level dependencies required after these accelerator-level dependencies.
+If you are a developer, you should also go through the [section](#installing-developer-dependencies), in addition to any system-level dependencies required after these accelerator-level dependencies.
 
 ### Installing system-level dependencies (after accelerator-level dependencies)
 
