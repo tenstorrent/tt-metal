@@ -343,12 +343,12 @@ void py_module(py::module& m_primary) {
     m_primary.def(
         "moreh_matmul",
         &moreh_matmul,
-        py::arg("input_tensor").noconvert(),
-        py::arg("other_tensor").noconvert(),
+        py::arg("input_a").noconvert(),
+        py::arg("input_b").noconvert(),
         py::kw_only(),
         py::arg("output_tensor").noconvert() = std::nullopt,
-        py::arg("transpose_input").noconvert() = false,
-        py::arg("transpose_other").noconvert() = false,
+        py::arg("transpose_input_a").noconvert() = false,
+        py::arg("transpose_input_b").noconvert() = false,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         "Performs a moreh_matmul operation.");
 
@@ -357,10 +357,10 @@ void py_module(py::module& m_primary) {
         "moreh_matmul_backward",
         &moreh_matmul_backward,
         py::arg("output_grad").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("other").noconvert(),
-        py::arg("input_grad").noconvert() = std::nullopt,
-        py::arg("other_grad").noconvert() = std::nullopt,
+        py::arg("input_a").noconvert(),
+        py::arg("input_b").noconvert(),
+        py::arg("input_a_grad").noconvert() = std::nullopt,
+        py::arg("input_b_grad").noconvert() = std::nullopt,
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
         "Performs a moreh_matmul_backward operation.

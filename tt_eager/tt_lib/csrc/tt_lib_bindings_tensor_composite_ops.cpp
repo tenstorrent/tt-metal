@@ -11,29 +11,29 @@ namespace tt::tt_metal::detail{
     void TensorModuleCompositeOPs( py::module & m_tensor){
 
 	m_tensor.def("repeat", &tt::tt_metal::repeat,
-		     py::arg("input_a"), py::arg("shape"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-                    Returns a new tensor filled with repetition of input ``input_a`` tensor according to number of times specified in ``shape``. The rank of ``shape`` should be same as rank of tensor ``input_a`` and contain positive integer entries - a limitation in our implementation.
+            py::arg("input"), py::arg("shape"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+                    Returns a new tensor filled with repetition of input ``input`` tensor according to number of times specified in ``shape``. The rank of ``shape`` should be same as rank of tensor ``input_a`` and contain positive integer entries - a limitation in our implementation.
 
                     Output tensor will have BFLOAT16 data type.
 
                     .. csv-table::
                         :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-                        "input_a", "Input tensor for which repetition is computed", "Tensor", "Tensor of any shape", "Yes"
+                        "input", "Input tensor for which repetition is computed", "Tensor", "Tensor of any shape", "Yes"
                         "shape", "Shape value", "Shape", "The number of times to repeat this tensor along each dimension", "Yes"
                         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 )doc");
 
 	m_tensor.def("power_fp", &tt::tt_metal::power_fp,
-		     py::arg("input_a"), py::arg("exponent"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-                    Returns a new tensor filled with power of input ``input_a`` raised to value of ``exponent``.
+		     py::arg("input"), py::arg("exponent"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+                    Returns a new tensor filled with power of input ``input`` raised to value of ``exponent``.
 
                     Output tensor will have BFLOAT16 data type.
 
                     .. csv-table::
                         :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-                        "input_a", "Input tensor for which power is computed", "Tensor", "Tensor of any shape", "Yes"
+                        "input", "Input tensor for which power is computed", "Tensor", "Tensor of any shape", "Yes"
                         "exponent", "exponent value", "float", "positive floating point value", "Yes"
                         "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 )doc");
@@ -56,7 +56,7 @@ namespace tt::tt_metal::detail{
 
 
         m_tensor.def("outer", &outer,
-            py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Perform a non-batched outer product multiplication ``arg0 x arg1`` with two tensors.
 
             Both input tensors must have BFLOAT16 data type but shape [1,1,N,1] and [1,1,1,M] respectively
@@ -67,8 +67,8 @@ namespace tt::tt_metal::detail{
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-                "input", "First tensor to multiply", "Tensor", "Tensor of shape [1, 1, N, 1]", "Yes"
-                "other", "Second tensor to multiply", "Tensor", "Tensor of shape [1, 1, 1, M]", "Yes"
+                "input_a", "First tensor to multiply", "Tensor", "Tensor of shape [1, 1, N, 1]", "Yes"
+                "input_b", "Second tensor to multiply", "Tensor", "Tensor of shape [1, 1, 1, M]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
@@ -237,8 +237,8 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("isclose", &isclose,
-            py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("rtol") = 1e-05f, py::arg("atol") = 1e-08f, py::arg("equal_nan") = false, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Applies the isclose function to the elements of the input tensor ``input`` and ``other``.
+            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("rtol") = 1e-05f, py::arg("atol") = 1e-08f, py::arg("equal_nan") = false, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Applies the isclose function to the elements of the input tensor ``input_a`` and ``input_b``.
 
             Input tensor must have BFLOAT16 data type.
 
@@ -246,13 +246,13 @@ namespace tt::tt_metal::detail{
 
             if equal_nan True, then two NaN s will be considered equal, else not equal.
 
-            isclose(input, other, rtol, atol) = ∣input−other∣ ≤ atol+rtol×∣other∣.
+            isclose(input_a, input_b, rtol, atol) = ∣input_a−input_B∣ ≤ atol+rtol×∣input_b∣.
 
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-                "input", "Tensor isclose is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "other", "Tensor isclose is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_a", "Tensor isclose is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_b", "Tensor isclose is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "rtol", "rtol value", "float", "default to 1e-05f", "No"
                 "atol", "atol value", "float", "default to 1e-08f", "No"
                 "equal_nan", "equal_nan value", "bool", "default to false", "No"
@@ -330,8 +330,8 @@ namespace tt::tt_metal::detail{
         )doc");
 
         m_tensor.def("subalpha", &subalpha,
-            py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("alpha") = 1.0f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Subtracts ``other``, scaled by ``alpha``, from ``input``.
+            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("alpha") = 1.0f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Subtracts ``input_b``, scaled by ``alpha``, from ``input_a``.
 
             Input tensor must have BFLOAT16 data type.
 
@@ -340,15 +340,15 @@ namespace tt::tt_metal::detail{
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-                "input", "Tensor subalpha is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "other", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_a", "Tensor subalpha is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_b", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "alpha", "Alpha value", "float", "default to 1.0f", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
         m_tensor.def("addalpha", &addalpha,
-            py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("alpha") = 1.0f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Add ``other``, scaled by ``alpha``, from ``input``.
+            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("alpha") = 1.0f, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            Add ``input_b``, scaled by ``alpha``, from ``input_a``.
 
             Input tensor must have BFLOAT16 data type.
 
@@ -357,8 +357,8 @@ namespace tt::tt_metal::detail{
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-                "input", "Tensor addalpha is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "other", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_a", "Tensor addalpha is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                "input_b", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "alpha", "Alpha value", "float", "default to 1.0f", "No"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
@@ -779,7 +779,7 @@ namespace tt::tt_metal::detail{
         detail::bind_binary_op<false, true, false>(m_tensor, "scatter", &tt::tt_metal::scatter, R"doc(Performs scatter operation on elements of the input tensors ``{0}`` and ``{1}``,specifically to copy channel data.)doc");
         detail::bind_binary_op<false, true, false>(m_tensor, "xlogy", &xlogy, R"doc(Performs eltwise-binary xlogy (``{0} * log( {1} )``) on two tensors.)doc");
         detail::bind_binary_op<false, true, false>(m_tensor, "atan2", &atan2, R"doc(Returns tensor with the atan2 activation on elements of the input tensors ``{0}`` and ``{1}``.)doc");
-        detail::bind_binary_op<false, true, false>(m_tensor, "nextafter", &nextafter, R"doc(Returns the next floating-point value after input towards other of the input tensors ``{0}`` and ``{1}``.)doc");
+        detail::bind_binary_op<false, true, false>(m_tensor, "nextafter", &nextafter, R"doc(Returns the next floating-point value after input_a towards input_b of the input tensors ``{0}`` and ``{1}``.)doc");
 
 	    // *** type-2 complex operations in new submodule 'type2_complex' ***
         auto m_type2_cplx = m_tensor.def_submodule("complex", "Complex type2");
@@ -800,56 +800,56 @@ namespace tt::tt_metal::detail{
 
         m_tensor.def("is_real",
 		     py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::is_real),
-            py::arg("input_a"),
+            py::arg("input"),
 	        py::arg("output_mem_config").noconvert() = std::nullopt,
 	        R"doc(Returns boolean tensor if value of complex tensor ``{0}`` is real.)doc"
         );
 
         m_tensor.def("is_imag",
 		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::is_imag),
-            py::arg("input_a"),
+            py::arg("input"),
 	        py::arg("output_mem_config").noconvert() = std::nullopt,
 	        R"doc(Returns boolean tensor if value of complex tensor ``{0}`` is imaginary.)doc"
         );
 
         m_tensor.def("complex_abs",
 		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::complex_abs),
-            py::arg("input_a"),
+            py::arg("input"),
 	        py::arg("output_mem_config").noconvert() = std::nullopt,
 	        R"doc(Returns absolute value of complex tensor ``{0}``.)doc"
         );
 
         m_tensor.def("real",
 		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::real),
-            py::arg("input_a"),
+            py::arg("input"),
 	        py::arg("output_mem_config").noconvert() = std::nullopt,
 	        R"doc(Returns real value of complex tensor ``{0}``.)doc"
         );
 
         m_tensor.def("imag",
 		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::imag),
-            py::arg("input_a"),
+            py::arg("input"),
 	        py::arg("output_mem_config").noconvert() = std::nullopt,
 	        R"doc(Returns imaginary value of complex tensor ``{0}``.)doc"
         );
 
         m_tensor.def("angle",
 		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::angle),
-            py::arg("input_a"),
+            py::arg("input"),
 	        py::arg("output_mem_config").noconvert() = std::nullopt,
 	        R"doc(Returns angle of a complex tensor ``{0}``.)doc"
         );
 
         m_tensor.def("conj",
 		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::conj),
-            py::arg("input_a"),
+            py::arg("input"),
 	        py::arg("output_mem_config").noconvert() = std::nullopt,
 	        R"doc(Returns complex conjugate value of complex tensor ``{0}``.)doc"
         );
 
         m_tensor.def("complex_recip",
 		    py::overload_cast<const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::complex_recip),
-            py::arg("input_a"),
+            py::arg("input"),
 	        py::arg("output_mem_config").noconvert() = std::nullopt,
 	        R"doc(Returns complex reciprocal value of complex tensor ``{0}``.)doc"
         );

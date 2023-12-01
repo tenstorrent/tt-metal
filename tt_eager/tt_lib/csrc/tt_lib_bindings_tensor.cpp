@@ -335,14 +335,14 @@ void TensorModule(py::module &m_tensor) {
 
     // moreh_linear
     m_tensor.def("moreh_matmul", &moreh_matmul,
-        py::arg("input").noconvert(), py::arg("other").noconvert(),  py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+        py::arg("input_a").noconvert(), py::arg("input_b").noconvert(),  py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a moreh_linear operation.
 
         .. csv-table::
             :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-            "input", "Input tensor", "Tensor", "", "Yes"
-            "other", "Other tensor", "Tensor", "", "Yes"
+            "input_a", "First input tensor", "Tensor", "", "Yes"
+            "input_b", "Second input tensor", "Tensor", "", "Yes"
             "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
     )doc");
 

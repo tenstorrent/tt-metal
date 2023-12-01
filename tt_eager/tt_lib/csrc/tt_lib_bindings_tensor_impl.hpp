@@ -59,7 +59,7 @@ void bind_op_with_mem_config(py::module_ &module, std::string op_name, Func &&f,
 
 template <bool fused_activations = true, bool mem_config_arg = true, bool dtype_arg = true, typename Func>
 void bind_binary_op(py::module_ &module, std::string op_name, Func &&f, std::string op_desc) {
-    std::vector<std::string> arg_name = {"input", "other"};
+    std::vector<std::string> arg_name = {"input_a", "input_b"};
     op_desc = fmt::format(op_desc, arg_name[0], arg_name[1]);
 
     std::string docstring = fmt::format(R"doc(
