@@ -109,13 +109,14 @@ struct DebugPrintServerContext {
 
     void SetMute(bool mute_print_server) { mute_print_server_ = mute_print_server; }
 
-    void WaitForNoNewDataProcessed() {
-        // Simply poll the flag every few ms to check whether new data is still being processed.
+    void WaitForPrintsFinished() {
+        // Simply poll the flag every few ms to check whether new data is still being processed,
+        // or whether any cores are waiting for a signal to be raised.
         // TODO(dma): once we have access to the device is there a way we can poll the device to
-        // help here?
+        // check whether more print data is coming?
         do {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        } while (new_data_processed_);
+        } while (hart_waiting_on_signal_.size() > 0 || new_data_processed_);
     }
 
 private:
@@ -377,8 +378,12 @@ void DebugPrintServerContext::thread_poll(
     // Main print loop, go through all chips/cores/harts on the device and poll for any print data
     // written.
     while (true) {
-        if (stop_print_server_)
-            break;
+        if (stop_print_server_) {
+            // If the stop signal was received, exit the print server thread, but wait for any
+            // existing prints to be wrapped up first.
+            if (hart_waiting_on_signal_.size() == 0 && !new_data_processed_)
+                break;
+        }
 
         // Flag for whether any new print data was found in this round of polling.
         bool new_print_data = false;
@@ -452,7 +457,7 @@ void tt_await_debug_print_server() {
         // Call the wait function for the print server, with a timeout
         auto future = std::async(
             std::launch::async,
-            &DebugPrintServerContext::WaitForNoNewDataProcessed,
+            &DebugPrintServerContext::WaitForPrintsFinished,
             DebugPrintServerContext::inst
         );
         if (future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout) {
