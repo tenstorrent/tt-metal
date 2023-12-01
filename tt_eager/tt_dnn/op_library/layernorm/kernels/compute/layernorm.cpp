@@ -99,8 +99,6 @@ void MAIN {
     }
     unpack_reconfig_data_format(tt::CB::c_intermed0, tt::CB::c_intermed0);
     cb_wait_front(cb_in, num_tiles_per_block);
-
-    // UNPACK(( DPRINT  << TSLICE(cb_in, 0, SliceRange::h0_w0_32()) << ENDL() ));
     #endif
 
     // E[x],
@@ -176,6 +174,7 @@ void MAIN {
 
     // (x - E[x])^2, cb_mm2 <-- cb_xmm
     mul_tiles_init();
+    index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -194,6 +193,7 @@ void MAIN {
             cb_push_back(cb_xmm2, subblock_w);
             index_subblock_w_offset += subblock_w;
         }
+        index_h_offset += block_w;
     }
     cb_wait_front(cb_xmm2, num_tiles_per_block);
 
@@ -260,7 +260,7 @@ void MAIN {
             pack_tile(dst0, cb_ex2pe);
             cb_push_back(cb_ex2pe, 1);
             tile_regs_release();
-            cb_wait_front(cb_ex2pe, 1);
+            cb_wait_front(cb_ex2pe, 1+i);
         }
 
     }
