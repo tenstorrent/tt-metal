@@ -41,15 +41,12 @@ class Cluster {
     Cluster(const Cluster &) = delete;
     Cluster(Cluster &&other) noexcept = delete;
 
-    static Cluster &instance();
+    static const Cluster &instance();
 
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
     size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
 
     ARCH arch() const { return this->arch_; }
-
-    void initialize_device_driver(chip_id_t device_id);
-    void close_device_driver(chip_id_t device_id);
 
     const metal_SocDescriptor &get_soc_desc(chip_id_t chip) const;
     uint32_t get_harvested_rows(chip_id_t chip) const;
@@ -134,13 +131,17 @@ class Cluster {
     Cluster();
     ~Cluster();
 
-    void open_device(chip_id_t device_id, const bool &skip_driver_allocs = false);
-    void start_device(chip_id_t device_id, tt_device_params &device_params);
+    void detect_arch_and_target();
+    void generate_cluster_descriptor();
+    void initialize_device_drivers();
+    void open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids, const bool &skip_driver_allocs = false);
+    void start_driver(chip_id_t mmio_device_id, tt_device_params &device_params) const;
 
     tt_device &get_driver(chip_id_t device_id) const;
     void get_metal_desc_from_tt_desc(const std::unordered_map<chip_id_t, tt_SocDescriptor> &input, const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks);
     tt_cxy_pair convert_physical_cxy_to_virtual(const tt_cxy_pair &physical_cxy) const;
-    void configure_static_tlbs(chip_id_t mmio_device_id);
+    void configure_static_tlbs(chip_id_t mmio_device_id) const;
+
 
     ARCH arch_;
     TargetDevice target_type_;
@@ -160,8 +161,6 @@ class Cluster {
     std::unordered_map<chip_id_t, std::set<chip_id_t>> devices_grouped_by_assoc_mmio_device_;
     // Save mapping of device id to associated MMIO device id for fast lookup
     std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_device_;
-    // Holds collection of devices (MMIO and remote) that can be targeted
-    std::set<chip_id_t> target_device_ids_;
 
     tt_device_dram_address_params dram_address_params = {
         DRAM_BARRIER_BASE
