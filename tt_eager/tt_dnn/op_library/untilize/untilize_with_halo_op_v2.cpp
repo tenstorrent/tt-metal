@@ -137,12 +137,13 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     CoreRangeSet all_cores = input_tensor.shard_spec().value().shard_grid;
     uint32_t ncores = all_cores.num_cores();
-    uint32_t ncores_width = 1;
+    uint32_t ncores_c = 1;
     if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         auto core_range = *(all_cores.ranges().begin());
         ncores = core_range.end.x - core_range.start.x + 1;
-        ncores_width = core_range.end.y - core_range.start.y + 1;
+        ncores_c = core_range.end.y - core_range.start.y + 1;
     }
+    log_debug(LogOp, "ncores_c: {}", ncores_c);
     TT_ASSERT(ncores_nhw == ncores);
 
     auto shard_shape = input_tensor.shard_spec().value().shard_shape;
@@ -386,52 +387,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     log_debug(LogOp, "rr_data_src_start_offsets: {}", rr_data_src_start_offsets_per_core);
 
     for (uint32_t core = 0; core < ncores_nhw; ++ core) {
-        CoreCoord core_coord = { core % ncores_x, core / ncores_x };    // logical
-        // left neighbor args
-        if (untilize_with_halo_v2_helpers::left_neighbor_core.count(core_coord) > 0) {
-            CoreCoord left_core = untilize_with_halo_v2_helpers::left_neighbor_core.at(core_coord);
-            CoreCoord left_noc = device->worker_core_from_logical_core(left_core);
-            writer_rt_args[4] = 1;
-            writer_rt_args[5] = left_noc.x;
-            writer_rt_args[6] = left_noc.y;
-            if (untilize_with_halo_v2_helpers::left_neighbor_core.count(left_core) > 0) {
-                CoreCoord left_left_core = untilize_with_halo_v2_helpers::left_neighbor_core.at(left_core);
-                CoreCoord left_left_noc = device->worker_core_from_logical_core(left_left_core);
-                writer_rt_args[1] = 1;
-                writer_rt_args[2] = left_left_noc.x;
-                writer_rt_args[3] = left_left_noc.y;
-            } else {
-                // no left-left neighbor
-                writer_rt_args[1] = 0;
-            }
-        } else {
-            // no left neighbors
-            writer_rt_args[1] = 0;
-            writer_rt_args[4] = 0;
-        }
-        // right neighbor args
-        if (untilize_with_halo_v2_helpers::right_neighbor_core.count(core_coord) > 0) {
-            CoreCoord right_core = untilize_with_halo_v2_helpers::right_neighbor_core.at(core_coord);
-            CoreCoord right_noc = device->worker_core_from_logical_core(right_core);
-            writer_rt_args[7] = 1;
-            writer_rt_args[8] = right_noc.x;
-            writer_rt_args[9] = right_noc.y;
-            if (untilize_with_halo_v2_helpers::right_neighbor_core.count(right_core) > 0) {
-                CoreCoord right_right_core = untilize_with_halo_v2_helpers::right_neighbor_core.at(right_core);
-                CoreCoord right_right_noc = device->worker_core_from_logical_core(right_right_core);
-                writer_rt_args[10] = 1;
-                writer_rt_args[11] = right_right_noc.x;
-                writer_rt_args[12] = right_right_noc.y;
-            } else {
-                // no right-right neighbor
-                writer_rt_args[10] = 0;
-            }
-        } else {
-            // no right neighbors
-            writer_rt_args[7] = 0;
-            writer_rt_args[10] = 0;
-        }
-
         writer_rt_args[13] = local_pad_nsegments_per_core[core];
         writer_rt_args[14] = local_data_src_start_offsets_per_core[core];
         writer_rt_args[15] = local_data_nsegments_per_core[core];
@@ -444,7 +399,60 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         writer_rt_args[22] = rr_data_src_start_offsets_per_core[core];
         writer_rt_args[23] = rr_data_nsegments_per_core[core];
 
-        SetRuntimeArgs(program, writer_kernel_id, core_coord, writer_rt_args);
+        for (uint32_t core_c = 0; core_c < ncores_c; ++ core_c) {
+            CoreCoord core_coord;   // logical
+            if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+                core_coord = { core, core_c };
+            } else {
+                core_coord = { core % ncores_x, core / ncores_x};
+            }
+            // left neighbor args
+            if (untilize_with_halo_v2_helpers::left_neighbor_core.count(core_coord) > 0) {
+                CoreCoord left_core = untilize_with_halo_v2_helpers::left_neighbor_core.at(core_coord);
+                CoreCoord left_noc = device->worker_core_from_logical_core(left_core);
+                writer_rt_args[4] = 1;
+                writer_rt_args[5] = left_noc.x;
+                writer_rt_args[6] = left_noc.y;
+                if (untilize_with_halo_v2_helpers::left_neighbor_core.count(left_core) > 0) {
+                    CoreCoord left_left_core = untilize_with_halo_v2_helpers::left_neighbor_core.at(left_core);
+                    CoreCoord left_left_noc = device->worker_core_from_logical_core(left_left_core);
+                    writer_rt_args[1] = 1;
+                    writer_rt_args[2] = left_left_noc.x;
+                    writer_rt_args[3] = left_left_noc.y;
+                } else {
+                    // no left-left neighbor
+                    writer_rt_args[1] = 0;
+                }
+            } else {
+                // no left neighbors
+                writer_rt_args[1] = 0;
+                writer_rt_args[4] = 0;
+            }
+            // right neighbor args
+            if (untilize_with_halo_v2_helpers::right_neighbor_core.count(core_coord) > 0) {
+                CoreCoord right_core = untilize_with_halo_v2_helpers::right_neighbor_core.at(core_coord);
+                CoreCoord right_noc = device->worker_core_from_logical_core(right_core);
+                writer_rt_args[7] = 1;
+                writer_rt_args[8] = right_noc.x;
+                writer_rt_args[9] = right_noc.y;
+                if (untilize_with_halo_v2_helpers::right_neighbor_core.count(right_core) > 0) {
+                    CoreCoord right_right_core = untilize_with_halo_v2_helpers::right_neighbor_core.at(right_core);
+                    CoreCoord right_right_noc = device->worker_core_from_logical_core(right_right_core);
+                    writer_rt_args[10] = 1;
+                    writer_rt_args[11] = right_right_noc.x;
+                    writer_rt_args[12] = right_right_noc.y;
+                } else {
+                    // no right-right neighbor
+                    writer_rt_args[10] = 0;
+                }
+            } else {
+                // no right neighbors
+                writer_rt_args[7] = 0;
+                writer_rt_args[10] = 0;
+            }
+
+            SetRuntimeArgs(program, writer_kernel_id, core_coord, writer_rt_args);
+        }
 
         // log_debug(LogOp, "Core {}: ", core);
         // log_debug(LogOp, "local pad nsegments: {}", local_pad_nsegments_per_core[core]);
@@ -595,6 +603,7 @@ std::vector<Tensor> UntilizeWithHaloV2::create_output_tensors(const std::vector<
     // NOTE: output is always ROW_MAJOR
     DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
     auto shard_spec = input_tensor.shard_spec().value();
+    // log_debug(LogOp, "INPUT SHARD SPEC: {}", shard_spec);
     auto output_shape = this->compute_output_shapes(input_tensors).at(0);
 
     TT_ASSERT(ncores_nhw_ == input_tensor.shape()[0] * input_tensor.shape()[2] / shard_spec.shard_shape[0]);
@@ -606,6 +615,7 @@ std::vector<Tensor> UntilizeWithHaloV2::create_output_tensors(const std::vector<
     auto out_shard_spec = shard_spec;
     out_shard_spec.shard_shape[0] = output_shape[0] * div_up(output_shape[2], ncores_nhw_);
     out_shard_spec.halo = true;
+    // log_debug(LogOp, "OUTPUT SHARD SPEC: {}", out_shard_spec);
     return {create_sharded_device_tensor(output_shape, output_dtype, Layout::ROW_MAJOR, input_tensor.device(), out_mem_config_, out_shard_spec)};
 }
 
@@ -670,17 +680,6 @@ Tensor untilize_with_halo_v2(const Tensor& input_tensor,
     TT_ASSERT(ncores_nhw == local_data_nsegments_per_core.size());
     // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along width)
-
-    // auto input_shape = input_tensor.shape();
-    // auto input_shard_shape = input_tensor.shard_spec().value().shard_shape;
-
-    // Calculate the max output nsticks across all coresfrom the resharded global indices
-    // uint32_t max_out_nsticks_per_core = 0;
-    // for (auto [shard_start, shard_end] : resharded_start_and_end) { // NOTE: start and end are inclusive
-    //     uint32_t shard_nsticks = shard_end - shard_start + 1;
-    //     max_out_nsticks_per_core = std::max(max_out_nsticks_per_core, shard_nsticks);
-    // }
-    // log_debug("max out nsticks across all shards = {}", max_out_nsticks_per_core);
 
     return operation::run_without_autoformat(UntilizeWithHaloV2{
                                                 pad_val,
