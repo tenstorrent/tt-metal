@@ -22,6 +22,9 @@ from tt_lib.fused_ops.conv import (
     resnet50_optimized_conv,
     resnet50_1x1_conv_s2_as_downsample_and_matmul,
 )
+from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_conv import TTPyConv
+from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
+
 from models.utility_functions import _nearest_32
 
 hardcoded_matmul_config_linear = {
@@ -698,38 +701,38 @@ hardcoded_matmul_config_conv = {
 
 hardcoded_conv_blocking_and_parallelization_config = {
     1: {
-        (3136, 64): [64 * 3, 64, 64, 64, 64, 64, (7, 7), 64, 64],
-        (800, 128): [128 * 3, 32, 128, 32, 64, 32, (5, 5), 32, 128],
-        (224, 256): [256, 32, 128, 32, 128, 32, (1, 7), 32, 256],
-        (64, 512): [512, 32, 64, 32, 64, 32, (1, 2), 32, 512],
+        (3136, 64): [64 * 3, 64, 64, 64, 64, 64, (7, 7), 64, 64, -1],
+        (800, 128): [128 * 3, 32, 128, 32, 64, 32, (5, 5), 32, 128, -1],
+        (224, 256): [256, 32, 128, 32, 128, 32, (1, 7), 32, 256, -1],
+        (64, 512): [512, 32, 64, 32, 64, 32, (1, 2), 32, 512, -1],
         # bypass convs
-        (3136, 256): [128, 64, 64, 64, 64, 64, (7, 7), 64, 256],
-        (800, 512): [256, 32, 64, 32, 64, 32, (5, 5), 32, 512],
-        (224, 1024): [512, 32, 128, 32, 64, 32, (1, 7), 32, 1024],
-        (64, 2048): [1024, 32, 128, 32, 64, 32, (1, 2), 32, 2048],
+        (3136, 256): [128, 64, 64, 64, 64, 64, (7, 7), 64, 256, -1],
+        (800, 512): [256, 32, 64, 32, 64, 32, (5, 5), 32, 512, -1],
+        (224, 1024): [512, 32, 128, 32, 64, 32, (1, 7), 32, 1024, -1],
+        (64, 2048): [1024, 32, 128, 32, 64, 32, (1, 2), 32, 2048, -1],
     },
     2: {
-        (6272, 64): [64 * 3, 128, 64, 128, 64, 128, (7, 7), 128, 64],
-        (1568, 128): [128 * 3, 32, 128, 32, 64, 32, (7, 7), 32, 128],
-        (416, 256): [256, 64, 128, 64, 128, 64, (7, 1), 64, 256],
-        (128, 512): [512, 32, 64, 32, 64, 32, (1, 4), 32, 512],
+        (6272, 64): [64 * 3, 128, 64, 128, 64, 128, (7, 7), 128, 64, -1],
+        (1568, 128): [128 * 3, 32, 128, 32, 64, 32, (7, 7), 32, 128, -1],
+        (416, 256): [256, 64, 128, 64, 128, 64, (7, 1), 64, 256, -1],
+        (128, 512): [512, 32, 64, 32, 64, 32, (1, 4), 32, 512, -1],
         # bypass convs
-        (6272, 256): [128, 128, 64, 128, 64, 128, (7, 7), 128, 256],
-        (1568, 512): [256, 32, 64, 32, 64, 32, (7, 7), 32, 512],
-        (416, 1024): [512, 64, 128, 64, 64, 64, (7, 1), 64, 1024],
-        (128, 2048): [1024, 64, 128, 64, 64, 64, (1, 2), 64, 2048],
+        (6272, 256): [128, 128, 64, 128, 64, 128, (7, 7), 128, 256, -1],
+        (1568, 512): [256, 32, 64, 32, 64, 32, (7, 7), 32, 512, -1],
+        (416, 1024): [512, 64, 128, 64, 64, 64, (7, 1), 64, 1024, -1],
+        (128, 2048): [1024, 64, 128, 64, 64, 64, (1, 2), 64, 2048, -1],
     },
     8: {
-        (25088, 64): [64 * 3, 256, 64, 128, 64, 256, (12, 9), 256, 64],
-        (6272, 128): [128 * 3, 64, 128, 64, 128, 64, (12, 9), 64, 128],
-        (1568, 256): [256, 160, 32, 160, 32, 160, (10, 8), 160, 32],
-        (416, 512): [512, 64, 64, 64, 64, 64, (7, 8), 64, 64],
+        (25088, 64): [64 * 3, 256, 64, 128, 64, 256, (12, 9), 256, 64, 98],
+        (6272, 128): [128 * 3, 64, 128, 64, 128, 64, (12, 9), 64, 128, 98],
+        (1568, 256): [256, 160, 32, 160, 32, 160, (10, 8), 160, 32, 10],
+        (416, 512): [512, 64, 64, 64, 64, 64, (7, 8), 64, 64, 7],
     },
     16: {
-        (50176, 64): [64 * 3, 256, 64, 128, 64, 512, (12, 9), 512, 64],
-        (12544, 128): [128 * 3, 128, 128, 64, 128, 128, (12, 9), 128, 128],
-        (3136, 256): [256, 288, 32, 96, 32, 288, (11, 8), 288, 32],
-        (800, 512): [512, 96, 64, 96, 64, 96, (9, 8), 96, 64],
+        (50176, 64): [64 * 3, 256, 64, 128, 64, 512, (12, 9), 512, 64, 98],
+        (12544, 128): [128 * 3, 128, 128, 64, 128, 128, (12, 9), 128, 128, 98],
+        (3136, 256): [256, 288, 32, 96, 32, 288, (11, 8), 288, 32, 11],
+        (800, 512): [512, 96, 64, 96, 64, 96, (9, 8), 96, 64, 9],
     },
 }
 
@@ -892,30 +895,64 @@ class Bottleneck:
             grid_size,
             per_core_act_h,
             per_core_weight_w,
+            num_cores_nhw,  # This number is only meaningful for batch 8, 16
         ] = hardcoded_conv_blocking_and_parallelization_config[batch_size][(conv2_output_padded_face_size, width)]
         assert per_core_act_h % 32 == 0
         per_core_act_h_ntiles = (int)(per_core_act_h / 32)
         per_core_weight_w_ntiles = (int)(per_core_weight_w / 32)
-        self.conv2 = resnet50_optimized_conv(
-            conv2_weight.reshape(-1).tolist(),
-            self.conv2_params,
-            self.device,
-            [act_block_h_datums, act_block_w_datums],
-            [act_block_w_datums, weight_block_w_datums],
-            [out_subblock_h_datums, out_subblock_w_datums],
-            out_block_h_datums,
-            grid_size,
-            per_core_act_h_ntiles,
-            per_core_weight_w_ntiles,
-            conv2_bias.tolist(),
-            True,
-            output_mem_config=self.sharded_memory_config,
-            input_tensor_shape=self.conv1_output_shape,
-            weights_dtype=model_config["WEIGHTS_DTYPE"],
-            output_dtype=model_config["ACTIVATIONS_DTYPE"],
-            math_fidelity=model_config["MATH_FIDELITY"],
-            act_c_num_blocks=grid_size[1] if self.conv_halo and conv_2d else 1,
-        )
+        # For sharded input, use new untilize_with_halo + conv infra
+        if self.conv_halo:
+            sliding_window_op_params = [
+                (stride, stride),
+                (1, 1),
+                (3, 3),
+                (input_shape[0], input_shape[1], input_shape[2]),
+                grid_size,
+                num_cores_nhw,
+            ]
+            self.conv2 = TTPyConv(
+                sliding_window_op_params,
+                conv2_weight.reshape(-1).tolist(),
+                self.conv2_params,
+                self.device,
+                [act_block_h_datums, act_block_w_datums],
+                [act_block_w_datums, weight_block_w_datums],
+                [out_subblock_h_datums, out_subblock_w_datums],
+                out_block_h_datums,
+                grid_size,
+                per_core_act_h_ntiles,
+                per_core_weight_w_ntiles,
+                conv2_bias.tolist(),
+                True,
+                output_mem_config=self.sharded_memory_config,
+                input_tensor_shape=self.conv1_output_shape,
+                weights_dtype=model_config["WEIGHTS_DTYPE"],
+                output_dtype=model_config["ACTIVATIONS_DTYPE"],
+                math_fidelity=model_config["MATH_FIDELITY"],
+                act_c_num_blocks=grid_size[1] if conv_2d else 1,
+            )
+            self.tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(self.device, sliding_window_op_params)
+        else:
+            self.conv2 = resnet50_optimized_conv(
+                conv2_weight.reshape(-1).tolist(),
+                self.conv2_params,
+                self.device,
+                [act_block_h_datums, act_block_w_datums],
+                [act_block_w_datums, weight_block_w_datums],
+                [out_subblock_h_datums, out_subblock_w_datums],
+                out_block_h_datums,
+                grid_size,
+                per_core_act_h_ntiles,
+                per_core_weight_w_ntiles,
+                conv2_bias.tolist(),
+                True,
+                output_mem_config=self.sharded_memory_config,
+                input_tensor_shape=self.conv1_output_shape,
+                weights_dtype=model_config["WEIGHTS_DTYPE"],
+                output_dtype=model_config["ACTIVATIONS_DTYPE"],
+                math_fidelity=model_config["MATH_FIDELITY"],
+                act_c_num_blocks=1,
+            )
 
         self.conv3_params = [planes * self.expansion, width, 1, 1, 1, 1, 0, 0, dilation, groups]
         self.conv3_output_shape = compute_conv_output_shape(self.conv3_params, self.conv2_output_shape)
@@ -982,15 +1019,7 @@ class Bottleneck:
         # out = self.relu(out, self.memory_config)
         # logger.info("Running untilize op")
         if self.conv_halo:
-            out = tt_lib.tensor.untilize_with_halo(
-                out,
-                0x0,
-                self.conv1_output_shape[0],
-                self.conv1_output_shape[1],
-                self.conv1_output_shape[2],
-                1,  ## stride case
-                self.sharded_memory_config,
-            )
+            out = self.tt_py_untilize_with_halo_op(out)
         else:
             out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
             out = out.reshape(
@@ -1441,6 +1470,7 @@ class ResNet(nn.Module):
                     grid_size,
                     per_core_act_h,
                     per_core_weight_w,
+                    num_cores_nhw,  # This number is only meaningful for batch 8, 16
                 ] = hardcoded_conv_blocking_and_parallelization_config[batch_size][
                     (downsample_output_padded_face_size, downsample_output_channels)
                 ]
@@ -1553,24 +1583,13 @@ class ResNet(nn.Module):
         # Relu is fused with conv1
 
         if self.sharded:
-            # x = tt_lib.tensor.untilize_with_halo(
-            #     x,
-            #     0xF7FF,  ## pad_val
-            #     self.conv1_output_shape[0],  ## in_n
-            #     self.conv1_output_shape[1],  ## in_h
-            #     self.conv1_output_shape[2],  ## in_w
-            #     2,  ## stride case
-            #     self.height_sharded_memory_config,
-            # )
-            x = tt_lib.tensor.untilize_with_halo_v2(
+            x = tt_lib.tensor.untilize_with_halo(
                 x,
                 0xF7FF,  ## pad_val
                 self.conv1_output_shape[0],  ## in_n
                 self.conv1_output_shape[1],  ## in_h
                 self.conv1_output_shape[2],  ## in_w
-                self.maxpool_config_params["kernel_size"],  ## kernel_h == kernel_w
-                self.maxpool_config_params["stride"],  ## stride_h == stride_w
-                self.maxpool_config_params["pad"],  ## pad_h == pad_w
+                2,  ## stride case
                 self.height_sharded_memory_config,
             )
         else:
