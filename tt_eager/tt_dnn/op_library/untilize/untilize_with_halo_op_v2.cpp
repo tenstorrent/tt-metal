@@ -605,14 +605,12 @@ std::vector<Tensor> UntilizeWithHaloV2::create_output_tensors(const std::vector<
     auto shard_spec = input_tensor.shard_spec().value();
     // log_debug(LogOp, "INPUT SHARD SPEC: {}", shard_spec);
     auto output_shape = this->compute_output_shapes(input_tensors).at(0);
-    cout << "num_cores_nhw=" << ncores_nhw_ << endl;
-    cout << "input_shape[0]=" << input_tensor.shape()[0] << " input_shape[2]=" << input_tensor.shape()[2];
-    cout << " shard shape[0]=" << shard_spec.shard_shape[0];
-    TT_ASSERT(ncores_nhw_ == input_tensor.shape()[0] * input_tensor.shape()[2] / shard_spec.shard_shape[0]);
 
     if (input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         auto core_range = *(shard_spec.shard_grid.ranges().begin());
-        TT_ASSERT(ncores_nhw_ == core_range.end.x - core_range.start.x + 1);
+        TT_FATAL(ncores_nhw_ == core_range.end.x - core_range.start.x + 1);
+    } else {
+        TT_FATAL(ncores_nhw_ == shard_spec.shard_grid.num_cores());
     }
     auto out_shard_spec = shard_spec;
     out_shard_spec.shard_shape[0] = output_shape[0] * div_up(output_shape[2], ncores_nhw_);
