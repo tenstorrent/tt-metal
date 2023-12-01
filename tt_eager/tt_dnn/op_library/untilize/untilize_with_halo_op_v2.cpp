@@ -119,6 +119,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     Buffer *dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
+    bool skip_untilize = input_tensor.layout() == Layout::ROW_MAJOR;
+
     Shape input_shape = input_tensor.shape();
     Shape output_shape = output_tensor.shape();
 
@@ -156,9 +158,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     uint32_t src_cb_id = CB::c_in0;
     uint32_t pad_cb_id = CB::c_in1;
-    uint32_t untilize_out_cb_id = CB::c_out0;
     uint32_t out_cb_id = CB::c_out1;
 
+    // input CB (sharded)
     uint32_t input_ntiles = ntiles_per_block * nblocks_per_core;
     auto src_cb_config = CircularBufferConfig(input_ntiles * in_tile_size, {{src_cb_id, in_df}})
                             .set_page_size(src_cb_id, in_tile_size)
@@ -166,12 +168,18 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
     log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", src_cb_id, input_ntiles, in_tile_size);
 
-    // output of untilize from compute kernel goes into this CB
-    uint32_t output_ntiles = ntiles_per_block * nblocks_per_core;
-    auto untilize_out_cb_config = CircularBufferConfig(output_ntiles * out_tile_size, {{untilize_out_cb_id, out_df}})
-                                    .set_page_size(untilize_out_cb_id, out_tile_size);
-    auto untilize_out_cb = CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
-    log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", untilize_out_cb_id, output_ntiles, out_tile_size);
+    uint32_t input_to_writer_cb_id = src_cb_id;
+    if (!skip_untilize) {
+        uint32_t untilize_out_cb_id = CB::c_out0;
+        input_to_writer_cb_id = untilize_out_cb_id;
+
+        // output of untilize from compute kernel goes into this CB
+        uint32_t output_ntiles = ntiles_per_block * nblocks_per_core;
+        auto untilize_out_cb_config = CircularBufferConfig(output_ntiles * out_tile_size, {{untilize_out_cb_id, out_df}})
+                                        .set_page_size(untilize_out_cb_id, out_tile_size);
+        auto untilize_out_cb = CreateCircularBuffer(program, all_cores, untilize_out_cb_config);
+        log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", untilize_out_cb_id, output_ntiles, out_tile_size);
+    }
 
     // output shard, after inserting halo and padding, goes into this CB as input to next op.
     uint32_t out_cb_pagesize = out_stick_nbytes;
@@ -310,7 +318,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     // writer kernel
     std::vector<uint32_t> writer_ct_args = {
-        untilize_out_cb_id,
+        input_to_writer_cb_id,
         out_cb_id,
         pad_cb_id,
         local_pad_ss_cb_id,
@@ -331,16 +339,18 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .noc = NOC::RISCV_0_default,
             .compile_args = writer_ct_args});
 
-    // compute kernel
-    std::vector<uint32_t> compute_ct_args = {
-        nblocks_per_core,
-        ntiles_per_block };
-    KernelHandle untilize_kernel_id = CreateKernel(
-        program,
-        "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
-        all_cores,
-        ComputeConfig{
-            .compile_args = compute_ct_args});
+    if (!skip_untilize) {
+        // compute kernel
+        std::vector<uint32_t> compute_ct_args = {
+            nblocks_per_core,
+            ntiles_per_block };
+        KernelHandle untilize_kernel_id = CreateKernel(
+            program,
+            "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
+            all_cores,
+            ComputeConfig{
+                .compile_args = compute_ct_args});
+    }
 
     // runtime args for reader
     std::vector<uint32_t> reader_rt_args = { ntiles_per_block * nblocks_per_core };
@@ -541,8 +551,12 @@ void UntilizeWithHaloV2::validate(const std::vector<Tensor> &input_tensors) cons
     const auto& rr_data_start_and_size = input_tensors.at(6);
 
     // validate input data tensor
-    TT_FATAL(input_tensor.layout() == Layout::TILE, "Input tensor should be TILE for untilize");
-    TT_FATAL(input_tensor.volume() % TILE_HW == 0);
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        // skip the untilize, only do halo
+        log_debug(LogOp, "Input is ROW_MAJOR, no need to untilize.");
+    } else {
+        TT_FATAL(input_tensor.volume() % TILE_HW == 0);
+    }
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
 
     // validate all other config tensors
