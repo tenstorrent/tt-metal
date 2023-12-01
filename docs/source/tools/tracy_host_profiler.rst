@@ -114,7 +114,7 @@ The following shows how to profile an example ``function_under_test`` function.
     profiler = Profiler()
 
     profiler.enable()
-    funtion_under_test()
+    function_under_test()
     profiler.disable()
 
 Similar to the pytest setup, calling the parent script with ``-p`` option will profile the region where profiler is enabled.
