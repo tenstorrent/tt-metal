@@ -42,7 +42,6 @@ import torch
 )
 @pytest.mark.parametrize("dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 @skip_for_wormhole_b0()
-@pytest.mark.skip(reason="Watcher error, see issue #")
 def test_run_downsample(
     use_program_cache,
     batch_size,
