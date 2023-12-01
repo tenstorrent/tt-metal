@@ -37,9 +37,20 @@ class TTPyUntilizeWithHalo(TTPyOp):
         self.set_op_configs(device, sliding_window_op_params_hash, sliding_window_op_params)
         assert sliding_window_op_params_hash in TTPyUntilizeWithHalo.static_kernel_configs_cache_map
         utwh_kernel_configs = TTPyUntilizeWithHalo.static_kernel_configs_cache_map[sliding_window_op_params_hash]
-        height_sharded_mem_config = ttl.tensor.MemoryConfig(
-            ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
-        )
+
+        ncores_w, ncores_h = sliding_window_op_params[4]
+        ncores_nhw = sliding_window_op_params[5]
+
+        is_block_sharding = ncores_w == ncores_nhw
+        out_mem_config = None
+        if is_block_sharding:
+            out_mem_config = ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, ttl.tensor.BufferType.L1
+            )
+        else:
+            out_mem_config = ttl.tensor.MemoryConfig(
+                ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1
+            )
 
         def utwh_(activation):
             return ttl.tensor.untilize_with_halo_v2(
@@ -64,7 +75,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 utwh_kernel_configs["l_data_src_start_offsets_per_core"],
                 utwh_kernel_configs["r_data_src_start_offsets_per_core"],
                 utwh_kernel_configs["rr_data_src_start_offsets_per_core"],
-                height_sharded_mem_config,
+                out_mem_config,
             )
 
         self.utwh = utwh_
@@ -196,7 +207,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
                     config_size,
                 )
 
-                print(f"config list size = {config_size}")
+                # print(f"config list size = {config_size}")
 
                 torch_tensor = torch.tensor(config_list_uint16, dtype=torch.short).reshape(config_tensor_shape)
                 shard_orientation = ttl.tensor.ShardOrientation.ROW_MAJOR
@@ -206,6 +217,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 tt_tensor = ttl.tensor.Tensor(torch_tensor, ttl.tensor.DataType.UINT16).to(
                     device, height_sharded_mem_config, shard_spec
                 )
+                # ttl.device.DumpDeviceMemoryState(device)
 
                 ## validate
                 tt_tensor_cpu = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch().reshape(config_tensor_shape)
