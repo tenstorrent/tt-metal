@@ -206,7 +206,7 @@ int main(int argc, char** argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:test_noc_rtor");
+    log_info("CSV_MICROBENCHMARK:title:test_noc_rtor");
     log_info(
         "CSV_INPUT:num-cores-r:{}:num-cores-c:{}:num-tiles:{}:noc-index:{}:"
         "access-type:{}:use-device-profiler:{}",

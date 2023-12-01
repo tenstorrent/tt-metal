@@ -310,7 +310,7 @@ int main(int argc, char **argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:test_dram_offchip");
+    log_info("CSV_MICROBENCHMARK:title:test_dram_offchip");
     log_info(
         "CSV_INPUT:input-size:{}:access-type:{}:use-device-profiler:{}",
         input_size,
