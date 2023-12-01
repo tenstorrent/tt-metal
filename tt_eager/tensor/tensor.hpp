@@ -60,6 +60,8 @@ class Tensor {
         const std::string write_to_string(Layout print_layout = Layout::ROW_MAJOR, bool pretty_print = false) const;
         void print(Layout print_layout=Layout::ROW_MAJOR, bool pretty_print=false) const;
 
+        Tensor extract_shard(CoreCoord core) const;
+
         // ======================================================================================
         //                                  Low Level APIs
         // ======================================================================================

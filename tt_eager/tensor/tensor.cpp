@@ -146,6 +146,31 @@ Tensor Tensor::cpu() const {
     return tensor_impl::to_host_wrapper(*this);
 }
 
+
+Tensor Tensor::extract_shard(CoreCoord core) const{
+
+    auto buffer= this->buffer();
+    uint32_t core_id = buffer->core_to_core_id().at(core);
+    auto buffer_shard_shape = buffer->shard_shape();
+    std::array <uint32_t, 4> shard_shape_array = {1,1,buffer_shard_shape[0],buffer_shard_shape[1]};
+    Shape shard_shape(shard_shape_array);
+    std::vector<uint32_t> device_data;
+    ::detail::ReadShard(*buffer, device_data, core_id);
+
+
+    auto dtype = this->dtype();
+    if(dtype ==DataType::BFLOAT16){
+        auto unpacked_data = tensor_impl::unpack_uint32_vec<bfloat16>(device_data);
+        auto output_buffer = owned_buffer::create<bfloat16>(std::move(unpacked_data));
+        return Tensor(OwnedStorage{output_buffer}, shard_shape, this->dtype(), this->layout());
+    }
+    else{
+        auto output_buffer = owned_buffer::create<uint32_t>(std::move(device_data));
+        return Tensor(OwnedStorage{output_buffer}, shard_shape, this->dtype(), this->layout());
+    }
+
+}
+
 Tensor Tensor::to(Layout target_layout) const {
     ZoneScoped;
     TT_ASSERT(this->storage_type() != StorageType::DEVICE && "Bring tensor to host before converting to target layout");

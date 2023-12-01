@@ -206,6 +206,42 @@ class Buffer {
         }
     }
 
+    std::unordered_map<CoreCoord, uint32_t> core_to_core_id() const{
+        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
+        return core_to_core_id_;
+    }
+
+    std::vector<uint32_t> host_pages_in_shard(uint32_t core_id) const
+    {
+        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
+        return core_host_page_indices_[core_id];
+    }
+
+    std::vector<uint32_t> host_pages_in_shard(CoreCoord core) const
+    {
+        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
+        auto core_id = core_to_core_id_.at(core);
+        return core_host_page_indices_[core_id];
+    }
+
+    std::vector<uint32_t> dev_pages_in_shard(const uint32_t & core_id) const
+    {
+        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
+        auto host_pages= core_host_page_indices_[core_id];
+        std::vector<uint32_t> dev_pages;
+        dev_pages.reserve(host_pages.size());
+        for(auto host_page: host_pages){
+            dev_pages.push_back(dev_page_to_host_page_mapping_[host_page]);
+        }
+        return dev_pages;
+    }
+
+    std::vector<uint32_t> dev_pages_in_shard(const CoreCoord & core) const
+    {
+        TT_ASSERT(is_sharded(this->buffer_layout_) , "Buffer not sharded");
+        auto core_id = core_to_core_id_.at(core);
+        return dev_pages_in_shard(core_id);
+    }
 
     std::string get_shard_info() const;
     void print_shard_info() const;
@@ -230,6 +266,7 @@ class Buffer {
     std::vector< std::vector<uint32_t> > core_host_page_indices_;
     std::vector<uint32_t> dev_page_to_core_mapping_;
     std::vector<uint32_t> dev_page_to_host_page_mapping_;
+    std::unordered_map<CoreCoord, uint32_t> core_to_core_id_;
 };
 
 }  // namespace tt_metal

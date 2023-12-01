@@ -258,6 +258,29 @@ namespace detail {
 
     }
 
+    void read_pages_to_host_helper(
+                                  Device * device,
+                                  const Buffer & dev_buffer,
+                                  std::vector<uint32_t> &host_buffer,
+                                  const uint32_t & page_size,
+                                  const uint32_t & host_page_id,
+                                  const uint32_t & dev_page_id,
+                                  const uint32_t & bank_id
+    ){
+        auto absolute_address = dev_buffer.page_address(bank_id, dev_page_id);
+        auto noc_coordinates = dev_buffer.noc_coordinates(bank_id);
+
+        uint32_t num_entries_per_page = page_size/sizeof(uint32_t);
+        auto page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
+        uint32_t host_buffer_start = host_page_id * num_entries_per_page;
+        uint32_t dev_page_index = 0;
+        for(uint32_t host_buffer_index = host_buffer_start; host_buffer_index < host_buffer_start + num_entries_per_page; host_buffer_index++){
+            host_buffer[host_buffer_index] = page[dev_page_index];
+            dev_page_index++;
+        }
+
+    }
+
     void ReadFromDeviceSharded(const Buffer &buffer, std::vector<uint32_t> &host_buffer, std::optional<TensorMemoryLayout> override_layout){
 
         TensorMemoryLayout buffer_layout;
@@ -295,16 +318,16 @@ namespace detail {
             auto core = cores[core_index];
             auto bank_id = core_bank_ids[core_index];
             auto host_page_id = host_page_ids[dev_page_id];
-            auto absolute_address = buffer.page_address(bank_id, dev_page_id);
-            auto noc_coordinates = buffer.noc_coordinates(bank_id);
+            read_pages_to_host_helper(
+                device,
+                buffer,
+                host_buffer,
+                page_size,
+                host_page_id,
+                dev_page_id,
+                bank_id
+            );
 
-            auto page = llrt::read_hex_vec_from_core(device->id(), noc_coordinates, absolute_address, page_size);
-            uint32_t host_buffer_start = host_page_id * num_entries_per_page;
-            uint32_t dev_page_index = 0;
-            for(uint32_t host_buffer_index = host_buffer_start; host_buffer_index < host_buffer_start + num_entries_per_page; host_buffer_index++){
-                host_buffer[host_buffer_index] = page[dev_page_index];
-                dev_page_index++;
-            }
             #ifdef DEBUG_PRINT_SHARD
                 print_page(dev_page_id, core, host_page_id, noc_coordinates, absolute_address, bank_id,  page);
             #endif
@@ -349,6 +372,41 @@ namespace detail {
             } break;
             default: TT_FATAL(false && "Unsupported buffer type!");
         }
+    }
+
+    void ReadShard(const Buffer &buffer, std::vector<uint32_t> &host_buffer, const uint32_t & core_id) {
+
+        Device *device = buffer.device();
+        TT_ASSERT(is_sharded(buffer.buffer_layout()));
+        host_buffer.clear();  // overwrite the data
+
+        uint32_t num_entries_per_page = buffer.page_size() / sizeof(uint32_t);
+        uint32_t num_entries_per_shard = num_entries_per_page * buffer.shard_size();
+        host_buffer = std::vector<uint32_t>(num_entries_per_shard);
+
+        auto page_ids = buffer.dev_pages_in_shard(core_id);
+
+        auto core_bank_ids = buffer.core_bank_indices();
+        auto dev_page_to_core_mapping = buffer.dev_page_to_core_mapping();
+
+        uint32_t host_page_id = 0;
+        for(auto dev_page_id: page_ids){
+            auto core_index = dev_page_to_core_mapping[dev_page_id];
+            auto bank_id = core_bank_ids[core_index];
+            read_pages_to_host_helper(
+                device,
+                buffer,
+                host_buffer,
+                buffer.page_size(),
+                host_page_id,
+                dev_page_id,
+                bank_id
+            );
+            host_page_id++;
+
+        }
+
+
     }
 
     void LaunchProgram(Device *device, Program &program) {

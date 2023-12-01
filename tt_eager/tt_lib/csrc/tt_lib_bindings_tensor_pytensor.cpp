@@ -683,6 +683,27 @@ Tensor convert_torch_tensor_to_tt_tensor(
 
                     tt_tensor = tt_tensor.to(tt_device)
             )doc")
+            .def("extract_shard", [](const Tensor &self, CoreCoord core) {
+                return self.extract_shard(core);
+            }, py::arg("core").noconvert(),
+                py::keep_alive<0, 2>(), R"doc(
+                Move TT Tensor from host device to TT accelerator device.
+
+                Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B (in TILE layout) are supported on device.
+
+                If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
+
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+                | Argument  | Description                                     | Data type                  | Valid range           | Required |
+                +===========+=================================================+============================+=======================+==========+
+                | arg0      | Core who's shard we want                        | tt_lib.tensor.CoreCoord    | TT accelerator device | Yes      |
+                +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
+
+
+                .. code-block:: python
+
+                    tt_tensor = tt_tensor.to(tt_device)
+            )doc")
             .def("cpu", &Tensor::cpu, R"doc(
                 Move TT Tensor from TT accelerator device to host device.
 

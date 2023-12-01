@@ -98,6 +98,7 @@ inline std::vector< std::vector<uint32_t> > core_to_host_pages(
     return ret_vec;
 }
 
+
 //#define DEBUG_SHARD_PRINT
 std::string Buffer::get_shard_info() const {
     std::string ret_str = "Shard info for buffer \n";
@@ -159,6 +160,11 @@ Buffer::Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferTy
         auto row_major = shard_parameters.value().shard_orientation == ShardOrientation::ROW_MAJOR;
         all_cores_ = corerange_to_cores(shard_parameters.value().shard_grid, this->num_cores(), row_major);
         TT_ASSERT(this->num_cores() == all_cores_.size());
+        uint32_t core_id = 0;
+        for(auto core: all_cores_){
+            this->core_to_core_id_.insert({core, core_id });
+            core_id++;
+        }
         core_host_page_indices_ = core_to_host_pages(shard_size(), this->num_cores(), buffer_layout, page_shape(), shard_shape(), tensor2d_size());
         core_bank_indices_.reserve(this->num_cores());
 

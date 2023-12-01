@@ -55,6 +55,21 @@ namespace tt::tt_metal{
         void ReadFromBuffer(const Buffer &buffer, std::vector<uint32_t> &host_buffer);
 
 
+        /**
+        * Copies data from a buffer into a host buffer
+        *
+        * Return value: void
+        *
+        * | Argument    | Description                                     | Data type               | Valid range                                      | Required |
+        * |-------------|-------------------------------------------------|-------------------------|--------------------------------------------------|----------|
+        * | buffer      | Buffer to read data from                        | const Buffer &          |                                                  | Yes      |
+        * | host_buffer | Buffer on host to copy data into                | std::vector<uint32_t> & |                                                  | Yes      |
+        * | core_id     | ID of core                                      | const uint32_t &        |                                                  | Yes      |
+        */
+        void ReadShard(const Buffer &buffer, std::vector<uint32_t> &host_buffer, const uint32_t & core_id);
+
+
+
         // Launches all kernels on cores specified with kernels in the program.
         // All kernels on a given Tensix core must be launched.
         void LaunchProgram(Device *device, Program &program);

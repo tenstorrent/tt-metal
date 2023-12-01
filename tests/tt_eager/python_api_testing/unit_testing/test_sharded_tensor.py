@@ -45,11 +45,14 @@ def print_tiles(tiled_tensor, num_tiles_height, num_tiles_width):
 @pytest.mark.parametrize(
     "tensor_shape, shard_scheme, shard_shape, compute_grid",
     [
-        #        ([1, 4, 64, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (64, 64), (0, 3)),
-        ([1, 1, 128, 256], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (64, 64), (1, 3)),
+        ([1, 4, 64, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (64, 64), (0, 3)),
+        #        ([1, 1, 128, 256], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (64, 64), (1, 3)),
         #        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, (1024, 64), None),
-        #        ([1, 1, 128, 50176], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (128, 512), None),
+        #        ([1, 1, 256, 32], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (32, 32), None),
+        #        ([1, 1, 128, 64], ttl.tensor.TensorMemoryLayout.WIDTH_SHARDED, (32, 64), None),
         #        ([1, 1, 100352, 64], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (2048, 32), None),
+        #        ([1, 1, 2048, 64], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (1024, 64), None),
+        #        ([1, 1, 64, 64], ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED, (32, 64), None),
     ],
 )
 @pytest.mark.parametrize(
@@ -83,7 +86,7 @@ def test_tensor_conversion_between_torch_and_tt_tile(
         tile_row = None
         for col_idx in range(0, int(num_tiles_width)):
             tile_idx = col_idx + num_tiles_width * row_idx
-            tile = torch.full((1, 1, TILE_WIDTH, TILE_HEIGHT), tile_idx, dtype=dtype)
+            tile = torch.full((1, 1, TILE_WIDTH, TILE_HEIGHT), tile_idx + 1, dtype=dtype)
             if tile_row == None:
                 tile_row = tile
             else:
@@ -96,6 +99,10 @@ def test_tensor_conversion_between_torch_and_tt_tile(
     tt_tensor = ttl.tensor.Tensor(torch_tensor, tt_dtype).to(ttl.tensor.Layout.TILE)
     mem_config = ttl.tensor.MemoryConfig(shard_scheme, ttl.tensor.BufferType.L1)
     tt_tensor = tt_tensor.to(device, mem_config, shard_spec)
+
+    shard_torch_tensor = tt_tensor.extract_shard(ttl.tensor.CoreCoord(0, 1)).to_torch()
+    print("First shard")
+    print(shard_torch_tensor)
     tt_tensor = tt_tensor.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
 
     torch_tensor_after_round_trip = tt_tensor.to_torch()
