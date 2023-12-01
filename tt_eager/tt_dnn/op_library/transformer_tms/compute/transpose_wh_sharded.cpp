@@ -31,7 +31,6 @@ void MAIN {
 
         cb_push_back(cb_out1, 1);
         cb_pop_front(cb_im0, 1);
-        cb_wait_front(cb_out1, 1);
 
 
     }
