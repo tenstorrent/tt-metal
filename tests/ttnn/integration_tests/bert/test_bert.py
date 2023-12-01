@@ -165,7 +165,6 @@ def run_bert_question_and_answering_inference(model_name, batch_size, sequence_s
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])
 @pytest.mark.parametrize("use_optimized_version", [True, False])
-@pytest.mark.skip(reason="Watcher error")
 def test_bert(device, use_program_cache, model_name, batch_size, sequence_size, use_optimized_version):
     enable_persistent_kernel_cache()
     run_bert_question_and_answering_inference(model_name, batch_size, sequence_size, use_optimized_version, device)
