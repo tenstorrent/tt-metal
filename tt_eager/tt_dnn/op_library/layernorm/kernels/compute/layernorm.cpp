@@ -260,7 +260,6 @@ void MAIN {
             pack_tile(dst0, cb_ex2pe);
             cb_push_back(cb_ex2pe, 1);
             tile_regs_release();
-            cb_wait_front(cb_ex2pe, 1+i);
         }
 
     }
