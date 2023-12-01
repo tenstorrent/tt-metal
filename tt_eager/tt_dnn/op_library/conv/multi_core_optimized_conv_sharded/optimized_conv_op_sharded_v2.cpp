@@ -628,7 +628,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     } else {
         compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
         // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
-        if (weight_size_h == 3 and weight_size_w == 3 and (stride_h == 1 or stride_h == 2)) {
+        if (weight_size_h == weight_size_w and weight_size_w > 1 and (stride_h == 1 or stride_h == 2)) {
             reader_with_indices = true;
             // 2D conv
             if (weight_width_sliced) {
@@ -699,7 +699,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
 
         (uint32_t) window_outer,
         (uint32_t) window_inner,
-        (uint32_t) act_block_h_datums};
+        (uint32_t) act_block_h_datums,
+        (uint32_t) weight_size_w,
+        (uint32_t) conv_act_size_w + (2 * pad_w)};
 
     // define for bias
     std::map<string, string> writer_defines;
