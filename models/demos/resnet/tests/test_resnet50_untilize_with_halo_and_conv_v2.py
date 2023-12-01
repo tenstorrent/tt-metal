@@ -638,7 +638,7 @@ def test_resnet50_conv(
                 conv_input_on_device,
                 grid_size,
                 [
-                    per_core_out_matrix_h,
+                    per_core_out_matrix_h * stride_h * stride_w,
                     weight_block_w_datums,
                 ],  # act_block_w_datums may include reads of multiple pixels in window
                 tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
