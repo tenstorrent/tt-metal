@@ -770,6 +770,8 @@ operation::ProgramWithCallbacks layernorm_sharded_(
         subblock_wt,
         num_subblocks_w,
         1,
+        num_rows_per_all_to_all_worker,
+        block_ht * block_wt
     };
     std::vector<uint32_t> all_to_all_except_top_compute_compile_time_args = {
         0,
@@ -780,7 +782,9 @@ operation::ProgramWithCallbacks layernorm_sharded_(
         block_wt,
         subblock_wt,
         num_subblocks_w,
-        1
+        1,
+        num_rows_per_all_to_all_worker,
+        block_ht * block_wt
     };
     std::vector<uint32_t> not_all_to_all_compute_compile_time_args = {
         0,
@@ -791,7 +795,9 @@ operation::ProgramWithCallbacks layernorm_sharded_(
         block_wt,
         subblock_wt,
         num_subblocks_w,
-        0
+        0,
+        num_rows_per_all_to_all_worker,
+        block_ht * block_wt
     };
     // compute kernel
     bool fp32_dest_acc_en = false;
@@ -904,24 +910,12 @@ operation::ProgramWithCallbacks layernorm_sharded_(
     tt_metal::CircularBufferConfig ex_global_cb_config = tt_metal::CircularBufferConfig(ex_global_CB_size, {{ex_global_cb_index, cb_data_format}})
 		.set_page_size(ex_global_cb_index, single_tile_size);
     auto cb_ex_global = tt_metal::CreateCircularBuffer(program, all_cores, ex_global_cb_config);
-    // xmm2
-    uint32_t xmm2_cb_index;
-    xmm2_cb_index = CB::c_intermed2;
-    tt_metal::CircularBufferConfig xmm2_cb_config = tt_metal::CircularBufferConfig(xmm2_CB_size, {{xmm2_cb_index, cb_data_format}})
-        .set_page_size(xmm2_cb_index, single_tile_size);
-    auto cb_xmm2 = tt_metal::CreateCircularBuffer(program, all_cores, xmm2_cb_config);
     // ex2pe
     uint32_t cb_ex2pe_index;
     cb_ex2pe_index = CB::c_intermed3;
     tt_metal::CircularBufferConfig ex2pe_cb_config = tt_metal::CircularBufferConfig(ex2pe_CB_size, {{cb_ex2pe_index, cb_data_format}})
         .set_page_size(cb_ex2pe_index, single_tile_size);
     auto cb_ex2pe = tt_metal::CreateCircularBuffer(program, all_cores, ex2pe_cb_config);
-    // fusion
-    uint32_t cb_fusion_index;
-    cb_fusion_index = CB::c_intermed4;
-    tt_metal::CircularBufferConfig fusion_cb_config = tt_metal::CircularBufferConfig(fusion_CB_size, {{cb_fusion_index, cb_data_format}})
-        .set_page_size(cb_fusion_index, single_tile_size);
-    auto cb_fusion = tt_metal::CreateCircularBuffer(program, all_cores, fusion_cb_config);
     // out
     uint32_t output_cb_index = CB::c_out0; // output operands start at index 16
     tt_metal::CircularBufferConfig output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, {{output_cb_index, out_data_format}})
