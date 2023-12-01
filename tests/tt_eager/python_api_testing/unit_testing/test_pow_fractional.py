@@ -13,7 +13,6 @@ import pytest
 
 
 @skip_for_wormhole_b0()
-@pytest.mark.skip(reason="Watcher error")
 def test_pow_fractional_composite(device):
     torch.manual_seed(577215)
     N = 1
