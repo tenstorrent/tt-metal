@@ -317,7 +317,7 @@ TEST_F(CommandQueueFixture, TestPageSizeTooLarge) {
     EXPECT_ANY_THROW(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), config));
 }
 
-TEST_F(CommandQueueFixture, DISABLED_TestWrapHostHugepageOnEnqueueReadBuffer) {
+TEST_F(CommandQueueFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
     uint32_t page_size = 2048;
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
     uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(this->device_->id(), channel);
