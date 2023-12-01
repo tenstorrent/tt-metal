@@ -2,12 +2,14 @@
 
    * [Installing](#installing)
       * [A note about rebooting](#a-note-about-rebooting)
-      * [Installing system-level dependencies](#installing-system-level-dependencies)
-         * [Installing dependencies on Ubuntu](#installing-dependencies-on-ubuntu)
+      * [Installing system-level dependencies (before accelerator-level dependencies)](#installing-system-level-dependencies-before-accelerator-level-dependencies)
+         * [Installing dependencies on Ubuntu (before accelerator-level)](#installing-dependencies-on-ubuntu-before-accelerator-level)
       * [Installing accelerator-level dependencies](#installing-accelerator-level-dependencies)
          * [Installing TTKMD (kernel-mode driver)](#installing-ttkmd-kernel-mode-driver)
          * [Installing tt-smi](#installing-tt-smi)
          * [Installing tt-flash firmware](#installing-tt-flash-firmware)
+      * [Installing system-level dependencies (after accelerator-level dependencies)](#installing-system-level-dependencies-after-accelerator-level-dependencies)
+         * [Installing dependencies on Ubuntu (after accelerator-level)](#installing-dependencies-on-ubuntu-after-accelerator-level)
       * [Installing developer dependencies](#installing-developer-dependencies)
          * [Installing developer-level dependencies on Ubuntu](#installing-developer-level-dependencies-on-ubuntu)
          * [About wheel installation](#about-wheel-installation)
@@ -46,7 +48,7 @@ installation method in the above list.
 
 ### A note about rebooting
 
-The full installation of accelerator-level and some host-level dependencies to use this software will require
+The full installation of accelerator-level and some system-level dependencies to use this software will require
 a large number of reboots.
 
 The minimum number of reboots you will require will be 2, for
@@ -63,13 +65,13 @@ to install WekaFS to use models along with the hugepages changes required to
 use WekaFS, you will require at least 2 more additional reboots. Because of the
 indeterminate nature of WekaFS, you may require more.
 
-### Installing system-level dependencies
+### Installing system-level dependencies (before accelerator-level dependencies)
 
-System-level dependencies include the third-party libraries, hugepages settings, and Weka mount needed for this project.
+System-level dependencies include the third-party libraries, hugepages settings, and Weka mount needed for this project. We have split this section into two parts. This is because you will require some of the accelerator-level dependencies to continue installing the system-level dependencies after the initial set.
 
-#### Installing dependencies on Ubuntu
+#### Installing dependencies on Ubuntu (before accelerator-level)
 
-1. Install the host system-level dependencies through `apt`.
+1. Install some system-level dependencies through `apt`.
 
 First, perform an update and install the dependencies:
 
@@ -78,25 +80,7 @@ sudo apt update
 sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu1.1 python3.8-venv=3.8.10-0ubuntu1~20.04.8 libgoogle-glog-dev=0.4.0-1build1 libyaml-cpp-dev=0.6.2-4ubuntu1 libboost-all-dev=1.71.0.0ubuntu2 libsndfile1=1.0.28-7ubuntu0.2 libhwloc-dev
 ```
 
-2. Download the raw latest version of the `setup_hugepages.py` script. It should be located [in the repository](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py).
-
-3. Invoke the first pass of the hugepages script and then reboot.
-
-```
-sudo -E python3 setup_hugepages.py first_pass && sudo reboot now
-```
-
-4. Invoke the second pass of the hugepages script and then check that hugepages is correctly set.
-
-```
-sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check
-```
-
-5. You must now also install and mount WekaFS. Note that this is only available on Tenstorrent cloud machines. The instructions are on this [page](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM), which are only available to those who have access to the Tenstorrent cloud.
-
-**NOTE**: You may have to repeat the hugepages steps upon every reboot, depending on your system and other services that use hugepages.
-
-6. If you are a developer, you should also go through the [section](#installing-developer-dependencies) on developer dependencies, in addition to accelerator-level dependencies.
+2. Now continue to following sections to [install](#installing-accelerator-level-dependencies) accelerator-level dependencies and then the [required](#installing-system-level-dependencies-after-accelerator-level-dependencies) system-level dependencies that require the driver.
 
 ### Installing accelerator-level dependencies
 
@@ -214,13 +198,37 @@ If you have a Wormhole card, you may use warm reset via `tt-smi`:
 tt-smi -wr all wait
 ```
 
-5. If you are a developer, you should also go through the [section](#installing-developer-dependencies) on developer dependencies.
+5. If you are a developer, you should also go through the [section](#installing-developer-dependencies), in addition to any system-level dependencies required after these accelerator-level dependencies.
+
+### Installing system-level dependencies (after accelerator-level dependencies)
+
+#### Installing dependencies on Ubuntu (after accelerator-level)
+
+1. Download the raw latest version of the `setup_hugepages.py` script. It should be located [in the repository](https://github.com/tenstorrent-metal/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py).
+
+2. Invoke the first pass of the hugepages script and then reboot.
+
+```
+sudo -E python3 setup_hugepages.py first_pass && sudo reboot now
+```
+
+3. Invoke the second pass of the hugepages script and then check that hugepages is correctly set.
+
+```
+sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check
+```
+
+4. You must now also install and mount WekaFS. Note that this is only available on Tenstorrent cloud machines. The instructions are on this [page](https://github.com/tenstorrent-metal/metal-internal-workflows/wiki/Installing-Metal-development-dependencies-on-a-TT-Cloud-VM), which are only available to those who have access to the Tenstorrent cloud.
+
+**NOTE**: You may have to repeat the hugepages steps upon every reboot, depending on your system and other services that use hugepages.
+
+5. If you are a developer, you should also go through the [section](#installing-developer-dependencies) on developer dependencies, in addition to accelerator-level dependencies.
 
 ### Installing developer dependencies
 
 #### Installing developer-level dependencies on Ubuntu
 
-1. Install host system-level dependencies for development through `apt`.
+1. Install system-level dependencies for development through `apt`.
 
 ```
 sudo apt install clang-6.0=1:6.0.1-14 git git-lfs cmake=3.16.3-1ubuntu1.20.04.1 pandoc
