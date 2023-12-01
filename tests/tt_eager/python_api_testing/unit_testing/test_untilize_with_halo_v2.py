@@ -346,6 +346,7 @@ def test_generate_all_configs_and_references(
         num_cores_nhw,
     ]
     num_cores_w, num_cores_h = grid_size
+    num_cores_c = 1
 
     is_block_sharded = num_cores_nhw == num_cores_w
 
@@ -369,15 +370,15 @@ def test_generate_all_configs_and_references(
     # untilize_with_halp_input_tt_tensor = ttl.tensor.reshape(untilize_with_halp_input_tt_tensor, batch_size, 1, input_h * input_w, input_c)
     grid_size_binary = device.compute_with_storage_grid_size()
 
-    # print(f'GRID SIZE BINARY: {grid_size_binary}')
+    print(f"GRID SIZE BINARY: {grid_size_binary}")
 
     if is_block_sharded:
-        assert input_padded_c % num_cores_h == 0
+        num_cores_c = num_cores_h
+        assert input_padded_c % num_cores_c == 0
         untilize_with_halp_input_tt_tensor = ttl.tensor.interleaved_to_sharded(
             untilize_with_halp_input_tt_tensor,
-            # grid_size_binary,
-            [10, 8],
-            [input_size_to_shard_evenly // num_cores_nhw, input_padded_c // num_cores_h],
+            grid_size,  ## need to pass in actual grid size for block sharded
+            [input_size_to_shard_evenly // num_cores_nhw, input_padded_c // num_cores_c],
             ttl.tensor.TensorMemoryLayout.BLOCK_SHARDED,
             ttl.tensor.ShardOrientation.COL_MAJOR,
         )
@@ -389,12 +390,12 @@ def test_generate_all_configs_and_references(
             ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
+
     # Run forward
     untilize_with_halo_output_tt_tensor = tt_py_untilize_with_halo_op(untilize_with_halp_input_tt_tensor)
 
-    # Compare against golden untilize with halo output
+    # Move the output tensor to host for comparison against golden
     untilize_with_halo_output_pyt_tensor = untilize_with_halo_output_tt_tensor.cpu().to_torch()
-    # print(f"OUTPUT: {untilize_with_halo_output_pyt_tensor}")
 
     ## make each golden shard same size as max shard size
     max_out_shard_nsticks = 0
@@ -406,21 +407,13 @@ def test_generate_all_configs_and_references(
         if max_out_shard_nsticks < size:
             max_out_shard_nsticks = size
         i += 1
-    # print(f"MAX_OUT_SHARD_NSTICKS: {max_out_shard_nsticks}")
-    # print(f"OUT_SHARD_NSTICKS_PER_CORE: {out_shard_nsticks_per_core}")
-    # print(f'SIZE = {len(golden_untilize_with_halo_output_shards)}, {len(golden_untilize_with_halo_output_shards[0])}')
-    # print(f'GOLDEN OUTPUT SHARDS:\n{torch.tensor(golden_untilize_with_halo_output_shards)}')
     for i in range(len(golden_untilize_with_halo_output_shards)):
         start, end = req_conv_input_shard_start_end[i][1]
         pad_size = max_out_shard_nsticks - (end - start + 1)
         pad_vec = numpy.full([pad_size, input_padded_c], 0)
-        # print(f"{golden_untilize_with_halo_output_shards[i].shape}")
         golden_untilize_with_halo_output_shards[i] = numpy.append(
             golden_untilize_with_halo_output_shards[i], pad_vec, axis=0
         )
-        # print(f"{golden_untilize_with_halo_output_shards[i].shape}")
-
-    # print(f'GOLDEN SHAPE: {torch.tensor(golden_untilize_with_halo_output_shards).shape}')
 
     ## flatten
     golden_untilize_with_halo_output = [
@@ -435,48 +428,76 @@ def test_generate_all_configs_and_references(
 
     # plot_diff(torch.abs(torch.reshape(golden_untilize_with_halo_output_pyt_tensor, [max_out_shard_nsticks, num_cores_nhw * input_padded_c]) - torch.reshape(untilize_with_halo_output_pyt_tensor, [max_out_shard_nsticks, num_cores_nhw * input_padded_c])), 0, max_out_shard_nsticks, num_cores_nhw * input_padded_c)
 
-    for i in range(len(golden_untilize_with_halo_output_shards)):
-        output_shard = untilize_with_halo_output_pyt_tensor[
-            i * max_out_shard_nsticks * input_padded_c : (i + 1) * max_out_shard_nsticks * input_padded_c
-        ]
-        golden_shard = golden_untilize_with_halo_output_pyt_tensor[
-            i * max_out_shard_nsticks * input_padded_c : (i + 1) * max_out_shard_nsticks * input_padded_c
-        ]
-        # core_x = i % 12
-        # core_y = i // 12
-        # print(
-        #     f"Core {i} ({core_x},{core_y}), GOLDEN sum = {torch.sum(golden_shard)}, OUTPUT sum = {torch.sum(output_shard)}"
-        # )
+    if is_block_sharded:
+        pass_status = True
+        golden_untilize_with_halo_output_pyt_tensor = torch.reshape(
+            golden_untilize_with_halo_output_pyt_tensor, [-1, input_padded_c]
+        )
+        shard_size_c = input_padded_c // num_cores_c
+        for i in range(num_cores_nhw):
+            for j in range(num_cores_c):
+                output_shard = torch.reshape(
+                    untilize_with_halo_output_tt_tensor.extract_shard(ttl.tensor.CoreCoord(i, j)).to_torch(),
+                    [max_out_shard_nsticks, shard_size_c],
+                )
+                golden_shard = golden_untilize_with_halo_output_pyt_tensor[
+                    i * max_out_shard_nsticks : (i + 1) * max_out_shard_nsticks,
+                    j * shard_size_c : (j + 1) * shard_size_c,
+                ]
+                passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(
+                    golden_shard,
+                    output_shard,
+                    rtol=1e-1,
+                    atol=1e-3,
+                    pcc=0.9999,
+                )
+                print(f"Core ({i, j}), Passing={passing_allclose_and_pcc}, Output={output_info}")
+                pass_status = pass_status and passing_allclose_and_pcc
+
+    else:  ## height sharding
+        for i in range(num_cores_nhw):
+            for j in range(num_cores_c):
+                output_shard = untilize_with_halo_output_pyt_tensor[
+                    i * max_out_shard_nsticks * input_padded_c : (i + 1) * max_out_shard_nsticks * input_padded_c
+                ]
+                golden_shard = golden_untilize_with_halo_output_pyt_tensor[
+                    i * max_out_shard_nsticks * input_padded_c : (i + 1) * max_out_shard_nsticks * input_padded_c
+                ]
+                passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(
+                    golden_shard,
+                    output_shard,
+                    rtol=1e-1,
+                    atol=1e-3,
+                    pcc=0.9999,
+                )
+                print(f"Core {i}, Passing={passing_allclose_and_pcc}, Output={output_info}")
+                # ## for debugging:
+                # if i >= 0:
+                #     output_shard = torch.reshape(torch.Tensor(output_shard), (-1, 32))[0 : out_shard_nsticks_per_core[i]]
+                #     golden_shard = torch.reshape(torch.Tensor(golden_shard), (-1, 32))[0 : out_shard_nsticks_per_core[i]]
+                #     print(f"CORE {i}:")
+                #     print(f"OUTPUT: {output_shard}")
+                #     print(f"GOLDEN: {golden_shard}")
+                # #     diff = torch.abs(golden_shard - output_shard)
+                # #     plot_diff(diff, i, out_shard_nsticks_per_core[i], input_padded_c)
+
+    # Clear the static cache map
+    TTPyUntilizeWithHalo.static_kernel_configs_cache_map = {}
+
+    if not is_block_sharded:
         passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(
-            golden_shard,
-            output_shard,
+            golden_untilize_with_halo_output_pyt_tensor,
+            untilize_with_halo_output_pyt_tensor,
             rtol=1e-1,
             atol=1e-3,
             pcc=0.9999,
         )
-        print(f"Core {i}, Passing={passing_allclose_and_pcc}, Output={output_info}")
-        # ## for debugging:
-        # if i >= 0:
-        #     output_shard = torch.reshape(torch.Tensor(output_shard), (-1, 32))[0 : out_shard_nsticks_per_core[i]]
-        #     golden_shard = torch.reshape(torch.Tensor(golden_shard), (-1, 32))[0 : out_shard_nsticks_per_core[i]]
-        #     print(f"CORE {i}:")
-        #     print(f"OUTPUT: {output_shard}")
-        #     print(f"GOLDEN: {golden_shard}")
-        # #     diff = torch.abs(golden_shard - output_shard)
-        # #     plot_diff(diff, i, out_shard_nsticks_per_core[i], input_padded_c)
-
-    passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(
-        golden_untilize_with_halo_output_pyt_tensor,
-        untilize_with_halo_output_pyt_tensor,
-        rtol=1e-1,
-        atol=1e-3,
-        pcc=0.9999,
-    )
-    print("Passing=", passing_allclose_and_pcc)
-    print("Output info=", output_info)
-    passing_pcc, _ = comp_pcc(
-        golden_untilize_with_halo_output_pyt_tensor, untilize_with_halo_output_pyt_tensor, pcc=0.999
-    )
-    # Clear the static cache map
-    TTPyUntilizeWithHalo.static_kernel_configs_cache_map = {}
-    assert passing_pcc
+        print("Passing=", passing_allclose_and_pcc)
+        print("Output info=", output_info)
+        passing_pcc, _ = comp_pcc(
+            golden_untilize_with_halo_output_pyt_tensor, untilize_with_halo_output_pyt_tensor, pcc=0.999
+        )
+        assert passing_pcc
+    else:
+        print(f"TODO: enable full tensor comparison once the tensor transfer ordering is fixed!")
+        assert pass_status
