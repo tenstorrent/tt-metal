@@ -5,21 +5,21 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
-SliceRange srr = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 };
-SliceRange srt = SliceRange{ .h0 = 0, .h1 = 8, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1 };
+// SliceRange srr = SliceRange{ .h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1 };
+// SliceRange srt = SliceRange{ .h0 = 0, .h1 = 8, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1 };
 
-inline void print_sticks(uint32_t l1_addr, uint32_t stick_start, uint32_t nsticks, uint32_t stick_size = 64) {
-    for (uint32_t i = stick_start; i < stick_start + nsticks; ++ i) {
-        volatile tt_l1_ptr uint16_t* l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr + i * stick_size * 2);
-        DPRINT << i << ": ";
-        for (uint32_t j = 0; j < stick_size; ++ j) {
-            DPRINT << BF16(l1_ptr[j]) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
+// inline void print_sticks(uint32_t l1_addr, uint32_t stick_start, uint32_t nsticks, uint32_t stick_size = 64) {
+//     for (uint32_t i = stick_start; i < stick_start + nsticks; ++ i) {
+//         volatile tt_l1_ptr uint16_t* l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr + i * stick_size * 2);
+//         DPRINT << i << ": ";
+//         for (uint32_t j = 0; j < stick_size; ++ j) {
+//             DPRINT << BF16(l1_ptr[j]) << " ";
+//         }
+//         DPRINT << ENDL();
+//     }
+// }
 
 // Fill an L1 buffer with the given val
 inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {

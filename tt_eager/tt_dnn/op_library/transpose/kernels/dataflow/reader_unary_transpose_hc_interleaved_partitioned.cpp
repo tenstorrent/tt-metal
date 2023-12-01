@@ -5,8 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
-
 using uint32_t = std::uint32_t;
 
 // tile index to address

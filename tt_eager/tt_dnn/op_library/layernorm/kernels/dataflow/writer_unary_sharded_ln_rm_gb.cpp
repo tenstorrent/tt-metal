@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
 FORCE_INLINE void generate_bcast_scaler_c() {
     constexpr uint32_t cb_in_4 = tt::CB::c_in4;

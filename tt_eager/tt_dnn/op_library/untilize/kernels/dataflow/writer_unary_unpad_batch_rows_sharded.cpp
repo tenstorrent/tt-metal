@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
+
 void kernel_main() {
     // This kernel only supports unpadding the end rows of each batch
     uint32_t num_unpadded_output_rows   = get_arg_val<uint32_t>(0);

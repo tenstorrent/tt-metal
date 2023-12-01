@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
 #ifdef FUSE_BIAS
     #include "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_single_core_bias.hpp"
