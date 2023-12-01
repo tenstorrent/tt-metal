@@ -119,3 +119,4 @@ tests/**/*test*conv*.py @tt-nshanker
 tests/python_api_testing/conv/ @tt-nshanker
 tests/python_api_testing/unit_testing/fallback_ops @tt-aho @arakhmati
 tests/python_api_testing/sweep_tests/pytests/tt_dnn/test_composite.py @muthutt
+scripts/profiler @muthutt
