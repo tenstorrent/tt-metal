@@ -8,6 +8,26 @@ Device-side performance profiling is done by annotating device-side code with ti
 
 ``kernel_profiler::mark_time(uint32_t timer_id)`` is the inline function for storing the execution timestamp of events and associating them with a ``timer_id``.
 
+
+How to Run
+~~~~~~~~~~
+
+Device-side profiling is only allowed in profiler builds. ``scripts/build_scripts/build_with_profiler_opt.sh`` is the script for building profiler builds.
+
+Because downloading profiler results from device adds high runtime overhead, ``TT_METAL_DEVICE_PROFILER=1`` environment variable has to be set to perform the download.
+
+The commands to build and run the ``full_buffer`` example after following :ref:`Getting Started<Getting Started>`:
+
+..  code-block:: sh
+
+    cd $TT_METAL_HOME
+    scripts/build_scripts/build_with_profiler_opt.sh
+    make programming_examples
+    TT_METAL_DEVICE_PROFILER=1 ./build/programming_examples/profiler/test_full_buffer
+
+The generated csv is ``profile_log_device.csv`` and is saved under ``{$TT_METAL_HOME}/generated/profiler/.logs`` by default.
+
+
 Example
 -------
 
@@ -51,7 +71,9 @@ The kernel code for full buffer is in ``{$TT_METAL_HOME}/tt_metal/programming_ex
 
 The inner for loop of "nop" instructions is executed multiple times. The count is determined by the define variable ``LOOP_COUNT`` defined by the host side code.
 
-The beginning of each iteration of the outer loop is timestamped under id number 5. The profiler output csv of this kernel for NCRISC on core 0,0 on device 0 looks as follows:
+The beginning of each iteration of the outer loop is timestamped under id number 5.
+
+Deivce-side profiler provides marker information for all riscs and cores used in the program. The following is the portion of the output csv of the ``full_buffer`` test for NCRISC on core 0,0 on device 0:
 
 ..  code-block:: c++
 
@@ -74,9 +96,9 @@ The beginning of each iteration of the outer loop is timestamped under id number
     0, 0, 0, NCRISC, 3, 161095200026549
     0, 0, 0, NCRISC, 4, 161095200026598
 
-ID numbers 1-4 mark default events that are always reported by the device profiler. You can see that additional to default markers 12 more markers can be recorded on each RISC.
+ID numbers 1-4 mark default events that are always reported by the device profiler. You can see that additional to default markers, 12 more markers can be recorded on each RISC.
 
-Default markers mark kernel and FW start and end events and are part of the tt_metal device infrastructure.
+Default markers mark kernel and FW start and end events and are part of the tt_metal device infrastructure. In other words, kernels without any calls to ``kernel_profiler::mark_time(uint32_t timer_id)`` still report these markers.
 
 .. list-table:: Default ID to Event table
    :widths: 15 15
@@ -109,29 +131,10 @@ In this example, stats on inner loop durations are:
          Min [cycles] =        232
 
 
-How to Run
-~~~~~~~~~~
-
-Device side profiling is only allowed in profiler builds.
-
-Because downloading profiler results from device adds high runtime overhead, ``TT_METAL_DEVICE_PROFILER=1`` environment variable has to be set to perform the download.
-
-The commands to build and run the ``full_buffer`` example after following :ref:`Getting Started<Getting Started>`:
-
-..  code-block:: sh
-
-    cd $TT_METAL_HOME
-    scripts/build_scripts/build_with_profiler_opt.sh
-    make programming_examples
-    TT_METAL_DEVICE_PROFILER=1 ./build/programming_examples/profiler/test_full_buffer
-
-The generated csv is ``profile_log_device.csv`` and is saved under ``{$TT_METAL_HOME}/generated/profiler/.logs`` by default.
-
-
 Limitations
 -----------
 
-* Each core has limited L1 buffer for recording device side markers. 16 total markers are supported, 12 spots for custom markers and 4 for default markers.
+* Each core has limited L1 buffer for recording device side markers. Space for only 16 total markers is reserved. 12 of the spots are for custom markers and 4 are for default markers. Flip-side of this limitation is that device-side profiling doesn't use L1 space available for kernels.
 
 * The cycle count from RISCs on the same core are perfectly synced as they all read from the same clock counter.
 

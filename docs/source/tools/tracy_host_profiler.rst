@@ -65,6 +65,16 @@ Here is a snapshot of Tracy C++ profiling:
 .. image:: ../_static/tracy-c++-run.png
     :alt: Tracy C++ run
 
+For example, the ``Device`` constructor shown above is instrumented as follows:
+
+..  code-block:: C++
+
+    Device::Device(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id)
+    {
+        ZoneScoped;
+        this->initialize(l1_bank_remap);
+    }
+
 Python
 ~~~~~~
 
@@ -101,7 +111,7 @@ Instrumenting Python Code
 
 Instrumentation can also be done without using the pytest fixture.
 
-The following shows how to profile an example ``function_under_test`` function.
+The following shows how to profile a function called ``function_under_test`` and all of its child python function calls by manually enabling tracy profiler.
 
 ..  code-block:: python
 
