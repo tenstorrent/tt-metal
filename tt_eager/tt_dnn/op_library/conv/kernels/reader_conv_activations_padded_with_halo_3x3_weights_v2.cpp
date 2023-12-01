@@ -52,6 +52,8 @@ void kernel_main() {
     constexpr uint32_t window_outer                        = get_compile_time_arg_val(10);
     constexpr uint32_t window_inner                        = get_compile_time_arg_val(11);
     constexpr uint32_t act_block_h_datums                  = get_compile_time_arg_val(12);
+    constexpr uint32_t weight_size_w_compile_time_arg      = get_compile_time_arg_val(13);
+    constexpr uint32_t conv_act_size_w_padded      = get_compile_time_arg_val(14);
 
     constexpr uint32_t cb_id_act = 0;
     constexpr uint32_t cb_id_sharded_act = 3;
@@ -162,11 +164,12 @@ void kernel_main() {
     uint32_t reader_offset = 0; // Constant offset for each pixel within filter window
     uint32_t reader_offset_idx = 0;
     for (uint32_t channel_stick_h = 0; channel_stick_h < weight_size_h; channel_stick_h++) {
+        uint32_t reader_offset_row = reader_offset;
         for (uint32_t channel_stick_w = 0; channel_stick_w < weight_size_w; channel_stick_w++) {
-            reader_offsets_ptr[reader_offset_idx++] = reader_offset++;
+            reader_offsets_ptr[reader_offset_idx++] = reader_offset_row++;
         }
         // -1 to go back to previous reader_offset
-        reader_offset += conv_act_size_w - 1; // Assuming (weight_size_w - 1) / 2 == pad_w
+        reader_offset += conv_act_size_w_padded;
     }
 
 
@@ -175,7 +178,7 @@ void kernel_main() {
     // currently works for the case of num_coalesced_reads == weight_size_w since these reads are contiguous on both src/dst side
     // we check if window_inner == weight_size_w to make sure coalescing is legal along full window_inner so the loop can be removed
     constexpr bool coalesce_window_inner_reads = true;
-    constexpr uint32_t num_coalesced_reads = 3;
+    constexpr uint32_t num_coalesced_reads = weight_size_w_compile_time_arg;
     constexpr uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
     // the conditional selecting between coalescing and no-colescing must be constexpr to that compiler can optimized the other path away
     // this has shown to be a big perf win
