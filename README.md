@@ -2,15 +2,15 @@
 
    * [Installing](#installing)
       * [A note about rebooting](#a-note-about-rebooting)
-      * [Installing system-level dependencies (before accelerator-level dependencies)](#installing-system-level-dependencies-before-accelerator-level-dependencies)
+      * [Step 1. Installing system-level dependencies (before accelerator-level dependencies)](#step-1-installing-system-level-dependencies-before-accelerator-level-dependencies)
          * [Installing dependencies on Ubuntu (before accelerator-level)](#installing-dependencies-on-ubuntu-before-accelerator-level)
-      * [Installing accelerator-level dependencies](#installing-accelerator-level-dependencies)
+      * [Step 2. Installing accelerator-level dependencies](#step-2-installing-accelerator-level-dependencies)
          * [Installing TTKMD (kernel-mode driver)](#installing-ttkmd-kernel-mode-driver)
          * [Installing tt-flash firmware](#installing-tt-flash-firmware)
          * [Installing tt-smi](#installing-tt-smi)
-      * [Installing system-level dependencies (after accelerator-level dependencies)](#installing-system-level-dependencies-after-accelerator-level-dependencies)
+      * [Step 3. Installing system-level dependencies (after accelerator-level dependencies)](#step-3-installing-system-level-dependencies-after-accelerator-level-dependencies)
          * [Installing dependencies on Ubuntu (after accelerator-level)](#installing-dependencies-on-ubuntu-after-accelerator-level)
-      * [Installing developer dependencies](#installing-developer-dependencies)
+      * [Step 4. Installing developer dependencies](#step-4-installing-developer-dependencies)
          * [Installing developer-level dependencies on Ubuntu](#installing-developer-level-dependencies-on-ubuntu)
          * [About wheel installation](#about-wheel-installation)
       * [From source](#from-source)
@@ -65,7 +65,7 @@ to install WekaFS to use models along with the hugepages changes required to
 use WekaFS, you will require at least 2 more additional reboots. Because of the
 indeterminate nature of WekaFS, you may require more.
 
-### Installing system-level dependencies (before accelerator-level dependencies)
+### Step 1. Installing system-level dependencies (before accelerator-level dependencies)
 
 System-level dependencies include the third-party libraries, hugepages settings, and Weka mount needed for this project. We have split this section into two parts. This is because you will require some of the accelerator-level dependencies to continue installing the system-level dependencies after the initial set.
 
@@ -82,7 +82,7 @@ sudo apt install software-properties-common=0.99.9.12 build-essential=12.8ubuntu
 
 2. Now continue to following sections to [install](#installing-accelerator-level-dependencies) accelerator-level dependencies and then the [required](#installing-system-level-dependencies-after-accelerator-level-dependencies) system-level dependencies that require the driver.
 
-### Installing accelerator-level dependencies
+### Step 2. Installing accelerator-level dependencies
 
 You must have the following accelerator-level dependencies:
 
@@ -120,7 +120,7 @@ Please refer to the Tenstorrent [tt-smi](https://github.com/tenstorrent/tt-smi) 
 
 If you are a developer, you should also go through the [section](#installing-developer-dependencies), in addition to any system-level dependencies required after these accelerator-level dependencies.
 
-### Installing system-level dependencies (after accelerator-level dependencies)
+### Step 3. Installing system-level dependencies (after accelerator-level dependencies)
 
 #### Installing dependencies on Ubuntu (after accelerator-level)
 
@@ -144,7 +144,7 @@ sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py 
 
 5. If you are a developer, you should also go through the [section](#installing-developer-dependencies) on developer dependencies, in addition to accelerator-level dependencies.
 
-### Installing developer dependencies
+### Step 4. Installing developer dependencies
 
 #### Installing developer-level dependencies on Ubuntu
 
