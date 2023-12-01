@@ -13,6 +13,7 @@ from models.utility_functions import skip_for_wormhole_b0
 
 @skip_for_wormhole_b0()
 def test_pow_fractional_composite(device):
+    torch.manual_seed(577215)
     N = 1
     C = 2
     H = 32
