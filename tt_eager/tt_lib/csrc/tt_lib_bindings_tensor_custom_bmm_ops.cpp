@@ -41,7 +41,7 @@ namespace tt::tt_metal::detail
         )doc");
         // *** matrix multiplication ***
         m_tensor.def("matmul", &matmul,
-            py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Perform a non-batched matrix multiplication ``arg0 x arg1`` with two tensors.
 
             Both input tensors must have BFLOAT16 data type.
@@ -51,13 +51,13 @@ namespace tt::tt_metal::detail
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-                "input", "First tensor to multiply", "Tensor", "Tensor of shape [1, 1, Y, S]", "Yes"
-                "other", "Second tensor to multiply", "Tensor", "Tensor of shape [1, 1, S, X]", "Yes"
+                "input_a", "First tensor to multiply", "Tensor", "Tensor of shape [1, 1, Y, S]", "Yes"
+                "input_b", "Second tensor to multiply", "Tensor", "Tensor of shape [1, 1, S, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
         m_tensor.def("bmm", &bmm,
-            py::arg("input").noconvert(), py::arg("other").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
             Perform a batched matmul ``arg0 x arg1`` with two tensors, where batch dims match.
 
             Both input tensors must have BFLOAT16 data type.
@@ -67,8 +67,8 @@ namespace tt::tt_metal::detail
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
-                "input", "First tensor to multiply", "Tensor", "Tensor of shape [W, Z, Y, S]", "Yes"
-                "other", "Second tensor to multiply", "Tensor", "Tensor of shape [W, Z, S, X]", "Yes"
+                "input_a", "First tensor to multiply", "Tensor", "Tensor of shape [W, Z, Y, S]", "Yes"
+                "input_b", "Second tensor to multiply", "Tensor", "Tensor of shape [W, Z, S, X]", "Yes"
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 

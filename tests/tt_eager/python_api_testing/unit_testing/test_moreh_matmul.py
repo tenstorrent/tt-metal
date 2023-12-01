@@ -312,7 +312,7 @@ def test_primary_moreh_matmul(params, device):
     cpu_layout = ttl.tensor.Layout.ROW_MAJOR
     tt_output = (
         ttl.operations.primary.moreh_matmul(
-            tt_input, tt_other, transpose_input=transpose_input, transpose_other=transpose_other
+            tt_input, tt_other, transpose_input_a=transpose_input, transpose_input_b=transpose_other
         )
         .cpu()
         .to(cpu_layout)
