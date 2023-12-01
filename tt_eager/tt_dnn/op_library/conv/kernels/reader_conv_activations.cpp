@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
 inline void pad_l1_buffer_with_zeroes(uint32_t l1_addr, uint32_t pad_size_bytes) {
     volatile std::uint32_t* dst = reinterpret_cast<volatile std::uint32_t*>(l1_addr);

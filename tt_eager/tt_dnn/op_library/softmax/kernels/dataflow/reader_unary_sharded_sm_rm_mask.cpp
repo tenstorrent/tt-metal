@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 #include "dataflow_api.h"
 
 FORCE_INLINE void generate_bcast_scaler() {

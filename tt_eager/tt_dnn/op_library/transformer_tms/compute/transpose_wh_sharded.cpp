@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint.h"
 #include <cstdint>
 
 #include "compute_kernel_api/transpose_wh.h"

@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
 template <bool DRAM>
 inline void write_tiles_in_block(uint32_t cb_id_out0,

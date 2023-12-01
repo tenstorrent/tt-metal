@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
 // TODO: FORCE INLINE
 inline void read_weight_blocks_inner_h_dim(uint32_t cb_id_weight,

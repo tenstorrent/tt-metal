@@ -5,8 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
-
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lenghts for compat
     uint32_t src0_addr            = get_arg_val<uint32_t>(0);

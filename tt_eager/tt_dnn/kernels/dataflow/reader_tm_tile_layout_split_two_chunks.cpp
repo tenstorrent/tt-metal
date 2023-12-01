@@ -8,7 +8,7 @@
 
 //#define DEBUG
 #ifdef DEBUG
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 #endif
 
 void kernel_main() {

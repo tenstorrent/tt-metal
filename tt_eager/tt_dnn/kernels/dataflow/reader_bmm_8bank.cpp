@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-#include "debug/dprint.h"
+// #include "debug/dprint.h"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lenghts for compat

@@ -4,8 +4,6 @@
 
 #include <cstdint>
 
-#include "debug/dprint.h"
-
 #include "compute_kernel_api/reduce.h"
 
 namespace NAMESPACE {
