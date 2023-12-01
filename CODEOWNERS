@@ -89,6 +89,7 @@ tests/scripts/run_performance.sh @farbabi
 # **/tt_dnn/op_library/bmm/**/module.mk @tt-rkim @mywoodstock @TT-BrianLiu @tt-aho
 tt_eager/tt_dnn/op_library/composite/ @muthutt
 tt_eager/tt_dnn/op_library/complex/ @muthutt
+tt_eager/tt_dnn/op_library/backward/ @muthutt
 
 # eager - python api
 # **/tt_lib/
