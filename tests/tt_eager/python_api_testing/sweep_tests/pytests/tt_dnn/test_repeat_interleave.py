@@ -26,7 +26,7 @@ shapes = (
 
 
 @pytest.mark.parametrize("input_shapes", shapes)
-@pytest.mark.parametrize("dim", [0, 2, -4, -2])
+@pytest.mark.parametrize("dim", [0, 2, -4, -2, 1, 3])
 @pytest.mark.parametrize("repeat", [2, 3, 4])
 def test_run_repeat_interleave_test(input_shapes, dim, repeat, device):
     datagen_func = [
