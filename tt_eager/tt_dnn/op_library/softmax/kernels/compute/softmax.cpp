@@ -64,7 +64,7 @@ void MAIN {
         unpack_reconfig_data_format(cb_scale_mask, cb_fused_attn);
 
         // fused attn
-        cb_wait_front(cb_scale_mask, block_w);
+        // cb_wait_front(cb_scale_mask, block_w);
         cb_wait_front(cb_fused_attn, block_w);
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -111,7 +111,7 @@ void MAIN {
         // sum(exp(x))
         ACQ();
         reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
-        cb_wait_front(cb_exps, block_w);
+        // cb_wait_front(cb_exps, block_w);
         cb_wait_front(cb_bcast_scaler, 1);
         cb_reserve_back(cb_recipsumexps, 1);
         for (uint32_t w = 0; w < block_w; w++) {
