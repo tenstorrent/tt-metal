@@ -13,6 +13,7 @@ from models.demos.resnet.tt.metalResnetBlock50 import (
     resnet50_1x1_conv_as_matmul,
     resnet50_optimized_conv,
     _nearest_32,
+    _nearest_y,
     format_tensor,
 )
 
@@ -617,7 +618,7 @@ def test_resnet50_conv(
             conv_input_pyt_nhwc.shape,
             tt_lib.tensor.DataType.BFLOAT16,
             tt_lib.tensor.Layout.ROW_MAJOR,
-        ).to(device, interleaved_mem_config)
+        )
 
         # Convert activation RM to tile layout
         conv_input_on_device = conv_input_on_device.reshape(
@@ -626,9 +627,23 @@ def test_resnet50_conv(
             conv_input_shape_nhwc[0] * conv_input_shape_nhwc[1] * conv_input_shape_nhwc[2],
             conv_input_shape_nhwc[3],
         )
+        conv_input_shape_padded = [
+            1,
+            1,
+            _nearest_y(
+                conv_input_shape_nhwc[0] * conv_input_shape_nhwc[1] * conv_input_shape_nhwc[2], num_cores_nhw * 32
+            ),
+            conv_input_shape_nhwc[3],
+        ]
+        print("input shape[2]=", conv_input_shape_padded[2])
+        conv_input_on_device = conv_input_on_device.pad(conv_input_shape_padded, (0, 0, 0, 0), 0).to(
+            device, interleaved_mem_config
+        )
+        print("conv_input_on_device_shape=", conv_input_on_device.shape())
         conv_input_on_device = format_tensor(
             conv_input_on_device, tt_lib.tensor.Layout.TILE, device, interleaved_mem_config
         )
+        print("act_c_num_blocks=", act_c_num_blocks)
 
         # Convert interleaved to sharded
         if act_c_num_blocks > 1:  # 2D conv
@@ -657,7 +672,7 @@ def test_resnet50_conv(
         # Untilize with halo concat
         tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(device, sliding_window_op_params)
         conv_input_on_device = tt_py_untilize_with_halo_op(conv_input_on_device)
-
+        print("UTWH done")
         # Conv with new reader for sharded untilized with halo inputs
         output_on_device = conv(conv_input_on_device)
 
