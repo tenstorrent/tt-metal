@@ -411,11 +411,11 @@ hardcoded_conv_blocking_and_parallelization_config = {
         (128, 128, 56, 56, 3, 3, 2, 2, 1, 1),
         (128, 128, 28, 28, 3, 3, 1, 1, 1, 1),
         # layer3
-        # (256, 256, 28, 28, 3, 3, 2, 2, 1, 1), # not supported yet
+        (256, 256, 28, 28, 3, 3, 2, 2, 1, 1),  # not supported yet
         # (1024, 512, 28, 28, 1, 1, 2, 2, 0, 0), # not supported yet
         (256, 256, 14, 14, 3, 3, 1, 1, 1, 1),
         # layer4
-        # (512, 512, 14, 14, 3, 3, 2, 2, 1, 1), # not supported yet
+        (512, 512, 14, 14, 3, 3, 2, 2, 1, 1),  # not supported yet
         # (2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0), # not supported yet
         (512, 512, 7, 7, 3, 3, 1, 1, 1, 1),
     ),
