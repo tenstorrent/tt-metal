@@ -27,6 +27,9 @@ you ever need hardware troubleshooting help or debugging tips.
 Community
 ---------
 
+We have an official Discord channel with representatives from both Tenstorrent
+and the Metal project. Join `here <https://discord.gg/tvhGzHQwaj>`_.
+
 We have a `discussion board
 <https://github.com/tenstorrent-metal/tt-metal/discussions>`_ on GitHub where
 members can bounce ideas off each other and discuss the project.
