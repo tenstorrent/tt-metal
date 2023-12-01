@@ -684,7 +684,14 @@ Tensor _repeat_interleave(const Tensor& input_a, uint32_t repeat, int32_t dim, c
     // normalizing the negative dim
     uint32_t normalized_dim = input_a.shape().get_normalized_index(dim);
     // check if dim is 1 or 3
-    TT_ASSERT( normalized_dim != 3 || normalized_dim != 1, "dim 1 & 3 is not supported ");
+    if( normalized_dim&1 ) {
+        constexpr uint32_t tmp_dim = 2;
+        std::vector<int64_t> dims = {0,1,2,3};
+        std::swap(dims[dim],dims[tmp_dim]);
+        Tensor transpose_input = permute(input_a,dims);
+        Tensor ril_result = _repeat_interleave(transpose_input,repeat,tmp_dim,output_mem_config);
+        return permute(ril_result,dims);
+    }
 
     if (normalized_dim <= 1){
         for (int i = 0; i < repeat; i++) {

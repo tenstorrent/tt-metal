@@ -24,8 +24,7 @@ class TtUpsampleNearest2d(nn.Module):
         output_shape = list(input.shape())
         output_shape[-1] *= self.scale_factor
         output_shape[-2] *= self.scale_factor
-        input =  fallback_ops.repeat_interleave(input, repeats= self.scale_factor, dim=-1)
-        input =  fallback_ops.repeat_interleave(input, repeats= self.scale_factor, dim=-2)
-
-
+        input = ttl.tensor.repeat_interleave(input, self.scale_factor, dim=3)
+        input = ttl.tensor.repeat_interleave(input, self.scale_factor, dim=2)
         return input
+

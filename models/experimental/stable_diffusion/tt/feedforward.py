@@ -36,7 +36,9 @@ class TtGEGLU(nn.Module):
 
         weights = state_dict[f"{base_address}.proj.weight"]
         bias = state_dict[f"{base_address}.proj.bias"]
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+        )
 
         self.proj = make_linear(
             in_features=dim_in,
@@ -86,12 +88,12 @@ class TtFeedForward(nn.Module):
         super().__init__()
         assert dropout == 0.0, "we do not support dropout"
         assert final_dropout == False, "we do not support dropout"
-        assert (
-            activation_fn == "geglu"
-        ), "except GEGLU, other activation functions are not supported."
+        assert activation_fn == "geglu", "except GEGLU, other activation functions are not supported."
         inner_dim = int(dim * mult)
         dim_out = dim_out if dim_out is not None else dim
-        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+        self.out_mem_config_l1 = ttl.tensor.MemoryConfig(
+            ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1
+        )
 
         if activation_fn == "geglu":
             act_fn = TtGEGLU(
