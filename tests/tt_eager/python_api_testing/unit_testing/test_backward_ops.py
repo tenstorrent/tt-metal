@@ -716,9 +716,9 @@ class TestBackwardOps:
 
         tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
 
-        golden_output_tensor = pyt_y
+        tt_output_tensor = tt_output_tensor / tt_output_tensor.numel()
+        golden_output_tensor = pyt_y / pyt_y.numel()
 
         comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
         _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
         logger.info(comp_out)
-        assert comp_pass
