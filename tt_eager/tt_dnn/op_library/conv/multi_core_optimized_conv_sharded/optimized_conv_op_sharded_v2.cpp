@@ -1140,7 +1140,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         const std::vector<Tensor>& output_tensors
     ) {
 
-        TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 3);
+        // Reader config indices is an optional static sharded tensor, so no need to update address
+        TT_ASSERT(input_tensors.size() + optional_input_tensors.size() == 4);
         TT_ASSERT(output_tensors.size() == 1);
 
         auto src_buffer_a = input_tensors.at(0).buffer();
