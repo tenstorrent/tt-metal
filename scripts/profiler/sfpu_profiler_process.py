@@ -34,7 +34,7 @@ def make_parser():
         "square",
         "tanh",
     ]
-    parser.add_argument("operations", nargs="+", default=all_operations, help=", ".join(all_operations))
+    parser.add_argument("operations", nargs="+", default=all_operations, help=": " + " ".join(all_operations))
     parser.add_argument("--use-L1", action="store_true", default=False)
     return parser
 
@@ -51,7 +51,7 @@ def run(args, home, function):
     env["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
     env["TT_METAL_DEVICE_PROFILER"] = "1"
     env["TT_METAL_ENV"] = "dev"
-    testcmd = " ".join([testpath, function, args.use_L1 and "--use-L1" or "--use-DRAM", "--tile-factor", "1"])
+    testcmd = " ".join([testpath, function, args.use_L1 and "--use-L1" or "--use-DRAM", "--tile-factor", "1024"])
     subprocess.run(testcmd, shell=True, env=env)
     return
 

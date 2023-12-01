@@ -10,8 +10,9 @@
 
 namespace NAMESPACE {
 void MAIN {
-           uint32_t per_core_block_cnt = 1; // get_compile_time_arg_val(0);
-           uint32_t per_core_block_dim = 1; //get_compile_time_arg_val(1);
+           uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+           uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+           uint32_t tile_factor = get_compile_time_arg_val(2);
 
 
 
@@ -28,7 +29,7 @@ void MAIN {
 
            kernel_profiler::mark_time(9997);
 
-           for(int i=0; i < 1024; i++) {
+           for(uint32_t i=0; i < tile_factor; i++) {
 #ifdef SFPU_OP_CHAIN_0
            SFPU_OP_CHAIN_0
 #endif

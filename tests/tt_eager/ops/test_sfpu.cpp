@@ -73,7 +73,7 @@ bool run_sfpu_test(string sfpu_name,int tile_factor=1,bool use_DRAM=true) {
         CoreCoord core = {0, 0};
 
         uint32_t single_tile_size = 2 * 1024;
-        uint32_t num_tiles = 1*tile_factor;
+        uint32_t num_tiles = 1;
         uint32_t dram_buffer_size = single_tile_size * num_tiles; // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
         uint32_t page_size = single_tile_size;
@@ -124,8 +124,9 @@ bool run_sfpu_test(string sfpu_name,int tile_factor=1,bool use_DRAM=true) {
                                                           tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         vector<uint32_t> compute_kernel_args = {
-                                                uint(num_tiles),
+                                                (uint)num_tiles,
                                                 1,
+                                                (uint)tile_factor,
         };
         string hlk_kernel_name = "tests/tt_eager/ops/kernel/eltwise_sfpu.cpp";
 
@@ -232,6 +233,10 @@ int main(int argc, char **argv) {
     if ( argc == 1 ) {
         for (const auto& [op_name, _]: sfpu_op_to_hlk_op_name) {
             pass &= run_unit_test(op_name,arg_tile_factor, arg_use_DRAM);
+            if (pass)
+                log_info(LogTest, "PASS-SFPU test {}",op_name);
+            else
+                log_info(LogTest, "FAIL-SFPU test {}",op_name);
         }
     } else {
         std::vector<std::string> operators;
