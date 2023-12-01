@@ -382,7 +382,7 @@ int main(int argc, char** argv) {
         pass &= tt_metal::CloseDevice(device);
 
         // for csv
-        log_info("CSV_MICROBENCHMARK:test_compute_mm");
+        log_info("CSV_MICROBENCHMARK:title:test_compute_mm");
         log_info("CSV_INPUT:M:{}:N:{}:K:{}:fast-dispatch:{}", M, N, K, fast_dispatch_mode);
         log_info("CSV_OUTPUT:RMax(TFLOPS):{:.2f}", avg_rmax_tflops);
         log_info("CSV_RESULT:pass:{}", pass);

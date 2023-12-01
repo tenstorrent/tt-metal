@@ -218,7 +218,7 @@ int main(int argc, char** argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:test_kernel_launch");
+    log_info("CSV_MICROBENCHMARK:title:test_kernel_launch");
     log_info("CSV_INPUT:num-cores-r:{}:num-cores-c:{}:core-groups:{}", num_cores_r, num_cores_c, num_core_groups);
     log_info("CSV_OUTPUT:ElapsedTime(us):{}", avg_elapsed_us);
     log_info("CSV_RESULT:pass:{}", pass);

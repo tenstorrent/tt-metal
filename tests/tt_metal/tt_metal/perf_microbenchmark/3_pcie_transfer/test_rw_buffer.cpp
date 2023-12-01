@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
     }
 
     // for csv
-    log_info("CSV_MICROBENCHMARK:test_rw_buffer");
+    log_info("CSV_MICROBENCHMARK:title:test_rw_buffer");
     log_info(
         "CSV_INPUT:buffer-type:{}:transfer-size:{}",
         BUFFER_TYPEToString(static_cast<BUFFER_TYPE>(buffer_type)),
