@@ -295,7 +295,7 @@ def test_generate_all_configs_and_references(
     input_pyt_tensor = torch.rand(input_volume, dtype=torch.bfloat16)
     input_pyt_tensor = torch.reshape(input_pyt_tensor, input_nchw_shape)
     # Pad channels to nearest 32
-    input_pyt_tensor = torch.nn.functional.pad(input_pyt_tensor, (0, 0, 0, 0, 0, _nearest_y(input_c, 32) - input_c))
+    # input_pyt_tensor = torch.nn.functional.pad(input_pyt_tensor, (0, 0, 0, 0, 0, _nearest_y(input_c, 32) - input_c))
     input_nchw_shape = list(input_pyt_tensor.shape)
     input_padded_c = input_nchw_shape[1]
     input_padded_width = input_w + 2 * pad_w
@@ -360,12 +360,19 @@ def test_generate_all_configs_and_references(
 
     memory_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
     input_padded_to_tile_shape = [1, 1, _nearest_y(batch_size * input_h * input_w, num_cores_nhw * 32), input_padded_c]
-    untilize_with_halp_input_tt_tensor = (
-        ttl.tensor.Tensor(input_pyt_tensor, ttl.tensor.DataType.BFLOAT16)
-        .pad(input_padded_to_tile_shape, (0, 0, 0, 0), 0)
-        .to(ttl.tensor.Layout.TILE)
-        .to(device, memory_config)
-    )
+    if input_c < 32:
+        untilize_with_halp_input_tt_tensor = (
+            ttl.tensor.Tensor(input_pyt_tensor, ttl.tensor.DataType.BFLOAT16)
+            .pad(input_padded_to_tile_shape, (0, 0, 0, 0), 0)
+            .to(device, memory_config)
+        )
+    else:
+        untilize_with_halp_input_tt_tensor = (
+            ttl.tensor.Tensor(input_pyt_tensor, ttl.tensor.DataType.BFLOAT16)
+            .pad(input_padded_to_tile_shape, (0, 0, 0, 0), 0)
+            .to(ttl.tensor.Layout.TILE)
+            .to(device, memory_config)
+        )
     # untilize_with_halp_input_tt_tensor = ttl.tensor.permute(untilize_with_halp_input_tt_tensor, (0, 2, 3, 1))
     # untilize_with_halp_input_tt_tensor = ttl.tensor.reshape(untilize_with_halp_input_tt_tensor, batch_size, 1, input_h * input_w, input_c)
     grid_size_binary = device.compute_with_storage_grid_size()

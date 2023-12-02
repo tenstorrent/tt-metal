@@ -128,9 +128,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     DataFormat out_df = datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t out_nbytes = datum_size(out_df);
 
-    uint32_t in_tile_size = detail::TileSize(in_df);
-    uint32_t out_tile_size = detail::TileSize(out_df);
-
     auto grid_size = device->compute_with_storage_grid_size();
     untilize_with_halo_v2_helpers::init_neighbor_core_xy_mapping(grid_size, input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
 
@@ -151,7 +148,18 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     auto shard_shape = input_tensor.shard_spec().value().shard_shape;
     uint32_t ntiles_per_block = shard_shape[1] / TILE_WIDTH;
     uint32_t nblocks_per_core = shard_shape[0] / TILE_HEIGHT;
+    uint32_t input_npages = ntiles_per_block * nblocks_per_core;
+
     uint32_t out_stick_nbytes = shard_shape[1] * out_nbytes;
+
+    uint32_t in_page_size = detail::TileSize(in_df);
+    uint32_t out_tile_size = detail::TileSize(out_df);
+
+    if (skip_untilize) {
+        uint32_t in_nbytes = datum_size(in_df);
+        in_page_size = shard_shape[1] * in_nbytes;
+        input_npages = shard_shape[0];
+    }
 
     // Construct CBs
     // //
@@ -161,12 +169,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t out_cb_id = CB::c_out1;
 
     // input CB (sharded)
-    uint32_t input_ntiles = ntiles_per_block * nblocks_per_core;
-    auto src_cb_config = CircularBufferConfig(input_ntiles * in_tile_size, {{src_cb_id, in_df}})
-                            .set_page_size(src_cb_id, in_tile_size)
+    auto src_cb_config = CircularBufferConfig(input_npages * in_page_size, {{src_cb_id, in_df}})
+                            .set_page_size(src_cb_id, in_page_size)
                             .set_globally_allocated_address(*src_buffer);
     auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
-    log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", src_cb_id, input_ntiles, in_tile_size);
+    log_debug(LogOp, "CB {} :: npages = {}, pagesize = {}", src_cb_id, input_npages, in_page_size);
 
     uint32_t input_to_writer_cb_id = src_cb_id;
     if (!skip_untilize) {
@@ -353,12 +360,13 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     }
 
     // runtime args for reader
-    std::vector<uint32_t> reader_rt_args = { ntiles_per_block * nblocks_per_core };
+    // std::vector<uint32_t> reader_rt_args = { ntiles_per_block * nblocks_per_core };
+    std::vector<uint32_t> reader_rt_args = { input_npages };
     SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
 
     // runtime args for writer
     std::vector<uint32_t> writer_rt_args = {
-        ntiles_per_block * nblocks_per_core,            // 0
+        input_npages,                                   // 0
         0,  // has ll
         0,  // ll noc.x
         0,  // ll noc.y
