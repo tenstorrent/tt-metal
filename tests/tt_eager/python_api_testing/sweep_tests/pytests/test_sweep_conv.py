@@ -40,8 +40,6 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
     pad_h = ctp.pad_h
     pad_w = ctp.pad_w
 
-    # torch.manual_seed(0)
-
     A_pyt = pytorch_inputs_and_golden[0]
     B_pyt = pytorch_inputs_and_golden[1]
 
@@ -102,7 +100,9 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
 
     return passing_pcc
 
+
 def test_sweep_conv_tt(device):
+    torch.manual_seed(27182)
     test_bench = generate_conv_tb()
     pytorch_conv_golden_tb = generate_conv_tb_with_pytorch_golden(test_bench)
     passing = True
@@ -130,9 +130,7 @@ def test_sweep_conv_tt(device):
             assert conv_op_test_params.test_level == TestLevel.OP_FULL_COMPUTE
             full_op_compute_tests += 1
         try:
-            passing_ = run_conv_as_large_matmul(
-                conv_op_test_params, pytorch_inputs_and_golden, device
-            )
+            passing_ = run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, device)
             if passing_:
                 passing_tests.append(conv_op_test_params)
             else:
