@@ -16,12 +16,12 @@ from tt_lib.utils import _nearest_32
 from models.utility_functions import comp_pcc
 from models.utility_functions import skip_for_wormhole_b0
 
+from functools import reduce
+import operator
+
 
 def volume(shape):
-    vol = 1.0
-    for d in shape:
-        vol *= d
-    return vol
+    return reduce(operator.mul, shape, 1)
 
 
 ## max-pool params:
