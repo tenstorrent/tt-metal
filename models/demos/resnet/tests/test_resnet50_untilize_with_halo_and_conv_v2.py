@@ -385,14 +385,14 @@ hardcoded_matmul_config_conv = {
 
 hardcoded_conv_blocking_and_parallelization_config = {
     8: {
-        (100352, 64): [32 * 4, 256, 1, 64, 128, 64, 1024, (12, 9), 1024, 64, 98],
+        (100352, 64): [16 * 4, 256, 1, 64, 128, 64, 1024, (12, 9), 1024, 64, 98],
         (25088, 64): [64 * 3, 256, 1, 64, 128, 64, 256, (12, 9), 256, 64, 98],
         (6272, 128): [128 * 3, 64, 1, 128, 64, 128, 64, (12, 9), 64, 128, 98],
         (1568, 256): [256, 160, 8, 32, 160, 32, 160, (10, 8), 160, 32, 10],
         (416, 512): [512, 64, 8, 64, 64, 64, 64, (7, 8), 64, 64, 7],
     },
     16: {
-        (200704, 64): [32 * 4, 64, 1, 64, 64, 64, 2048, (12, 9), 2048, 64, 98],
+        (200704, 64): [16 * 4, 64, 1, 64, 64, 64, 2048, (12, 9), 2048, 64, 98],
         (50176, 64): [64 * 3, 256, 1, 64, 128, 64, 512, (12, 9), 512, 64, 98],
         (12544, 128): [128 * 3, 128, 1, 128, 64, 128, 128, (12, 9), 128, 128, 98],
         (3136, 256): [256, 288, 8, 32, 96, 32, 288, (11, 8), 288, 32, 11],
@@ -407,7 +407,7 @@ hardcoded_conv_blocking_and_parallelization_config = {
     (
         # unique convs in rn50 (complete list)
         # first conv post folding and C padding to tile width
-        (64, 32, 115, 115, 4, 4, 1, 1, 0, 0),
+        (64, 16, 115, 115, 4, 4, 1, 1, 0, 0),
         # layer1
         (64, 64, 56, 56, 3, 3, 1, 1, 1, 1),
         # layer2
@@ -458,11 +458,9 @@ def test_resnet50_conv(
     interleaved_mem_config = tt_lib.tensor.MemoryConfig(
         tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
     )
-    if N == 16 and H == 115:
-        pytest.skip()
 
     for i in range(1):  # increase num of iterations to test op caching
-        assert C % 32 == 0
+        # assert C % 32 == 0
         assert K % 32 == 0
         torch.manual_seed(0)
         conv_input_shape = [N, C, H, W]
@@ -634,10 +632,11 @@ def test_resnet50_conv(
             conv_input_shape_nhwc[0] * conv_input_shape_nhwc[1] * conv_input_shape_nhwc[2],
             conv_input_shape_nhwc[3],
         ).to(device, interleaved_mem_config)
+        if C >= 32:
+            conv_input_on_device = format_tensor(
+                conv_input_on_device, tt_lib.tensor.Layout.TILE, device, interleaved_mem_config
+            )
 
-        conv_input_on_device = format_tensor(
-            conv_input_on_device, tt_lib.tensor.Layout.TILE, device, interleaved_mem_config
-        )
         input_size_to_shard_evenly = _nearest_y(
             conv_input_shape_nhwc[0] * conv_input_shape_nhwc[1] * conv_input_shape_nhwc[2], num_cores_nhw * 32
         )
