@@ -19,32 +19,6 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-// Used for compiling blank kernel before setting environment variable
-namespace blank {
-struct hlk_args_t {
-    std::int32_t dummy;
-};
-}
-void run_compile_blank(tt_metal::Device *device) {
-
-    // Create and config an OP
-    tt::build_kernel_for_riscv_options_t build_kernel_for_riscv_options(device->id(), "blank_op");
-
-    log_info(tt::LogBuildKernels, "Compiling OP: {}", build_kernel_for_riscv_options.name);
-
-    void *hlk_args = new blank::hlk_args_t{
-        .dummy = 0,
-    };
-    build_kernel_for_riscv_options.set_hlk_args_all_cores(hlk_args, sizeof(blank::hlk_args_t));
-    build_kernel_for_riscv_options.set_hlk_file_name_all_cores("tt_metal/kernels/compute/blank.cpp");
-    build_kernel_for_riscv_options.ncrisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
-    build_kernel_for_riscv_options.brisc_kernel_file_name = "tt_metal/kernels/dataflow/blank.cpp";
-
-    generate_binaries_params_t params;
-    tt_metal::detail::GenerateDeviceHeaders(device, &build_kernel_for_riscv_options, build_kernel_for_riscv_options.name);
-    generate_binaries_all_riscs(&build_kernel_for_riscv_options, build_kernel_for_riscv_options.name, tt::ARCH::GRAYSKULL, params);
-}
-
 const map<string, tt::OpCode> sfpu_name_to_op_code = {
     {"exponential", tt::OpCode::Exponential},
     {"reciprocal",  tt::OpCode::Reciprocal},
@@ -132,10 +106,6 @@ bool run_chained_sfpu_test(int chain_length) {
         int device_id = 0;
         tt_metal::Device *device =
             tt_metal::CreateDevice(device_id);
-
-
-
-        run_compile_blank(device);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -1021,10 +991,6 @@ bool run_forked_binary_test() {
 
 
 int main(int argc, char **argv) {
-
-    // Trivial chain of sfpu ops
-    char env[] = "HACK_FOR_GRAPH_INTERPRETER=1";
-    putenv(env);
 
     bool pass = true;
 
