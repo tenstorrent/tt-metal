@@ -22,6 +22,7 @@
 using std::uint32_t;
 using std::int32_t;
 using std::string;
+using std::to_string;
 using std::cout;
 using std::endl;
 using std::setw;
@@ -152,17 +153,32 @@ static void print_tile_slice(ostream& stream, uint8_t* ptr) {
         stream << " count=" << ts->count_ << std::flush;
     } else {
         uint32_t i = 0;
+        bool count_exceeded = false;
         for (int h = ts->h0_; h < ts->h1_; h += ts->hs_) {
             if (ts->w0_ < ts->w1_)
                 stream << "  ";
             for (int w = ts->w0_; w < ts->w1_; w += ts->ws_) {
-                if (i >= ts->count_)
-                    goto done;
+                // If the number of data specified by the SliceRange exceeds the number that was
+                // saved in the print buffer (set by the MAX_COUNT template parameter in the
+                // TileSlice), then break early.
+                if (i >= ts->count_) {
+                    count_exceeded = true;
+                    break;
+                }
                 stream << bfloat16_to_float(ts->samples_[i]);
                 if (w + ts->ws_ < ts->w1_)
                     stream << " ";
                 i++;
             }
+
+            // Break outer loop as well if MAX COUNT exceeded, also print a message to let the user
+            // know that the slice has been truncated.
+            if (count_exceeded) {
+                stream << "<TileSlice data truncated due to exceeding max count ("
+                    << to_string(ts->count_) << ")>" << endl;
+                break;
+            }
+
             if (ts->endl_rows_)
                 stream << endl;
         }

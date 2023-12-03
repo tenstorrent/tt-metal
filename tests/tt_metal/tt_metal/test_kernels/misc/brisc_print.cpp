@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint.h"
+#include "dataflow_api.h"
 #include "debug/dprint_test_common.h"
 
 /*
