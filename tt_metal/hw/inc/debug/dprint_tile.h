@@ -10,7 +10,7 @@
 struct SliceRange {
     // A slice object encoding semantics of np.slice(h0:h1:hs, w0:w1:ws)
     // This is only used with DPRINT for TileSlice object
-    int h0, h1, hs, w0, w1, ws;
+    uint16_t h0, h1, hs, w0, w1, ws;
     // [0:32:16, 0:32:16]
     static inline SliceRange hw0_32_16() { return SliceRange{ .h0 = 0, .h1 = 32, .hs = 16, .w0 = 0, .w1 = 32, .ws = 16 }; }
     // [0:32:8, 0:32:8]
@@ -74,13 +74,23 @@ struct TileSlice : TileSliceHostDev<MAXCOUNT> {
             this->w0_ = s.w0;  this->w1_ = s.w1;  this->ws_ = s.ws;
             this->h0_ = s.h0;  this->h1_ = s.h1;  this->hs_ = s.hs;
             t = reinterpret_cast<volatile Tile*>(this->ptr_);
-            for (int h = s.h0; h < s.h1; h += s.hs)
-            for (int w = s.w0; w < s.w1; w += s.ws) {
-                int i = w + (h<<5);
-                if (print_untilized) i = TileSlice::tilize_rm_index(i); // tilize the index
-                this->samples_[this->count_] = t->vals[i];
-                this->count_ ++;
-                if (this->count_ >= MAXCOUNT)
+            bool max_count_exceeded = false;
+            for (int h = s.h0; h < s.h1; h += s.hs) {
+                for (int w = s.w0; w < s.w1; w += s.ws) {
+                    // Tile size is 32, so 1D index is w_idx + h_idx * 32
+                    const int log_tile_height = 5;
+                    int i = w + (h << log_tile_height);
+                    if (print_untilized) i = TileSlice::tilize_rm_index(i); // tilize the index
+                    this->samples_[this->count_] = t->vals[i];
+                    this->count_ ++;
+                    // If we've gone over the maximum data points to print, break
+                    if (this->count_ >= MAXCOUNT) {
+                        max_count_exceeded = true;
+                        break;
+                    }
+                }
+
+                if (max_count_exceeded)
                     break;
             }
         #endif
