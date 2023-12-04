@@ -20,7 +20,7 @@ inline const uint32_t get_operand_src_format(const std::uint32_t operand_id)
 
 inline const uint32_t get_operand_dst_format(const std::uint32_t operand_id)
 {
-   return unpack_src_format[operand_id];
+   return unpack_dst_format[operand_id];
 }
 
 inline const uint32_t get_operand_num_faces(const std::uint32_t operand_id)
