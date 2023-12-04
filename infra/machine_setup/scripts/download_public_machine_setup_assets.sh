@@ -34,7 +34,7 @@ GS_TT_SMI_FILENAME=tt-smi_2023-06-16-0283a02404487eea
 WH_TT_SMI_FILENAME=tt-smi-8.6.0.0_2023-08-22-492ad2b9ef82a243
 GS_TT_FLASH_FILENAME=tt-flash_2023-06-28-91e1cc1ef8caea8f
 WH_TT_FLASH_FILENAME=tt-flash_7.D.0.0_2023-08-08-7ab3bd015206a6ff
-GS_TT_DRIVER_FILENAME=install_ttkmd_1.23.bash
+GS_TT_DRIVER_FILENAME=install_ttkmd_1.26.bash
 
 PYBUDA_GS_RELEASE_ID=$(curl -L -H "Authorization: Bearer $GITHUB_TOKEN" \
 	-H "X-GitHub-Api-Version: 2022-11-28" \

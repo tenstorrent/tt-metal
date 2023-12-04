@@ -217,9 +217,6 @@ TestConstCharStrNC{4,4}
 TestStrBR{4,4}
 +++++++++++++++)";
 TEST_F(CommandQueueWithDPrintFixture, TestPrintRaiseWait) {
-    // Disable for now, see https://github.com/tenstorrent-metal/tt-metal/issues/4096
-    GTEST_SKIP();
-
     // Device already set up by gtest fixture.
     Device *device = this->device_;
 

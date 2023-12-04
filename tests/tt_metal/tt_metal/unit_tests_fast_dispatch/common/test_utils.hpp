@@ -80,8 +80,9 @@ inline bool FilesMatchesString(string file_name, const string& expected) {
 
     // Go through line-by-line
     string line_a, line_b;
-    int line_num = 1;
+    int line_num = 0;
     while (getline(file, line_a) && getline(expect_stream, line_b)) {
+        line_num++;
         if (line_a != line_b) {
             tt::log_info(
                 tt::LogTest,
@@ -93,23 +94,24 @@ inline bool FilesMatchesString(string file_name, const string& expected) {
             );
             return false;
         }
-        line_num++;
     }
 
     // Make sure that there's no lines left over in either stream
     if (getline(file, line_a)) {
         tt::log_info(
             tt::LogTest,
-            "Test Error: file {} has more lines than expected.",
-            file_name
+            "Test Error: file {} has more lines than expected (>{}).",
+            file_name,
+            line_num
         );
         return false;
     }
     if (getline(expect_stream, line_b)) {
         tt::log_info(
             tt::LogTest,
-            "Test Error: file {} has less lines than expected.",
-            file_name
+            "Test Error: file {} has less lines than expected ({}).",
+            file_name,
+            line_num
         );
         return false;
     }
