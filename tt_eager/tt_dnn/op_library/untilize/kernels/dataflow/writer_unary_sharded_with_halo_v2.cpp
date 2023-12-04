@@ -127,7 +127,7 @@ void kernel_main() {
     // then insert all local data
     if (local_data_nsegments > 0) {
         // cb_wait_front(local_data_ss_cb_id, 1);
-        in_l1_addr = in_base_l1_addr + local_data_src_start_offset;
+        in_l1_addr = in_base_l1_addr + local_data_src_start_offset * stick_nbytes;
         uint32_t local_data_ss_l1_addr = get_read_ptr(local_data_ss_cb_id);
         volatile tt_l1_ptr uint16_t* local_data_ss = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_data_ss_l1_addr);
         for (int32_t i = 0; i < 2 * local_data_nsegments; i += 2) {
