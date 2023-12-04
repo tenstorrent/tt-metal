@@ -398,6 +398,8 @@ void py_module(py::module& m_primary) {
     m_primary.def(
         "softmax_in_place",
         &softmax_in_place,
+        py::arg("input_tensor").noconvert(),
+        py::arg("program_config").noconvert() = transformers::SoftmaxDefaultProgramConfig{},
         "Performs a softmax operation on the last tensor dimension. Returns a reference to the input tensor modified "
         "in place.");
 

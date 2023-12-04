@@ -86,6 +86,8 @@ void MAIN {
         }
         cb_pop_front(cb_scale_mask, block_w);
         #else
+        unpack_reconfig_data_format(cb_in0, cb_in0);
+        pack_reconfig_data_format(cb_exps);
         // exp(x)
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -106,6 +108,7 @@ void MAIN {
             index_subblock_w_offset += subblock_w;
         }
         cb_pop_front(cb_in0, block_w);
+        unpack_reconfig_data_format(cb_exps, cb_bcast_scaler);
         #endif
 
         // sum(exp(x))
