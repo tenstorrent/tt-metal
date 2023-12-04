@@ -19,7 +19,7 @@ test-list:
           high: 100
           dim: -1
       comparison:
-        function: comp_pcc
+        function: comp_equal
       args-gen: gen_dtype_layout_device
       output-file: reduce_max_w_sweep.csv
       args:
@@ -46,7 +46,7 @@ test-list:
           high: 100
           dim: -1
       comparison:
-        function: comp_pcc
+        function: comp_equal
       args-gen: gen_dtype_layout_device
       output-file: reduce_max_w_sweep.csv
       args:

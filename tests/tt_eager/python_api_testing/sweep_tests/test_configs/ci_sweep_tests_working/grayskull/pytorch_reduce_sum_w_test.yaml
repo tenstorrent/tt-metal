@@ -12,16 +12,13 @@ test-list:
         TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
-        function: gen_checkerboard
+        function: gen_rand
         dtype: bfloat16
         args:
-          low: 0
+          low: -100
           high: 100
       comparison:
-        function: comp_allclose
-        args:
-          rtol: 0
-          atol: 0.1
+        function: comp_pcc
       args-gen: gen_dtype_layout_device
       output-file: reduce_sum_w_sweep.csv
       args:
@@ -41,16 +38,13 @@ test-list:
         TT_METAL_SLOW_DISPATCH_MODE: ["", "1"]
         # TT_PCI_DMA_BUF_SIZE: "1048576"
       datagen:
-        function: gen_checkerboard
+        function: gen_rand
         dtype: bfloat16
         args:
-          low: 0
+          low: -100
           high: 100
       comparison:
-        function: comp_allclose
-        args:
-          rtol: 0
-          atol: 0.1
+        function: comp_pcc
       args-gen: gen_dtype_layout_device
       output-file: reduce_sum_w_sweep.csv
       args:
