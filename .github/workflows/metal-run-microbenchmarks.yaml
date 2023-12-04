@@ -16,7 +16,7 @@ jobs:
         runner-info: [
           {arch: grayskull, runs-on: ["perf-grayskull", "self-reset"]},
           # Do not run N150 on microbenchmarks for now as we do not have the machines for it
-          # {arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "fw-date-2023-08-08", "multi-chip-num-pcie-1", "multi-chip-num-chips-1", "self-reset"]},
+          # {arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1", "self-reset"]},
           # N300
           {arch: wormhole_b0, runs-on: ["perf-wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2", "self-reset"]},
         ]
