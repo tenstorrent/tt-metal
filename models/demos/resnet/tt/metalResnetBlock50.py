@@ -1522,7 +1522,7 @@ class ResNet(nn.Module):
                 out_sharded=sharded is not None,
                 use_downsample_op_and_mm_for_conv1x1_s2=use_downsample_op_and_mm_for_conv1x1_s2,
                 model_config=model_config,
-                conv_halo=conv_halo if stride == 1 else False,
+                conv_halo=conv_halo,
                 conv_2d=conv_2d,
             )
         )
