@@ -31,7 +31,7 @@ void MAIN {
     const uint32_t Wt = get_arg_val<uint32_t>(2);
     const uint32_t ndst = get_arg_val<uint32_t>(3);
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
-    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in2);
+    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in2, tt::CB::c_intermed0);
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -59,6 +59,8 @@ void MAIN {
     bool wait_mask = true;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         #if FUSED_SCALE_MASK
+        unpack_reconfig_data_format(cb_in0, cb_fused_scale);
+        pack_reconfig_data_format(cb_scale_mask);
         for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
             // apply fused scale [*= 1/sqrt(...)]
             ACQ();
@@ -73,6 +75,7 @@ void MAIN {
             cb_pop_front(cb_in0, ndst);
             REL();
         }
+        unpack_reconfig_data_format(cb_scale_mask, cb_fused_attn);
 
         for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
             ACQ();
@@ -104,7 +107,8 @@ void MAIN {
             wait_mask = true;
         }
         #else
-
+        unpack_reconfig_data_format(cb_in0, cb_in0);
+        pack_reconfig_data_format(cb_exps);
         for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
 
             ACQ();
@@ -124,6 +128,7 @@ void MAIN {
             cb_push_back(cb_exps, ndst);
             REL();
         }
+        unpack_reconfig_data_format(cb_exps, cb_bcast_scaler);
         #endif
 
         ACQ();
@@ -142,9 +147,9 @@ void MAIN {
 
         REL();
 
-
         cb_wait_front(cb_recipsumexps, 1); // will reuse Wt times for bcast
 
+        pack_reconfig_data_format(cb_out0);
         // now cb_sumexps has exp tiles, need to multiply by our DST[2]
         // by now we already did a umulative wait for Wt tiles in cb_exps
         mul_bcast_cols_init_short();
