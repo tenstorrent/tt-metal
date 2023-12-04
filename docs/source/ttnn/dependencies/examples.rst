@@ -53,8 +53,8 @@ Run `TT-LIB` and PyTorch OPs
 
 In this code example we build on previous example and after ``relu`` also execute ``pow``, ``silu``, and ``exp``.
 
-Since ``pow`` is not supported in `TT-LIB` library, we need to move TT Tensor produced by ``relu`` to host machine,
-convert it to PyTorch tensor, execute ``pow`` from PyTorch, and then convert the outpout of ``pow`` back to TT Tensor for ``silu`` to be executed on device.
+Since ``pow`` with exponent as tensor is not supported in `TT-LIB` library, we need to move TT Tensor produced by ``relu`` to host machine,
+convert it to PyTorch tensor, execute ``pow`` from PyTorch, and then convert the outpout of ``pow`` back to TT Tensor for ``silu`` to be executed on device. The `TT-LIB` supports ``power`` for integral scalar exponent, and ``power_fp`` for floating point positive valued exponent.
 
 After ``pow`` is executed as a fallback op; this means that the operation will actully execute as a PyTorch operation
 on host machine. But since ``silu`` is supported as on-device operation in `TT-LIB` library we can
@@ -75,6 +75,7 @@ Lastly, we run ``exp`` on TT Accelerator device (suppling it with output from ``
 
         # Create random PyTorch tensor
         py_tensor = torch.randn((1, 1, 32, 32))
+        py_tensor_exp = torch.randint(0,10,(1, 1, 32, 32))
 
         # Create TT tensor from PyTorch Tensor and send it to TT accelerator device
         tt_tensor = tt_lib.tensor.Tensor(
@@ -93,7 +94,7 @@ Lastly, we run ``exp`` on TT Accelerator device (suppling it with output from ``
         py_relu_out = torch.Tensor(tt_relu_out.data()).reshape(tt_relu_out.shape())
 
         # Execute pow using PyTorch (since pow is not available from tt_lib)
-        py_pow_out = torch.pow(py_relu_out, 2)
+        py_pow_out = torch.pow(py_relu_out, py_tensor_exp)
 
         # Create TT Tensor from py_pow_out and move it to TT accelerator device
         tt_pow_out = tt_lib.tensor.Tensor(

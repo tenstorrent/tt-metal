@@ -92,7 +92,7 @@ def from_torch(
 
     Args:
         * :attr:`tensor`: the torch.Tensor
-        * :attr:`dtype`: the optional `ttnn` date type.
+        * :attr:`dtype`: the optional `ttnn` data type.
 
     Example::
 
