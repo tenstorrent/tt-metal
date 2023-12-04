@@ -17,7 +17,19 @@ All important ways we use the API different are in the new
 ``matmul_multi_core`` function.
 
 The full example program is in
-``tt_metal/programming_examples/matmul_single_core/matmul_multi_core.cpp``
+``tt_metal/programming_examples/matmul_multi_core/matmul_multi_core.cpp``
+
+To build and execute, you may use the following commands. Note that we include
+the necessary environment variables here, but you may possibly need more
+depending on the most up-to-date installation methods.
+
+::
+
+    export ARCH_NAME=<arch name>
+    export TT_METAL_HOME=<this repo dir>
+    make build
+    make programming_examples/matmul_multi_core
+    ./build/programming_examples/matmul_multi_core
 
 Accessing all the cores
 -----------------------
