@@ -16,9 +16,25 @@ namespace tt {
 
 namespace tt_metal {
 
+struct LayerNormDefaultProgramConfig{
+    tt::stl::reflection::Attributes attributes() const { return {}; };
+};
+struct LayerNormInterleavedMultiCoreProgramConfig {
+    MathFidelity math_fidelity;
+    DataType im_data_format;
+    DataType out_data_format;
+
+    tt::stl::reflection::Attributes attributes() const;
+};
+using LayerNormProgramConfig = std::variant<
+    LayerNormDefaultProgramConfig,
+    LayerNormInterleavedMultiCoreProgramConfig
+>;
+
 struct LayerNorm {
     float eps;
     MemoryConfig output_mem_config;
+    tt::tt_metal::LayerNormProgramConfig program_config;
 
     void validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -46,7 +62,7 @@ struct RMSNorm {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-inline Tensor layernorm(const Tensor &a, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+inline Tensor layernorm(const Tensor &a, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const LayerNormProgramConfig& program_config = tt::tt_metal::LayerNormDefaultProgramConfig{}) {
     TT_ASSERT(a.shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
 
     if (gamma.has_value() and gamma.value().layout() == Layout::TILE) {
@@ -55,11 +71,11 @@ inline Tensor layernorm(const Tensor &a, float eps, std::optional<const Tensor> 
     if (beta.has_value() and beta.value().layout() == Layout::TILE) {
         TT_ASSERT(beta.value().shape()[3] == a.shape()[3], "Beta width must be equal to input width");
     }
-    return operation::run_with_autoformat(LayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {std::nullopt, gamma, beta}).at(0);
+    return operation::run_with_autoformat(LayerNorm{.eps=eps, .output_mem_config=mem_config, .program_config=program_config}, {a}, {std::nullopt, gamma, beta}).at(0);
 }
 
 // computes layernorm(a+b)*gamma+beta
-inline Tensor add_layernorm(const Tensor &a, const Tensor& b, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+inline Tensor add_layernorm(const Tensor &a, const Tensor& b, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, const LayerNormProgramConfig& program_config = tt::tt_metal::LayerNormDefaultProgramConfig{}) {
     TT_ASSERT(a.shape()[3] % TILE_WIDTH == 0, "Normalizing on last dim cannot be padded");
     TT_ASSERT(a.shape() == b.shape(), "Input shapes must be equal");
     if (gamma.has_value() and gamma.value().layout() == Layout::TILE) {
@@ -68,7 +84,7 @@ inline Tensor add_layernorm(const Tensor &a, const Tensor& b, float eps, std::op
     if (beta.has_value() and beta.value().layout() == Layout::TILE) {
         TT_ASSERT(beta.value().shape()[3] == a.shape()[3], "Beta width must be equal to input width");
     }
-    return operation::run_with_autoformat(LayerNorm{.eps=eps, .output_mem_config=mem_config}, {a}, {b, gamma, beta}).at(0);
+    return operation::run_with_autoformat(LayerNorm{.eps=eps, .output_mem_config=mem_config, .program_config=program_config}, {a}, {b, gamma, beta}).at(0);
 }
 
 inline Tensor rmsnorm(const Tensor &a, float eps, std::optional<const Tensor> gamma = std::nullopt, std::optional<const Tensor> beta = std::nullopt, const MemoryConfig& mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
