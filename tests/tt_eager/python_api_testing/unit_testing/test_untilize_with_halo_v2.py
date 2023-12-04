@@ -248,18 +248,29 @@ def plot_diff(vals, fid, nsticks, stick_len):
             False,
         ),  # layer3 b20 - 11 cores for height slicing
         # resnet50 maxpool
-        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 8, (1, 112, 112), 98, (12, 9), True),
-        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 16, (1, 112, 112), 98, (12, 9), True),
-        ((1, 1, 3, 3, 2, 2, 1, 1, 1, 1), 20, (1, 112, 112), 98, (12, 9), True),
+        ((64, 64, 3, 3, 2, 2, 1, 1, 1, 1), 8, (64, 112, 112), 98, (12, 9), True),
+        ((64, 64, 3, 3, 2, 2, 1, 1, 1, 1), 16, (64, 112, 112), 98, (12, 9), True),
+        ((64, 64, 3, 3, 2, 2, 1, 1, 1, 1), 20, (64, 112, 112), 98, (12, 9), True),
+    ),
+)
+@pytest.mark.parametrize(
+    "skip_untilize",
+    (
+        False,
+        True,
     ),
 )
 def test_generate_all_configs_and_references(
-    device, conv_params, batch_size, input_chw_shape, num_cores_nhw, grid_size, test_max_pool
+    device, conv_params, batch_size, input_chw_shape, num_cores_nhw, grid_size, test_max_pool, skip_untilize
 ):
     assert len(conv_params) == 10
     output_channels, input_channels, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, dilation, groups = [
         conv_params[i] for i in range(10)
     ]
+
+    if test_max_pool and batch_size > 8:
+        print(f"Skipping maxpool config with batch_size = {batch_size} due to mem limitations")
+        pytest.skip()
 
     torch.set_printoptions(threshold=10000, edgeitems=50, linewidth=400)  ##, sci_mode=False)
 
@@ -358,21 +369,30 @@ def test_generate_all_configs_and_references(
     )
     # print(f"INPUT SHAPE: {input_pyt_tensor.shape}")
 
+    if input_c < 32 and not skip_untilize:
+        ## for input_c < 32, always need to pad when not skipping untilize, so skip
+        pytest.skip()
+
     memory_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
-    input_padded_to_tile_shape = [1, 1, _nearest_y(batch_size * input_h * input_w, num_cores_nhw * 32), input_padded_c]
-    if input_c < 32:
-        untilize_with_halp_input_tt_tensor = (
-            ttl.tensor.Tensor(input_pyt_tensor, ttl.tensor.DataType.BFLOAT16)
-            .pad(input_padded_to_tile_shape, (0, 0, 0, 0), 0)
-            .to(device, memory_config)
-        )
+
+    untilize_with_halp_input_tt_tensor = ttl.tensor.Tensor(input_pyt_tensor, ttl.tensor.DataType.BFLOAT16)
+    if skip_untilize:
+        ## no need to pad, just construct the tensor in RM
+        untilize_with_halp_input_tt_tensor = untilize_with_halp_input_tt_tensor.to(ttl.tensor.Layout.ROW_MAJOR)
     else:
-        untilize_with_halp_input_tt_tensor = (
-            ttl.tensor.Tensor(input_pyt_tensor, ttl.tensor.DataType.BFLOAT16)
-            .pad(input_padded_to_tile_shape, (0, 0, 0, 0), 0)
-            .to(ttl.tensor.Layout.TILE)
-            .to(device, memory_config)
-        )
+        ## pad to tile size first, then convert to TILE
+        input_padded_to_tile_shape = [
+            1,
+            1,
+            _nearest_y(batch_size * input_h * input_w, num_cores_nhw * 32),
+            input_padded_c,
+        ]
+        untilize_with_halp_input_tt_tensor = untilize_with_halp_input_tt_tensor.pad(
+            input_padded_to_tile_shape, (0, 0, 0, 0), 0
+        ).to(ttl.tensor.Layout.TILE)
+    ## move input to device
+    untilize_with_halp_input_tt_tensor = untilize_with_halp_input_tt_tensor.to(device, memory_config)
+
     # untilize_with_halp_input_tt_tensor = ttl.tensor.permute(untilize_with_halp_input_tt_tensor, (0, 2, 3, 1))
     # untilize_with_halp_input_tt_tensor = ttl.tensor.reshape(untilize_with_halp_input_tt_tensor, batch_size, 1, input_h * input_w, input_c)
     grid_size_binary = device.compute_with_storage_grid_size()
