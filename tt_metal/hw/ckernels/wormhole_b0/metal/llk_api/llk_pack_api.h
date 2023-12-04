@@ -298,10 +298,11 @@ inline void llk_pack_reduce_config_v2(uint32_t icb_out) {
             narrow_tile,
             relu_config.val
         );
-    } else {
-        TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
-        tensix_sync();
     }
 
-    _llk_pack_reduce_mask_config_<untilize, dim>();
+    if constexpr (revert) {
+        _llk_pack_reduce_mask_clear_();
+    } else {
+        _llk_pack_reduce_mask_config_<untilize, dim>();
+    }
 }
