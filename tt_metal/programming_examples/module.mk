@@ -13,6 +13,8 @@ include $(TT_METAL_HOME)/tt_metal/programming_examples/matmul_multi_core/module.
 include $(TT_METAL_HOME)/tt_metal/programming_examples/matmul_multicore_reuse/module.mk
 include $(TT_METAL_HOME)/tt_metal/programming_examples/matmul_multicore_reuse_mcast/module.mk
 
+# Need to depend on set_up_kernels.
+
 PROFILER_TESTS += \
 		  programming_examples/profiler/test_custom_cycle_count\
 		  programming_examples/profiler/test_full_buffer
