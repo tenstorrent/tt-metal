@@ -40,6 +40,13 @@
       ansible.builtin.copy:
         src: ../scripts/
         dest: "/opt/tt_metal_infra/scripts/"
+    - name: Make all script files in scripts/ci executable because perms may not txfr
+      become: yes
+      ansible.builtin.file:
+        path: /opt/tt_metal_infra/scripts/ci
+        state: directory
+        mode: ugo+x
+        recurse: yes
     - name: Copy assets
       become: yes
       ansible.builtin.copy:
