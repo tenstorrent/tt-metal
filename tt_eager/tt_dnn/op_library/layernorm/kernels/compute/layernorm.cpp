@@ -298,6 +298,7 @@ void MAIN {
     cb_wait_front(cb_im, num_tiles_per_block);
 
     if constexpr(do_gamma) {
+        unpack_reconfig_data_format(cb_im, cb_gamma);
         if constexpr(do_beta == 0) {
             pack_reconfig_data_format(cb_out);
         }
@@ -329,6 +330,7 @@ void MAIN {
     }
 
     if constexpr(do_beta) {
+        unpack_reconfig_data_format(cb_fusion, cb_beta);
         pack_reconfig_data_format(cb_out);
         add_bcast_rows_init_short();
         cb_wait_front(cb_beta, block_w);

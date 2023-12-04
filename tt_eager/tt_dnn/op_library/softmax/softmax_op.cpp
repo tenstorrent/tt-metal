@@ -336,7 +336,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_(
     tt::DataFormat out0_cb_data_format = tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat im_cb_data_format = tt_metal::datatype_to_dataformat_converter(im_data_format);
     tt::DataFormat mask_cb_data_format = mask.has_value() ? tt_metal::datatype_to_dataformat_converter(mask.value().dtype()) : tt::DataFormat::Float16_b;
-    tt::DataFormat scale_cb_data_format = tt_metal::datatype_to_dataformat_converter(im_data_format);
+    tt::DataFormat scale_cb_data_format = tt::DataFormat::Float16_b;
+    tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
     // tt::DataFormat scale_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     // log_info(LogTest, "in0 dtype {}", in0_cb_data_format);
@@ -364,6 +365,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_(
     uint32_t out0_tile_size = tt_metal::detail::TileSize(out0_cb_data_format);
     uint32_t mask_tile_size = tt_metal::detail::TileSize(mask_cb_data_format);
     uint32_t scale_tile_size = tt_metal::detail::TileSize(scale_cb_data_format);
+    uint32_t scalar_tile_size = tt_metal::detail::TileSize(scalar_cb_data_format);
     // in out buffer
     auto src0_buffer = input_tensor.buffer();
     auto out0_buffer = output_tensor.buffer();
@@ -381,7 +383,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_(
     // block size for in0 (tensor a)
     uint32_t in0_CB_size = block_wt * block_ht * in0_tile_size;
     // scaler for reduce coming from reader
-    uint32_t in1_CB_size = 1 * im_tile_size;
+    uint32_t in1_CB_size = 1 * scalar_tile_size;
     // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
     uint32_t in2_CB_size = 1 * scale_tile_size;
     // attention mask
@@ -467,8 +469,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_(
         .set_page_size(CB::c_in0, in0_tile_size).set_globally_allocated_address(*src0_buffer);
     auto cb_in0_id = CreateCircularBuffer(program, all_device_cores, c_in0_config);
     // in1 scalar
-    auto c_in1_config = CircularBufferConfig(in1_CB_size, {{CB::c_in1, im_cb_data_format}})
-        .set_page_size(CB::c_in1, im_tile_size);
+    auto c_in1_config = CircularBufferConfig(in1_CB_size, {{CB::c_in1, scalar_cb_data_format}})
+        .set_page_size(CB::c_in1, scalar_tile_size);
     auto cb_in1_id = CreateCircularBuffer(program, all_device_cores, c_in1_config);
     // in2 in3 attn scale mask
     std::optional<CBHandle> cb_intermed2_id;
