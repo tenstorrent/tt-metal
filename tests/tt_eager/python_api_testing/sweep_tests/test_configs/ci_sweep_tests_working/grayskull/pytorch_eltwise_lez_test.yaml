@@ -18,7 +18,7 @@ test-list:
           high: 100
         dtype: bfloat16
       comparison:
-        function: comp_pcc
+        function: comp_equal
       args-gen: gen_dtype_layout_device
       output-file: eltwise_lez_sweep.csv
       args:
@@ -44,7 +44,7 @@ test-list:
           high: 100
         dtype: bfloat16
       comparison:
-        function: comp_pcc
+        function: comp_equal
       args-gen: gen_dtype_layout_device
       output-file: eltwise_lez_sweep.csv
       args:

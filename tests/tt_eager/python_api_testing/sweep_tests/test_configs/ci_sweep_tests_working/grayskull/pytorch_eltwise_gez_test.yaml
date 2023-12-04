@@ -19,7 +19,7 @@ test-list:
           high: 100
         dtype: bfloat16
       comparison:
-        function: comp_pcc
+        function: comp_equal
       args-gen: gen_dtype_layout_device
       args:
         data-layout: ["TILE"]
@@ -46,7 +46,7 @@ test-list:
           high: 100
         dtype: bfloat16
       comparison:
-        function: comp_pcc
+        function: comp_equal
       args-gen: gen_dtype_layout_device
       args:
         data-layout: ["ROW_MAJOR"]
