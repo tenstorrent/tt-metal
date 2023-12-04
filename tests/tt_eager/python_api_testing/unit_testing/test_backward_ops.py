@@ -1,0 +1,768 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import torch
+import pytest
+import tt_lib
+from tests.tt_eager.python_api_testing.sweep_tests import (
+    comparison_funcs,
+)
+from loguru import logger
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+class TestBackwardOps:
+    @pytest.mark.parametrize("scalar", [0.05, 1.0, 0.5, 0.12])
+    def test_bw_unary_mul(self, input_shapes, scalar, device):
+        torch.manual_seed(0)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.unary_mul_bw(grad_tensor, input_tensor, scalar=scalar)
+        tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+
+        pyt_y = in_data * torch.tensor(scalar)
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor = in_data.grad
+
+        comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+        logger.info(comp_out)
+        assert comp_pass
+
+    def test_bw_mul(self, input_shapes, device):
+        torch.manual_seed(0)
+        in_data_a = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        in_data_b = torch.randn(input_shapes, requires_grad=True).bfloat16()
+
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor_a = (
+            tt_lib.tensor.Tensor(in_data_a, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor_b = (
+            tt_lib.tensor.Tensor(in_data_b, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.mul_bw(grad_tensor, input_tensor_a, input_tensor_b)
+        tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_output_tensor_b = tt_output_tensor_on_device[1].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data_a.retain_grad()
+        in_data_b.retain_grad()
+
+        pyt_y = in_data_a * in_data_b
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor_a = in_data_a.grad
+        golden_output_tensor_b = in_data_b.grad
+
+        comp_pass_a, _ = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a, 0.99)
+        _, comp_out_a = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_a, tt_output_tensor_a)
+
+        comp_pass_b, _ = comparison_funcs.comp_pcc(golden_output_tensor_b, tt_output_tensor_b, 0.99)
+        _, comp_out_b = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_b, tt_output_tensor_b)
+
+        logger.info(comp_out_a)
+        logger.info(comp_out_b)
+        assert comp_pass_a & comp_pass_b
+
+    def test_bw_unary_assign(self, input_shapes, device):
+        torch.manual_seed(0)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.unary_assign_bw(grad_tensor, input_tensor)
+        tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+
+        pyt_y = torch.clone(in_data)
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor = in_data.grad
+
+        comp_pass, _ = comparison_funcs.comp_equal(golden_output_tensor, tt_output_tensor)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+        logger.info(comp_out)
+        assert comp_pass
+
+    @pytest.mark.parametrize("alpha", [0.05, 1.0, 0.5, 0.12])
+    def test_bw_addalpha(self, input_shapes, alpha, device):
+        torch.manual_seed(0)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        other_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        other_tensor = (
+            tt_lib.tensor.Tensor(other_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.addalpha_bw(grad_tensor, input_tensor, other_tensor, alpha)
+        tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_output_tensor_b = tt_output_tensor_on_device[1].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+        other_data.retain_grad()
+
+        pyt_y = torch.add(in_data, other_data, alpha=alpha)
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor_a = in_data.grad
+        golden_output_tensor_b = other_data.grad
+
+        comp_pass_a, _ = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a, 0.99)
+        _, comp_out_a = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_a, tt_output_tensor_a)
+
+        comp_pass_b, _ = comparison_funcs.comp_pcc(golden_output_tensor_b, tt_output_tensor_b, 0.99)
+        _, comp_out_b = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_b, tt_output_tensor_b)
+
+        logger.info(comp_out_a)
+        logger.info(comp_out_b)
+        assert comp_pass_a & comp_pass_b
+
+    def test_bw_exp(self, input_shapes, device):
+        torch.manual_seed(12386)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        pyt_y = torch.exp(in_data)
+
+        exp_tensor = (
+            tt_lib.tensor.Tensor(pyt_y, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.exp_bw(grad_tensor, exp_tensor)
+        tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor = in_data.grad
+
+        comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+        logger.info(comp_out)
+        assert comp_pass
+
+    def test_bw_tan(self, input_shapes, device):
+        torch.manual_seed(12386)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        pyt_y = torch.tan(in_data)
+
+        tan_tensor = (
+            tt_lib.tensor.Tensor(pyt_y, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.tan_bw(grad_tensor, tan_tensor)
+        tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor = in_data.grad
+
+        comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+        logger.info(comp_out)
+        assert comp_pass
+
+    @pytest.mark.parametrize("value", [0.05, 1.0, 0.5, 0.12])
+    def test_bw_addcmul(self, input_shapes, value, device):
+        torch.manual_seed(0)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        tensor1_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        tensor2_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tensor1_tensor = (
+            tt_lib.tensor.Tensor(tensor1_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+        tensor2_tensor = (
+            tt_lib.tensor.Tensor(tensor2_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.addcmul_bw(
+            grad_tensor, input_tensor, tensor1_tensor, tensor2_tensor, value
+        )
+        tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_output_tensor_b = tt_output_tensor_on_device[1].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_output_tensor_c = tt_output_tensor_on_device[2].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+        tensor1_data.retain_grad()
+        tensor2_data.retain_grad()
+
+        pyt_y = torch.addcmul(in_data, tensor1_data, tensor2_data, value=value)
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor_a = in_data.grad
+        golden_output_tensor_b = tensor1_data.grad
+        golden_output_tensor_c = tensor2_data.grad
+
+        comp_pass_a, _ = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a, 0.99)
+        _, comp_out_a = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_a, tt_output_tensor_a)
+
+        comp_pass_b, _ = comparison_funcs.comp_pcc(golden_output_tensor_b, tt_output_tensor_b, 0.99)
+        _, comp_out_b = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_b, tt_output_tensor_b)
+
+        comp_pass_c, _ = comparison_funcs.comp_pcc(golden_output_tensor_c, tt_output_tensor_c, 0.99)
+        _, comp_out_c = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_c, tt_output_tensor_c)
+
+        logger.info(comp_out_a)
+        logger.info(comp_out_b)
+        logger.info(comp_out_c)
+        assert comp_pass_a & comp_pass_b & comp_pass_c
+
+    def test_bw_tanh(self, input_shapes, device):
+        torch.manual_seed(12386)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        pyt_y = torch.tanh(in_data)
+
+        tt_output_tensor_on_device = tt_lib.tensor.tanh_bw(grad_tensor, input_tensor)
+        tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor = in_data.grad
+
+        comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+        logger.info(comp_out)
+        assert comp_pass
+
+    @pytest.mark.parametrize("alpha", [1.0])
+    def test_bw_unary_add(self, input_shapes, alpha, device):
+        torch.manual_seed(0)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.unary_add_bw(grad_tensor, input_tensor, alpha=alpha)
+        tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+
+        pyt_y = torch.add(in_data, torch.tensor(alpha))
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor = in_data.grad
+
+        comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+        logger.info(comp_out)
+        assert comp_pass
+
+    def test_bw_add(self, input_shapes, device):
+        torch.manual_seed(0)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        other_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        other_tensor = (
+            tt_lib.tensor.Tensor(other_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.add_bw(grad_tensor, input_tensor, other_tensor)
+        tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_output_tensor_b = tt_output_tensor_on_device[1].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+        other_data.retain_grad()
+
+        pyt_y = torch.add(in_data, other_data)
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor_a = in_data.grad
+        golden_output_tensor_b = other_data.grad
+
+        comp_pass_a, _ = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a, 0.99)
+        _, comp_out_a = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_a, tt_output_tensor_a)
+
+        comp_pass_b, _ = comparison_funcs.comp_pcc(golden_output_tensor_b, tt_output_tensor_b, 0.99)
+        _, comp_out_b = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_b, tt_output_tensor_b)
+
+        logger.info(comp_out_a)
+        logger.info(comp_out_b)
+        assert comp_pass_a & comp_pass_b
+
+    @pytest.mark.parametrize("value", [0.05, 1.0, 0.5, 5.0])
+    def test_bw_addcdiv(self, input_shapes, value, device):
+        torch.manual_seed(0)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        tensor1_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        tensor2_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tensor1_tensor = (
+            tt_lib.tensor.Tensor(tensor1_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+        tensor2_tensor = (
+            tt_lib.tensor.Tensor(tensor2_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.addcdiv_bw(
+            grad_tensor, input_tensor, tensor1_tensor, tensor2_tensor, value
+        )
+        tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_output_tensor_b = tt_output_tensor_on_device[1].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_output_tensor_c = tt_output_tensor_on_device[2].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+        tensor1_data.retain_grad()
+        tensor2_data.retain_grad()
+
+        pyt_y = torch.addcdiv(in_data, tensor1_data, tensor2_data, value=value)
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor_a = in_data.grad
+        golden_output_tensor_b = tensor1_data.grad
+        golden_output_tensor_c = tensor2_data.grad
+
+        comp_pass_a, _ = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a, 0.99)
+        _, comp_out_a = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_a, tt_output_tensor_a)
+
+        comp_pass_b, _ = comparison_funcs.comp_pcc(golden_output_tensor_b, tt_output_tensor_b, 0.99)
+        _, comp_out_b = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_b, tt_output_tensor_b)
+
+        comp_pass_c, _ = comparison_funcs.comp_pcc(golden_output_tensor_c, tt_output_tensor_c, 0.99)
+        _, comp_out_c = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_c, tt_output_tensor_c)
+
+        logger.info(comp_out_a)
+        logger.info(comp_out_b)
+        logger.info(comp_out_c)
+        assert comp_pass_a & comp_pass_b & comp_pass_c
+
+    def test_bw_sqrt(self, input_shapes, device):
+        torch.manual_seed(12345)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        pyt_y = torch.sqrt(in_data)
+
+        sqrt_tensor = (
+            tt_lib.tensor.Tensor(pyt_y, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.sqrt_bw(grad_tensor, sqrt_tensor)
+        tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor = in_data.grad
+
+        comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+        logger.info(comp_out)
+        assert comp_pass
+
+    @pytest.mark.parametrize("scalar", [0.05, 1.0, 0.5, 0.12])
+    def test_bw_unary_div(self, input_shapes, scalar, device):
+        torch.manual_seed(0)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.unary_div_bw(grad_tensor, input_tensor, scalar=scalar)
+        tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+
+        pyt_y = torch.div(in_data, torch.tensor(scalar))
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor = in_data.grad
+
+        comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+        logger.info(comp_out)
+        assert comp_pass
+
+    def test_bw_div(self, input_shapes, device):
+        torch.manual_seed(0)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        other_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        other_tensor = (
+            tt_lib.tensor.Tensor(other_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.div_bw(grad_tensor, input_tensor, other_tensor)
+        tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_output_tensor_b = tt_output_tensor_on_device[1].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+        other_data.retain_grad()
+
+        pyt_y = torch.div(in_data, other_data)
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor_a = in_data.grad
+        golden_output_tensor_b = other_data.grad
+
+        comp_pass_a, _ = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a, 0.99)
+        _, comp_out_a = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_a, tt_output_tensor_a)
+
+        comp_pass_b, _ = comparison_funcs.comp_pcc(golden_output_tensor_b, tt_output_tensor_b, 0.99)
+        _, comp_out_b = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_b, tt_output_tensor_b)
+
+        logger.info(comp_out_a)
+        logger.info(comp_out_b)
+        assert comp_pass_a & comp_pass_b
+
+    def test_bw_max(self, input_shapes, device):
+        torch.manual_seed(0)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        other_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        other_tensor = (
+            tt_lib.tensor.Tensor(other_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.max_bw(grad_tensor, input_tensor, other_tensor)
+        tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_output_tensor_b = tt_output_tensor_on_device[1].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+        other_data.retain_grad()
+
+        pyt_y = torch.max(in_data, other_data)
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor_a = in_data.grad
+        golden_output_tensor_b = other_data.grad
+
+        comp_pass_a, _ = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a, 0.99)
+        _, comp_out_a = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_a, tt_output_tensor_a)
+
+        comp_pass_b, _ = comparison_funcs.comp_pcc(golden_output_tensor_b, tt_output_tensor_b, 0.99)
+        _, comp_out_b = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_b, tt_output_tensor_b)
+
+        logger.info(comp_out_a)
+        logger.info(comp_out_b)
+        assert comp_pass_a & comp_pass_b
+
+    @pytest.mark.parametrize(
+        "exponent",
+        [
+            0.0,
+            1.0,
+            2.0,
+        ],
+    )
+    def test_bw_unary_pow(self, input_shapes, exponent, device):
+        torch.manual_seed(0)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.unary_pow_bw(grad_tensor, input_tensor, exponent=exponent)
+        tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+
+        pyt_y = torch.pow(in_data, exponent)
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor = in_data.grad
+
+        comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+        logger.info(comp_out)
+        assert comp_pass
+
+    def test_bw_where(self, input_shapes, device):
+        torch.manual_seed(0)
+        in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        other_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
+        grad_data = torch.randn(input_shapes).bfloat16()
+        condition_data = torch.randn(input_shapes).bool()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        condition_tensor = (
+            tt_lib.tensor.Tensor(condition_data, tt_lib.tensor.DataType.BFLOAT16)
+            .to(tt_lib.tensor.Layout.TILE)
+            .to(device)
+        )
+
+        input_tensor = (
+            tt_lib.tensor.Tensor(in_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        other_tensor = (
+            tt_lib.tensor.Tensor(other_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.where_bw(grad_tensor, condition_tensor, input_tensor, other_tensor)
+        tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+        tt_output_tensor_b = tt_output_tensor_on_device[1].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        in_data.retain_grad()
+        other_data.retain_grad()
+
+        pyt_y = torch.where(condition_data, in_data, other_data)
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor_a = in_data.grad
+        golden_output_tensor_b = other_data.grad
+
+        comp_pass_a, _ = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a, 0.99)
+        _, comp_out_a = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_a, tt_output_tensor_a)
+
+        comp_pass_b, _ = comparison_funcs.comp_pcc(golden_output_tensor_b, tt_output_tensor_b, 0.99)
+        _, comp_out_b = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_b, tt_output_tensor_b)
+
+        logger.info(comp_out_a)
+        logger.info(comp_out_b)
+        assert comp_pass_a & comp_pass_b
+
+    # Pytorch Reference
+    # - name: fill.Scalar(Tensor self, Scalar value) -> Tensor
+    #   self: zeros_like(grad)
+    #   result: at::fill(self_t, 0)
+    def test_bw_fill_zero(self, input_shapes, device):
+        torch.manual_seed(12386)
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+        tt_output_tensor_on_device = tt_lib.tensor.fill_zero_bw(grad_tensor)
+        pyt_y = torch.zeros_like(grad_data)
+
+        tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        golden_output_tensor = pyt_y
+
+        comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+        logger.info(comp_out)
+        assert comp_pass
+
+    # Pytorch Reference
+    # - name: fill.Tensor(Tensor self, Tensor value) -> Tensor
+    #   self: zeros_like(grad)
+    #   value: grad.sum()
+    #   result: at::fill(self_t, value_t)
+    def test_bw_fill(self, input_shapes, device):
+        torch.manual_seed(12386)
+        grad_data = torch.randn(input_shapes).bfloat16()
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.TILE).to(device)
+        )
+
+        pyt_y = torch.zeros_like(grad_data)
+
+        grad_sum = grad_data.sum()
+        pyt_y.fill_(grad_sum)
+
+        tt_output_tensor_on_device = tt_lib.tensor.fill_bw(grad_tensor)
+
+        tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        tt_output_tensor = tt_output_tensor / tt_output_tensor.numel()
+        golden_output_tensor = pyt_y / pyt_y.numel()
+
+        comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+        logger.info(comp_out)
+
+    def test_embedding_bw(self, input_shapes, device):
+        torch.manual_seed(1234)
+
+        batch_size = input_shapes[0]
+        no_of_embeddings = input_shapes[1] * input_shapes[2]
+        embedding_dim = input_shapes[3]
+
+        input_shape = [batch_size, 1, 1, no_of_embeddings]
+        input_index = torch.reshape(torch.arange(0, batch_size * no_of_embeddings), shape=input_shape)
+        weights_shape = [batch_size, 1, no_of_embeddings, embedding_dim]
+        weights = torch.tensor(torch.randn(weights_shape), requires_grad=True)
+        grad_shape = [1, 1, batch_size * no_of_embeddings, embedding_dim]
+        grad_data = torch.tensor(torch.randn(grad_shape), requires_grad=True)
+
+        grad_tensor = (
+            tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16)
+            .to(tt_lib.tensor.Layout.ROW_MAJOR)
+            .to(device)
+        )
+
+        input_tensor = tt_lib.tensor.Tensor(input_index, tt_lib.tensor.DataType.UINT32).to(device)
+
+        weights_tensor = (
+            tt_lib.tensor.Tensor(weights, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.ROW_MAJOR).to(device)
+        )
+
+        tt_output_tensor_on_device = tt_lib.tensor.embedding_bw(grad_tensor, input_tensor, weights_tensor)
+        tt_output_tensor_a = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+
+        weights.retain_grad()
+
+        pyt_y = torch.nn.functional.embedding(
+            input_index.reshape((batch_size, no_of_embeddings)),
+            weights.reshape((batch_size * no_of_embeddings, embedding_dim)),
+        ).reshape((1, 1, batch_size * no_of_embeddings, embedding_dim))
+
+        pyt_y.backward(gradient=grad_data)
+
+        golden_output_tensor_a = weights.grad
+
+        comp_pass_a, _ = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a, 0.99)
+        _, comp_out_a = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_a, tt_output_tensor_a)
+
+        logger.info(comp_out_a)
+        assert comp_pass_a
