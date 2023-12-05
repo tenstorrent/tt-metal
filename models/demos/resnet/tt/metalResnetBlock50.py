@@ -1173,7 +1173,7 @@ class ResNet(nn.Module):
             per_core_act_h_ntiles = 64
             self.layer_3_grid_size = (11, 8)
             self.layer_4_grid_size = (9, 8)
-        if sharded and batch_size == 8:
+        if sharded:
             self.folded_conv1_params = [self.inplanes, 16, 4, 4, 1, 1, 0, 0, 1, groups]
             first_conv_output_padded_nhw_size = _nearest_y(112 * 112 * batch_size, 98 * 32)
             first_conv_output_channels = 64
@@ -1634,7 +1634,7 @@ class ResNet(nn.Module):
         return layers, last_layer_shape
 
     def preprocessing(self, x: torch.Tensor) -> tt_lib.tensor:
-        if self.sharded and self.batch_size == 8:
+        if self.sharded:
             x = pad_and_fold_conv_activation_for_unity_stride(x, 3, 3, 2, 2)
             x = torch.permute(x, (0, 2, 3, 1))
             x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
@@ -1657,7 +1657,7 @@ class ResNet(nn.Module):
         # x = torch.permute(x, (0, 2, 3, 1))
 
         # x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
-        if self.sharded and self.batch_size == 8:
+        if self.sharded:
             interleaved_mem_config = tt_lib.tensor.MemoryConfig(
                 tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
             )
