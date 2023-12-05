@@ -8,6 +8,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt::constants;
 using namespace tt;
@@ -89,37 +90,37 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp",
         in0_sender_in1_sender,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = detail::GetPreferredNOCForDRAMWrite(device->arch()), .compile_args = reader_compile_time_args});
 
     auto mm_reader_kernel_in0_sender_in1_receiver_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver.cpp",
         in0_sender_in1_receiver,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = detail::GetPreferredNOCForDRAMWrite(device->arch()), .compile_args = reader_compile_time_args});
 
     auto mm_reader_kernel_in0_receiver_in1_sender_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender.cpp",
         in0_receiver_in1_sender,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = detail::GetPreferredNOCForDRAMRead(device->arch()), .compile_args = reader_compile_time_args});
 
     auto mm_reader_kernel_in0_receiver_in1_receiver_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp",
         in0_receiver_in1_receiver,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = detail::GetPreferredNOCForDRAMRead(device->arch()), .compile_args = reader_compile_time_args});
 
     auto unary_writer_kernel_noc0_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_bmm_tile_layout.cpp",
         all_except_left_column,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = detail::GetPreferredNOCForDRAMWrite(device->arch()), .compile_args = writer_compile_time_args});
 
     auto unary_writer_kernel_noc1_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_bmm_tile_layout.cpp",
         left_column,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = writer_compile_time_args});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = detail::GetPreferredNOCForDRAMRead(device->arch()), .compile_args = writer_compile_time_args});
 
     // Compute kernel compile time args
     uint32_t num_blocks = (K/in0_block_w);
@@ -396,19 +397,19 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_tile_layout_in0_mcast_sender.cpp",
         mcast_senders,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
     auto mm_reader_kernel_receiver_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_tile_layout_in0_mcast_receiver.cpp",
         mcast_receivers,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
     auto unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_bmm_tile_layout.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
     uint32_t num_blocks = (K/in0_block_w);
 
@@ -655,19 +656,19 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_tile_layout_in1_mcast_sender.cpp",
         mcast_senders,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
     auto mm_reader_kernel_receiver_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_tile_layout_in1_mcast_receiver.cpp",
         mcast_receivers,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
     auto unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_bmm_tile_layout.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
     // Compute kernel compile time args
     uint32_t num_blocks = (K/in0_block_w);

@@ -5,6 +5,7 @@
 #pragma once
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/common/math.hpp"
+#include "tt_metal/impl/kernels/data_types.hpp"
 
 namespace tt::tt_metal::detail{
 
@@ -28,5 +29,27 @@ namespace tt::tt_metal::detail{
         int num_equally_distributed_pages = num_pages == 1 ? 1 : 1 + ((num_pages - 1) / num_banks);
         return num_equally_distributed_pages * round_up(page_size_bytes, ADDRESS_ALIGNMENT);
     }
+
+    inline NOC GetPreferredNOCForDRAMRead(ARCH arch) {
+            switch (arch) {
+                case ARCH::GRAYSKULL:
+                    return NOC::NOC_1;
+                case ARCH::WORMHOLE_B0:
+                default:
+                    return NOC::NOC_0;
+
+            }
+        }
+
+        inline NOC GetPreferredNOCForDRAMWrite(ARCH arch) {
+            switch (arch) {
+                case ARCH::GRAYSKULL:
+                    return NOC::NOC_0;
+                case ARCH::WORMHOLE_B0:
+                default:
+                    return NOC::NOC_1;
+
+            }
+        }
 
 }

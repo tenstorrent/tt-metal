@@ -113,10 +113,10 @@ def test_bert_linear(
     # out_subblock_w = 4
     # out_subblock_h = 4
 
-    print("in0 block w h " + str(in0_block_w * 32) + " " + str(in0_block_h * 32))
-    print("in1 block w h " + str(out_block_w * 32) + " " + str(in0_block_w * 32))
-    print("out block w h " + str(out_block_w * 32) + " " + str(out_block_h * 32))
-    print("out subblock w h " + str(out_subblock_w * 32) + " " + str(out_subblock_h * 32))
+    logger.debug("in0 block w h " + str(in0_block_w * 32) + " " + str(in0_block_h * 32))
+    logger.debug("in1 block w h " + str(out_block_w * 32) + " " + str(in0_block_w * 32))
+    logger.debug("out block w h " + str(out_block_w * 32) + " " + str(out_block_h * 32))
+    logger.debug("out subblock w h " + str(out_subblock_w * 32) + " " + str(out_subblock_h * 32))
 
     interleaved_mem_config_L1 = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,
@@ -297,10 +297,10 @@ def test_bert_linear_batch7(
         while out_block_w % out_subblock_w != 0:
             out_subblock_w = out_block_w // 2
 
-    print("in0 block w h " + str(in0_block_w * 32) + " " + str(in0_block_h * 32))
-    print("in1 block w h " + str(out_block_w * 32) + " " + str(in0_block_w * 32))
-    print("out block w h " + str(out_block_w * 32) + " " + str(out_block_h * 32))
-    print("out subblock w h " + str(out_subblock_w * 32) + " " + str(out_subblock_h * 32))
+    logger.debug("in0 block w h " + str(in0_block_w * 32) + " " + str(in0_block_h * 32))
+    logger.debug("in1 block w h " + str(out_block_w * 32) + " " + str(in0_block_w * 32))
+    logger.debug("out block w h " + str(out_block_w * 32) + " " + str(out_block_h * 32))
+    logger.debug("out subblock w h " + str(out_subblock_w * 32) + " " + str(out_subblock_h * 32))
 
     interleaved_mem_config_L1 = ttl.tensor.MemoryConfig(
         memory_layout=ttl.tensor.TensorMemoryLayout.INTERLEAVED,

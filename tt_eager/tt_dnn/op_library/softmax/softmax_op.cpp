@@ -109,22 +109,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_(const Tensor &input_tensor, 
     }
     auto reader_kernels_id = CreateKernel(
         program, "tt_eager/tt_dnn/op_library/softmax/kernels/reader_unary_interleaved_sm.cpp", all_device_cores,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
+        tt_metal::ReaderDataMovementConfig{
             .compile_args = reader_compile_time_args,
             .defines = softmax_defines
     });
-    //DataMovementProcessor::RISCV_1, core.x < 6 ? NOC::RISCV_1_default : NOC::RISCV_0_default);
 
     auto writer_kernels_id = CreateKernel(
         program, "tt_eager/tt_dnn/op_library/softmax/kernels/writer_unary_interleaved_start_id_blocked_sm.cpp", all_device_cores,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
+        tt_metal::WriterDataMovementConfig{
             .compile_args = writer_compile_time_args
     });
-    //DataMovementProcessor::RISCV_0, core.x < 6 ? NOC::RISCV_0_default : NOC::RISCV_1_default);
 
     // for broadcasting in H direction we need to
     // NCHt, Nt, Wt
@@ -436,9 +430,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_(
         program,
         use_row_major_kernel ? "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/reader_unary_sharded_sm_rm_mask.cpp" : "tt_eager/tt_dnn/op_library/softmax/kernels/dataflow/reader_unary_sharded_sm.cpp",
         all_device_cores,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
+        tt_metal::ReaderDataMovementConfig{
             .compile_args = reader_compile_time_args,
             .defines = softmax_defines
     });

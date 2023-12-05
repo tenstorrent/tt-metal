@@ -12,6 +12,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt::constants;
 using namespace tt;
@@ -247,17 +248,22 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     }
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
+
+    // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
+    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
         in0_is_sharded ? "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp" : "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         mcast_sender,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = in0_sender_compile_time_args});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc, .compile_args = in0_sender_compile_time_args});
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = in1_sender_writer_compile_time_args, .defines = mm_kernel_in1_sender_writer_defines});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc, .compile_args = in1_sender_writer_compile_time_args, .defines = mm_kernel_in1_sender_writer_defines});
 
 
     KernelHandle mm_kernel_in0_receiver_id = 0;
@@ -265,9 +271,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
             program,
             "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
-            /* in0_receiver_in1_sender, // If not using half-half noc setup */
             mcast_receivers,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = in0_receiver_compile_time_args});
+            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc, .compile_args = in0_receiver_compile_time_args});
     }
     // Compute kernel compile time args
 
@@ -374,8 +379,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
         }
     }
-    CoreCoord start_core_noc = device->worker_core_from_logical_core({start_core_x, start_core_y});
-    CoreCoord end_core_noc = device->worker_core_from_logical_core({start_core_x + num_cores_c - 1, start_core_y + num_cores_r - 1});
+    CoreCoord start_core_noc = top_left_core_physical;
+    CoreCoord end_core_noc = bottom_right_core_physical;
+    if (in0_noc == NOC::NOC_1) {
+        std::swap(start_core_noc, end_core_noc);
+    }
 
     for(uint32_t i = 0; i < num_cores; i++) {
         uint32_t core_idx_x = i % num_cores_c;
@@ -404,10 +412,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 (std::uint32_t)  in0_buffer->address(),
                 (std::uint32_t)  K * per_core_M * output_idx_y, // in0_tensor_start_tile_id
                 // in0 mcast args
-                (std::uint32_t)  top_left_core_physical.x, // in0_mcast_dest_noc_start_x
-                (std::uint32_t)  top_left_core_physical.y, // in0_mcast_dest_noc_start_y
-                (std::uint32_t)  bottom_right_core_physical.x, // in0_mcast_dest_noc_end_x
-                (std::uint32_t)  bottom_right_core_physical.y, // in0_mcast_dest_noc_end_y
+                (std::uint32_t)  start_core_noc.x, // in0_mcast_dest_noc_start_x
+                (std::uint32_t)  start_core_noc.y, // in0_mcast_dest_noc_start_y
+                (std::uint32_t)  end_core_noc.x, // in0_mcast_dest_noc_end_x
+                (std::uint32_t)  end_core_noc.y, // in0_mcast_dest_noc_end_y
 
                 // padding args
                 (std::uint32_t) per_core_M // last_block_h
@@ -767,24 +775,29 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     }
 
     mm_kernel_in0_sender_defines["SKIP_MCAST"] = "1";
+
+    // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
+    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = in0_sender_compile_time_args, .defines = mm_kernel_in0_sender_defines});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc, .compile_args = in0_sender_compile_time_args, .defines = mm_kernel_in0_sender_defines});
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
         mcast_sender,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = in1_sender_writer_compile_time_args, .defines = mm_kernel_in1_sender_writer_defines});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc, .compile_args = in1_sender_writer_compile_time_args, .defines = mm_kernel_in1_sender_writer_defines});
 
 
     auto mm_kernel_in1_receiver_writer_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
         mcast_receivers,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = in1_receiver_writer_compile_time_args, .defines = mm_kernel_in1_receiver_writer_defines});
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc, .compile_args = in1_receiver_writer_compile_time_args, .defines = mm_kernel_in1_receiver_writer_defines});
 
     // Compute kernel compile time args
 
@@ -875,6 +888,13 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 
     std::vector<KernelHandle> reader_kernel_ids;
     std::vector<KernelHandle> writer_kernel_ids;
+
+    CoreCoord start_core_noc = bottom_right_core_physical;
+    CoreCoord end_core_noc = top_left_core_physical;
+    if (in1_noc == NOC::NOC_0) {
+        std::swap(start_core_noc, end_core_noc);
+    }
+
     for(uint32_t i = 0; i < num_cores; i++) {
         uint32_t core_idx_x = i % num_cores_c;
         uint32_t core_idx_y = i / num_cores_c;
@@ -890,10 +910,10 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 (std::uint32_t)  in1_buffer->address(),
                 (std::uint32_t)  per_core_N * output_idx_x, //in1_tensor_start_tile_id
                 // in1 mcast args
-                (std::uint32_t)  bottom_right_core_physical.x, // in1_mcast_dest_noc_start_x
-                (std::uint32_t)  bottom_right_core_physical.y, // in1_mcast_dest_noc_start_y
-                (std::uint32_t)  top_left_core_physical.x, // in1_mcast_dest_noc_end_x
-                (std::uint32_t)  top_left_core_physical.y, // in1_mcast_dest_noc_end_y
+                (std::uint32_t)  start_core_noc.x, // in1_mcast_dest_noc_start_x
+                (std::uint32_t)  start_core_noc.y, // in1_mcast_dest_noc_start_y
+                (std::uint32_t)  end_core_noc.x, // in1_mcast_dest_noc_end_x
+                (std::uint32_t)  end_core_noc.y, // in1_mcast_dest_noc_end_y
 
                 // WRITER
                 // out tensor args

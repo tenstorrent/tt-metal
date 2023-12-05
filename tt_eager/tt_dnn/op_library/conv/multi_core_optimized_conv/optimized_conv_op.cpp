@@ -726,8 +726,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_(const Tensor& a, cons
         bias_ntiles_per_core
     };
 
-    auto writer_mcast_noc = NOC::NOC_0;
-    auto reader_noc = writer_mcast_noc == NOC::NOC_0 ? NOC::NOC_1 : NOC::NOC_0;
+    auto writer_mcast_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
+    auto reader_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
     auto writer_mcast_sender_id = CreateKernel(
     program,
     writer_mcast_sender_kernel,

@@ -106,9 +106,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             program,
             "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded_blocks_interleaved_start_id.cpp",
             all_cores,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = tt_metal::NOC::RISCV_1_default,
+            tt_metal::ReaderDataMovementConfig{
                 .compile_args = reader_compile_time_args});
     } else {
         bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(num_units_per_row);
@@ -123,9 +121,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             program,
             "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp",
             all_cores,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = tt_metal::NOC::RISCV_1_default,
+            tt_metal::ReaderDataMovementConfig{
                 .compile_args = reader_compile_time_args});
     }
 
@@ -134,9 +130,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
+        tt_metal::WriterDataMovementConfig{
             .compile_args = writer_compile_time_args});
 
     if (convert_df) {
@@ -354,9 +348,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         program,
         "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
+        tt_metal::ReaderDataMovementConfig{
             .compile_args = reader_compile_time_args});
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -369,9 +361,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
             program,
             "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/writer_unary_sharded_blocks_interleaved_start_id.cpp",
             all_cores,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::RISCV_0_default,
+            tt_metal::WriterDataMovementConfig{
                 .compile_args = writer_compile_time_args});
     } else {
         bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(num_units_per_row);
@@ -387,9 +377,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
             "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/"
             "writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp",
             all_cores,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::RISCV_0_default,
+            tt_metal::WriterDataMovementConfig{
                 .compile_args = writer_compile_time_args});
     }
     if (convert_df) {

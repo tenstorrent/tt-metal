@@ -5,6 +5,8 @@
 #pragma once
 
 #include "common/base_types.hpp"
+#include "tt_metal/impl/kernels/data_types.hpp"
+#include "tt_metal/detail/util.hpp"
 #include <map>
 #include <vector>
 #include <string>
@@ -12,23 +14,6 @@
 namespace tt::tt_metal {
 
 using KernelHandle = std::uint16_t;
-
-enum class DataMovementProcessor {
-    RISCV_0 = 0,  // BRISC
-    RISCV_1 = 1,  // NCRISC
-};
-
-enum NOC : uint8_t {
-    RISCV_0_default = 0,
-    RISCV_1_default = 1,
-    NOC_0 = 0,
-    NOC_1 = 1,
-};
-
-enum Eth : uint8_t {
-    SENDER = 0,
-    RECEIVER = 1,
-};
 
 struct DataMovementConfig {
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0;  // For data transfer kernels: NCRISC & BRISC
@@ -38,6 +23,24 @@ struct DataMovementConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
+};
+
+struct ReaderDataMovementConfig : public DataMovementConfig {
+    ReaderDataMovementConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {}) :
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch()),
+            .compile_args = compile_args,
+            .defines = defines} {}
+};
+
+struct WriterDataMovementConfig : public DataMovementConfig {
+    WriterDataMovementConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {}) :
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch()),
+            .compile_args = compile_args,
+            .defines = defines} {}
 };
 
 struct ComputeConfig {

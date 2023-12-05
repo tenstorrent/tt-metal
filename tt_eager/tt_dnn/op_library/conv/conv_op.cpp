@@ -555,9 +555,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         program,
         reader_kernel,
         core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
+        ReaderDataMovementConfig{
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
@@ -565,9 +563,7 @@ operation::ProgramWithCallbacks conv_as_large_bmm_single_core_(const Tensor& a, 
         program,
         writer_kernel,
         core,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+        WriterDataMovementConfig{
             .compile_args = writer_compile_time_args,
             .defines = all_defines});
 
@@ -1252,13 +1248,13 @@ operation::ProgramWithCallbacks conv_as_large_bmm_with_address_map_single_core_(
         program,
         reader_kernel,
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        tt_metal::ReaderDataMovementConfig{});
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t) (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0)};
     auto writer_id = tt_metal::CreateKernel(
         program,
         writer_kernel,
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,

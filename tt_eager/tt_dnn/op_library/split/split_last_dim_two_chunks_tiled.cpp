@@ -198,18 +198,14 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
+        tt_metal::ReaderDataMovementConfig{
             .compile_args = reader_compile_time_args});
 
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_tm_tile_layout_split_two_chunks.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
+        tt_metal::WriterDataMovementConfig{
             .compile_args = writer_compile_time_args});
 
     // Dummy compute kernel
