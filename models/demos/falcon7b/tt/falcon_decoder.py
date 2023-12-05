@@ -13,6 +13,7 @@ from models.demos.falcon7b.tt.falcon_attention import TtFalconAttention
 from models.demos.falcon7b.tt.falcon_mlp import TtFalconMLP
 from models.utility_functions import pad_by_zero
 
+
 class TtFalconDecoderLayer(nn.Module):
     def __init__(
         self,
@@ -34,9 +35,7 @@ class TtFalconDecoderLayer(nn.Module):
         self.max_position_embeddings = max_position_embeddings
         self.model_config = model_config
 
-        assert (
-            config.parallel_attn
-        ), "Path for config.parallel_attn=False is not implemented in TtFalconDecoderLayer!"
+        assert config.parallel_attn, "Path for config.parallel_attn=False is not implemented in TtFalconDecoderLayer!"
 
         self.self_attn = TtFalconAttention(
             device=device,
@@ -64,19 +63,16 @@ class TtFalconDecoderLayer(nn.Module):
 
         layernorm_weights_str = f"{layer_name}.input_layernorm.weight"
         layernorm_bias_str = f"{layer_name}.input_layernorm.bias"
-        if tt_cache_path is not None:
+
+        if (
+            tt_cache_path / f"{layernorm_weights_str}_{self.model_config['INPUT_LAYERNORM_WEIGHTS_DTYPE'].name}.bin"
+        ).exists():
             self.layernorm_gamma = tt_lib.tensor.load_tensor(
                 str(
                     tt_cache_path
                     / f"{layernorm_weights_str}_{self.model_config['INPUT_LAYERNORM_WEIGHTS_DTYPE'].name}.bin"
                 )
             ).to(device, self.model_config["INPUT_LAYERNORM_WEIGHTS_MEMCFG"])
-            self.layernorm_beta = tt_lib.tensor.load_tensor(
-                str(
-                    tt_cache_path
-                    / f"{layernorm_bias_str}_{self.model_config['INPUT_LAYERNORM_BIAS_DTYPE'].name}.bin"
-                )
-            ).to(device, self.model_config["INPUT_LAYERNORM_BIAS_MEMCFG"])
         else:
             self.layernorm_gamma = pad_by_zero(
                 self.state_dict[layernorm_weights_str],
@@ -84,12 +80,32 @@ class TtFalconDecoderLayer(nn.Module):
                 tt_memory_config=self.model_config["INPUT_LAYERNORM_WEIGHTS_MEMCFG"],
                 tt_dtype=self.model_config["INPUT_LAYERNORM_WEIGHTS_DTYPE"],
             )[0]
+            tt_lib.tensor.dump_tensor(
+                str(
+                    tt_cache_path
+                    / f"{layernorm_weights_str}_{self.model_config['INPUT_LAYERNORM_WEIGHTS_DTYPE'].name}.bin"
+                ),
+                self.layernorm_gamma.cpu(),
+            )
+
+        if (
+            tt_cache_path / f"{layernorm_bias_str}_{self.model_config['INPUT_LAYERNORM_BIAS_DTYPE'].name}.bin"
+        ).exists():
+            self.layernorm_beta = tt_lib.tensor.load_tensor(
+                str(tt_cache_path / f"{layernorm_bias_str}_{self.model_config['INPUT_LAYERNORM_BIAS_DTYPE'].name}.bin")
+            ).to(device, self.model_config["INPUT_LAYERNORM_BIAS_MEMCFG"])
+        else:
             self.layernorm_beta = pad_by_zero(
                 self.state_dict[layernorm_bias_str],
                 device,
                 tt_memory_config=self.model_config["INPUT_LAYERNORM_BIAS_MEMCFG"],
                 tt_dtype=self.model_config["INPUT_LAYERNORM_BIAS_DTYPE"],
             )[0]
+            tt_lib.tensor.dump_tensor(
+                str(tt_cache_path / f"{layernorm_bias_str}_{self.model_config['INPUT_LAYERNORM_BIAS_DTYPE'].name}.bin"),
+                self.layernorm_beta.cpu(),
+            )
+
         self.layernorm_eps = config.layer_norm_epsilon
 
     def forward(
@@ -103,14 +119,10 @@ class TtFalconDecoderLayer(nn.Module):
         layer_past_len: int = 0,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
-    ) -> Tuple[
-        tt_lib.tensor.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
-    ]:
+    ) -> Tuple[tt_lib.tensor.Tensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """Input shape: [batch, 1, seq_len, hidden_size]"""
 
-        assert (
-            not output_attentions
-        )
+        assert not output_attentions
 
         layernorm_output = tt_lib.tensor.layernorm(
             hidden_states,
