@@ -1622,54 +1622,62 @@ class ShardedBuffer {
         uint32_t pages_start = 0;
         uint32_t pages_end = 0;
 
+
+        uint32_t total_core_words = this->num_cores_ * NUM_ENTRIES_PER_SHARD;
+
         //first get to correct core
-        for(uint32_t core_id = 0;  core_id < this->num_cores_; core_id++){
-            uint32_t num_pages_core = this->base_command_addr_[core_id*NUM_ENTRIES_PER_SHARD];
+        for(uint32_t core_word_id = 0;  core_word_id < total_core_words; core_word_id+=NUM_ENTRIES_PER_SHARD){
+            uint32_t num_pages_core = this->base_command_addr_[core_word_id];
             pages_end = pages_start + num_pages_core;
-            uint32_t core_id_x = this->base_command_addr_[core_id*NUM_ENTRIES_PER_SHARD + 1];
-            uint32_t core_id_y = this->base_command_addr_[core_id*NUM_ENTRIES_PER_SHARD + 2];
+            uint32_t core_id_x = this->base_command_addr_[core_word_id + 1];
+            uint32_t core_id_y = this->base_command_addr_[core_word_id + 2];
 
             //first get to correct core
             if(!(page_id >= pages_start && page_id < pages_end)){
                 pages_start = pages_end;
                 continue;
             }
-            core_id_start = core_id;
+            core_id_start = core_word_id;
             break;
         }
 
         uint32_t flattened_page_id = page_id;
 
         uint32_t host_page_id = 0;
-        for(uint32_t core_id = core_id_start;  core_id < this->num_cores_; core_id++){
-            uint32_t num_pages_core = this->base_command_addr_[core_id*NUM_ENTRIES_PER_SHARD];
+        uint32_t host_offset = 0;
+        uint32_t core_page_id = (flattened_page_id - pages_start);
+        uint32_t core_offset = core_page_id * this->page_size_;
+
+        for(uint32_t core_word_id = core_id_start;  core_word_id < total_core_words; core_word_id+=NUM_ENTRIES_PER_SHARD){
+            uint32_t num_pages_core = this->base_command_addr_[core_word_id];
             pages_end = pages_start + num_pages_core;
-            uint32_t core_id_x = this->base_command_addr_[core_id*NUM_ENTRIES_PER_SHARD + 1];
-            uint32_t core_id_y = this->base_command_addr_[core_id*NUM_ENTRIES_PER_SHARD + 2];
+            uint32_t core_id_x = this->base_command_addr_[core_word_id + 1];
+            uint32_t core_id_y = this->base_command_addr_[core_word_id + 2];
 
 
             //now curr_page_id pointing to beginning of section we want in this core
             uint32_t num_pages_write_core = min(pages_end - flattened_page_id, num_pages_left);
 
+            uint32_t size_in_bytes_written = num_pages_write_core * this->page_size_;
+
             //Writing at beginning of core
-            uint32_t core_page_id = (flattened_page_id - pages_start);
-            uint32_t core_offset = core_page_id * this->page_size_;
             uint64_t noc_address = this->get_noc_addr_(core_id_x, core_id_y, core_offset);
-            uint32_t host_offset = host_page_id*this->page_size_;
 
             if(!read){
-                noc_async_write(addr + host_offset, noc_address, num_pages_write_core*this->page_size_);
+                noc_async_write(addr + host_offset, noc_address, size_in_bytes_written);
             }
             else{
-                noc_async_read(noc_address, addr + host_offset, num_pages_write_core*this->page_size_);
+                noc_async_read(noc_address, addr + host_offset, size_in_bytes_written);
             }
+
             num_pages_left-= num_pages_write_core;
-            host_page_id += num_pages_write_core;
-            flattened_page_id += num_pages_write_core;
+            host_offset += size_in_bytes_written;
             if(num_pages_left == 0){
                 break;
             }
+            core_offset = 0;
             pages_start = pages_end;
+            flattened_page_id = pages_start;
         }
     }
 
