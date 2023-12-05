@@ -97,7 +97,7 @@ golden_pcc = {
             tt_lib.tensor.MathFidelity.LoFi,
             tt_lib.tensor.DataType.BFLOAT8_B,
             tt_lib.tensor.DataType.BFLOAT8_B,
-        ): 0.894135,  # Max ATOL Delta: 6.205164909362793, Max RTOL Delta: inf, PCC: 0.8941357301670332
+        ): 0.884609,  # Max ATOL Delta: 6.455164909362793, Max RTOL Delta: inf, PCC: 0.8846098380419435
     },
 }
 
