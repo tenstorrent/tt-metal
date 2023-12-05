@@ -150,14 +150,11 @@ class TTPyConv(TTPyOp):
                 [0] * (indices_length_per_core - len(sliding_window_op_sharded_input_top_left_indices[-1]))
             )
 
-            # TODO: Uplift 1D convs to also use uint16 indices
-            indices_torch_dtype = torch.int32
-            indices_tt_dtype = ttl.tensor.DataType.UINT32
+            indices_torch_dtype = torch.int16
+            indices_tt_dtype = ttl.tensor.DataType.UINT16
             # For 2d convs, each core in a column share the same specs
             if conv_is_2d:
                 sliding_window_op_sharded_input_top_left_indices *= num_cores_h
-                indices_torch_dtype = torch.int16
-                indices_tt_dtype = ttl.tensor.DataType.UINT16
 
             # Create sharded tensor on device for conv_reader_indices
             conv_reader_indices_torch_tensor = torch.tensor(

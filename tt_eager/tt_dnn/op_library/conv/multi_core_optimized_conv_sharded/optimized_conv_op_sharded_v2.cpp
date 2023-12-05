@@ -656,9 +656,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
             }
 
             // Local L1 to store array for reader indices
-            // TODO: once 1D-sys-conv is uint16_t indicies (2D-sys-conv already is), then each entry can be 2B (not 4)
-            CircularBufferConfig cb_for_reader_indices_config = CircularBufferConfig(out_block_h_datums * 4, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
-		        .set_page_size(cb_for_reader_indices, out_block_h_datums * 4);
+            // All convs use packed uint16 indices, so each entry can be 2B (not 4)
+            CircularBufferConfig cb_for_reader_indices_config = CircularBufferConfig(out_block_h_datums * 2, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
+		        .set_page_size(cb_for_reader_indices, out_block_h_datums * 2);
             cb_for_reader_indices_config.set_globally_allocated_address(*conv_reader_indices.value().buffer());
             auto cb_for_reader_indices_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_indices_config);
 
