@@ -13,6 +13,7 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/detail/program.hpp"
 #include "tt_metal/llrt/watcher.hpp"
+#include "tt_metal/jit_build/genfiles.hpp"
 
 using std::unique_lock;
 using std::mutex;
@@ -301,7 +302,7 @@ namespace tt::tt_metal{
             const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
 
             // Generate header file in proper location
-            generate_bank_to_noc_coord_descriptor (
+            jit_build_genfiles_bank_to_noc_coord_descriptor (
                 path,
                 soc_d.grid_size,
                 dram_noc_coord_per_bank,
@@ -334,7 +335,7 @@ namespace tt::tt_metal{
                 pcie_chan_end_addr += tt::Cluster::instance().get_host_channel_size(device->id(), pcie_chan);
             }
 
-            generate_noc_addr_ranges_header(
+            jit_build_genfiles_noc_addr_ranges_header(
                 path,
                 pcie_chan_base_addr,
                 pcie_chan_end_addr - pcie_chan_base_addr,

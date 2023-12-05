@@ -13,6 +13,7 @@
 #include "common/executor.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/detail/kernel_cache.hpp"
+#include "tt_metal/jit_build/genfiles.hpp"
 
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tools/profiler/profiler.hpp"
@@ -29,7 +30,7 @@ namespace{
         const std::string tracyPrefix = "GenerateBinaries_";
         ZoneName( (tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
         try {
-            generate_descriptors(device->build_env(), build_options);
+            jit_build_genfiles_descriptors(device->build_env(), build_options);
             kernel->generate_binaries(device, build_options);
         } catch (std::runtime_error &ex) {
             TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
