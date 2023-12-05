@@ -10,30 +10,6 @@ on:
       - "main"
 
 jobs:
-  check-syseng-assets-dev:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.CHECKOUT_TOKEN }}
-      - name: Check asset download script
-        env:
-          GITHUB_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
-        run: |
-          cd infra/machine_setup
-          ./scripts/download_public_machine_setup_assets.sh
-  check-syseng-assets-release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.CHECKOUT_TOKEN }}
-      - name: Check asset download script
-        env:
-          GITHUB_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
-        run: |
-          cd infra/machine_setup
-          ./scripts/download_public_machine_setup_assets.sh -r
   check-spdx-licenses:
     runs-on: ubuntu-latest
     steps:
