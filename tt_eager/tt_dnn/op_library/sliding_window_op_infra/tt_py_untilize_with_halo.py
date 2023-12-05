@@ -30,7 +30,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
     # sliding window op params: tuple(stride_hw: tuple(int, int), pad_hw: tuple(int, int), window_hw: tuple(int, int), input_nhw: tuple(int, int, int), num_cores_nhw: int)
     static_kernel_configs_cache_map = {}
 
-    def __init__(self, device, sliding_window_op_params):
+    def __init__(self, device, sliding_window_op_params, pad_val=0x0):
         self.sliding_window_op_params = sliding_window_op_params
         self.device = device
         sliding_window_op_params_hash = _get_hash_from_sliding_window_op_params(sliding_window_op_params)
@@ -62,7 +62,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
                 utwh_kernel_configs["local_data_tensor"],
                 utwh_kernel_configs["r_data_tensor"],
                 utwh_kernel_configs["rr_data_tensor"],
-                0x0,  ## pad_val
+                pad_val,
                 self.sliding_window_op_params[5],
                 utwh_kernel_configs["max_out_nsticks_per_core"],
                 utwh_kernel_configs["local_pad_nsegments_per_core"],

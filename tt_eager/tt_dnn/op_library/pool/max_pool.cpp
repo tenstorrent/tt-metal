@@ -97,24 +97,26 @@ std::vector<Tensor> MaxPool::create_output_tensors(const std::vector<Tensor> &in
 
 operation::ProgramWithCallbacks MaxPool::create_program(const std::vector<Tensor>& inputs, std::vector<Tensor> &outputs) const {
     const auto& input = inputs.at(0);
+    const auto& reader_indices = inputs.at(1);
     auto& output = outputs.at(0);
-    if (!use_multicore_) {
-        return {max_pool_2d_single_core(input, output,
-                                        in_h_, in_w_,
-                                        out_h_, out_w_,
-                                        kernel_size_h_, kernel_size_w_,
-                                        stride_h_, stride_w_,
-                                        pad_h_, pad_w_,
-                                        dilation_h_, dilation_w_,
-                                        out_mem_config_,
-                                        nblocks_)};
+    if (inputs.size() > 1) {
+        TT_FATAL(use_multicore_, "UTWHv2 only works with multicore option.");
+        TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded for UTWHv2");
+        return {max_pool_2d_multi_core_sharded_with_halo_v2(
+                                    input, reader_indices,
+                                    output,
+                                    in_n_, in_h_, in_w_,
+                                    out_h_, out_w_,
+                                    kernel_size_h_, kernel_size_w_,
+                                    stride_h_, stride_w_,
+                                    pad_h_, pad_w_,
+                                    dilation_h_, dilation_w_,
+                                    out_mem_config_,
+                                    nblocks_)};
     } else {
-        if (input.memory_config().is_sharded()) {
-            auto shard_spec = input.shard_spec().value();
-            if (shard_spec.halo) {
-                log_debug(LogOp, "Using sharded with halo");
-                return {max_pool_2d_multi_core_sharded_with_halo(input, output,
-                                            in_n_, in_h_, in_w_,
+        if (!use_multicore_) {
+            return {max_pool_2d_single_core(input, output,
+                                            in_h_, in_w_,
                                             out_h_, out_w_,
                                             kernel_size_h_, kernel_size_w_,
                                             stride_h_, stride_w_,
@@ -122,29 +124,44 @@ operation::ProgramWithCallbacks MaxPool::create_program(const std::vector<Tensor
                                             dilation_h_, dilation_w_,
                                             out_mem_config_,
                                             nblocks_)};
-            } else {
-                log_debug(LogOp, "Using sharded");
-                return {max_pool_2d_multi_core_generic(input, output,
-                                                        in_h_, in_w_,
-                                                        out_h_, out_w_,
-                                                        kernel_size_h_, kernel_size_w_,
-                                                        stride_h_, stride_w_,
-                                                        pad_h_, pad_w_,
-                                                        dilation_h_, dilation_w_,
-                                                        out_mem_config_,
-                                                        nblocks_)};
-            }
         } else {
-            log_debug(LogOp, "Using generic");
-            return {max_pool_2d_multi_core_generic(input, output,
-                                        in_h_, in_w_,
-                                        out_h_, out_w_,
-                                        kernel_size_h_, kernel_size_w_,
-                                        stride_h_, stride_w_,
-                                        pad_h_, pad_w_,
-                                        dilation_h_, dilation_w_,
-                                        out_mem_config_,
-                                        nblocks_)};
+            if (input.memory_config().is_sharded()) {
+                auto shard_spec = input.shard_spec().value();
+                if (shard_spec.halo) {
+                    log_debug(LogOp, "Using sharded with halo");
+                    return {max_pool_2d_multi_core_sharded_with_halo(input, output,
+                                                in_n_, in_h_, in_w_,
+                                                out_h_, out_w_,
+                                                kernel_size_h_, kernel_size_w_,
+                                                stride_h_, stride_w_,
+                                                pad_h_, pad_w_,
+                                                dilation_h_, dilation_w_,
+                                                out_mem_config_,
+                                                nblocks_)};
+                } else {
+                    log_debug(LogOp, "Using sharded");
+                    return {max_pool_2d_multi_core_generic(input, output,
+                                                            in_h_, in_w_,
+                                                            out_h_, out_w_,
+                                                            kernel_size_h_, kernel_size_w_,
+                                                            stride_h_, stride_w_,
+                                                            pad_h_, pad_w_,
+                                                            dilation_h_, dilation_w_,
+                                                            out_mem_config_,
+                                                            nblocks_)};
+                }
+            } else {
+                log_debug(LogOp, "Using generic");
+                return {max_pool_2d_multi_core_generic(input, output,
+                                            in_h_, in_w_,
+                                            out_h_, out_w_,
+                                            kernel_size_h_, kernel_size_w_,
+                                            stride_h_, stride_w_,
+                                            pad_h_, pad_w_,
+                                            dilation_h_, dilation_w_,
+                                            out_mem_config_,
+                                            nblocks_)};
+            }
         }
     }
 }
@@ -174,6 +191,34 @@ Tensor max_pool2d(const Tensor &input,
                                                      nblocks,
                                                      use_multicore},
                                              {input}).at(0);
+}
+
+Tensor max_pool2d_v2(const Tensor &input,
+                  const Tensor &reader_indices,
+                  uint32_t in_n, uint32_t in_h, uint32_t in_w,
+                  uint32_t kernel_size_h, uint32_t kernel_size_w,
+                  uint32_t stride_h, uint32_t stride_w,
+                  uint32_t pad_h, uint32_t pad_w,
+                  uint32_t dilation_h, uint32_t dilation_w,
+                  const MemoryConfig& out_mem_config,
+                  uint32_t nblocks,
+                  bool use_multicore) {
+    TT_ASSERT(dilation_h == 1 && dilation_w == 1 && "Dilation not yet supported in max_pool2d.");
+    TT_ASSERT(pad_h < 2 && pad_w < 2 && "Padding > 1 not yet supported.");
+    TT_ASSERT(stride_h == stride_w && "Stride should be equal for both H and W for now.");
+    // calculate the H and W dims for output
+    uint32_t out_h = ((in_h + 2 * pad_h - (dilation_h * kernel_size_h - 1) - 1) / stride_h) + 1;   // floor
+    uint32_t out_w = ((in_w + 2 * pad_w - (dilation_w * kernel_size_w - 1) - 1) / stride_w) + 1;   // floor
+    return operation::run_without_autoformat(MaxPool{in_n, in_h, in_w,
+                                                     out_h, out_w,
+                                                     kernel_size_h, kernel_size_w,
+                                                     stride_h, stride_w,
+                                                     pad_h, pad_w,
+                                                     dilation_h, dilation_w,
+                                                     out_mem_config,
+                                                     nblocks,
+                                                     use_multicore},
+                                             {input, reader_indices}).at(0);
 }
 
 } // namespace tt_metal

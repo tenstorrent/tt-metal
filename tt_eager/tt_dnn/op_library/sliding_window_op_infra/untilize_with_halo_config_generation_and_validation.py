@@ -4,7 +4,9 @@ import numpy as np
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 
 
-def construct_2d_padded_tensor_list(input_tensor, input_nchw_shape, pad_metadata):
+def construct_2d_padded_tensor_list(input_tensor, input_nchw_shape, pad_metadata, pad_val: torch.int16 = 0x0):
+    if pad_val == 0xF7FF:
+        pad_val = -1.03e34  ## TODO: how to do this in python properly???
     # Construct the padded tensor using pad_metadata
     input_padded_tensor = []
     input_tensor_idx = 0
@@ -17,7 +19,7 @@ def construct_2d_padded_tensor_list(input_tensor, input_nchw_shape, pad_metadata
     for i in range(len(pad_metadata)):
         for c in range(input_c):
             if pad_metadata[i]:
-                input_padded_tensor.append(0x0)
+                input_padded_tensor.append(pad_val)
             else:
                 assert input_tensor_idx < len(input_tensor_nhwc)
                 input_padded_tensor.append(input_tensor_nhwc[input_tensor_idx])
@@ -90,9 +92,9 @@ def trace_conv_to_generate_data_top_left_indices_and_pad_metadata(conv_params, i
     return pad_metadata, data_top_left_indices
 
 
-def construct_input_padded_tensor(input_pyt_tensor, pad_metadata):
+def construct_input_padded_tensor(input_pyt_tensor, pad_metadata, pad_val: torch.int16 = 0x0):
     return construct_2d_padded_tensor_list(
-        input_pyt_tensor.reshape(-1).tolist(), list(input_pyt_tensor.size()), pad_metadata
+        input_pyt_tensor.reshape(-1).tolist(), list(input_pyt_tensor.size()), pad_metadata, pad_val
     )
 
 
@@ -592,6 +594,9 @@ def generate_untilize_with_halo_kernel_configs(tensor_metadata: list, resharded_
             [(0, 0)] * (max_local_pad_nsegments_across_cores - local_pad_nsegments_per_core[i])
         )
         local_pad_start_and_size[i] = [item for tuple_item in local_pad_start_and_size[i] for item in tuple_item]
+
+    # for core_id in range(ncores):
+    #     print(f'Core {core_id}: {resharded_start_and_end[core_id][1][1] - resharded_start_and_end[core_id][1][0] + 1}')
 
     max_out_nsticks_per_core = max(
         [
