@@ -73,15 +73,15 @@ def run_perf_resnet(
         logits = torch_resnet50(inputs)
         profiler.end(cpu_key)
 
-        profiler.start(first_key)
         tt_inputs = tt_resnet50.preprocessing(inputs)
+        profiler.start(first_key)
         tt_output = tt_resnet50(tt_inputs).cpu()
         profiler.end(first_key)
 
         # enable_persistent_kernel_cache()
 
-        profiler.start(second_key)
         tt_inputs = tt_resnet50.preprocessing(inputs)
+        profiler.start(second_key)
         tt_output = tt_resnet50(tt_inputs).cpu()
         profiler.end(second_key)
 
