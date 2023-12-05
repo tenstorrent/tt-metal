@@ -105,19 +105,43 @@ void tt_assert_message(std::ostream& os, T const& t, Ts const&... ts) {
 }
 
 template <typename... Ts>
+void tt_assert_log_message(Ts const&... ts) {
+    std::string fmt;
+    for (int i = 0; i < sizeof...(ts); i++) {
+        fmt += "{} ";
+    }
+    log_fatal(fmt.c_str(), ts...);
+}
+
+template <typename... Ts>
+void tt_assert_log_message(const char *t, Ts const&... ts) {
+    log_fatal(t, ts...);
+}
+
+template <typename... Ts>
+void tt_assert_log_message(const std::string& t, Ts const&... ts) {
+    log_fatal(t.c_str(), ts...);
+}
+
+template <typename... Ts>
 [[ noreturn ]] void tt_throw(char const* file, int line, const std::string& assert_type, char const* condition_str, Ts const&... messages) {
     std::stringstream trace_message_ss = {};
     trace_message_ss << assert_type << " @ " << file << ":" << line << ": " << condition_str << std::endl;
     if constexpr (sizeof...(messages) > 0) {
         trace_message_ss << "info:" << std::endl;
         tt_assert_message(trace_message_ss, messages...);
+        tt_assert_log_message(messages...);
     }
     trace_message_ss << "backtrace:\n";
     trace_message_ss << tt::assert::backtrace_to_string(100, 3, " --- ");
     trace_message_ss << std::flush;
     Logger::get().flush();
     throw std::runtime_error(trace_message_ss.str());
+}
 
+template <typename... Ts>
+void tt_assert(char const* file, int line, const std::string& assert_type, char const* condition_str, Ts const&... messages) {
+    ::tt::assert::tt_throw(file, line, assert_type, condition_str, messages...);
 }
 
 template <typename... Ts>
@@ -133,14 +157,14 @@ void tt_assert(char const* file, int line, const std::string& assert_type, bool 
 // https://stackoverflow.com/questions/55933541/else-without-previous-if-error-when-defining-macro-with-arguments/55933720#55933720
 #ifdef DEBUG
 #ifndef TT_ASSERT
-#define TT_ASSERT(condition, ...) do{ if (not (condition)) ::tt::assert::tt_assert(__FILE__, __LINE__, "TT_ASSERT", (condition), #condition,      ##__VA_ARGS__); }while(0)
+#define TT_ASSERT(condition, ...) do{ if (not (condition)) tt::assert::tt_assert(__FILE__, __LINE__, "TT_ASSERT", (condition), #condition, ##__VA_ARGS__); } while(0)
 #endif
 #else
 #define TT_ASSERT(condition, ...)
 #endif
 
 #ifndef TT_THROW
-#define TT_THROW(...)             ::tt::assert::tt_throw(__FILE__, __LINE__, "TT_THROW",     "tt::exception", ##__VA_ARGS__)
+#define TT_THROW(...) tt::assert::tt_throw(__FILE__, __LINE__, "TT_THROW", "tt::exception", ##__VA_ARGS__)
 #endif
 
 #ifndef TT_FATAL

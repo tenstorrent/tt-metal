@@ -309,7 +309,7 @@ tt_device &Cluster::get_driver(chip_id_t device_id) const {
 
 const metal_SocDescriptor &Cluster::get_soc_desc(chip_id_t chip) const {
     if (this->sdesc_per_chip_.find(chip) == this->sdesc_per_chip_.end()) {
-        TT_FATAL("Cannot access soc descriptor for {} before device driver is initialized! Call initialize_device_driver({}) first", chip, chip);
+        TT_THROW("Cannot access soc descriptor for {} before device driver is initialized! Call initialize_device_driver({}) first", chip, chip);
     }
     return this->sdesc_per_chip_.at(chip);
 }
