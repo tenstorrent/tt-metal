@@ -13,7 +13,7 @@ namespace ckernel {
 // New LLK SFPU APIs
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_sqrt(uint dst_index, int vector_mode = Dim::RC) {
+inline void llk_math_eltwise_unary_sfpu_sqrt(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     constexpr bool zero_negative = true;
     constexpr int first_iterations = 1;
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>

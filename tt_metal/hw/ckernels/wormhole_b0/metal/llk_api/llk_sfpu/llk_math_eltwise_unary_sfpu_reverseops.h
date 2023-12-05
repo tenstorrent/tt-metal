@@ -24,7 +24,7 @@ namespace ckernel {
         llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
                                     (ckernel::sfpu::calculate_rsub<APPROXIMATE,8>,
                                     ckernel::sfpu::calculate_rsub<APPROXIMATE,8>,
-                                    dst_index, Dim::RC, param0);
+                                    dst_index, (int)VectorMode::RC, param0);
     }
 
 }

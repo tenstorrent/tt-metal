@@ -29,7 +29,7 @@ inline void llk_math_eltwise_unary_sfpu_erf(uint dst_index, int param0 = 0) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erf, APPROXIMATE>,
                                 ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erf, APPROXIMATE>,
-                                dst_index, Dim::RC);
+                                dst_index, (int)VectorMode::RC);
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
@@ -37,7 +37,7 @@ inline void llk_math_eltwise_unary_sfpu_erfc(uint dst_index, int param0 = 0) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erfc, APPROXIMATE>,
                                 ckernel::sfpu::calculate_sfpu_erf_erfc<SfpuType::erfc, APPROXIMATE>,
-                                dst_index, Dim::RC);
+                                dst_index, (int)VectorMode::RC);
 }
 
 }

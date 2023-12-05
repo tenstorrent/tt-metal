@@ -26,7 +26,7 @@ inline void llk_math_eltwise_unary_sfpu_isinf(uint dst_index) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isinf, APPROXIMATE>,
                                 ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isinf, APPROXIMATE>,
- 				                dst_index, Dim::RC);
+ 				                dst_index, (int)VectorMode::RC);
 
 }
 
@@ -41,7 +41,7 @@ inline void llk_math_eltwise_unary_sfpu_isposinf(uint dst_index) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isposinf, APPROXIMATE>,
                                 ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isposinf, APPROXIMATE>,
- 				                dst_index,Dim::RC);
+ 				                dst_index,(int)VectorMode::RC);
 
 }
 
@@ -58,7 +58,7 @@ inline void llk_math_eltwise_unary_sfpu_isneginf(uint dst_index) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isneginf, APPROXIMATE>,
                                 ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isneginf, APPROXIMATE>,
-                                dst_index,Dim::RC);
+                                dst_index,(int)VectorMode::RC);
 
 }
 
@@ -73,7 +73,7 @@ inline void llk_math_eltwise_unary_sfpu_isnan(uint dst_index) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isnan, APPROXIMATE>,
                                 ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isnan, APPROXIMATE>,
- 				                dst_index,Dim::RC);
+ 				                dst_index,(int)VectorMode::RC);
 
 }
 
@@ -88,7 +88,7 @@ inline void llk_math_eltwise_unary_sfpu_isfinite(uint dst_index) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isfinite, APPROXIMATE>,
                                 ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isfinite, APPROXIMATE>,
- 				                dst_index,Dim::RC);
+ 				                dst_index,(int)VectorMode::RC);
 
 }
 

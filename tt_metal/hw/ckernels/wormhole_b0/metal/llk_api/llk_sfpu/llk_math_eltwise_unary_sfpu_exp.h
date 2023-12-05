@@ -15,7 +15,7 @@ namespace ckernel {
 // New LLK SFPU APIs
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_exponential(uint dst_index, int vector_mode = Dim::RC, int param0 = 0) {
+inline void llk_math_eltwise_unary_sfpu_exponential(uint dst_index, int vector_mode = (int)VectorMode::RC, int param0 = 0) {
 
 	constexpr bool zero_negative = true;
     constexpr int first_iterations = 1;
