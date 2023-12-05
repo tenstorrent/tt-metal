@@ -385,23 +385,31 @@ hardcoded_matmul_config_conv = {
 
 hardcoded_conv_blocking_and_parallelization_config = {
     8: {
-        (100352, 64): [16 * 4, 256, 1, 64, 128, 64, 1024, (12, 9), 1024, 64, 98],
+        (100352, 64): [16 * 4, 1024, 1, 64, 128, 64, 1024, (12, 9), 1024, 64, 98],
         (25088, 64): [64 * 3, 256, 1, 64, 128, 64, 256, (12, 9), 256, 64, 98],
         (6272, 128): [128 * 3, 64, 1, 128, 64, 128, 64, (12, 9), 64, 128, 98],
         (1568, 256): [256, 160, 8, 32, 160, 32, 160, (10, 8), 160, 32, 10],
         (416, 512): [512, 64, 8, 64, 64, 64, 64, (7, 8), 64, 64, 7],
     },
     16: {
-        (200704, 64): [16 * 4, 64, 1, 64, 64, 64, 2048, (12, 9), 2048, 64, 98],
+        (200704, 64): [16 * 4, 1024, 1, 64, 128, 64, 2048, (12, 9), 2048, 64, 98],
         (50176, 64): [64 * 3, 256, 1, 64, 128, 64, 512, (12, 9), 512, 64, 98],
         (12544, 128): [128 * 3, 128, 1, 128, 64, 128, 128, (12, 9), 128, 128, 98],
         (3136, 256): [256, 288, 8, 32, 96, 32, 288, (11, 8), 288, 32, 11],
         (800, 512): [512, 96, 8, 64, 96, 64, 96, (9, 8), 96, 64, 9],
     },
+    20: {
+        (250880, 64): [16 * 4, 1280, 1, 64, 128, 64, 2560, (12, 9), 2560, 64, 98],  # Won't fit for bfloat16 activations
+        (62720, 64): [64 * 3, 640, 1, 64, 128, 64, 640, (12, 9), 640, 64, 98],
+        # (62720, 64): [64 * 3, 320, 1, 64, 64, 64, 640, (12, 9), 640, 64, 98], # TODO: This fits for BFLOAT16, but do we need?
+        (15680, 128): [128 * 3, 160, 1, 128, 32, 128, 160, (12, 9), 160, 128, 98],
+        (3936, 256): [256, 352, 8, 32, 32, 32, 352, (12, 8), 352, 32, 12],
+        (992, 512): [512, 96, 8, 64, 96, 64, 96, (11, 8), 96, 64, 11],
+    },
 }
 
 
-@pytest.mark.parametrize("N", (8, 16), ids=["batch_8", "batch_16"])
+@pytest.mark.parametrize("N", (8, 16, 20), ids=["batch_8", "batch_16", "batch_20"])
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
@@ -455,6 +463,15 @@ def test_resnet50_conv(
     pad_h,
     pad_w,
 ):
+    if (
+        activations_dtype == tt_lib.tensor.DataType.BFLOAT16
+        and N == 20
+        and (
+            K == 64 or (stride_h == 2 and (K == 256 or (K == 128 and weights_dtype == tt_lib.tensor.DataType.BFLOAT16)))
+        )
+    ):
+        pytest.skip("Skipping test because it won't fit in L1!")
+
     interleaved_mem_config = tt_lib.tensor.MemoryConfig(
         tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
     )
@@ -520,7 +537,6 @@ def test_resnet50_conv(
         # Directly run old conv (row major input)
         # NOTE: New conv should have identical output
         ###############################################
-
         conv = resnet50_optimized_conv(
             conv_weight_pyt.reshape(-1).tolist(),
             conv_params,
