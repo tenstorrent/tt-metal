@@ -1,9 +1,0 @@
----
-- name: Reboot nodes
-  hosts: all
-  tasks:
-    - name: Reboot machine
-      become: yes
-      ansible.builtin.reboot:
-        post_reboot_delay: 60
-        reboot_timeout: 1500
