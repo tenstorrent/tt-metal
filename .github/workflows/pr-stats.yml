@@ -6,6 +6,7 @@ on:
 
 jobs:
   stats:
+    permissions: write-all
     runs-on: ubuntu-latest
     steps:
       - name: Run pull request stats
