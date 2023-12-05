@@ -182,8 +182,8 @@ void kernel_main() {
     // #pragma GCC unroll 4 // didn't seem to help (neutral), manual unroll 2x perf drop
     for (uint32_t bh = 0; bh < act_block_h_datums/2; bh++) {
         uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-        read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , log_base_2_of_conv_act_size_c_bytes, coalesced_read_bytes, stride_h_bytes);
         read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, log_base_2_of_conv_act_size_c_bytes, coalesced_read_bytes, stride_h_bytes);
+        read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , log_base_2_of_conv_act_size_c_bytes, coalesced_read_bytes, stride_h_bytes);
 
         reader_idx++;
     }

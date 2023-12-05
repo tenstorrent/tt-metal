@@ -40,8 +40,8 @@ inline void push_to_neighbor_async(uint32_t noc_x,
                                    uint32_t stick_nbytes) {
     volatile tt_l1_ptr uint16_t* data_ss = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(data_ss_cb_id));
     for (uint32_t i = 0; i < 2 * data_nsegments; i += 2) {
-        uint32_t seg_nbytes = data_ss[i] * stick_nbytes;
-        uint32_t dst_addr = out_l1_addr + data_ss[i + 1] * stick_nbytes;
+        uint32_t seg_nbytes = data_ss[i + 1] * stick_nbytes;
+        uint32_t dst_addr = out_l1_addr + data_ss[i] * stick_nbytes;
         noc_async_write(in_l1_addr, get_noc_addr(noc_x, noc_y, dst_addr), seg_nbytes);
         in_l1_addr += seg_nbytes;
     }
@@ -115,8 +115,8 @@ void kernel_main() {
         uint32_t local_pad_ss_l1_addr = get_read_ptr(local_pad_ss_cb_id);
         volatile tt_l1_ptr uint16_t* local_pad_ss = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_pad_ss_l1_addr);
         for (int32_t i = 0; i < 2 * local_pad_nsegments; i += 2) {
-            uint32_t dst_size = local_pad_ss[i];
-            uint32_t dst_addr = out_base_l1_addr + local_pad_ss[i + 1] * stick_nbytes;
+            uint32_t dst_size = local_pad_ss[i + 1];
+            uint32_t dst_addr = out_base_l1_addr + local_pad_ss[i] * stick_nbytes;
             for (uint32_t j = 0; j < dst_size; ++ j) {
                 noc_async_read(padding_noc_addr, dst_addr, stick_nbytes);
                 dst_addr += stick_nbytes;
@@ -131,8 +131,8 @@ void kernel_main() {
         uint32_t local_data_ss_l1_addr = get_read_ptr(local_data_ss_cb_id);
         volatile tt_l1_ptr uint16_t* local_data_ss = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_data_ss_l1_addr);
         for (int32_t i = 0; i < 2 * local_data_nsegments; i += 2) {
-            uint32_t dst_size = local_data_ss[i] * stick_nbytes;
-            uint32_t dst_addr = out_base_l1_addr + local_data_ss[i + 1] * stick_nbytes;
+            uint32_t dst_size = local_data_ss[i + 1] * stick_nbytes;
+            uint32_t dst_addr = out_base_l1_addr + local_data_ss[i] * stick_nbytes;
             noc_async_read(get_noc_addr(in_l1_addr), dst_addr, dst_size);
             in_l1_addr += dst_size;
         }
