@@ -191,8 +191,12 @@ def test_run_max_pool(
 
     out_padded = max_pool(out_untilize)
 
-    out_padded = ttl.tensor.sharded_to_interleaved(out_padded, interleaved_mem_config)
+    # out_padded = ttl.tensor.sharded_to_interleaved(out_padded, interleaved_mem_config)
     out_padded = out_padded.cpu().to(ttl.tensor.Layout.ROW_MAJOR)
+
+    # Clear the static cache map
+    TTPyMaxPool.static_kernel_configs_cache_map = {}
+    TTPyUntilizeWithHalo.static_kernel_configs_cache_map = {}
 
     out_shape_padded = out_padded.shape()
     out_pytorch_padded = out_padded.to_torch().reshape(out_shape_padded)  ## N, 1, HW, C

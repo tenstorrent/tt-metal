@@ -1894,70 +1894,18 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
                                               core_range,
                                               compute_config);
 
-    PoolConfig pc {
-        .in_w = in_w,
-        .in_h = in_h,
-        .out_w = out_w,
-        .out_h = out_h,
-        .stride_w = stride_w,
-        .stride_h = stride_h,
-        .pad_w = pad_w,
-        .pad_h = pad_h,
-        .window_w = kernel_size_w,
-        .window_h = kernel_size_h,
-        .dilation_w = dilation_w,
-        .dilation_h = dilation_h
-    };
+    /**
+     * Set runtime args
+     */
 
-    // calculate and set the start/end h_i for each core
-    // for all but last core (cliff)
-    uint32_t core_out_h_i = 0;
-    uint32_t core_out_w_i = 0;
-    int32_t curr_start_h = - pad_h;
-    uint32_t core_batch_offset = 0;
+    SetRuntimeArgs(program, reader_kernel, all_cores, reader_rt_args);
+
     uint32_t curr_out_stick_id = 0; // track output sticks with batch folded in
-    int32_t curr_in_stick_id = 0; // track input sticks with batch folded in
-    uint32_t core_out_w_i_start = 0;
-    uint32_t core_out_h_i_start = 0;
     for (int32_t i = 0; i < ncores; ++ i) {
         CoreCoord core(i % ncores_w, i / ncores_w); // logical
-        // reader_rt_args[37] = (curr_in_stick_id / in_hw) * in_hw;
-        // core_out_w_i_start = curr_out_stick_id % out_w;
-        // core_out_h_i_start = (curr_out_stick_id / out_w) % out_h;
-        // reader_rt_args[38] = core_out_w_i_start;
-        // reader_rt_args[39] = core_out_h_i_start;
-        // reader_rt_args[41] = curr_out_stick_id;
-
-        // reader_rt_args[43] = curr_out_stick_id;
-        // reader_rt_args[45] = curr_in_stick_id;
-        // reader_rt_args[46] = curr_in_stick_id + in_nhw_per_core;
-
-        // reader_rt_args[64] = i; // my_core
-
-        // given the start,end out stick id, calculate the start,end in stick id.
-        int32_t start_out_stick_id = curr_out_stick_id;
-        int32_t start_batch_i = start_out_stick_id / out_hw;
-        int32_t start_out_w_i = start_out_stick_id % out_w;
-        int32_t start_out_h_i = (start_out_stick_id % out_hw) / out_w;
-        int32_t start_in_w_i = start_out_w_i * stride_w;
-        int32_t start_in_h_i = start_out_h_i * stride_h;
-        int32_t start_center_in_stick_id = start_in_h_i * in_w + start_in_w_i;
-
-        int32_t end_out_stick_id = start_out_stick_id + out_nhw_per_core - 1;
-        int32_t end_batch_i = end_out_stick_id / out_hw;
-        int32_t end_out_w_i = end_out_stick_id % out_w;
-        int32_t end_out_h_i = (end_out_stick_id % out_hw) / out_w;
-        int32_t end_in_w_i = end_out_w_i * stride_w;
-        int32_t end_in_h_i = end_out_h_i * stride_h;
-        int32_t end_center_in_stick_id = end_in_h_i * in_w + end_in_w_i + (end_batch_i - start_batch_i) * in_hw;
-
-        SetRuntimeArgs(program, reader_kernel, core, reader_rt_args);
-
         writer_rt_args[4] = curr_out_stick_id;
         SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
-
         curr_out_stick_id += out_nhw_per_core;
-        curr_in_stick_id += in_nhw_per_core;
     }
 
     auto override_runtime_arguments_callback = [
@@ -1979,9 +1927,6 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(cons
 
         for (uint32_t i = 0; i < ncores; ++ i) {
             CoreCoord core{i % ncores_w, i / ncores_w };
-            // {
-            //     auto &runtime_args = GetRuntimeArgs(program, reader_kernel, core);
-            // }
             {
                 auto &runtime_args = GetRuntimeArgs(program, writer_kernel, core);
                 runtime_args[0] = dst_buffer->address();

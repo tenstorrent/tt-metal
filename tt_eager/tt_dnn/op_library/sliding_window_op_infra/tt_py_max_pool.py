@@ -95,8 +95,8 @@ class TTPyMaxPool(TTPyOp):
                 )
             )
 
-            for core_data in sliding_window_op_sharded_input_top_left_indices:
-                print(f"READER IDX {len(core_data)}: {core_data}")
+            # for core_data in sliding_window_op_sharded_input_top_left_indices:
+            #     print(f"READER IDX {len(core_data)}: {core_data}")
 
             # Pad indices for last core if not equal to other cores
             indices_length_per_core = len(sliding_window_op_sharded_input_top_left_indices[0])
@@ -130,6 +130,8 @@ class TTPyMaxPool(TTPyOp):
             reader_indices_sharded_tensor = reader_indices_tt_tensor.to(device, mem_config, shard_spec)
 
             cls.static_kernel_configs_cache_map[sliding_window_op_params_hash] = reader_indices_sharded_tensor
+
+        return
 
     def set_op_weights_biases(self, op_params, output_mem_config, reader_indices):
         stride_h, stride_w = op_params[0]
