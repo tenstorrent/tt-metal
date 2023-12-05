@@ -190,8 +190,26 @@ def get_model_config(model_config_str):
         }
         model_config.update(new_config_values)
 
-    elif model_config_str == "BFLOAT8_B-L1":
-        new_config_values = {}
+    elif model_config_str == "BFLOAT8_B-L1" or model_config_str == "BFLOAT8_B-DRAM":
+        new_config_values = {
+            # "OP10_FF2_MM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            # "OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            # "OP4_SOFTMAX_ATTENTION_MASK_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
+            # "OP4_SOFTMAX_CONFIG": tt_lib.operations.primary.transformers.SoftmaxInterleavedMultiCoreProgramConfig(
+            #     math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+            #     im_data_format=tt_lib.tensor.DataType.BFLOAT16,
+            # ),
+            # "OP8_LAYERNORM_CONFIG": tt_lib.operations.primary.LayerNormInterleavedMultiCoreProgramConfig(
+            #     math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+            #     im_data_format=tt_lib.tensor.DataType.BFLOAT16,
+            #     out_data_format=tt_lib.tensor.DataType.BFLOAT16,
+            # ),
+            # "OP11_LAYERNORM_CONFIG": tt_lib.operations.primary.LayerNormInterleavedMultiCoreProgramConfig(
+            #     math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+            #     im_data_format=tt_lib.tensor.DataType.BFLOAT16,
+            #     out_data_format=tt_lib.tensor.DataType.BFLOAT8_B,
+            # ),
+        }
         model_config.update(new_config_values)
 
     elif model_config_str == "MIXED_PRECISION_BATCH9":

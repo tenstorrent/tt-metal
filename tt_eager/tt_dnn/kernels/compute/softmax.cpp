@@ -106,6 +106,7 @@ void MAIN {
             ht = 0;
             wait_mask = true;
         }
+        unpack_reconfig_data_format(cb_exps, cb_bcast_scaler);
         #else
         unpack_reconfig_data_format(cb_in0, cb_in0);
         pack_reconfig_data_format(cb_exps);

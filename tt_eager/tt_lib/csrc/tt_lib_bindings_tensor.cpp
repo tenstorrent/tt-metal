@@ -450,23 +450,12 @@ void TensorModule(py::module &m_tensor) {
     )doc");
 
     // layernorm
-    py::class_<LayerNormDefaultProgramConfig>(m_tensor, "LayerNormDefaultProgramConfig")
-        .def(py::init<>());
-
-    py::class_<LayerNormInterleavedMultiCoreProgramConfig>(m_tensor, "LayerNormInterleavedMultiCoreProgramConfig")
-        .def(
-            py::init<MathFidelity, DataType, DataType>(),
-            py::kw_only(),
-            py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
-            py::arg("im_data_format").noconvert(),
-            py::arg("out_data_format").noconvert()
-        );
     m_tensor.def("layernorm", &layernorm,
-        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("program_config").noconvert() = tt::tt_metal::LayerNormDefaultProgramConfig{}, R"doc(
+        py::arg("input").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a layernorm operation on the last tensor dimension with optional fused with post-multiplication and addition via W-bcast.
     )doc");
     m_tensor.def("add_layernorm", &add_layernorm,
-        py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, py::arg("program_config").noconvert() = tt::tt_metal::LayerNormDefaultProgramConfig{}, R"doc(
+        py::arg("a").noconvert(), py::arg("b").noconvert(), py::arg("eps").noconvert(), py::arg("gamma").noconvert() = std::nullopt, py::arg("beta").noconvert() = std::nullopt, py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         "Performs a layernorm(a+b)*gamma + beta operation."
     )doc");
     m_tensor.def("rmsnorm", &rmsnorm,
