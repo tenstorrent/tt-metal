@@ -8,9 +8,8 @@
 
 inline uint32_t get_operand_id(uint32_t operand)
 {
-    const int INTERMEDIATE_BASE_ID = 24;
     const int OPERAND_BASE_ID = 0;
-    return (operand>=INTERMEDIATE_BASE_ID) ? operand - 8 : operand - OPERAND_BASE_ID;
+    return (operand);
 }
 
 inline const uint32_t get_operand_src_format(const std::uint32_t operand_id)
