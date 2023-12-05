@@ -1,3 +1,0 @@
-[hosts]
-172.27.28.43 ansible_user=testuser
-172.27.28.104 ansible_user=testuser

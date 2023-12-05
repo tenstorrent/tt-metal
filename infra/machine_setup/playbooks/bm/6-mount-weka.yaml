@@ -1,5 +1,0 @@
----
-- name: Mount MLPerf now and on reboot
-  ansible.builtin.import_playbook: ../common/6-mount-weka.yaml
-  vars:
-    machine_type: bm
