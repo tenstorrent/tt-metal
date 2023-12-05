@@ -55,7 +55,9 @@ struct TileSlice : TileSliceHostDev<MAXCOUNT> {
 
     __attribute__((__noinline__))
     TileSlice(int cb, int itile, const SliceRange& s, bool endl_rows = true, bool print_untilized = true) {
-        this->count_ = 0; // for math thread which doesn't have access to CBs
+        // The math risc uses a different mechanism for syncing data, and as such doesn't have
+        // access to CBs, so TileSlice printing is skipped on this risc.
+        this->count_ = 0;
         volatile Tile* t;
         #if defined(TRISC_PACK) || defined(COMPILE_FOR_NCRISC)
             this->ptr_ = cb_interface[cb].fifo_wr_ptr<<4;

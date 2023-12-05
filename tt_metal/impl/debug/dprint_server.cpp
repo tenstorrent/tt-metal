@@ -145,7 +145,15 @@ private:
     bool peek_flush_one_hart_nonblocking(int chip_id, const CoreCoord& core, int hart_index);
 };
 
-static void print_tile_slice(ostream& stream, uint8_t* ptr) {
+static void print_tile_slice(ostream& stream, uint8_t* ptr, int hart_id) {
+    // Since MATH RISCV doesn't have access to CBs, we can't print tiles from it. If the user still
+    // tries to do this print a relevant message.
+    if ((1 << hart_id) == DPRINT_RISCV_TR1) {
+        stream << "Warning: MATH core does not support TileSlice printing, omitting print..."
+            << endl << std::flush;
+        return;
+    }
+
     TileSliceHostDev<0>* ts = reinterpret_cast<TileSliceHostDev<0>*>(ptr);
     stream << "TILE: (" << endl << std::flush;
     if (ts->w0_ == 0xFFFF) {
@@ -183,7 +191,6 @@ static void print_tile_slice(ostream& stream, uint8_t* ptr) {
                 stream << endl;
         }
     }
-done:
     stream << endl << "  ptr=" << ts->ptr_ << ")" << endl;
 }
 
@@ -258,7 +265,7 @@ bool DebugPrintServerContext::peek_flush_one_hart_nonblocking(int chip_id, const
                     TT_ASSERT(sz == strlen(cptr)+1);
                 break;
                 case DEBUG_PRINT_TYPEID_TILESLICE:
-                    print_tile_slice(stream, ptr);
+                    print_tile_slice(stream, ptr, hart_id);
                 break;
 
                 case DEBUG_PRINT_TYPEID_ENDL:
