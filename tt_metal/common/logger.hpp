@@ -241,6 +241,16 @@ static void log_error(char const* fmt, Args&&... args) {
     log_error(LogAlways, fmt, std::forward<Args>(args)...);
 }
 
+template <typename... Args>
+static void log_fatal(LogType type, char const* fmt, Args&&... args) {
+    Logger::get().log_level_type(Logger::Level::Fatal, type, fmt, std::forward<Args>(args)...);
+}
+
+template <typename... Args>
+static void log_fatal(char const* fmt, Args&&... args) {
+    log_fatal(LogAlways, fmt, std::forward<Args>(args)...);
+}
+
 #undef LOGGER_TYPES
 
 }  // namespace tt

@@ -259,8 +259,7 @@ void metal_SocDescriptor::load_dispatch_and_banking_config(uint32_t harvesting_m
     uint32_t num_harvested_noc_rows = mask_bitset.count();
 
     if (num_harvested_noc_rows > 2) {
-        TT_THROW(
-            tt::LogDevice, "At most two rows can be harvested, but detected {} harvested rows", num_harvested_noc_rows);
+        TT_THROW("At most two rows can be harvested, but detected {} harvested rows", num_harvested_noc_rows);
     }
     if (num_harvested_noc_rows == 1 and this->arch == tt::ARCH::GRAYSKULL) {
         TT_THROW("One row harvested Grayskull is not supported");
