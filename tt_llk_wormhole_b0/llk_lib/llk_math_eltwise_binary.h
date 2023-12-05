@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 #include "ckernel_include.h"
@@ -348,7 +347,7 @@ inline void _llk_math_eltwise_binary_init_(const std::uint32_t num_faces, const 
         FWASSERT("Unsupported op!", false);
     }
 
-    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0); 
+    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 }

@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 #include "ckernel.h"
@@ -14,19 +13,19 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-#ifndef SKIP_UNP 
+#ifndef SKIP_UNP
     #define SKIP_UNP (0)
 #endif
 
 inline void _llk_unpack_untilize_mop_config_() {
 
-    constexpr uint replay_buf_len = (SKIP_UNP == 1) ? 1 : 5; 
+    constexpr uint replay_buf_len = (SKIP_UNP == 1) ? 1 : 5;
     TTI_REPLAY(0, replay_buf_len, 0, 1);
 #if SKIP_UNP == 1
     TTI_NOP;
     static constexpr uint load_offset_addr_cntx0 = TT_OP_NOP;
     static constexpr uint load_offset_addr_cntx1 = TT_OP_NOP;
-#else 
+#else
     TTI_DMANOP; // REG2FLOP that sets offset in previous loop needs additional cycle to complete
     TTI_UNPACR(SrcA, 0b01000001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     TTI_UNPACR(SrcA, 0b01000001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -35,7 +34,7 @@ inline void _llk_unpack_untilize_mop_config_() {
 
     static constexpr uint load_offset_addr_cntx0 = TT_OP_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TILE_OFFSET);
     static constexpr uint load_offset_addr_cntx1 = TT_OP_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG7_Offset_cntx1_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TILE_OFFSET);
-#endif    
+#endif
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
           true,  // src B
@@ -57,19 +56,19 @@ inline void _llk_unpack_untilize_hw_configure_(const std::uint32_t unpack_src_fo
     constexpr bool fpu_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Fpu);
     constexpr bool pack_srnd_en = stoch_rnd_en ||(stoch_rnd_mode == StochRndType::Pack);
     configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, fpu_srnd_en, pack_srnd_en>(
-        unpack_src_format, 
-        unpack_src_format, 
-        unpack_dst_format, 
-        unpack_dst_format, 
-        face_r_dim, 
-        face_r_dim, 
-        within_face_16x16_transpose, 
-        num_faces, 
+        unpack_src_format,
+        unpack_src_format,
+        unpack_dst_format,
+        unpack_dst_format,
+        face_r_dim,
+        face_r_dim,
+        within_face_16x16_transpose,
+        num_faces,
         num_faces);
 }
 
-inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) { 
- 
+inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4) {
+
     const std::uint32_t unpA_ch1_x_stride = (unpack_dst_format&0x3) == (std::uint32_t) DataFormat::Float32 ? 4 : (unpack_dst_format&0x3) == (std::uint32_t) DataFormat::Float16 ? 2 : 1;
     const std::uint32_t unpA_ch1_y_stride = FACE_R_DIM*unpA_ch1_x_stride;
 
@@ -84,7 +83,7 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, co
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE));
     TT_SETDMAREG(0, UPPER_HALFWORD(tile_size), 0, HI_16(p_gpr_unpack::TILE_SIZE));
 
-    _llk_unpack_untilize_mop_config_(); 
+    _llk_unpack_untilize_mop_config_();
 }
 
 template <bool first_pass = true>
@@ -163,7 +162,7 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
                 0,
                 THCON_SEC0_REG7_Offset_cntx1_address_ADDR32 - THCON_CFGREG_BASE_ADDR32,
                 p_gpr::ZERO);                 // Clear offset register
-        } 
+        }
         TTI_INCADCXY(0b001, 0, 0, 1, 0);  // inc l1 addr y cnt
     }
 
@@ -177,4 +176,3 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
     first_unpack_recorded = true;
 #endif
 }
-

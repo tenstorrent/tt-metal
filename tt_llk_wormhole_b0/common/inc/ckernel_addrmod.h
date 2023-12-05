@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 
@@ -18,10 +17,10 @@ constexpr uint8_t ADDR_MOD_5 = 5;
 constexpr uint8_t ADDR_MOD_6 = 6;
 constexpr uint8_t ADDR_MOD_7 = 7;
 
-constexpr uint32_t SRC_INCR_MASK = 0x3F; 
-constexpr uint32_t DEST_INCR_MASK = 0x3FF; 
+constexpr uint32_t SRC_INCR_MASK = 0x3F;
+constexpr uint32_t DEST_INCR_MASK = 0x3FF;
 
-//FIXME: These should be updated from cfg_defines.h 
+//FIXME: These should be updated from cfg_defines.h
 
 struct addr_mod_t
 {

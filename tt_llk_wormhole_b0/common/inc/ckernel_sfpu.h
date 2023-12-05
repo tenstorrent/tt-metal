@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 
@@ -23,23 +22,23 @@ namespace sfpu
 
 inline void _sfpu_load_imm32_(const uint dest, const uint val)
 {
-        TT_SFPLOADI(dest, 10, (val & 0xFFFF));  // insmod == 10 will write the lower bits, and not affect the upper bits; 
-        TT_SFPLOADI(dest, 8, (val>>16) & 0xFFFF);  // insmod == 8 will write the upper bits, and not affect the lower bits; 
+        TT_SFPLOADI(dest, 10, (val & 0xFFFF));  // insmod == 10 will write the lower bits, and not affect the upper bits;
+        TT_SFPLOADI(dest, 8, (val>>16) & 0xFFFF);  // insmod == 8 will write the upper bits, and not affect the lower bits;
 }
 
 inline void _sfpu_load_imm16_(const uint dest, const uint val)
 {
-        TT_SFPLOADI(dest, 2, val);  // insmod == 2 will write imm16 value treated as unsigned integer, right justified and padded with zeroes on the MSBs 
+        TT_SFPLOADI(dest, 2, val);  // insmod == 2 will write imm16 value treated as unsigned integer, right justified and padded with zeroes on the MSBs
 }
 
 inline void _sfpu_load_config32_(const uint dest, const uint upper16, const uint lower16)
 {
         // registers 11 through 14 are programmable "constants" which are shared across all 4 rows
         // They are updated only through the CONFIG path, which uses LREG[0] first and then copies it to the desired register location
-        TTI_SFPLOADI(0, 10, lower16);  // insmod == A will write the lower bits, and not affect the upper bits; 
-        TTI_SFPLOADI(0, 8, upper16);  // insmod == 8 will write the upper bits, and not affect the lower bits; 
-        TTI_SFPCONFIG(0, dest, 0); 
-} 
+        TTI_SFPLOADI(0, 10, lower16);  // insmod == A will write the lower bits, and not affect the upper bits;
+        TTI_SFPLOADI(0, 8, upper16);  // insmod == 8 will write the upper bits, and not affect the lower bits;
+        TTI_SFPCONFIG(0, dest, 0);
+}
 
 sfpi_inline vInt _sfpu_is_fp16_zero_(const vFloat& v, uint exponent_size_8)
 {
@@ -103,7 +102,7 @@ sfpi_inline vFloat _sfpu_reciprocal_(const vFloat in)
     vInt orig_exp = exexp(in);
     vInt new_exp = exexp(result);
 
-    // "Subtract" exponents, and re-bias.  
+    // "Subtract" exponents, and re-bias.
     // Execute: -1 - exp, then exp += 127
     new_exp -= orig_exp;
     new_exp += 126;
@@ -122,7 +121,7 @@ sfpi_inline vFloat _sfpu_reciprocal_(const vFloat in)
 
 inline void _init_dropout_seed_(uint16_t p2){
     FWLOG1("calculate_dropout() -- input seed:%x", p2);
-    
+
     uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID);
 
     uint16_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
@@ -131,7 +130,7 @@ inline void _init_dropout_seed_(uint16_t p2){
     uint16_t per_tensix_input_seed = p2 ^ (my_x << my_y);
 
     FWLOG1("calculate_dropout() -- calculated seed:%x", per_tensix_input_seed);
-    
+
     vInt result = l_reg[LRegs::LReg3];
 
     vInt tmp = vConstTileId << 10;
@@ -153,7 +152,7 @@ inline void _init_exponential_()
         vConstFloatPrgm1 = 2.0f;
         vConstFloatPrgm2 = 0.863281f;
     }
-} 
+}
 
 template <bool APPROXIMATION_MODE>
 inline void _init_reciprocal_()
@@ -183,7 +182,7 @@ inline void _init_sqrt_()
 }
 
 template <bool APPROXIMATION_MODE>
-inline void _init_tanh_() 
+inline void _init_tanh_()
 {
     uint imm0;
     uint imm1;
@@ -197,7 +196,7 @@ inline void _init_tanh_()
 }
 
 template <bool APPROXIMATION_MODE>
-inline void _init_sigmoid_() 
+inline void _init_sigmoid_()
 {
     // imm0 = 0x3DFF;
     // imm1 = 0x21D8;
@@ -213,12 +212,12 @@ inline void _init_sigmoid_()
     // x <= 4.0 --> 0.0485x + 0.2998
     // x >  4.0 --> 0.4998
 
-    // imm0[15:0] = A0=0.2452 = 0x33D9 -- imm0[31:16] = A1=0.2173 = 0x32F4  
+    // imm0[15:0] = A0=0.2452 = 0x33D9 -- imm0[31:16] = A1=0.2173 = 0x32F4
     _sfpu_load_imm32_(0,0x32F433D9);
-    // imm4[15:0] = B0= -0.0004997  = 0x9018 -- imm4[31:16] = B1= 0.0152 = 0x23c8  
+    // imm4[15:0] = B0= -0.0004997  = 0x9018 -- imm4[31:16] = B1= 0.0152 = 0x23c8
     _sfpu_load_imm32_(4,0x23C89018);
 
-    // imm1[15:0] = A2=0.1731 = 0x318a -- imm1[31:16] = A3=0.1262 = 0x300a  
+    // imm1[15:0] = A2=0.1731 = 0x318a -- imm1[31:16] = A3=0.1262 = 0x300a
     _sfpu_load_imm32_(1,0x300A318A);
     // imm5[15:0] = B2=0.05988 = 0x2BAA -- imm5[31:16] = B3=0.1298 = 0x3027
     _sfpu_load_imm32_(5,0x30272BAA);
@@ -230,7 +229,7 @@ inline void _init_sigmoid_()
 }
 
 template <bool APPROXIMATION_MODE>
-inline void _init_gelu_derivative_() 
+inline void _init_gelu_derivative_()
 {
     vConstFloatPrgm0 = 1.442695f; // ln2_recip
     vConstFloatPrgm1 = 2.0f;
@@ -251,18 +250,18 @@ inline void _init_gelu_derivative_()
         // x <= 2.0 --> -0.09x + 1.27
         // x <= 3.0 --> -0.075x + 1.235
         // x >  3.0 --> 1.0
-        // imm0[15:0] = A0=0.8    = 0x3A66 -- imm0[31:16] = A1=0.4   = 0x3666  
-        imm0 = 0x36663A66; 
-        // imm1[15:0] = A2=0.1    = 0x2E66 -- imm1[31:16] = A3=-0.09 = 0xADC3  
-        imm1 = 0xADC32E66;    
-        // imm2[15:0] = A4=-0.075 = 0xACCD -- imm2[31:16] = A5=0     = 0x7C00  
-        imm2 = 0x7C00ACCD; 
-        // imm3[15:0] = B0=0.5    = 0x3800 -- imm3[31:16] = B1=0.7   = 0x399A  
-        imm3 = 0x399A3800; 
-        // imm4[15:0] = B2=0.99   = 0x3BEC -- imm4[31:16] = B3=1.27  = 0x3D14  
-        imm4 = 0x3D143BEC; 
-        // imm5[15:0] = B4=1.235  = 0x3CF1 -- imm5[31:16] = B5=1.0   = 0x3C00  
-        imm5 = 0x3C003CF1; 
+        // imm0[15:0] = A0=0.8    = 0x3A66 -- imm0[31:16] = A1=0.4   = 0x3666
+        imm0 = 0x36663A66;
+        // imm1[15:0] = A2=0.1    = 0x2E66 -- imm1[31:16] = A3=-0.09 = 0xADC3
+        imm1 = 0xADC32E66;
+        // imm2[15:0] = A4=-0.075 = 0xACCD -- imm2[31:16] = A5=0     = 0x7C00
+        imm2 = 0x7C00ACCD;
+        // imm3[15:0] = B0=0.5    = 0x3800 -- imm3[31:16] = B1=0.7   = 0x399A
+        imm3 = 0x399A3800;
+        // imm4[15:0] = B2=0.99   = 0x3BEC -- imm4[31:16] = B3=1.27  = 0x3D14
+        imm4 = 0x3D143BEC;
+        // imm5[15:0] = B4=1.235  = 0x3CF1 -- imm5[31:16] = B5=1.0   = 0x3C00
+        imm5 = 0x3C003CF1;
         _sfpu_load_imm32_(0, imm0);
         _sfpu_load_imm32_(1, imm1);
         _sfpu_load_imm32_(2, imm2);
@@ -279,7 +278,7 @@ inline void _init_gelu_derivative_()
 }
 
 template <bool APPROXIMATION_MODE>
-inline void _init_gelu_() 
+inline void _init_gelu_()
 {
     vConstFloatPrgm0 = 0.5f;
 
@@ -312,7 +311,7 @@ inline void _init_gelu_()
 
 }
 
-inline void _init_dropout_(const uint seed) 
+inline void _init_dropout_(const uint seed)
 {
     vConstIntPrgm0 = 0xb400;
     vConstIntPrgm1 = 0x1; // binary 0b1 - used to extract LSB
@@ -320,7 +319,7 @@ inline void _init_dropout_(const uint seed)
     _init_dropout_seed_(seed);
 }
 
-inline void init_quant_zero_point(const uint zero_point) 
+inline void init_quant_zero_point(const uint zero_point)
 {
     _sfpu_load_imm32_(2,zero_point);
 }
@@ -433,8 +432,8 @@ void _calculate_exponential_(const int iterations, uint16_t exp_base_scale_facto
 template <bool APPROXIMATION_MODE>
 inline vFloat _calculate_gelu_core_(vFloat in)
 {
-    // SFPU microcode: 
-    // result = (APPROX_MODE == 1) 
+    // SFPU microcode:
+    // result = (APPROX_MODE == 1)
     //   ? (1 + erf(x/sqrt(2)))
     //   : (1 + tanh( sqrt(2/pi) * (x + 0.044715*x^3) )
     vFloat result;
@@ -477,7 +476,7 @@ inline void _calculate_gelu_(const int iterations)
         vFloat half_in = in * half;
         vFloat result = lut2_sign(in, l0, l1, l2, l4, l5, l6);
         result = half_in + result;
-        
+
         dst_reg[0] = result;
 
         dst_reg++;
@@ -631,7 +630,7 @@ inline void _calculate_gelu_derivative_(const int iterations)
         vUInt l5 = l_reg[LRegs::LReg5];
         vUInt l6 = l_reg[LRegs::LReg6];
 
-        // SFPU microcode: 
+        // SFPU microcode:
         #pragma GCC unroll 0
         for (int d = 0; d < iterations; d++)
         {
@@ -658,7 +657,7 @@ inline void _calculate_gelu_derivative_(const int iterations)
         vUInt l0 = l_reg[LRegs::LReg0];
         vUInt l1 = l_reg[LRegs::LReg1];
 
-        // SFPU microcode: 
+        // SFPU microcode:
         #pragma GCC unroll 0
         for (int d = 0; d < iterations; d++)
         {
@@ -890,7 +889,7 @@ sfpi_inline void _calculate_log_body_(const uint log_base_scale_factor)
     if constexpr (HAS_BASE_SCALING) {
         result *= s2vFloat16a(log_base_scale_factor);
     }
-    
+
     ////////////////////////////
     // Base case when input is 0. ln(0) = -inf
     ////////////////////////////
@@ -928,7 +927,7 @@ inline void _calculate_comp_(const int iterations, uint exponent_size_8)
     // False = 0.0 = kCONST_0 (5/8-bit exponent format)
     // True  = 1.0 = kCONST_1_FP16B (8-bit exponent format)
     // SFPU uses 8-bit exponent in operations so loading these constants in 8-bit exponent format.
-    // Although a command flag can tell SFPU to re-bias a 5-bit exponent to 8-bit, we are loading 8-bit 
+    // Although a command flag can tell SFPU to re-bias a 5-bit exponent to 8-bit, we are loading 8-bit
     // exponent and telling SFPU to not add any bias to these constants.
     constexpr float output_0 = invert_output ? 0.0f : 1.0f;
     constexpr float output_1 = invert_output ? 1.0f : 0.0f;
@@ -974,7 +973,7 @@ inline void _calculate_comp_(const int iterations, uint exponent_size_8)
                 // flag1 = 0x3F80(1.0) if DST >= 0 else 0
                 // flag2 = 0x3F80(1.0) if DST != 0 else 0
                 // Do a bitwise And (flag1 & flag2) to get > condition.
-                // flag2 >= 0 AND flag1 != 0 => DST is Greater than zero 
+                // flag2 >= 0 AND flag1 != 0 => DST is Greater than zero
                 // Result will be either 0x0000(0.0) or 0x3F80(1.0)
                 result = reinterpret<vFloat>(reinterpret<vUInt>(flag1) & reinterpret<vUInt>(flag2));
             }
@@ -1064,8 +1063,8 @@ inline void _calculate_max_(const int iterations)
     {
         vFloat a = dst_reg[0];
         vFloat b = dst_reg[32];
-        v_if(a < b) { 
-            dst_reg[0] = b; 
+        v_if(a < b) {
+            dst_reg[0] = b;
         }
         v_endif;
 
@@ -1108,7 +1107,7 @@ sfpi_inline vFloat _sfpu_sine_maclaurin_series_(vFloat val)
     if constexpr (not APPROXIMATION_MODE) {
         // x^9/9!
         tmp = tmp*val*val;
-        output +=  0.0000027557*tmp; 
+        output +=  0.0000027557*tmp;
         // x^11/11!
         tmp = tmp*val*val;
         output += -0.00000002505*tmp;
@@ -1152,7 +1151,7 @@ inline void _calculate_sine_(const int iterations)
     for (int d = 0; d < iterations; d++)
     {
         vFloat v = dst_reg[0];
-        v = 0.318309886183791f*v; // *1/pi to get number of pi rads. 
+        v = 0.318309886183791f*v; // *1/pi to get number of pi rads.
         vInt whole_v = float_to_int16(v);
         vFloat whole_v_float = int32_to_float(whole_v, 0);
         v = v - whole_v_float;
@@ -1175,7 +1174,7 @@ inline void _calculate_cosine_(const int iterations)
     for (int d = 0; d < iterations; d++)
     {
         vFloat v = dst_reg[0];
-        v = 0.318309886183791f*v; // *1/pi to get number of pi rads. 
+        v = 0.318309886183791f*v; // *1/pi to get number of pi rads.
         vInt whole_v = float_to_int16(v);
         vFloat whole_v_float = int32_to_float(whole_v, 0);
         v = v - whole_v_float;
@@ -1198,15 +1197,15 @@ inline void _relu_max_(const int iterations, uint uint_threshold)
     for (int d = 0; d < iterations; d++)
     {
         vFloat a = dst_reg[0];
-        v_if(a > threshold) { 
-            a = threshold; 
+        v_if(a > threshold) {
+            a = threshold;
         }
         v_endif;
-        v_if(a < 0.0f) { 
-            a = 0.0f; 
+        v_if(a < 0.0f) {
+            a = 0.0f;
         }
         v_endif;
-        dst_reg[0] = a; 
+        dst_reg[0] = a;
         dst_reg++;
     }
 }
@@ -1217,11 +1216,11 @@ inline void _relu_min_(const int iterations, uint uint_threshold)
     for (int d = 0; d < iterations; d++)
     {
         vFloat a = dst_reg[0];
-        v_if(a < threshold) { 
+        v_if(a < threshold) {
             a = 0.0f;
         }
         v_endif;
-        dst_reg[0] = a; 
+        dst_reg[0] = a;
         dst_reg++;
     }
 }
@@ -1339,6 +1338,7 @@ inline void _add_int32_(const int iterations, const uint dst_offset) {
         dst_reg++;
     }
 }
+
 
 } // namespace sfpu
 } // namespace ckernel

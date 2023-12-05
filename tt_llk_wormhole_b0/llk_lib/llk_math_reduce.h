@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 #include "ckernel_include.h"
@@ -80,7 +79,7 @@ inline void _llk_math_reduce_(const uint dst_index) {
         TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         if constexpr (is_int_fpu_en) {
             TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
-        }    
+        }
 
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
@@ -106,7 +105,7 @@ inline void _llk_math_reduce_(const uint dst_index) {
                 ckernel_template::run(instrn_buffer);
                 TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
             } else {
-                TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);                
+                TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
             }
         }
 
@@ -128,7 +127,7 @@ inline void _llk_math_reduce_(const uint dst_index) {
             TTI_SFPSTORE(0,5,ADDR_MOD_0,2);
             TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
             TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
-        }    
+        }
 
         // Move back to B and transpose
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
@@ -167,7 +166,7 @@ inline void _llk_math_reduce_(const uint dst_index) {
                 if constexpr (HIGH_FIDELITY) {
                     ckernel_template::run(instrn_buffer);
                 } else {
-                    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);                    
+                    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
                 }
             }
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
@@ -308,13 +307,13 @@ inline void _llk_math_reduce_init_(const std::uint32_t within_face_16x16_transpo
 
     constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
     constexpr bool HIGH_FIDELITY = MATH_FIDELITY_PHASES > 0;
-    
+
     reduce_configure_addrmod<type, MATH_FIDELITY_DESC>();
     if constexpr (HIGH_FIDELITY) {
         reduce_configure_mop<dim, MATH_FIDELITY_PHASES>();
     }
 
-    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0); 
-    
+    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+
     math::reset_counters(p_setrwc::SET_ABD_F);
 }

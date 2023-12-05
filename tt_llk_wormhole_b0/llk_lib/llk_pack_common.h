@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 
@@ -91,8 +90,8 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
         if constexpr (FaceLayout == ColMajor) {
             // Packer0 :  0,32,  1,33 ...  7, 39
             // Packer1 :  8,40,  9,41 ... 15, 47
-            // Packer2 : 16,48, 17,49 ... 23, 55		  
-            // Packer3 : 23,56, 24,57 ... 31, 63		  
+            // Packer2 : 16,48, 17,49 ... 23, 55
+            // Packer3 : 23,56, 24,57 ... 31, 63
             TT_SETDMAREG(0, 0x000 + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
             TT_SETDMAREG(0, 0x000 + 0x08, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
             TT_SETDMAREG(0, 0x000 + 0x10, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
@@ -101,12 +100,12 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
             TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x08, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
             TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x10, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
             TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x18, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
-        } else {	
-            //For example if face_offset = 8:	 
+        } else {
+            //For example if face_offset = 8:
             // Packer0 :  0,16,  1,17 ...  7, 23
             // Packer1 :  8,24,  9,25 ... 15, 31
-            // Packer2 : 32,48, 33,49 ... 39, 55		  
-            // Packer3 : 40,56, 41,57 ... 47, 63		  
+            // Packer2 : 32,48, 33,49 ... 39, 55
+            // Packer3 : 40,56, 41,57 ... 47, 63
             TT_SETDMAREG(0, 0x000 + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
             TT_SETDMAREG(0, 0x000 + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
             TT_SETDMAREG(0, 0x000 + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
@@ -115,8 +114,8 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
             TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
             TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
             TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x20 + face_r_offset, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
-        }    
-    } else { 
+        }
+    } else {
         if constexpr (FaceLayout == ColMajor) {
             TT_SETDMAREG(0, 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
             TT_SETDMAREG(0, 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
@@ -136,7 +135,7 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
             TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
             TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x30, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
         }
-    }   
+    }
     select_packer_dest_registers<Dst>();
 }
 
@@ -167,7 +166,7 @@ inline void llk_pack_release_tile(std::uint32_t operand) {
     TT_LLK_DUMP("llk_pack_release_tile<{}, {}>({})", mail2math, mail2pack, operand);
     if constexpr (mail2pack) {
        semaphore_get(semaphore::UNPACK_OPERAND_SYNC);
-    }   
+    }
 }
 
 inline void llk_pack_debug_dump(std::uint8_t *data, std::uint32_t byte_size) {
@@ -203,8 +202,8 @@ inline void llk_pack_reduce_mask_config() {
 
     // We initialize PCK_EDGE_OFFSET_SEC0 mask to clear out all the datums in the row
     pack_edge_offset.f.mask = 0x0;
-    uint32_t row_set_mapping_1;
-    uint32_t edge_offset_sec1_mask;
+    uint32_t row_set_mapping_1 = 0;
+    uint32_t edge_offset_sec1_mask = 0;
 
     if constexpr (dim == ReduceDim::REDUCE_ROW) {
         // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
@@ -217,7 +216,7 @@ inline void llk_pack_reduce_mask_config() {
             row_set_mapping_1 = 0x11111111; // each packer packs 1x32 row
         } else {
             // Packer 0 and 2 will use TILE_ROW_SET_MAPPING_1, while packer 1 and 3 will keep using
-            // TILE_ROW_SET_MAPPING_0 configuration which is the default one 
+            // TILE_ROW_SET_MAPPING_0 configuration which is the default one
             pack_edge_offset.f.tile_row_set_select_pack0 = 1;
             pack_edge_offset.f.tile_row_set_select_pack2 = 1;
 
@@ -229,7 +228,7 @@ inline void llk_pack_reduce_mask_config() {
         edge_offset_sec1_mask = 0xffff;
 
         // Packer 0 and 1 will use TILE_ROW_SET_MAPPING_1, while packer 2 and 3 will keep using
-        // TILE_ROW_SET_MAPPING_0 configuration which is the default one 
+        // TILE_ROW_SET_MAPPING_0 configuration which is the default one
         pack_edge_offset.f.tile_row_set_select_pack0 = 1;
         pack_edge_offset.f.tile_row_set_select_pack1 = 1;
 
@@ -239,6 +238,15 @@ inline void llk_pack_reduce_mask_config() {
             // TILE_ROW_SET_MAPPING_1 configuration sets only first row to use PCK_EDGE_OFFSET_SEC1 mask
             row_set_mapping_1 = 0x00000001; // each packer packs 1x16 row
         }
+    } else if constexpr (dim == ReduceDim::REDUCE_SCALAR) {
+        // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
+        edge_offset_sec1_mask = 0x0001;
+        // Packer 0  will use TILE_ROW_SET_MAPPING_1, while packers 1,2 and 3 will keep using
+        // TILE_ROW_SET_MAPPING_0 configuration which is the default one
+        pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+
+        // TILE_ROW_SET_MAPPING_1 configuration sets only first row to use PCK_EDGE_OFFSET_SEC1 mask
+        row_set_mapping_1 = 0x00000001;
     }
 
     // Initialize TMP registers with values we need to write in CFG registers

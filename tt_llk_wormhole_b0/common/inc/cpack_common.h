@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 
@@ -14,9 +13,9 @@
 
 namespace ckernel::packer
 {
-   constexpr uint32_t PACK_CNT       = 4; 
-   
-   
+   constexpr uint32_t PACK_CNT       = 4;
+
+
    constexpr uint PACK_SEL(const uint pack_count)
    {
      return (pack_count == 1) ? 0x1 :
@@ -52,7 +51,7 @@ namespace ckernel::packer
    } pack_config_t;
 
    static_assert(sizeof(pack_config_t) == (sizeof(uint32_t)*4));
-   
+
    typedef union {
      uint32_t val[4];
      pack_config_t f;
@@ -149,12 +148,12 @@ namespace ckernel::packer
       // Get pointer to registers for current state ID
       volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
-      uint x_stride = (uint)(pack_src_format&0x3) == (uint)DataFormat::Float32 ? 4 : 
+      uint x_stride = (uint)(pack_src_format&0x3) == (uint)DataFormat::Float32 ? 4 :
                       (uint)(pack_src_format&0x3) == (uint)DataFormat::Float16 ? 2 : 1;
       uint y_stride = FACE_R_DIM*x_stride;
       uint z_stride = PACK_CNT*FACE_C_DIM*y_stride;
       uint w_stride = z_stride;
-   
+
       TT_SETDMAREG(0, LOWER_HALFWORD((y_stride<<PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, LO_16(p_gpr_pack::TMP0)); //x-stride not used!
       TT_SETDMAREG(0, UPPER_HALFWORD((y_stride<<PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, HI_16(p_gpr_pack::TMP0));
       TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32);
@@ -176,7 +175,7 @@ namespace ckernel::packer
          config.val[i] = 0;
       }
 
-      config.f.exp_section_size = ((pack_dst_format == (uint)DataFormat::Lf8) || 
+      config.f.exp_section_size = ((pack_dst_format == (uint)DataFormat::Lf8) ||
                                    (pack_dst_format == (uint)DataFormat::Int8)) ? 0 : (partial_face ? 1 : num_faces); // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
 
       config.f.uncompress   = 1;
@@ -191,13 +190,13 @@ namespace ckernel::packer
             config.f.exp_threshold_en = 1;
             config.f.exp_threshold = 113;
          }
-      } 
+      }
 
       // Program:
       // THCON_SEC0_REG1_Row_start_section_size = cfg_reg_array[1][0 +: 16];
       // THCON_SEC0_REG1_Exp_section_size = cfg_reg_array[1][16 +: 16];
-      // This is filled with garbage, and will be set up on every pack: 
-      //           THCON_SEC0_REG1_L1_Dest_addr = cfg_reg_array[1][32 +: 32];    
+      // This is filled with garbage, and will be set up on every pack:
+      //           THCON_SEC0_REG1_L1_Dest_addr = cfg_reg_array[1][32 +: 32];
       // THCON_SEC0_REG1_Disable_zero_compress = cfg_reg_array[1][64 +: 1];
       // THCON_SEC0_REG1_Add_l1_dest_addr_offset = cfg_reg_array[1][65 +: 1];
       // THCON_SEC0_REG1_Unused0 = cfg_reg_array[1][66 +: 2];
@@ -232,7 +231,7 @@ namespace ckernel::packer
 
       dest_rd_ctrl_u dest_rd_ctrl;
       dest_rd_ctrl.val = 0;
-      dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = (pack_src_format == (uint)DataFormat::Int8) | 
+      dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_32b_data = (pack_src_format == (uint)DataFormat::Int8) |
                                                       (pack_src_format == (uint)DataFormat::Int32) |
                                                       (pack_src_format == (uint)DataFormat::Float32) |
                                                       (is_fp32_dest_acc_en ? 1 : 0);
@@ -245,7 +244,7 @@ namespace ckernel::packer
 
       if (IS_BFP_FORMAT(pack_dst_format)) {
          // Override exp section size for packers 1,2,3
-         // Tile header + exp size + datum size 
+         // Tile header + exp size + datum size
          if ((uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp8 || (uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp8_b) {
             config.f.exp_section_size = 1 + ((num_faces>2) ? 2 : 0) + 16;
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
@@ -273,7 +272,7 @@ namespace ckernel::packer
 
       }
 
-      // Save to GPR for quick data format reconfig 
+      // Save to GPR for quick data format reconfig
       regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = (1 + ((num_faces>2) ? 2 : 0) + 16) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
       regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = (1 + 1 + 32) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
@@ -291,7 +290,7 @@ namespace ckernel::packer
 
       const uint face_dim = face_r_dim * FACE_C_DIM;
 
-      uint32_t l1_offset_1 = IS_BFP_FORMAT(pack_dst_format) ? 1 : (((uint8_t)(pack_dst_format&0x3) == (uint8_t)DataFormat::Float32)  ? (face_dim/16)*4 : 
+      uint32_t l1_offset_1 = IS_BFP_FORMAT(pack_dst_format) ? 1 : (((uint8_t)(pack_dst_format&0x3) == (uint8_t)DataFormat::Float32)  ? (face_dim/16)*4 :
                                                                                ((uint8_t)(pack_dst_format&0x3) == (uint8_t)DataFormat::Float16) ? (face_dim/16)*2 : (face_dim/16));
       uint32_t l1_offset_2 = 2 * l1_offset_1;
       uint32_t l1_offset_3 = 3 * l1_offset_1;
@@ -310,13 +309,13 @@ namespace ckernel::packer
       TTI_REG2FLOP(2,0,0,0,THCON_SEC1_REG1_L1_Dest_addr_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
       TT_SETDMAREG(0, LOWER_HALFWORD(l1_offset_3), 0, LO_16(p_gpr_pack::TMP_LO));
       TTI_REG2FLOP(2,0,0,0,THCON_SEC1_REG8_L1_Dest_addr_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
-   }   
+   }
 
 
    template <bool is_fp32_dest_acc_en = false>
    inline void reconfig_packer_data_format(
-      const uint pack_src_format, 
-      const uint pack_dst_format, 
+      const uint pack_src_format,
+      const uint pack_dst_format,
       const uint tile_size,
       const uint face_r_dim = FACE_R_DIM)
    {
@@ -338,7 +337,7 @@ namespace ckernel::packer
 
       if (IS_BFP_FORMAT(pack_dst_format)) {
          // Override exp section size for packers 1,2,3
-         // Tile header + exp size + datum size 
+         // Tile header + exp size + datum size
          TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP0_SEC_SIZE_BFP);
          if ((pack_dst_format&0x1F) == (uint)DataFormat::Bfp8 || (pack_dst_format&0x1F) == (uint)DataFormat::Bfp8_b) {
             TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP1_SEC_SIZE_BFP8);
@@ -355,13 +354,13 @@ namespace ckernel::packer
          } else {
             FWASSERT("Other data formats not supported", false);
          }
-      } else if ((pack_dst_format == (uint)DataFormat::Lf8) || 
+      } else if ((pack_dst_format == (uint)DataFormat::Lf8) ||
                  (pack_dst_format == (uint)DataFormat::Int8)) {
          TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
          TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
          TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG1_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
          TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG8_Row_start_section_size_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
-      }   
+      }
 
       // Set l1 address offset
       set_packer_l1_offset(pack_dst_format, face_r_dim);
@@ -401,13 +400,13 @@ namespace ckernel::packer
 
    template <bool is_fp32_dest_acc_en, bool untilize>
    inline void configure_pack(
-      const uint pack_src_format, 
-      const uint pack_dst_format, 
+      const uint pack_src_format,
+      const uint pack_dst_format,
       const uint tile_size,
-      const uint face_r_dim = FACE_R_DIM, 
-      const uint num_faces = 4, 
-      const bool partial_face = false, 
-      const bool narrow_tile = false, 
+      const uint face_r_dim = FACE_R_DIM,
+      const uint num_faces = 4,
+      const bool partial_face = false,
+      const bool narrow_tile = false,
       const uint relu_config = 0)
    {
       // Get pointer to registers for current state ID
@@ -415,8 +414,8 @@ namespace ckernel::packer
 
       if (pack_src_format != pack_dst_format) {
          TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
-         tensix_sync();	         
-      }	      
+         tensix_sync();
+      }
 
       set_packer_strides(pack_src_format, pack_dst_format);
 
@@ -447,7 +446,7 @@ namespace ckernel::packer
       pck_edge_offset.f.mask = 0xffff;
 
       cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]=pck_edge_offset.val;
-      cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask 
+      cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask
 
       regfile[p_gpr_pack::TILE_HEADER]   = tile_size;
       regfile[p_gpr_pack::TILE_HEADER+1] = 0;
@@ -469,9 +468,9 @@ namespace ckernel::packer
 
       // To untilize narrow tile (32x16) we just pack 2 faces back to back
       // Number of datums to pack per row
-      const uint pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM; 
-                                                                                   
-      TT_SETADCXX(p_setadc::PAC, pack_x_dim-1, 0x0); 
+      const uint pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
+
+      TT_SETADCXX(p_setadc::PAC, pack_x_dim-1, 0x0);
    }
 
    inline uint8_t get_packer_dest_offset_index()
@@ -488,7 +487,7 @@ namespace ckernel::packer
    {
            dest_offset_id = 1 - dest_offset_id;
    }
-   
+
    // Flip packer dest register offset to 0 or DEST_REGISTER_HALF_SIZE
    // flip-flopping between two halfs
    template <DstSync Dst>
@@ -523,9 +522,9 @@ namespace ckernel::packer
    inline void program_packer_untilized_destination(const uint32_t addr, const uint32_t pack_dst_format)
    {
       // Each packer packs 8 rows of block_ct_dim*TILE_C_DIM datums
-      const uint32_t block_size = SCALE_DATUM_SIZE(pack_dst_format, block_ct_dim * TILE_C_DIM * (TILE_R_DIM/4)); 
+      const uint32_t block_size = SCALE_DATUM_SIZE(pack_dst_format, block_ct_dim * TILE_C_DIM * (TILE_R_DIM/4));
       constexpr uint32_t offset0 = 0;
-      const uint32_t offset1 = (1*block_size)/16; 
+      const uint32_t offset1 = (1*block_size)/16;
       const uint32_t offset2 = (2*block_size)/16;
       const uint32_t offset3 = (3*block_size)/16;
 

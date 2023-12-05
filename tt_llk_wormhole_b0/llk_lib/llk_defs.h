@@ -1,12 +1,20 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 
 namespace ckernel {
+
+enum VectorMode {
+  None      = 0,
+  R         = 1,
+  C         = 2,
+  RC        = 4,
+  Invalid   = 0xFF,
+};
+
 enum ReduceDim {
     REDUCE_ROW,
     REDUCE_COL,
@@ -92,12 +100,12 @@ enum ReluType {
 Stochastic rounding modes:
     None: No stochastic rounding enabled, default rounding is round to nearest even.
     Fpu: Enables stochastic rounding for every accumulation in the fpu
-    Pack: Enables stochastic rounding in both gasket and packer. Gasket rounding is in 
+    Pack: Enables stochastic rounding in both gasket and packer. Gasket rounding is in
     data format conversion stage from dest format to pack_src_format. Packer rounding
     is in data format conversion stage from pack_src_format to pack_dst_format.
-    All: Enables fpu, pack and gasket rounding. 
+    All: Enables fpu, pack and gasket rounding.
 */
-enum StochRndType {
+enum struct StochRndType {
     None    = 0,
     Fpu     = 1,
     Pack    = 2,

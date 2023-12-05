@@ -1,11 +1,11 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 
+#include "llk_defs.h"
 #include "ckernel_ops.h"
 #include "tensix_types.h"
 
@@ -143,13 +143,13 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(uint format, uint datum_count) {
     switch (format&0xF) {
         case ((uint8_t)DataFormat::Int32):
         case ((uint8_t)DataFormat::Float32): return (datum_count<<2);
-        case ((uint8_t)DataFormat::Float16): 
+        case ((uint8_t)DataFormat::Float16):
         case ((uint8_t)DataFormat::Float16_b): return (datum_count<<1);
         default: return datum_count;
     };
 }
 
 #define LOWER_HALFWORD(x) ((x) & 0xFFFF)
-#define UPPER_HALFWORD(x) ((x) >> 16) 
+#define UPPER_HALFWORD(x) ((x) >> 16)
 
 } // namespace ckernel

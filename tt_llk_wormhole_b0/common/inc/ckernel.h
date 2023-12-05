@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 
@@ -37,7 +36,7 @@
 #define OVERLAY_DECOUPLE 0
 #endif
 
-#ifndef LLK_TB_TEST
+#ifdef LLK_TB_TEST
 #include "kernel_slowdown_config.h"
 #endif
 
@@ -55,14 +54,16 @@
 
 #define DELAY_EN (INSERT_UNPACK_DELAY || INSERT_PACK_DELAY || INSERT_MATH_DELAY)
 
-#define TT_ALWAYS_INLINE inline __attribute__ ((always_inline)) 
+#define TT_ALWAYS_INLINE inline __attribute__ ((always_inline))
 
 #include <cstdint>
 
 #include "ckernel_include.h"
-#include "tt_log.h"
 #include "tensix.h"
 #include "fw_debug.h"
+#if defined(ENABLE_TT_LOG) || defined(ENABLE_TT_LLK_DUMP)
+#include "tt_log.h"
+#endif
 // #include <cstring>
 #if defined(PERF_DUMP) || DELAY_EN > 0
 #include <l1_address_map.h>
@@ -288,12 +289,12 @@ inline void wait(uint32_t cycles) {
     do {
        wall_clock = clock_lo[0] | ((uint64_t)clock_hi[0]<<32);
     }
-    while (wall_clock < (wall_clock_timestamp+cycles));     
+    while (wall_clock < (wall_clock_timestamp+cycles));
 }
 
 // Clear dest
 inline void zeroacc() {
-    // Clear dest	
+    // Clear dest
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
@@ -350,14 +351,14 @@ inline void cfg_reg_rmw_tensix(uint32_t val)
 {
     uint32_t wrdata = val<<Shamt;
     uint8_t mask_b0 = Mask & 0xff;
-    
+
     if (mask_b0!=0){
         uint8_t data_b0 = wrdata & 0xff;
         TT_RMWCIB0(mask_b0, data_b0, CfgAddr32);
     }
     wrdata>>=8;
     uint8_t mask_b1 = (Mask>>8) & 0xff;
-    
+
     if (mask_b1!=0){
         uint8_t data_b1 = (wrdata) & 0xff;
         TT_RMWCIB1(mask_b1, data_b1, CfgAddr32);
@@ -365,12 +366,12 @@ inline void cfg_reg_rmw_tensix(uint32_t val)
 
     wrdata>>=8;
     uint8_t mask_b2 = (Mask>>16) & 0xff;
-    
+
     if (mask_b2!=0){
         uint8_t data_b2 = (wrdata) & 0xff;
         TT_RMWCIB2(mask_b2, data_b2, CfgAddr32);
     }
-    
+
     wrdata>>=8;
     uint8_t mask_b3 = (Mask>>24) & 0xff;
     if (mask_b3!=0){

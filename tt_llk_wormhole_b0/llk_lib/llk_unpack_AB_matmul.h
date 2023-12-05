@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 #include "ckernel.h"
@@ -14,7 +13,7 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-// transpose is unused, math is adjusted to take into account srca face layout when transpose=true 
+// transpose is unused, math is adjusted to take into account srca face layout when transpose=true
 inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t kt_dim, const bool partial_face) {
     // in0 - loaded to SrcB
     // in1 - loaded to SrcA
@@ -41,7 +40,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
             TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG3_Base_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
             //TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG7_Offset_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP_LO);
             TTI_NOP;
-        #endif    
+        #endif
     } else {
         #if SKIP_UNP == 1
             TTI_REPLAY(0, 1, 0, 1);
@@ -54,7 +53,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
                 TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
             } else {
                 TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-            }    
+            }
             TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_address_ADDR32);
             TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
             TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG3_Base_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
@@ -66,29 +65,29 @@ inline void _llk_unpack_AB_matmul_mop_config_(const bool transpose, const std::u
                 TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
             } else {
                 TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-            }    
+            }
             TTI_RDCFG(p_gpr_unpack::TMP0, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
             TTI_ADDDMAREG(0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP0, p_gpr_unpack::TMP_LO);
             TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG3_Base_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
             //TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG7_Offset_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP_LO);
             TTI_NOP;
-        #endif    
+        #endif
 
-    } 
+    }
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
         false,  // src B
         false,  // halo - just used for 4 unpacks
-        TT_OP_REPLAY(0, replay_buf_run_len, 0, 0), // runs when context is 0 
+        TT_OP_REPLAY(0, replay_buf_run_len, 0, 0), // runs when context is 0
         0,
         0,
         0,
-        TT_OP_REPLAY(replay_buf_run_len, replay_buf_run_len, 0, 0), // runs when context is 1 
+        TT_OP_REPLAY(replay_buf_run_len, replay_buf_run_len, 0, 0), // runs when context is 1
         0,
         0);
-    
+
     tmp.program(instrn_buffer);
-     
+
 
 }
 
@@ -101,14 +100,14 @@ inline void _llk_unpack_AB_matmul_hw_configure_(const std::uint32_t unpA_src_for
     constexpr bool pack_srnd_en = stoch_rnd_en ||(stoch_rnd_mode == StochRndType::Pack);
 
     configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, fpu_srnd_en, pack_srnd_en>(
-        unpA_src_format, 
-        unpB_src_format, 
-        unpA_dst_format, 
-        unpB_dst_format, 
-        unpA_face_r_dim, 
-        unpB_face_r_dim, 
-        within_face_16x16_transpose, 
-        unpA_num_faces, 
+        unpA_src_format,
+        unpB_src_format,
+        unpA_dst_format,
+        unpB_dst_format,
+        unpA_face_r_dim,
+        unpB_face_r_dim,
+        within_face_16x16_transpose,
+        unpA_num_faces,
         unpB_num_faces);
 
     // Configure tile size in datums
@@ -124,7 +123,7 @@ inline void _llk_unpack_AB_matmul_hw_configure_(const std::uint32_t unpA_src_for
 
 __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(const std::uint32_t transpose=0, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1, const std::uint32_t unpA_face_r_dim=FACE_R_DIM, const std::uint32_t unpB_face_r_dim=FACE_R_DIM, const std::uint32_t unpA_num_faces=4, const std::uint32_t unpB_num_faces=4, const bool partial_face=false) {
 
-    const bool reuse_a = ct_dim >= rt_dim; 
+    const bool reuse_a = ct_dim >= rt_dim;
 
     // also turn on within_face_16x16_transpose if it was turned off by datacopy at runtime
     // on WH, the unpacker performs both transpose of faces as well as transpose each face.
@@ -139,7 +138,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(const std
     TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
 
     if (partial_face) {
-        // Do face by face unpacking. Need to program correct face dim 
+        // Do face by face unpacking. Need to program correct face dim
         // to compute address of the next face
         config_unpacker_x_end<p_setadc::UNP_B>(unpB_face_r_dim);
     } else {
@@ -147,7 +146,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(const std
         // as address counter pointing to the face is not incremented
         const uint32_t unpB_x_end = unpB_num_faces*unpB_face_r_dim*FACE_C_DIM-1;
         TT_SETADCXX(p_setadc::UNP_B, unpB_x_end, 0x0);
-    }   
+    }
 
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
 
@@ -161,7 +160,7 @@ inline void _llk_unpack_AB_matmul_(
 
     volatile uint *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
-    const bool reuse_a = ct_dim >= rt_dim; 
+    const bool reuse_a = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
 
     if (!reuse_a) {
@@ -186,12 +185,12 @@ inline void _llk_unpack_AB_matmul_(
 
         // Program unpacker 1 base address
         if (0 == unp_cfg_context) {
-            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_b; 
+            cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_b;
             cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_a;
         } else {
             cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_b;
             cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_a;
-        } 
+        }
 
         if (reuse_a) {
             #if SKIP_UNP == 1
@@ -204,7 +203,7 @@ inline void _llk_unpack_AB_matmul_(
                     TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
                 } else {
                     TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                }    
+                }
                 if ((t+1)<t_dim) {
                     // Let's load one more tile into srcB
                     TT_SETDMAREG(0, LOWER_HALFWORD(next_address_a), 0, LO_16(p_gpr_unpack::TMP0));
@@ -213,7 +212,7 @@ inline void _llk_unpack_AB_matmul_(
                         TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG3_Base_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
                     } else {
                         TTI_REG2FLOP(1,0,0,0,THCON_SEC1_REG3_Base_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
-                    }    
+                    }
                     TTI_DMANOP;
                     if (partial_face) {
                         // Do face by face unpacking
@@ -222,10 +221,10 @@ inline void _llk_unpack_AB_matmul_(
                         TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
                     } else {
                         TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
-                    }    
+                    }
                     t++;
                 }
-            #endif    
+            #endif
         } else {
             #if SKIP_UNP == 1
                 TTI_NOP;
@@ -239,13 +238,13 @@ inline void _llk_unpack_AB_matmul_(
                         TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG3_Base_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
                     } else {
                         TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG3_Base_cntx1_address_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
-                    }    
+                    }
                     TTI_DMANOP;
                     TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
                     t++;
                 }
-            #endif    
-        }    
+            #endif
+        }
 
 
         TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : 0xff); // Run the MOP

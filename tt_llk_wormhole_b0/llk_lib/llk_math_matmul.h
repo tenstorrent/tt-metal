@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 #include "ckernel_include.h"
@@ -83,7 +82,7 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
                 .dest = {.incr = 8,  .clr = 0, .cr = 0},
             }
                 .set(ADDR_MOD_1);
-        }       
+        }
     } else {
         if (is_in1_32x16) {
                 addr_mod_t{
@@ -108,15 +107,15 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
                     .dest = {.incr =  8, .clr = 0, .cr = 0},
                 }
                     .set(ADDR_MOD_1);
-            }    
-        }        
-    }        
+            }
+        }
+    }
 
     if (is_in1_32x16) {
          addr_mod_t{
              .srca = {.incr = 16, .clr = 0, .cr = 0},
              .srcb = {.incr = 8, .clr = 0, .cr = 0},
-             .dest = {.incr = 0, .clr = 0, .cr = 1}, // cr=16  
+             .dest = {.incr = 0, .clr = 0, .cr = 1}, // cr=16
          }
              .set(ADDR_MOD_2);
     } else if (is_in0_16x32||is_in0_32x16) {
@@ -137,7 +136,7 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
                     .bias = {.incr = 1},
                 }
                     .set(ADDR_MOD_2);
-            }   
+            }
         } else {
             if (transpose) {
                 addr_mod_t{
@@ -153,8 +152,8 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
                     .dest = {.incr = 8, .clr = 0, .cr = 0},
                 }
                     .set(ADDR_MOD_2);
-            }        
-        }    
+            }
+        }
     } else {
         addr_mod_t{
             .srca = {.incr =  0, .clr = 0, .cr = 1},
@@ -162,7 +161,7 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
             .dest = {.incr =  8, .clr = 0, .cr = 0},
         }
             .set(ADDR_MOD_2);
-    }        
+    }
 
     if (is_in0_16x32) {
         if (partial_face) {
@@ -182,7 +181,7 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
                     .bias = {.incr = 1},
                 }
                     .set(ADDR_MOD_4);
-            }        
+            }
         } else {
             if (transpose) {
                 addr_mod_t{
@@ -200,8 +199,8 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
                     .bias = {.incr = 1},
                 }
                     .set(ADDR_MOD_4);
-            }        
-        }        
+            }
+        }
     } else if (is_in0_32x16) {
         addr_mod_t{
             .srca = {.incr =0 , .clr = 0, .cr = 1},
@@ -229,16 +228,16 @@ inline void matmul_configure_addrmod(const bool transpose, const std::uint32_t c
                 .set(ADDR_MOD_4);
         } else {
             addr_mod_t{
-                .srca = {.incr = 32, .clr = 0, .cr = 1}, 
-                //.srca = {.incr = srca_set, .clr = 0, .cr = 1}, 
+                .srca = {.incr = 32, .clr = 0, .cr = 1},
+                //.srca = {.incr = srca_set, .clr = 0, .cr = 1},
                 .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
                 .bias = {.incr = 1},
             }
                 .set(ADDR_MOD_4);
-        }    
-    }        
-    
+        }
+    }
+
 }
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
@@ -247,7 +246,7 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
     // in0 - loaded to SrcB
     // in1 - loaded to SrcA
     // Unpacker will always load faces in f0,f1,f2,f3 order
-    // if in1 is transposed then faces 1&2 need to be swapped during read 
+    // if in1 is transposed then faces 1&2 need to be swapped during read
     // by changing address increment amount via addr_mods
     // Col major layout in dest only impacs destination address increment
     // if col major layout faces are ordered as f0,f2,f1,f3
@@ -279,11 +278,11 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // srca+=16,  srcb=0,   dest+=8
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B0A1 // srca=srca, srcb+=8,  dest+=8,  bias=1
-        }    
+        }
     } else if (is_in1_32x16) {
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16,  srcb+=8,  dest=0
-        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B1A1 // srca=srca, srcb+=8,  dest=+8, bias=1 
+        TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B1A1 // srca=srca, srcb+=8,  dest=+8, bias=1
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A1 // srca=0,    srcb+=8,  dest=16 (addr_mod_4), bias=0
 
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A0 // srca=srca, srcb+=8,  dest+=8
@@ -291,8 +290,8 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B3A1 // srca=srca, srcb+=8,  dest+=8, bias=1
     } else if (is_in0_16x32 || is_in0_32x16) {
         if (partial_face) {
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // srca+=16/32,  srcb=0,   dest=+16, bias = 1, // srca+=32 if transposed  
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A1 // srca+=16/=16,  srcb+=16,  dest=0 (addr_mod_4), bias=0, // srca=16 if transposed 
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A0 // srca+=16/32,  srcb=0,   dest=+16, bias = 1, // srca+=32 if transposed
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A1 // srca+=16/=16,  srcb+=16,  dest=0 (addr_mod_4), bias=0, // srca=16 if transposed
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B1A2 // srca+=16/32,  srcb=0,  dest=+16, bias = 1  // srca+=32 if transposed
         } else {
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
@@ -303,7 +302,7 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A2 // srca=srca, srcb+=8,  dest+=8
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B1A2 // srca+=16,  srcb=16,  dest+=8/24 // dest+=24 if transposed
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B1A3 // srca=srca, srcb+=8,  dest+=8,  bias=1
-        }    
+        }
     } else {
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16/32, srcb=0, dest+=8  // srca+=32 if transposed
@@ -324,7 +323,7 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B3A2 // srca+=16,  srcb=0,   dest+=8 // A2 -> A1 if transposed
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // B3A3 // srca=srca, srcb+=8,  dest+=8,  bias=1
     }
-          
+
     if constexpr(high_fidelity) {
         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B3A3 or B3A2 // reset srca/srcb/dest, increment phase (addr_mod_5)
     } else {
@@ -341,12 +340,12 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
             } else {
                 TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_1, 0); // B3A3 or B2A1 // reset srca/srcb/dest, increment phase (addr_mod_5), clear src A
             }
-        }    
+        }
     }
 
     // TODO: can we commonize this?
     constexpr uint inner_loops = high_fidelity ? NUM_FIDELITY_PHASES : 1;
-    ckernel_template tmp(1 /* outer loop */, inner_loops, TT_OP_REPLAY(replay_buf_offset, replay_buf_len, 0, 0)); 
+    ckernel_template tmp(1 /* outer loop */, inner_loops, TT_OP_REPLAY(replay_buf_offset, replay_buf_len, 0, 0));
 
     if constexpr(high_fidelity) {
         if (t_dim>1) { //
@@ -356,9 +355,9 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
                 tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD_F));
             } else {
                 tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F));
-            }    
+            }
 
-        }    
+        }
 
     }
     tmp.program(instrn_buffer);
@@ -366,18 +365,18 @@ inline void matmul_configure_mop(bool transpose, const std::uint32_t ct_dim, con
 
 template <int MATH_FIDELITY_DESC, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
 inline void _llk_math_matmul_init_(const std::uint32_t in0_tile_r_dim = TILE_R_DIM, const std::uint32_t in0_tile_c_dim = TILE_C_DIM, const std::uint32_t in1_tile_r_dim = TILE_R_DIM, const std::uint32_t in1_tile_c_dim = TILE_C_DIM, const bool partial_face = false, const std::uint32_t transpose=0, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
-    
+
     matmul_configure_addrmod<MATH_FIDELITY_DESC, FaceLayout>(transpose, ct_dim, rt_dim, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     const bool reuse_a = ct_dim>=rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
     if (t_dim>1) {
         if (reuse_a) {
-            TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, CLR_DVALID_SrcB_Disable_MASK); // Disable srcB valid clear. Has to be done via dedicated instruction 
+            TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, CLR_DVALID_SrcB_Disable_MASK); // Disable srcB valid clear. Has to be done via dedicated instruction
         } else {
             TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, CLR_DVALID_SrcA_Disable_MASK); // Disable srcA valid clear. Has to be done via dedicated instruction
-        }    
+        }
     } else {
-        TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0); 
+        TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     }
 
     constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
@@ -411,7 +410,7 @@ inline void _llk_math_matmul_(uint dst_index, const bool transpose=false, const 
 
                 if ((t+1)<t_dim) {
 
-                    // Move to the next srcA or srcB bank 
+                    // Move to the next srcA or srcB bank
                     if (reuse_a) {
                         if(rut == (rut_dim-1)) {
                             // Clear srcB valid as reuse is done and move to next srcB bank
@@ -428,21 +427,21 @@ inline void _llk_math_matmul_(uint dst_index, const bool transpose=false, const 
                         } else {
                             // Move to the next srcB bank
                             TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
-                        }    
-                    }    
+                        }
+                    }
 
                     math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index+(reuse_a ? ct_dim*(t+1)+rut : t+1+rut*ct_dim));
                     ckernel_template::run(instrn_buffer);
-                } 
+                }
 
                 if (reuse_a) {
                     // Clear srcA&B valid
                     if(rut == (rut_dim-1)) {
                         TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD); // Clear srcA valid as reuse is done and move to next srcA bank
-                        TTI_CLEARDVALID(p_setrwc::CLR_B, 0); // Clear srcB valid as reuse is done and move to next srcB bank 
+                        TTI_CLEARDVALID(p_setrwc::CLR_B, 0); // Clear srcB valid as reuse is done and move to next srcB bank
                     } else {
                         TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD); // Move to the next srcB and srcA bank
-                    }    
+                    }
                 } else{
                     // Clear srcB&A valid
                     if(rut == (rut_dim-1)) {
@@ -450,11 +449,11 @@ inline void _llk_math_matmul_(uint dst_index, const bool transpose=false, const 
                         TTI_CLEARDVALID(p_setrwc::CLR_A, 0); // Clear srcA valid as reuse is done and move to next srcA bank
                     } else {
                         TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD); // Move to the next srcA and srcB bank
-                    }    
-                }    
-            }    
+                    }
+                }
+            }
 
-        }    
+        }
         t++;
     }
 }

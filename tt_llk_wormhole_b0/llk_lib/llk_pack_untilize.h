@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 #include "llk_defs.h"
@@ -38,7 +37,7 @@ inline void _llk_pack_untilize_mop_config_() {
     constexpr uint MEGAROW = 1;
     constexpr uint ZERO_OUTPUT_FLAG = p_pacr::P_ZERO_OUTPUT_DISABLED;
     constexpr uint MOP_INNER_LOOP = 1;
-    
+
     constexpr uint MOP_OUTER_LOOP = block_ct_dim;
 
     // Inc ch0_y+=1 (addr_mod_0 will increment by 15)
@@ -66,7 +65,7 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
         TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, 0); // Clear tile counter
         ckernel::ckernel_template::run(instrn_buffer);
         TTI_ADDRCRXY(p_setadc::PAC, 0, 0, 1, 0, 0b0010); // Read new row in the tile
-    }    
+    }
 
     TTI_PACR(ADDR_MOD_2, 0, 0xf, 0, 0, 1, 1); // close block
 }

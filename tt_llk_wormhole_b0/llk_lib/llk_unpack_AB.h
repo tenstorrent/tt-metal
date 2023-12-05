@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 #include "ckernel.h"
@@ -28,27 +27,27 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces=false, cons
 
     if constexpr (BType == BroadcastType::COL) {
         static constexpr uint unpack_srcb_set_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 2, 0b0001);
-        const uint32_t outerloop = num_faces < 4 ? 1 : 2;   
-        const uint32_t innerloop = num_faces < 2 ? 1 : 2;   
+        const uint32_t outerloop = num_faces < 4 ? 1 : 2;
+        const uint32_t innerloop = num_faces < 2 ? 1 : 2;
         ckernel_template tmp(outerloop, innerloop, unpack_srca);
         tmp.set_start_op(unpack_srcb);
         if (narrow_tile) {
             tmp.set_end_op(unpack_srcb); // Read face 1
         } else {
             tmp.set_end_op(unpack_srcb_set_z);
-        }    
+        }
         tmp.program(instrn_buffer);
     } else if constexpr (BType == BroadcastType::ROW) {
         static constexpr uint unpack_srcb_clear_z  = TT_OP_SETADCZW(0b010, 0, 0, 0, 0, 0b0001);
         static constexpr uint unpack_srcb_no_z_inc = TT_OP_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-        const uint32_t outerloop = num_faces < 4 ? 1 : 2;   
-        const uint32_t innerloop = num_faces < 2 ? 1 : 2;   
+        const uint32_t outerloop = num_faces < 4 ? 1 : 2;
+        const uint32_t innerloop = num_faces < 2 ? 1 : 2;
         ckernel_template tmp(outerloop, innerloop, narrow_tile ? unpack_srcb_no_z_inc : unpack_srcb, unpack_srca);
         tmp.set_end_op(unpack_srcb_clear_z);
         tmp.program(instrn_buffer);
     } else if constexpr (BType == BroadcastType::SCALAR) {
-        const uint32_t outerloop = 1;   
-        const uint32_t innerloop = num_faces;   
+        const uint32_t outerloop = 1;
+        const uint32_t innerloop = num_faces;
         ckernel_template tmp(outerloop, innerloop, unpack_srca);
         tmp.set_start_op(unpack_srcb);
         tmp.program(instrn_buffer);
@@ -57,17 +56,17 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces=false, cons
             static constexpr uint srca_set_z = TT_OP_SETADCZW(0b001, 0, 0, 0, 1, 0b0001); // set z to 1
             static constexpr uint unpack_srca_skip_z =
                 TT_OP_UNPACR(SrcA, 0b10, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // inc z by 2
-            const uint32_t outerloop = num_faces < 4 ? 1 : 2;   
-            const uint32_t innerloop = num_faces < 2 ? 1 : 2;   
+            const uint32_t outerloop = num_faces < 4 ? 1 : 2;
+            const uint32_t innerloop = num_faces < 2 ? 1 : 2;
             ckernel_template tmp(outerloop, innerloop, num_faces<4 ? unpack_srca : unpack_srca_skip_z, unpack_srcb);
             tmp.set_end_op(srca_set_z);
             tmp.program(instrn_buffer);
         } else {
-            constexpr uint32_t outerloop = 1;   
-            const uint32_t innerloop = num_faces;   
+            constexpr uint32_t outerloop = 1;
+            const uint32_t innerloop = num_faces;
             ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb);
             tmp.program(instrn_buffer);
-        }    
+        }
     }
 
 }
@@ -79,14 +78,14 @@ inline void _llk_unpack_AB_hw_configure_(const std::uint32_t unpA_src_format, co
     constexpr bool fpu_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Fpu);
     constexpr bool pack_srnd_en = stoch_rnd_en ||(stoch_rnd_mode == StochRndType::Pack);
     configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, fpu_srnd_en, pack_srnd_en>(
-        unpA_src_format, 
-        unpB_src_format, 
-        unpA_dst_format, 
-        unpB_dst_format, 
-        face_r_dim, 
-        face_r_dim, 
-        within_face_16x16_transpose, 
-        num_faces, 
+        unpA_src_format,
+        unpB_src_format,
+        unpA_dst_format,
+        unpB_dst_format,
+        face_r_dim,
+        face_r_dim,
+        within_face_16x16_transpose,
+        num_faces,
         num_faces);
 }
 

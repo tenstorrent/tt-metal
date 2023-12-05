@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 #include "ckernel.h"
@@ -51,14 +50,14 @@ inline void _llk_unpack_reduce_hw_configure_(const std::uint32_t unpA_src_format
     constexpr bool pack_srnd_en = stoch_rnd_en ||(stoch_rnd_mode == StochRndType::Pack);
 
     configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, fpu_srnd_en, pack_srnd_en>(
-        unpA_src_format, 
-        unpB_src_format, 
-        unpA_dst_format, 
-        unpB_dst_format, 
-        unpA_face_r_dim, 
-        unpB_face_r_dim, 
-        within_face_16x16_transpose, 
-        unpA_num_faces, 
+        unpA_src_format,
+        unpB_src_format,
+        unpA_dst_format,
+        unpB_dst_format,
+        unpA_face_r_dim,
+        unpB_face_r_dim,
+        within_face_16x16_transpose,
+        unpA_num_faces,
         unpB_num_faces);
 }
 
@@ -102,7 +101,7 @@ inline void _llk_unpack_reduce_(const std::uint32_t address) {
     mop_run(0, 4);
 
     // Restore face height
-    TTI_SETADCXX(p_setadc::UNP1, FACE_R_DIM*FACE_C_DIM-1, 0x0);  
+    TTI_SETADCXX(p_setadc::UNP1, FACE_R_DIM*FACE_C_DIM-1, 0x0);
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);

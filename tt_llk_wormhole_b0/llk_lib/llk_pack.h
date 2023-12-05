@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 #include "llk_defs.h"
@@ -54,10 +53,10 @@ inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std
     constexpr uint MEGAROW = 1;
     constexpr uint ZERO_OUTPUT_FLAG = zero_output ? p_pacr::P_ZERO_OUTPUT_ENABLED : p_pacr::P_ZERO_OUTPUT_DISABLED;
     constexpr uint MOP_INNER_LOOP = 1;
-    
+
     if constexpr (!untilize) {
         constexpr uint MOP_OUTER_LOOP = 1;
-        
+
         ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
 
         if (partial_face && IS_BFP_FORMAT(pack_dst_format)) {
@@ -69,7 +68,7 @@ inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std
         if constexpr (write_tile_header) {
             tmp.set_end_op(TT_OP_STOREIND(
                 1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
-        }        
+        }
 
         tmp.program(instrn_buffer);
     } else {
@@ -82,13 +81,13 @@ inline void _llk_pack_mop_config_(const std::uint32_t pack_dst_format, const std
             // Inc ch0_y+=1 (addr_mod_0 will increment by 15)
             ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0));
             tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
-            tmp.set_end_op(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0)); 
+            tmp.set_end_op(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
             tmp.program(instrn_buffer);
         }
     }
 }
 
-template <bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor, bool write_tile_header = true> 
+template <bool is_fp32_dest_acc_en = false, bool is_tile_dim_reconfig_en = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor, bool write_tile_header = true>
 inline void _llk_pack_reconfig_data_format_(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const bool partial_face = false, const bool narrow_tile = false) {
 
     reconfig_packer_data_format<is_fp32_dest_acc_en>(
@@ -148,7 +147,7 @@ inline void _llk_pack_reduce_hw_configure_(const std::uint32_t pack_src_format, 
             pack_edge_offset.f.tile_row_set_select_pack0 = 1;
             pack_edge_offset.f.tile_row_set_select_pack2 = 1;
             cfg[TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32] = 0x55555555; // each packer packs 1x16 row
-        }    
+        }
         cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+0] = pack_edge_offset.val;
     } else if constexpr (dim == ReduceDim::REDUCE_SCALAR) {
         pack_edge_offset.f.tile_row_set_select_pack0 = 1;
@@ -176,9 +175,9 @@ inline void _llk_pack_init_(const std::uint32_t pack_dst_format, const std::uint
 
     _llk_pack_mop_config_<untilize, zero_output, FaceLayout, write_tile_header>(
         pack_dst_format,
-        face_r_dim, 
-        num_faces, 
-        partial_face, 
+        face_r_dim,
+        num_faces,
+        partial_face,
         narrow_tile
     );
 }

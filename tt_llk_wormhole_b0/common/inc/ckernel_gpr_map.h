@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 
@@ -32,7 +31,7 @@ struct p_gpr_unpack
     constexpr static uint TMP1              = 13;   // Temp data
     constexpr static uint TILE_SIZE         = 14;   // Tile size
     constexpr static uint TILE_OFFSET       = 15;   // Tile offset
-    constexpr static uint L1_BUFFER_ADDR    = 17;   // Holds address of fixed l1 buffer used for reduce in1 
+    constexpr static uint L1_BUFFER_ADDR    = 17;   // Holds address of fixed l1 buffer used for reduce in1
     constexpr static uint TMP_LO            = 18;   // Temp data. Upper 16-bits always 0
     constexpr static uint TMP_HI            = 19;   // Temp data. Lower 16-bits always 0
     constexpr static uint PERF_FIRST_UNP_LO = 32;   // timestamp for first-unpack-instruction (low 32b)
@@ -51,20 +50,20 @@ struct p_gpr_unpack
     constexpr static uint PERF_UNPACK_NUM_TILES_3 = 48;   // num tiles for input operands 6-7
     constexpr static uint UNPACK_STRIDE     = 52;   // Used to save/restore unpack A stride (UNP0_ADDR_CTRL_ZW_REG_1_Zstride register)
                                                     // before/after unpacking directly to dest
-    constexpr static uint SR_UNPACK_TILIZER_STATE_0 = 54;  // Save unpack state before tilizer is enabled for quick restore 
-    constexpr static uint SR_UNPACK_TILIZER_STATE_1 = 55;  
-    constexpr static uint SR_UNPACK_UNTILIZER_STATE_0 = 56;  // Save unpack state before tilizer is enabled for quick restore 
-    constexpr static uint SR_UNPACK_UNTILIZER_STATE_1 = 57;  
-    constexpr static uint SR_UNPACK_UNTILIZER_STATE_2 = 58;  
-    constexpr static uint SR_UNPACK_UNTILIZER_STATE_3 = 59;  
-                                                    
+    constexpr static uint SR_UNPACK_TILIZER_STATE_0 = 54;  // Save unpack state before tilizer is enabled for quick restore
+    constexpr static uint SR_UNPACK_TILIZER_STATE_1 = 55;
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_0 = 56;  // Save unpack state before tilizer is enabled for quick restore
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_1 = 57;
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_2 = 58;
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_3 = 59;
+
 };
 
 // Math GPR thread
 struct p_gpr_math
 {
-    constexpr static uint PERF_DBUS_CNTL    = 4;   // Control debug bus perf counter selection 
-    constexpr static uint PERF_MEM_DUMP_CNTL_CLEAR= 5;   // Clear write to memory flag 
+    constexpr static uint PERF_DBUS_CNTL    = 4;   // Control debug bus perf counter selection
+    constexpr static uint PERF_MEM_DUMP_CNTL_CLEAR= 5;   // Clear write to memory flag
     constexpr static uint PERF_MEM_DUMP_CNTL_SET= 6;   // Set write to memory flag
     constexpr static uint PERF_CNT_START    = 7;   // Start perf counter
     constexpr static uint PERF_CNT_STOP     = 8;   // Stop perf counter

@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 #include "ckernel.h"
@@ -23,10 +22,10 @@ inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile=false) {
         static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
         static constexpr uint unpack_srcb_zerosrc    = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
         static constexpr uint unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID); //WA for tenstorrent/budabackend#1230
-    #endif    
+    #endif
 
     const uint32_t outerloop = narrow_tile ? 1 : 2;
-    constexpr uint32_t innerloop = 1;   
+    constexpr uint32_t innerloop = 1;
     ckernel_template tmp(outerloop, innerloop, unpack_srcb_zerosrc, unpack_srcb_set_dvalid);
     tmp.set_start_op(unpack_srca);
     tmp.program(instrn_buffer);
@@ -41,14 +40,14 @@ inline void _llk_unpack_tilize_hw_configure_(const std::uint32_t unpack_src_form
     constexpr bool pack_srnd_en = stoch_rnd_en ||(stoch_rnd_mode == StochRndType::Pack);
 
     configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, fpu_srnd_en, pack_srnd_en>(
-        unpack_src_format, 
-        unpack_src_format, 
-        unpack_dst_format, 
-        unpack_dst_format, 
-        face_r_dim, 
-        face_r_dim, 
-        within_face_16x16_transpose, 
-        num_faces, 
+        unpack_src_format,
+        unpack_src_format,
+        unpack_dst_format,
+        unpack_dst_format,
+        face_r_dim,
+        face_r_dim,
+        within_face_16x16_transpose,
+        num_faces,
         num_faces);
 }
 
@@ -69,7 +68,7 @@ inline void _llk_unpack_tilize_init_(const std::uint32_t unpack_src_format=0, co
 
     TT_SETDMAREG(0, LOWER_HALFWORD(config.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
     TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
-    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG2_Out_data_format_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0); // Load unpack config[0] 
+    TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG2_Out_data_format_ADDR32+0-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0); // Load unpack config[0]
     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16); //GPR preloaded with  16 | (16 << 16)
 
     _llk_unpack_tilize_mop_config_(narrow_tile);
@@ -79,7 +78,7 @@ inline void _llk_unpack_tilize_(const std::uint32_t base_address, const std::uin
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
 
-    std::uint32_t top_face_offset_address = SCALE_DATUM_SIZE(unpack_src_format, tile_index) << (narrow_tile ? 0 : 1);  
+    std::uint32_t top_face_offset_address = SCALE_DATUM_SIZE(unpack_src_format, tile_index) << (narrow_tile ? 0 : 1);
                                                     // Each iteration unpacks 2 face_r_dimx16 faces (1st 0,1 2nd 2,3 unless tile is <=16x32)
                                                     // For narrow tile we unpack 1 face in each iteration
                                                     // Offset address is in 16B words

@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 
@@ -152,15 +151,15 @@ inline void set_math_semaphores()
     t6_semaphore_post<p_stall::MATH|p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
 }
 
-inline void math_unpack_to_dest_math_ready() 
+inline void math_unpack_to_dest_math_ready()
 {
     t6_semaphore_wait_on_max<p_stall::STALL_SYNC>(semaphore::MATH_DONE);
     t6_semaphore_post<p_stall::MATH|p_stall::WAIT_SFPU>(semaphore::MATH_DONE);
     while (semaphore_read(semaphore::MATH_DONE) == 0) {}
-    semaphore_get(semaphore::MATH_DONE); 
+    semaphore_get(semaphore::MATH_DONE);
 }
 
-inline void math_unpack_to_dest_tile_ready() 
+inline void math_unpack_to_dest_tile_ready()
 {
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::UNPACK_TO_DEST);
     t6_semaphore_get<p_stall::MATH|p_stall::WAIT_SFPU>(semaphore::UNPACK_TO_DEST);
@@ -173,14 +172,14 @@ inline void set_dst_write_addr(uint32_t tile_index)
         uint dst_index = tile_index << DstTileSizeLog2[tile_shape];
         dst_index = dst_index + get_dest_buffer_base();
         if constexpr (unpack_to_dest) {
-            mailbox_write(ThreadId::UnpackThreadId, dst_index); // Send to unpacker   
+            mailbox_write(ThreadId::UnpackThreadId, dst_index); // Send to unpacker
         } else {
             TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index);
-        }    
+        }
     } else {
         // FIXME MT: add this mapping for other layout
     }
-    
+
 }
 
 // Programming a dst write addr offset that gets added to base
@@ -240,12 +239,12 @@ inline constexpr bool is_32bit_input(const std::uint32_t src_format, const std::
            ((output_df == (uint)DataFormat::Int32) || (output_df == (uint)DataFormat::Float32));
 }
 
-inline constexpr int get_math_num_fidelity_phases(const int math_fidelity_desc) 
+inline constexpr int get_math_num_fidelity_phases(const int math_fidelity_desc)
 {
     return (math_fidelity_desc & 0x7);
 }
 
-inline constexpr int get_math_fidelity_increment(const int math_fidelity_desc) 
+inline constexpr int get_math_fidelity_increment(const int math_fidelity_desc)
 {
     return ((math_fidelity_desc >> 3) & 0x1) + 1;
 }
