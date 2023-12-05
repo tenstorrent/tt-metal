@@ -9,6 +9,7 @@
 #include <random>
 
 #include "n300_device_fixture.hpp"
+#include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
@@ -22,12 +23,11 @@ using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
 struct BankedConfig {
-    size_t num_tiles = 1;
+    size_t num_pages = 1;
     size_t size_bytes = 1 * 2 * 32 * 32;
     size_t page_size_bytes = 2 * 32 * 32;
     BufferType input_buffer_type = BufferType::L1;
     BufferType output_buffer_type = BufferType::L1;
-    CoreCoord logical_core = CoreCoord({.x = 0, .y = 0});
     tt::DataFormat l1_data_format = tt::DataFormat::Float16_b;
 };
 
@@ -166,7 +166,8 @@ bool chip_to_chip_interleaved_buffer_transfer(
     tt_metal::Device* receiver_device,
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
-    const BankedConfig& cfg) {
+    const BankedConfig& cfg,
+    const uint32_t& max_transfer_size) {
     bool pass = true;
 
     log_info(
@@ -180,7 +181,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     const uint32_t input0_cb_index = 0;
     const uint32_t output_cb_index = 16;
 
-    TT_FATAL(cfg.num_tiles * cfg.page_size_bytes == cfg.size_bytes);
+    TT_FATAL(cfg.num_pages * cfg.page_size_bytes == cfg.size_bytes);
     constexpr uint32_t num_pages_cb = 1;
 
     ////////////////////////////////////////////////////////////////////////////
@@ -197,11 +198,13 @@ bool chip_to_chip_interleaved_buffer_transfer(
 
     auto input_buffer = CreateBuffer(sender_device, cfg.size_bytes, cfg.page_size_bytes, cfg.input_buffer_type);
     bool input_is_dram = cfg.input_buffer_type == BufferType::DRAM;
+    tt_metal::detail::WriteToBuffer(input_buffer, input_packed);
 
-    CircularBufferConfig l1_input_cb_config =
-        CircularBufferConfig(cfg.page_size_bytes, {{input0_cb_index, cfg.l1_data_format}})
-            .set_page_size(input0_cb_index, cfg.page_size_bytes);
-    auto l1_input_cb = CreateCircularBuffer(sender_program, cfg.logical_core, l1_input_cb_config);
+    const uint32_t max_buffer = round_down(max_transfer_size, cfg.page_size_bytes);
+    uint32_t pages_per_loop = max_buffer / cfg.page_size_bytes;
+    uint32_t num_loops = (uint32_t)(cfg.size_bytes / max_buffer);
+    uint32_t remaining_bytes = (uint32_t)(cfg.size_bytes % max_buffer);
+    uint32_t remaining_pages = remaining_bytes / cfg.page_size_bytes;
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -214,12 +217,13 @@ bool chip_to_chip_interleaved_buffer_transfer(
         sender_program,
         eth_sender_kernel,
         eth_sender_core,
-        {
-            (uint32_t)input_buffer.address(),
-            (uint32_t)cfg.num_tiles,
-            (uint32_t)input0_cb_index,
-            (uint32_t)cfg.size_bytes,
-        });
+        {(uint32_t)input_buffer.address(),
+         (uint32_t)cfg.page_size_bytes,
+         (uint32_t)max_buffer,
+         (uint32_t)num_loops,
+         (uint32_t)pages_per_loop,
+         (uint32_t)remaining_bytes,
+         (uint32_t)remaining_pages});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
@@ -228,11 +232,9 @@ bool chip_to_chip_interleaved_buffer_transfer(
 
     auto output_buffer = CreateBuffer(receiver_device, cfg.size_bytes, cfg.page_size_bytes, cfg.output_buffer_type);
     bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;
+    std::vector<uint32_t> all_zeros(cfg.size_bytes / sizeof(uint32_t), 0);
 
-    CircularBufferConfig l1_output_cb_config =
-        CircularBufferConfig(cfg.page_size_bytes, {{output_cb_index, cfg.l1_data_format}})
-            .set_page_size(output_cb_index, cfg.page_size_bytes);
-    auto l1_output_cb = CreateCircularBuffer(receiver_program, cfg.logical_core, l1_output_cb_config);
+    tt_metal::detail::WriteToBuffer(output_buffer, all_zeros);
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -240,7 +242,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
         eth_receiver_core,
         tt_metal::experimental::EthernetConfig{
             .eth_mode = tt_metal::Eth::RECEIVER,
-            .noc = tt_metal::NOC::NOC_0,
+            .noc = tt_metal::NOC::NOC_1,
             .compile_args = {(uint32_t)output_is_dram}});
 
     tt_metal::SetRuntimeArgs(
@@ -249,9 +251,12 @@ bool chip_to_chip_interleaved_buffer_transfer(
         eth_receiver_core,
         {
             (uint32_t)output_buffer.address(),
-            (uint32_t)cfg.num_tiles,
-            (uint32_t)output_cb_index,
-            (uint32_t)cfg.size_bytes,
+            (uint32_t)cfg.page_size_bytes,
+            (uint32_t)max_buffer,
+            (uint32_t)num_loops,
+            (uint32_t)pages_per_loop,
+            (uint32_t)remaining_bytes,
+            (uint32_t)remaining_pages,
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -311,11 +316,51 @@ TEST_F(N300DeviceFixture, EthKernelsSendInterleavedBufferChip0ToChip1) {
     const auto& sender_device = devices_.at(0);
     const auto& receiver_device = devices_.at(1);
 
-    BankedConfig test_config;
     for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores()) {
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
+        BankedConfig test_config;
         ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-            sender_device, receiver_device, sender_eth_core, receiver_eth_core, test_config));
+            sender_device,
+            receiver_device,
+            sender_eth_core,
+            receiver_eth_core,
+            test_config,
+            test_config.page_size_bytes));
+        test_config = BankedConfig{.num_pages = 200, .size_bytes = 200 * 2 * 32 * 32, .page_size_bytes = 2 * 32 * 32};
+        ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
+            sender_device,
+            receiver_device,
+            sender_eth_core,
+            receiver_eth_core,
+            test_config,
+            test_config.page_size_bytes));
+        ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
+            sender_device,
+            receiver_device,
+            sender_eth_core,
+            receiver_eth_core,
+            test_config,
+            eth_l1_mem::address_map::MAX_L1_LOADING_SIZE));
+        test_config = BankedConfig{
+            .num_pages = 200,
+            .size_bytes = 200 * 2 * 32 * 32,
+            .page_size_bytes = 2 * 32 * 32,
+            .input_buffer_type = BufferType::DRAM,
+            .output_buffer_type = BufferType::DRAM};
+        ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
+            sender_device,
+            receiver_device,
+            sender_eth_core,
+            receiver_eth_core,
+            test_config,
+            test_config.page_size_bytes));
+        ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
+            sender_device,
+            receiver_device,
+            sender_eth_core,
+            receiver_eth_core,
+            test_config,
+            eth_l1_mem::address_map::MAX_L1_LOADING_SIZE));
     }
 }
