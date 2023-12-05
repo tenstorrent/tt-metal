@@ -11,7 +11,7 @@ import torch
 import tt_lib as ttl
 from functools import partial
 
-from tests.tt_eager.python_api_testing.sweep_tests.common import set_dispatch_mode
+from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import sum as tt_sum
@@ -19,7 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import sum as tt_s
 
 def run_sum_2_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
     torch.manual_seed(data_seed)
-    set_dispatch_mode(dispatch_mode)
+    prev_dispatch_mode = set_slow_dispatch_mode(dispatch_mode)
 
     if in_mem_config[0] == "SYSTEM_MEMORY":
         in_mem_config[0] = None
@@ -45,6 +45,7 @@ def run_sum_2_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, d
     logger.debug(pcc_value)
     logger.debug(success)
 
+    set_slow_dispatch_mode(prev_dispatch_mode)
     assert success
 
 
@@ -56,7 +57,7 @@ test_sweep_args = [
         ["SYSTEM_MEMORY"],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         17643447,
-        False,
+        "",
     ),
     (
         (6, 7, 82, 2),
@@ -65,7 +66,7 @@ test_sweep_args = [
         ["SYSTEM_MEMORY"],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         79106,
-        False,
+        "",
     ),
 ]
 

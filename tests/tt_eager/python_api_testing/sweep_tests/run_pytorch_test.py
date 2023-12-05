@@ -65,7 +65,6 @@ def make_env_combinations(env_dict):
     return product(*envs)
 
 
-
 def run_pytorch_test(args):
     # Create output folder
     output_folder = Path(args.output_folder_path)
@@ -101,8 +100,7 @@ def run_pytorch_test(args):
     assert "test-list" in pytorch_test_configs_yaml
     pytorch_test_list = pytorch_test_configs_yaml["test-list"]
 
-    default_env_dict = {
-    }
+    default_env_dict = {}
     # Get env variables from CLI
     args_env_dict = {}
     if args.env != "":
@@ -125,7 +123,6 @@ def run_pytorch_test(args):
 
     for i in range(len(pytorch_test_list)):
         for test_name, test_config in pytorch_test_list[i].items():
-
             assert test_name in op_map
 
             # Get env variables from yaml (yaml overrides CLI)
@@ -147,7 +144,9 @@ def run_pytorch_test(args):
 
                 for key, value in env_dict:
                     old_env_dict[key] = os.environ.pop(key, None)
-                    os.environ[key] = value
+
+                    if value != "" and value is not None:
+                        os.environ[key] = value
 
                 shape_dict = test_config["shape"]
                 datagen_dict = test_config["datagen"]
@@ -155,9 +154,7 @@ def run_pytorch_test(args):
 
                 comparison_dict = test_config["comparison"]
                 comparison_args = comparison_dict.get("args", {})
-                comparison_func = partial(
-                    getattr(comparison_funcs, comparison_dict["function"]), **comparison_args
-                )
+                comparison_func = partial(getattr(comparison_funcs, comparison_dict["function"]), **comparison_args)
                 test_args_gen = getattr(
                     generation_funcs,
                     test_config.get("args-gen", "gen_default_dtype_layout_device"),
@@ -176,17 +173,17 @@ def run_pytorch_test(args):
                         test_tt_layouts.append([])
                         test_mem_configs.append([])
 
-                        assert 'data-type' in input_spec, f"For each input you need to specify 'data-type'"
-                        assert 'data-layout' in input_spec, f"For each input you need to specify 'data-layout'"
-                        assert 'buffer-type' in input_spec, f"For each input you need to specify 'buffer-type'"
+                        assert "data-type" in input_spec, f"For each input you need to specify 'data-type'"
+                        assert "data-layout" in input_spec, f"For each input you need to specify 'data-layout'"
+                        assert "buffer-type" in input_spec, f"For each input you need to specify 'buffer-type'"
 
-                        for dtype in input_spec['data-type']:
+                        for dtype in input_spec["data-type"]:
                             test_tt_dtypes[-1].append(DTYPES_TT_DICT[dtype])
 
-                        for layout in input_spec['data-layout']:
+                        for layout in input_spec["data-layout"]:
                             test_tt_layouts[-1].append(LAYOUTS_TT_DICT[layout])
 
-                        for buffer_type in input_spec['buffer-type']:
+                        for buffer_type in input_spec["buffer-type"]:
                             test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_type])
                 else:
                     for i in range(shape_dict["num-shapes"]):
@@ -194,20 +191,20 @@ def run_pytorch_test(args):
                         test_tt_layouts.append([])
                         test_mem_configs.append([])
 
-                        if 'data-layout' in test_args:
-                            for layout in test_args['data-layout']:
+                        if "data-layout" in test_args:
+                            for layout in test_args["data-layout"]:
                                 test_tt_layouts[-1].append(LAYOUTS_TT_DICT[layout])
                         else:
                             test_tt_layouts[-1] = generation_funcs.supported_tt_layouts
 
-                        if 'data-type' in test_args:
-                            for dtype in test_args['data-type']:
+                        if "data-type" in test_args:
+                            for dtype in test_args["data-type"]:
                                 test_tt_dtypes[-1].append(DTYPES_TT_DICT[dtype])
                         else:
                             test_tt_dtypes[-1] = generation_funcs.supported_tt_dtypes
 
-                        if 'buffer-type' in test_args:
-                            for buffer_type in test_args['buffer-type']:
+                        if "buffer-type" in test_args:
+                            for buffer_type in test_args["buffer-type"]:
                                 test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_type])
                         else:
                             test_mem_configs[-1] = generation_funcs.supported_mem_configs
@@ -216,15 +213,15 @@ def run_pytorch_test(args):
                     for out_spec in test_args["outputs"]:
                         test_mem_configs.append([])
 
-                        assert 'out-buffer-type' in out_spec, f"For output you need to specify 'out-buffer-type'"
+                        assert "out-buffer-type" in out_spec, f"For output you need to specify 'out-buffer-type'"
 
-                        for buffer_type in out_spec['out-buffer-type']:
+                        for buffer_type in out_spec["out-buffer-type"]:
                             test_mem_configs[-1].append(buffer_type)
                 else:
                     test_mem_configs.append([])
 
-                    if 'out-buffer-type' in test_args:
-                        for buffer_type in test_args['out-buffer-type']:
+                    if "out-buffer-type" in test_args:
+                        for buffer_type in test_args["out-buffer-type"]:
                             test_mem_configs[-1].append(MEM_CONFIGS_TT_DICT[buffer_type])
                     else:
                         test_mem_configs[-1] = [MEM_CONFIGS_TT_DICT["DRAM"]]
@@ -241,20 +238,15 @@ def run_pytorch_test(args):
                         results_csv_writer = None
 
                         if write_to_csv:
-                            results_csv_writer = csv.DictWriter(
-                                results_csv,
-                                fieldnames=get_test_fieldnames(["args"])
-                            )
+                            results_csv_writer = csv.DictWriter(results_csv, fieldnames=get_test_fieldnames(["args"]))
                             if not skip_header:
                                 results_csv_writer.writeheader()
                                 results_csv.flush()
 
-                        data_seed = random.randint(0, 20000000) # int(time.time())
+                        data_seed = random.randint(0, 20000000)  # int(time.time())
                         torch.manual_seed(data_seed)
 
-                        logger.info(
-                            f"Running with shape: {input_shapes} and seed: {data_seed}"
-                        )
+                        logger.info(f"Running with shape: {input_shapes} and seed: {data_seed}")
 
                         test_profiling_key = f"test_sweep_separator - {run_id}"
                         logger.info(f"Starting profiling test {test_profiling_key}")
@@ -285,14 +277,12 @@ def run_pytorch_test(args):
 
                         # Check if test passed
                         if args.run_tests_for_ci and not test_pass:
-                            logger.error(
-                                f"{test_name} test failed with input shape {input_shapes}."
-                            )
+                            logger.error(f"{test_name} test failed with input shape {input_shapes}.")
                             sys.exit(1)
 
                 # Unset env variables
                 for key, value in old_env_dict.items():
-                    os.environ.pop(key)
+                    os.environ.pop(key, None)
                     if value is not None:
                         os.environ[key] = value
 

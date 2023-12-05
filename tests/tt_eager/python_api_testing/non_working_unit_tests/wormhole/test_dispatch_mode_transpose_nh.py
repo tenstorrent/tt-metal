@@ -42,7 +42,7 @@ def gen_shapes(start_shape, end_shape, interval, num_shapes):
     return result
 
 
-def set_dispatch_mode(set_var):
+def set_slow_dispatch_mode(set_var):
     if set_var:
         dispatch = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
         os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
@@ -60,7 +60,7 @@ def run_transpose_nh_tests(dtype, dlayout, in_mem_config, out_mem_config, device
         shapes = gen_shapes([1, 1, 32, 32], [12, 24, 512, 512], [1, 1, 32, 32], 256)
 
     # dispatch_mode = False
-    # set_dispatch_mode(dispatch_mode)
+    # set_slow_dispatch_mode(dispatch_mode)
 
     overall_pass = True
 
