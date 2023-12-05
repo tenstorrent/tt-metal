@@ -70,10 +70,12 @@ void kernel_main() {
 
     // LOOP TO FILL READER INDICES
     constexpr uint32_t cb_reader_indices = tt::CB::c_in4;
-    volatile tt_l1_ptr uint32_t* reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
+    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
+
     uint32_t reader_idx = 0;
 
     /* REFERENCE; TODO: Remove
+    volatile tt_l1_ptr uint16_t* reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_reader_indices));
     uint32_t weights_top_left_corner_idx = 0;
 
     // First partial right-aligned row
@@ -182,6 +184,7 @@ void kernel_main() {
     constexpr uint32_t coalesced_read_bytes = num_coalesced_reads * conv_act_c_read_bytes;
     // the conditional selecting between coalescing and no-colescing must be constexpr to that compiler can optimized the other path away
     // this has shown to be a big perf win
+    static_assert(act_block_h_datums % 2 == 0); // need to be even to read 2 in the body, due to packing of 2 indices in 1 uint32_t word
     if constexpr (coalesce_window_inner_reads and window_inner == num_coalesced_reads) {
         // coalesce reads along weight_size_w
         reader_offset_idx = 0;
@@ -201,11 +204,20 @@ void kernel_main() {
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act);
                 uint32_t reader_offset = act_l1_read_addr + (reader_offsets_ptr[reader_offset_idx] << log_base_2_of_conv_act_size_c_bytes);
                 // #pragma GCC unroll 4 // unroll didn't help, but act_block_h_datums (loop bound) being const does help
-                for (uint32_t bhd = 0; bhd < act_block_h_datums; bhd++) {
+                for (uint32_t bhd = 0; bhd < act_block_h_datums/2; bhd++) {
                     // local read from reader_index + reader_offset;
-                    act_l1_offset = reader_offset + (reader_indices_ptr[reader_idx] << log_base_2_of_conv_act_size_c_bytes);
+                    uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                    uint32_t reader_idx_1 = two_reader_indices & 0xffff;
+                    uint32_t reader_idx_2 = two_reader_indices >> 16;
+
+                    act_l1_offset = reader_offset + (reader_idx_1 << log_base_2_of_conv_act_size_c_bytes);
                     noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
                     l1_write_addr_act += coalesced_read_bytes;
+
+                    act_l1_offset = reader_offset + (reader_idx_2 << log_base_2_of_conv_act_size_c_bytes);
+                    noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
+                    l1_write_addr_act += coalesced_read_bytes;
+
                     reader_idx++;
                 }
                 noc_async_read_barrier();
@@ -218,6 +230,10 @@ void kernel_main() {
         }
 
     } else {
+        // NOTE: This code block expects reader_indices_ptr to be uint32_t (not packed uint16_t)
+        // Inner window dim is usually 3, so reading packed indices is complicated
+        // TODO: We could probably just remove this block is no convs use it
+
         // no coalescing of reads
         reader_offset_idx = 0;
         uint32_t act_l1_offset = 0;
@@ -239,7 +255,7 @@ void kernel_main() {
                     // and if window_inner is const this loop should be removed by the compiler
                     for (uint32_t inner = 0; inner < window_inner; inner++) {
                         // local read from reader_index + reader_offset;
-                        act_l1_offset = act_l1_read_addr + ((reader_indices_ptr[reader_idx] + reader_offsets_ptr[reader_offset_idx + inner]) << log_base_2_of_conv_act_size_c_bytes);
+                        act_l1_offset = act_l1_read_addr + ((packed_reader_indices_ptr[reader_idx] + reader_offsets_ptr[reader_offset_idx + inner]) << log_base_2_of_conv_act_size_c_bytes);
                         noc_async_read_one_packet_with_state<true>(act_l1_offset, l1_write_addr_act);
                         l1_write_addr_act += conv_act_c_read_bytes;
 
