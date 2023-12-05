@@ -336,10 +336,10 @@ void wait_until_cores_done(chip_id_t device_id,
                            std::unordered_set<CoreCoord>& not_done_phys_cores) {
 
     // poll the cores until the set of not done cores is empty
-    int loop_count = 0;
+    int loop_count = 1;
     while (!not_done_phys_cores.empty()) {
         // Print not-done cores
-        if (loop_count % 20 == 0) {
+        if (loop_count % 1000 == 0) {
             string not_done_cores_str = "Not done phys cores: ";
             for (const auto &core : not_done_phys_cores) {
                 not_done_cores_str += (core.str() + " ");
