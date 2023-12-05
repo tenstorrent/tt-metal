@@ -4,13 +4,28 @@ Kernel Debug Print
 Overview
 --------
 
-The device can optionally print to the host terminal.  Device side prints are controlled through API calls; the host
-side is controlled through environment variables.
+The device can optionally print to the host terminal or a log file.  This feature can be useful for printing variables,
+addresses, and Circular Buffer data from kernels running on the device. Device-side prints are controlled through API
+calls; the host-side is controlled through environment variables.
 
 Enabling
 --------
 
-To generate kernel debug prints on the device:
+Kernel debug printing can be enabled and configured using the environment variables shown below.  The first
+environment variable, ``TT_METAL_DPRINT_CORES`` specifies which cores the host-side will read print data from, and
+whether this environment variable is defined determines whether printing is enabled during kernel compilation.
+Note that the core coordinates are currently physical NOC coordinates (not logical); the top left core is (1,1) *not*
+(0,0).
+
+.. code-block::
+
+    export TT_METAL_DPRINT_CORES=1,1     # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all
+    export TT_METAL_DPRINT_CHIPS=0       # optional, comma separated list of chips
+    export TT_METAL_DPRINT_RISCVS=BR     # optional, default is all RISCs.  Use a subset of BR,NC,TR0,TR1,TR2
+    export TT_METAL_DPRINT_FILE=log.txt  # optional, default is to print to the screen
+
+To generate kernel debug prints on the device, include the ``debug/dprint.h`` header and use the APIs defined there.
+And example with the different features available is shown below:
 
 .. code-block::
 
@@ -40,9 +55,27 @@ To generate kernel debug prints on the device:
         DPRINT_UNPACK(DPRINT << "this is the unpack kernel" << ENDL());
         DPRINT_DATA0(DPRINT << "this is the data movement kernel on noc 0" << ENDL());
         DPRINT_DATA1(DPRINT << "this is the data movement kernel on noc 1" << ENDL());
+    }
 
-        // Print a tile slice
-        DPRINT_PACK({ DPRINT  << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL(); });
+The APIs for printing data from Circular Buffers can be found in ``debug/dprint_tile.h``.  These APIs use the
+``SliceRange`` struct to print tile contents with a given sample count, starting index, and stride.  An example of
+how to print data from a CB (in this case, ``CB::c_intermed1``) is shown below.  Note that sampling happens relative
+to the current CB read or write pointer. This means that for printing a tile read from the front of the CB, the
+``DPRINT`` call has to occur between the ``cb_wait_front`` and ``cb_pop_front`` calls. For printing a tile from the
+back of the CB, the ``DPRINT`` call has to occur between the ``cb_reserve_back`` and ``cb_push_back`` calls.
+
+.. code-block::
+
+    #include "debug/dprint.h"  // required in all kernels using DPRINT
+
+    void kernel_main() {
+        // Assuming the tile we want to print from CB::c_intermed1 is from the front the CB, print must happen after
+        // this call. If the tile is from the back of the CB, then print must happen after cb_reserve_back().
+        cb_wait_front(CB::c_intermed1, 1);
+        ...
+
+        // Extract a numpy slice `[0:32:16, 0:32:16]` from tile `0` from `CB::c_intermed1` and print it.
+        DPRINT  << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL();
         // Note that since the MATH core does not have acces to CBs, so this is an invalid print:
         DPRINT_MATH({ DPRINT  << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL(); }); // Invalid
 
@@ -51,19 +84,7 @@ To generate kernel debug prints on the device:
             SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
             DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(0, 0, sr, true, false) << ENDL();
         }
+
+        ...
+        cb_pop_front(CB::c_intermed1, 1);
     }
-
-The ``TSLICE`` macros support printing tile contents with a given sample count, starting index and stride.  The
-first example above extracts a numpy slice ``[0:32:16, 0:32:16]`` from tile ``0`` from ``CB::c_intermed1``.
-
-To display the kernel debug prints on the host:
-
-.. code-block::
-
-    export TT_METAL_DPRINT_CORES=1,1     # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all
-    export TT_METAL_DPRINT_CHIPS=0       # optional, comma separated list of chip
-    export TT_METAL_DPRINT_RISCVS=BR     # optional, default is all RISCs.  Use a subset of BR,NC,TR0,TR1,TR2
-    export TT_METAL_DPRINT_FILE=log.txt  # optional, default is to print to the screen
-
-**NOTE:** the core coordinates are currently physical NOC coordinates (not logical); the top left core is (1,1) *not*
-(0,0)
