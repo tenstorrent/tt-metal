@@ -70,44 +70,43 @@ def torch_bert_encoder(
     attention_mask,
     parameters,
     *,
-    encoder_index,
     head_size,
 ):
     *_, hidden_size = hidden_states.shape
     multi_head_attention_output = torch_multi_head_attention(
         hidden_states,
         attention_mask,
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.query.weight"].T,
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.query.bias"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.key.weight"].T,
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.key.bias"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.value.weight"].T,
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.value.bias"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.output.dense.weight"].T,
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.output.dense.bias"],
+        parameters.attention.self.query.weight,
+        parameters.attention.self.query.bias,
+        parameters.attention.self.key.weight,
+        parameters.attention.self.key.bias,
+        parameters.attention.self.value.weight,
+        parameters.attention.self.value.bias,
+        parameters.attention.output.dense.weight,
+        parameters.attention.output.dense.bias,
         head_size=head_size,
     )
 
     multi_head_attention_add_and_layer_norm_output = F.layer_norm(
         hidden_states + multi_head_attention_output,
         (hidden_size,),
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.output.LayerNorm.weight"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.output.LayerNorm.bias"],
+        parameters.attention.output.LayerNorm.weight,
+        parameters.attention.output.LayerNorm.bias,
     )
 
     feedforward_output = torch_feedforward(
         multi_head_attention_add_and_layer_norm_output,
-        parameters[f"bert.encoder.layer.{encoder_index}.intermediate.dense.weight"].T,
-        parameters[f"bert.encoder.layer.{encoder_index}.intermediate.dense.bias"],
-        parameters[f"bert.encoder.layer.{encoder_index}.output.dense.weight"].T,
-        parameters[f"bert.encoder.layer.{encoder_index}.output.dense.bias"],
+        parameters.intermediate.dense.weight,
+        parameters.intermediate.dense.bias,
+        parameters.output.dense.weight,
+        parameters.output.dense.bias,
     )
 
     feedforward_add_and_layer_norm_output = F.layer_norm(
         multi_head_attention_add_and_layer_norm_output + feedforward_output,
         (hidden_size,),
-        parameters[f"bert.encoder.layer.{encoder_index}.output.LayerNorm.weight"],
-        parameters[f"bert.encoder.layer.{encoder_index}.output.LayerNorm.bias"],
+        parameters.output.LayerNorm.weight,
+        parameters.output.LayerNorm.bias,
     )
 
     return feedforward_add_and_layer_norm_output
@@ -119,28 +118,26 @@ def torch_bert(
     attention_mask,
     parameters,
     *,
-    num_encoders,
     head_size,
 ):
-    word_embeddings = F.embedding(input_ids, parameters["bert.embeddings.word_embeddings.weight"])
-    token_type_embeddings = F.embedding(token_type_ids, parameters["bert.embeddings.token_type_embeddings.weight"])
+    word_embeddings = F.embedding(input_ids, parameters.bert.embeddings.word_embeddings.weight)
+    token_type_embeddings = F.embedding(token_type_ids, parameters.bert.embeddings.token_type_embeddings.weight)
     encoder_input = word_embeddings + token_type_embeddings
 
     *_, hidden_size = encoder_input.shape
     encoder_input = F.layer_norm(
         encoder_input,
         (hidden_size,),
-        parameters["bert.embeddings.LayerNorm.weight"],
-        parameters["bert.embeddings.LayerNorm.bias"],
+        parameters.bert.embeddings.LayerNorm.weight,
+        parameters.bert.embeddings.LayerNorm.bias,
     )
 
     encoder_output = None
-    for encoder_index in range(num_encoders):
+    for encoder_parameters in parameters.bert.encoder.layer:
         encoder_output = torch_bert_encoder(
             encoder_input,
             attention_mask,
-            parameters,
-            encoder_index=encoder_index,
+            encoder_parameters,
             head_size=head_size,
         )
         encoder_input = encoder_output
@@ -153,7 +150,6 @@ def torch_bert_for_question_answering(
     attention_mask,
     parameters,
     *,
-    num_encoders,
     head_size,
 ):
     bert_output = torch_bert(
@@ -161,11 +157,10 @@ def torch_bert_for_question_answering(
         token_type_ids,
         attention_mask,
         parameters,
-        num_encoders=num_encoders,
         head_size=head_size,
     )
 
     qa_outputs = bert_output
-    qa_outputs = qa_outputs @ parameters["qa_outputs.weight"].T
-    qa_outputs = qa_outputs + parameters["qa_outputs.bias"]
+    qa_outputs = qa_outputs @ parameters.qa_outputs.weight
+    qa_outputs = qa_outputs + parameters.qa_outputs.bias
     return qa_outputs

@@ -25,7 +25,6 @@ from models.experimental.functional_bert.reference.torch_functional_bert import 
     torch_bert_for_question_answering,
 )
 from ttnn.model_preprocessing import (
-    ParametersConfig,
     preprocess_model_parameters,
     preprocess_linear_bias,
     preprocess_linear_weight,
@@ -61,11 +60,11 @@ def ttnn_bert_preprocess_inputs(
     return input_ids, token_type_ids, attention_mask
 
 
-def is_to_be_converted(torch_model, full_name):
+def convert_to_ttnn(torch_model, full_name):
     return True
 
 
-def custom_preprocessor(parameters_config, torch_model, full_name, **kwargs):
+def custom_preprocessor(torch_model, name):
     parameters = {}
     if isinstance(torch_model, transformers.models.bert.modeling_bert.BertSelfAttention):
         qkv_weight = torch.cat(
@@ -80,51 +79,49 @@ def custom_preprocessor(parameters_config, torch_model, full_name, **kwargs):
             [torch_model.query.bias, torch_model.key.bias, torch_model.value.bias],
             dim=0,
         )
-        parameters[f"{full_name}fused_qkv.weight"] = preprocess_linear_weight(
-            qkv_weight, dtype=parameters_config.linear_weight_dtype
-        )
-        parameters[f"{full_name}fused_qkv.bias"] = preprocess_linear_bias(
-            qkv_bias, dtype=parameters_config.linear_bias_dtype
-        )
+
+        parameters = {"fused_qkv": {}}
+        parameters["fused_qkv"]["weight"] = preprocess_linear_weight(qkv_weight, dtype=ttnn.bfloat16)
+        parameters["fused_qkv"]["bias"] = preprocess_linear_bias(qkv_bias, dtype=ttnn.bfloat16)
     return parameters
 
 
 def run_bert_question_and_answering_inference(model_name, batch_size, sequence_size, use_optimized_version, device):
     torch.manual_seed(1234)
 
-    torch_model = transformers.BertForQuestionAnswering.from_pretrained(model_name, torchscript=False).eval()
-    config = torch_model.config
+    config = transformers.BertConfig.from_pretrained(model_name)
 
-    num_encoders = config.num_hidden_layers
     head_size = config.hidden_size // config.num_attention_heads
 
     # TODO(arakhmati): re-enable the line below once the issue with ttnn.embedding is fixed
-    # torch_bert_input = torch.randint(0, torch_model.config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
+    # torch_bert_input = torch.randint(0, config.config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
     torch_bert_input = torch.randint(0, 1, (batch_size, sequence_size)).to(torch.int32)
     torch_token_type_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
     torch_attention_mask = torch.zeros(1, sequence_size) if use_optimized_version else None
+
+    torch_parameters = preprocess_model_parameters(
+        f"torch-{model_name}",
+        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
+            model_name, torchscript=False
+        ).eval(),
+        convert_to_ttnn=lambda *_: False,
+    )
 
     torch_output = torch_bert_for_question_answering(
         torch_bert_input,
         torch_token_type_ids,
         torch_attention_mask,
-        parameters=torch_model.state_dict(),
-        num_encoders=num_encoders,
+        parameters=torch_parameters,
         head_size=head_size,
     )
 
     # Run TT Model
-    parameters_config = ParametersConfig(
-        linear_weight_dtype=ttnn.bfloat16,
-        linear_bias_dtype=ttnn.bfloat16,
-        layernorm_parameter_dtype=ttnn.bfloat16,
-    )
     parameters = preprocess_model_parameters(
-        f"{model_name}-{use_optimized_version}",
-        "version_0",
-        parameters_config,
-        initialize_model=lambda: torch_model,
-        is_to_be_converted=is_to_be_converted,
+        f"ttnn-{model_name}-{use_optimized_version}",
+        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
+            model_name, torchscript=False
+        ).eval(),
+        convert_to_ttnn=convert_to_ttnn,
         custom_preprocessor=custom_preprocessor if use_optimized_version else None,
         device=device,
     )
@@ -146,7 +143,6 @@ def run_bert_question_and_answering_inference(model_name, batch_size, sequence_s
         tt_output = bert_for_question_answering(
             *ttnn_bert_inputs,
             parameters=parameters,
-            num_encoders=num_encoders,
             head_size=head_size,
         )
         tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
