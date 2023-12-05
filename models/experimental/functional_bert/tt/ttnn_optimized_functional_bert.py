@@ -110,24 +110,23 @@ def ttnn_optimized_bert_encoder(
     attention_mask,
     parameters,
     *,
-    encoder_index,
     head_size,
 ):
     multi_head_attention_output = ttnn_optimized_multi_head_attention(
         hidden_states,
         attention_mask,
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.fused_qkv.weight"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.fused_qkv.bias"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.output.dense.weight"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.output.dense.bias"],
+        parameters.attention.self.fused_qkv.weight,
+        parameters.attention.self.fused_qkv.bias,
+        parameters.attention.output.dense.weight,
+        parameters.attention.output.dense.bias,
         head_size=head_size,
     )
 
     multi_head_attention_add_and_layer_norm_output = ttnn.experimental.layer_norm(
         hidden_states,
         residual_input=multi_head_attention_output,
-        weight=parameters[f"bert.encoder.layer.{encoder_index}.attention.output.LayerNorm.weight"],
-        bias=parameters[f"bert.encoder.layer.{encoder_index}.attention.output.LayerNorm.bias"],
+        weight=parameters.attention.output.LayerNorm.weight,
+        bias=parameters.attention.output.LayerNorm.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn.deallocate(hidden_states)
@@ -135,17 +134,17 @@ def ttnn_optimized_bert_encoder(
 
     feedforward_output = ttnn_optimized_feedforward(
         multi_head_attention_add_and_layer_norm_output,
-        parameters[f"bert.encoder.layer.{encoder_index}.intermediate.dense.weight"],
-        parameters[f"bert.encoder.layer.{encoder_index}.intermediate.dense.bias"],
-        parameters[f"bert.encoder.layer.{encoder_index}.output.dense.weight"],
-        parameters[f"bert.encoder.layer.{encoder_index}.output.dense.bias"],
+        parameters.intermediate.dense.weight,
+        parameters.intermediate.dense.bias,
+        parameters.output.dense.weight,
+        parameters.output.dense.bias,
     )
 
     feedforward_add_and_layer_norm_output = ttnn.experimental.layer_norm(
         multi_head_attention_add_and_layer_norm_output,
         residual_input=feedforward_output,
-        weight=parameters[f"bert.encoder.layer.{encoder_index}.output.LayerNorm.weight"],
-        bias=parameters[f"bert.encoder.layer.{encoder_index}.output.LayerNorm.bias"],
+        weight=parameters.output.LayerNorm.weight,
+        bias=parameters.output.LayerNorm.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn.deallocate(multi_head_attention_add_and_layer_norm_output)
@@ -160,21 +159,20 @@ def ttnn_optimized_bert(
     attention_mask,
     parameters,
     *,
-    num_encoders,
     head_size,
 ):
     import tt_lib as ttl
 
     word_embeddings = ttnn.embedding(
         input_ids,
-        parameters["bert.embeddings.word_embeddings.weight"],
+        parameters.bert.embeddings.word_embeddings.weight,
         layout=ttnn.TILE_LAYOUT,
     )
     ttnn.deallocate(input_ids)
 
     token_type_embeddings = ttnn.embedding(
         token_type_ids,
-        parameters["bert.embeddings.token_type_embeddings.weight"],
+        parameters.bert.embeddings.token_type_embeddings.weight,
         layout=ttnn.TILE_LAYOUT,
     )
     ttnn.deallocate(token_type_ids)
@@ -185,19 +183,18 @@ def ttnn_optimized_bert(
 
     encoder_input = ttnn.experimental.layer_norm(
         embeddings,
-        weight=parameters[f"bert.embeddings.LayerNorm.weight"],
-        bias=parameters[f"bert.embeddings.LayerNorm.bias"],
+        weight=parameters.bert.embeddings.LayerNorm.weight,
+        bias=parameters.bert.embeddings.LayerNorm.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn.deallocate(embeddings)
 
     encoder_output = None
-    for encoder_index in range(num_encoders):
+    for encoder_parameters in parameters.bert.encoder.layer:
         encoder_output = ttnn_optimized_bert_encoder(
             encoder_input,
             attention_mask,
-            parameters,
-            encoder_index=encoder_index,
+            encoder_parameters,
             head_size=head_size,
         )
         encoder_output = ttnn.reallocate(encoder_output)
@@ -212,7 +209,6 @@ def ttnn_optimized_bert_for_question_answering(
     attention_mask,
     parameters,
     *,
-    num_encoders,
     head_size,
 ):
     bert_output = ttnn_optimized_bert(
@@ -220,14 +216,13 @@ def ttnn_optimized_bert_for_question_answering(
         token_type_ids,
         attention_mask,
         parameters,
-        num_encoders=num_encoders,
         head_size=head_size,
     )
 
     qa_outputs = ttnn.linear(
         bert_output,
-        parameters["qa_outputs.weight"],
-        bias=parameters["qa_outputs.bias"],
+        parameters.qa_outputs.weight,
+        bias=parameters.qa_outputs.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 

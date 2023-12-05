@@ -75,41 +75,40 @@ def ttnn_bert_encoder(
     attention_mask,
     parameters,
     *,
-    encoder_index,
     head_size,
 ):
     multi_head_attention_output = ttnn_multi_head_attention(
         hidden_states,
         attention_mask,
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.query.weight"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.query.bias"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.key.weight"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.key.bias"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.value.weight"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.self.value.bias"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.output.dense.weight"],
-        parameters[f"bert.encoder.layer.{encoder_index}.attention.output.dense.bias"],
+        parameters.attention.self.query.weight,
+        parameters.attention.self.query.bias,
+        parameters.attention.self.key.weight,
+        parameters.attention.self.key.bias,
+        parameters.attention.self.value.weight,
+        parameters.attention.self.value.bias,
+        parameters.attention.output.dense.weight,
+        parameters.attention.output.dense.bias,
         head_size=head_size,
     )
 
     hidden_states = ttnn.experimental.layer_norm(
         hidden_states + multi_head_attention_output,
-        weight=parameters[f"bert.encoder.layer.{encoder_index}.attention.output.LayerNorm.weight"],
-        bias=parameters[f"bert.encoder.layer.{encoder_index}.attention.output.LayerNorm.bias"],
+        weight=parameters.attention.output.LayerNorm.weight,
+        bias=parameters.attention.output.LayerNorm.bias,
     )
 
     feedforward_output = ttnn_feedforward(
         hidden_states,
-        parameters[f"bert.encoder.layer.{encoder_index}.intermediate.dense.weight"],
-        parameters[f"bert.encoder.layer.{encoder_index}.intermediate.dense.bias"],
-        parameters[f"bert.encoder.layer.{encoder_index}.output.dense.weight"],
-        parameters[f"bert.encoder.layer.{encoder_index}.output.dense.bias"],
+        parameters.intermediate.dense.weight,
+        parameters.intermediate.dense.bias,
+        parameters.output.dense.weight,
+        parameters.output.dense.bias,
     )
 
     hidden_states = ttnn.experimental.layer_norm(
         hidden_states + feedforward_output,
-        weight=parameters[f"bert.encoder.layer.{encoder_index}.output.LayerNorm.weight"],
-        bias=parameters[f"bert.encoder.layer.{encoder_index}.output.LayerNorm.bias"],
+        weight=parameters.output.LayerNorm.weight,
+        bias=parameters.output.LayerNorm.bias,
     )
 
     return hidden_states
@@ -121,30 +120,28 @@ def ttnn_bert(
     attention_mask,
     parameters,
     *,
-    num_encoders,
     head_size,
 ):
     word_embeddings = ttnn.embedding(
-        input_ids, parameters["bert.embeddings.word_embeddings.weight"], layout=ttnn.TILE_LAYOUT
+        input_ids, parameters.bert.embeddings.word_embeddings.weight, layout=ttnn.TILE_LAYOUT
     )
     token_type_embeddings = ttnn.embedding(
-        token_type_ids, parameters["bert.embeddings.token_type_embeddings.weight"], layout=ttnn.TILE_LAYOUT
+        token_type_ids, parameters.bert.embeddings.token_type_embeddings.weight, layout=ttnn.TILE_LAYOUT
     )
     encoder_input = word_embeddings + token_type_embeddings
 
     encoder_input = ttnn.experimental.layer_norm(
         encoder_input,
-        weight=parameters[f"bert.embeddings.LayerNorm.weight"],
-        bias=parameters[f"bert.embeddings.LayerNorm.bias"],
+        weight=parameters.bert.embeddings.LayerNorm.weight,
+        bias=parameters.bert.embeddings.LayerNorm.bias,
     )
 
     encoder_output = None
-    for encoder_index in range(num_encoders):
+    for encoder_parameters in parameters.bert.encoder.layer:
         encoder_output = ttnn_bert_encoder(
             encoder_input,
             attention_mask,
-            parameters,
-            encoder_index=encoder_index,
+            encoder_parameters,
             head_size=head_size,
         )
         encoder_input = encoder_output
@@ -157,7 +154,6 @@ def ttnn_bert_for_question_answering(
     attention_mask,
     parameters,
     *,
-    num_encoders,
     head_size,
 ):
     bert_output = ttnn_bert(
@@ -165,12 +161,11 @@ def ttnn_bert_for_question_answering(
         token_type_ids,
         attention_mask,
         parameters,
-        num_encoders=num_encoders,
         head_size=head_size,
     )
 
     qa_outputs = bert_output
-    qa_outputs = qa_outputs @ parameters["qa_outputs.weight"]
-    qa_outputs = qa_outputs + parameters["qa_outputs.bias"]
+    qa_outputs = qa_outputs @ parameters.qa_outputs.weight
+    qa_outputs = qa_outputs + parameters.qa_outputs.bias
 
     return qa_outputs

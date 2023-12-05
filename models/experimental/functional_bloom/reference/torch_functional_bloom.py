@@ -10,16 +10,7 @@ from typing import Tuple
 
 import torch.utils.checkpoint
 from torch.nn import functional as F
-
-
-def transpose(tensor):
-    ndim = len(tensor.shape)
-    if ndim < 2:
-        return tensor
-    else:
-        dims = tuple(range(ndim - 2)) + (ndim - 1, ndim - 2)
-        new_tensor = torch.permute(tensor, dims=dims)
-        return new_tensor
+import transformers
 
 
 # From transformers/models/bloom/modeling_bloom.py
@@ -196,34 +187,34 @@ def mlp(
     return hidden_states
 
 
-def bloom(input_ids, alibi, causal_mask, parameters, num_heads, hidden_layers):
-    inputs_embeds = F.embedding(input_ids, parameters["transformer.word_embeddings.weight"])
+def bloom(input_ids, alibi, causal_mask, parameters, num_heads):
+    inputs_embeds = F.embedding(input_ids, parameters.transformer.word_embeddings.weight)
     hidden_size = inputs_embeds.shape[2]
     head_size = hidden_size // num_heads
 
     hidden_states = F.layer_norm(
         inputs_embeds,
         (hidden_size,),
-        parameters[f"transformer.word_embeddings_layernorm.weight"],
-        parameters[f"transformer.word_embeddings_layernorm.bias"],
+        parameters.transformer.word_embeddings_layernorm.weight,
+        parameters.transformer.word_embeddings_layernorm.bias,
     )
 
-    for i in range(0, hidden_layers):
+    for layer_parameters in parameters.transformer.h:
         normalized_hidden_states = F.layer_norm(
             hidden_states,
             (hidden_size,),
-            parameters[f"transformer.h.{i}.input_layernorm.weight"],
-            parameters[f"transformer.h.{i}.input_layernorm.bias"],
+            layer_parameters.input_layernorm.weight,
+            layer_parameters.input_layernorm.bias,
         )
 
         attention_output = multi_head_attention(
             normalized_hidden_states,
             alibi,
             causal_mask,
-            transpose(parameters[f"transformer.h.{i}.self_attention.query_key_value.weight"]),
-            parameters[f"transformer.h.{i}.self_attention.query_key_value.bias"],
-            transpose(parameters[f"transformer.h.{i}.self_attention.dense.weight"]),
-            parameters[f"transformer.h.{i}.self_attention.dense.bias"],
+            layer_parameters.self_attention.query_key_value.weight,
+            layer_parameters.self_attention.query_key_value.bias,
+            layer_parameters.self_attention.dense.weight,
+            layer_parameters.self_attention.dense.bias,
             head_size=head_size,
         )
         attention_output += hidden_states
@@ -231,16 +222,16 @@ def bloom(input_ids, alibi, causal_mask, parameters, num_heads, hidden_layers):
         normalized_attention_output = F.layer_norm(
             attention_output,
             (hidden_size,),
-            parameters[f"transformer.h.{i}.post_attention_layernorm.weight"],
-            parameters[f"transformer.h.{i}.post_attention_layernorm.bias"],
+            layer_parameters.post_attention_layernorm.weight,
+            layer_parameters.post_attention_layernorm.bias,
         )
 
         mlp_output = mlp(
             normalized_attention_output,
-            transpose(parameters[f"transformer.h.{i}.mlp.dense_h_to_4h.weight"]),
-            parameters[f"transformer.h.{i}.mlp.dense_h_to_4h.bias"],
-            transpose(parameters[f"transformer.h.{i}.mlp.dense_4h_to_h.weight"]),
-            parameters[f"transformer.h.{i}.mlp.dense_4h_to_h.bias"],
+            layer_parameters.mlp.dense_h_to_4h.weight,
+            layer_parameters.mlp.dense_h_to_4h.bias,
+            layer_parameters.mlp.dense_4h_to_h.weight,
+            layer_parameters.mlp.dense_4h_to_h.bias,
         )
         mlp_output += attention_output
         hidden_states = mlp_output
@@ -248,15 +239,15 @@ def bloom(input_ids, alibi, causal_mask, parameters, num_heads, hidden_layers):
     hidden_states = F.layer_norm(
         hidden_states,
         (hidden_size,),
-        parameters[f"transformer.ln_f.weight"],
-        parameters[f"transformer.ln_f.bias"],
+        parameters.transformer.ln_f.weight,
+        parameters.transformer.ln_f.bias,
     )
     return hidden_states
 
 
-def bloom_for_causal_lm(input_ids, alibi, causal_mask, parameters, num_heads, hidden_layers):
+def bloom_for_causal_lm(input_ids, alibi, causal_mask, parameters, num_heads):
     start = time.time()
-    hidden_states = bloom(input_ids, alibi, causal_mask, parameters, num_heads, hidden_layers)
+    hidden_states = bloom(input_ids, alibi, causal_mask, parameters, num_heads)
     end = time.time()
     batch_size, _ = input_ids.shape
     duration = end - start
@@ -264,7 +255,7 @@ def bloom_for_causal_lm(input_ids, alibi, causal_mask, parameters, num_heads, hi
     logger.info(f"Samples per second: {1 / duration * batch_size}")
 
     # return logits
-    return hidden_states @ transpose(parameters[f"lm_head.weight"])
+    return hidden_states @ parameters.lm_head.weight
 
 
 def preprocess_inputs(
@@ -295,36 +286,40 @@ def preprocess_inputs(
     return padded_input_ids, alibi, causal_mask
 
 
-def preprocess_parameters(parameters, num_heads):
-    preprocessed_parameters = {}
-    for name, parameter in parameters.items():
-        # Store QKV one after another instead of interleaving heads
-        if "query_key_value.weight" in name:
-            three_times_hidden_size, _ = parameter.shape
-            hidden_size = three_times_hidden_size // 3
-            head_size = hidden_size // num_heads
+def custom_preprocessor(torch_model, name):
+    parameters = {}
+    if isinstance(torch_model, transformers.models.bloom.modeling_bloom.BloomAttention):
+        weight = torch_model.query_key_value.weight
+        bias = torch_model.query_key_value.bias
 
-            parameter = parameter.view(num_heads, 3, head_size, hidden_size)
-            query, key, value = parameter[:, 0], parameter[:, 1], parameter[:, 2]
-            query = torch.reshape(query, (hidden_size, hidden_size))
-            key = torch.reshape(key, (hidden_size, hidden_size))
-            value = torch.reshape(value, (hidden_size, hidden_size))
-            preprocessed_parameter = torch.cat([query, key, value], dim=0)
-            preprocessed_parameters[name] = preprocessed_parameter
+        assert weight.shape[-1] == 1024
+        num_heads = 16
+
+        three_times_hidden_size, _ = weight.shape
+        hidden_size = three_times_hidden_size // 3
+        head_size = hidden_size // num_heads
 
         # Store QKV one after another instead of interleaving heads
-        elif "query_key_value.bias" in name:
-            (three_times_hidden_size,) = parameter.shape
-            hidden_size = three_times_hidden_size // 3
-            head_size = hidden_size // num_heads
+        weight = weight.view(num_heads, 3, head_size, hidden_size)
+        query, key, value = weight[:, 0], weight[:, 1], weight[:, 2]
+        query = torch.reshape(query, (hidden_size, hidden_size))
+        key = torch.reshape(key, (hidden_size, hidden_size))
+        value = torch.reshape(value, (hidden_size, hidden_size))
+        preprocessed_weight = torch.cat([query, key, value], dim=0)
 
-            parameter = parameter.view(num_heads, 3, head_size)
-            query, key, value = parameter[:, 0], parameter[:, 1], parameter[:, 2]
-            query = torch.reshape(query, (hidden_size,))
-            key = torch.reshape(key, (hidden_size,))
-            value = torch.reshape(value, (hidden_size,))
-            preprocessed_parameter = torch.cat([query, key, value], dim=0)
-            preprocessed_parameters[name] = preprocessed_parameter
-        else:
-            preprocessed_parameters[name] = parameter
-    return preprocessed_parameters
+        # Store QKV one after another instead of interleaving heads
+        bias = bias.view(num_heads, 3, head_size)
+        query, key, value = bias[:, 0], bias[:, 1], bias[:, 2]
+        query = torch.reshape(query, (hidden_size,))
+        key = torch.reshape(key, (hidden_size,))
+        value = torch.reshape(value, (hidden_size,))
+        preprocessed_bias = torch.cat([query, key, value], dim=0)
+
+        parameters = {"query_key_value": {}, "dense": {}}
+
+        parameters["query_key_value"]["weight"] = preprocessed_weight.T.contiguous()
+        parameters["query_key_value"]["bias"] = preprocessed_bias
+
+        parameters["dense"]["weight"] = torch_model.dense.weight.T.contiguous()
+        parameters["dense"]["bias"] = torch_model.dense.bias
+    return parameters

@@ -198,11 +198,10 @@ def bloom(
     causal_mask,
     parameters,
     num_heads,
-    hidden_layers,
 ):
     inputs_embeds = ttnn.embedding(
         input_ids,
-        parameters["transformer.word_embeddings.weight"],
+        parameters.transformer.word_embeddings.weight,
         layout=ttnn.TILE_LAYOUT,
     )
     hidden_size = inputs_embeds.shape[-1]
@@ -210,41 +209,41 @@ def bloom(
 
     hidden_states = ttnn.experimental.layer_norm(
         inputs_embeds,
-        weight=parameters[f"transformer.word_embeddings_layernorm.weight"],
-        bias=parameters[f"transformer.word_embeddings_layernorm.bias"],
+        weight=parameters.transformer.word_embeddings_layernorm.weight,
+        bias=parameters.transformer.word_embeddings_layernorm.bias,
     )
 
-    for i in range(0, hidden_layers):
+    for layer_parameters in parameters.transformer.h:
         normalized_hidden_states = ttnn.experimental.layer_norm(
             hidden_states,
-            weight=parameters[f"transformer.h.{i}.input_layernorm.weight"],
-            bias=parameters[f"transformer.h.{i}.input_layernorm.bias"],
+            weight=layer_parameters.input_layernorm.weight,
+            bias=layer_parameters.input_layernorm.bias,
         )
 
         attention_output = multi_head_attention(
             normalized_hidden_states,
             alibi,
             causal_mask,
-            parameters[f"transformer.h.{i}.self_attention.query_key_value.weight"],
-            parameters[f"transformer.h.{i}.self_attention.query_key_value.bias"],
-            parameters[f"transformer.h.{i}.self_attention.dense.weight"],
-            parameters[f"transformer.h.{i}.self_attention.dense.bias"],
+            layer_parameters.self_attention.query_key_value.weight,
+            layer_parameters.self_attention.query_key_value.bias,
+            layer_parameters.self_attention.dense.weight,
+            layer_parameters.self_attention.dense.bias,
             head_size=head_size,
         )
         attention_output = attention_output + hidden_states
 
         normalized_attention_output = ttnn.experimental.layer_norm(
             attention_output,
-            weight=parameters[f"transformer.h.{i}.post_attention_layernorm.weight"],
-            bias=parameters[f"transformer.h.{i}.post_attention_layernorm.bias"],
+            weight=layer_parameters.post_attention_layernorm.weight,
+            bias=layer_parameters.post_attention_layernorm.bias,
         )
 
         mlp_output = mlp(
             normalized_attention_output,
-            parameters[f"transformer.h.{i}.mlp.dense_h_to_4h.weight"],
-            parameters[f"transformer.h.{i}.mlp.dense_h_to_4h.bias"],
-            parameters[f"transformer.h.{i}.mlp.dense_4h_to_h.weight"],
-            parameters[f"transformer.h.{i}.mlp.dense_4h_to_h.bias"],
+            layer_parameters.mlp.dense_h_to_4h.weight,
+            layer_parameters.mlp.dense_h_to_4h.bias,
+            layer_parameters.mlp.dense_4h_to_h.weight,
+            layer_parameters.mlp.dense_4h_to_h.bias,
         )
         mlp_output = mlp_output + attention_output
 
@@ -252,27 +251,27 @@ def bloom(
 
     hidden_states = ttnn.experimental.layer_norm(
         hidden_states,
-        weight=parameters[f"transformer.ln_f.weight"],
-        bias=parameters[f"transformer.ln_f.bias"],
+        weight=parameters.transformer.ln_f.weight,
+        bias=parameters.transformer.ln_f.bias,
     )
     return hidden_states
 
 
-def bloom_for_causal_lm(input_ids, alibi, causal_mask, parameters, num_heads, hidden_layers):
-    hidden_states = bloom(input_ids, alibi, causal_mask, parameters, num_heads, hidden_layers)
+def bloom_for_causal_lm(input_ids, alibi, causal_mask, parameters, num_heads):
+    hidden_states = bloom(input_ids, alibi, causal_mask, parameters, num_heads)
 
     # Unfortuntely we do not have the ability to handle large tensors yet. So running final matmul ising torch is a workaround.
     hidden_states = ttnn.from_device(hidden_states)
     hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
     hidden_states = ttnn.to_torch(hidden_states).to(torch.float32)
-    output = hidden_states @ parameters[f"lm_head.weight"]
+    output = hidden_states @ parameters.lm_head.weight
 
     return output
 
 
-def bloom_for_question_answering(input_ids, alibi, causal_mask, parameters, num_heads, hidden_layers):
-    hidden_states = bloom(input_ids, alibi, causal_mask, parameters, num_heads, hidden_layers)
-    hidden_states = ttnn.linear(hidden_states, parameters[f"qa_outputs.weight"], bias=parameters[f"qa_outputs.bias"])
+def bloom_for_question_answering(input_ids, alibi, causal_mask, parameters, num_heads):
+    hidden_states = bloom(input_ids, alibi, causal_mask, parameters, num_heads)
+    hidden_states = ttnn.linear(hidden_states, parameters.qa_outputs.weight, bias=parameters.qa_outputs.bias)
     return hidden_states
 
 
@@ -315,7 +314,7 @@ def preprocess_inputs(
     return padded_input_ids, alibi, causal_mask
 
 
-def custom_preprocessor(parameters_config, torch_model, full_name, **kwargs):
+def custom_preprocessor(torch_model, name):
     parameters = {}
     if isinstance(torch_model, transformers.models.bloom.modeling_bloom.BloomAttention):
         weight = torch_model.query_key_value.weight
@@ -344,17 +343,11 @@ def custom_preprocessor(parameters_config, torch_model, full_name, **kwargs):
         value = torch.reshape(value, (hidden_size,))
         preprocessed_bias = torch.cat([query, key, value], dim=0)
 
-        parameters[f"{full_name}query_key_value.weight"] = preprocess_linear_weight(
-            preprocessed_weight, dtype=parameters_config.linear_weight_dtype
-        )
-        parameters[f"{full_name}query_key_value.bias"] = preprocess_linear_bias(
-            preprocessed_bias, dtype=parameters_config.linear_bias_dtype
-        )
+        parameters = {"query_key_value": {}, "dense": {}}
 
-        parameters[f"{full_name}dense.weight"] = preprocess_linear_weight(
-            torch_model.dense.weight, dtype=parameters_config.linear_weight_dtype
-        )
-        parameters[f"{full_name}dense.bias"] = preprocess_linear_bias(
-            torch_model.dense.bias, dtype=parameters_config.linear_bias_dtype
-        )
+        parameters["query_key_value"]["weight"] = preprocess_linear_weight(preprocessed_weight, dtype=ttnn.bfloat16)
+        parameters["query_key_value"]["bias"] = preprocess_linear_bias(preprocessed_bias, dtype=ttnn.bfloat16)
+
+        parameters["dense"]["weight"] = preprocess_linear_weight(torch_model.dense.weight, dtype=ttnn.bfloat16)
+        parameters["dense"]["bias"] = preprocess_linear_bias(torch_model.dense.bias, dtype=ttnn.bfloat16)
     return parameters

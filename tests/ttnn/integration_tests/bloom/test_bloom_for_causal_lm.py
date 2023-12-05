@@ -13,13 +13,10 @@ from models.experimental.functional_bloom.tt import ttnn_optimized_functional_bl
 from models.utility_functions import skip_for_wormhole_b0
 
 import ttnn
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-    ParametersConfig,
-)
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 
-def generate_next_token(model, input_ids, parameters, num_heads, hidden_layers, logits_processor, max_length, **kwargs):
+def generate_next_token(model, input_ids, parameters, num_heads, logits_processor, max_length, **kwargs):
     num_tokens = input_ids.shape[-1]
     padded_input_ids, alibi, causal_mask = model.preprocess_inputs(
         input_ids=input_ids,
@@ -29,7 +26,7 @@ def generate_next_token(model, input_ids, parameters, num_heads, hidden_layers, 
         **kwargs,
     )
 
-    logits = model.bloom_for_causal_lm(padded_input_ids, alibi, causal_mask, parameters, num_heads, hidden_layers)
+    logits = model.bloom_for_causal_lm(padded_input_ids, alibi, causal_mask, parameters, num_heads)
     next_token_logits = logits[:, num_tokens - 1, :]  # Get the logits for the last token
     processed_logits = logits_processor(input_ids, next_token_logits)
     next_token = torch.argmax(processed_logits, dim=-1).unsqueeze(-1)
@@ -43,7 +40,6 @@ def generate_text(
     tokenizer,
     logits_processor,
     num_heads,
-    hidden_layers,
     num_tokens_to_decode,
     max_length=384,
     **kwargs,
@@ -56,7 +52,6 @@ def generate_text(
             input_ids,
             parameters,
             num_heads,
-            hidden_layers,
             logits_processor,
             max_length,
             **kwargs,
@@ -77,16 +72,19 @@ def test_torch_bloom_for_causal_lm():
     model_name = "bigscience/bloom-560m"
     config = BloomConfig.from_pretrained(model_name)
     tokenizer = BloomTokenizerFast.from_pretrained(model_name)
-    model = BloomForCausalLM.from_pretrained(model_name).eval()
 
     input_text = "Hello, my dog is cute"
     expected_generated_text = "Hello, my dog is cute. He is a little shy, but he loves"
 
     # Initialize logits processor based on the model's configuration
     num_heads = config.n_head
-    hidden_layers = config.n_layer
 
-    parameters = torch_functional_bloom.preprocess_parameters(model.state_dict(), num_heads)
+    parameters = preprocess_model_parameters(
+        f"torch-functional-bloom-for-causal-lm",
+        initialize_model=lambda: BloomForCausalLM.from_pretrained(model_name).eval(),
+        custom_preprocessor=torch_functional_bloom.custom_preprocessor,
+        convert_to_ttnn=lambda *_: False,
+    )
 
     input_ids = tokenizer.encode(input_text, return_tensors="pt")
     logits_processor = generation_utils.get_logits_processor(input_ids, config)
@@ -98,7 +96,6 @@ def test_torch_bloom_for_causal_lm():
         tokenizer,
         logits_processor,
         num_heads,
-        hidden_layers,
         num_tokens_to_decode=10,
     )
     assert expected_generated_text == generated_text
@@ -109,28 +106,19 @@ def test_ttnn_bloom_for_causal_lm(device, batch_size=8):
     model_name = "bigscience/bloom-560m"
     config = BloomConfig.from_pretrained(model_name)
     tokenizer = BloomTokenizerFast.from_pretrained(model_name)
-    model = BloomForCausalLM.from_pretrained(model_name).eval()
 
     input_text = "Hello, my dog is cute"
     expected_generated_text = "Hello, my dog is cute and sweet. He loves to play with me and"
 
     num_heads = config.n_head
-    hidden_layers = config.n_layer
 
-    parameters_config = ParametersConfig(
-        linear_weight_dtype=ttnn.bfloat16,
-        linear_bias_dtype=ttnn.bfloat16,
-        layernorm_parameter_dtype=ttnn.bfloat16,
-    )
     parameters = preprocess_model_parameters(
         f"ttnn-functional-bloom-for-causal-lm",
-        "version_0",
-        parameters_config,
-        initialize_model=lambda: model,
+        initialize_model=lambda: BloomForCausalLM.from_pretrained(model_name).eval(),
         device=device,
         custom_preprocessor=ttnn_optimized_functional_bloom.custom_preprocessor,
+        convert_to_ttnn=lambda model, name: name != "lm_head",
     )
-    parameters[f"lm_head.weight"] = model.state_dict()[f"lm_head.weight"].T.to(torch.float32)
 
     # Initialize logits processor based on the model's configuration
     input_ids = tokenizer.encode(input_text, return_tensors="pt")
@@ -144,7 +132,6 @@ def test_ttnn_bloom_for_causal_lm(device, batch_size=8):
         tokenizer,
         logits_processor,
         num_heads,
-        hidden_layers,
         num_tokens_to_decode=10,
         device=device,
     )

@@ -15,10 +15,7 @@ from models.utility_functions import enable_persistent_kernel_cache, disable_per
 from models.utility_functions import skip_for_wormhole_b0
 
 import ttnn
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-    ParametersConfig,
-)
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -34,7 +31,6 @@ def test_pcc_of_bloom_for_question_answering(device, use_program_cache, ttnn_mod
     torch_model = BloomForQuestionAnswering.from_pretrained(model_name).eval()
 
     num_heads = config.n_head
-    hidden_layers = config.n_layer
 
     question = "What is my name?"
     context = "My name is John."
@@ -44,15 +40,8 @@ def test_pcc_of_bloom_for_question_answering(device, use_program_cache, ttnn_mod
     torch_start_logits = torch_output.start_logits
     torch_end_logits = torch_output.end_logits
 
-    parameters_config = ParametersConfig(
-        linear_weight_dtype=ttnn.bfloat16,
-        linear_bias_dtype=ttnn.bfloat16,
-        layernorm_parameter_dtype=ttnn.bfloat16,
-    )
     parameters = preprocess_model_parameters(
         f"ttnn-functional-bloom-for-question-answering",
-        "version_0",
-        parameters_config,
         initialize_model=lambda: torch_model,
         device=device,
         custom_preprocessor=ttnn_model.custom_preprocessor,
@@ -70,9 +59,7 @@ def test_pcc_of_bloom_for_question_answering(device, use_program_cache, ttnn_mod
     )
 
     # Run twice to measure the time with and without the program cache
-    tt_output = ttnn_model.bloom_for_question_answering(
-        input_ids, alibi, causal_mask, parameters, num_heads, hidden_layers
-    )
+    tt_output = ttnn_model.bloom_for_question_answering(input_ids, alibi, causal_mask, parameters, num_heads)
 
     tt_output = ttnn.from_device(tt_output)
     tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
@@ -107,21 +94,13 @@ def test_performance_of_bloom_for_question_answering(
     tokenizer = BloomTokenizerFast.from_pretrained(model_name)
 
     num_heads = config.n_head
-    hidden_layers = config.n_layer
 
     question = "What is my name?"
     context = "My name is John."
     inputs = tokenizer.encode_plus(question, context, return_tensors="pt")
 
-    parameters_config = ParametersConfig(
-        linear_weight_dtype=ttnn.bfloat16,
-        linear_bias_dtype=ttnn.bfloat16,
-        layernorm_parameter_dtype=ttnn.bfloat16,
-    )
     parameters = preprocess_model_parameters(
         "ttnn-functional-bloom-for-question-answering",
-        "version_0",
-        parameters_config,
         initialize_model=lambda: BloomForQuestionAnswering.from_pretrained(model_name).eval(),
         device=device,
         custom_preprocessor=ttnn_model.custom_preprocessor,
@@ -141,9 +120,7 @@ def test_performance_of_bloom_for_question_answering(
     # Run twice to measure the time with and without the program cache
     for _ in range(2):
         start = time.time()
-        tt_output = ttnn_model.bloom_for_question_answering(
-            input_ids, alibi, causal_mask, parameters, num_heads, hidden_layers
-        )
+        tt_output = ttnn_model.bloom_for_question_answering(input_ids, alibi, causal_mask, parameters, num_heads)
         tt_output = ttnn.from_device(tt_output)
         end = time.time()
 
