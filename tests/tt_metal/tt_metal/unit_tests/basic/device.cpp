@@ -110,7 +110,7 @@ bool load_all_blank_kernels(tt_metal::Device* device) {
 
 TEST_F(BasicFixture, MultiDeviceInitializeAndTeardown) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
-    const size_t num_devices = tt::tt_metal::Device::detect_num_available_devices();
+    const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (is_multi_device_gs_machine(arch, num_devices)) {
         GTEST_SKIP();
     }
@@ -129,7 +129,7 @@ TEST_F(BasicFixture, MultiDeviceInitializeAndTeardown) {
 }
 TEST_F(BasicFixture, MultiDeviceLoadBlankKernels) {
     auto arch = tt::get_arch_from_string(get_env_arch_name());
-    const size_t num_devices = tt::tt_metal::Device::detect_num_available_devices();
+    const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (is_multi_device_gs_machine(arch, num_devices)) {
         GTEST_SKIP();
     }

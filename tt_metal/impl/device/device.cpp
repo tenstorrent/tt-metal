@@ -57,22 +57,6 @@ Device::Device(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) 
     this->initialize(l1_bank_remap);
 }
 
-size_t Device::detect_num_available_devices() {
-#ifdef TT_METAL_VERSIM_DISABLED
-    return tt::Cluster::instance().number_of_devices();
-#else
-    return 1;
-#endif
-}
-
-size_t Device::detect_num_pci_devices() {
-#ifdef TT_METAL_VERSIM_DISABLED
-    return tt::Cluster::instance().number_of_pci_devices();
-#else
-    return 1;
-#endif
-}
-
 void Device::initialize_cluster() {
     ZoneScoped;
     this->clear_l1_state();

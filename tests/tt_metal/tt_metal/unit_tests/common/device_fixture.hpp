@@ -24,7 +24,7 @@ class DeviceFixture : public ::testing::Test {
         }
         arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
 
-        num_devices_ = tt::tt_metal::Device::detect_num_available_devices();
+        num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (is_multi_device_gs_machine(arch_, num_devices_)) {
             GTEST_SKIP();
         }

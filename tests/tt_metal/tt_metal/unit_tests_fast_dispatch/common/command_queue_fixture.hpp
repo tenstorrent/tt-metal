@@ -53,8 +53,8 @@ protected:
         // so skip before creating the device.
         // TODO: remove this once N300 DPrint is working.
         auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-        auto num_devices = tt::tt_metal::Device::detect_num_available_devices();
-        auto num_pci_devices = tt::tt_metal::Device::detect_num_pci_devices();
+        auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+        auto num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
         if (arch == tt::ARCH::WORMHOLE_B0 and
             num_devices == 2 and
             num_pci_devices == 1) {

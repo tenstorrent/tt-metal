@@ -45,7 +45,7 @@ namespace unit_tests::basic::soc_desc {
 
 // This test ensures that no logical core maps to a harvested row
 TEST_F(BasicFixture, ValidateLogicalToPhysicalCoreCoordHostMapping) {
-    size_t num_devices = tt_metal::Device::detect_num_available_devices();
+    size_t num_devices = tt_metal::GetNumAvailableDevices();
     ASSERT_TRUE(num_devices > 0);
     tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
     num_devices = (arch == tt::ARCH::GRAYSKULL) ? 1 : num_devices;

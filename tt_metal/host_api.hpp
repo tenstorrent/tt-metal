@@ -38,13 +38,27 @@ class CircularBuffer;
 // ==================================================
 
 /**
+ * Returns number of Tenstorrent devices that can be targeted
+ *
+ * Return value: size_t
+ */
+size_t GetNumAvailableDevices();
+
+/**
+ * Returns number of Tenstorrent devices that are connected to host via PCIe and can be targeted
+ *
+ * Return value: size_t
+ */
+size_t GetNumPCIeDevices();
+
+/**
  * Instantiates a device object.
  *
  * Return value: Device *
  *
  * | Argument       | Description                                                      | Data type       | Valid range                                         | required |
  * |----------------|------------------------------------------------------------------|-----------------|-----------------------------------------------------|----------|
- * | device_id      | ID of device to target                                           | chip_id_t (int) | 0 to (Device::detect_num_available_devices - 1)     | Yes      |
+ * | device_id      | ID of device to target                                           | chip_id_t (int) | 0 to (GetNumAvailableDevices - 1)     | Yes      |
  * */
 Device *CreateDevice(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap = {});
 

@@ -330,6 +330,22 @@ namespace detail {
     }
 }
 
+size_t GetNumAvailableDevices() {
+#ifdef TT_METAL_VERSIM_DISABLED
+    return tt::Cluster::instance().number_of_devices();
+#else
+    return 1;
+#endif
+}
+
+size_t GetNumPCIeDevices() {
+#ifdef TT_METAL_VERSIM_DISABLED
+    return tt::Cluster::instance().number_of_pci_devices();
+#else
+    return 1;
+#endif
+}
+
 Device *CreateDevice(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) {
     Device * dev = new Device(device_id, l1_bank_remap);
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
