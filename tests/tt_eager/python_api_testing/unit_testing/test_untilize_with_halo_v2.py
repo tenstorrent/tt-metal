@@ -141,7 +141,7 @@ def plot_diff(vals, fid, nsticks, stick_len):
             98,
             (12, 9),
             False,
-        ),  # first conv b16 - 98 cores for height slicing
+        ),  # first conv b20 - 98 cores for height slicing
         (
             (64, 64, 3, 3, 1, 1, 1, 1, 1, 1),
             20,
