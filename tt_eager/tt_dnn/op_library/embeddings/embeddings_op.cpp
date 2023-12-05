@@ -154,9 +154,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
         program,
         "tt_eager/tt_dnn/op_library/embeddings/kernels/dataflow/embeddings_tilize.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
+        tt_metal::ReaderDataMovementConfig{
             .compile_args = embedding_compile_time_args,
             .defines = embedding_defines});
 
@@ -191,9 +189,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+        tt_metal::WriterDataMovementConfig{
             .compile_args = writer_compile_time_args});
 
     uint32_t input_offset = 0;
@@ -394,9 +390,7 @@ operation::ProgramWithCallbacks embeddings_rm(
         program,
         "tt_eager/tt_dnn/op_library/embeddings/kernels/dataflow/embeddings.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
+        tt_metal::ReaderDataMovementConfig{
             .compile_args = embedding_compile_time_args,
             .defines = embedding_defines});
 
@@ -413,10 +407,7 @@ operation::ProgramWithCallbacks embeddings_rm(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
     uint32_t input_offset = 0;
     uint32_t weight_offset = 0;

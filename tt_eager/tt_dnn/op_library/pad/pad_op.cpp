@@ -75,15 +75,11 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
     KernelHandle reader_kernel_id = CreateKernel(program,
                                                         "tt_eager/tt_dnn/kernels/dataflow/reader_pad_dims_rm_interleaved.cpp",
                                                         cores,
-                                                        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
-                                                                            .noc = NOC::RISCV_1_default,
-                                                                            .compile_args = reader_ct_args});
+                                                        ReaderDataMovementConfig{.compile_args = reader_ct_args});
     KernelHandle writer_kernel_id = CreateKernel(program,
                                                         "tt_eager/tt_dnn/kernels/dataflow/writer_pad_dims_rm_interleaved.cpp",
                                                         cores,
-                                                        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0,
-                                                                            .noc = NOC::RISCV_0_default,
-                                                                            .compile_args = writer_ct_args});
+                                                        WriterDataMovementConfig{.compile_args = writer_ct_args});
     uint32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;
 
     #if 0
@@ -221,9 +217,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
     KernelHandle reader_kernel_id = CreateKernel(program,
                                                         "tt_eager/tt_dnn/kernels/dataflow/pad_dims_rm_interleaved_opt.cpp",
                                                         core,
-                                                        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
-                                                                            .noc = NOC::RISCV_1_default,
-                                                                            .compile_args = reader_ct_args});
+                                                        ReaderDataMovementConfig{.compile_args = reader_ct_args});
     uint32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;
 
     #if 0
@@ -353,7 +347,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
         program,
         "tt_eager/tt_dnn/kernels/dataflow/pad_dims_rm_interleaved.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = compile_time_args_vec});
+        tt_metal::ReaderDataMovementConfig{.compile_args = compile_time_args_vec});
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -468,13 +462,13 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_pad_dims_interleaved.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
     tt_metal::SetRuntimeArgs(
         program,

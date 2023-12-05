@@ -93,9 +93,7 @@ KernelHandle CreateReadKernel(
         program,
         file_name,
         core_spec,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
+        tt_metal::ReaderDataMovementConfig{
             .compile_args = compile_args,
             .defines = defines});
 }
@@ -110,9 +108,7 @@ KernelHandle CreateWriteKernel(
         program,
         file_name,
         core_spec,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
+        tt_metal::WriterDataMovementConfig{
             .compile_args = compile_args,
             .defines = defines});
 }

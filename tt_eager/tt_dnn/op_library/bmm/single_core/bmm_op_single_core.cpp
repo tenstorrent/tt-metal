@@ -72,13 +72,13 @@ operation::ProgramWithCallbacks matmul_single_core(const Tensor &a, const Tensor
         program,
         "tt_eager/tt_dnn/kernels/dataflow/reader_bmm_8bank.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
     auto writer_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_bmm_8bank.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
     vector<uint32_t> compute_args = {
         B, // B

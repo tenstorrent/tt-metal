@@ -81,13 +81,13 @@ operation::ProgramWithCallbacks bcast_single_core(const Tensor &a, const Tensor 
         program,
         reader_name,
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args});
 
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args});
 
     const char* compute_name = bcast_op_utils::get_compute_name(bcast_dim);
     std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(bcast_dim, bcast_math);

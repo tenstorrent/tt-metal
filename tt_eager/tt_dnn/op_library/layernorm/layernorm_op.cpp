@@ -195,14 +195,14 @@ operation::ProgramWithCallbacks layernorm_(
         program,
         use_row_major_kernel ? "tt_eager/tt_dnn/op_library/layernorm/kernels/reader_unary_interleaved_ln_rm_gb.cpp" : "tt_eager/tt_dnn/op_library/layernorm/kernels/reader_unary_interleaved_ln.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = reader_defines}
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_compile_time_args, .defines = reader_defines}
     );
 
     auto writer_kernels_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_compile_time_args}
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args}
     );
 
     vector<uint32_t> compute_args = { Wt, block_size, gamma.has_value(), beta.has_value() };
@@ -671,19 +671,19 @@ operation::ProgramWithCallbacks layernorm_sharded_(
         program,
         "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/reader_mcast_sender_unary_sharded_ln.cpp",
         top_row,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_mcast_sender_compile_time_args, .defines = reader_mcast_sender_defines}
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_mcast_sender_compile_time_args, .defines = reader_mcast_sender_defines}
     );
     auto reader_mcast_receiver_kernels_id_all_to_all = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp",
         all_to_all_workers_except_top_row,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_mcast_receiver_all_to_all_compile_time_args, .defines = reader_mcast_receiver_defines}
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_mcast_receiver_all_to_all_compile_time_args, .defines = reader_mcast_receiver_defines}
     );
     auto reader_mcast_receiver_kernels_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/layernorm/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp",
         not_all_to_all_workers,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_mcast_receiver_compile_time_args, .defines = reader_mcast_receiver_defines}
+        tt_metal::ReaderDataMovementConfig{.compile_args = reader_mcast_receiver_compile_time_args, .defines = reader_mcast_receiver_defines}
     );
     // writer defines
     std::map<string, string> writer_defines;
@@ -746,13 +746,13 @@ operation::ProgramWithCallbacks layernorm_sharded_(
         program,
         writer_kernel,
         all_to_all_cores,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_mcast_sender_compile_time_args, .defines = writer_defines}
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_mcast_sender_compile_time_args, .defines = writer_defines}
     );
     auto writer_mcast_receiver_kernels_id = CreateKernel(
         program,
         writer_kernel,
         not_all_to_all_workers,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_mcast_receiver_compile_time_args, .defines = writer_defines}
+        tt_metal::WriterDataMovementConfig{.compile_args = writer_mcast_receiver_compile_time_args, .defines = writer_defines}
     );
     // defines
     std::map<string, string> eltwise_binary_defines;

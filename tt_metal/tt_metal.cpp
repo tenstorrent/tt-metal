@@ -490,8 +490,6 @@ std::vector<uint32_t> & GetRuntimeArgs(const Program &program, KernelHandle kern
     return detail::GetKernel(program, kernel_id)->runtime_args(logical_core);
 }
 
-
-
 }  // namespace tt_metal
 
 }  // namespace tt

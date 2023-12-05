@@ -11,6 +11,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt::constants;
 using namespace tt;
@@ -114,16 +115,15 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t in0_end = num_cores_r - 1;
     uint32_t in1_end = num_cores_c - 1;
 
-    tt_metal::NOC in0_noc = tt_metal::NOC::RISCV_0_default;
-    tt_metal::NOC in1_noc = tt_metal::NOC::RISCV_1_default;
-    tt_metal::NOC in0_split_noc = tt_metal::NOC::RISCV_1_default;
-    tt_metal::NOC in1_split_noc = tt_metal::NOC::RISCV_0_default;
+    // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
+    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in0_split_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in1_split_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
     if (transpose_mcast) {
         std::swap(in0_sender, in1_sender);
         std::swap(in0_sender_in1_receiver, in0_receiver_in1_sender);
         std::swap(in0_end, in1_end);
-        // std::swap(in0_noc, in1_noc);
-        // std::swap(in0_split_noc, in1_split_noc);
     }
     if (in0_is_sharded) {
         in0_sender = all_cores;
@@ -491,6 +491,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             }
         }
     }
+    if (in0_noc == NOC::NOC_1) {
+        std::swap(diff_start_coord, diff_end_coord);
+    }
 
     for(uint32_t core_idx_y = 0; core_idx_y < num_cores_r; ++core_idx_y) {
         for(uint32_t core_idx_x = 0; core_idx_x < num_cores_c; ++core_idx_x) {
@@ -512,18 +515,27 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             uint32_t in1_idx = core_idx_x;
 
             auto in0_mcast_sender = left_core_physical;
+            auto in1_mcast_sender = top_core_physical;
+
+            // Assuming in0 is NOC0
             auto in0_mcast_start = left_core_plus_one_physical;
             auto in0_mcast_end = right_core_physical;
-            auto in1_mcast_sender = top_core_physical;
+            if (in0_noc == NOC::NOC_1) {
+                std::swap(in0_mcast_start, in0_mcast_end);
+            }
+
+            // Assuming in1 is NOC1
             auto in1_mcast_start = bottom_core_physical;
             auto in1_mcast_end = top_core_plus_one_physical;
+            if (in1_noc == NOC::NOC_0) {
+                std::swap(in1_mcast_start, in1_mcast_end);
+            }
+
             if (transpose_mcast) {
                 std::swap(in0_idx, in1_idx);
                 std::swap(in0_mcast_sender, in1_mcast_sender);
-                std::swap(in0_mcast_start, in1_mcast_start);
-                std::swap(in0_mcast_end, in1_mcast_end);
-                std::swap(in0_mcast_start, in0_mcast_end);
-                std::swap(in1_mcast_start, in1_mcast_end);
+                std::swap(in0_mcast_start, in1_mcast_end);
+                std::swap(in0_mcast_end, in1_mcast_start);
             }
 
             // in0 sender

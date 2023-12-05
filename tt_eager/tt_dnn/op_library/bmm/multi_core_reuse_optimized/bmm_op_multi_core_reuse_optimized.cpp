@@ -9,6 +9,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 
 using namespace tt::constants;
 using namespace tt;
@@ -155,14 +156,14 @@ operation::ProgramWithCallbacks create_program(
         program,
         "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
         left_half,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args, .defines = mm_kernel_in0_reader_defines}
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = detail::GetPreferredNOCForDRAMWrite(device->arch()), .compile_args = reader_compile_time_args, .defines = mm_kernel_in0_reader_defines}
     );
 
     auto mm_kernel_in1_reader_writer_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
         left_half,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_writer_compile_time_args, .defines = mm_kernel_in1_reader_writer_defines}
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = detail::GetPreferredNOCForDRAMRead(device->arch()), .compile_args = reader_writer_compile_time_args, .defines = mm_kernel_in1_reader_writer_defines}
     );
 
     // right half
@@ -170,14 +171,14 @@ operation::ProgramWithCallbacks create_program(
         program,
         "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
         right_half,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args, .defines = mm_kernel_in0_reader_defines}
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = detail::GetPreferredNOCForDRAMRead(device->arch()), .compile_args = reader_compile_time_args, .defines = mm_kernel_in0_reader_defines}
     );
 
     auto mm_kernel_in1_reader_writer_other_noc_setup_id = tt_metal::CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/bmm/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
         right_half,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_writer_compile_time_args, .defines = mm_kernel_in1_reader_writer_defines}
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = detail::GetPreferredNOCForDRAMWrite(device->arch()), .compile_args = reader_writer_compile_time_args, .defines = mm_kernel_in1_reader_writer_defines}
     );
 
     vector<uint32_t> compute_kernel_args_group_1 = {
