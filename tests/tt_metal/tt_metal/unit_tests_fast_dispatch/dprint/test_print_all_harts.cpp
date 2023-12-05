@@ -86,6 +86,8 @@ SETW:
 HEX/OCT/DEC:
 1e240361100123456
 SLICE:
+Warning: MATH core does not support TileSlice printing, omitting print...
+Warning: MATH core does not support TileSlice printing, omitting print...
 Test Debug Print: Pack
 Basic Types:
 101-1.61800337@0.122558594

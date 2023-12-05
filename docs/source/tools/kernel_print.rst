@@ -23,22 +23,6 @@ To generate kernel debug prints on the device:
         uint16_t my_bf16_val = 0x3dfb; // Equivalent to 0.122559
         DPRINT << BF16(my_bf16_val) << ENDL();
 
-        // The following prints only occur on a particular RISCV core:
-        DPRINT_MATH(DPRINT << "this is the math kernel" << ENDL());
-        DPRINT_PACK(DPRINT << "this is the pack kernel" << ENDL());
-        DPRINT_UNPACK(DPRINT << "this is the unpack kernel" << ENDL());
-        DPRINT_DATA0(DPRINT << "this is the data movement kernel on noc 0" << ENDL());
-        DPRINT_DATA1(DPRINT << "this is the data movement kernel on noc 1" << ENDL());
-
-        // Print a tile slice
-        DPRINT_PACK({ DPRINT  << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL(); });
-
-        // Print a full tile
-        for (int32_t r = 0; r < 32; ++r) {
-            SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-            DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(0, 0, sr, true, false) << ENDL();
-        }
-
         // dprint.h includes macros for a subset of std::ios and std::iomanip functionality:
         // SETPRECISION macro has the same behaviour as std::setprecision
         DPRINT << SETPRECISION(5) << 0.123456f << ENDL();
@@ -49,6 +33,24 @@ To generate kernel debug prints on the device:
         DPRINT << "SETW (non-sticky): " << SETW(10, false) << 1 << 2 << ENDL();
         // HEX/DEC/OCT macros corresponding to std::hex/std::dec/std::oct
         DPRINT << HEX() << 15 << DEC() << 15 << OCT() << 15 << ENDL();
+
+        // The following prints only occur on a particular RISCV core:
+        DPRINT_MATH(DPRINT << "this is the math kernel" << ENDL());
+        DPRINT_PACK(DPRINT << "this is the pack kernel" << ENDL());
+        DPRINT_UNPACK(DPRINT << "this is the unpack kernel" << ENDL());
+        DPRINT_DATA0(DPRINT << "this is the data movement kernel on noc 0" << ENDL());
+        DPRINT_DATA1(DPRINT << "this is the data movement kernel on noc 1" << ENDL());
+
+        // Print a tile slice
+        DPRINT_PACK({ DPRINT  << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL(); });
+        // Note that since the MATH core does not have acces to CBs, so this is an invalid print:
+        DPRINT_MATH({ DPRINT  << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL(); }); // Invalid
+
+        // Print a full tile
+        for (int32_t r = 0; r < 32; ++r) {
+            SliceRange sr = SliceRange{.h0 = r, .h1 = r+1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+            DPRINT << (uint)r << " --READ--cin0-- " << TileSlice(0, 0, sr, true, false) << ENDL();
+        }
     }
 
 The ``TSLICE`` macros support printing tile contents with a given sample count, starting index and stride.  The
