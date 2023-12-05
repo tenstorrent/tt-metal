@@ -1637,13 +1637,16 @@ class ResNet(nn.Module):
         if self.sharded:
             x = pad_and_fold_conv_activation_for_unity_stride(x, 3, 3, 2, 2)
             x = torch.permute(x, (0, 2, 3, 1))
-            x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
             x = x.reshape(
                 1,
                 1,
-                x.shape()[0] * x.shape()[1] * x.shape()[2],
-                x.shape()[3],
+                x.shape[0] * x.shape[1] * x.shape[2],
+                x.shape[3],
             )
+            input_size_to_shard_evenly = _nearest_y(x.shape[2], self.first_conv_num_cores_nhw * 32)
+            x = torch.nn.functional.pad(x, (0, 0, 0, input_size_to_shard_evenly - x.shape[2], 0, 0))
+
+            x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
         else:
             extra_padding_for_32B_alignment = 25
             x = torch.nn.functional.pad(x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1))
@@ -1658,21 +1661,34 @@ class ResNet(nn.Module):
 
         # x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
         if self.sharded:
-            x = x.to(self.device, self.memory_config)
+            untilize_with_halo_input_shard_height = (int)(x.shape()[2] / self.first_conv_num_cores_nhw)
 
-            input_size_to_shard_evenly = _nearest_y(x.shape()[2], self.first_conv_num_cores_nhw * 32)
-            untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / self.first_conv_num_cores_nhw)
-
-            x = tt_lib.tensor.interleaved_to_sharded(
-                x,
-                self.first_conv_grid_size,
+            shard_grid = tt_lib.tensor.CoreRangeSet(
+                {
+                    tt_lib.tensor.CoreRange(
+                        tt_lib.tensor.CoreCoord(0, 0),
+                        tt_lib.tensor.CoreCoord(11, 7),
+                    ),
+                    tt_lib.tensor.CoreRange(
+                        tt_lib.tensor.CoreCoord(0, 8),
+                        tt_lib.tensor.CoreCoord(1, 8),
+                    ),
+                }
+            )
+            shard_spec = tt_lib.tensor.ShardSpec(
+                shard_grid,
                 [
                     untilize_with_halo_input_shard_height,
                     x.shape()[3],
                 ],
-                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
                 tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+                False,
             )
+            mem_config = tt_lib.tensor.MemoryConfig(
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
+            )
+
+            x = x.to(self.device, mem_config, shard_spec)
             x = self.tt_py_untilize_with_halo_op_before_first_conv(x)
         else:
             original_A_cl_host_shape = x.shape()

@@ -566,6 +566,7 @@ void UntilizeWithHaloV2::validate(const std::vector<Tensor> &input_tensors) cons
         TT_FATAL(input_tensor.volume() % TILE_HW == 0);
     }
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+    TT_FATAL(input_tensor.shard_spec().has_value());
 
     // validate all other config tensors
     // int32_t max_size = std::max(local_data_nsegments_per_core_.cbegin(), local_data_nsegments_per_core_.cend());

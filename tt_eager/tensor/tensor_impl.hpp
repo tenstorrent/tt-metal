@@ -596,7 +596,7 @@ inline Tensor to_device_sharded(const Tensor &tensor, Device *target_device, con
         layout, memory_config,
         std::make_optional<ShardSpec>(shard_spec)
     );
-    return Tensor(DeviceStorage{device_buffer, target_device, memory_config}, shape, data_type, layout);
+    return Tensor(DeviceStorage{device_buffer, target_device, memory_config}, shape, data_type, layout, shard_spec);
 }
 
 template <typename T>
