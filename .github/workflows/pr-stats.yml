@@ -11,5 +11,6 @@ jobs:
       - name: Run pull request stats
         uses: flowwer-dev/pull-request-stats@master
         with:
+          token: ${{ secrets.ADD_A_PERSONAL_ACCESS_TOKEN }}
           period: 187
           limit: 0
