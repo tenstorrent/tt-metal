@@ -48,14 +48,12 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
         emb = torch.cat((freqs, freqs), dim=-1)
 
         layer_name = f"{base_url}.{layer_num}.rotary_embedding"
-        if tt_cache_path is not None:
-            # if 0:
+        if (
+            tt_cache_path / f"{layer_name}.cos_cached_{self.model_config['COS_CACHED_WEIGHTS_DTYPE'].name}.bin"
+        ).exists():
             self.tt_cos_cached = tt_lib.tensor.load_tensor(
                 str(tt_cache_path / f"{layer_name}.cos_cached_{self.model_config['COS_CACHED_WEIGHTS_DTYPE'].name}.bin")
             ).to(tt_device, self.model_config["COS_CACHED_WEIGHTS_MEMCFG"])
-            self.tt_sin_cached = tt_lib.tensor.load_tensor(
-                str(tt_cache_path / f"{layer_name}.sin_cached_{self.model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}.bin")
-            ).to(tt_device, self.model_config["SIN_CACHED_WEIGHTS_MEMCFG"])
         else:
             self.tt_cos_cached = torch2tt_tensor(
                 emb.cos()[None, None, :, :],
@@ -63,11 +61,30 @@ class TtFalconRotaryEmbedding(torch.nn.Module):
                 tt_memory_config=self.model_config["COS_CACHED_WEIGHTS_MEMCFG"],
                 tt_dtype=self.model_config["COS_CACHED_WEIGHTS_DTYPE"],
             )
+            tt_lib.tensor.dump_tensor(
+                str(
+                    tt_cache_path / f"{layer_name}.cos_cached_{self.model_config['COS_CACHED_WEIGHTS_DTYPE'].name}.bin"
+                ),
+                self.tt_cos_cached.cpu(),
+            )
+        if (
+            tt_cache_path / f"{layer_name}.sin_cached_{self.model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}.bin"
+        ).exists():
+            self.tt_sin_cached = tt_lib.tensor.load_tensor(
+                str(tt_cache_path / f"{layer_name}.sin_cached_{self.model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}.bin")
+            ).to(tt_device, self.model_config["SIN_CACHED_WEIGHTS_MEMCFG"])
+        else:
             self.tt_sin_cached = torch2tt_tensor(
                 emb.sin()[None, None, :, :],
                 tt_device,
                 tt_memory_config=self.model_config["SIN_CACHED_WEIGHTS_MEMCFG"],
                 tt_dtype=self.model_config["SIN_CACHED_WEIGHTS_DTYPE"],
+            )
+            tt_lib.tensor.dump_tensor(
+                str(
+                    tt_cache_path / f"{layer_name}.sin_cached_{self.model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}.bin"
+                ),
+                self.tt_sin_cached.cpu(),
             )
 
     def forward(self, layer: tt_lib.tensor.Tensor, token_idx: Optional[int] = None) -> tt_lib.tensor.Tensor:
@@ -117,14 +134,13 @@ class TtFalconAttention(nn.Module):
         layer_name = f"{base_url}.{layer_num}.self_attention"
         query_key_value_str = f"{layer_name}.query_key_value.weight"
         selfout_str = f"{layer_name}.dense.weight"
-        if tt_cache_path is not None:
-            # if 0:
+
+        if (
+            tt_cache_path / f"{query_key_value_str}_{self.model_config['FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin"
+        ).exists():
             self.query_key_value_weights = tt_lib.tensor.load_tensor(
                 str(tt_cache_path / f"{query_key_value_str}_{self.model_config['FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin")
             ).to(device, self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"])
-            self.dense_weights = tt_lib.tensor.load_tensor(
-                str(tt_cache_path / f"{selfout_str}_{self.model_config['SELFOUT_MM_WEIGHTS_DTYPE'].name}.bin")
-            ).to(device, self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"])
         else:
             self.query_key_value_weights = torch2tt_tensor(
                 torch.transpose(
@@ -136,7 +152,18 @@ class TtFalconAttention(nn.Module):
                 tt_memory_config=self.model_config["FUSED_QKV_MM_WEIGHTS_MEMCFG"],
                 tt_dtype=self.model_config["FUSED_QKV_MM_WEIGHTS_DTYPE"],
             )
+            tt_lib.tensor.dump_tensor(
+                str(
+                    tt_cache_path / f"{query_key_value_str}_{self.model_config['FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin"
+                ),
+                self.query_key_value_weights.cpu(),
+            )
 
+        if (tt_cache_path / f"{selfout_str}_{self.model_config['SELFOUT_MM_WEIGHTS_DTYPE'].name}.bin").exists():
+            self.dense_weights = tt_lib.tensor.load_tensor(
+                str(tt_cache_path / f"{selfout_str}_{self.model_config['SELFOUT_MM_WEIGHTS_DTYPE'].name}.bin")
+            ).to(device, self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"])
+        else:
             self.dense_weights = torch2tt_tensor(
                 torch.transpose(
                     self.state_dict[selfout_str],
@@ -146,6 +173,10 @@ class TtFalconAttention(nn.Module):
                 self.device,
                 tt_memory_config=self.model_config["SELFOUT_MM_WEIGHTS_MEMCFG"],
                 tt_dtype=self.model_config["SELFOUT_MM_WEIGHTS_DTYPE"],
+            )
+            tt_lib.tensor.dump_tensor(
+                str(tt_cache_path / f"{selfout_str}_{self.model_config['SELFOUT_MM_WEIGHTS_DTYPE'].name}.bin"),
+                self.dense_weights.cpu(),
             )
 
         self.rotary_embedding = TtFalconRotaryEmbedding(
