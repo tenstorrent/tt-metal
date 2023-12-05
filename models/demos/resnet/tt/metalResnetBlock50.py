@@ -25,7 +25,11 @@ from tt_lib.fused_ops.conv import (
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_conv import TTPyConv
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
 
-from models.utility_functions import _nearest_32
+from models.utility_functions import (
+    _nearest_32,
+    pad_and_fold_conv_activation_for_unity_stride,
+    pad_and_fold_conv_filters_for_unity_stride,
+)
 
 hardcoded_matmul_config_linear = {
     8: tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -723,12 +727,14 @@ hardcoded_conv_blocking_and_parallelization_config = {
         (128, 2048): [1024, 64, 128, 64, 64, 64, (1, 2), 64, 2048, -1],
     },
     8: {
+        (100352, 64): [16 * 4, 1024, 64, 128, 64, 1024, (12, 9), 1024, 64, 98],
         (25088, 64): [64 * 3, 256, 64, 128, 64, 256, (12, 9), 256, 64, 98],
         (6272, 128): [128 * 3, 64, 128, 64, 128, 64, (12, 9), 64, 128, 98],
         (1568, 256): [256, 160, 32, 160, 32, 160, (10, 8), 160, 32, 10],
         (416, 512): [512, 64, 64, 64, 64, 64, (7, 8), 64, 64, 7],
     },
     16: {
+        (200704, 64): [16 * 4, 32, 64, 32, 64, 2048, (12, 9), 2048, 64, 98],
         (50176, 64): [64 * 3, 256, 64, 128, 64, 512, (12, 9), 512, 64, 98],
         (12544, 128): [128 * 3, 128, 128, 64, 128, 128, (12, 9), 128, 128, 98],
         (3136, 256): [256, 288, 32, 96, 32, 288, (11, 8), 288, 32, 11],
@@ -1166,25 +1172,84 @@ class ResNet(nn.Module):
             per_core_act_h_ntiles = 64
             self.layer_3_grid_size = (11, 8)
             self.layer_4_grid_size = (9, 8)
-
-        self.conv1 = resnet50_first_conv(
-            conv1_weight.reshape(-1).tolist(),
-            self.conv1_params,
-            self.device,
-            [act_block_h_datums, 32],
-            [32, 64],
-            [32, 64],
-            act_block_h_datums,
-            grid_size,
-            per_core_act_h_ntiles,
-            conv1_bias.tolist(),
-            8,
-            fuse_relu=True,
-            out_mem_config=self.height_sharded_memory_config if sharded else None,
-            weights_dtype=model_config["WEIGHTS_DTYPE"],
-            output_dtype=model_config["ACTIVATIONS_DTYPE"],
-            math_fidelity=model_config["MATH_FIDELITY"],
-        )
+        if sharded and batch_size == 8:
+            self.folded_conv1_params = [self.inplanes, 16, 4, 4, 1, 1, 0, 0, 1, groups]
+            first_conv_output_padded_nhw_size = _nearest_y(112 * 112 * batch_size, 98 * 32)
+            first_conv_output_channels = 64
+            self.first_conv_num_cores_nhw = 98
+            self.first_conv_grid_size = (12, 9)
+            assert (
+                first_conv_output_padded_nhw_size,
+                first_conv_output_channels,
+            ) in hardcoded_conv_blocking_and_parallelization_config[batch_size]
+            [
+                act_block_w_datums,
+                act_block_h_datums,
+                weight_block_w_datums,
+                out_subblock_h_datums,
+                out_subblock_w_datums,
+                out_block_h_datums,
+                grid_size,
+                per_core_act_h,
+                per_core_weight_w,
+                self.first_conv_num_cores_nhw,  # This number is only meaningful for batch 8, 16
+            ] = hardcoded_conv_blocking_and_parallelization_config[batch_size][
+                (first_conv_output_padded_nhw_size, first_conv_output_channels)
+            ]
+            sliding_window_op_params = [
+                (1, 1),
+                (0, 0),
+                (4, 4),
+                (batch_size, 115, 115),
+                grid_size,
+                self.first_conv_num_cores_nhw,
+            ]
+            per_core_act_h_ntiles = (int)(per_core_act_h / 32)
+            per_core_weight_w_ntiles = (int)(per_core_weight_w / 32)
+            conv1_weight = pad_and_fold_conv_filters_for_unity_stride(conv1_weight, 2, 2)
+            self.conv1 = TTPyConv(
+                sliding_window_op_params,
+                conv1_weight.reshape(-1).tolist(),
+                self.folded_conv1_params,
+                self.device,
+                [act_block_h_datums, act_block_w_datums],
+                [act_block_w_datums, weight_block_w_datums],
+                [out_subblock_h_datums, out_subblock_w_datums],
+                out_block_h_datums,
+                grid_size,
+                per_core_act_h_ntiles,
+                per_core_weight_w_ntiles,
+                conv1_bias.tolist(),
+                True,
+                output_mem_config=self.height_sharded_memory_config,
+                input_tensor_shape=[batch_size, 115, 115, 16],
+                weights_dtype=model_config["WEIGHTS_DTYPE"],
+                output_dtype=model_config["ACTIVATIONS_DTYPE"],
+                math_fidelity=model_config["MATH_FIDELITY"],
+                act_c_num_blocks=1,
+            )
+            self.tt_py_untilize_with_halo_op_before_first_conv = TTPyUntilizeWithHalo(
+                self.device, sliding_window_op_params
+            )
+        else:
+            self.conv1 = resnet50_first_conv(
+                conv1_weight.reshape(-1).tolist(),
+                self.conv1_params,
+                self.device,
+                [act_block_h_datums, 32],
+                [32, 64],
+                [32, 64],
+                act_block_h_datums,
+                grid_size,
+                per_core_act_h_ntiles,
+                conv1_bias.tolist(),
+                8,
+                fuse_relu=True,
+                out_mem_config=self.height_sharded_memory_config if sharded else None,
+                weights_dtype=model_config["WEIGHTS_DTYPE"],
+                output_dtype=model_config["ACTIVATIONS_DTYPE"],
+                math_fidelity=model_config["MATH_FIDELITY"],
+            )
         self.conv1_output_shape = compute_conv_output_shape(
             self.conv1_params,
             [batch_size, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes],
@@ -1555,10 +1620,21 @@ class ResNet(nn.Module):
         return layers, last_layer_shape
 
     def preprocessing(self, x: torch.Tensor) -> tt_lib.tensor:
-        extra_padding_for_32B_alignment = 25
-        x = torch.nn.functional.pad(x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1))
-        x = torch.permute(x, (0, 2, 3, 1))
-        x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
+        if self.sharded and self.batch_size == 8:
+            x = pad_and_fold_conv_activation_for_unity_stride(x, 3, 3, 2, 2)
+            x = torch.permute(x, (0, 2, 3, 1))
+            x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
+            x = x.reshape(
+                1,
+                1,
+                x.shape()[0] * x.shape()[1] * x.shape()[2],
+                x.shape()[3],
+            )
+        else:
+            extra_padding_for_32B_alignment = 25
+            x = torch.nn.functional.pad(x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1))
+            x = torch.permute(x, (0, 2, 3, 1))
+            x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
         return x
 
     def forward(self, x: tt_lib.tensor) -> tt_lib.tensor:
@@ -1567,21 +1643,41 @@ class ResNet(nn.Module):
         # x = torch.permute(x, (0, 2, 3, 1))
 
         # x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
+        if self.sharded and self.batch_size == 8:
+            interleaved_mem_config = tt_lib.tensor.MemoryConfig(
+                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+            )
+            x = x.to(self.device, interleaved_mem_config)
 
-        original_A_cl_host_shape = x.shape()
-        x = x.reshape(x.shape()[0], x.shape()[1], 1, x.shape()[2] * x.shape()[3])
+            input_size_to_shard_evenly = _nearest_y(x.shape()[2], self.first_conv_num_cores_nhw * 32)
+            untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / self.first_conv_num_cores_nhw)
 
-        x = x.to(self.device, self.memory_config)  # to l1
-        # re-shape back to original shape (N, H, W, C)
-        x = x.reshape(
-            original_A_cl_host_shape[0],
-            original_A_cl_host_shape[1],
-            original_A_cl_host_shape[2],
-            original_A_cl_host_shape[3],
-        )
+            x = tt_lib.tensor.interleaved_to_sharded(
+                x,
+                self.first_conv_grid_size,
+                [
+                    untilize_with_halo_input_shard_height,
+                    x.shape()[3],
+                ],
+                tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+                tt_lib.tensor.ShardOrientation.ROW_MAJOR,
+            )
+            x = self.tt_py_untilize_with_halo_op_before_first_conv(x)
+        else:
+            original_A_cl_host_shape = x.shape()
+            x = x.reshape(x.shape()[0], x.shape()[1], 1, x.shape()[2] * x.shape()[3])
+
+            x = x.to(self.device, self.memory_config)  # to l1
+            # re-shape back to original shape (N, H, W, C)
+            x = x.reshape(
+                original_A_cl_host_shape[0],
+                original_A_cl_host_shape[1],
+                original_A_cl_host_shape[2],
+                original_A_cl_host_shape[3],
+            )
         x = self.conv1(x)
         # Relu is fused with conv1
-
+        # print("first conv done")
         if self.sharded:
             x = tt_lib.tensor.untilize_with_halo(
                 x,
@@ -1602,7 +1698,7 @@ class ResNet(nn.Module):
             )
 
         x = self.maxpool(x)
-
+        # print("maxpool done")
         x = x.reshape(
             1,
             1,

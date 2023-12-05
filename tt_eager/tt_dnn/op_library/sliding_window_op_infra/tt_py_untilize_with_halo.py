@@ -53,6 +53,7 @@ class TTPyUntilizeWithHalo(TTPyOp):
             )
 
         def utwh_(activation):
+            # print("sliding_window_op_params=", self.sliding_window_op_params)
             return ttl.tensor.untilize_with_halo_v2(
                 activation,
                 utwh_kernel_configs["local_pad_tensor"],
@@ -225,17 +226,17 @@ class TTPyUntilizeWithHalo(TTPyOp):
 
                 return tt_tensor
 
-            print("gen local data config tt tensor")
+            # print("gen local data config tt tensor")
             local_data_tensor = gen_config_tt_tensors_uint16(local_data)
-            print("gen local pad config tt tensor")
+            # print("gen local pad config tt tensor")
             local_pad_tensor = gen_config_tt_tensors_uint16(local_pad)
-            print("gen ll data config tt tensor")
+            # print("gen ll data config tt tensor")
             ll_data_tensor = gen_config_tt_tensors_uint16(ll_data)
-            print("gen l data config tt tensor")
+            # print("gen l data config tt tensor")
             l_data_tensor = gen_config_tt_tensors_uint16(l_data)
-            print("gen r data config tt tensor")
+            # print("gen r data config tt tensor")
             r_data_tensor = gen_config_tt_tensors_uint16(r_data)
-            print("gen rr data config tt tensor")
+            # print("gen rr data config tt tensor")
             rr_data_tensor = gen_config_tt_tensors_uint16(rr_data)
 
             cls.static_kernel_configs_cache_map[sliding_window_op_params_hash] = {
