@@ -5,6 +5,7 @@ JIT_BUILD_CFLAGS = $(CFLAGS) -Werror
 
 JIT_BUILD_SRCS_RELATIVE = \
 	jit_build/build.cpp \
+	jit_build/genfiles.cpp \
 	jit_build/data_format.cpp \
 	jit_build/settings.cpp
 
