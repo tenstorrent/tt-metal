@@ -102,11 +102,7 @@ def get_model_config(model_config_str):
         # TODO: Set default memcfg for BFLOAT16-L1 to L1
         # mem_config = DRAM_MEMCFG if mem_config_str == "DRAM" else L1_MEMCFG
         mem_config = DRAM_MEMCFG
-        dtype = (
-            ttl.tensor.DataType.BFLOAT16
-            if dtype_str == "BFLOAT16"
-            else ttl.tensor.DataType.BFLOAT8_B
-        )
+        dtype = ttl.tensor.DataType.BFLOAT16 if dtype_str == "BFLOAT16" else ttl.tensor.DataType.BFLOAT8_B
     else:
         raise NotImplementedError(f"Model config {model_config_str} is not supported!")
 
@@ -116,12 +112,8 @@ def get_model_config(model_config_str):
         "DEFAULT_MEMCFG": mem_config,
         "MOVE_DECODER_OUTPUT_BOOL": False,
     }  # DEFAULT_MEMCFG also used to determine banking for ttl.device.InitializeDevice
-    model_config.update(
-        {f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG}
-    )
-    model_config.update(
-        {f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE}
-    )
+    model_config.update({f"{key}_MEMCFG": mem_config for key in OP_KEYS if key not in NO_MEMCFG})
+    model_config.update({f"{key}_DTYPE": dtype for key in OP_KEYS if key not in NO_DTYPE})
 
     # Matmul Weights must always be BFP8_B
     # Override defaults for certain configs
@@ -139,7 +131,8 @@ def get_model_config(model_config_str):
         model_config["PRE_SOFTMAX_MASK_OUTPUT_MEMCFG"] = L1_MEMCFG
         model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"] = L1_MEMCFG
 
-    logger.debug(f"Falcon model config: \n{pretty_print_model_config(model_config)}")
+    # uncomment if need to see all the configs
+    # logger.debug(f"Falcon model config: \n{pretty_print_model_config(model_config)}")
 
     return model_config
 
@@ -150,41 +143,40 @@ def get_tt_cache_path(model_version):
     if tt_cache_path.exists():
         return tt_cache_path
     else:
-        return None
+        Path(f"models/demos/falcon7b/datasets/{model_version}").mkdir(parents=True, exist_ok=True)
+        return Path(f"models/demos/falcon7b/datasets/{model_version}")
 
 
 model_config_entries = {
-            "_name_or_path": "tiiuae/falcon-7b-instruct",
-            "alibi": False,
-            "apply_residual_connection_post_layernorm": False,
-            "architectures": [
-                "FalconForCausalLM"
-            ],
-            "attention_dropout": 0.0,
-            "auto_map": {
-                "AutoConfig": "configuration_falcon.FalconConfig",
-                "AutoModel": "modeling_falcon.FalconModel",
-                "AutoModelForCausalLM": "modeling_falcon.FalconForCausalLM",
-                "AutoModelForQuestionAnswering": "modeling_falcon.FalconForQuestionAnswering",
-                "AutoModelForSequenceClassification": "modeling_falcon.FalconForSequenceClassification",
-                "AutoModelForTokenClassification": "modeling_falcon.FalconForTokenClassification"
-            },
-            "bias": False,
-            "bos_token_id": 11,
-            "eos_token_id": 11,
-            "hidden_dropout": 0.0,
-            "hidden_size": 4544,
-            "initializer_range": 0.02,
-            "layer_norm_epsilon": 1e-05,
-            "model_type": "falcon",
-            "multi_query": True,
-            "new_decoder_architecture": False,
-            "num_attention_heads": 71,
-            "num_hidden_layers": 32,
-            "num_kv_heads": 71,
-            "parallel_attn": True,
-            "torch_dtype": "bfloat16",
-            "transformers_version": "4.28.1",
-            "use_cache": True,
-            "vocab_size": 65024
-        }
+    "_name_or_path": "tiiuae/falcon-7b-instruct",
+    "alibi": False,
+    "apply_residual_connection_post_layernorm": False,
+    "architectures": ["FalconForCausalLM"],
+    "attention_dropout": 0.0,
+    "auto_map": {
+        "AutoConfig": "configuration_falcon.FalconConfig",
+        "AutoModel": "modeling_falcon.FalconModel",
+        "AutoModelForCausalLM": "modeling_falcon.FalconForCausalLM",
+        "AutoModelForQuestionAnswering": "modeling_falcon.FalconForQuestionAnswering",
+        "AutoModelForSequenceClassification": "modeling_falcon.FalconForSequenceClassification",
+        "AutoModelForTokenClassification": "modeling_falcon.FalconForTokenClassification",
+    },
+    "bias": False,
+    "bos_token_id": 11,
+    "eos_token_id": 11,
+    "hidden_dropout": 0.0,
+    "hidden_size": 4544,
+    "initializer_range": 0.02,
+    "layer_norm_epsilon": 1e-05,
+    "model_type": "falcon",
+    "multi_query": True,
+    "new_decoder_architecture": False,
+    "num_attention_heads": 71,
+    "num_hidden_layers": 32,
+    "num_kv_heads": 71,
+    "parallel_attn": True,
+    "torch_dtype": "bfloat16",
+    "transformers_version": "4.28.1",
+    "use_cache": True,
+    "vocab_size": 65024,
+}

@@ -9,8 +9,9 @@ import tt_lib
 import torch
 from loguru import logger
 import time
-
+from pathlib import Path
 from transformers import AutoTokenizer
+import os
 
 from models.demos.falcon7b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
@@ -106,17 +107,27 @@ def run_falcon_demo_kv(
     profiler.end(f"loading_inputs")
 
     # State dict is needed for embeddings
-    logger.info("Loading TT weights and model...")
-    profiler.start(f"loading_weights_model")
-    if tt_cache_path:
-        state_dict = {"transformer.word_embeddings.weight": torch.load(tt_cache_path / "embedding.pt")}
-    else:
+    logger.info("Loading weights...")
+    profiler.start(f"loading_weights")
+    if (tt_cache_path == Path(f"models/demos/falcon7b/datasets/{model_version}")) and (
+        len(os.listdir(f"models/demos/falcon7b/datasets/{model_version}")) < 260
+    ):
+        logger.info("Weights not found on machine; downloading weights...")
         model_name = model_location_generator(model_version, model_subdir="Falcon")
         hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name)
         hugging_face_reference_model.eval()
         state_dict = hugging_face_reference_model.state_dict()
+        torch.save(state_dict["transformer.word_embeddings.weight"], tt_cache_path / "embedding.pt")
+    else:
+        state_dict = None
+
+    logger.info("Loading weights finished!")
+    profiler.end(f"loading_weights")
 
     tt_lib.device.Synchronize()
+
+    logger.info("Moving weights to device; might take some time...")
+    profiler.start(f"moving_to_device")
 
     base_url = ""
     tt_FalconCausalLM = TtFalconCausalLM(
@@ -130,12 +141,12 @@ def run_falcon_demo_kv(
         tt_cache_path,
     )
 
-    logger.info("Loaded TT weights and model")
-    profiler.end(f"loading_weights_model")
+    logger.info("Moved weights to device!")
+    profiler.end(f"moving_to_device")
 
     tt_lib.device.Synchronize()
 
-    logger.info("Tokenizing inputs")
+    logger.info("Tokenizing inputs...")
     profiler.start(f"tokenizing_inputs")
 
     tokenizer = AutoTokenizer.from_pretrained(model_version)
@@ -143,7 +154,7 @@ def run_falcon_demo_kv(
 
     profiler.end(f"tokenizing_inputs")
 
-    logger.info("Initializing KV cache")
+    logger.info("Initializing KV cache...")
     profiler.start(f"initializing_KV_cache")
     kv_cache = initialize_kv_cache(configuration, num_layers, batch_size, max_seq_len, device)
     profiler.end(f"initializing_KV_cache")
@@ -190,7 +201,7 @@ def run_falcon_demo_kv(
     generated_ids = torch.concat((prefill_ids[..., :num_input_tokens], output_ids), dim=1)
 
     tt_lib.device.Synchronize()
-    logger.info("Finished 1st run prefill stage with compile")
+    logger.info("Finished 1st run prefill stage with compile!")
 
     ### First run decode stage with compile ###
     logger.info("Running 1st run decode stage with compile...")
@@ -243,7 +254,7 @@ def run_falcon_demo_kv(
         generated_ids = torch.concat((generated_ids, decode_ids[:num_users]), dim=1)
         kv_cache_len += 1
 
-    logger.info("Finished 1st run decode stage with compile")
+    logger.info("Finished 1st run decode stage with compile!")
     tt_lib.device.Synchronize()
 
     del user_output_ids
@@ -298,7 +309,7 @@ def run_falcon_demo_kv(
         user_output_ids = post_processor(logits=logits, index=num_input_tokens - 1)
         output_ids[user_id] = user_output_ids
 
-    logger.info("Finished inference prefill stage")
+    logger.info("Finished inference prefill stage!")
 
     generated_ids = torch.concat((prefill_ids[..., :num_input_tokens], output_ids), dim=1)
 
@@ -355,7 +366,7 @@ def run_falcon_demo_kv(
         generated_ids = torch.concat((generated_ids, decode_ids[:num_users]), dim=1)
         kv_cache_len += 1
 
-    logger.info("Finished inference decode stage")
+    logger.info("Finished inference decode stage!")
     logger.info(f"Total number of tokens generated in decode: {batch_size*(kv_cache_len)}")
 
     print_output_prompts(generated_ids, tokenizer)
@@ -366,7 +377,8 @@ def run_falcon_demo_kv(
 
     measurements = {
         "preprocessing": profiler.get("tokenizing_inputs"),
-        "loading_weights_model": profiler.get("loading_weights_model"),
+        "loading_weights": profiler.get("loading_weights"),
+        "moving_to_device": profiler.get("moving_to_device"),
         "initializing_KV_cache": profiler.get("initializing_KV_cache"),
         "compile_prefill": time_prefill_compile - time_prefill_inference,
         "compile_decode": time_decode_compile - time_decode_inference,
@@ -378,9 +390,12 @@ def run_falcon_demo_kv(
         "inference_throughput_decode": batch_size / time_decode_inference,
     }
 
-    logger.info(f"pre processing duration: {round(measurements['preprocessing'], 5)} s")
-    logger.info(f"loading weights and model duration: {round(measurements['loading_weights_model'], 5)} s")
-    logger.info(f"initializing KV cache duration: {round(measurements['initializing_KV_cache'], 5)} s")
+    logger.info(f"pre processing: {round(measurements['preprocessing'], 5)} s")
+    logger.info(f"loading weights (+downloading if not on machine): {round(measurements['loading_weights'], 5)} s")
+    logger.info(
+        f"conversion to TT (if downloaded) and moving weights to device: {round(measurements['moving_to_device'], 5)} s"
+    )
+    logger.info(f"initializing KV cache: {round(measurements['initializing_KV_cache'], 5)} s")
     logger.info(f"prefill compile time: {round(measurements['compile_prefill'],5)} s")
     logger.info(f"decode compile time: {round(measurements['compile_decode'], 5)} s")
     logger.info(f"total compile time: {round(measurements['compile_total'], 5)} s")
@@ -393,7 +408,7 @@ def run_falcon_demo_kv(
     )
     logger.info(f"inference throughput decode: {round(measurements['inference_throughput_decode'], 5)} 1/s")
     logger.info(
-        f"end-to-end throughput | seq_len={num_input_tokens}: {round((batch_size*(kv_cache_len)/(measurements['preprocessing']+measurements['loading_weights_model']+ measurements['initializing_KV_cache'] + measurements['compile_total'] +  measurements['inference_total']))/num_users, 5)} tok/sec/user"
+        f"end-to-end throughput | seq_len={num_input_tokens}: {round((batch_size*(kv_cache_len)/measurements['inference_total'])/num_users, 5)} tok/sec/user"
     )
 
     return generated_text, measurements
