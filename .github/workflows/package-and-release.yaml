@@ -102,12 +102,6 @@ jobs:
         # We are still committed to making this eventually work for proper
         # releases to allow for easier installing for Python users.
         run: ls -arhl metal_libs-*+*.whl
-      - name: Download syseng assets for release
-        env:
-          GITHUB_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
-        run: |
-          cd infra/machine_setup
-          ./scripts/download_public_machine_setup_assets.sh -r
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
@@ -118,5 +112,4 @@ jobs:
           files: |
             VERSION
             CHANGELOG.txt
-            infra/machine_setup/assets/*
           fail_on_unmatched_files: true
