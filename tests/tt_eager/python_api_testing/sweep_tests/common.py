@@ -494,12 +494,13 @@ def shapes_and_datagen(shape_dict, datagen_dict, test_args_gen, test_tt_dtypes, 
             raise NotImplementedError("Method {method} is not a valid choice")
 
 
-def set_dispatch_mode(set_var):
-    if set_var:
-        dispatch = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
-        os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
-        logger.info("Set slow dispatch mode")
+def set_slow_dispatch_mode(set_var):
+    prev_value = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
+
+    if set_var != "" and set_var is not None:
+        os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = set_var
+        logger.info("Setting slow dispatch mode")
     else:
-        dispatch = os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
-        os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = ""
-        logger.info("Set fast dispatch mode")
+        logger.info("Setting fast dispatch mode")
+
+    return prev_value

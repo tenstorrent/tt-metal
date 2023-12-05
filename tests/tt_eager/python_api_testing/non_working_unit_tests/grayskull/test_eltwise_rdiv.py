@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_rdiv as tt_eltwise_rdiv
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_rand
-from tests.tt_eager.python_api_testing.sweep_tests.common import set_dispatch_mode
+from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 
 
 def run_eltwise_rdiv_tests(
@@ -20,7 +20,7 @@ def run_eltwise_rdiv_tests(
 ):
     random.seed(0)
     torch.manual_seed(data_seed)
-    set_dispatch_mode(dispatch_mode)
+    prev_dispatch_mode = set_slow_dispatch_mode(dispatch_mode)
 
     if in_mem_config == "SYSTEM_MEMORY":
         in_mem_config = None
@@ -45,6 +45,7 @@ def run_eltwise_rdiv_tests(
     success, pcc_value = comp_pcc(ref_value, tt_result)
     logger.debug(pcc_value)
 
+    set_slow_dispatch_mode(prev_dispatch_mode)
     assert success
 
 
@@ -57,7 +58,7 @@ test_sweep_args = [
         (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
         4781318,
         1.9915642058736664,
-        False,
+        "",
     ),
     (
         (10, 22, 160, 256),
@@ -67,7 +68,7 @@ test_sweep_args = [
         (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
         2692686,
         1.3892220599951342,
-        False,
+        "",
     ),
     (
         (11, 18, 320, 352),
@@ -77,7 +78,7 @@ test_sweep_args = [
         (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
         19325774,
         0.8325692531786724,
-        False,
+        "",
     ),
     (
         (12, 14, 448, 352),
@@ -87,7 +88,7 @@ test_sweep_args = [
         (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
         5371386,
         0.8991587580374605,
-        True,
+        "1",
     ),
     (
         (11, 22, 448, 104),
@@ -97,7 +98,7 @@ test_sweep_args = [
         (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
         1190117,
         0.19607612839476013,
-        False,
+        "",
     ),
     (
         (9, 20, 214, 424),
@@ -107,7 +108,7 @@ test_sweep_args = [
         (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
         7837345,
         8.47037061625196,
-        False,
+        "",
     ),
     (
         (11, 10, 280, 312),
@@ -117,7 +118,7 @@ test_sweep_args = [
         (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
         16699356,
         1.6465889871095842,
-        True,
+        "1",
     ),
 ]
 
