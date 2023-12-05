@@ -10,6 +10,7 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
+#include "debug/dprint.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
@@ -83,8 +84,13 @@ void MAIN {
                 ACQ();
                         //UNPACK(( { DPRINT  << "Waiting on cb_x" << ENDL(); } ));
                 cb_wait_front(cb_in, blk);
+
+                // if (wt == 0)UNPACK(( { DPRINT  << TSLICE(cb_in, 0, SliceRange::h0_w0_32()) << ENDL(); } ));
+
                         //UNPACK(( { DPRINT  << "Waiting on cb_inb" << ENDL(); } ));
                 cb_wait_front(cb_inb, blk);
+
+                // if (wt == 0)UNPACK(( { DPRINT  << TSLICE(cb_inb, 0, SliceRange::h0_w0_32()) << ENDL(); } ));
                         //UNPACK(( { DPRINT  << "Done Waiting on cb_inb" << ENDL(); } ));
                 cb_reserve_back(cb_x, blk);
                 for (uint32_t j = 0; j < blk; j++) {
@@ -109,6 +115,9 @@ void MAIN {
         reduce_init_delta<false>(REDUCE_OP, REDUCE_DIM);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt+blk);
+
+            if (wt == 0)UNPACK(( { DPRINT  << TSLICE(cb_x, 0, SliceRange::h0_w0_32()) << ENDL(); } ));
+
             for (uint32_t j = 0; j < blk; j++) {
                 reduce_tile(REDUCE_OP, REDUCE_DIM, cb_x, cb_scaler, wt+j, scaler0, dst0);
             }

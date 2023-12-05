@@ -501,6 +501,14 @@ Tensor bert_large_pre_softmax_bmm(const Tensor &input_tensor_a, const Tensor &in
         .per_core_M = 12,
         .per_core_N = 12,
     };
+    // auto program_config = operations::primary::MatmulMultiCoreReuseProgramConfig{
+    //     .compute_with_storage_grid_size = {12, batch_size},
+    //     .in0_block_w = 2,
+    //     .out_subblock_h = 1,
+    //     .out_subblock_w = 6,
+    //     .per_core_M = 24,
+    //     .per_core_N = 12,
+    // };
     return operations::primary::matmul(input_tensor_a, input_tensor_b, program_config, mem_config, output_dtype);
 
 }

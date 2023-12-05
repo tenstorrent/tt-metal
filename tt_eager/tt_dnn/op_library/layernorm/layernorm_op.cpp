@@ -66,6 +66,13 @@ operation::ProgramWithCallbacks layernorm_(
     uint32_t out_single_tile_size = tt_metal::detail::TileSize(out_data_format);
     uint32_t bfloat16_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
+    tt::DataFormat inb_data_format;
+    uint32_t inb_single_tile_size = 0;
+    if (b) {
+        inb_data_format = tt_metal::datatype_to_dataformat_converter(b.value().dtype());
+        inb_single_tile_size = tt_metal::detail::TileSize(inb_data_format);
+    }
+
     auto a_addr = a.buffer()->address();
     auto b_dram_addr = b ? b.value().buffer()->address() : 0;
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
@@ -219,7 +226,7 @@ operation::ProgramWithCallbacks layernorm_(
         program,
         rms_norm ? "tt_eager/tt_dnn/kernels/compute/rmsnorm.cpp" : "tt_eager/tt_dnn/kernels/compute/layernorm.cpp",
         all_cores,
-        tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_args, .defines = eltwise_binary_defines}
+        tt_metal::ComputeConfig{.math_fidelity = fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode, .compile_args = compute_args, .defines = eltwise_binary_defines}
     );
 
     // Create circular buffers
@@ -269,7 +276,7 @@ operation::ProgramWithCallbacks layernorm_(
         CircularBufferConfig c_intermed6_config = CircularBufferConfig(im6_t*single_tile_size, {{CB::c_intermed6, cb_data_format}}).set_page_size(CB::c_intermed6, single_tile_size);
         CreateCircularBuffer( program, all_cores, c_intermed6_config );
         // c_in1 is input buffer for b
-        CircularBufferConfig c_in1_config = CircularBufferConfig(in1_t*in_single_tile_size, {{CB::c_in1, in_data_format}}).set_page_size(CB::c_in1, in_single_tile_size);
+        CircularBufferConfig c_in1_config = CircularBufferConfig(in1_t*inb_single_tile_size, {{CB::c_in1, inb_data_format}}).set_page_size(CB::c_in1, inb_single_tile_size);
         CreateCircularBuffer( program, all_cores, c_in1_config);
     }
 
@@ -409,21 +416,7 @@ std::vector<Shape> LayerNorm::compute_output_shapes(const std::vector<Tensor> &i
 
 std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-
-    return std::visit(
-        [&](const auto& program_config) -> std::vector<Tensor> {
-            using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (
-                std::is_same_v<ProgramConfigType, tt::tt_metal::LayerNormInterleavedMultiCoreProgramConfig>
-            ) {
-                auto out_dtype = program_config.out_data_format;
-                return operation::generic_create_output_tensors(*this, input_tensors, out_dtype, Layout::TILE, this->output_mem_config);
-            } else {
-                return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
-            }
-        },
-        this->program_config
-    );
+    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
 }
 
 operation::ProgramWithCallbacks LayerNorm::create_program(
@@ -437,20 +430,7 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
     const auto& beta = optional_input_tensors.at(2);
     auto& output_tensor = output_tensors.at(0);
 
-    return std::visit(
-        [&](const auto& program_config) -> operation::ProgramWithCallbacks {
-            using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (
-                std::is_same_v<ProgramConfigType, tt::tt_metal::LayerNormInterleavedMultiCoreProgramConfig>
-            ) {
-                MathFidelity fidelity = program_config.math_fidelity;
-                return layernorm_(a, b, gamma, beta, output_tensor, this->eps, false, fidelity, program_config.im_data_format);
-            } else {
-                return layernorm_(a, b, gamma, beta, output_tensor, this->eps, false, MathFidelity::HiFi4, a.dtype());
-            }
-        },
-        this->program_config
-    );
+    return layernorm_(a, b, gamma, beta, output_tensor, this->eps, false, MathFidelity::HiFi4, DataType::BFLOAT16);
 }
 
 tt::stl::reflection::Attributes LayerNorm::attributes() const {
@@ -1207,6 +1187,9 @@ std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor> &
                     ShardSpec shard_spec = ShardSpec{.shard_grid=all_cores, .shard_shape={per_core_M * TILE_HEIGHT, per_core_N * TILE_WIDTH}, .shard_orientation=shard_orientation};
                     return {create_sharded_device_tensor(this->compute_output_shapes(input_tensors).at(0), out_data_format, Layout::TILE, input_tensor.device(), this->output_mem_config, shard_spec)};
                 }
+            } else if constexpr(std::is_same_v<ProgramConfigType, tt::operations::primary::LayerNormInterleavedMultiCoreProgramConfig>) {
+                DataType out_data_format = program_config.out_data_format;
+                return operation::generic_create_output_tensors(*this, input_tensors, out_data_format, Layout::TILE, this->output_mem_config);
             } else {
                 return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), Layout::TILE, this->output_mem_config);
             }
@@ -1245,6 +1228,11 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                                             program_config.block_h,
                                             program_config.block_w
                                             );
+            } else if constexpr (
+                std::is_same_v<ProgramConfigType, tt::operations::primary::LayerNormInterleavedMultiCoreProgramConfig>
+            ) {
+                MathFidelity fidelity = program_config.math_fidelity;
+                return layernorm_(a, b, gamma, beta, output_tensor, this->eps, false, fidelity, program_config.im_data_format);
             } else {
                 return layernorm_(a, b, gamma, beta, output_tensor, this->eps);
             }

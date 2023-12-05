@@ -208,6 +208,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_(
             grid_size,
             scalar_tile_size,
             in0_tile_size,
+            im_tile_size,
             out0_tile_size,
             mask_tile_size,
             cb_in0_id,
@@ -274,12 +275,12 @@ operation::ProgramWithCallbacks scale_mask_softmax_(
 
         UpdateCircularBufferTotalSize(program, cb_in0_id, in0_t * in0_tile_size);
         UpdateCircularBufferTotalSize(program, cb_out0_id, out0_t * out0_tile_size);
-        UpdateCircularBufferTotalSize(program, cb_intermed1_id, im1_t * in0_tile_size);
+        UpdateCircularBufferTotalSize(program, cb_intermed1_id, im1_t * im_tile_size);
         UpdateCircularBufferTotalSize(program, cb_in2_id, in2_t * scalar_tile_size);
-        UpdateCircularBufferTotalSize(program, cb_intermed0_id, im0_t * in0_tile_size);
+        UpdateCircularBufferTotalSize(program, cb_intermed0_id, im0_t * im_tile_size);
 
         if (optional_input_tensors.at(0).has_value()) {
-            UpdateCircularBufferTotalSize(program, cb_intermed3_id.value(), im3_t * in0_tile_size);
+            UpdateCircularBufferTotalSize(program, cb_intermed3_id.value(), im3_t * im_tile_size);
             UpdateCircularBufferTotalSize(program, cb_in3_id.value(), in3_t * scalar_tile_size);
             UpdateCircularBufferTotalSize(program, cb_in4_id.value(), in4_t * mask_tile_size);
         }
@@ -583,8 +584,6 @@ void Softmax::validate(const std::vector<Tensor> &input_tensors, const std::vect
                     if constexpr (
                         std::is_same_v<ProgramConfigType, tt::operations::primary::transformers::SoftmaxDefaultProgramConfig>
                     ) {
-                        TT_FATAL(input_tensor.dtype() == mask.dtype());
-                        TT_FATAL(input_tensor.shape()[-1] == mask.shape()[-1]);
                         TT_FATAL(input_tensor.shape()[0] == mask.shape()[0]);
                     } else if constexpr (
                         std::is_same_v<ProgramConfigType, tt::operations::primary::transformers::SoftmaxShardedMultiCoreProgramConfig>

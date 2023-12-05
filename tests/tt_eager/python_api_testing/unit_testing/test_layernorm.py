@@ -216,21 +216,15 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, out_dtype, cb_dtype, in
             in0_mem_config,
         )
 
-        program_config = ttl.tensor.LayerNormInterleavedMultiCoreProgramConfig(
-            math_fidelity=ttl.tensor.MathFidelity.HiFi4, im_data_format=cb_dtype, out_data_format=out_dtype
-        )
-
         if test_id == 0:
             logger.info("Running add_LN_NOGB")
-            ttz = tensor.add_layernorm(ttx, tty, epsf, output_mem_config=out_mem_config, program_config=program_config)
+            ttz = tensor.add_layernorm(ttx, tty, epsf, output_mem_config=out_mem_config)
         elif test_id == 1:
             logger.info("Running add_LN_G")
-            ttz = tensor.add_layernorm(
-                ttx, tty, epsf, ttgamma, output_mem_config=out_mem_config, program_config=program_config
-            )
+            ttz = tensor.add_layernorm(ttx, tty, epsf, ttgamma, output_mem_config=out_mem_config)
         elif test_id == 2:
             logger.info("Running add_LN_GB")
-            ttz = tensor.add_layernorm(ttx, tty, epsf, ttgamma, ttbeta, out_mem_config, program_config=program_config)
+            ttz = tensor.add_layernorm(ttx, tty, epsf, ttgamma, ttbeta, out_mem_config)
         else:
             assert False
         logger.info("Done")
@@ -248,7 +242,6 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, out_dtype, cb_dtype, in
         tt_got_back = torch.Tensor(t2_data).reshape((N, C, H, W))
         tt_got_back = untilize(tt_got_back)
 
-        # ref_lnorm = ref_layernorm(x, epsf, gammaf, betaf, H, W)
         ref_lnorm = torch.nn.functional.layer_norm(x + y, x.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
 
         assert is_close(tt_got_back, ref_lnorm)
