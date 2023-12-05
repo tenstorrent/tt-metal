@@ -45,7 +45,7 @@ class Algorithm {
     virtual std::vector<std::pair<uint64_t, uint64_t>> available_addresses(uint64_t size_bytes) const = 0;
 
     // bottom_up=true indicates that allocation grows from address 0
-    virtual std::optional<uint64_t> allocate(uint64_t size_bytes, bool bottom_up=true) = 0;
+    virtual std::optional<uint64_t> allocate(uint64_t size_bytes, bool bottom_up=true, uint64_t address_limit=0) = 0;
 
     virtual std::optional<uint64_t> allocate_at_address(uint64_t absolute_start_address, uint64_t size_bytes) = 0;
 

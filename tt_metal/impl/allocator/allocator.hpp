@@ -29,7 +29,7 @@ class BankManager {
     BankManager() {}
 
     BankManager(const BufferType &buffer_type, const std::vector<int64_t> &bank_descriptors, uint64_t size_bytes, uint64_t alloc_offset=0);
-    BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_descriptor, uint64_t size_bytes, uint64_t alloc_offset=0);
+    BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_descriptor, uint64_t size_bytes, uint64_t interleaved_address_limit, uint64_t alloc_offset=0);
 
     uint32_t num_banks() const;
 
@@ -60,7 +60,7 @@ class BankManager {
     // Set to 0 for cores/nodes with only 1 bank
     std::unordered_map<uint32_t, int64_t> bank_id_to_bank_offset_;
     std::unique_ptr<Algorithm> allocator_;
-
+    uint64_t interleaved_address_limit_;
     void validate_bank_id(uint32_t bank_id) const;
 
     void init_allocator(uint64_t size_bytes, uint64_t offset);
