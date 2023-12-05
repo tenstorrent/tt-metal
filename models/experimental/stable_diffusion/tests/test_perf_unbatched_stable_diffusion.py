@@ -235,10 +235,10 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
         # predict the noise residual
         with torch.no_grad():
             tt_noise_pred_cond = tt_unet(tt_conditioned, _t_cond, encoder_hidden_states=tt_text_embeddings)
-            ttl.device.Synchronize()
+            ttl.device.Synchronize(device)
 
             tt_noise_pred_uncond = tt_unet(tt_unconditioned, _t_uncond, encoder_hidden_states=tt_uncond_embeddings)
-            ttl.device.Synchronize()
+            ttl.device.Synchronize(device)
             noise_pred_cond = tt_to_torch_tensor(tt_noise_pred_cond)
             noise_pred_uncond = tt_to_torch_tensor(tt_noise_pred_uncond)
         # perform guidance

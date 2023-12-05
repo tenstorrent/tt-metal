@@ -49,12 +49,12 @@ def test_perf(device, expected_inference_time, expected_compile_time, model_loca
 
         profiler.start(cpu_key)
         pt_out = pt_model(test_input)
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(cpu_key)
 
         profiler.start(first_key)
         tt_out = tt_model(tt_input)
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(first_key)
         del tt_out
 
@@ -62,7 +62,7 @@ def test_perf(device, expected_inference_time, expected_compile_time, model_loca
 
         profiler.start(second_key)
         tt_out = tt_model(tt_input)
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(second_key)
         del tt_out
 

@@ -138,7 +138,7 @@ def run_bert_question_and_answering_inference(
     # Recreate inputs since activations were deallocated
     tt_attention_mask = tt_bert_model.model_attention_mask(**bert_input)
     tt_embedding_inputs = tt_bert_model.embeddings.preprocess_embedding_inputs(**bert_input)
-    tt_lib.device.Synchronize()
+    tt_lib.device.Synchronize(device)
     print(f"Enable profiler and enable binary and compile cache")
     profiler.enable()
     enable_persistent_kernel_cache()

@@ -23,9 +23,7 @@ def test_feedforward_inference(device):
     input = torch.randn(input_shape) * 0.01
 
     # setup pytorch model
-    pipe = StableDiffusionPipeline.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32
-    )
+    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
@@ -41,7 +39,7 @@ def test_feedforward_inference(device):
         state_dict=state_dict,
         device=device,
     )
-    ttl.device.Synchronize()
+    ttl.device.Synchronize(device)
     tt_input = torch_to_tt_tensor(input, device)
     tt_output = tt_ff(tt_input)
     tt_output = tt_to_torch_tensor(tt_output)

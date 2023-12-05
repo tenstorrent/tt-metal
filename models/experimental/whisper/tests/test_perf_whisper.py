@@ -73,14 +73,14 @@ def run_perf_whisper(expected_inference_time, expected_compile_time, device):
         )
         profiler.start(first_key)
         ttm_output = tt_whisper(input_features=input_features, decoder_input_ids=decoder_input_ids)
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(first_key)
 
         enable_persistent_kernel_cache()
 
         profiler.start(second_key)
         ttm_output = tt_whisper(input_features=input_features, decoder_input_ids=decoder_input_ids)
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(second_key)
 
     first_iter_time = profiler.get(first_key)

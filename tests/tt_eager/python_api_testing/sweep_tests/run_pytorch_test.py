@@ -268,7 +268,7 @@ def run_pytorch_test(args):
                             device,
                         )
 
-                        tt_lib.device.Synchronize()
+                        tt_lib.device.Synchronize(device)
                         tt_lib.profiler.stop_profiling(test_profiling_key)
                         logger.info(f"Stopped profiling test {test_profiling_key}")
                         run_id += 1

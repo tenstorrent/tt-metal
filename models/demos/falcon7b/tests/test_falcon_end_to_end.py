@@ -188,7 +188,7 @@ def run_test_FalconCausalLM_end_to_end(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-    tt_lib.device.Synchronize()
+    tt_lib.device.Synchronize(device)
     profiler.end("first_model_run_with_compile", force_enable=True)
     del tt_out
     del tt_layer_past
@@ -262,7 +262,7 @@ def run_test_FalconCausalLM_end_to_end(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-    tt_lib.device.Synchronize()
+    tt_lib.device.Synchronize(device)
     profiler.end(f"model_run_for_inference")
 
     if llm_mode == "prefill":

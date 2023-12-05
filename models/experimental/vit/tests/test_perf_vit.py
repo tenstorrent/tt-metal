@@ -46,7 +46,7 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
     with torch.no_grad():
         profiler.start(cpu_key)
         logits = HF_model(**inputs).logits
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(cpu_key)
 
         profiler.start(first_key)
@@ -57,7 +57,7 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
 
         profiler.start(second_key)
         tt_output = tt_model(tt_inputs)[0]
-        tt_lib.device.Synchronize()
+        tt_lib.device.Synchronize(device)
         profiler.end(second_key)
 
     first_iter_time = profiler.get(first_key)
