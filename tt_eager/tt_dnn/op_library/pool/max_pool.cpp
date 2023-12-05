@@ -97,9 +97,9 @@ std::vector<Tensor> MaxPool::create_output_tensors(const std::vector<Tensor> &in
 
 operation::ProgramWithCallbacks MaxPool::create_program(const std::vector<Tensor>& inputs, std::vector<Tensor> &outputs) const {
     const auto& input = inputs.at(0);
-    const auto& reader_indices = inputs.at(1);
     auto& output = outputs.at(0);
     if (inputs.size() > 1) {
+        const auto& reader_indices = inputs.at(1);
         TT_FATAL(use_multicore_, "UTWHv2 only works with multicore option.");
         TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded for UTWHv2");
         return {max_pool_2d_multi_core_sharded_with_halo_v2(
