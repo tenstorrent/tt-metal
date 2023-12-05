@@ -1658,10 +1658,7 @@ class ResNet(nn.Module):
 
         # x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
         if self.sharded:
-            interleaved_mem_config = tt_lib.tensor.MemoryConfig(
-                tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-            )
-            x = x.to(self.device, interleaved_mem_config)
+            x = x.to(self.device, self.memory_config)
 
             input_size_to_shard_evenly = _nearest_y(x.shape()[2], self.first_conv_num_cores_nhw * 32)
             untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / self.first_conv_num_cores_nhw)
