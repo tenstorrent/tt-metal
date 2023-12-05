@@ -36,7 +36,7 @@
 #define OVERLAY_DECOUPLE 0
 #endif
 
-#ifdef LLK_TB_TEST
+#if defined(EN_KERNEL_SLOWDOWN)
 #include "kernel_slowdown_config.h"
 #endif
 
@@ -61,10 +61,10 @@
 #include "ckernel_include.h"
 #include "tensix.h"
 #include "fw_debug.h"
+#include "tt_log.h"
 // #include <cstring>
 #if defined(PERF_DUMP) || DELAY_EN > 0
 #include <l1_address_map.h>
-#include "tt_log.h"
 #include "perf_lib/scratch_api.h"
 #endif
 
