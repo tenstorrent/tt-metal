@@ -99,7 +99,7 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
 }
 
 template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
-inline void llk_pack_init(const std::uint32_t pack_output = 0) {
+inline void llk_pack_init(const std::uint32_t pack_output = 16) {
 
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -179,7 +179,7 @@ inline void llk_pack_dest_section_done() {
 }
 
 template <DstSync Dst, DstTileFaceLayout FaceLayout, bool untilize = false>
-inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output = 0) {
+inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output = 16) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
@@ -191,7 +191,7 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
 }
 
 template <DstSync Dst, DstTileFaceLayout FaceLayout = RowMajor, bool untilize = false, bool is_fp32_dest_acc_en = false>
-inline void llk_pack_dest_init(const std::uint32_t pack_output = 0) {
+inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
 
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
