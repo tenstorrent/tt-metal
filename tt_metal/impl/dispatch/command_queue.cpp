@@ -978,7 +978,9 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking)
         }
 
 
-    if(is_sharded(buffer.buffer_layout())){
+    if(buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+        buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED  )
+    {
         convert_interleaved_to_sharded_on_host(dst, buffer.num_pages(),
                                         buffer.page_size(),
                                         buffer.dev_page_to_host_page_mapping(),
@@ -995,7 +997,9 @@ void CommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool bl
         buffer.page_size() < MEM_L1_SIZE - DeviceCommand::DATA_SECTION_ADDRESS,
         "Buffer pages must fit within the command queue data section");
 
-    if (is_sharded(buffer.buffer_layout())) {
+    if(buffer.buffer_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+        buffer.buffer_layout() == TensorMemoryLayout::BLOCK_SHARDED  )
+    {
         convert_interleaved_to_sharded_on_host(src, buffer.num_pages(),
                                     buffer.page_size(),
                                     buffer.dev_page_to_host_page_mapping());
