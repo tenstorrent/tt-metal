@@ -21,11 +21,11 @@ test-list:
         inputs:
           - input-1:
             data-layout: ["TILE"]
-            data-type: ["BFLOAT16"]
+            data-type: ["BFLOAT16", "BFLOAT8_B"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
           - input-2:
             data-layout: ["TILE"]
-            data-type: ["BFLOAT16"]
+            data-type: ["BFLOAT16", "BFLOAT8_B"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM", "L1"]
       output-file: eltwise_add_sweep.csv
