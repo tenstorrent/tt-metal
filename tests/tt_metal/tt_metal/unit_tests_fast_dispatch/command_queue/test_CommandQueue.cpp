@@ -11,6 +11,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/test_utils/print_helpers.hpp"
 
 using namespace tt::tt_metal;
 
@@ -22,7 +23,12 @@ TEST_F(MultiCommandQueueFixture, TestAccessCommandQueue) {
     }
 }
 
-TEST_F(BasicFastDispatchFixture, TestCannotAccessCommandQueueForClosedDevice) {
+TEST(FastDispatchHostSuite, TestCannotAccessCommandQueueForClosedDevice) {
+    auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (slow_dispatch) {
+        TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+        GTEST_SKIP();
+    }
     const unsigned int device_id = 0;
     Device* device = CreateDevice(device_id);
     EXPECT_NO_THROW(detail::GetCommandQueue(device));
@@ -52,7 +58,7 @@ TEST_F(MultiCommandQueueFixture, TestDirectedLoopbackToUniqueHugepage) {
     for (chip_id_t device_id = 0; device_id < num_devices_; device_id++) {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-        tt::Cluster::instance().read_sysmem(&readback_data, byte_size, address, mmio_device_id, channel);
+        tt::Cluster::instance().read_sysmem(readback_data.data(), byte_size, address, mmio_device_id, channel);
         EXPECT_EQ(readback_data, golden_data.at(device_id));
     }
 }

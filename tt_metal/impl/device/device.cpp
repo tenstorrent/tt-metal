@@ -299,6 +299,14 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
             this->dispatch_cores(),
             [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); }
         );
+
+        std::vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
+        pointers[0] = CQ_START >> 4;
+
+        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id_);
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->id_);
+        tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), 0, mmio_device_id, channel);
+
         detail::SendDispatchKernelToDevice(this);
     }
 

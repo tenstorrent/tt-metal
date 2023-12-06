@@ -277,12 +277,16 @@ namespace tt::tt_metal{
         {
             detail::DispatchStateCheck(true);
             // For now there is only one SW CommandQueue per device
-            static std::vector<std::unique_ptr<CommandQueue>> command_queues( Device::detect_num_available_devices() );
+            static std::vector<std::unique_ptr<CommandQueue>> command_queues( GetNumAvailableDevices() );
             chip_id_t id = device->id();
             TT_FATAL(id < command_queues.size(), "Invalid device {} detected", id);
             TT_FATAL(device->is_initialized(), "Cannot access command queue for closed device {}", id);
-            if (not command_queues[id] or (command_queues[id] and command_queues[id]->device != device)) {
-                command_queues[device->id()] = std::make_unique<CommandQueue>(device);
+            static std::mutex cq_creation_mutex;
+            {
+                std::lock_guard<std::mutex> lock(cq_creation_mutex);
+                if (not command_queues[id] or (command_queues[id] and command_queues[id]->device != device)) {
+                    command_queues[device->id()] = std::make_unique<CommandQueue>(device);
+                }
             }
             return *(command_queues[id]);
         }
@@ -492,8 +496,6 @@ namespace tt::tt_metal{
 
             const std::tuple<uint32_t, uint32_t> tlb_data = tt::Cluster::instance().get_tlb_data(tt_cxy_pair(device->id(), device->worker_core_from_logical_core(*device->dispatch_cores().begin()))).value();
             auto [tlb_offset, tlb_size] = tlb_data;
-            // std::cout << "CORE: " << device->worker_core_from_logical_core(*device->dispatch_cores().begin()).str() << std::endl;
-            // std::cout << "after sending pointers to device. my tlb_offset: " << tlb_offset << ", my tlb_size: " << tlb_size << std::endl;
 
             launch_msg_t msg = dispatch_program.kernels_on_core(producer_logical_core)->launch_msg;
 

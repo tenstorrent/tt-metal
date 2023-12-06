@@ -732,13 +732,6 @@ EnqueueCommandType EnqueueWrapCommand::type() { return this->type_; }
 
 // CommandQueue section
 CommandQueue::CommandQueue(Device* device) {
-    vector<uint32_t> pointers(CQ_START / sizeof(uint32_t), 0);
-    pointers[0] = CQ_START >> 4;
-
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-    tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), 0, mmio_device_id, channel);
-
     this->device = device;
 }
 
