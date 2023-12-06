@@ -277,7 +277,7 @@ operation::ProgramWithCallbacks moreh_layernorm_backward_input_grad_impl(
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             num_rows_per_core = num_rows_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges.");
+            TT_THROW("Core not in specified core ranges.");
         }
 
         const std::vector<uint32_t> reader_runtime_args{

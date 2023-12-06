@@ -184,7 +184,7 @@ operation::ProgramWithCallbacks moreh_matmul_multi_core(
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             num_output_tiles_per_core = num_output_tiles_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         tt_metal::SetRuntimeArgs(

@@ -130,7 +130,7 @@ operation::ProgramWithCallbacks moreh_sum_multi_core(const Tensor &src, const Te
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             num_tiles_per_core = num_cols_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges.");
+            TT_THROW("Core not in specified core ranges.");
         }
 
         SetRuntimeArgs(
