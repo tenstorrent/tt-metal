@@ -5,6 +5,34 @@
 #include "dataflow_api.h"
 
 FORCE_INLINE
+void noc_async_write_multicast_one_packet_no_path_reserve(
+    uint32_t src_local_l1_addr,
+    std::uint64_t dst_noc_addr_multicast,
+    std::uint32_t size,
+    std::uint32_t num_dests) {
+
+    DEBUG_STATUS('N', 'W', 'P', 'W');
+    DEBUG_SANITIZE_WORKER_ADDR(src_local_l1_addr, size);
+    DEBUG_SANITIZE_NOC_ADDR(dst_noc_addr, size);
+    while (!ncrisc_noc_fast_write_ok(noc_index, NCRISC_WR_REG_CMD_BUF))
+        ;
+    DEBUG_STATUS('N', 'W', 'P', 'D');
+
+    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_DISPATCH_MULTICAST_WRITE_VC) |
+                             NOC_CMD_BRCST_PACKET |
+                             NOC_CMD_RESP_MARKED;
+
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_LO, src_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr_multicast);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_RET_ADDR_MID, dst_noc_addr_multicast >> 32);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_AT_LEN_BE, size);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_REG_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    noc_nonposted_writes_num_issued[noc_index] += 1;
+    noc_nonposted_writes_acked[noc_index] += num_dests;
+}
+
+FORCE_INLINE
 void multicore_cb_wait_front(bool db_buf_switch, int32_t num_pages) {
     DEBUG_STATUS('C', 'R', 'B', 'W');
 
@@ -97,12 +125,11 @@ FORCE_INLINE void write_program_page(uint32_t page_addr, volatile tt_l1_ptr uint
         uint32_t dst_noc = command_ptr[2];
         uint32_t num_recv = command_ptr[3];
         bool last_transfer_in_group = command_ptr[4];
-        bool linked = (not (last_page & last_transfer_in_group)) & command_ptr[5];
 
         uint64_t dst_noc_addr = (uint64_t(dst_noc) << 32) | dst;
 
         if constexpr (multicast) {
-            noc_async_write_multicast(src, dst_noc_addr, num_bytes, num_recv, linked);
+            noc_async_write_multicast_one_packet_no_path_reserve(src, dst_noc_addr, num_bytes, num_recv);
         } else {
             noc_async_write_one_packet(src, dst_noc_addr, num_bytes);
         }
