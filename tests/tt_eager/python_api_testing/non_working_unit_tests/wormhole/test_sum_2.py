@@ -51,22 +51,22 @@ def run_sum_2_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, d
 
 test_sweep_args = [
     (
-        (4, 4, 92, 30),
+        (4, 4, 96, 32),
         [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR],
+        [ttl.tensor.Layout.TILE],
         ["SYSTEM_MEMORY"],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         17643447,
-        "",
+        "True",
     ),
     (
-        (6, 7, 82, 2),
+        (6, 7, 96, 32),
         [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR],
+        [ttl.tensor.Layout.TILE],
         ["SYSTEM_MEMORY"],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         79106,
-        "",
+        "True",
     ),
 ]
 
