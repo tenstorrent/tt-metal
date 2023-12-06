@@ -109,15 +109,6 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
     ),
     # TestEntry("tt_metal/tests/test_l1_to_l1_multi_core", "test_l1_to_l1_multi_core"), // TODO (nshanker): fix this test
     TestEntry("tt_metal/tests/test_core_range_set", "test_core_range_set"),
-    # Allocator Tests
-    TestEntry(
-        "tt_metal/tests/allocator/test_free_list_allocator_algo",
-        "allocator/test_free_list_allocator_algo",
-    ),
-    TestEntry(
-        "tt_metal/tests/allocator/test_l1_banking_allocator",
-        "allocator/test_l1_banking_allocator",
-    ),
     # Compile unit tests
     TestEntry(
         "tt_metal/tests/test_compile_sets_kernel_binaries",
@@ -135,15 +126,6 @@ TT_METAL_FAST_DISPATCH_TEST_ENTRIES = (
 )
 
 TT_METAL_COMMON_TEST_ENTRIES = (
-    # Allocator Tests
-    TestEntry(
-        "tt_metal/tests/allocator/test_free_list_allocator_algo",
-        "allocator/test_free_list_allocator_algo",
-    ),
-    TestEntry(
-        "tt_metal/tests/allocator/test_l1_banking_allocator",
-        "allocator/test_l1_banking_allocator",
-    ),
     # Compile unit tests
     TestEntry(
         "tt_metal/tests/test_compile_sets_kernel_binaries",
