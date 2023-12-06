@@ -1306,7 +1306,7 @@ void noc_async_read_barrier() {
 }
 
 /**
- * This blocking call waits for all the outstanding enqueued *noc_async_writ*e
+ * This blocking call waits for all the outstanding enqueued *noc_async_write*
  * calls issued on the current Tensix core to complete. After returning from
  * this call the *noc_async_write* queue will be empty for the current Tensix
  * core.
@@ -1317,6 +1317,19 @@ FORCE_INLINE
 void noc_async_write_barrier() {
     DEBUG_STATUS('N', 'W', 'B', 'W');
     while (!ncrisc_noc_nonposted_writes_flushed(noc_index))
+        ;
+    DEBUG_STATUS('N', 'W', 'B', 'D');
+}
+
+/**
+ * This blocking call waits for all outstanding enqueued *noc_async_write*
+ * calls issued on the current Tensix core to depart, but will not wait
+ * for them to complete
+*/
+FORCE_INLINE
+void noc_async_writes_flushed() {
+    DEBUG_STATUS('N', 'W', 'B', 'W');
+    while (!ncrisc_noc_nonposted_writes_sent(noc_index))
         ;
     DEBUG_STATUS('N', 'W', 'B', 'D');
 }
