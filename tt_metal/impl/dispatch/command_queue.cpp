@@ -879,9 +879,9 @@ void CommandQueue::finish() {
         tt::Cluster::instance().read_sysmem(&finish, 4, HOST_CQ_FINISH_PTR, 0);
 
         // There's also a case where the device can be hung due to an unanswered DPRINT WAIT and
-        // a full print buffer. Poll the print server for this case and finish if it happens.
+        // a full print buffer. Poll the print server for this case and throw if it happens.
         if (tt_print_hang_detected()) {
-            break;
+            TT_THROW("Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
         }
     } while (finish != 1);
 

@@ -37,10 +37,17 @@ TEST_F(CommandQueueWithDPrintFixture, TestPrintHanging) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
     );
 
-    // Run the program
+    // Run the program, we expect it to throw on waiting for CQ to finish
     EnqueueProgram(cq, program, false);
+try {
     Finish(cq);
     tt_await_debug_print_server();
+} catch (std::runtime_error& e) {
+    const string expected = "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.";
+    const string error = string(e.what());
+    log_info(tt::LogTest, "Caught exception (one is expected in this test): {}", error);
+    EXPECT_TRUE(error.find(expected) != string::npos);
+}
 
     // Check the print log against golden output.
     EXPECT_TRUE(
