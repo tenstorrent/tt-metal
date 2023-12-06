@@ -30,8 +30,8 @@
 #endif
 
 #ifdef TRISC_PACK
-#include "llk_pack_common.h"
-#include "llk_pack.h"
+#include "llk_pack_api.h"
+#include "llk_io_pack.h"
 #define PACK(x) x
 #define MAIN pack_main()
 #else
@@ -46,6 +46,7 @@
 #include "llk_unpack_reduce_api.h"
 #include "llk_unpack_tilize_api.h"
 #include "llk_unpack_untilize_api.h"
+#include "llk_io_unpack.h"
 #define UNPACK(x) x
 #define MAIN unpack_main()
 #else
