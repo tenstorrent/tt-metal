@@ -231,9 +231,9 @@ def to_layout(tensor, layout: Layout):
     return Tensor(ttl_tensor)
 
 
-def free(tensor: Tensor) -> None:
+def deallocate(tensor: Tensor) -> None:
     """
-    free(tensor: ttnn.Tensor) -> None
+    deallocate(tensor: ttnn.Tensor) -> None
 
     Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
 
@@ -245,13 +245,19 @@ def free(tensor: Tensor) -> None:
         >>> device = ttnn.open(device_id)
         >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
         >>> tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
-        >>> ttnn.free(tensor)
+        >>> ttnn.deallocate(tensor)
     """
 
     def impl(tensor):
         tensor._tensor.deallocate(force=True)
 
-    ttl.tensor.decorate_external_operation(impl, function_name="ttnn.free")(tensor)
+    ttl.tensor.decorate_external_operation(impl, function_name="ttnn.deallocate")(tensor)
+
+
+def reallocate(input_tensor: Tensor) -> Tensor:
+    ttl_input_tensor = input_tensor._tensor
+    ttl_output_tensor = ttl.tensor.move(ttl_input_tensor)
+    return Tensor(ttl_output_tensor)
 
 
 def load_tensor(file_name: Union[str, pathlib.Path]) -> Tensor:
@@ -287,7 +293,8 @@ __all__ = [
     "to_device",
     "from_device",
     "to_layout",
-    "free",
+    "deallocate",
+    "reallocate",
     "load_tensor",
     "dump_tensor",
 ]

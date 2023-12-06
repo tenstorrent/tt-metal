@@ -10,8 +10,9 @@ from ttnn.tensor import (
     Tensor,
     MemoryConfig,
     DRAM_MEMORY_CONFIG,
+    TILE_LAYOUT,
 )
-from ttnn.core import reshape, softmax
+from ttnn.core import reshape
 
 
 def split_fused_qkv_and_split_heads(
@@ -34,6 +35,9 @@ def split_fused_qkv_and_split_heads(
     if len(input_tensor.shape) != 3:
         raise RuntimeError("Input Tensor must have strictly 3 dimensions!")
 
+    if input_tensor.layout != TILE_LAYOUT:
+        raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
+
     batch_size, sequence_size, hidden_size = input_tensor.shape
     input_tensor = reshape(input_tensor, (batch_size, 1, sequence_size, hidden_size))
 
@@ -55,6 +59,7 @@ def attention_softmax(
     *,
     head_size: int,
     attention_mask: Optional[Tensor],
+    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
 ) -> Tensor:
     """
     attention_softmax(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask: Optional[Tensor]) -> Tensor
@@ -70,15 +75,20 @@ def attention_softmax(
     if len(input_tensor.shape) != 4:
         raise RuntimeError("Input Tensor must have strictly 3 dimensions!")
 
+    if input_tensor.layout != TILE_LAYOUT:
+        raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
+
     scaler = 1 / (head_size**0.5)
 
     if attention_mask is not None:
-        output_tensor = ttl.tensor.scale_mask_softmax(input_tensor._tensor, scaler, attention_mask._tensor)
+        output_tensor = ttl.tensor.scale_mask_softmax(
+            input_tensor._tensor, scaler, attention_mask._tensor, output_mem_config=memory_config
+        )
         return Tensor(output_tensor)
     else:
         scaled_input_tensor = input_tensor * scaler
         ttl_scaled_input_tensor = scaled_input_tensor._tensor
-        ttl_output_tensor = ttl.tensor.softmax(ttl_scaled_input_tensor)
+        ttl_output_tensor = ttl.tensor.softmax(ttl_scaled_input_tensor, output_mem_config=memory_config)
         return Tensor(ttl_output_tensor)
 
 
@@ -102,6 +112,9 @@ def attention_softmax_(
     if len(input_tensor.shape) != 4:
         raise RuntimeError("Input Tensor must have strictly 3 dimensions!")
 
+    if input_tensor.layout != TILE_LAYOUT:
+        raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
+
     scaler = 1 / (head_size**0.5)
 
     if attention_mask is not None:
@@ -116,30 +129,29 @@ def attention_softmax_(
 def concatenate_heads(
     input_tensor: Tensor,
     *,
-    core_grid: Tuple[int, int],
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
 ) -> Tensor:
     """
-    concatenate_heads(input_tensor: ttnn.Tensor, *, core_grid: Tuple[int, int], memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor
+    concatenate_heads(input_tensor: ttnn.Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor
 
     Takes in a tensor of shape [batch_size, num_heads, sequence_size, head_size], concatenates heads back along the width dimension and return the tensor of [batch_size, sequence_size, num_heads * head_size]
 
     Args:
         * :attr:`input_tensor`: Input Tensor
-        * :attr:`core_grid`: Compute and Storage Core Grid to use for the operation
         * :attr:`memory_config`: Memory Config of the output tensor
 
     """
     if len(input_tensor.shape) != 4:
         raise RuntimeError("Input Tensor must have strictly 4 dimensions!")
 
+    if input_tensor.layout != TILE_LAYOUT:
+        raise RuntimeError("Input Tensor must be in a TILE_LAYOUT!")
+
     batch_size, num_heads, sequence_size, head_size = input_tensor.shape
-    core_y, core_x = core_grid
 
     ttl_input_tensor = input_tensor._tensor
-    ttl_output_tensor = ttl.operations.primary.transformers.concatenate_heads(
+    ttl_output_tensor = ttl.tensor.nlp_concat_heads(
         ttl_input_tensor,
-        ttl.tensor.CoreCoord(core_x, core_y),
         memory_config,
     )
     output_tensor = Tensor(ttl_output_tensor)

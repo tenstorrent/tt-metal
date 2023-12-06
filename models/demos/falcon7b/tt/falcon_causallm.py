@@ -40,7 +40,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         self.model_config = model_config
 
         lm_head_str = f"lm_head.weight"
-        if tt_cache_path is not None:
+        if (tt_cache_path / f"{lm_head_str}_{self.model_config['LM_HEAD_MM_WEIGHTS_DTYPE'].name}.bin").exists():
             self.lm_head_weights = tt_lib.tensor.load_tensor(
                 str(tt_cache_path / f"{lm_head_str}_{self.model_config['LM_HEAD_MM_WEIGHTS_DTYPE'].name}.bin")
             ).to(device, self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"])
@@ -50,6 +50,10 @@ class TtFalconCausalLM(TtFalconModelShared):
                 self.device,
                 tt_memory_config=self.model_config["LM_HEAD_MM_WEIGHTS_MEMCFG"],
                 tt_dtype=self.model_config["LM_HEAD_MM_WEIGHTS_DTYPE"],
+            )
+            tt_lib.tensor.dump_tensor(
+                str(tt_cache_path / f"{lm_head_str}_{self.model_config['LM_HEAD_MM_WEIGHTS_DTYPE'].name}.bin"),
+                self.lm_head_weights.cpu(),
             )
 
     def forward(

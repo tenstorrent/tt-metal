@@ -80,8 +80,12 @@ def custom_preprocessor(parameters_config, torch_model, full_name, **kwargs):
             [torch_model.query.bias, torch_model.key.bias, torch_model.value.bias],
             dim=0,
         )
-        parameters[f"{full_name}fused_qkv.weight"] = preprocess_linear_weight(parameters_config, qkv_weight, **kwargs)
-        parameters[f"{full_name}fused_qkv.bias"] = preprocess_linear_bias(parameters_config, qkv_bias, **kwargs)
+        parameters[f"{full_name}fused_qkv.weight"] = preprocess_linear_weight(
+            qkv_weight, dtype=parameters_config.linear_weight_dtype
+        )
+        parameters[f"{full_name}fused_qkv.bias"] = preprocess_linear_bias(
+            qkv_bias, dtype=parameters_config.linear_bias_dtype
+        )
     return parameters
 
 
@@ -117,12 +121,12 @@ def run_bert_question_and_answering_inference(model_name, batch_size, sequence_s
     )
     parameters = preprocess_model_parameters(
         f"{model_name}-{use_optimized_version}",
+        "version_0",
         parameters_config,
-        torch_model,
+        initialize_model=lambda: torch_model,
         is_to_be_converted=is_to_be_converted,
         custom_preprocessor=custom_preprocessor if use_optimized_version else None,
         device=device,
-        use_model_cache=False,
     )
 
     bert_for_question_answering = (

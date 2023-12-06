@@ -769,8 +769,6 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.tanh_bw
 
-
 .. autofunction:: tt_lib.tensor.fill_zero_bw
 
 .. autofunction:: tt_lib.tensor.fill_bw
-

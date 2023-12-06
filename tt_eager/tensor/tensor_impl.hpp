@@ -201,18 +201,24 @@ std::string to_string_row_major_0D(const BufferType& buffer, const Shape& shape,
     return ss.str();
 }
 
+// TODO: make these configurable
+const Shape MAX_NUM_ELEMENTS_TO_PRINT = Shape({4, 4, 32, 32});
+
 template <typename BufferType>
 std::string to_string_row_major_1D(const BufferType& buffer, const Shape& shape, DataType dtype) {
 
     std::stringstream ss;
     ss << "Tensor([ ";
-    for(auto x = 0; x < shape[0]; x++) {
+    for (auto x = 0; x < std::min(shape[-1], MAX_NUM_ELEMENTS_TO_PRINT[-1]); x++) {
         // data in row major order
         auto index = x;
         print_datum(ss, buffer[index]);
-        if (x < shape[0] - 1) {
+        if (x < shape[-1] - 1) {
             ss << ", ";
         }
+    }
+    if (shape[-1] > MAX_NUM_ELEMENTS_TO_PRINT[-1]) {
+        ss << "...";
     }
     ss << "], dtype=" <<  dtype << " )" << std::endl;
     return ss.str();
@@ -223,12 +229,12 @@ std::string to_string_row_major_2D(const BufferType& buffer, const Shape& shape,
 
     std::stringstream ss;
     ss << "Tensor([ ";
-    for(auto y = 0; y < shape[0]; y++) {
+    for (auto y = 0; y < std::min(shape[-2], MAX_NUM_ELEMENTS_TO_PRINT[-2]); y++) {
         if (y == 0)
             ss << "[";
         else
             ss << "    [";
-        for(auto x = 0; x < shape[1]; x++) {
+        for (auto x = 0; x < std::min(shape[-1], MAX_NUM_ELEMENTS_TO_PRINT[-1]); x++) {
             // data in row major order
             auto index = x + y*shape[1];
             print_datum(ss, buffer[index]);
@@ -236,10 +242,16 @@ std::string to_string_row_major_2D(const BufferType& buffer, const Shape& shape,
                 ss << ", ";
             }
         }
+        if (shape[-1] > MAX_NUM_ELEMENTS_TO_PRINT[-1]) {
+            ss << "...";
+        }
         if(y < shape[0] - 1)
             ss << "]," << std::endl;
         else
             ss << "]";
+    }
+    if (shape[-2] > MAX_NUM_ELEMENTS_TO_PRINT[-2]) {
+        ss << "...";
     }
     ss << "], dtype=" <<  dtype << " )" << std::endl;
     return ss.str();
@@ -250,17 +262,17 @@ std::string to_string_row_major_3D(const BufferType& buffer, const Shape& shape,
 
     std::stringstream ss;
     ss << "Tensor([ ";
-    for(auto z = 0; z < shape[0]; z++) {
+    for (auto z = 0; z < std::min(shape[-3], MAX_NUM_ELEMENTS_TO_PRINT[-3]); z++) {
         if (z == 0)
             ss << "[";
         else
             ss << "   [";
-        for(auto y = 0; y < shape[1]; y++) {
+        for (auto y = 0; y < std::min(shape[-2], MAX_NUM_ELEMENTS_TO_PRINT[-2]); y++) {
             if (y == 0)
                 ss << "[";
             else
                 ss << "    [";
-            for(auto x = 0; x < shape[2]; x++) {
+            for (auto x = 0; x < std::min(shape[-1], MAX_NUM_ELEMENTS_TO_PRINT[-1]); x++) {
                 // data in row major order
                 auto index = x + y*shape[2] + z*shape[1]*shape[2];
                 print_datum(ss, buffer[index]);
@@ -268,15 +280,24 @@ std::string to_string_row_major_3D(const BufferType& buffer, const Shape& shape,
                     ss << ", ";
                 }
             }
+            if (shape[-1] > MAX_NUM_ELEMENTS_TO_PRINT[-1]) {
+                ss << "...";
+            }
             if(y < shape[1] - 1)
                 ss << "]," << std::endl;
             else
                 ss << "]";
         }
+        if (shape[-2] > MAX_NUM_ELEMENTS_TO_PRINT[-2]) {
+            ss << "...";
+        }
         if(z < shape[0] - 1)
             ss << "]," << std::endl << std::endl;
         else
             ss << "]";
+    }
+    if (shape[-3] > MAX_NUM_ELEMENTS_TO_PRINT[-3]) {
+        ss << "...";
     }
     ss << "], dtype=" <<  dtype << " )" << std::endl;
     return ss.str();
@@ -287,22 +308,22 @@ std::string to_string_row_major_4D(const BufferType& buffer, const Shape& shape,
 
     std::stringstream ss;
     ss << "Tensor([ ";
-    for(auto w = 0; w < shape[0]; w++) {
+    for (auto w = 0; w < std::min(shape[-4], MAX_NUM_ELEMENTS_TO_PRINT[-4]); w++) {
         if(w == 0)
             ss << "[";
         else
             ss << "  [";
-        for(auto z = 0; z < shape[1]; z++) {
+        for (auto z = 0; z < std::min(shape[-3], MAX_NUM_ELEMENTS_TO_PRINT[-3]); z++) {
             if (z == 0)
                 ss << "[";
             else
                 ss << "   [";
-            for(auto y = 0; y < shape[2]; y++) {
+            for (auto y = 0; y < std::min(shape[-2], MAX_NUM_ELEMENTS_TO_PRINT[-2]); y++) {
                 if (y == 0)
                     ss << "[";
                 else
                     ss << "    [";
-                for(auto x = 0; x < shape[3]; x++) {
+                for (auto x = 0; x < std::min(shape[-1], MAX_NUM_ELEMENTS_TO_PRINT[-1]); x++) {
                     // data in row major order
                     auto index = x + y*shape[3] + z*shape[2]*shape[3] + w*shape[1]*shape[2]*shape[3];
                     print_datum(ss, buffer[index]);
@@ -310,20 +331,32 @@ std::string to_string_row_major_4D(const BufferType& buffer, const Shape& shape,
                         ss << ", ";
                     }
                 }
+                if (shape[-1] > MAX_NUM_ELEMENTS_TO_PRINT[-1]) {
+                    ss << "...";
+                }
                 if(y < shape[2] - 1)
                     ss << "]," << std::endl;
                 else
                     ss << "]";
+            }
+            if (shape[-2] > MAX_NUM_ELEMENTS_TO_PRINT[-2]) {
+                ss << "...";
             }
             if(z < shape[1] - 1)
                 ss << "]," << std::endl << std::endl;
             else
                 ss << "]";
         }
+        if (shape[-3] > MAX_NUM_ELEMENTS_TO_PRINT[-3]) {
+            ss << "...";
+        }
         if(w < shape[0] - 1)
             ss << "]," << std::endl << std::endl << std::endl;
         else
             ss << "]";
+    }
+    if (shape[-4] > MAX_NUM_ELEMENTS_TO_PRINT[-4]) {
+        ss << "...";
     }
     ss << "], dtype=" <<  dtype << " )" << std::endl;
     return ss.str();
