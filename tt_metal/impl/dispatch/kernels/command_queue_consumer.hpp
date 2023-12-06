@@ -4,8 +4,6 @@
 
 #include "dataflow_api.h"
 
-static constexpr uint32_t PROGRAM_CB_ID = 0;
-
 FORCE_INLINE
 void multicore_cb_wait_front(bool db_buf_switch, int32_t num_pages) {
     DEBUG_STATUS('C', 'R', 'B', 'W');
@@ -82,7 +80,7 @@ FORCE_INLINE void write_buffers(
                 ShardedBuffer src_buffer(page_size, num_cores, bank_base_address, command_ptr+6);
                 src_buffer.noc_async_write_buffer(src_addr, id, num_to_write);
             }
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
             multicore_cb_pop_front(
                 producer_noc_encoding,
                 db_buf_switch,
@@ -90,10 +88,10 @@ FORCE_INLINE void write_buffers(
                 consumer_cb_size,
                 num_to_write,
                 page_size);
-            noc_async_write_barrier();
             id += num_to_write;
         }
     }
+    noc_async_write_barrier();
 }
 
 template <bool multicast>
@@ -145,7 +143,7 @@ FORCE_INLINE void program_page_transfer(
             src_addr += DeviceCommand::PROGRAM_PAGE_SIZE;
         }
         page_idx += num_to_write;
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         multicore_cb_pop_front(
             producer_noc_encoding,
             db_buf_switch,
@@ -153,7 +151,6 @@ FORCE_INLINE void program_page_transfer(
             consumer_cb_size,
             num_to_write,
             DeviceCommand::PROGRAM_PAGE_SIZE);
-        noc_async_write_barrier();  // Flush barrier, not an ack barrier
     }
 }
 
