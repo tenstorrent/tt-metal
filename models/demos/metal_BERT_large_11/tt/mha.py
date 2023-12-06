@@ -153,87 +153,31 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
                 activation.device(),
                 tt_lib.tensor.MemoryConfig(tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1),
             )
-
-        print("qkv")
         qkv = op1_qkv_fused(activation, qkv_weight, qkv_bias)
         if reserve_split_heads_shape is not None:
             temp.deallocate()
         # activation.deallocate()
 
-        DRAM_MEMCFG = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-        )
-
-        # qkv1 = tt_lib.tensor.sharded_to_interleaved(qkv, DRAM_MEMCFG)
-        # qkv1 = qkv
-        # qkv_test = qkv1.cpu().to_torch().float()
-        # print(qkv_test[0][0][0][0:128])
-
-        print("op2_create_qkv_heads")
         Q_heads, K_T_heads, V_heads = op2_create_qkv_heads(qkv)
         qkv.deallocate()
 
-        # print(Q_heads.shape())
-
-        # # Q_heads1 = tt_lib.tensor.sharded_to_interleaved(Q_heads, DRAM_MEMCFG)
-        # Q_heads1 = Q_heads
-        # Q_heads_test = Q_heads1.cpu().to_torch().float()
-        # print(Q_heads_test)
-        # # K_T_heads1 = tt_lib.tensor.sharded_to_interleaved(K_T_heads, DRAM_MEMCFG)
-        # K_T_heads1 = K_T_heads
-        # K_T_heads_test = K_T_heads1.cpu().to_torch().float()
-        # print(K_T_heads_test)
-
-        # with open('inter_Q.txt', 'w') as file:
-        #     file.write(str(Q_heads_test[0]))
-        # with open('inter_KT.txt', 'w') as file:
-        #     file.write(str(K_T_heads_test[0]))
-
-        # with open('shard_Q.txt', 'w') as file:
-        #     file.write(str(Q_heads_test[0]))
-        # with open('shard_KT.txt', 'w') as file:
-        #     file.write(str(K_T_heads_test[0]))
-        print("op3_bmm")
         qkt = op3_bmm(Q_heads, K_T_heads)
         Q_heads.deallocate()
         K_T_heads.deallocate()
 
-        if "OP3_PRE_SOFTMAX_BMM_CONFIG" in model_config:
-            qkt1 = tt_lib.tensor.sharded_to_interleaved(qkt, DRAM_MEMCFG)
-        else:
-            qkt1 = qkt
-        qkt_test = qkt1.cpu().to_torch().float()
-        print(qkt_test)
-
-        if "OP3_PRE_SOFTMAX_BMM_CONFIG" in model_config:
-            with open("shard_qkt.txt", "w") as file:
-                file.write(str(qkt_test[0]))
-        else:
-            with open("inter_qkt.txt", "w") as file:
-                file.write(str(qkt_test[0]))
-
-        # attention_scores = op4_scale_mask_softmax(qkt, attention_mask)
-
-        # attention_scores1 = tt_lib.tensor.sharded_to_interleaved(attention_scores, DRAM_MEMCFG)
-        # attention_scores1 = attention_scores
-        # attention_scores_test = attention_scores1.cpu().to_torch().float()
-        # print(attention_scores_test[0][0][0][0:32])
-
+        attention_scores = op4_scale_mask_softmax(qkt, attention_mask)
         # Should be a no-op deallocate since it was moved?
-        qkt.deallocate()
-        # weighted_activation = op5_bmm(attention_scores, V_heads)
-        # weighted_activation = op5_bmm(qkt, V_heads)
-        # attention_scores.deallocate()
+        # qkt.deallocate()
+        weighted_activation = op5_bmm(attention_scores, V_heads)
+        attention_scores.deallocate()
         V_heads.deallocate()
 
-        # print(weighted_activation.shape())
+        res = op6_unmake_attention_heads(
+            weighted_activation
+        )  # [N, num heads, seq len, hid size / num heads] -> [N, seq len, hid size]
+        weighted_activation.deallocate()
 
-        # res = op6_unmake_attention_heads(
-        #     weighted_activation
-        # )  # [N, num heads, seq len, hid size / num heads] -> [N, seq len, hid size]
-        # weighted_activation.deallocate()
-
-        return activation
+        return res
 
     return mha_
 

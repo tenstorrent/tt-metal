@@ -105,7 +105,7 @@ def pretty_print_model_config(model_config):
     return "\n".join(print_str)
 
 
-def get_model_config(model_config_str):
+def get_model_config(batch, model_config_str):
     assert model_config_str in ACCEPTABLE_MODEL_CONFIG_STRS
     DRAM_MEMCFG = tt_lib.tensor.MemoryConfig(
         tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
@@ -191,24 +191,68 @@ def get_model_config(model_config_str):
         model_config.update(new_config_values)
 
     elif model_config_str == "BFLOAT8_B-L1" or model_config_str == "BFLOAT8_B-DRAM":
+        grid_size = [12, batch]
         new_config_values = {
-            # "OP10_FF2_MM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            # "OP3_PRE_SOFTMAX_BMM_OUTPUT_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            # "OP4_SOFTMAX_ATTENTION_MASK_DTYPE": tt_lib.tensor.DataType.BFLOAT16,
-            # "OP4_SOFTMAX_CONFIG": tt_lib.operations.primary.transformers.SoftmaxInterleavedMultiCoreProgramConfig(
-            #     math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
-            #     im_data_format=tt_lib.tensor.DataType.BFLOAT16,
-            # ),
-            # "OP8_LAYERNORM_CONFIG": tt_lib.operations.primary.LayerNormInterleavedMultiCoreProgramConfig(
-            #     math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
-            #     im_data_format=tt_lib.tensor.DataType.BFLOAT16,
-            #     out_data_format=tt_lib.tensor.DataType.BFLOAT16,
-            # ),
-            # "OP11_LAYERNORM_CONFIG": tt_lib.operations.primary.LayerNormInterleavedMultiCoreProgramConfig(
-            #     math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
-            #     im_data_format=tt_lib.tensor.DataType.BFLOAT16,
-            #     out_data_format=tt_lib.tensor.DataType.BFLOAT8_B,
-            # ),
+            "OP3_PRE_SOFTMAX_BMM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                in0_block_w=2,
+                out_subblock_h=1,
+                out_subblock_w=6,
+                per_core_M=12,
+                per_core_N=12,
+            ),
+            "OP5_POST_SOFTMAX_BMM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                in0_block_w=12,
+                out_subblock_h=4,
+                out_subblock_w=2,
+                per_core_M=12,
+                per_core_N=2,
+            ),
+            "OP7_SELFOUT_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                in0_block_w=4,
+                out_subblock_h=2,
+                out_subblock_w=4,
+                per_core_M=12,
+                per_core_N=4,
+                transpose_mcast=False,
+                fused_activation=None,
+            ),
+            "OP9_FF1_MM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=8,
+                per_core_M=12,
+                per_core_N=16,
+                transpose_mcast=False,
+                fused_activation=(tt_lib.tensor.FusibleActivation.GELU, True),
+            ),
+            "OP10_FF2_MM_CONFIG": tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=grid_size,
+                in0_block_w=16,
+                out_subblock_h=2,
+                out_subblock_w=4,
+                per_core_M=12,
+                per_core_N=4,
+                transpose_mcast=False,
+                fused_activation=None,
+            ),
+            "OP4_SOFTMAX_CONFIG": tt_lib.operations.primary.transformers.SoftmaxInterleavedMultiCoreProgramConfig(
+                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+                im_data_format=tt_lib.tensor.DataType.BFLOAT16,
+            ),
+            "OP8_LAYERNORM_CONFIG": tt_lib.operations.primary.LayerNormInterleavedMultiCoreProgramConfig(
+                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+                im_data_format=tt_lib.tensor.DataType.BFLOAT16,
+                out_data_format=tt_lib.tensor.DataType.BFLOAT8_B,
+            ),
+            "OP11_LAYERNORM_CONFIG": tt_lib.operations.primary.LayerNormInterleavedMultiCoreProgramConfig(
+                math_fidelity=tt_lib.tensor.MathFidelity.HiFi4,
+                im_data_format=tt_lib.tensor.DataType.BFLOAT16,
+                out_data_format=tt_lib.tensor.DataType.BFLOAT8_B,
+            ),
         }
         model_config.update(new_config_values)
 

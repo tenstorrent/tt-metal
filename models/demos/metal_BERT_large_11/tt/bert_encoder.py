@@ -201,53 +201,17 @@ class TtBertEncoder:
         # MHA - OP1 - OP6 ------------------------------->
         mha_res = self.mha(activation, attention_mask)
         # Don't deallocate activations here since it is used by more ops
-        DRAM_MEMCFG = tt_lib.tensor.MemoryConfig(
-            tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
-        )
 
-        # mha_res1 = tt_lib.tensor.sharded_to_interleaved(mha_res, DRAM_MEMCFG)
-        # mha_res1 = mha_res
-        # mha_res_test = mha_res1.cpu().to_torch().float()
-        # print(mha_res_test[0][0][0][0:32])
-
-        # mha_out = self.op7_mm_plus_bias(mha_res, self.attention_output_weight, self.attention_output_bias)
-        # mha_out = self.op7_mm_plus_bias(activation, self.attention_output_weight, self.attention_output_bias)
-        # mha_res.deallocate()
-
-        # activation1 = tt_lib.tensor.sharded_to_interleaved(activation, DRAM_MEMCFG)
-        # activation1 = activation
-        # activation_test = activation1.cpu().to_torch().float()
-        # print(activation_test[0][0][0][0:32])
-
-        # mha_out1 = tt_lib.tensor.sharded_to_interleaved(mha_out, DRAM_MEMCFG)
-        # mha_out1 = mha_out
-        # mha_test = mha_out1.cpu().to_torch().float()
-        # print(mha_test[0][0][0][0:32])
-
-        # mha_out_add_and_norm = self.op8_add_layernorm(activation, mha_out)
-        # mha_out_add_and_norm = self.op8_add_layernorm(activation, activation)
-        # activation.deallocate()
-        # mha_out_add_and_norm.deallocate()
-        # mha_out.deallocate()
+        mha_out = self.op7_mm_plus_bias(mha_res, self.attention_output_weight, self.attention_output_bias)
+        mha_res.deallocate()
+        mha_out_add_and_norm = self.op8_add_layernorm(activation, mha_out)
+        activation.deallocate()
+        mha_out.deallocate()
 
         # FFN - OP9 - OP10 ----------------------------->
-        # ffn_out = self.ffn(mha_out_add_and_norm)
-        # ffn_out = self.ffn(mha_out)
-        # mha_out.deallocate()
+        ffn_out = self.ffn(mha_out_add_and_norm)
 
-        # mha_out_add_and_norm1 = tt_lib.tensor.sharded_to_interleaved(mha_out_add_and_norm, DRAM_MEMCFG)
-        # mha_out_add_and_norm1 = mha_out_add_and_norm
-        # mha_out_add_and_norm_test = mha_out_add_and_norm1.cpu().to_torch().float()
-        # print(mha_out_add_and_norm_test[0][0][0][0:32])
-
-        # ffn_out1 = tt_lib.tensor.sharded_to_interleaved(ffn_out, DRAM_MEMCFG)
-        # ffn_out1 = ffn_out
-        # ffn_test = ffn_out1.cpu().to_torch().float()
-        # print(ffn_test[0][0][0][0:32])
-
-        # ffn_out_add_and_norm = self.op11_add_layernorm(mha_out_add_and_norm, ffn_out)
-        # mha_out_add_and_norm.deallocate()
-        # ffn_out.deallocate()
-
-        # return ffn_out_add_and_norm
-        return mha_res
+        ffn_out_add_and_norm = self.op11_add_layernorm(mha_out_add_and_norm, ffn_out)
+        mha_out_add_and_norm.deallocate()
+        ffn_out.deallocate()
+        return ffn_out_add_and_norm
