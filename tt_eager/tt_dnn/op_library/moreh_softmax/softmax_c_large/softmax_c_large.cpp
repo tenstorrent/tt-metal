@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks moreh_softmax_c_large(const Tensor &input, Tenso
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_THROW("Core not in specified core ranges");
         }
 
         vector<uint32_t> reader_args = {
