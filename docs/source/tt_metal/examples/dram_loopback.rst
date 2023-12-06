@@ -99,6 +99,7 @@ For simplicity, let's make the size of all our buffers 50 tiles.
 Let's make the input and output DRAM buffers.
 
 .. code-block:: cpp
+
   tt_metal::InterleavedBufferConfig dram_config{
                                         .device=device,
                                         .size = dram_buffer_size,

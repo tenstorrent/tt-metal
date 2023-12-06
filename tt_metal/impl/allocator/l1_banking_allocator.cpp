@@ -117,12 +117,11 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
         num_banks.total
     );
 
-    uint32_t reserved_region = (alloc_config.l1_bank_size == alloc_config.worker_l1_size) ? L1_UNRESERVED_BASE : STORAGE_ONLY_UNRESERVED_BASE;
     // There is only alloc_config.l1_bank_size bytes available for L1 buffers to be allocated in
-    uint64_t interleaved_address_limit = static_cast<uint64_t>(alloc_config.l1_bank_size) + reserved_region;
-    uint64_t allocatable_l1_size = static_cast<uint64_t>(alloc_config.worker_l1_size) - reserved_region;
+    uint64_t interleaved_address_limit = static_cast<uint64_t>(alloc_config.worker_l1_size - alloc_config.l1_bank_size) + STORAGE_ONLY_UNRESERVED_BASE;
+    uint64_t allocatable_l1_size = static_cast<uint64_t>(alloc_config.worker_l1_size) - L1_UNRESERVED_BASE;
     // Assuming top down allocation for L1 buffers so the allocatable memory space is the top alloc_config.l1_bank_size bytes of L1
-    uint64_t alloc_offset = reserved_region;
+    uint64_t alloc_offset = L1_UNRESERVED_BASE;
     allocator.l1_manager = BankManager(BufferType::L1, bank_id_to_bank_offset, allocatable_l1_size, interleaved_address_limit, alloc_offset);
 }
 
