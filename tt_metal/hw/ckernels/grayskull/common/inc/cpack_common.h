@@ -416,14 +416,4 @@ namespace ckernel::packer
    {
        dest_offset_id = 0;
    }
-
-   inline uint32_t get_output_id(uint32_t output)
-   {
-      return ((output) - OUTPUT_BASE);
-   }
-
-   inline constexpr uint32_t get_output_base_id()
-   {
-      return (OUTPUT_BASE_ID);
-   }
 }

@@ -62,8 +62,6 @@ extern uint32_t dest_offset_id;
 extern uint32_t dbg_event_index;
 extern uint32_t dbg_event_end;
 
-extern uint32_t op_info_offset;
-
 // Internal scope to namespace methods only (C++ does not allow namespace private ownership)
 namespace internal {
 }
@@ -279,109 +277,6 @@ inline std::uint32_t memory_cast(T *object_ptr)
 
 inline void debug_dump(uint8_t *data, uint32_t byte_size) {
     // TODO(pk) re-implement
-}
-
-inline void llk_get_next_op_info(tt::op_info_t& op_info_struct) {
-
-    uint32_t* op_info_ptr = reinterpret_cast<uint32_t*>(OP_INFO_BASE_ADDR + op_info_offset);
-    static constexpr uint32_t op_info_num_items = 7;
-
-    volatile tt_l1_ptr uint32_t* op_info_struct_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(&op_info_struct);
-    for (uint32_t i = 0; i < op_info_num_items; i++) {
-        op_info_struct_ptr[i] = op_info_ptr[i];
-    }
-    op_info_offset += 28;
-
-    if (op_info_offset == OP_INFO_SIZE) {
-        op_info_offset = 0; // In case we go out of bounds
-    }
-}
-
-inline __attribute__((always_inline)) unsigned int mulsi3 (unsigned int a, unsigned int b)
-{
-  unsigned int r = 0;
-  while (a)
-    {
-      if (a & 1)
-        r += b;
-      a >>= 1;
-      b <<= 1;
-    }
-  return r;
-}
-
-inline __attribute__((always_inline)) uint32_t fast_udiv_12(uint32_t n)
-{
-    // Uses embedding style magic number
-    // * fixed point 1/12 then shifting.
-    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
-    return (((uint64_t) n * 0xAAAAAAAB) >> 32) >> 3;
-}
-
-inline __attribute__((always_inline)) uint32_t fast_udiv_94(uint32_t n)
-{
-    // Uses embedding style magic number
-    // * fixed point 1/12 then shifting.
-    // https://web.archive.org/web/20190703172151/http://www.hackersdelight.org/magic.htm
-    return (((uint64_t) n * 0xAE4C415D) >> 32) >> 6;
-}
-
-template <uint32_t d>
-inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
-{
-    if constexpr (d == 12) {
-        // fast divide for 12 divisor
-        return fast_udiv_12(n);
-    } else if constexpr (d == 94) {
-        // fast divide for 94 divisor. Handles Banked L1 address generation for E75
-        return fast_udiv_94(n);
-    } else {
-        // generic divide from llvm
-        const unsigned n_uword_bits = sizeof(uint32_t) * CHAR_BIT;
-        unsigned int q;
-        unsigned int r;
-        unsigned sr;
-        /* special cases */
-        if (d == 0)
-            return 0; /* ?! */
-        if (n == 0)
-            return 0;
-        sr = __builtin_clz(d) - __builtin_clz(n);
-        /* 0 <= sr <= n_uword_bits - 1 or sr large */
-        if (sr > n_uword_bits - 1)  /* d > r */
-            return 0;
-        if (sr == n_uword_bits - 1)  /* d == 1 */
-            return n;
-        ++sr;
-        /* 1 <= sr <= n_uword_bits - 1 */
-        /* Not a special case */
-        q = n << (n_uword_bits - sr);
-        r = n >> sr;
-        unsigned int  carry = 0;
-        for (; sr > 0; --sr)
-        {
-            /* r:q = ((r:q)  << 1) | carry */
-            r = (r << 1) | (q >> (n_uword_bits - 1));
-            q = (q << 1) | carry;
-            /* carry = 0;
-             * if (r.all >= d.all)
-             * {
-             *      r.all -= d.all;
-             *      carry = 1;
-             * }
-             */
-            const int s = (unsigned int)(d - r - 1) >> (n_uword_bits - 1);
-            carry = s & 1;
-            r -= d & s;
-        }
-        q = (q << 1) | carry;
-        return q;
-    }
-}
-template <uint32_t d>
-inline __attribute__((always_inline)) uint32_t umodsi3_const_divisor(uint32_t a)
-{
-    return a - udivsi3_const_divisor<d>(a) * d;
 }
 
 inline void tensix_sync()

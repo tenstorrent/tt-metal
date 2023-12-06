@@ -11,6 +11,9 @@
 #include "llk_param_structs.h"
 #include "llk_io_unpack.h"
 
+//TODO: Remove with GS uplift
+#include "llk_operands.h"
+
 #ifdef PERF_DUMP
 #include "ckernel_perf_api.h"
 #endif

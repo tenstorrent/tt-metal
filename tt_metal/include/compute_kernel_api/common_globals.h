@@ -31,6 +31,7 @@
 #endif
 
 #ifdef TRISC_UNPACK
+#include "llk_unpack_common_api.h"
 #define UNPACK(x) x
 #define MAIN unpack_main()
 #else

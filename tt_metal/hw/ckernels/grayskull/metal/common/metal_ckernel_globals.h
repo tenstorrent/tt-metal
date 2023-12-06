@@ -7,12 +7,10 @@
 #pragma once
 
 #include <cstdint>
-#include "ckernel_globals.h"
-#include "tensix_functions.h"
-#include "metal_compile_time_args.h"
+#include "ckernel_structs.h"
 #include "risc_attribs.h"
+#include "tensix_functions.h"
 #include "hostdevcommon/common_runtime_address_map.h"
-#include "hostdevcommon/kernel_structs.h"
 
 extern uint32_t __ldm_bss_start[];
 extern uint32_t __ldm_bss_end[];

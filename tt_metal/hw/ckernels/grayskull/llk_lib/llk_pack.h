@@ -149,7 +149,7 @@ inline void llk_pack_init() {
 template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false>
 inline void llk_matmul_pack(std::uint32_t start_tile_index, std::uint32_t output, uint32_t ntiles, std::uint32_t output_tile_index = 0) {
     std::uint8_t output_id = get_output_id(output);
-    constexpr std::uint8_t OUTPUT_BASE_ID = (std::uint8_t) get_output_base_id();
+    const std::uint8_t OUTPUT_BASE_ID = (std::uint8_t) get_output_base_id();
 
     static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
 

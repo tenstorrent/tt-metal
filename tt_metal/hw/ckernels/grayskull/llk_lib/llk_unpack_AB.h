@@ -6,6 +6,9 @@
 #include "llk_io_unpack.h"
 #include "llk_param_structs.h"
 
+//TODO: Remove with GS uplift
+#include "llk_operands.h"
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_template.h"

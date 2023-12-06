@@ -335,9 +335,4 @@ namespace ckernel::unpacker
       // Clear context ID
       //reset_config_context();
     }
-
-   inline uint32_t get_operand_id(uint32_t operand)
-   {
-      return operand;
-   }
 }
