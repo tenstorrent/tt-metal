@@ -55,6 +55,8 @@ operation::ProgramWithCallbacks Move::create_program(const std::vector<Tensor>& 
             return move_multi_core(input_tensor, output_tensor);
         case MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP:
             return move_multi_core_with_overlap(input_tensor, output_tensor);
+        case MoveOpParallelizationStrategy::MULTI_CORE_SHARDED:
+            return move_multi_core_sharded(input_tensor, output_tensor);
         case MoveOpParallelizationStrategy::SINGLE_CORE:
         default:
             return move_single_core(input_tensor, output_tensor);

@@ -112,6 +112,8 @@ def test_sharded_rm(device, input_shape, shard_size, shard_scheme, shard_orienta
         ),
     )
 
+    assert input_shape[0] == 1 and input_shape[1] == 1
+
     yt = ttl.tensor.interleaved_to_sharded(xt, grid_size, shard_size, shard_scheme, shard_orientation)
 
     zt = ttl.tensor.sharded_to_interleaved(

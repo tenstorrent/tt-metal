@@ -711,7 +711,6 @@ void Matmul::validate(
                     uint32_t N = input_tensor_b.shape()[-1] / TILE_WIDTH;
                     uint32_t per_core_M = program_config.per_core_M;
                     auto shard_shape = input_tensor_a.shard_spec().value().shard_shape;
-
                     TT_FATAL(per_core_M == (shard_shape[0] / TILE_HEIGHT));
                     TT_FATAL((shard_shape[1] / TILE_WIDTH) % program_config.in0_block_w == 0);
                     TT_FATAL(K / (shard_shape[1] / TILE_WIDTH) == N / program_config.per_core_N);

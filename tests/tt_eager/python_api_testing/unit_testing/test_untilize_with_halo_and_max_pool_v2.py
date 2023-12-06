@@ -38,6 +38,7 @@ def volume(shape):
             [4, 64, 112, 112],
             [8, 64, 112, 112],
             [16, 64, 112, 112],
+            [20, 64, 112, 112],
         )
     ),
 )
@@ -140,7 +141,14 @@ def test_run_max_pool(
     elif out_nhw == 2048 or out_nhw == 4096 or out_nhw == 8192 or out_nhw == 16384 or out_nhw == 32768:
         ncores_nhw = 64
         grid_size = (8, 8)
-    elif out_nhw == 3136 or out_nhw == 6272 or out_nhw == 12544 or out_nhw == 25088 or out_nhw == 50176:
+    elif (
+        out_nhw == 3136
+        or out_nhw == 6272
+        or out_nhw == 12544
+        or out_nhw == 25088
+        or out_nhw == 50176
+        or out_nhw == 62720
+    ):
         if is_wormhole_b0():
             pytest.skip("Unsupported grid size for WH")
         ncores_nhw = 98
