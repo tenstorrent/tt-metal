@@ -7,7 +7,7 @@
 
 #include "common_globals.h"
 
-
+//TODO: Should WHB0 functions be added here?
 namespace ckernel {
 
 /**

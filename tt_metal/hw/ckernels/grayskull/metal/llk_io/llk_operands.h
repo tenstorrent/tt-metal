@@ -21,6 +21,7 @@ inline const uint32_t get_operand_dst_format(const std::uint32_t operand_id)
    return unpack_dst_format[operand_id];
 }
 
+//TODO: Do we need tile dim functions for GS?
 inline const uint32_t get_operand_num_faces(const std::uint32_t operand_id)
 {
    return 4;
