@@ -10,11 +10,11 @@ import tt_lib as ttl
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import permute as tt_permute
+from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import activation_swiglu as tt_activation_swiglu
 from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 
 
-def run_permute_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, permute_dims, data_seed, device):
+def run_swiglu_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
     # prev_dispatch_mode = set_slow_dispatch_mode("1")
 
@@ -25,11 +25,10 @@ def run_permute_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config
     x_ref = x.detach().clone()
 
     # get ref result
-    ref_value = pytorch_ops.permute(x_ref, permute_dims=permute_dims)
+    ref_value = pytorch_ops.activation_swiglu(x_ref)
 
-    tt_result = tt_permute(
+    tt_result = tt_activation_swiglu(
         x=x,
-        permute_dims=permute_dims,
         device=device,
         dtype=[dtype],
         layout=[dlayout],
@@ -46,29 +45,20 @@ def run_permute_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config
 
 test_sweep_args = [
     (
-        (3, 4, 98, 124),
+        (1, 1, 88, 128),
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.ROW_MAJOR,
         "SYSTEM_MEMORY",
         (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
-        (1, 2, 3, 0),
-        18244914,
-    ),
-    (
-        (2, 3, 82, 126),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-        "SYSTEM_MEMORY",
-        (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
-        (0, 1, 2, 3),
-        4054436,
+        True,
+        11033139,
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, permute_dims, data_seed",
+    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
     (test_sweep_args),
 )
-def test_permute(input_shape, dtype, dlayout, in_mem_config, out_mem_config, permute_dims, data_seed, device):
-    run_permute_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, permute_dims, data_seed, device)
+def test_swiglu(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
+    run_swiglu_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
