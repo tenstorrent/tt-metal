@@ -466,6 +466,8 @@ but in general retaining the data.
 
 .. autofunction:: tt_lib.tensor.clone
 
+.. autofunction:: tt_lib.tensor.typecast
+
 .. autofunction:: tt_lib.tensor.copy
 
 Tensor creation operations

@@ -8,6 +8,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "tt_metal/common/tt_backend_api_types.hpp"
+#include "common/bfloat8.hpp"
 
 using namespace tt::constants;
 
@@ -36,6 +38,7 @@ operation::ProgramWithCallbacks copy_single_core(const Tensor &input, const Tens
     uint32_t src0_cb_index = CB::c_in0;
     uint32_t num_input_units = 2;
     uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size);
+    uint32_t aligned_output_unit_size = round_up_to_mul32(output_unit_size);
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_units * aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
 		.set_page_size(src0_cb_index, aligned_input_unit_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
@@ -99,6 +102,7 @@ operation::ProgramWithCallbacks copy_single_core(const Tensor &input, const Tens
         core,
         tt_metal::WriterDataMovementConfig{.compile_args = writer_compile_time_args, .defines = kernel_defines});
 
+<<<<<<< HEAD
     if (convert_dtype) {
         vector<uint32_t> compute_kernel_args = {
             num_units
@@ -110,6 +114,24 @@ operation::ProgramWithCallbacks copy_single_core(const Tensor &input, const Tens
             tt_metal::ComputeConfig{.compile_args=compute_kernel_args}
         );
     }
+=======
+    bool fp32_dest_acc_en = false;
+    bool math_approx_mode = false;
+    vector<uint32_t> compute_kernel_args = {
+        uint(num_units) // per_core_tile_cnt
+    };
+
+    auto eltwise_unary_kernel = tt_metal::CreateKernel(
+        program,
+        "tt_eager/tt_dnn/kernels/compute/eltwise_copy.cpp",
+        core,
+        tt_metal::ComputeConfig{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = compute_kernel_args
+        });
+>>>>>>> 8f2e54a4b... #0: Add support for typecast
 
    if (tilized) {
         SetRuntimeArgs(
