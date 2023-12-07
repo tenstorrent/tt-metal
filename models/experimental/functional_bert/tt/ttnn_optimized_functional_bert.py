@@ -161,8 +161,6 @@ def ttnn_optimized_bert(
     *,
     head_size,
 ):
-    import tt_lib as ttl
-
     word_embeddings = ttnn.embedding(
         input_ids,
         parameters.bert.embeddings.word_embeddings.weight,

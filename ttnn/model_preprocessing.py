@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import copy
 import io
 import pathlib
 import shutil
@@ -176,15 +175,15 @@ def _preprocess_model_parameters(
         if default_preprocessor_parameters:
             return make_parameter_dict(default_preprocessor_parameters)
 
-    if isinstance(model, torch.nn.Linear):
-        # TODO: remove deepcopy. It's needed because we don't want to modify the actual model
-        model = copy.deepcopy(model)
-        model.weight = torch.nn.Parameter(model.weight.T.contiguous())
-    elif isinstance(model, torch.nn.Conv2d):
-        raise RuntimeError("Transpose conv weights?")
-
     named_children = list(model.named_children())
     if not named_children:
+        if isinstance(model, torch.nn.Linear):
+            parameters = {"weight": model.weight.T.contiguous()}
+            if model.bias is not None:
+                parameters["bias"] = model.bias
+            return make_parameter_dict(parameters)
+        elif isinstance(model, torch.nn.Conv2d):
+            raise RuntimeError("Transpose conv weights?")
         return make_parameter_dict(dict(model.named_parameters()))
 
     parameters = {}

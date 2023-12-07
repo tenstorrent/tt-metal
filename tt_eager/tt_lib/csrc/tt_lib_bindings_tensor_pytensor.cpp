@@ -9,6 +9,7 @@
 #include "tensor/tensor_impl.hpp"
 #include "tt_dnn/op_library/run_operation.hpp"
 #include "tt_lib_bindings_tensor.hpp"
+#include "tt_metal/tools/profiler/op_profiler.hpp"
 
 namespace tt::tt_metal::detail {
 Tensor convert_torch_tensor_to_tt_tensor(
@@ -325,15 +326,23 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     auto [op, input_tensors] = detail::parse_external_operation(function, args, kwargs, function_name);
                     operation::log_operation(op, input_tensors);
 
+                    auto profile_scope = tt::tt_metal::op_profiler::OpProfileScope(
+                        op.get_type_name(), tt::tt_metal::op_profiler::OpType::python_fallback);
+                    auto do_profile = tt::tt_metal::op_profiler::get_profiler_flag();
+                    if (do_profile) {
+                        op_profiler::set_preferred_name(op.get_type_name());
+                    }
+
                     auto output_tensors = function(*args, **kwargs);
+
                     const auto end{std::chrono::steady_clock::now()};
 #ifdef TTNN_ENABLE_LOGGING
-                    const std::chrono::duration<double> elapsed_seconds{end - start};
+                    const auto elapsed_seconds = static_cast<std::size_t>((end - start).count());
                     tt::log_info(
                         tt::LogOp,
-                        "Operation {:100} finished in {:15} seconds",
+                        "Operation {:100} finished in {:15} nanoseconds",
                         op.get_type_name(),
-                        elapsed_seconds.count());
+                        elapsed_seconds);
 #endif
 
                     return output_tensors;

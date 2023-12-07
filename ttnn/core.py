@@ -741,6 +741,14 @@ def sub(
         )
         return reshape(output_tensor, original_shape)
     elif isinstance(input_tensor_b, Tensor):
+        input_shape_b = input_tensor_b._tensor.shape_without_padding()
+
+        if len(input_shape_b) == 1:
+            height_b = 1
+            (width_b,) = input_shape_b
+        else:
+            *_, height_b, width_b = input_shape_b
+
         input_tensor_b = _reshape_to_4D(input_tensor_b)
         ttl_input_tensor_b = input_tensor_b._tensor
         if ttl_input_tensor_b.storage_type() != ttl.tensor.StorageType.DEVICE:
@@ -749,7 +757,6 @@ def sub(
         raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
 
     ttl_input_tensor_b = input_tensor_b._tensor
-    input_shape_b = ttl_input_tensor_b.shape()
 
     if alpha != 1:
         ttl_input_tensor_b = ttl.tensor.mul_unary(
@@ -757,12 +764,6 @@ def sub(
             alpha,
             output_mem_config=memory_config,
         )
-
-    if len(input_shape_b) == 1:
-        height_b = 1
-        (width_b,) = input_shape_b
-    else:
-        *_, height_b, width_b = input_shape_b
 
     if height_b == 1 and width_b == 1:
         output_tensor = Tensor(
@@ -858,10 +859,16 @@ def mul(input_tensor_a: Tensor, input_tensor_b: Tensor, memory_config: MemoryCon
     elif not isinstance(input_tensor_b, Tensor):
         raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
 
+    input_shape_b = input_tensor_b._tensor.shape_without_padding()
+
+    if len(input_shape_b) == 1:
+        height_b = 1
+        (width_b,) = input_shape_b
+    else:
+        *_, height_b, width_b = input_shape_b
+
     input_tensor_b = _reshape_to_4D(input_tensor_b)
     ttl_input_tensor_b = input_tensor_b._tensor
-    input_shape_b = ttl_input_tensor_b.shape()
-    *_, height_b, width_b = input_shape_b
 
     if height_b == 1 and width_b == 1:
         return reshape(

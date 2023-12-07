@@ -5,9 +5,9 @@
 import time
 
 from loguru import logger
+import pytest
 import torch
 from transformers import BloomConfig, BloomForQuestionAnswering, BloomTokenizerFast
-import pytest
 
 from models.experimental.functional_bloom.tt import ttnn_functional_bloom
 from models.experimental.functional_bloom.tt import ttnn_optimized_functional_bloom
