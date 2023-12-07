@@ -31,7 +31,7 @@ def test_add_1D_tensor_and_scalar(device, scalar, size):
 @pytest.mark.parametrize("h", [2 * 32])
 @pytest.mark.parametrize("w", [4 * 32])
 def test_add_scalar(device, s, h, w):
-    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor + s
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
@@ -49,7 +49,7 @@ def test_add_scalar(device, s, h, w):
 @pytest.mark.parametrize("h", [1])
 @pytest.mark.parametrize("w", [4])
 def test_add_scalar_and_alpha(device, alpha, scalar_input_tensor_b, h, w):
-    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.add(torch_input_tensor, scalar_input_tensor_b, alpha=alpha)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
@@ -65,8 +65,8 @@ def test_add_scalar_and_alpha(device, alpha, scalar_input_tensor_b, h, w):
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [2 * 32])
 def test_add(device, h, w):
-    torch_a = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
-    torch_b = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_a = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_b = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output = torch.add(torch_a, torch_b)
 
     a = ttnn.from_torch(torch_a)
@@ -106,7 +106,7 @@ def test_add_4D(device, n, c, h, w):
 @pytest.mark.parametrize("w", [2 * 32])
 @pytest.mark.parametrize("scalar", [0.42])
 def test_add_scalar(device, h, w, scalar):
-    torch_a = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_a = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output = scalar + torch_a
 
     a = ttnn.from_torch(torch_a)

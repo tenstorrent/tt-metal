@@ -18,7 +18,7 @@ from models.utility_functions import skip_for_wormhole_b0
 def test_layer_norm(device, h, w):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
@@ -37,7 +37,7 @@ def test_layer_norm(device, h, w):
 def test_layer_norm_with_weight_and_bias(device, h, w):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_weight = torch.rand((w,), dtype=torch.bfloat16)
     torch_bias = torch.rand((w,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.layer_norm(
@@ -66,8 +66,8 @@ def test_layer_norm_with_weight_and_bias(device, h, w):
 def test_layer_norm_with_weight_bias_and_residual_input(device, h, w):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
-    torch_residual_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_residual_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_weight = torch.rand((w,), dtype=torch.bfloat16)
     torch_bias = torch.rand((w,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.layer_norm(
