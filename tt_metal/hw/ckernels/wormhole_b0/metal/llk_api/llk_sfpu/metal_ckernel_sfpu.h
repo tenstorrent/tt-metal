@@ -655,20 +655,6 @@ inline void cast_fp32_to_fp16a()
     }
 }
 
-
-
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_negative()
-{
-
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        vFloat val = dst_reg[0];
-        dst_reg[0] = -val;
-        dst_reg++;
-    }
-}
-
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_add1()
 {
@@ -771,21 +757,6 @@ inline void calculate_silu()
         v_endif;
         result = val * result;
         dst_reg[0] = result;
-        dst_reg++;
-    }
-}
-
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_mask()
-{
-    bool exponent_size_8 = true;
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        vFloat mask = dst_reg[32];
-        v_if(sfpu_is_fp16_zero(mask, exponent_size_8)) {
-            dst_reg[0] = 0;
-        }
-        v_endif;
         dst_reg++;
     }
 }
