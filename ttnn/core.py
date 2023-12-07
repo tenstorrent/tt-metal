@@ -1009,10 +1009,10 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
                 ttl_input_tensor, shape
             )
 
-    try:
+    if len(input_tensor.shape) == 4 and len(shape) == 4:
         w, z, y, x = shape
         return Tensor(ttl.tensor.reshape(ttl_input_tensor, w, z, y, x))
-    except:
+    else:
 
         def torch_reshape(tensor, shape):
             return tensor.reshape(shape).contiguous()
@@ -1063,9 +1063,9 @@ def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
 
     ttl_input_tensor = input_tensor._tensor
 
-    try:
+    if len(input_tensor.shape) == 4:
         return Tensor(ttl.tensor.permute(ttl_input_tensor, order))
-    except:
+    else:
 
         def torch_permute(tensor, order):
             return tensor.permute(order).contiguous()
