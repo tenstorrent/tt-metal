@@ -6,6 +6,7 @@
 
 #include <filesystem>
 #include <type_traits>
+#include <chrono>
 
 #include "third_party/magic_enum/magic_enum.hpp"
 
@@ -102,7 +103,8 @@ namespace op_profiler {
             string name;
             Profiler profiler = Profiler();
             vector<string> metaDataVector = {};
-
+            std::chrono::time_point<std::chrono::steady_clock> start_time; //in seconds
+            std::chrono::time_point<std::chrono::steady_clock> end_time; //in seconds
             int opCallCount;
             int globalCallCount;
             int stackSize;
@@ -112,7 +114,7 @@ namespace op_profiler {
             vector<string> mathFidelities = {};
             string parlStrategy = "";
             string preferredName = "";
-
+            
             OpType type;
 
             OpData (string opName, int opCount, int globalCount, int stackSizeArg, OpType typeArg):
@@ -122,6 +124,11 @@ namespace op_profiler {
                 stackSize(stackSizeArg),
                 type(typeArg)
             {}
+
+            const std::chrono::duration<double> get_runtime() {
+                const auto diff = end_time - start_time;
+                return diff;
+            }
         };
 
         class OpProfiler {
@@ -205,7 +212,8 @@ namespace op_profiler {
                     additionalFields.push_back({"Preferred Name", opData.preferredName});
                     additionalFields.push_back({"Meta Data", join_vector(opData.metaDataVector)});
                     additionalFields.push_back({"Type", fmt::format("{}",magic_enum::enum_name(opData.type))});
-
+                    additionalFields.push_back({"Runtime", fmt::format("{}",opData.get_runtime().count)});
+                    
                     return additionalFields;
                 }
 
@@ -258,6 +266,7 @@ namespace op_profiler {
 
                     setup_profiling_folders (opNameNoComma, callCount, opData.profiler);
                     opStack.push(opData);
+                    opData.start_time = std::chrono::steady_clock::now();
 #endif
                 }
 
@@ -270,6 +279,7 @@ namespace op_profiler {
                     TT_ASSERT (opNameNoComma == opData.name, "Something is wrong, op name mismatch");
 
                     auto additionalFields = generate_additional_data();
+                    opData.end_time = std::chrono::steady_clock::now();                    
                     opData.profiler.markStop(opNameNoComma, additionalFields);
                     clear_profiler();
 #endif
