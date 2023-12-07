@@ -80,7 +80,6 @@ struct llk_pack_params_t {
     llk_relu_config_u relu_config;
 };
 
-// TODO: nsmith move this to a common place where the hlk can include it
 struct hlk_pack_shifted_params_t {
     std::uint32_t pack_output;
     llk_relu_config_u relu_config;
