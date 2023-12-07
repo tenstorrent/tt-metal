@@ -20,6 +20,7 @@ uint32_t unp_cfg_context = 0;
 uint32_t pack_sync_tile_dst_ptr = 0;
 uint32_t math_sync_tile_dst_index = 0;
 uint32_t gl_alu_format_spec_reg = 0;
+uint32_t op_info_offset = 0;
 
 namespace ckernel
 {
