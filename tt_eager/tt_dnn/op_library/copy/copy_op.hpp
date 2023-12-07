@@ -46,6 +46,10 @@ inline Tensor clone(const Tensor& input, const MemoryConfig& output_mem_config =
     return operation::run(Copy{output_mem_config, output_dtype.value_or(input.dtype())}, {input}).at(0);
 }
 
+inline Tensor typecast(const Tensor& input_tensor, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    return operation::run(Copy{output_mem_config}, {input_tensor}).at(0);
+}
+
 //unary assign
 inline Tensor assign(const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, std::optional<const DataType> output_dtype = std::nullopt) {
     return operation::run(Copy{output_mem_config, output_dtype.value_or(input.dtype())}, {input}).at(0);

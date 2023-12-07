@@ -24,6 +24,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.clone,
         "pytorch_op": pytorch_ops.clone,
     },
+    "typecast": {
+        "tt_lib_op": tt_lib_ops.typecast,
+        "pytorch_op": pytorch_ops.typecast,
+    },
     "copy": {
         "tt_lib_op": tt_lib_ops.copy,
         "pytorch_op": pytorch_ops.copy,
