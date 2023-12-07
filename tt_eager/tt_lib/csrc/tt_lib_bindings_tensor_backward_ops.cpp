@@ -62,7 +62,7 @@ namespace tt::tt_metal::detail{
             )doc");
 
     m_tensor.def("exp_bw", &tt::tt_metal::exp_bw,
-            py::arg("grad").noconvert(), py::arg("exp_result").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
+            py::arg("grad").noconvert(), py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
                 Performs backward operations for exponential with given ``grad``
 
                 Input tensors must have BFLOAT16 data type.
@@ -74,7 +74,7 @@ namespace tt::tt_metal::detail{
 
 
                     "grad", "Gradient tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                    "exp_result", "Result tensor of an exponentinal forward operation", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
+                    "input", "Tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                     "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
             )doc");
 
