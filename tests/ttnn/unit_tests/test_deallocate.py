@@ -11,8 +11,8 @@ import ttnn
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [2 * 32])
-def test_free(device, h, w):
-    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+def test_deallocate(device, h, w):
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
 
@@ -25,7 +25,7 @@ def test_free(device, h, w):
 
     # Create a reference to the same storage by using reshape which will create a new flyweight
     # (If reshape operation changes, then this test might need to be updated)
-    output_tensor_reference = ttnn.reshape(output_tensor, (1, 1, h, w))
+    output_tensor_reference = ttnn.reshape(output_tensor, (h, w))
 
     ttnn.deallocate(output_tensor)
     with pytest.raises(RuntimeError) as exception:

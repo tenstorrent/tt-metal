@@ -15,9 +15,13 @@ from ttnn.core import reshape, _reshape_to_4D
 
 
 def exp(input_tensor: Tensor) -> Tensor:
+    original_shape = tuple(input_tensor.shape)
+    input_tensor = _reshape_to_4D(input_tensor)
     ttl_input_tensor = input_tensor._tensor
-    output_tensor = ttl.tensor.exp(ttl_input_tensor)
-    return Tensor(output_tensor)
+    ttl_output_tensor = ttl.tensor.exp(ttl_input_tensor)
+    output_tensor = Tensor(ttl_output_tensor)
+    output_tensor = reshape(output_tensor, original_shape)
+    return output_tensor
 
 
 def gelu(input_tensor: Tensor, fast_and_approx=True) -> Tensor:

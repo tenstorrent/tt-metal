@@ -1009,7 +1009,7 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
                 ttl_input_tensor, shape
             )
 
-    if len(input_tensor.shape) == 4 and len(shape) == 4:
+    if input_tensor.is_on_device and len(input_tensor.shape) == 4 and len(shape) == 4:
         w, z, y, x = shape
         return Tensor(ttl.tensor.reshape(ttl_input_tensor, w, z, y, x))
     else:
@@ -1063,7 +1063,7 @@ def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
 
     ttl_input_tensor = input_tensor._tensor
 
-    if len(input_tensor.shape) == 4:
+    if input_tensor.is_on_device and len(input_tensor.shape) == 4:
         return Tensor(ttl.tensor.permute(ttl_input_tensor, order))
     else:
 
@@ -1099,15 +1099,20 @@ def softmax(input_tensor: Tensor, dim: int, memory_config: MemoryConfig = DRAM_M
 
     """
 
-    rank = len(input_tensor.shape)
+    input_shape = tuple(input_tensor.shape)
+    rank = len(input_shape)
     if dim < 0:
         dim = rank + dim
     if dim != rank - 1:
         raise RuntimeError("Softmax can only operate on the last dimension.")
 
+    input_tensor = _reshape_to_4D(input_tensor)
+
     ttl_input_tensor = input_tensor._tensor
     ttl_output_tensor = ttl.tensor.softmax(ttl_input_tensor, output_mem_config=memory_config)
-    return Tensor(ttl_output_tensor)
+    output_tensor = Tensor(ttl_output_tensor)
+    output_tensor = reshape(output_tensor, input_shape)
+    return output_tensor
 
 
 def embedding(

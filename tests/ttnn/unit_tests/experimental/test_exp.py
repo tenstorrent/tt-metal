@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 def test_exp(device, h, w):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.exp(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
