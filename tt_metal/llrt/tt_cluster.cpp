@@ -45,8 +45,6 @@ Cluster::Cluster() {
     this->generate_cluster_descriptor();
 
     this->initialize_device_drivers();
-
-    this->assert_risc_reset();
 }
 
 void Cluster::detect_arch_and_target() {
@@ -127,12 +125,6 @@ void Cluster::initialize_device_drivers() {
             default_params.vcd_dump_cores = tt::utils::strsplit(dump_cores_string, ',');
         }
         this->start_driver(mmio_device_id, default_params);
-    }
-}
-
-void Cluster::assert_risc_reset() {
-    for (const auto &[mmio_device_id, controlled_devices] : this->devices_grouped_by_assoc_mmio_device_) {
-        this->get_driver(mmio_device_id).assert_risc_reset();
     }
 }
 
@@ -374,16 +366,24 @@ void Cluster::reset_debug_print_server_buffers() const {
     }
 }
 
+void Cluster::assert_risc_reset(const chip_id_t &chip) const {  this->get_driver(chip).assert_risc_reset(chip); }
+
 void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(physical_chip_coord.chip);
     tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(physical_chip_coord);
     this->get_driver(virtual_chip_coord.chip).deassert_risc_reset_at_core(virtual_chip_coord);
 }
 
-void Cluster::assert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const {
-    const metal_SocDescriptor &soc_desc = this->get_soc_desc(physical_chip_coord.chip);
-    tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(physical_chip_coord);
-    this->get_driver(virtual_chip_coord.chip).assert_risc_reset_at_core(virtual_chip_coord);
+void Cluster::deassert_risc_reset(const chip_id_t &target_device_id, bool start_stagger) const {
+    if (this->target_type_ == TargetDevice::Versim) {
+        // Not running silicon multichip test
+        TT_FATAL(target_device_id == 0, "Device ID must be 0 for Versim");
+        this->get_driver(target_device_id).deassert_risc_reset(target_device_id);
+    } else if (this->target_type_ == TargetDevice::Silicon) {
+        log_debug(tt::LogLLRuntime, "Stagger start : {}", start_stagger);
+        TT_ASSERT(not start_stagger, "UMD currently does not support staggered deassert of RISC reset");
+        this->get_driver(target_device_id).deassert_risc_reset(target_device_id);
+    }
 }
 
 inline uint64_t get_sys_addr(uint32_t chip_x, uint32_t chip_y, uint32_t noc_x, uint32_t noc_y, uint64_t offset) {

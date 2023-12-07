@@ -64,6 +64,7 @@ void Device::initialize_cluster() {
     int ai_clk = tt::Cluster::instance().get_device_aiclk(this->id_);
     log_info(tt::LogMetal, "AI CLK for device {} is:   {} MHz", this->id_, ai_clk);
 #endif
+    tt::Cluster::instance().assert_risc_reset(this->id_);
 }
 
 void Device::initialize_allocator(const std::vector<uint32_t>& l1_bank_remap) {
@@ -292,20 +293,7 @@ bool Device::close() {
     this->deallocate_buffers();
     llrt::watcher_detach(this);
     tt_stop_debug_print_server();
-
-    // Assert worker cores
-    CoreCoord grid_size = this->logical_grid_size();
-    for (uint32_t y = 0; y < grid_size.y; y++) {
-        for (uint32_t x = 0; x < grid_size.x; x++) {
-            CoreCoord logical_core(x, y);
-            CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
-
-            if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
-                tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
-            }
-        }
-    }
-
+    tt::Cluster::instance().assert_risc_reset(id_);
     this->clear_l1_state();
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);

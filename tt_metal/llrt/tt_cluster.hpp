@@ -57,8 +57,9 @@ class Cluster {
     void verify_eth_fw() const;
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const;
 
+    void assert_risc_reset(const chip_id_t &chip) const;
     void deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
-    void assert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
+    void deassert_risc_reset(const chip_id_t &target_device_id, bool start_stagger = false) const;
 
     void write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access = false) const;
     void read_dram_vec(
@@ -133,7 +134,6 @@ class Cluster {
     void detect_arch_and_target();
     void generate_cluster_descriptor();
     void initialize_device_drivers();
-    void assert_risc_reset();
     void open_driver(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids, const bool &skip_driver_allocs = false);
     void start_driver(chip_id_t mmio_device_id, tt_device_params &device_params) const;
 
@@ -174,8 +174,7 @@ class Cluster {
         (uint32_t)MEM_TRISC2_SIZE,
         (uint32_t)MEM_TRISC0_BASE,
         (uint32_t)GET_MAILBOX_ADDRESS_HOST(l1_barrier),
-        (uint32_t)eth_l1_mem::address_map::ERISC_BARRIER_BASE,
-        (uint32_t)eth_l1_mem::address_map::FW_VERSION_ADDR,
+        (uint32_t)eth_l1_mem::address_map::ERISC_BARRIER_BASE
     };
 
     tt_driver_host_address_params host_address_params = {
