@@ -780,3 +780,10 @@ Backward Operations
 .. autofunction:: tt_lib.tensor.sub_bw
 
 .. autofunction:: tt_lib.tensor.unary_sub_bw
+
+Loss Functions
+--------------
+
+.. autofunction:: tt_lib.tensor.mseloss
+
+.. autofunction:: tt_lib.tensor.maeloss

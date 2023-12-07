@@ -6,6 +6,7 @@
 #include "tt_lib_bindings_tensor_impl.hpp"
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/complex/complex_ops.hpp"
+#include "tt_eager/tt_dnn/op_library/loss/loss_op.hpp"
 
 namespace tt::tt_metal::detail{
     void TensorModuleCompositeOPs( py::module & m_tensor){
@@ -882,12 +883,30 @@ namespace tt::tt_metal::detail{
         );
 
         m_tensor.def("complex_div",
-		    py::overload_cast<const ComplexTensor&,const ComplexTensor&,const MemoryConfig&>(tt::tt_metal::complex_div),
+		    py::overload_cast<const ComplexTensor&,const ComplexTensor&, const MemoryConfig&>(tt::tt_metal::complex_div),
             py::arg("input_a"),
             py::arg("input_b"),
 	        py::arg("output_mem_config").noconvert() = std::nullopt,
 	        R"doc(Returns addition of a complex division of ``{0}`` by ``{1}``.)doc"
         );
-    }
 
+        //loss functions
+        m_tensor.def("mseloss",
+		    py::overload_cast<const Tensor&,const Tensor&,const LossReductionMode,const MemoryConfig&>(tt::tt_metal::mseloss),
+            py::arg("input_reference"),
+            py::arg("input_prediction"),
+            py::arg("reduce_mode"),
+	        py::arg("output_mem_config").noconvert() = std::nullopt,
+	        R"doc(Returns mean squared error loss function for ``{0}`` and ``{1}``.)doc"
+        );
+
+        m_tensor.def("maeloss",
+		    py::overload_cast<const Tensor&,const Tensor&,const LossReductionMode,const MemoryConfig&>(tt::tt_metal::maeloss),
+            py::arg("input_reference"),
+            py::arg("input_prediction"),
+            py::arg("reduce_mode"),
+	        py::arg("output_mem_config").noconvert() = std::nullopt,
+	        R"doc(Returns mean absolute error loss function for ``{0}`` and ``{1}``.)doc"
+        );
+    }
 }
