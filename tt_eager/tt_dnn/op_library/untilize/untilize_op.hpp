@@ -12,6 +12,8 @@ namespace tt {
 
 namespace tt_metal {
 
+#define MAX_PACK_UNTILIZE_WIDTH 8       // pack untilize currently does not support > 8 width
+
 enum class UntilizeOpParallelizationStrategy {
     MULTI_CORE = 0, SINGLE_CORE = 1
 };
@@ -19,6 +21,7 @@ enum class UntilizeOpParallelizationStrategy {
 struct Untilize {
     const MemoryConfig output_mem_config;
     const bool use_multicore;
+    const bool use_pack_untilize;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::Shape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -57,12 +60,12 @@ struct UntilizeWithUnpadding {
     }
 };
 
-operation::ProgramWithCallbacks untilize_multi_core(const Tensor &a, Tensor& output);
-operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& output);
+operation::ProgramWithCallbacks untilize_multi_core(const Tensor &a, Tensor& output, bool use_pack_untilize = true);
+operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& output, bool use_pack_untilize = true);
 operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end);
 operation::ProgramWithCallbacks untilize_with_unpadding_single_core(const Tensor &a, Tensor& output, const Shape &output_tensor_start, const Shape &output_tensor_end);
 
-Tensor untilize (const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, bool use_multicore = false);
+Tensor untilize (const Tensor &a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, bool use_multicore = true, bool use_pack_untilize = true);
 Tensor untilize_with_unpadding(const Tensor &a, const Shape &output_tensor_start, const Shape &output_tensor_end, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // NOTE: UntilizeWithHalo is only for sharded input/output

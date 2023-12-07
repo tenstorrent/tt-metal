@@ -145,7 +145,7 @@ inline std::tuple<int32_t, int32_t, int32_t, int32_t, CoreRangeSet, CoreRangeSet
     return std::make_tuple(ncores, ncores_x, ncores_x_cliff, ncores_y, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff);
 }
 
-operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& output) {
+operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& output, bool use_pack_untilize) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     bool src_sharded = a.memory_config().is_sharded();
@@ -318,10 +318,18 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
         (uint32_t) ntiles_per_block,    // per_block_ntiles
     };
 
+    std::string compute_kernel("tt_eager/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
+    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
+        log_debug(LogOp, "Using slow untilize.");
+        compute_kernel = std::string("tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
+    } else {
+        log_debug(LogOp, "Using fast pack untilize.");
+    }
+
     if (core_range.ranges().size() > 0) {
         auto untilize_kernel_id = CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
+            compute_kernel,
             core_range,
             ComputeConfig{
                 .compile_args = compute_args});
@@ -329,7 +337,7 @@ operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a, Tensor& out
     if (core_range_cliff.ranges().size() > 0) {
         auto untilize_cliff_kernel_id = CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
+            compute_kernel,
             core_range_cliff,
             ComputeConfig{
                 .compile_args = compute_args_cliff});

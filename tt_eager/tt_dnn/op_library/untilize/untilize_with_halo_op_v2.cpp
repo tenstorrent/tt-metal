@@ -351,9 +351,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         std::vector<uint32_t> compute_ct_args = {
             nblocks_per_core,
             ntiles_per_block };
+        std::string compute_kernel("tt_eager/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
+        if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH) {
+            log_debug(LogOp, "Falling back to slow untilize since ntiles_per_block {} > MAX_PACK_UNTILIZE_WIDTH {}", ntiles_per_block, MAX_PACK_UNTILIZE_WIDTH);
+            compute_kernel = std::string("tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
+        }
         KernelHandle untilize_kernel_id = CreateKernel(
             program,
-            "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
+            compute_kernel,
             all_cores,
             ComputeConfig{
                 .compile_args = compute_ct_args});

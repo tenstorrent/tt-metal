@@ -18,7 +18,7 @@ namespace tt {
 namespace tt_metal {
 
 
-operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& output) {
+operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& output, bool use_pack_untilize) {
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -122,9 +122,17 @@ operation::ProgramWithCallbacks untilize_single_core(const Tensor &a, Tensor& ou
         uint32_t(num_tiles_per_block) // per_core_block_tile_cnt
     };
 
+    std::string compute_kernel("tt_eager/tt_dnn/op_library/untilize/kernels/compute/pack_untilize.cpp");
+    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
+        log_debug(LogOp, "Using slow untilize.");
+        compute_kernel = std::string("tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp");
+    } else {
+        log_debug(LogOp, "Using fast pack untilize.");
+    }
+
     auto untilize_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/untilize/kernels/compute/untilize.cpp",
+        compute_kernel,
         core,
         tt_metal::ComputeConfig{.compile_args = compute_args}
     );
