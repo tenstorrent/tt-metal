@@ -174,6 +174,21 @@ std::vector<Tensor> tanh_bw(const Tensor& grad, const Tensor& input, const Memor
     return operation::decorate_as_composite(__func__, _tanh_bw)(grad, input, output_mem_config);
 }
 
+// grad(sigmoid) = grad*(1 - sigmoid(x))*sigmoid(x)
+std::vector<Tensor> _sigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) {
+    Tensor rsub_term = rsub(input,1.0f,output_mem_config);
+    Tensor prod_term_1 = mul(input,rsub_term,{},output_mem_config);
+    Tensor prod_term_2 = mul(prod_term_1,grad,{},output_mem_config);
+    return {prod_term_2};
+}
+
+std::vector<Tensor> sigmoid_bw(const Tensor& grad, const Tensor& input, 
+                                const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _sigmoid_bw)(grad, input, output_mem_config);
+}
+
+
+
 std::vector<Tensor> _tan_bw(const Tensor& grad, const Tensor& tan_result, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor result = mul(grad, add1(square(tan_result, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
