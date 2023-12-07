@@ -18,6 +18,9 @@ def run_sum_0_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, 
     torch.manual_seed(data_seed)
     prev_dispatch_mode = set_slow_dispatch_mode("")
 
+    if in_mem_config == "SYSTEM_MEMORY":
+        in_mem_config = None
+
     x = torch.Tensor(size=input_shape).uniform_(0, 100).to(torch.bfloat16)
     ref_value = pytorch_ops.sum(x, dim=0)
 
@@ -64,6 +67,14 @@ test_sweep_args = [
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         13587334,
     ),
+    (
+        (1, 4, 50, 48),
+        ttl.tensor.DataType.BFLOAT16,
+        ttl.tensor.Layout.ROW_MAJOR,
+        "SYSTEM_MEMORY",
+        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
+        3514701,
+    ),
 ]
 
 
@@ -73,9 +84,3 @@ test_sweep_args = [
 )
 def test_sum_0_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     run_sum_0_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
-
-
-# def test_sum_0_test(device):
-#     for (input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed) in test_sweep_args:
-#         os.environ["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
-#         run_sum_0_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
