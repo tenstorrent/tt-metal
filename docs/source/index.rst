@@ -1,10 +1,10 @@
-.. TT-Metal documentation master file, created by
+.. TT-Metalium documentation master file, created by
    sphinx-quickstart on Tue Jan  3 21:37:34 2023.
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Welcome to TT-Metal documentation!
-==================================
+Welcome to TT-Metalium documentation!
+=====================================
 
 .. toctree::
    :caption: Get Started
@@ -12,7 +12,7 @@ Welcome to TT-Metal documentation!
    get_started/get_started
 
 .. toctree::
-   :caption: TT-Metal
+   :caption: TT-Metalium
 
    tt_metal/programming_model/index.rst
    tt_metal/apis/index
