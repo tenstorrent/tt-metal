@@ -50,6 +50,13 @@ class Tensor:
         return self._tensor.layout()
 
     @property
+    def device(self: "Tensor") -> DataType:
+        if self.is_on_device:
+            return self._tensor.device()
+        else:
+            raise RuntimeError("Tensor is not on device!")
+
+    @property
     def is_on_device(self: "Tensor") -> DataType:
         return self._tensor.storage_type() == ttl.tensor.StorageType.DEVICE
 
