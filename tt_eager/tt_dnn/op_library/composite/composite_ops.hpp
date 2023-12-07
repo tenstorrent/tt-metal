@@ -24,15 +24,6 @@ using binary_tensor_op_t = Tensor (const Tensor& a, const Tensor& b);
 //Note: inline doesn't allow pybind to work well so we keep few function not inlined.
 
 template<typename T>
-Tensor mk_scalar(T value) {
-    assert(std::is_scalar<T>::value && "T should be scalar");
-    std::array<unsigned int,4> shape = {1,1,1,1};
-    auto buffer = owned_buffer::create(std::vector{bfloat16(value)});
-    Tensor scalar = Tensor(OwnedStorage{buffer}, shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
-    return scalar;
-}
-
-template<typename T>
 Tensor mk_tiled_scalar(T value) {
     assert(std::is_scalar<T>::value && "T should be scalar");
     std::array<unsigned int,4> shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
