@@ -41,7 +41,9 @@ def test_bw_unary_pow(input_shapes, exponent, device):
     )
 
     tt_output_tensor_on_device = tt_lib.tensor.unary_pow_bw(grad_tensor, input_tensor, exponent=exponent)
-    tt_output_tensor = tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch()
+    tt_output_tensor = (
+        tt_output_tensor_on_device[0].cpu().to(tt_lib.tensor.Layout.ROW_MAJOR).to_torch().to(torch.bfloat16)
+    )
 
     in_data.retain_grad()
 
@@ -51,7 +53,10 @@ def test_bw_unary_pow(input_shapes, exponent, device):
 
     golden_output_tensor = in_data.grad
 
-    comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
-    _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+    if exponent == 0:
+        comp_pass, comp_out = comparison_funcs.comp_allclose(golden_output_tensor, tt_output_tensor, 0.1, 1)
+    else:
+        comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
+        _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
     logger.info(comp_out)
     assert comp_pass

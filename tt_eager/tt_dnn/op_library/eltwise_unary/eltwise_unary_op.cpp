@@ -67,13 +67,22 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string,std::string>
         case UnaryOpType::LEAKY_RELU:
             defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
             break;
+        case UnaryOpType::ADD_UNARY:
+        case UnaryOpType::SUB_UNARY:
+        case UnaryOpType::MUL_UNARY:
+        case UnaryOpType::DIV_UNARY:
+            defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
+            break;
         case UnaryOpType::IDENTITY:
             defines["SFPU_OP_IDENTITY_INCLUDE"] = "1";
             break;
         case UnaryOpType::RDIV:
+            defines["SFPU_OP_RECIP_INCLUDE"] = "1";
+            defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
             break;
         case UnaryOpType::RSUB:
             defines["SFPU_OP_REVERSE_FAMILY_INCLUDE"] = "1";
+	    break;
         case UnaryOpType::ISINF:
         case UnaryOpType::ISNAN:
         case UnaryOpType::ISNEGINF:
@@ -117,8 +126,12 @@ std::pair<string, string> get_op_init_and_func_parameterized(UnaryOpType op_type
         case UnaryOpType::EXP: op_init_and_name = {"exp_tile_init({1});", fmt::format("exp_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::ERF: op_init_and_name = {"erf_tile_init({1});", fmt::format("erf_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
         case UnaryOpType::ERFC: op_init_and_name = {"erfc_tile_init({1});", fmt::format("erfc_tile({0}, {1}u);", idst, std::to_string((uint32_t)param0))}; break;
-        case UnaryOpType::RDIV: op_init_and_name = {}; break;
+        case UnaryOpType::RDIV: op_init_and_name = {"recip_tile_init();", fmt::format("recip_tile({}); mul_unary_tile({},{}u);",idst, idst,Converter::to_hex(param0))}; break;
         case UnaryOpType::RSUB: op_init_and_name = {"rsub_tile_init();", fmt::format("rsub_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::SUB_UNARY: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("sub_unary_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::ADD_UNARY: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("add_unary_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::MUL_UNARY: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("mul_unary_tile({}, {}u);", idst, Converter::to_hex(param0))}; break;
+        case UnaryOpType::DIV_UNARY: op_init_and_name = {"binop_with_scalar_tile_init();", fmt::format("div_unary_tile({}, {}u);", idst, Converter::to_hex(1.0f/param0))}; break;
         default:
         TT_ASSERT( false && "unexpected parameterized type");
     };
@@ -301,54 +314,6 @@ const operation::Hash EltwiseUnary::compute_program_hash(const std::vector<Tenso
         }
     }
     return hash;
-}
-
-//unary op version tie
-template<BcastOpMath OP>
-Tensor tie_binop_to_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
-  Tensor t_value = mk_tiled_scalar(value);
-  return bcast(input_tensor, t_value, OP, BcastOpDim::HW);
-}
-
-Tensor div_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
-    return tie_binop_to_unary<BcastOpMath::MUL>(input_tensor, 1.0f/value, output_mem_config);
-}
-
-Tensor div_unary(float value,const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-    Tensor inv = recip(input_tensor,output_mem_config);
-    return tie_binop_to_unary<BcastOpMath::MUL>(inv, value, output_mem_config);
-}
-
-//same as div_unary(value,tensor)
-Tensor rdiv(const Tensor& input_tensor,float value, const MemoryConfig& output_mem_config) {
-    return div_unary(value,input_tensor,output_mem_config);
-}
-
-
-
-Tensor mul_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
-    return tie_binop_to_unary<BcastOpMath::MUL>(input_tensor, value, output_mem_config);
-}
-
-Tensor sub_unary(const Tensor& input_tensor,float value, const MemoryConfig& output_mem_config) {
-    return tie_binop_to_unary<BcastOpMath::SUB>(input_tensor, value, output_mem_config);
-}
-
-Tensor sub_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-  return add_unary(value, neg(input_tensor, output_mem_config), output_mem_config);
-}
-
-Tensor add_unary(const Tensor& input_tensor, float value, const MemoryConfig& output_mem_config) {
-    return tie_binop_to_unary<BcastOpMath::ADD>(input_tensor, value, output_mem_config);
-}
-
-// symmetric
-Tensor add_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-    return add_unary(input_tensor, value, output_mem_config);
-}
-
-Tensor mul_unary(float value, const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-    return mul_unary(input_tensor, value, output_mem_config);
 }
 
 }  // namespace tt_metal

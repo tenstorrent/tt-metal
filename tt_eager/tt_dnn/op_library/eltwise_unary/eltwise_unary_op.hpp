@@ -65,7 +65,11 @@ enum class UnaryOpType {
     RDIV = 47,
     SILU = 48,
     IDENTITY = 49,
-    NEG = 50
+    NEG = 50,
+    ADD_UNARY = 51,
+    SUB_UNARY = 52,
+    MUL_UNARY = 53,
+    DIV_UNARY = 54
 };
 
 template <typename T>
@@ -83,7 +87,12 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::ERFC:
         case UnaryOpType::RSUB:
         case UnaryOpType::RDIV:
-        case UnaryOpType::EXP: return true;
+        case UnaryOpType::EXP:
+        case UnaryOpType::ADD_UNARY:
+        case UnaryOpType::SUB_UNARY:
+        case UnaryOpType::MUL_UNARY:
+        case UnaryOpType::DIV_UNARY:
+            return true;
         default: return false;
     }
     return false;
@@ -136,6 +145,50 @@ inline Tensor run_eltwise_unary(
                EltwiseUnary{ops_chain, output_mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE})
         .at(0);
 }
+
+template <UnaryOpType unary_op_type, typename T = float>
+struct make_eltwise_symmetric_binop_unary_with_param {
+    Tensor operator()(
+        const Tensor& input_tensor,
+        T param,
+        const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
+        return run_eltwise_unary(
+            input_tensor,
+            {UnaryWithParam{.op_type = unary_op_type, .param = static_cast<float>(param)}},
+            output_mem_config);
+    }
+    Tensor operator()(
+        T param,
+        const Tensor& input_tensor,
+        const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
+        return run_eltwise_unary(
+            input_tensor,
+            {UnaryWithParam{.op_type = unary_op_type, .param = static_cast<float>(param)}},
+            output_mem_config);
+    }
+};
+
+template <UnaryOpType unary_op_type,UnaryOpType unary_op_rev_type, typename T = float>
+struct make_eltwise_asymmetric_binop_unary_with_param {
+    Tensor operator()(
+        const Tensor& input_tensor,
+        T param,
+        const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
+        return run_eltwise_unary(
+            input_tensor,
+            {UnaryWithParam{.op_type = unary_op_type, .param = static_cast<float>(param)}},
+            output_mem_config);
+    }
+    Tensor operator()(
+        T param,
+        const Tensor& input_tensor,
+        const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG) const {
+        return run_eltwise_unary(
+            input_tensor,
+            {UnaryWithParam{.op_type = unary_op_rev_type, .param = static_cast<float>(param)}},
+            output_mem_config);
+    }
+};
 
 template <UnaryOpType unary_op_type, typename T = float>
 struct make_eltwise_unary_with_param {
@@ -212,6 +265,12 @@ constexpr auto heaviside = make_eltwise_unary_with_param<UnaryOpType::HEAVISIDE>
 constexpr auto rsub = make_eltwise_unary_with_param<UnaryOpType::RSUB>{};
 constexpr auto silu = make_eltwise_unary<UnaryOpType::SILU>{};
 constexpr auto identity = make_eltwise_unary<UnaryOpType::IDENTITY>{};
+// same as div_unary(value,tensor)
+constexpr auto rdiv = make_eltwise_unary_with_param<UnaryOpType::RDIV>{};
+constexpr auto add_unary = make_eltwise_symmetric_binop_unary_with_param<UnaryOpType::ADD_UNARY>{};
+constexpr auto mul_unary = make_eltwise_symmetric_binop_unary_with_param<UnaryOpType::MUL_UNARY>{};
+constexpr auto sub_unary = make_eltwise_asymmetric_binop_unary_with_param<UnaryOpType::SUB_UNARY,UnaryOpType::RSUB>{};
+constexpr auto div_unary = make_eltwise_asymmetric_binop_unary_with_param<UnaryOpType::DIV_UNARY,UnaryOpType::RDIV>{};
 
 inline Tensor exp(
     const Tensor& input_tensor,
@@ -264,46 +323,6 @@ inline Tensor unary_chain(
     return run_eltwise_unary(input_tensor, ops_chain, output_mem_config);
 }
 
-Tensor sub_unary(
-    const Tensor& input_tensor,
-    float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-Tensor sub_unary(
-    float value,
-    const Tensor& input_tensor,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-Tensor add_unary(
-    const Tensor& input_tensor,
-    float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-Tensor add_unary(
-    float value,
-    const Tensor& input_tensor,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-Tensor mul_unary(
-    const Tensor& input_tensor,
-    float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-Tensor mul_unary(
-    float value,
-    const Tensor& input_tensor,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
-Tensor div_unary(
-    const Tensor& input_tensor,
-    float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-Tensor div_unary(
-    float value,
-    const Tensor& input_tensor,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-// same as div_unary(value,tensor)
-Tensor rdiv(
-    const Tensor& input_tensor,
-    float value,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 // deg2rad(a) using scale pi/180.
 inline Tensor deg2rad(
