@@ -50,6 +50,9 @@ std::vector<Tensor> embedding_bw(const Tensor& grad, const Tensor& input, const 
 // bw = grad(1 - tanh(x) ** 2)
 std::vector<Tensor> tanh_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+// grad(sigmoid) = grad*(1 - sigmoid(x))*sigmoid(x)
+std::vector<Tensor> sigmoid_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 std::vector<Tensor> tan_bw(const Tensor& grad, const Tensor& tan_result, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
 std::vector<Tensor> where_bw(const Tensor& grad, const Tensor& condition, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
