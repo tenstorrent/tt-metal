@@ -19,6 +19,7 @@
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
 #include "tt_dnn/op_library/rotate_half/rotate_half_op.hpp"
 #include "tt_dnn/op_library/rotary_embedding/rotary_embedding_op.hpp"
+#include "tt_eager/tt_dnn/op_library/loss/loss_op.hpp"
 #include "tt_dnn/op_library/embeddings/embeddings_op.hpp"
 #include "tt_dnn/op_library/update_cache/update_cache_op.hpp"
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"
@@ -99,6 +100,10 @@ void TensorModule(py::module &m_tensor) {
     detail::export_enum<TensorMemoryLayout>(m_tensor);
 
     detail::export_enum<ShardOrientation>(m_tensor);
+
+    detail::export_enum<LossFunction>(m_tensor);
+
+    detail::export_enum<LossReductionMode>(m_tensor);
 
     py::enum_<BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)
