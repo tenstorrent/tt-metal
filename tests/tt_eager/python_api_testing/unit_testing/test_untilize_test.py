@@ -12,8 +12,9 @@ from models.utility_functions import untilize
 @pytest.mark.parametrize(
     "nb, nc, nh, nw",
     (
-        (5, 2, 4, 8),  # fast power of 2 width path
-        (5, 2, 4, 7),  # slow non-power of 2 width path
+        (1, 1, 1, 2),
+        (5, 2, 4, 8),
+        (5, 2, 4, 7),
         ## resnet shapes
         (1, 1, 1, 1),
         (1, 1, 7, 8),
@@ -30,10 +31,18 @@ from models.utility_functions import untilize
     ),
 )
 def test_run_untilize_test(nb, nc, nh, nw, device):
-    nt = nb * nc * nh * nw
     shape = [nb, nc, 32 * nh, 32 * nw]
 
+    torch.set_printoptions(precision=3, sci_mode=False, linewidth=3000, threshold=10000, edgeitems=128)
+
+    torch.manual_seed(10)
     inp = torch.rand(*shape).bfloat16()
+    # for b in range(0, nb):
+    #     for c in range(0, nc):
+    #         for h in range(0, 32 * nh):
+    #             for w in range(0, 32 * nw):
+    #                 inp[b][c][h][w] = 1 + w // 32
+    # print(f"{inp}")
 
     a = ttl.tensor.Tensor(
         inp.flatten().tolist(),
@@ -42,9 +51,31 @@ def test_run_untilize_test(nb, nc, nh, nw, device):
         ttl.tensor.Layout.TILE,
         device,
     )
-    b = ttl.tensor.untilize(a, use_multicore=True)
-    c = b.cpu().to_torch()
+
+    # a_sharded = ttl.tensor.interleaved_to_sharded(
+    #     a,
+    #     [12, 9],
+    #     [a.shape()[-2] // 100, a.shape()[-1]],
+    #     ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
+    #     ttl.tensor.ShardOrientation.ROW_MAJOR,
+    # )
+    # out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.BufferType.L1)
+    out_mem_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1)
+
+    # print(f"{a}")
+    b1 = ttl.tensor.untilize(a, out_mem_config, use_multicore=True, use_pack_untilize=True)
+    # b2 = ttl.tensor.untilize(a_sharded, out_mem_config, use_multicore=True, use_pack_untilize=False)
+    c1 = b1.cpu().to_torch()
+    # c2 = b2.cpu().to_torch()
+
+    # print(f"{c.shape}")
+    # torch.save(c, "output.pt")
 
     untilized_inp = untilize(inp)
-    passing = torch.equal(untilized_inp, c)
-    assert passing
+    # print(f"{untilized_inp.shape}")
+    # torch.save(untilized_inp, "golden.pt")
+
+    passing1 = torch.equal(untilized_inp, c1)
+    # passing2 = torch.equal(untilized_inp, c2)
+    assert passing1
+    # assert passing1 and passing2

@@ -41,6 +41,14 @@ def plot_diff(vals, fid, nsticks, stick_len):
 @pytest.mark.parametrize(
     "conv_params, batch_size, input_chw_shape, num_cores_nhw, grid_size, test_max_pool",
     (
+        (
+            (256, 256, 3, 3, 1, 1, 1, 1, 1, 1),
+            8,
+            (256, 32, 32),
+            98,
+            (12, 9),
+            False,
+        ),
         # ((1, 1, 2, 2, 1, 1, 0, 0, 1, 1), 8, (1, 8, 8), 1, False),
         # ((1, 1, 2, 2, 1, 1, 0, 0, 1, 1), 8, (1, 8, 8), 2, False),
         # ((1, 1, 2, 2, 1, 1, 1, 1, 1, 1), 8, (1, 8, 8), 1, False),

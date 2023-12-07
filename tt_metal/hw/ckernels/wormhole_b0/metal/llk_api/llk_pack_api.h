@@ -16,6 +16,7 @@
 #include "llk_param_structs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "llk_pack_untilize.h"
 
 /*************************************************************************
 * LLK PACK

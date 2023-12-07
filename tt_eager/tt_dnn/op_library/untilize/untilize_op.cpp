@@ -83,10 +83,10 @@ operation::ProgramWithCallbacks Untilize::create_program(const std::vector<Tenso
     auto& output_tensor = output_tensors.at(0);
     switch (this->get_parallelization_strategy(input_tensors)) {
         case UntilizeOpParallelizationStrategy::MULTI_CORE:
-            return untilize_multi_core(input_tensor_a, output_tensor);
+            return untilize_multi_core(input_tensor_a, output_tensor, use_pack_untilize);
         case UntilizeOpParallelizationStrategy::SINGLE_CORE:
         default:
-            return untilize_single_core(input_tensor_a, output_tensor);
+            return untilize_single_core(input_tensor_a, output_tensor, use_pack_untilize);
     }
 }
 
@@ -98,7 +98,7 @@ UntilizeOpParallelizationStrategy Untilize::get_parallelization_strategy(const s
     }
 }
 
-Tensor untilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_config, bool use_multicore) {
+Tensor untilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_config, bool use_multicore, bool use_pack_untilize) {
     // No-op (Will do a tensor copy)
     if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
         log_warning("Perf warning: Trying to untilize non-tilized data.");
@@ -108,7 +108,7 @@ Tensor untilize(const Tensor &input_tensor_a, const MemoryConfig& output_mem_con
             return input_tensor_a;
         }
     }
-    return operation::run_without_autoformat(Untilize{output_mem_config, use_multicore}, {input_tensor_a}).at(0);
+    return operation::run_without_autoformat(Untilize{output_mem_config, use_multicore, use_pack_untilize}, {input_tensor_a}).at(0);
 }
 
 
