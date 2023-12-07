@@ -260,7 +260,7 @@ this time.
 
 ### C++ Integration Tests
 
-1. Build the TT-Metal C++ API integration tests using the make command,
+1. Build the API integration tests using the make command,
 ```
 make tests
 ```
@@ -305,7 +305,7 @@ Announcements from the Tenstorrent team regarding this project will be in the
 page](https://github.com/orgs/tenstorrent-metal/discussions/categories/announcements).
 
 We also have a Discord channel that you can join. You may discuss with other
-members of the community and Metal developers there. You may use this invite
+members of the community and developers there. You may use this invite
 [link](https://discord.gg/tvhGzHQwaj).
 
 If you have ideas you would like to bounce off others in the community before

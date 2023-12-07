@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.abspath("."))
 
 # -- Project information -----------------------------------------------------
 
-project = "TT-Metal"
+project = "TT-Metalium"
 copyright = "Tenstorrent"
 author = "Tenstorrent"
 

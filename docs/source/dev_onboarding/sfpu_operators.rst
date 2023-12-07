@@ -11,11 +11,11 @@ simple C API. SFPU can be thought of as a math co-processor which has specialize
 This section of manual shows how to develop DNN operators, activation functions, trigonometric and hyperbolic functions for
 various applications on the Tenstorrent Tensix cores by leveraging the SFPU.
 
-**True North** for the TT Metal project is to have a ecosystem of operator implementations suitable for eager mode execution of neural-network graphs,
+**True North** for the TT Metalium project is to have a ecosystem of operator implementations suitable for eager mode execution of neural-network graphs,
 general computational **DAG**\s, or provide a backend of hosting a compiler for either of above uses.
 
-Requirements for TT Metal
--------------------------
+Requirements for TT Metalium
+----------------------------
 We require all operator implementations on Tensix (Tenstorrent SFPU core) to support:
 
 - Grayskull (GS) architecture
@@ -29,7 +29,7 @@ We require all operator implementations on Tensix (Tenstorrent SFPU core) to sup
 - provide Python bindings for operators
 - test operators on CPU and device
     - test Python API
-    - test TT Metal API
+    - test TT Metalium API
 
 
 Operator Implementation Methodology

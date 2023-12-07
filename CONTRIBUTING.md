@@ -57,7 +57,7 @@ standards](#contribution-standards).
 
 ### Hugepages setup
 
-Hugepages is required to both run and develop on the Metal project.
+Hugepages is required to both run and develop on the Metalium project.
 
 If you ever need to re-enable Hugepages, you can try the script we homemade
 for this:
