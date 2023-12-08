@@ -29,8 +29,6 @@ def run_layernorm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_conf
     if in_mem_config[2] == "SYSTEM_MEMORY":
         in_mem_config[2] = None
 
-    print(in_mem_config)
-
     x = torch.Tensor(size=input_shape[0]).uniform_(-10, 10)
     y = torch.Tensor(size=input_shape[1]).uniform_(-10, 10)
     z = torch.Tensor(size=input_shape[2]).uniform_(-10, 10)
