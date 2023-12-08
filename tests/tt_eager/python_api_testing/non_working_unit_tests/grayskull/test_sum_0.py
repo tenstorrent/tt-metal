@@ -70,6 +70,7 @@ test_sweep_args = [
 ]
 
 
+# unit test which reproduce low PCC error
 @pytest.mark.parametrize(
     "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
     (test_sweep_args),
