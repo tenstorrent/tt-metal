@@ -39,7 +39,7 @@ class Tensor:
 
     @property
     def shape(self: "Tensor") -> tuple:
-        return self._tensor.shape()
+        return self._tensor.shape_without_padding()
 
     @property
     def dtype(self: "Tensor") -> DataType:
@@ -140,6 +140,9 @@ def to_torch(tensor: Tensor) -> "torch.Tensor":
 
         if ttl_tensor.storage_type() == ttl.tensor.StorageType.DEVICE:
             raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch!")
+
+        if ttl_tensor.shape_without_padding() != ttl_tensor.shape():
+            raise RuntimeError("ttnn.Tensor cannot have padding when converting to torch!")
 
         return ttl_tensor.to_torch()
 

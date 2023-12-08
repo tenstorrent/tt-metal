@@ -9,6 +9,7 @@ Operations
    operations/embedding
    operations/from_device
    operations/from_torch
+   operations/gelu
    operations/matmul
    operations/mul
    operations/permute

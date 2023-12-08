@@ -44,7 +44,7 @@ def test_embedding(
 
     torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
     torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
-    torch_output = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
 
     input_tensor = ttnn.to_device(ttnn.from_torch(torch_input_tensor), device, memory_config=input_mem_config)
     weights = ttnn.to_device(ttnn.from_torch(torch_weights, dtype=dtype), device, memory_config=input_mem_config)
@@ -54,7 +54,7 @@ def test_embedding(
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    torch.allclose(torch_output, output_tensor, atol=1e-2)
+    torch.allclose(torch_output_tensor, output_tensor, atol=1e-2)
 
 
 @skip_for_wormhole_b0()
@@ -79,7 +79,7 @@ def test_bloom_embedding(
 
     torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
     torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
-    torch_output = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
 
     input_tensor = ttnn.to_device(ttnn.from_torch(torch_input_tensor), device, memory_config=input_mem_config)
     weights = ttnn.to_device(ttnn.from_torch(torch_weights, dtype=dtype), device, memory_config=input_mem_config)
@@ -89,4 +89,4 @@ def test_bloom_embedding(
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    torch.allclose(torch_output, output_tensor, atol=1e-2)
+    torch.allclose(torch_output_tensor, output_tensor, atol=1e-2)

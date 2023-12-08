@@ -46,11 +46,12 @@ from ttnn.core import (
     reshape,
     permute,
     embedding,
-    # unary operations
+    # fused operations
     softmax,
-    tanh,
+    layer_norm,
 )
 
-import ttnn.experimental
+from ttnn.unary import *
+
 import ttnn.nlp
 import ttnn.model_preprocessing

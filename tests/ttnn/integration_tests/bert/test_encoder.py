@@ -55,7 +55,7 @@ def ttnn_model(
         output_bias,
         head_size=head_size,
     )
-    hidden_states = ttnn.experimental.layer_norm(
+    hidden_states = ttnn.layer_norm(
         hidden_states + multi_head_attention_output, weight=attention_layer_norm_weight, bias=attention_layer_norm_bias
     )
 
@@ -66,7 +66,7 @@ def ttnn_model(
         ff2_weight,
         ff2_bias,
     )
-    hidden_states = ttnn.experimental.layer_norm(
+    hidden_states = ttnn.layer_norm(
         hidden_states + feedforward_output, weight=ff_layer_norm_weight, bias=ff_layer_norm_bias
     )
     return hidden_states

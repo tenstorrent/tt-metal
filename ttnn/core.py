@@ -176,7 +176,13 @@ def matmul(
 
     input_shape_a = input_tensor_a.shape
     input_shape_b = input_tensor_b.shape
-    output_shape = tuple(input_shape_a[:-1] + input_shape_b[-1:])
+    # TODO: use unpadded output_shape
+    if len(input_shape_a) >= 2:
+        output_shape = tuple(
+            input_shape_a[:-2] + [input_tensor_a._tensor.shape()[-2], input_tensor_b._tensor.shape()[-1]]
+        )
+    else:
+        output_shape = (input_tensor_b._tensor.shape()[-1],)
 
     if not isinstance(input_tensor_a, Tensor):
         raise RuntimeError("Expected first argument to be a ttnn.Tensor")
@@ -381,9 +387,9 @@ def linear(
     Example::
         >>> # batched matrix x broadcasted matrix
         >>> activations = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
-        >>> weights = ttnn.to_device(ttnn.from_torch(torch.randn((32, 128), dtype=torch.bfloat16)), device)
+        >>> weight = ttnn.to_device(ttnn.from_torch(torch.randn((32, 128), dtype=torch.bfloat16)), device)
         >>> bias = ttnn.to_device(ttnn.from_torch(torch.randn((128,), dtype=torch.bfloat16)), device)
-        >>> output = torch.linear(activations, weights, bias=bias)
+        >>> output = torch.linear(activations, weight, bias=bias)
         >>> print(output.shape)
         [10, 64, 128]
     """
@@ -393,7 +399,8 @@ def linear(
 
     input_shape_a = input_tensor_a.shape
     input_shape_b = input_tensor_b.shape
-    output_shape = tuple(input_shape_a[:-1] + input_shape_b[-1:])
+    # TODO: use unpadded output_shape
+    output_shape = tuple(input_shape_a[:-2] + [input_tensor_a._tensor.shape()[-2], input_tensor_b._tensor.shape()[-1]])
 
     if not isinstance(input_tensor_a, Tensor):
         raise RuntimeError("Expected first argument to be a ttnn.Tensor")
@@ -623,7 +630,7 @@ def add(
         )
         return reshape(output_tensor, original_shape)
     elif isinstance(input_tensor_b, Tensor):
-        input_shape_b = input_tensor_b._tensor.shape_without_padding()
+        input_shape_b = input_tensor_b.shape
 
         if len(input_shape_b) == 1:
             height_b = 1
@@ -741,7 +748,7 @@ def sub(
         )
         return reshape(output_tensor, original_shape)
     elif isinstance(input_tensor_b, Tensor):
-        input_shape_b = input_tensor_b._tensor.shape_without_padding()
+        input_shape_b = input_tensor_b.shape
 
         if len(input_shape_b) == 1:
             height_b = 1
@@ -859,7 +866,7 @@ def mul(input_tensor_a: Tensor, input_tensor_b: Tensor, memory_config: MemoryCon
     elif not isinstance(input_tensor_b, Tensor):
         raise TypeError("Expected second argument to be a ttnn.Tensor or a scalar")
 
-    input_shape_b = input_tensor_b._tensor.shape_without_padding()
+    input_shape_b = input_tensor_b.shape
 
     if len(input_shape_b) == 1:
         height_b = 1
@@ -916,42 +923,6 @@ def mul(input_tensor_a: Tensor, input_tensor_b: Tensor, memory_config: MemoryCon
     )
 
 
-def tanh(input_tensor: Tensor) -> Tensor:
-    r"""
-    mul(input_tensor: Tensor) -> Tensor
-
-    Applies tanh to :attr:`input_tensor` element-wise.
-
-    .. math::
-        tanh(\mathrm{{input\_tensor}}_i)
-
-    Args:
-        * :attr:`input_tensor`
-
-    Example::
-
-        >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-        >>> output = ttnn.tanh(tensor)
-        >>> print(output)
-        Tensor([ 0, 2], dtype=bfloat16 )
-
-    """
-
-    original_shape = tuple(input_tensor.shape)
-    input_tensor = _reshape_to_4D(input_tensor)
-    ttl_input_tensor = input_tensor._tensor
-
-    if not isinstance(input_tensor, Tensor):
-        raise TypeError("Expected first argument to be a ttnn.Tensor")
-
-    ttl_input_tensor = input_tensor._tensor
-
-    if not input_tensor.is_on_device:
-        raise RuntimeError("input_tensor must be on device!")
-
-    return reshape(Tensor(ttl.tensor.tanh(ttl_input_tensor)), original_shape)
-
-
 subtract = sub
 multiply = mul
 
@@ -984,8 +955,19 @@ def reshape(input_tensor: Tensor, shape: Tuple[int, ...]) -> Tensor:
 
     """
 
+    if not (0 <= shape.count(-1) <= 1):
+        raise RuntimeError("Shape cannot have more than 1 elements that is set to -1!")
+
+    volume = math.prod(input_tensor.shape)
+    new_volume = math.prod(shape)
+    if new_volume < 0:
+        index_of_negative_1 = shape.index(-1)
+        shape = list(shape)
+        shape[index_of_negative_1] = volume // (-new_volume)
+        shape = tuple(shape)
+
     if not isinstance(shape, tuple):
-        raise RuntimeError("order must be a tuple")
+        raise RuntimeError("shape must be a tuple")
 
     ttl_input_tensor = input_tensor._tensor
 
@@ -1087,6 +1069,60 @@ def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
         return tensor
 
 
+def embedding(
+    input_tensor: Tensor,
+    weight: Tensor,
+    *,
+    layout: Layout = ROW_MAJOR_LAYOUT,
+    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
+):
+    r"""
+    embedding(inxput_tensor: ttnn.Tensor, weight: ttnn.Tensor) -> None
+
+    Retrieves word embeddings using input_tensor. The input_tensor is a list of indices, and the embedding matrix, and the output is the corresponding word embeddings.
+
+    Args:
+        * :attr:`input_tensor`: the indices ttnn.Tensor
+        * :attr:`weight`: the embeddings ttnn.Tensor that correspond to the indices ttnn.Tensor
+
+    Example::
+        >>> device_id = 0
+        >>> device = ttnn.open(device_id)
+        >>> input_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor([[1, 2, 4, 5], [4, 3, 2, 9]]), dtype=ttnn.uint32), device)
+        >>> # an embedding matrix containing 10 tensors of size 4
+        >>> weight = ttnn.to_device(ttnn.from_torch(torch.rand(10, 4), dtype=ttnn.bfloat16), device)
+        >>> ttnn.embedding(input_tensor, weight)
+        Tensor([ [[1, 0.106445, 0.988281, 0.59375],
+            [0.212891, 0.964844, 0.199219, 0.996094],
+            [3.78362e-38, 0, 7.89785e-39, 0],
+            [8.04479e-38, 0, 1.25815e-38, 0]],
+
+           [[2.71833e-38, 0, 3.59995e-38, 0],
+            [7.60398e-38, 0, 1.83671e-38, 0],
+            [2.22242e-38, 0, 1.88263e-38, 0],
+            [1.35917e-38, 0, 4.49994e-39, 0]]], dtype=bfloat16 )
+
+    """
+    if len(input_tensor.shape) != 2:
+        raise RuntimeError("Input Tensor must have rank of 2!")
+    if len(weight.shape) not in {2, 4}:
+        raise RuntimeError("Weight Tensor must either have rank of 2 or 4!")
+
+    *_, hidden_embedding_dim = tuple(weight.shape)
+    weight = _reshape_to_4D(weight)
+
+    batch_size, sentence_size = input_tensor.shape
+    input_tensor = reshape(input_tensor, shape=(batch_size, 1, 1, sentence_size))
+
+    tilized = layout == TILE_LAYOUT
+    embeddings = Tensor(
+        ttl.tensor.embeddings(input_tensor._tensor, weight._tensor, tilized, output_mem_config=memory_config)
+    )
+    embeddings = reshape(embeddings, shape=(batch_size, sentence_size, hidden_embedding_dim))
+
+    return embeddings
+
+
 def softmax(input_tensor: Tensor, dim: int, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
     r"""
     softmax(input_tensor: Tensor, dim: int) -> Tensor
@@ -1110,70 +1146,76 @@ def softmax(input_tensor: Tensor, dim: int, memory_config: MemoryConfig = DRAM_M
     rank = len(input_shape)
     if dim < 0:
         dim = rank + dim
-    if dim != rank - 1:
-        raise RuntimeError("Softmax can only operate on the last dimension.")
 
     input_tensor = _reshape_to_4D(input_tensor)
 
     ttl_input_tensor = input_tensor._tensor
-    ttl_output_tensor = ttl.tensor.softmax(ttl_input_tensor, output_mem_config=memory_config)
+    if dim == rank - 1:
+        ttl_output_tensor = ttl.tensor.softmax(ttl_input_tensor, output_mem_config=memory_config)
+    else:
+        dim_4D = dim + 4 - rank
+        ttl_output_tensor = ttl.operations.primary.moreh_softmax(
+            ttl_input_tensor, dim=dim_4D, output_mem_config=memory_config
+        )
     output_tensor = Tensor(ttl_output_tensor)
     output_tensor = reshape(output_tensor, input_shape)
     return output_tensor
 
 
-def embedding(
+def layer_norm(
     input_tensor: Tensor,
-    weights: Tensor,
     *,
-    layout: Layout = ROW_MAJOR_LAYOUT,
-    memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
-):
+    epsilon: float = 1e-12,
+    residual_input: Optional[Tensor] = None,
+    weight: Optional[Tensor] = None,
+    bias: Optional[Tensor] = None,
+    memory_config: Optional[MemoryConfig] = DRAM_MEMORY_CONFIG,
+) -> Tensor:
     r"""
-    embedding(inxput_tensor: ttnn.Tensor, weights: ttnn.Tensor) -> None
+    layer_norm(input_tensor: Tensor, dim: int) -> Tensor
 
-    Retrieves word embeddings using input_tensor. The input_tensor is a list of indices, and the embedding matrix, and the output is the corresponding word embeddings.
-
-    Args:
-        * :attr:`input_tensor`: the indices ttnn.Tensor
-        * :attr:`weights`: the embeddings ttnn.Tensor that correspond to the indices ttnn.Tensor
-
-    Example::
-        >>> device_id = 0
-        >>> device = ttnn.open(device_id)
-        >>> input_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor([[1, 2, 4, 5], [4, 3, 2, 9]]), dtype=ttnn.uint32), device)
-        >>> # an embedding matrix containing 10 tensors of size 4
-        >>> weights = ttnn.to_device(ttnn.from_torch(torch.rand(10, 4), dtype=ttnn.bfloat16), device)
-        >>> ttnn.embedding(input_tensor, weights)
-        Tensor([ [[1, 0.106445, 0.988281, 0.59375],
-            [0.212891, 0.964844, 0.199219, 0.996094],
-            [3.78362e-38, 0, 7.89785e-39, 0],
-            [8.04479e-38, 0, 1.25815e-38, 0]],
-
-           [[2.71833e-38, 0, 3.59995e-38, 0],
-            [7.60398e-38, 0, 1.83671e-38, 0],
-            [2.22242e-38, 0, 1.88263e-38, 0],
-            [1.35917e-38, 0, 4.49994e-39, 0]]], dtype=bfloat16 )
+    Compute layer_norm over :attr:`input_tensor`.
 
     """
-    if len(input_tensor.shape) != 2:
-        raise RuntimeError("Input Tensor must have rank of 2!")
-    if len(weights.shape) not in {2, 4}:
-        raise RuntimeError("Weight Tensor must either have rank of 2 or 4!")
 
-    *_, hidden_embedding_dim = tuple(weights.shape)
-    weights = _reshape_to_4D(weights)
+    original_shape = tuple(input_tensor.shape)
+    input_tensor = _reshape_to_4D(input_tensor)
+    if residual_input is not None:
+        residual_input = _reshape_to_4D(residual_input)
+    if weight is not None:
+        weight = _reshape_to_4D(weight)
+    if bias is not None:
+        bias = _reshape_to_4D(bias)
 
-    batch_size, sentence_size = input_tensor.shape
-    input_tensor = reshape(input_tensor, shape=(batch_size, 1, 1, sentence_size))
+    ttl_input_tensor = input_tensor._tensor
+    residual_input = residual_input._tensor if residual_input is not None else None
+    ttl_weight = weight._tensor if weight is not None else None
+    ttl_bias = bias._tensor if bias is not None else None
 
-    tilized = layout == TILE_LAYOUT
-    embeddings = Tensor(
-        ttl.tensor.embeddings(input_tensor._tensor, weights._tensor, tilized, output_mem_config=memory_config)
-    )
-    embeddings = reshape(embeddings, shape=(batch_size, sentence_size, hidden_embedding_dim))
+    if residual_input is not None:
+        output_tensor = ttl.tensor.add_layernorm(
+            ttl_input_tensor, residual_input, epsilon, ttl_weight, ttl_bias, output_mem_config=memory_config
+        )
+    else:
+        output_tensor = ttl.tensor.layernorm(
+            ttl_input_tensor, epsilon, ttl_weight, ttl_bias, output_mem_config=memory_config
+        )
 
-    return embeddings
+    output_tensor = Tensor(output_tensor)
+    output_tensor = reshape(output_tensor, original_shape)
+    return output_tensor
 
 
-__all__ = ["matmul", "add", "sub", "subtract", "mul", "multiply", "reshape", "permute", "softmax", "embedding", "tanh"]
+__all__ = [
+    "matmul",
+    "add",
+    "sub",
+    "subtract",
+    "mul",
+    "multiply",
+    "reshape",
+    "permute",
+    "embedding",
+    "softmax",
+    "layer_norm",
+]

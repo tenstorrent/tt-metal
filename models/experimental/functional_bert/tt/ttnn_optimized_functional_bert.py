@@ -122,7 +122,7 @@ def ttnn_optimized_bert_encoder(
         head_size=head_size,
     )
 
-    multi_head_attention_add_and_layer_norm_output = ttnn.experimental.layer_norm(
+    multi_head_attention_add_and_layer_norm_output = ttnn.layer_norm(
         hidden_states,
         residual_input=multi_head_attention_output,
         weight=parameters.attention.output.LayerNorm.weight,
@@ -140,7 +140,7 @@ def ttnn_optimized_bert_encoder(
         parameters.output.dense.bias,
     )
 
-    feedforward_add_and_layer_norm_output = ttnn.experimental.layer_norm(
+    feedforward_add_and_layer_norm_output = ttnn.layer_norm(
         multi_head_attention_add_and_layer_norm_output,
         residual_input=feedforward_output,
         weight=parameters.output.LayerNorm.weight,
@@ -179,7 +179,7 @@ def ttnn_optimized_bert(
     ttnn.deallocate(word_embeddings)
     ttnn.deallocate(token_type_embeddings)
 
-    encoder_input = ttnn.experimental.layer_norm(
+    encoder_input = ttnn.layer_norm(
         embeddings,
         weight=parameters.bert.embeddings.LayerNorm.weight,
         bias=parameters.bert.embeddings.LayerNorm.bias,

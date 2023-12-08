@@ -185,7 +185,7 @@ def mlp(
 ):
     hidden_states = hidden_states @ dense_h_to_4h_weight
     hidden_states = hidden_states + dense_h_to_4h_bias
-    hidden_states = ttnn.experimental.gelu(hidden_states)
+    hidden_states = ttnn.gelu(hidden_states)
     hidden_states = hidden_states @ dense_4h_to_h_weight
     hidden_states = hidden_states + dense_4h_to_h_bias
     # output_tensor = F.dropout(dense_4h_to_h, p=0.0, training=False)
@@ -207,14 +207,14 @@ def bloom(
     hidden_size = inputs_embeds.shape[-1]
     head_size = hidden_size // num_heads
 
-    hidden_states = ttnn.experimental.layer_norm(
+    hidden_states = ttnn.layer_norm(
         inputs_embeds,
         weight=parameters.transformer.word_embeddings_layernorm.weight,
         bias=parameters.transformer.word_embeddings_layernorm.bias,
     )
 
     for layer_parameters in parameters.transformer.h:
-        normalized_hidden_states = ttnn.experimental.layer_norm(
+        normalized_hidden_states = ttnn.layer_norm(
             hidden_states,
             weight=layer_parameters.input_layernorm.weight,
             bias=layer_parameters.input_layernorm.bias,
@@ -232,7 +232,7 @@ def bloom(
         )
         attention_output = attention_output + hidden_states
 
-        normalized_attention_output = ttnn.experimental.layer_norm(
+        normalized_attention_output = ttnn.layer_norm(
             attention_output,
             weight=layer_parameters.post_attention_layernorm.weight,
             bias=layer_parameters.post_attention_layernorm.bias,
@@ -249,7 +249,7 @@ def bloom(
 
         hidden_states = mlp_output
 
-    hidden_states = ttnn.experimental.layer_norm(
+    hidden_states = ttnn.layer_norm(
         hidden_states,
         weight=parameters.transformer.ln_f.weight,
         bias=parameters.transformer.ln_f.bias,
