@@ -15,8 +15,8 @@ from models.utility_functions import (
     Profiler,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
-    prep_report,
 )
+from models.perf.perf_utils import prep_perf_report
 from models.experimental.roberta.roberta_common import torch2tt_tensor
 
 BATCH_SIZE = 1
@@ -73,7 +73,7 @@ def run_perf_roberta(expected_inference_time, expected_compile_time, device):
     first_iter_time = profiler.get(first_key)
     second_iter_time = profiler.get(second_key)
     cpu_time = profiler.get(cpu_key)
-    prep_report(
+    prep_perf_report(
         model_name="roberta",
         batch_size=BATCH_SIZE,
         inference_and_compile_time=first_iter_time,

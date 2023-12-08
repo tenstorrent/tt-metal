@@ -14,10 +14,10 @@ from models.experimental.vit.tt.modeling_vit import vit_for_image_classification
 from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
-    prep_report,
     torch_to_tt_tensor_rm,
     Profiler,
 )
+from models.perf.perf_utils import prep_perf_report
 
 
 BATCH_SIZE = 1
@@ -64,7 +64,7 @@ def run_perf_vit(expected_inference_time, expected_compile_time, hf_cat_image_sa
     second_iter_time = profiler.get(second_key)
     cpu_time = profiler.get(cpu_key)
 
-    prep_report(
+    prep_perf_report(
         model_name="vit",
         batch_size=BATCH_SIZE,
         inference_and_compile_time=first_iter_time,

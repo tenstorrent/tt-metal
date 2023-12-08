@@ -16,7 +16,8 @@ from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
 )
-from models.utility_functions import prep_report, Profiler
+from models.utility_functions import Profiler
+from models.perf.perf_utils import prep_perf_report
 import tt_lib as ttl
 from models.experimental.stable_diffusion.tt.unet_2d_condition import (
     UNet2DConditionModel as tt_unet_condition,
@@ -36,9 +37,7 @@ def constant_prop_time_embeddings(timesteps, sample, time_proj):
 
 def guide(noise_pred, guidance_scale, t):  # will return latents
     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-    noise_pred = noise_pred_uncond + guidance_scale * (
-        noise_pred_text - noise_pred_uncond
-    )
+    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
     return noise_pred
 
 
@@ -108,18 +107,14 @@ def test_perf(device, expected_inference_time, expected_compile_time):
     cpu_key = "ref_iter"
 
     # 1. Load the autoencoder model which will be used to decode the latents into image space.
-    vae = AutoencoderKL.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", subfolder="vae"
-    )
+    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
 
     # 2. Load the tokenizer and text encoder to tokenize and encode the text.
     tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
     text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
 
     # 3. The UNet model for generating the latents.
-    unet = UNet2DConditionModel.from_pretrained(
-        "CompVis/stable-diffusion-v1-4", subfolder="unet"
-    )
+    unet = UNet2DConditionModel.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="unet")
 
     # 4. load the K-LMS scheduler with some fitting parameters.
     scheduler = LMSDiscreteScheduler(
@@ -155,9 +150,7 @@ def test_perf(device, expected_inference_time, expected_compile_time):
     height = 256  # default height of Stable Diffusion
     width = 256  # default width of Stable Diffusion
     guidance_scale = 7.5  # Scale for classifier-free guidance
-    generator = torch.manual_seed(
-        174
-    )  # 10233 Seed generator to create the inital latent noise
+    generator = torch.manual_seed(174)  # 10233 Seed generator to create the inital latent noise
     batch_size = len(prompt)
 
     ## First, we get the text_embeddings for the prompt. These embeddings will be used to condition the UNet model.
@@ -204,9 +197,7 @@ def test_perf(device, expected_inference_time, expected_compile_time):
         latent_model_input = latent_expansion(latents, scheduler, t)
         # predict the noise residual
         with torch.no_grad():
-            noise_pred = unet(
-                latent_model_input, t, encoder_hidden_states=text_embeddings
-            ).sample
+            noise_pred = unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
         # perform guidance
         noise_pred = guide(noise_pred, guidance_scale, t)
         # compute the previous noisy sample x_t -> x_t-1
@@ -228,18 +219,12 @@ def test_perf(device, expected_inference_time, expected_compile_time):
         _t = constant_prop_time_embeddings(t, tt_latent_model_input, unet.time_proj)
 
         _t = torch_to_tt_tensor_rm(_t, device, put_on_device=False)
-        tt_latent_model_input = torch_to_tt_tensor_rm(
-            tt_latent_model_input, device, put_on_device=False
-        )
-        tt_text_embeddings = torch_to_tt_tensor_rm(
-            text_embeddings, device, put_on_device=False
-        )
+        tt_latent_model_input = torch_to_tt_tensor_rm(tt_latent_model_input, device, put_on_device=False)
+        tt_text_embeddings = torch_to_tt_tensor_rm(text_embeddings, device, put_on_device=False)
 
         # predict the noise residual
         with torch.no_grad():
-            tt_noise_pred = tt_unet(
-                tt_latent_model_input, _t, encoder_hidden_states=tt_text_embeddings
-            )
+            tt_noise_pred = tt_unet(tt_latent_model_input, _t, encoder_hidden_states=tt_text_embeddings)
             ttl.device.Synchronize()
             noise_pred = tt_to_torch_tensor(tt_noise_pred)
 
@@ -264,7 +249,7 @@ def test_perf(device, expected_inference_time, expected_compile_time):
     cpu_time = profiler.get(cpu_key)
     comments = f"image size: {height}x{width} - v1.4"
 
-    prep_report(
+    prep_perf_report(
         "batched_stable_diffusion",
         BATCH_SIZE,
         first_iter_time,
@@ -272,14 +257,8 @@ def test_perf(device, expected_inference_time, expected_compile_time):
         comments,
         cpu_time,
     )
-    logger.info(
-        f"Batched Stable Diffusion {comments} inference time: {second_iter_time}"
-    )
+    logger.info(f"Batched Stable Diffusion {comments} inference time: {second_iter_time}")
     logger.info(f"Batched Stable Diffusion {comments} compile time: {compile_time}")
 
-    assert (
-        second_iter_time < expected_inference_time
-    ), f"Batched Stable Diffusion {comments} is too slow"
-    assert (
-        compile_time < expected_compile_time
-    ), f"Batched Stable Diffusion {comments} compile time is too slow"
+    assert second_iter_time < expected_inference_time, f"Batched Stable Diffusion {comments} is too slow"
+    assert compile_time < expected_compile_time, f"Batched Stable Diffusion {comments} compile time is too slow"

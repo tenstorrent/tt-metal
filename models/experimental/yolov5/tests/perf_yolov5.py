@@ -14,8 +14,8 @@ from models.utility_functions import (
     Profiler,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
-    prep_report,
 )
+from models.perf.perf_utils import prep_perf_report
 
 BATCH_SIZE = 1
 
@@ -61,9 +61,6 @@ def test_perf(device):
     second_iter_time = profiler.get(second_key)
     cpu_time = profiler.get(cpu_key)
 
-
     # TODO: expected compile time (100 s) and expected inference time (100 s) are not real values
     # update to real time and add to CI pipeline
-    prep_report(
-        "yolov5", BATCH_SIZE, first_iter_time, second_iter_time, 100, 100, "yolov5s", cpu_time
-    )
+    prep_perf_report("yolov5", BATCH_SIZE, first_iter_time, second_iter_time, 100, 100, "yolov5s", cpu_time)

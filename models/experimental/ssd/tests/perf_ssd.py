@@ -10,7 +10,8 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
 )
-from models.utility_functions import Profiler, prep_report
+from models.utility_functions import Profiler
+from models.perf.perf_utils import prep_perf_report
 from models.experimental.ssd.tt.ssd_lite import ssd_for_object_detection
 import pytest
 
@@ -72,9 +73,7 @@ def test_perf(
 
     # TODO: expected compile time (100 s) and expected inference time (100 s) are not real values
     # update to real time and add to CI pipeline
-    prep_report(
-        "SSD", BATCH_SIZE, first_iter_time, second_iter_time, 100, 100, "SSD_lite", cpu_time
-    )
+    prep_perf_report("SSD", BATCH_SIZE, first_iter_time, second_iter_time, 100, 100, "SSD_lite", cpu_time)
 
     compile_time = first_iter_time - second_iter_time
 

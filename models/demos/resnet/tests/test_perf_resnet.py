@@ -9,11 +9,10 @@ from transformers import AutoImageProcessor
 import pytest
 import tt_lib
 
-from models.utility_functions import prep_report, is_e75
+from models.utility_functions import is_e75
 from models.utility_functions import profiler
 from models.utility_functions import disable_persistent_kernel_cache
-from models.utility_functions import prep_report
-
+from models.perf.perf_utils import prep_perf_report
 
 from loguru import logger
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
@@ -91,7 +90,7 @@ def run_perf_resnet(
 
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
-    prep_report(
+    prep_perf_report(
         model_name=f"resnet50_batch_size{batch_size}",
         batch_size=batch_size,
         inference_and_compile_time=first_iter_time,

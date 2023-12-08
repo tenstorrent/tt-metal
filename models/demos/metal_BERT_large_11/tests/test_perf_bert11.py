@@ -16,9 +16,9 @@ from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     profiler,
-    prep_report,
     is_e75,
 )
+from models.perf.perf_utils import prep_perf_report
 
 BATCH_SIZE = 12
 model_version = "phiyodr/bert-large-finetuned-squad2"
@@ -132,7 +132,7 @@ def run_perf_bert11(
     second_iter_time = profiler.get(second_run_accum_key) / inference_iterations
     cpu_time = profiler.get(cpu_key)
 
-    prep_report(
+    prep_perf_report(
         model_name="bert11",
         batch_size=BATCH_SIZE,
         inference_and_compile_time=first_iter_time,

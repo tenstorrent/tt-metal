@@ -16,8 +16,9 @@ from models.utility_functions import (
     enable_persistent_kernel_cache,
     torch_to_tt_tensor_rm,
     profiler,
-    prep_report,
 )
+from models.perf.perf_utils import prep_perf_report
+
 
 BATCH_SIZE = 1
 
@@ -60,7 +61,7 @@ def run_perf_deit(expected_inference_time, expected_compile_time, hf_cat_image_s
 
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
-    prep_report(
+    prep_perf_report(
         model_name="deit",
         batch_size=BATCH_SIZE,
         inference_and_compile_time=first_iter_time,

@@ -15,9 +15,9 @@ from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     profiler,
-    prep_report,
     is_e75,
 )
+from models.perf.perf_utils import prep_perf_report
 from models.demos.resnet.tests.demo_utils import get_data
 from models.demos.resnet.tt.metalResnetBlock50 import ResNet, Bottleneck
 from datasets import load_dataset
@@ -144,7 +144,7 @@ def run_perf_resnet(
     third_iter_time = profiler.get(third_key)
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
-    prep_report(
+    prep_perf_report(
         model_name=f"resnet50",
         batch_size=batch_size,
         inference_and_compile_time=first_iter_time,

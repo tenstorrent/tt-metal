@@ -14,8 +14,8 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     Profiler,
-    prep_report,
 )
+from models.perf.perf_utils import prep_perf_report
 from models.experimental.trocr.tt.trocr import trocr_causal_llm
 
 BATCH_SIZE = 1
@@ -29,13 +29,9 @@ def test_perf(expected_inference_time, expected_compile_time, device):
     cpu_key = "ref_key"
 
     processor = TrOCRProcessor.from_pretrained("microsoft/trocr-base-handwritten")
-    model = VisionEncoderDecoderModel.from_pretrained(
-        "microsoft/trocr-base-handwritten"
-    )
+    model = VisionEncoderDecoderModel.from_pretrained("microsoft/trocr-base-handwritten")
     iam_ocr_sample_input = Image.open("models/sample_data/iam_ocr_image.jpg")
-    pixel_values = processor(
-        images=iam_ocr_sample_input, return_tensors="pt"
-    ).pixel_values
+    pixel_values = processor(images=iam_ocr_sample_input, return_tensors="pt").pixel_values
 
     tt_model = trocr_causal_llm(device)
 
@@ -58,7 +54,7 @@ def test_perf(expected_inference_time, expected_compile_time, device):
         second_iter_time = profiler.get(second_key)
         cpu_time = profiler.get(cpu_key)
 
-        prep_report(
+        prep_perf_report(
             "trocr",
             BATCH_SIZE,
             first_iter_time,
@@ -86,9 +82,7 @@ def test_perf(expected_inference_time, expected_compile_time, device):
         ),
     ),
 )
-def test_perf_bare_metal(
-    use_program_cache, expected_inference_time, expected_compile_time, device
-):
+def test_perf_bare_metal(use_program_cache, expected_inference_time, expected_compile_time, device):
     test_perf(expected_inference_time, expected_compile_time, device)
 
 
@@ -102,7 +96,5 @@ def test_perf_bare_metal(
         ),
     ),
 )
-def test_perf_virtual_machine(
-    use_program_cache, expected_inference_time, expected_compile_time, device
-):
+def test_perf_virtual_machine(use_program_cache, expected_inference_time, expected_compile_time, device):
     test_perf(expected_inference_time, expected_compile_time, device)

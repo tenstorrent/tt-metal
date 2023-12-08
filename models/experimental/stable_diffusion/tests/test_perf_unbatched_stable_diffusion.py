@@ -20,7 +20,8 @@ from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
 )
-from models.utility_functions import prep_report, Profiler
+from models.utility_functions import Profiler
+from models.perf.perf_utils import prep_perf_report
 import tt_lib as ttl
 from models.experimental.stable_diffusion.tt.unet_2d_condition import (
     UNet2DConditionModel as tt_unet_condition,
@@ -263,7 +264,7 @@ def run_perf_unbatched_stable_diffusion(expected_inference_time, expected_compil
     cpu_time = profiler.get(cpu_key)
     comments = f"image size: {height}x{width} - v1.4"
 
-    prep_report(
+    prep_perf_report(
         model_name="unbatched_stable_diffusion",
         batch_size=BATCH_SIZE,
         inference_and_compile_time=first_iter_time,

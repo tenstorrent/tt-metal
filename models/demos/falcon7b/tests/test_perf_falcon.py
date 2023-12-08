@@ -30,12 +30,12 @@ from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     profiler,
-    prep_report,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     disable_compilation_reports,
     is_e75,
 )
+from models.perf.perf_utils import prep_perf_report
 
 
 # TODO: Replace this with actual Falcon application-level tests
@@ -319,7 +319,7 @@ def run_test_FalconCausalLM_end_to_end(
     first_iter_time = profiler.get("first_model_run_with_compile")
     second_iter_time = profiler.get("model_run_for_inference")
     expected_compile_time = 30
-    prep_report(
+    prep_perf_report(
         model_name=f"Falcon_{llm_mode}_{comment}",
         batch_size=batch,
         inference_and_compile_time=first_iter_time,

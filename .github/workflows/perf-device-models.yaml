@@ -38,3 +38,15 @@ jobs:
         run: |
           source build/python_env/bin/activate
           ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_device_performance_${{ matrix.runner-info.machine-type }}
+      - name: Check device perf report exists
+        id: check-device-perf-report
+        run: |
+          ls -hal
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_$(date +%Y_%m_%d).csv
+          ls -hal $DEVICE_PERF_REPORT_FILENAME
+          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      - name: Upload device perf report
+        uses: actions/upload-artifact@v3
+        with:
+          name: device-perf-report-csv-${{ matrix.runner-info.arch }}-${{ matrix.runner-info.machine-type }}
+          path: "${{ steps.check-device-perf-report.outputs.device_perf_report_filename }}"
