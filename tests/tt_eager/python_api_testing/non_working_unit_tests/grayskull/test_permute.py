@@ -46,15 +46,6 @@ def run_permute_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config
 
 test_sweep_args = [
     (
-        (3, 4, 98, 124),
-        ttl.tensor.DataType.BFLOAT16,
-        ttl.tensor.Layout.ROW_MAJOR,
-        "SYSTEM_MEMORY",
-        (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
-        (1, 2, 3, 0),
-        18244914,
-    ),
-    (
         (2, 3, 82, 126),
         ttl.tensor.DataType.BFLOAT16,
         ttl.tensor.Layout.ROW_MAJOR,

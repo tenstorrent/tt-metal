@@ -50,7 +50,6 @@ test_sweep_args = [
         ttl.tensor.Layout.ROW_MAJOR,
         "SYSTEM_MEMORY",
         (ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)),
-        True,
         11033139,
     ),
 ]
