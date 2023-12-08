@@ -33,6 +33,10 @@ inline void tilize_in(
     uint32_t in_num_subblocks,
     uint32_t out_cb_id) {
 
+    // Configure to RowMajor for tilize (similar to add bcast for bias)
+    MATH(( llk_math_pack_sync_init<SYNC>()  ));
+    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::RowMajor, false>()  ));
+
     tilize_init_short(in_cb_id, in_block_w);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
@@ -44,6 +48,10 @@ inline void tilize_in(
         }
     }
     tilize_uninit();
+
+    // Configure back to ColMajor for matmul
+    MATH(( llk_math_pack_sync_init<SYNC>()  ));
+    PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::ColMajor, false>()  ));
 } // tilize_in()
 
 // NOTE: Bias is not supported with the untilize option
@@ -100,15 +108,6 @@ inline void tilize_in(
 
 #endif
 
-inline void pack_matmul_subblock(uint32_t cb_id, uint32_t out_subblock_num_tiles) {
-    cb_reserve_back(cb_id, out_subblock_num_tiles);
-    tile_regs_wait();
-    for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-        pack_tile(i, cb_id);
-    }
-    tile_regs_release();
-    cb_push_back(cb_id, out_subblock_num_tiles);
-}
 
 namespace NAMESPACE {
 void MAIN {
@@ -158,7 +157,7 @@ void MAIN {
 
     constexpr uint32_t mm_in0_cb_id = tilize_in0 ? tilized_in0_cb_id : in0_cb_id;
 
-    mm_init(mm_in0_cb_id, in1_cb_id, out_cb_id);
+    mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id);
     #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
     #endif
@@ -166,11 +165,10 @@ void MAIN {
     #ifdef PRE_TILIZE
     unpack_reconfig_data_format_srca(in1_cb_id, in0_pretilize_cb_id);
     tilize_in(in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
-    mm_init_short();
     // TODO: unpack_reconfig_data_format_srca(in0_pretilize_cb_id, in1_cb_id) doesn't work if in0 is BFLOATB_B and in1 is BFLOAT16
+    mm_block_init_short();
     unpack_reconfig_data_format_srca(in1_cb_id);
     #endif
-
 
     // in1 num blocks w is the outer loop. Output blocks are computed in col major order.
     for(uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
@@ -198,8 +196,7 @@ void MAIN {
                     #endif
                     unpack_reconfig_data_format_srca(in1_cb_id, in0_cb_id);
                     tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
-                    mm_init_short();
-                    unpack_reconfig_data_format_srca(in0_cb_id, in1_cb_id);
+                    mm_block_init_short_with_dt(mm_in0_cb_id, in1_cb_id, /*srca_old_operand=*/in0_cb_id);
                 }
                 cb_wait_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_wait_front(in1_cb_id, in1_block_num_tiles);
@@ -217,43 +214,35 @@ void MAIN {
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
                         if (enable_reload) {
                             // Reconfigure input
-                            copy_tile_to_dst_init_short();
-                            unpack_reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
+                            copy_tile_matmul_partials_init_short_with_dt(matmul_partials_cb);
                             cb_wait_front(matmul_partials_cb, out_subblock_num_tiles);
                             tile_regs_acquire();
-                            for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                                copy_tile(matmul_partials_cb, i, i);
-                            }
+
+                            uint32_t start_dst_index = 0;
+                            uint32_t start_tile_index = 0;
+                            copy_block_matmul_partials(matmul_partials_cb, start_tile_index, start_dst_index, out_subblock_num_tiles);
+
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
                             // Reconfigure srcA back
-                            mm_init_short();
-                            unpack_reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
+                            mm_block_init_short_with_dt(mm_in0_cb_id, in1_cb_id, matmul_partials_cb);
                         } else {
                             // just acquire
                             tile_regs_acquire();
                         }
 
-                        // Compute output sub-block from in0_subblock x in1_subblock
-                        uint32_t dst_index = 0;
-                        uint32_t in0_index_h_offset = 0;
-                        for (uint32_t h = 0; h < out_subblock_h; ++h) {
-                            uint32_t in0_index_offset = in0_index_subblock_offset + in0_index_h_offset;
-                            for (uint32_t w = 0; w < out_subblock_w; ++w) {
-                                uint32_t in1_index_inner_dim_offset = 0;
-                                uint32_t in1_index_offset = in1_index_subblock_offset + w;
-                                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                                    matmul_tiles(mm_in0_cb_id,                    // in0_cb
-                                                 in1_cb_id,                                                     // in1_cb
-                                                 in0_index_offset + inner_dim,    // in0 tile
-                                                 in1_index_offset + in1_index_inner_dim_offset,    // in1 tile
-                                                 dst_index,                                                     // dst
-                                                 false);
-                                    in1_index_inner_dim_offset += in1_block_w;
-                                } // for in0_block_w
-                                ++dst_index;
-                            } // for out_subblock_w
-                            in0_index_h_offset += in0_block_w;
-                        } // for out_subblock_h
+                        // Compute output sub-block
+                        uint32_t dst_index = 0; // start at 0, each call to matmul_block internally increments dst_index
+                        uint32_t in0_index = in0_index_subblock_offset; // offset into in0 block
+                        uint32_t in1_index = in1_index_subblock_offset; // offset into in1 block
+                        // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
+                        for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
+                            // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
+                            // accumulation is done by iterating matmul_block across inner dim
+                            // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
+                            matmul_block(mm_in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, false, out_subblock_w, out_subblock_h, in0_block_w);
+                            in0_index ++;  // stride right by 1
+                            in1_index += in1_block_w; // to stride down by 1 need to stride by in_per_core_w (should be called in1_block_w)
+                        }
 
                         #if not defined FUSE_BIAS and defined SFPU_OP_INIT_ACTIVATION
                         if (last_out) {
@@ -263,7 +252,15 @@ void MAIN {
                         }
                         #endif
                         tile_regs_commit();
-                        pack_matmul_subblock(curr_matmul_out_cb, out_subblock_num_tiles);
+                        cb_reserve_back(curr_matmul_out_cb, out_subblock_num_tiles);
+                        tile_regs_wait();
+
+                        uint32_t start_dst_index = 0;
+                        matmul_pack_tile(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+
+                        tile_regs_release();
+                        cb_push_back(curr_matmul_out_cb, out_subblock_num_tiles);
+
                         in1_index_subblock_offset += out_subblock_w;
                     } // for in1_num_subblocks
                     in0_index_subblock_offset += in0_subblock_num_tiles;
@@ -287,7 +284,7 @@ void MAIN {
             // if last block we pack the final result with relu enabled
             PACK(( llk_pack_relu_config(ReluType::ZERO_RELU) ));
             #endif
-            add_bcast_rows_init_short();
+            add_bcast_rows_init_short_post_matmul();
             unpack_reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
             cb_wait_front(bias_cb_id, bias_ntiles_w);
             cb_wait_front(matmul_partials_cb, out_block_num_tiles);
@@ -316,7 +313,14 @@ void MAIN {
                     // do not pop front bias as it may be used again for subsequent blocks
                     cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
 
-                    pack_matmul_subblock(untilize_mode_out_cb_id, out_subblock_num_tiles);
+                    cb_reserve_back(untilize_mode_out_cb_id, out_subblock_num_tiles);
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                        pack_tile(i, out_cb_id);
+                    }
+                    tile_regs_release();
+                    cb_push_back(untilize_mode_out_cb_id, out_subblock_num_tiles);
+
                     in1_index_subblock_offset += out_subblock_w;
                 } // for in1_num_subblocks
             }
