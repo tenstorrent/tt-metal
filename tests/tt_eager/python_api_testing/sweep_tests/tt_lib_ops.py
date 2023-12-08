@@ -697,12 +697,11 @@ def eltwise_assign_binary(
     dtype,
     layout,
     input_mem_config,
-    output_mem_config=ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    t2 = ttl.tensor.assign(t0, t1, output_mem_config=output_mem_config)
+    t2 = ttl.tensor.assign(t0, t1)
 
     return tt2torch_tensor(t2)
 

@@ -42,8 +42,9 @@ namespace tt::tt_metal::detail{
 
         detail::export_enum<BcastOpDim>(m_tensor);
 
-        detail::bind_unary_op(m_tensor, "clone", &clone, R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.)doc");
+        detail::bind_unary_op<true, true>(m_tensor, "clone", &clone, R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.)doc");
         detail::bind_binary_op<false, false, false>(m_tensor, "copy", &copy, R"doc(  Copies the elements from ``{0}`` into ``{1}``. ``{1}`` is modified in place.)doc");
+        detail::bind_unary_op<true, true>(m_tensor, "assign", py::overload_cast<const Tensor&, const MemoryConfig&, std::optional<const DataType>>(&assign), R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.)doc");
 
         // *** tensor manipulation ***
         m_tensor.def("concat", &concat,
@@ -62,8 +63,8 @@ namespace tt::tt_metal::detail{
                 "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
-        m_tensor.def("assign", py::overload_cast<const Tensor&, const Tensor&, const MemoryConfig&>(&assign),
-            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,R"doc(
+        m_tensor.def("assign", py::overload_cast<const Tensor&, const Tensor&>(&assign),
+            py::arg("input_a").noconvert(), py::arg("input_b").noconvert(), R"doc(
             Copies input tensor ``arg0`` (given by input_a) to ``arg1`` (given by input_b) if their
             shapes and memory layouts match, and returns input_b tensor.
 
@@ -76,22 +77,6 @@ namespace tt::tt_metal::detail{
 
                 "input_a", "Tensor assign is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
                 "input_b", "Input tensor", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-        )doc");
-
-        m_tensor.def("assign", py::overload_cast<const Tensor&, const MemoryConfig&>(&assign),
-            py::arg("input").noconvert(), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
-            Clones input tensors ``arg0`` (given by input) and returns the output tensor.
-
-            Input tensor can be of any data type.
-
-            Output tensor will be of same data type as Input tensor.
-
-            .. csv-table::
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input", "Tensor assign is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"
-                "output_mem_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
         )doc");
 
         m_tensor.def("reshape", &reshape,
