@@ -22,14 +22,16 @@ void Copy::validate(const std::vector<Tensor> &input_tensors) const {
         const auto& dst_tensor = input_tensors[1];
         TT_FATAL(input_tensor_a.shape() == dst_tensor.shape());
         TT_FATAL(input_tensor_a.layout() == dst_tensor.layout());
-        TT_FATAL(input_tensor_a.dtype() == dst_tensor.dtype());
         TT_FATAL(input_tensor_a.memory_config().memory_layout == dst_tensor.memory_config().memory_layout);
+    }
+    if (this->output_dtype != input_tensor_a.dtype()) {
+        TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Only tile layout supports dtype conversion");
     }
 }
 
 std::vector<Shape> Copy::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     if (input_tensors.size() == 2) {
-        return {};
+        return {input_tensors[1].shape()};
     } else {
         const auto& input_tensor = input_tensors.at(0);
         return {input_tensor.shape()};
@@ -38,16 +40,16 @@ std::vector<Shape> Copy::compute_output_shapes(const std::vector<Tensor> &input_
 
 std::vector<Tensor> Copy::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     if (input_tensors.size() == 2) {
-        return {};
+        return {input_tensors[1]};
     } else {
         const auto& input_tensor = input_tensors.at(0);
-        return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.dtype(), input_tensor.layout(), this->output_mem_config);
+        return operation::generic_create_output_tensors(*this, input_tensors, this->output_dtype, input_tensor.layout(), this->output_mem_config);
     }
 }
 
 operation::ProgramWithCallbacks Copy::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto& output_tensor = input_tensors.size() == 2 ? input_tensors[1] : output_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
 
     switch (Copy::get_parallelization_strategy(input_tensors)){
         case CopyOpParallelizationStrategy::MULTI_CORE:
@@ -71,7 +73,8 @@ CopyOpParallelizationStrategy Copy::get_parallelization_strategy(const std::vect
 
 tt::stl::reflection::Attributes Copy::attributes() const {
     return {
-        {"output_mem_config", this->output_mem_config}
+        {"output_mem_config", this->output_mem_config},
+        {"output_dtype", this->output_dtype}
     };
 }
 
