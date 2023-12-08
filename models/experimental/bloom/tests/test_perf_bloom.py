@@ -12,7 +12,7 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
 )
-from models.utility_functions import prep_report
+from models.perf.perf_utils import prep_perf_report
 
 from transformers import BloomForCausalLM, BloomTokenizerFast
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -80,7 +80,7 @@ def run_perf_bloom(expected_inference_time, expected_compile_time, device):
 
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
-    prep_report(
+    prep_perf_report(
         model_name="bloom",
         batch_size=BATCH_SIZE,
         inference_and_compile_time=first_iter_time,

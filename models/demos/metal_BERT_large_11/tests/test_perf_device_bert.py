@@ -2,16 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import json
 import pytest
-from loguru import logger
 
-from tt_metal.tools.profiler.common import clear_profiler_runtime_artifacts
-from tt_metal.tools.profiler.process_model_log import (
-    post_process_ops_log,
-    run_device_profiler,
-    get_samples_per_s,
-)
+from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 
 
 @pytest.mark.models_device_performance_bare_metal
@@ -20,7 +13,7 @@ from tt_metal.tools.profiler.process_model_log import (
     [
         # [9, "BERT_LARGE-batch_9-MIXED_PRECISION_BATCH9", 70],
         [8, "BERT_LARGE-batch_8-MIXED_PRECISION_BATCH8", 165],
-        [12, "BERT_LARGE-batch_12-BFLOAT8_B-SHARDED_BATCH12", 390],
+        [12, "BERT_LARGE-batch_12-BFLOAT8_B-SHARDED_BATCH12", 410],
     ],
 )
 def test_perf_device_bare_metal(batch_size, test, expected_perf):
@@ -29,42 +22,16 @@ def test_perf_device_bare_metal(batch_size, test, expected_perf):
     margin = 0.03
     command = f"pytest models/demos/metal_BERT_large_11/tests/test_bert.py::test_bert[{test}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-    duration_cols = [col + " DURATION [ns]" for col in cols]
-    samples_cols = [col + " SAMPLES/S" for col in cols]
 
-    clear_profiler_runtime_artifacts()
+    inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
+    expected_perf_cols = {inference_time_key: expected_perf}
 
-    results = {}
-    for d_col in duration_cols:
-        results[f"AVG {d_col}"] = 0
-        results[f"MIN {d_col}"] = float("inf")
-        results[f"MAX {d_col}"] = -float("inf")
-
-    for _ in range(num_iterations):
-        run_device_profiler(command, subdir)
-        r = post_process_ops_log(subdir, duration_cols)
-        for d_col in duration_cols:
-            results[f"AVG {d_col}"] += r[d_col]
-            results[f"MIN {d_col}"] = min(results[f"MIN {d_col}"], r[d_col])
-            results[f"MAX {d_col}"] = max(results[f"MAX {d_col}"], r[d_col])
-
-    post_processed_results = {}
-    for s_col, d_col in zip(samples_cols, duration_cols):
-        post_processed_results[f"AVG {s_col}"] = get_samples_per_s(results[f"AVG {d_col}"] / num_iterations, batch_size)
-        post_processed_results[f"MIN {s_col}"] = get_samples_per_s(results[f"MAX {d_col}"], batch_size)
-        post_processed_results[f"MAX {s_col}"] = get_samples_per_s(results[f"MIN {d_col}"], batch_size)
-
-    logger.warning("This script does not currently assert for perf regressions, and prints info only")
-    logger.info(
-        f"\nTest: {command}"
-        f"\nPerformance statistics over {num_iterations} iterations"
-        f"\n{json.dumps(post_processed_results, indent=4)}"
+    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
+    prep_device_perf_report(
+        model_name=f"bert11",
+        batch_size=batch_size,
+        post_processed_results=post_processed_results,
+        expected_results=expected_results,
+        comments=test,
     )
-
-    lower_threshold = (1 - margin) * expected_perf
-    upper_threshold = (1 + margin) * expected_perf
-    passing = lower_threshold <= post_processed_results["AVG DEVICE KERNEL SAMPLES/S"] <= upper_threshold
-    if not passing:
-        logger.error(
-            f"Average device kernel duration {post_processed_results['AVG DEVICE KERNEL SAMPLES/S']} is outside of expected range ({lower_threshold}, {upper_threshold})"
-        )

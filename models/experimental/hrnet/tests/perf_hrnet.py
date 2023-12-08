@@ -12,8 +12,8 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     Profiler,
-    prep_report,
 )
+from models.perf.perf_utils import prep_perf_report
 
 from models.experimental.hrnet.tt.hrnet_model import hrnet_w18_small
 
@@ -29,15 +29,12 @@ BATCH_SIZE = 1
         ),
     ),
 )
-def test_perf(
-    device, expected_inference_time, expected_compile_time, imagenet_sample_input
-):
+def test_perf(device, expected_inference_time, expected_compile_time, imagenet_sample_input):
     profiler = Profiler()
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
     cpu_key = "ref_key"
-
 
     HF_model = timm.create_model("hrnet_w18_small", pretrained=True)
 
@@ -64,9 +61,7 @@ def test_perf(
     second_iter_time = profiler.get(second_key)
     cpu_time = profiler.get(cpu_key)
 
-    prep_report(
-        "hrnet", BATCH_SIZE, first_iter_time, second_iter_time, "w18_small", cpu_time
-    )
+    prep_perf_report("hrnet", BATCH_SIZE, first_iter_time, second_iter_time, "w18_small", cpu_time)
     compile_time = first_iter_time - second_iter_time
     logger.info(f"hrnet inference time: {second_iter_time}")
     logger.info(f"hrnet compile time: {compile_time}")

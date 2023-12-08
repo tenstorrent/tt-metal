@@ -15,10 +15,10 @@ from models.experimental.whisper.tt.whisper_model import TtWhisperModel
 from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
-    prep_report,
     Profiler,
     torch2tt_tensor,
 )
+from models.perf.perf_utils import prep_perf_report
 
 
 BATCH_SIZE = 1
@@ -88,7 +88,7 @@ def run_perf_whisper(expected_inference_time, expected_compile_time, device):
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
 
-    prep_report(
+    prep_perf_report(
         model_name="whisper",
         batch_size=BATCH_SIZE,
         inference_and_compile_time=first_iter_time,

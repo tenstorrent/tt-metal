@@ -11,12 +11,11 @@ import pytest
 from models.utility_functions import (
     torch2tt_tensor,
     profiler,
-    prep_report,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
 )
+from models.perf.perf_utils import prep_perf_report
 from models.experimental.efficientnet.tt.efficientnet_model import efficientnet_b0
-
 
 
 def make_input_tensor(imagenet_sample_input, resize=256, crop=224):
@@ -24,9 +23,7 @@ def make_input_tensor(imagenet_sample_input, resize=256, crop=224):
         [
             torchvision.transforms.Resize(resize),
             torchvision.transforms.CenterCrop(crop),
-            torchvision.transforms.Normalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-            ),
+            torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ]
     )
 
@@ -57,9 +54,7 @@ def test_perf_efficientnet_b0(
     test_input = make_input_tensor(imagenet_sample_input)
 
     hf_model = torchvision.models.efficientnet_b0()
-    tt_input = torch2tt_tensor(
-        test_input, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-    )
+    tt_input = torch2tt_tensor(test_input, tt_device=device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
     tt_model = efficientnet_b0(device)
 
     with torch.no_grad():
@@ -89,12 +84,10 @@ def test_perf_efficientnet_b0(
 
     # TODO: expected compile time (100 s) and expected inference time (100 s) are not real values
     # update to real time and add to CI pipeline
-    prep_report("EfficientNet", 1, first_iter_time, second_iter_time, 100, 100, "b0", cpu_time)
+    prep_perf_report("EfficientNet", 1, first_iter_time, second_iter_time, 100, 100, "b0", cpu_time)
 
     logger.info(f"efficientnet_b0 inference time: {second_iter_time}")
     logger.info(f"efficientnet_b0 compile time: {compile_time}")
 
     assert second_iter_time < expected_inference_time, "efficientnet_b0 is too slow"
-    assert (
-        compile_time < expected_compile_time
-    ), "efficientnet_b0 compile time is too slow"
+    assert compile_time < expected_compile_time, "efficientnet_b0 compile time is too slow"

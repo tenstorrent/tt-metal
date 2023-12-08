@@ -14,10 +14,10 @@ from models.utility_functions import (
     Profiler,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
-    prep_report,
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )
+from models.perf.perf_utils import prep_perf_report
 
 
 BATCH_SIZE = 1
@@ -30,9 +30,7 @@ def test_perf(device, imagenet_sample_input):
     second_key = "Execution time of vovnet second run"
     cpu_key = "Execution time of reference model"
 
-    torch_model = timm.create_model(
-        "hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True
-    )
+    torch_model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True)
 
     tt_model = vovnet_for_image_classification(
         device=device,
@@ -69,6 +67,4 @@ def test_perf(device, imagenet_sample_input):
 
     # TODO: expected compile time (100 s) and expected inference time (100 s) are not real values
     # update to real time and add to CI pipeline
-    prep_report(
-        "vovnet", BATCH_SIZE, first_iter_time, second_iter_time, 100, 100, "vovnet", cpu_time
-    )
+    prep_perf_report("vovnet", BATCH_SIZE, first_iter_time, second_iter_time, 100, 100, "vovnet", cpu_time)

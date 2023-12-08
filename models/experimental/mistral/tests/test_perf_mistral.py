@@ -13,10 +13,10 @@ from pathlib import Path
 from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
-    prep_report,
     torch_to_tt_tensor_rm,
     Profiler,
 )
+from models.perf.perf_utils import prep_perf_report
 from models.experimental.mistral.reference.model import Transformer
 from models.experimental.mistral.tt.mistral_transformer import TtTransformer
 from models.experimental.mistral.mistral_utils import generate as generate_tt
@@ -101,7 +101,7 @@ def run_perf_mistral(expected_inference_time, expected_compile_time, device, mod
 
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
-    prep_report(
+    prep_perf_report(
         model_name="Mistral",
         batch_size=BATCH_SIZE,
         inference_and_compile_time=first_iter_time,

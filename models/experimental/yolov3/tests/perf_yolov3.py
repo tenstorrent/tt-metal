@@ -3,11 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-
 import torch
 
 from loguru import logger
-
 
 
 import tt_lib
@@ -20,8 +18,8 @@ from models.utility_functions import (
     torch2tt_tensor,
     profiler,
     disable_persistent_kernel_cache,
-    prep_report,
 )
+from models.perf.perf_utils import prep_perf_report
 
 BATCH_SIZE = 1
 
@@ -44,9 +42,7 @@ def test_perf(use_program_cache, model_location_generator, device):
     model_config_path = str(data_path / "yolov3.yaml")
     weights_loc = str(model_path / "yolov3.pt")
 
-    reference_model = DetectMultiBackend(
-        weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False
-    )
+    reference_model = DetectMultiBackend(weights_loc, device=torch.device("cpu"), dnn=False, data=data_coco, fp16=False)
     state_dict = reference_model.state_dict()
     reference_model = reference_model.model
 
@@ -93,6 +89,4 @@ def test_perf(use_program_cache, model_location_generator, device):
 
     # TODO: expected compile time (100 s) and expected inference time (100 s) are not real values
     # update to real time and add to CI pipeline
-    prep_report(
-        "yolov3", BATCH_SIZE, first_iter_time, second_iter_time, 100, 100, comments, cpu_time
-    )
+    prep_perf_report("yolov3", BATCH_SIZE, first_iter_time, second_iter_time, 100, 100, comments, cpu_time)

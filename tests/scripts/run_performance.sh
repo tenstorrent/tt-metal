@@ -35,7 +35,7 @@ run_perf_models() {
     env pytest models/experimental/bloom/tests -m $pipeline_type
 
     ## Merge all the generated reports
-    env python models/merge_perf_results.py
+    env python models/perf/merge_perf_results.py
 }
 
 run_device_perf_models() {
@@ -44,6 +44,9 @@ run_device_perf_models() {
     env pytest models/demos/resnet/tests -m $pipeline_type
 
     env pytest models/demos/metal_BERT_large_11/tests -m $pipeline_type
+
+    ## Merge all the generated reports
+    env python models/perf/merge_device_perf_results.py
 }
 
 main() {

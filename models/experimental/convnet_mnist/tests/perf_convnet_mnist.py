@@ -11,9 +11,9 @@ from models.utility_functions import (
     profiler,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
-    prep_report,
     torch2tt_tensor,
 )
+from models.perf.perf_utils import prep_perf_report
 from models.experimental.convnet_mnist.tt.convnet_mnist import convnet_mnist
 from models.experimental.convnet_mnist.convnet_mnist_utils import get_test_data
 
@@ -27,9 +27,7 @@ from models.experimental.convnet_mnist.convnet_mnist_utils import get_test_data
         ),
     ),
 )
-def test_perf(
-    use_program_cache, expected_inference_time, expected_compile_time, device
-):
+def test_perf(use_program_cache, expected_inference_time, expected_compile_time, device):
     disable_persistent_kernel_cache()
     first_key = "first_iter"
     second_key = "second_iter"
@@ -38,9 +36,7 @@ def test_perf(
     tt_model, pt_model = convnet_mnist(device)
     test_input, images = get_test_data(64)
 
-    tt_input = torch2tt_tensor(
-        test_input, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR
-    )
+    tt_input = torch2tt_tensor(test_input, device, tt_layout=tt_lib.tensor.Layout.ROW_MAJOR)
 
     with torch.no_grad():
         profiler.start(cpu_key)
@@ -67,12 +63,10 @@ def test_perf(
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - second_iter_time
 
-    prep_report("convnet_mnist", 1, first_iter_time, second_iter_time, "", cpu_time)
+    prep_perf_report("convnet_mnist", 1, first_iter_time, second_iter_time, "", cpu_time)
 
     logger.info(f"ConvNet Mnist inference time: {second_iter_time}")
     logger.info(f"ConvNet Mnist compile time: {compile_time}")
 
     assert second_iter_time < expected_inference_time, "ConvNet Mnist is too slow"
-    assert (
-        compile_time < expected_compile_time
-    ), "ConvNet Mnist compile time is too slow"
+    assert compile_time < expected_compile_time, "ConvNet Mnist compile time is too slow"
