@@ -218,7 +218,7 @@ def bloom(
     hidden_size = inputs_embeds.shape[-1]
     head_size = hidden_size // num_heads
 
-    hidden_states = ttnn.experimental.layer_norm(
+    hidden_states = ttnn.layer_norm(
         inputs_embeds,
         weight=parameters.transformer.word_embeddings_layernorm.weight,
         bias=parameters.transformer.word_embeddings_layernorm.bias,
@@ -229,7 +229,7 @@ def bloom(
         hidden_states = ttnn.reallocate(hidden_states)
 
     for layer_parameters in parameters.transformer.h:
-        normalized_hidden_states = ttnn.experimental.layer_norm(
+        normalized_hidden_states = ttnn.layer_norm(
             hidden_states,
             weight=layer_parameters.input_layernorm.weight,
             bias=layer_parameters.input_layernorm.bias,
@@ -251,7 +251,7 @@ def bloom(
         attention_output = ttnn.add(attention_output, hidden_states, memory_config=BLOOM_MEMORY_CONFIG)
         ttnn.deallocate(hidden_states)
 
-        normalized_attention_output = ttnn.experimental.layer_norm(
+        normalized_attention_output = ttnn.layer_norm(
             attention_output,
             weight=layer_parameters.post_attention_layernorm.weight,
             bias=layer_parameters.post_attention_layernorm.bias,
@@ -275,7 +275,7 @@ def bloom(
         if BLOOM_MEMORY_CONFIG == ttnn.L1_MEMORY_CONFIG:
             hidden_states = ttnn.reallocate(hidden_states)
 
-    hidden_states = ttnn.experimental.layer_norm(
+    hidden_states = ttnn.layer_norm(
         hidden_states,
         weight=parameters.transformer.ln_f.weight,
         bias=parameters.transformer.ln_f.bias,

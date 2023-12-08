@@ -15,7 +15,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("h", [2 * 32])
 @pytest.mark.parametrize("w", [4 * 32])
 def test_sub_scalar(device, s, h, w):
-    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor - s
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
@@ -33,7 +33,7 @@ def test_sub_scalar(device, s, h, w):
 @pytest.mark.parametrize("h", [2 * 32])
 @pytest.mark.parametrize("w", [4 * 32])
 def test_rsub_scalar(device, s, h, w):
-    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = s - torch_input_tensor
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
@@ -54,7 +54,7 @@ def test_rsub_scalar(device, s, h, w):
 @pytest.mark.parametrize("h", [1])
 @pytest.mark.parametrize("w", [4])
 def test_sub_scalar_and_alpha(device, alpha, scalar_input_tensor_b, h, w):
-    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.sub(torch_input_tensor, scalar_input_tensor_b, alpha=alpha)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
@@ -67,29 +67,29 @@ def test_sub_scalar_and_alpha(device, alpha, scalar_input_tensor_b, h, w):
 
 
 def test_subtract(device):
-    a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    b = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
-    output = ttnn.sub(a, b, alpha=2)
+    input_tensor_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+    input_tensor_b = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+    output = ttnn.sub(input_tensor_a, input_tensor_b, alpha=2)
     assert_with_pcc(torch.tensor((1, 0)), ttnn.to_torch(ttnn.from_device(output)), 0.9999)
 
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [2 * 32])
 def test_sub(device, h, w):
-    torch_a = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
-    torch_b = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
-    torch_output = torch.sub(torch_a, torch_b)
+    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.sub(torch_input_tensor_a, torch_input_tensor_b)
 
-    a = ttnn.from_torch(torch_a)
-    b = ttnn.from_torch(torch_b)
-    a = ttnn.to_device(a, device)
-    b = ttnn.to_device(b, device)
-    tt_output = ttnn.sub(a, b)
-    tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
-    tt_output = ttnn.from_device(tt_output)
-    tt_output = ttnn.to_torch(tt_output)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b)
+    input_tensor_a = ttnn.to_device(input_tensor_a, device)
+    input_tensor_b = ttnn.to_device(input_tensor_b, device)
+    output = ttnn.sub(input_tensor_a, input_tensor_b)
+    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
+    output = ttnn.from_device(output)
+    output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
 @pytest.mark.parametrize("n", [2])
@@ -97,18 +97,18 @@ def test_sub(device, h, w):
 @pytest.mark.parametrize("h", [4 * 32])
 @pytest.mark.parametrize("w", [4 * 32])
 def test_sub_4D(device, n, c, h, w):
-    torch_a = torch.rand((n, c, h, w), dtype=torch.bfloat16)
-    torch_b = torch.rand((n, c, h, w), dtype=torch.bfloat16)
-    torch_output = torch.sub(torch_a, torch_b)
+    torch_input_tensor_a = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.sub(torch_input_tensor_a, torch_input_tensor_b)
 
-    a = ttnn.from_torch(torch_a)
-    b = ttnn.from_torch(torch_b)
-    a = ttnn.to_device(a, device)
-    b = ttnn.to_device(b, device)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b)
+    input_tensor_a = ttnn.to_device(input_tensor_a, device)
+    input_tensor_b = ttnn.to_device(input_tensor_b, device)
 
-    tt_output = ttnn.sub(a, b)
-    tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
-    tt_output = ttnn.from_device(tt_output)
-    tt_output = ttnn.to_torch(tt_output)
+    output = ttnn.sub(input_tensor_a, input_tensor_b)
+    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
+    output = ttnn.from_device(output)
+    output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_with_pcc(torch_output_tensor, output, 0.9999)

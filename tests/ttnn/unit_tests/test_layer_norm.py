@@ -23,7 +23,7 @@ def test_layer_norm(device, h, w):
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
     input_tensor = ttnn.to_device(input_tensor, device)
-    output_tensor = ttnn.experimental.layer_norm(input_tensor)
+    output_tensor = ttnn.layer_norm(input_tensor)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -52,7 +52,7 @@ def test_layer_norm_with_weight_and_bias(device, h, w):
     weight = ttnn.to_device(weight, device)
     bias = ttnn.to_device(bias, device)
 
-    output_tensor = ttnn.experimental.layer_norm(input_tensor, weight=weight, bias=bias)
+    output_tensor = ttnn.layer_norm(input_tensor, weight=weight, bias=bias)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -84,9 +84,7 @@ def test_layer_norm_with_weight_bias_and_residual_input(device, h, w):
     weight = ttnn.to_device(weight, device)
     bias = ttnn.to_device(bias, device)
 
-    output_tensor = ttnn.experimental.layer_norm(
-        input_tensor, residual_input=residual_input_tensor, weight=weight, bias=bias
-    )
+    output_tensor = ttnn.layer_norm(input_tensor, residual_input=residual_input_tensor, weight=weight, bias=bias)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)

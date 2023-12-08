@@ -64,7 +64,7 @@ def ttnn_feedforward(
 ):
     hidden_states = hidden_states @ ff1_weight
     hidden_states = hidden_states + ff1_bias
-    hidden_states = ttnn.experimental.gelu(hidden_states)
+    hidden_states = ttnn.gelu(hidden_states)
     hidden_states = hidden_states @ ff2_weight
     hidden_states = hidden_states + ff2_bias
     return hidden_states
@@ -91,7 +91,7 @@ def ttnn_bert_encoder(
         head_size=head_size,
     )
 
-    hidden_states = ttnn.experimental.layer_norm(
+    hidden_states = ttnn.layer_norm(
         hidden_states + multi_head_attention_output,
         weight=parameters.attention.output.LayerNorm.weight,
         bias=parameters.attention.output.LayerNorm.bias,
@@ -105,7 +105,7 @@ def ttnn_bert_encoder(
         parameters.output.dense.bias,
     )
 
-    hidden_states = ttnn.experimental.layer_norm(
+    hidden_states = ttnn.layer_norm(
         hidden_states + feedforward_output,
         weight=parameters.output.LayerNorm.weight,
         bias=parameters.output.LayerNorm.bias,
@@ -130,7 +130,7 @@ def ttnn_bert(
     )
     encoder_input = word_embeddings + token_type_embeddings
 
-    encoder_input = ttnn.experimental.layer_norm(
+    encoder_input = ttnn.layer_norm(
         encoder_input,
         weight=parameters.bert.embeddings.LayerNorm.weight,
         bias=parameters.bert.embeddings.LayerNorm.bias,

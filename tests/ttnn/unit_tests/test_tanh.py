@@ -18,14 +18,14 @@ from torch.nn import functional as F
 # fmt: on
 def test_tanh_not_4D(device, h, w):
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_output = torch.tanh(torch_input_tensor)
+    torch_output_tensor = torch.tanh(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
     input_tensor = ttnn.to_device(input_tensor, device)
 
-    tt_output = ttnn.tanh(input_tensor)
-    tt_output = ttnn.from_device(tt_output)
-    tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
-    tt_output = ttnn.to_torch(tt_output)
+    output = ttnn.tanh(input_tensor)
+    output = ttnn.from_device(output)
+    output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
+    output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, tt_output, 0.99)
+    assert_with_pcc(torch_output_tensor, output, 0.99)

@@ -57,7 +57,7 @@ def t5_layer_norm(hidden_states, *, weight, eps=1e-6):
 
 def t5_dense_gated_act_dense(hidden_states, parameters):
     hidden_gelu = hidden_states @ parameters.wi_0.weight
-    hidden_gelu = ttnn.experimental.gelu(hidden_gelu)
+    hidden_gelu = ttnn.gelu(hidden_gelu)
     hidden_linear = hidden_states @ parameters.wi_1.weight
     hidden_states = hidden_gelu * hidden_linear
 
