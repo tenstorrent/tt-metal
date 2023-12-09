@@ -489,8 +489,8 @@ namespace tt::tt_metal{
 
             uint32_t fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;
             vector<uint32_t> fifo_addr_vector = {fifo_addr};
-            WriteToDeviceL1(device, producer_logical_core, CQ_READ_PTR, fifo_addr_vector);
-            WriteToDeviceL1(device, producer_logical_core, CQ_WRITE_PTR, fifo_addr_vector);
+            WriteToDeviceL1(device, producer_logical_core, CQ_ISSUE_READ_PTR, fifo_addr_vector);
+            WriteToDeviceL1(device, producer_logical_core, CQ_ISSUE_WRITE_PTR, fifo_addr_vector);
 
             tt::Cluster::instance().l1_barrier(device->id());
 

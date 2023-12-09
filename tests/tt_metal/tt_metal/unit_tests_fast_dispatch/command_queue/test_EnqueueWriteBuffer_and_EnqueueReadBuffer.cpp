@@ -318,8 +318,14 @@ TEST_F(CommandQueueFixture, TestPageSizeTooLarge) {
 }
 
 TEST_F(CommandQueueFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
+    uint32_t page_size = 2048;
+    uint32_t max_command_size = DeviceCommand::COMMAND_ISSUE_REGION_SIZE - CQ_START;
+    uint32_t buffer = 14240;
+    uint32_t buffer_size = max_command_size - (buffer + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
+    TT_ASSERT(buffer_size % page_size == 0);
+    uint32_t num_pages = buffer_size / page_size;
 
-    TestBufferConfig buf_config = {.num_pages = 524270, .page_size = 2048, .buftype = BufferType::DRAM};
+    TestBufferConfig buf_config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
 
     EXPECT_TRUE(local_test_functions::test_EnqueueWrap_on_EnqueueReadBuffer(this->device_, tt::tt_metal::detail::GetCommandQueue(device_), buf_config));
 }

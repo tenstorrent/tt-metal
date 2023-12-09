@@ -294,7 +294,7 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
 
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e. hugepage)
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-        this->sysmem_writer = std::make_unique<SystemMemoryWriter>(
+        this->sysmem_manager = std::make_unique<SystemMemoryManager>(
             this->id_,
             this->dispatch_cores(),
             [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); }

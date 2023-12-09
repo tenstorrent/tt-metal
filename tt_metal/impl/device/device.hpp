@@ -183,8 +183,8 @@ class Device {
     JitBuildStateSet firmware_build_states_;
     JitBuildStateSet kernel_build_states_;
 
-    // SystemMemoryWriter is the interface to the hardware command queue
-    std::unique_ptr<SystemMemoryWriter> sysmem_writer;
+    // SystemMemoryManager is the interface to the hardware command queue
+    std::unique_ptr<SystemMemoryManager> sysmem_manager;
     // Allows access to sysmem_writer
     friend class CommandQueue;
 

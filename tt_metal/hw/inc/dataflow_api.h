@@ -35,7 +35,7 @@ extern uint8_t noc_index;
  */
 extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
-extern CQReadInterface cq_read_interface;
+extern CQInterface cq_interface;
 
 // Use VC 1 for unicast writes, and VC 4 for mcast writes
 #define NOC_UNICAST_WRITE_VC 1
@@ -1504,18 +1504,18 @@ void cq_wait_front() {
         write_ptr_and_toggle = *get_cq_write_ptr();
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
-    } while (cq_read_interface.fifo_rd_ptr == write_ptr and cq_read_interface.fifo_rd_toggle == write_toggle);
+    } while (cq_interface.issue_fifo_rd_ptr == write_ptr and cq_interface.issue_fifo_rd_toggle == write_toggle);
     DEBUG_STATUS('N', 'Q', 'D');
 }
 
 FORCE_INLINE
 void notify_host_of_cq_read_pointer() {
     // These are the PCIE core coordinates
-    constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | HOST_CQ_READ_PTR;  // For now, we are writing to host hugepages at offset
-    uint32_t rd_ptr_and_toggle = cq_read_interface.fifo_rd_ptr | (cq_read_interface.fifo_rd_toggle << 31);;
+    constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | HOST_CQ_ISSUE_READ_PTR;  // For now, we are writing to host hugepages at offset
+    uint32_t rd_ptr_and_toggle = cq_interface.issue_fifo_rd_ptr | (cq_interface.issue_fifo_rd_toggle << 31);;
     volatile tt_l1_ptr uint32_t* rd_ptr_addr = get_cq_read_ptr();
     rd_ptr_addr[0] = rd_ptr_and_toggle;
-    noc_async_write(CQ_READ_PTR, pcie_address, 4);
+    noc_async_write(CQ_ISSUE_READ_PTR, pcie_address, 4);
     noc_async_write_barrier();
 }
 
@@ -1525,7 +1525,7 @@ void cq_pop_front(uint32_t cmd_size_B) {
     // host and device are consistent in updating their pointers in this way, so they won't get out of sync. The
     // alignment is necessary because we can only read/write from/to 32B aligned addrs in host<->dev communication.
     uint32_t cmd_size_16B = align(cmd_size_B, 32) >> 4;
-    cq_read_interface.fifo_rd_ptr += cmd_size_16B;
+    cq_interface.issue_fifo_rd_ptr += cmd_size_16B;
 
     notify_host_of_cq_read_pointer();
 }

@@ -22,10 +22,18 @@
 #include <kernel.cpp>
 
 
-uint8_t noc_index = NOC_INDEX;
-
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 CQReadInterface cq_read_interface;
+
+void ApplicationHandler(void) __attribute__((__section__(".init")));
+
+uint8_t my_x[NUM_NOCS] __attribute__((used));
+uint8_t my_y[NUM_NOCS] __attribute__((used));
+
+uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
+uint8_t noc_index = NOC_INDEX;
 
 void __attribute__((section("erisc_l1_code"))) kernel_launch() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];

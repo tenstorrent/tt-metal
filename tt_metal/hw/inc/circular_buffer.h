@@ -7,11 +7,11 @@
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "risc_attribs.h"
 
-struct CQReadInterface {
-    uint32_t fifo_size;
-    uint32_t fifo_limit; // range is inclusive of the limit
-    uint32_t fifo_rd_ptr;
-    uint32_t fifo_rd_toggle;
+struct CQInterface {
+    uint32_t issue_fifo_size;
+    uint32_t issue_fifo_limit; // range is inclusive of the limit
+    uint32_t issue_fifo_rd_ptr;
+    uint32_t issue_fifo_rd_toggle;
 };
 
 struct CBInterface {

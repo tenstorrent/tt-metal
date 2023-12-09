@@ -93,14 +93,14 @@ constexpr static std::uint64_t DISPATCH_MESSAGE_REMOTE_SENDER_ADDR = 110848;
 constexpr static std::uint32_t COMMAND_PTR_SHARD_IDX = 6;
 
 // Command queue pointers
-constexpr static uint32_t CQ_READ_PTR = 110944;
-constexpr static uint32_t CQ_WRITE_PTR = 110976;
-constexpr static uint32_t CQ_READ_TOGGLE = 111008;
-constexpr static uint32_t CQ_WRITE_TOGGLE = 111040;
+constexpr static uint32_t CQ_ISSUE_READ_PTR = 110944;
+constexpr static uint32_t CQ_ISSUE_WRITE_PTR = 110976;
+constexpr static uint32_t CQ_ISSUE_READ_TOGGLE = 111008; // is this unused?
+constexpr static uint32_t CQ_ISSUE_WRITE_TOGGLE = 111040; // is this unused?
 
 // Host addresses for dispatch
-static constexpr uint32_t HOST_CQ_READ_PTR = 0;
-static constexpr uint32_t HOST_CQ_READ_TOGGLE_PTR = 32;
+static constexpr uint32_t HOST_CQ_ISSUE_READ_PTR = 0;
+static constexpr uint32_t HOST_CQ_ISSUE_READ_TOGGLE_PTR = 32; // is this unused?
 static constexpr uint32_t HOST_CQ_FINISH_PTR = 64;
 static constexpr uint32_t CQ_START = 96;
 
