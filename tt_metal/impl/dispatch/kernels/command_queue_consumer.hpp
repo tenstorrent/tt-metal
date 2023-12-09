@@ -13,7 +13,7 @@ void noc_async_write_multicast_one_packet_no_path_reserve(
 
     DEBUG_STATUS('N', 'W', 'P', 'W');
     DEBUG_SANITIZE_WORKER_ADDR(src_local_l1_addr, size);
-    DEBUG_SANITIZE_NOC_ADDR(dst_noc_addr, size);
+    DEBUG_SANITIZE_NOC_ADDR(dst_noc_addr_multicast, size);
     while (!ncrisc_noc_fast_write_ok(noc_index, NCRISC_WR_REG_CMD_BUF))
         ;
     DEBUG_STATUS('N', 'W', 'P', 'D');
