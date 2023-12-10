@@ -4,6 +4,8 @@
 
 #include "eth_l1_address_map.h"
 #include "ethernet/dataflow_api.h"
+#include "firmware_common.h"
+#include "generated_bank_to_noc_coord_mapping.h"
 #include "noc_nonblocking_api.h"
 #include "noc_parameters.h"
 #include "risc_attribs.h"
@@ -19,39 +21,37 @@ void ApplicationHandler(void) __attribute__((__section__(".init")));
 }
 #endif
 
+uint8_t my_x[NUM_NOCS] __attribute__((used));
+uint8_t my_y[NUM_NOCS] __attribute__((used));
 
+uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
+
+void __attribute__((section("code_l1"))) risc_init() {
+    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(n, 0, NOC_NODE_ID);
+        my_x[n] = noc_id_reg & NOC_NODE_ID_MASK;
+        my_y[n] = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+    }
+}
 void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
+    risc_init();
     noc_init();
 
-    int32_t src_addr = eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE;
-    int32_t dst_addr = eth_l1_mem::address_map::ERISC_APP_RESERVED_BASE;
-
-    uint32_t mode = erisc_info->mode;
-    uint32_t num_loops = erisc_info->num_bytes >> 4;
-    if (mode == 0) {
-        // Ethernet Send
-        erisc_info->bytes_sent = 0;
-        for (uint32_t i = 0; i < num_loops; i++) {
-            eth_send_packet(0, i + (src_addr >> 4), i + (dst_addr >> 4), 1);
-        }
-        erisc_info->bytes_sent = erisc_info->num_bytes;
-        eth_send_packet(0, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, 1);
-        uint64_t start_time = eth_read_wall_clock();
-        while (erisc_info->bytes_sent != 0) {
-            RISC_POST_STATUS(0x10000001 | (erisc_info->bytes_sent << 12));
-        }
-    } else if (mode == 1) {
-        // Ethernet Receive
-        uint64_t start_time = eth_read_wall_clock();
-        while (erisc_info->bytes_sent != erisc_info->num_bytes) {
-            RISC_POST_STATUS(0x10000002 | (erisc_info->bytes_sent << 12));
-        }
-        erisc_info->bytes_sent = 0;
-        eth_send_packet(0, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, ((uint32_t)(&(erisc_info->bytes_sent))) >> 4, 1);
-    } else {
-        while (true) RISC_POST_STATUS(0x1234DEAD);
+    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+        noc_local_state_init(n);
     }
-    flag_disable[0] = 0;
+    ncrisc_noc_full_sync();
+    while (1) {
+        if (erisc_info->num_bytes == 123) {
+            kernel_init();
+            break;
+        } else {
+            risc_context_switch();
+        }
+    }
+    disable_erisc_app();
 }
