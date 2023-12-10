@@ -161,18 +161,26 @@ void Device::build_firmware() {
 void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg) {
     ZoneScoped;
 
-    llrt::program_brisc_startup_addr(this->id(), phys_core);
-    for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
-        ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""));
-        uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, riscv_id);
-        if (riscv_id == 1) {
-            launch_msg->ncrisc_kernel_size16 = kernel_size16;
+    if (llrt::is_ethernet_core(phys_core, this->id())) {
+        int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0;
+        ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""));
+        uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
+        log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
+        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
+    } else {
+        llrt::program_brisc_startup_addr(this->id(), phys_core);
+        for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
+            ll_api::memory binary_mem =
+                llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""));
+            uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, riscv_id);
+            if (riscv_id == 1) {
+                launch_msg->ncrisc_kernel_size16 = kernel_size16;
+            }
+            log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, kernel_size16 * 16);
+            llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
         }
-        log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, kernel_size16 * 16);
-        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
+        llrt::write_launch_msg_to_core(this->id(), phys_core, launch_msg);
     }
-
-    llrt::write_launch_msg_to_core(this->id(), phys_core, launch_msg);
 }
 
 void Device::initialize_and_launch_firmware() {
@@ -188,6 +196,7 @@ void Device::initialize_and_launch_firmware() {
         .enable_brisc = 0,
         .enable_ncrisc = 0,
         .enable_triscs = 0,
+        .enable_erisc = 0,
         .run = RUN_MSG_INIT,
     };
 
@@ -205,6 +214,13 @@ void Device::initialize_and_launch_firmware() {
                 not_done_cores.insert(worker_core);
             }
         }
+    }
+
+    // Load erisc app base FW to eth cores
+    // TODO: we can optimize and split send/receive FD modes to two FWs
+    for (const auto &eth_core : this->get_active_ethernet_cores()) {
+        CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+        this->initialize_firmware(phys_eth_core, &launch_msg);
     }
 
     // Barrier between L1 writes above and deassert below

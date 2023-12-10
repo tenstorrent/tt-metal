@@ -27,6 +27,7 @@ struct address_map {
   static constexpr std::int32_t TILE_HEADER_BUFFER_BASE = DATA_BUFFER_BASE + DATA_BUFFER_SIZE;
 
   // TT Metal Specific
+  static constexpr std::int32_t ERISC_FIRMWARE_SIZE = 2 * 1024;
   // Total 160 * 1024 L1 starting from TILE_HEADER_BUFFER_BASE
   //    -   1 * 1024 misc args
   //    -  53 * 1024 eth app reserved buffer space
