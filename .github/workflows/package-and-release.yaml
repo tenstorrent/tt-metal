@@ -112,4 +112,5 @@ jobs:
           files: |
             VERSION
             CHANGELOG.txt
+            infra/machine_setup/scripts/setup_hugepages.py
           fail_on_unmatched_files: true
