@@ -19,7 +19,7 @@ test-list:
           high: 100
       args-gen: gen_dtype_layout_device
       comparison:
-        function: comp_pcc
+        function: comp_equal
       output-file: untilize_sweep.csv
       args:
         data-layout: ["TILE"]
