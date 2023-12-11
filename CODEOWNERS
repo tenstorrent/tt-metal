@@ -105,6 +105,7 @@ models/ @boris-drazic @farbabi
 models/conv_on_device_utils*.py @tt-nshanker
 models/bert_large_performant @tt-aho @TT-BrianLiu
 models/metal_BERT_large_11 @tt-aho @TT-BrianLiu
+functional_*/ @eyonland @arakhmati
 
 # docs
 # docs/source/apis/host_apis/ @abhullar-tt @TT-billteng @davorchap @tt-rkim
