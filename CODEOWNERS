@@ -18,6 +18,7 @@ MANIFEST.in @tt-rkim
 setup.py @tt-rkim
 pyproject.toml @tt-rkim
 requirements*.txt @tt-rkim
+setup_hugepages.py @tt-rkim
 
 Makefile @tt-rkim
 /module.mk @tt-rkim
