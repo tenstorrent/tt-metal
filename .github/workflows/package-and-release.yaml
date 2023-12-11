@@ -2,7 +2,7 @@ name: Package and release
 
 on:
   push:
-    branches: ["release"]
+    branches: ["release", "rkim/0-hugepages-release-asset"]
   workflow_dispatch:
 
 permissions:
