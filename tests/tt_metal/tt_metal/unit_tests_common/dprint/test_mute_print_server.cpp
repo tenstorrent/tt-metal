@@ -49,11 +49,11 @@ TEST_F(DPrintFixture, TestPrintMuting) {
     run_program(0);
 
     // Disable the printing and run the program again.
-    tt_set_debug_print_server_mute(true);
+    DprintServerSetMute(true);
     run_program(1);
 
     // Re-enable prints and run the program one more time.
-    tt_set_debug_print_server_mute(false);
+    DprintServerSetMute(false);
     run_program(2);
 
     // Check the print log against golden output.
