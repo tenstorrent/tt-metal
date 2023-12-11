@@ -1023,7 +1023,7 @@ void CommandQueue::finish() {
 
         // There's also a case where the device can be hung due to an unanswered DPRINT WAIT and
         // a full print buffer. Poll the print server for this case and throw if it happens.
-        if (tt_print_hang_detected()) {
+        if (DPrintServerHangDetected()) {
             TT_THROW("Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
         }
     } while (finish != 1);

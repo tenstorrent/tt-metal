@@ -89,6 +89,6 @@ protected:
         }
 
         // Wait for the print server to catch up if needed.
-        tt_await_debug_print_server();
+        tt::DprintServerAwait();
     }
 };
