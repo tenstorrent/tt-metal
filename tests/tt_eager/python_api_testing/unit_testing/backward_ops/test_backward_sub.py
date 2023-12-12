@@ -19,7 +19,7 @@ from loguru import logger
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bw_add(input_shapes, device):
+def test_bw_sub(input_shapes, device):
     torch.manual_seed(0)
     in_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
     other_data = torch.randn(input_shapes, requires_grad=True).bfloat16()
@@ -52,10 +52,10 @@ def test_bw_add(input_shapes, device):
     golden_output_tensor_a = in_data.grad
     golden_output_tensor_b = other_data.grad
 
-    comp_pass_a, _ = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a, 0.99)
+    comp_pass_a, _ = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a)
     _, comp_out_a = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_a, tt_output_tensor_a)
 
-    comp_pass_b, _ = comparison_funcs.comp_pcc(golden_output_tensor_b, tt_output_tensor_b, 0.99)
+    comp_pass_b, _ = comparison_funcs.comp_pcc(golden_output_tensor_b, tt_output_tensor_b)
     _, comp_out_b = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_b, tt_output_tensor_b)
 
     logger.info(comp_out_a)
