@@ -211,7 +211,10 @@ void MAIN {
         }
         if constexpr(batch > 1) {
             // reconfigure init for matmul
-            mm_init_short();
+            mm_block_init_short(in0_cb_id, in1_cb_id);
+            PACK(( llk_pack_init<false, false, DstTileFaceLayout::ColMajor>()  ));
+            // PACK(( llk_pack_dest_init<SYNC, DstTileFaceLayout::ColMajor, false>()  ));
+            PACK(( llk_init_packer_dest_offset_registers<SyncHalf,DstTileFaceLayout::ColMajor,false>()  ));
             // reconfigure unpacker df for src B
             unpack_reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_cb_id, in0_cb_id);
         }
