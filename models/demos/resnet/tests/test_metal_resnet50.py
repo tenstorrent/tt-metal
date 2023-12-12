@@ -16,6 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_conv import TTPyConv
+from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import TTPyMaxPool
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
 
 # golden pcc is ordered fidelity, weight dtype, activation dtype
@@ -25,74 +26,74 @@ golden_pcc = {
             tt_lib.tensor.MathFidelity.HiFi4,
             tt_lib.tensor.DataType.BFLOAT16,
             tt_lib.tensor.DataType.BFLOAT16,
-        ): 0.989913,  # Max ATOL Delta: 1.982335090637207, Max RTOL Delta: 22.094308853149414, PCC: 0.989913317779133
+        ): 0.990804,  # Max ATOL Delta: 1.607335090637207, Max RTOL Delta: 115.62200164794922, PCC: 0.9908042840544742
         (
             tt_lib.tensor.MathFidelity.HiFi4,
             tt_lib.tensor.DataType.BFLOAT8_B,
             tt_lib.tensor.DataType.BFLOAT16,
-        ): 0.985777,  # Max ATOL Delta: 2.232335090637207, Max RTOL Delta: 143.95509338378906, PCC: 0.9857770896722845
+        ): 0.986301,  # Max ATOL Delta: 1.5697126388549805, Max RTOL Delta: 21.3042049407959, PCC: 0.9863013351442654
         (
             tt_lib.tensor.MathFidelity.HiFi4,
             tt_lib.tensor.DataType.BFLOAT16,
             tt_lib.tensor.DataType.BFLOAT8_B,
-        ): 0.972452,  # Max ATOL Delta: 2.330164909362793, Max RTOL Delta: inf, PCC: 0.9724525986614849
+        ): 0.973763,  # Max ATOL Delta: 2.455164909362793, Max RTOL Delta: inf, PCC: 0.9737631427307492
         (
             tt_lib.tensor.MathFidelity.HiFi4,
             tt_lib.tensor.DataType.BFLOAT8_B,
             tt_lib.tensor.DataType.BFLOAT8_B,
-        ): 0.976795,  # Max ATOL Delta: 2.705164909362793, Max RTOL Delta: inf, PCC: 0.9767951799869169
+        ): 0.978099,  # Max ATOL Delta: 1.955164909362793, Max RTOL Delta: inf, PCC: 0.9780993165966628
         (
             tt_lib.tensor.MathFidelity.HiFi2,
             tt_lib.tensor.DataType.BFLOAT16,
             tt_lib.tensor.DataType.BFLOAT16,
-        ): 0.983090,  # Max ATOL Delta: 1.9497511386871338, Max RTOL Delta: 224.39161682128906, PCC: 0.9830904625520384
+        ): 0.983400,  # Max ATOL Delta: 1.7310011386871338, Max RTOL Delta: 369.5689392089844, PCC: 0.9834004200555363
         (
             tt_lib.tensor.MathFidelity.HiFi2,
             tt_lib.tensor.DataType.BFLOAT8_B,
             tt_lib.tensor.DataType.BFLOAT16,
-        ): 0.984897,  # Max ATOL Delta: 1.7310011386871338, Max RTOL Delta: 25.013704299926758, PCC: 0.984897263218172
+        ): 0.984828,  # Max ATOL Delta: 1.6054553985595703, Max RTOL Delta: 59.124324798583984, PCC: 0.9848281996919587
         (
             tt_lib.tensor.MathFidelity.HiFi2,
             tt_lib.tensor.DataType.BFLOAT16,
             tt_lib.tensor.DataType.BFLOAT8_B,
-        ): 0.930658,  # Max ATOL Delta: 4.705164909362793, Max RTOL Delta: inf, PCC: 0.9306583851557794
+        ): 0.934073,  # Max ATOL Delta: 4.330164909362793, Max RTOL Delta: inf, PCC: 0.9340735819578696
         (
             tt_lib.tensor.MathFidelity.HiFi2,
             tt_lib.tensor.DataType.BFLOAT8_B,
             tt_lib.tensor.DataType.BFLOAT8_B,
-        ): 0.947387,  # Max ATOL Delta: 4.705164909362793, Max RTOL Delta: inf, PCC: 0.9473877801237898
+        ): 0.944435,  # Max ATOL Delta: 4.705164909362793, Max RTOL Delta: inf, PCC: 0.9444350983635019
         (
             tt_lib.tensor.MathFidelity.LoFi,
             tt_lib.tensor.DataType.BFLOAT16,
             tt_lib.tensor.DataType.BFLOAT16,
-        ): 0.943105,  # Max ATOL Delta: 3.736414909362793, Max RTOL Delta: 53.903194427490234, PCC: 0.9431057021249141
+        ): 0.938909,  # Max ATOL Delta: 3.861414909362793, Max RTOL Delta: 240.63145446777344, PCC: 0.9389092547575272
         (
             tt_lib.tensor.MathFidelity.LoFi,
             tt_lib.tensor.DataType.BFLOAT8_B,
             tt_lib.tensor.DataType.BFLOAT16,
-        ): 0.962400,  # Max ATOL Delta: 2.830164909362793, Max RTOL Delta: 159.69110107421875, PCC: 0.9624007409443723
+        ): 0.959609,  # Max ATOL Delta: 3.205164909362793, Max RTOL Delta: 141.7057342529297, PCC: 0.9596095155046113
         (
             tt_lib.tensor.MathFidelity.LoFi,
             tt_lib.tensor.DataType.BFLOAT16,
             tt_lib.tensor.DataType.BFLOAT8_B,
-        ): 0.844913,  # Max ATOL Delta: 8.142664909362793, Max RTOL Delta: inf, PCC: 0.8449133550359712
+        ): 0.854903,  # Max ATOL Delta: 7.830164909362793, Max RTOL Delta: inf, PCC: 0.8549035869182201
         (
             tt_lib.tensor.MathFidelity.LoFi,
             tt_lib.tensor.DataType.BFLOAT8_B,
             tt_lib.tensor.DataType.BFLOAT8_B,
-        ): 0.894135,  # Max ATOL Delta: 6.205164909362793, Max RTOL Delta: inf, PCC: 0.8941357301670331
+        ): 0.884609,  # Max ATOL Delta: 6.455164909362793, Max RTOL Delta: inf, PCC: 0.8846098380419433
     },
     16: {
         (
             tt_lib.tensor.MathFidelity.HiFi4,
             tt_lib.tensor.DataType.BFLOAT8_B,
             tt_lib.tensor.DataType.BFLOAT8_B,
-        ): 0.976795,  # Max ATOL Delta: 2.705164909362793, Max RTOL Delta: inf, PCC: 0.9767951799869171
+        ): 0.978099,  # Max ATOL Delta: 1.955164909362793, Max RTOL Delta: inf, PCC: 0.9780993165966632
         (
             tt_lib.tensor.MathFidelity.HiFi2,
             tt_lib.tensor.DataType.BFLOAT8_B,
             tt_lib.tensor.DataType.BFLOAT8_B,
-        ): 0.947387,  # Max ATOL Delta: 4.705164909362793, Max RTOL Delta: inf, PCC: 0.9473877801237898
+        ): 0.944435,  # Max ATOL Delta: 4.705164909362793, Max RTOL Delta: inf, PCC: 0.9444350983635021
         (
             tt_lib.tensor.MathFidelity.LoFi,
             tt_lib.tensor.DataType.BFLOAT8_B,
@@ -203,4 +204,5 @@ def test_run_resnet50_inference(
         # assert passing # fails because of torch.allclose
 
         TTPyConv.static_kernel_configs_cache_map = {}
+        TTPyMaxPool.static_kernel_configs_cache_map = {}
         TTPyUntilizeWithHalo.static_kernel_configs_cache_map = {}
