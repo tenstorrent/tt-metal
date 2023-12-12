@@ -279,7 +279,7 @@ bool Device::initialize(const std::vector<uint32_t>& l1_bank_remap) {
                          [&, this]() { return this->logical_grid_size(); },
                          [&, this](CoreCoord core) { return this->worker_core_from_logical_core(core); },
                          [&, this]() -> const std::set<CoreCoord>& { return this->storage_only_cores(); },
-                         build_env_.get_out_kernel_root_path()
+                         build_env_.get_out_root_path()
                          );
     this->initialized_ = true;
     return true;
