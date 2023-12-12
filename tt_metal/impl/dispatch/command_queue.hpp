@@ -75,12 +75,20 @@ class EnqueueReadBufferCommand : public Command {
     Device* device;
     SystemMemoryManager& manager;
     void* dst;
+    uint32_t src_page_index;
+    uint32_t pages_to_read;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_READ_BUFFER;
 
    public:
     Buffer& buffer;
     uint32_t read_buffer_addr;
-    EnqueueReadBufferCommand(Device* device, Buffer& buffer, void* dst, SystemMemoryManager& manager);
+    EnqueueReadBufferCommand(
+        Device* device,
+        Buffer& buffer,
+        void* dst,
+        SystemMemoryManager& manager,
+        uint32_t src_page_index = 0,
+        std::optional<uint32_t> pages_to_read = std::nullopt);
 
     const DeviceCommand assemble_device_command(uint32_t dst);
 

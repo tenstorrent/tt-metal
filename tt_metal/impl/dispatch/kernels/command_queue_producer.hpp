@@ -6,6 +6,52 @@
 #include "tt_metal/hostdevcommon/common_values.hpp"
 #include "risc_attribs.h"
 
+CQReadInterface cq_read_interface;
+
+inline __attribute__((always_inline)) volatile uint32_t* get_cq_issue_read_ptr() {
+    return reinterpret_cast<volatile uint32_t*>(CQ_ISSUE_READ_PTR);
+}
+
+inline __attribute__((always_inline)) volatile uint32_t* get_cq_issue_write_ptr() {
+    return reinterpret_cast<volatile uint32_t*>(CQ_ISSUE_WRITE_PTR);
+}
+
+FORCE_INLINE
+void cq_wait_front() {
+    DEBUG_STATUS('N', 'Q', 'W');
+    uint32_t issue_write_ptr_and_toggle;
+    uint32_t issue_write_ptr;
+    uint32_t issue_write_toggle;
+    do {
+        issue_write_ptr_and_toggle = *get_cq_issue_write_ptr();
+        issue_write_ptr = issue_write_ptr_and_toggle & 0x7fffffff;
+        issue_write_toggle = issue_write_ptr_and_toggle >> 31;
+    } while (cq_read_interface.issue_fifo_rd_ptr == issue_write_ptr and cq_read_interface.issue_fifo_rd_toggle == issue_write_toggle);
+    DEBUG_STATUS('N', 'Q', 'D');
+}
+
+FORCE_INLINE
+void notify_host_of_cq_read_pointer() {
+    // These are the PCIE core coordinates
+    constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | HOST_CQ_ISSUE_READ_PTR;  // For now, we are writing to host hugepages at offset
+    uint32_t issue_rd_ptr_and_toggle = cq_read_interface.issue_fifo_rd_ptr | (cq_read_interface.issue_fifo_rd_toggle << 31);;
+    volatile tt_l1_ptr uint32_t* issue_rd_ptr_addr = get_cq_issue_read_ptr();
+    issue_rd_ptr_addr[0] = issue_rd_ptr_and_toggle;
+    noc_async_write(CQ_ISSUE_READ_PTR, pcie_address, 4);
+    noc_async_write_barrier();
+}
+
+FORCE_INLINE
+void cq_pop_front(uint32_t cmd_size_B) {
+    // First part of equation aligns to nearest multiple of 32, and then we shift to make it a 16B addr. Both
+    // host and device are consistent in updating their pointers in this way, so they won't get out of sync. The
+    // alignment is necessary because we can only read/write from/to 32B aligned addrs in host<->dev communication.
+    uint32_t cmd_size_16B = align(cmd_size_B, 32) >> 4;
+    cq_read_interface.issue_fifo_rd_ptr += cmd_size_16B;
+
+    notify_host_of_cq_read_pointer();
+}
+
 FORCE_INLINE
 bool cb_producer_space_available(int32_t num_pages) {
     uint32_t operand = 0;
@@ -94,6 +140,7 @@ void produce(
         const uint32_t num_pages = command_ptr[2];
         const uint32_t page_size = command_ptr[3];
         const uint32_t src_buf_type = command_ptr[4];
+        const uint32_t src_page_index = command_ptr[6];
 
 
         uint32_t fraction_of_producer_cb_num_pages = consumer_cb_num_pages / 2;
@@ -103,6 +150,7 @@ void produce(
         uint32_t num_reads_issued = 0;
         uint32_t num_reads_completed = 0;
         uint32_t num_writes_completed = 0;
+        uint32_t src_page_id = src_page_index;
 
         Buffer buffer;
         if ((BufferType)src_buf_type == BufferType::SYSTEM_MEMORY or not(sharded)) {
@@ -118,9 +166,10 @@ void produce(
             // These APIs are non-blocking to allow for context switching.
             if (cb_producer_space_available(num_to_read) and num_reads_issued < num_pages) {
                 uint32_t l1_write_ptr = get_write_ptr(0);
-                buffer.noc_async_read_buffer(l1_write_ptr, num_reads_issued, num_to_read);
+                buffer.noc_async_read_buffer(l1_write_ptr, src_page_id, num_to_read);
                 cb_push_back(0, num_to_read);
                 num_reads_issued += num_to_read;
+                src_page_id += num_to_read;
 
                 uint32_t num_pages_left = num_pages - num_reads_issued;
                 num_to_read = min(num_pages_left, fraction_of_producer_cb_num_pages);

@@ -7,8 +7,6 @@
 static constexpr uint32_t COMMAND_START_ADDR =
     L1_UNRESERVED_BASE;  // Space between UNRESERVED_BASE -> data_start is for commands
 
-CQInterface cq_interface;
-
 FORCE_INLINE
 void program_local_cb(uint32_t num_pages, uint32_t page_size, uint32_t cb_size) {
     uint32_t cb_id = 0;
@@ -54,19 +52,19 @@ void program_consumer_cb(bool db_buf_switch, uint64_t consumer_noc_encoding, uin
 
 // Only the read interface is set up on the device... the write interface
 // belongs to host
-void setup_cq_interface() {
-    uint issue_fifo_addr = (HOST_CQ_FINISH_PTR + 32) >> 4;  // The fifo starts after the pointer addresses
+void setup_cq_read_interface() {
+    uint issue_fifo_addr = CQ_START >> 4;  // The fifo starts after the pointer addresses
     uint issue_fifo_size = ((DeviceCommand::COMMAND_ISSUE_REGION_SIZE) >> 4) - issue_fifo_addr;
 
-    cq_interface.issue_fifo_limit = issue_fifo_addr + issue_fifo_size;
-    cq_interface.issue_fifo_rd_ptr = issue_fifo_addr;
-    cq_interface.issue_fifo_size = issue_fifo_size;
-    cq_interface.issue_fifo_rd_toggle = 0;
+    cq_read_interface.issue_fifo_limit = issue_fifo_addr + issue_fifo_size;
+    cq_read_interface.issue_fifo_rd_ptr = issue_fifo_addr;
+    cq_read_interface.issue_fifo_size = issue_fifo_size;
+    cq_read_interface.issue_fifo_rd_toggle = 0;
 }
 
 void kernel_main() {
 
-    setup_cq_interface();
+    setup_cq_read_interface();
 
     // Initialize the producer/consumer DB semaphore
     // This represents how many buffers the producer can write to.
@@ -84,7 +82,7 @@ void kernel_main() {
         cq_wait_front();
 
         // Read in command
-        uint32_t rd_ptr = (cq_interface.issue_fifo_rd_ptr << 4);
+        uint32_t rd_ptr = (cq_read_interface.issue_fifo_rd_ptr << 4);
         uint64_t src_noc_addr = pcie_core_noc_encoding | rd_ptr;
         noc_async_read(src_noc_addr, COMMAND_START_ADDR, min(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, DeviceCommand::COMMAND_ISSUE_REGION_SIZE - rd_ptr));
         noc_async_read_barrier();
@@ -106,8 +104,8 @@ void kernel_main() {
 
         if (wrap) {
             // Basically popfront without the extra conditional
-            cq_interface.issue_fifo_rd_ptr = CQ_START >> 4;  // Head to beginning of command queue
-            cq_interface.issue_fifo_rd_toggle = not cq_interface.issue_fifo_rd_toggle;
+            cq_read_interface.issue_fifo_rd_ptr = CQ_START >> 4;  // Head to beginning of command queue
+            cq_read_interface.issue_fifo_rd_toggle = not cq_read_interface.issue_fifo_rd_toggle;
             notify_host_of_cq_read_pointer();
             continue;
         }

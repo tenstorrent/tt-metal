@@ -2,8 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/dispatch/kernels/command_queue_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/command_queue_consumer.hpp"
+
+// The read interface for the issue region is set up on the device, the write interface belongs to host
+// Opposite for completion region where device sets up the write interface and host owns read interface
+void setup_cq_write_interface() {
+    uint completion_fifo_addr = DeviceCommand::COMMAND_ISSUE_REGION_SIZE >> 4;
+    uint completion_fifo_size = DeviceCommand::COMMAND_COMPLETION_REGION_SIZE >> 4;
+
+    cq_write_interface.completion_fifo_limit = completion_fifo_addr + completion_fifo_size;
+    cq_write_interface.completion_fifo_wr_ptr = completion_fifo_addr;
+    cq_write_interface.completion_fifo_size = completion_fifo_size;
+    cq_write_interface.completion_fifo_wr_toggle = 0;
+}
 
 void kernel_main() {
     constexpr uint32_t tensix_soft_reset_addr = get_compile_time_arg_val(0);
@@ -14,6 +25,8 @@ void kernel_main() {
 
     uint64_t producer_noc_encoding = uint64_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y)) << 32;
     uint64_t consumer_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0])) << 32;
+
+    setup_cq_write_interface();
 
     while (true) {
         // Wait for producer to supply a command

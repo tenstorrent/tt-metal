@@ -18,6 +18,7 @@ constexpr static std::uint32_t BRISC_L1_RESULT_BASE = 102 * 1024;
 constexpr static std::uint32_t NCRISC_L1_ARG_BASE = 103 * 1024;
 constexpr static std::uint32_t NCRISC_L1_RESULT_BASE = 104 * 1024;
 constexpr static std::uint32_t TRISC_L1_ARG_BASE = 105 * 1024;
+constexpr static std::uint32_t L1_ALIGNMENT = 16;
 
 // config for 32 L1 buffers is at addr BUFFER_CONFIG_BASE
 // 12 bytes for each buffer: (addr, size, size_in_tiles)
@@ -32,8 +33,7 @@ constexpr static std::uint32_t CIRCULAR_BUFFER_CONFIG_SIZE = NUM_CIRCULAR_BUFFER
 constexpr static std::uint32_t SEMAPHORE_BASE = CIRCULAR_BUFFER_CONFIG_BASE + CIRCULAR_BUFFER_CONFIG_SIZE;
 constexpr static std::uint32_t NUM_SEMAPHORES = 4;
 constexpr static std::uint32_t UINT32_WORDS_PER_SEMAPHORE = 1;
-constexpr static std::uint32_t SEMAPHORE_ALIGNMENT = 16;
-constexpr static std::uint32_t ALIGNED_SIZE_PER_SEMAPHORE = (((UINT32_WORDS_PER_SEMAPHORE * sizeof(uint32_t)) + SEMAPHORE_ALIGNMENT - 1) / SEMAPHORE_ALIGNMENT) * SEMAPHORE_ALIGNMENT;
+constexpr static std::uint32_t ALIGNED_SIZE_PER_SEMAPHORE = (((UINT32_WORDS_PER_SEMAPHORE * sizeof(uint32_t)) + L1_ALIGNMENT - 1) / L1_ALIGNMENT) * L1_ALIGNMENT;
 constexpr static std::uint32_t SEMAPHORE_SIZE = NUM_SEMAPHORES * ALIGNED_SIZE_PER_SEMAPHORE;
 
 // Debug printer buffers - A total of 5*PRINT_BUFFER_SIZE starting at PRINT_BUFFER_NC address
@@ -90,38 +90,38 @@ constexpr static std::uint32_t OP_INFO_SIZE      = 280; // So far, holds up to 1
 constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR = 110816;
 constexpr static std::uint64_t DISPATCH_MESSAGE_REMOTE_SENDER_ADDR = 110848;
 
-constexpr static std::uint32_t COMMAND_PTR_SHARD_IDX = 6;
+constexpr static std::uint32_t COMMAND_PTR_SHARD_IDX = 7;
 
 // Command queue pointers
 constexpr static uint32_t CQ_ISSUE_READ_PTR = 110944;
-constexpr static uint32_t CQ_ISSUE_WRITE_PTR = 110976;
-constexpr static uint32_t CQ_ISSUE_READ_TOGGLE = 111008; // is this unused?
-constexpr static uint32_t CQ_ISSUE_WRITE_TOGGLE = 111040; // is this unused?
+constexpr static uint32_t CQ_ISSUE_WRITE_PTR = CQ_ISSUE_READ_PTR + L1_ALIGNMENT;
+constexpr static uint32_t CQ_COMPLETION_WRITE_PTR = CQ_ISSUE_WRITE_PTR + L1_ALIGNMENT;
+constexpr static uint32_t CQ_COMPLETION_READ_PTR = CQ_COMPLETION_WRITE_PTR + L1_ALIGNMENT;
 
 // Host addresses for dispatch
 static constexpr uint32_t HOST_CQ_ISSUE_READ_PTR = 0;
-static constexpr uint32_t HOST_CQ_ISSUE_READ_TOGGLE_PTR = 32; // is this unused?
+static constexpr uint32_t HOST_CQ_COMPLETION_WRITE_PTR = 32;
 static constexpr uint32_t HOST_CQ_FINISH_PTR = 64;
 static constexpr uint32_t CQ_START = 96;
 
 static constexpr uint32_t CQ_CONSUMER_CB_BASE = 111056;
 // CB0
 static constexpr uint32_t CQ_CONSUMER_CB0_ACK = CQ_CONSUMER_CB_BASE;
-static constexpr uint32_t CQ_CONSUMER_CB0_RECV = CQ_CONSUMER_CB0_ACK + 16;
-static constexpr uint32_t CQ_CONSUMER_CB0_NUM_PAGES_BASE = CQ_CONSUMER_CB0_RECV + 16;
-static constexpr uint32_t CQ_CONSUMER_CB0_PAGE_SIZE = CQ_CONSUMER_CB0_NUM_PAGES_BASE + 16;
-static constexpr uint32_t CQ_CONSUMER_CB0_TOTAL_SIZE = CQ_CONSUMER_CB0_PAGE_SIZE + 16;
-static constexpr uint32_t CQ_CONSUMER_CB0_READ_PTR = CQ_CONSUMER_CB0_TOTAL_SIZE + 16;
-static constexpr uint32_t CQ_CONSUMER_CB0_WRITE_PTR = CQ_CONSUMER_CB0_READ_PTR + 16;
+static constexpr uint32_t CQ_CONSUMER_CB0_RECV = CQ_CONSUMER_CB0_ACK + L1_ALIGNMENT;
+static constexpr uint32_t CQ_CONSUMER_CB0_NUM_PAGES_BASE = CQ_CONSUMER_CB0_RECV + L1_ALIGNMENT;
+static constexpr uint32_t CQ_CONSUMER_CB0_PAGE_SIZE = CQ_CONSUMER_CB0_NUM_PAGES_BASE + L1_ALIGNMENT;
+static constexpr uint32_t CQ_CONSUMER_CB0_TOTAL_SIZE = CQ_CONSUMER_CB0_PAGE_SIZE + L1_ALIGNMENT;
+static constexpr uint32_t CQ_CONSUMER_CB0_READ_PTR = CQ_CONSUMER_CB0_TOTAL_SIZE + L1_ALIGNMENT;
+static constexpr uint32_t CQ_CONSUMER_CB0_WRITE_PTR = CQ_CONSUMER_CB0_READ_PTR + L1_ALIGNMENT;
 
 // CB1
-static constexpr uint32_t CQ_CONSUMER_CB1_ACK = CQ_CONSUMER_CB0_WRITE_PTR + 16;
-static constexpr uint32_t CQ_CONSUMER_CB1_RECV = CQ_CONSUMER_CB1_ACK + 16;
-static constexpr uint32_t CQ_CONSUMER_CB1_NUM_PAGES_BASE = CQ_CONSUMER_CB1_RECV + 16;
-static constexpr uint32_t CQ_CONSUMER_CB1_PAGE_SIZE = CQ_CONSUMER_CB1_NUM_PAGES_BASE + 16;
-static constexpr uint32_t CQ_CONSUMER_CB1_TOTAL_SIZE = CQ_CONSUMER_CB1_PAGE_SIZE + 16;
-static constexpr uint32_t CQ_CONSUMER_CB1_READ_PTR = CQ_CONSUMER_CB1_TOTAL_SIZE + 16;
-static constexpr uint32_t CQ_CONSUMER_CB1_WRITE_PTR = CQ_CONSUMER_CB1_READ_PTR + 16;
+static constexpr uint32_t CQ_CONSUMER_CB1_ACK = CQ_CONSUMER_CB0_WRITE_PTR + L1_ALIGNMENT;
+static constexpr uint32_t CQ_CONSUMER_CB1_RECV = CQ_CONSUMER_CB1_ACK + L1_ALIGNMENT;
+static constexpr uint32_t CQ_CONSUMER_CB1_NUM_PAGES_BASE = CQ_CONSUMER_CB1_RECV + L1_ALIGNMENT;
+static constexpr uint32_t CQ_CONSUMER_CB1_PAGE_SIZE = CQ_CONSUMER_CB1_NUM_PAGES_BASE + L1_ALIGNMENT;
+static constexpr uint32_t CQ_CONSUMER_CB1_TOTAL_SIZE = CQ_CONSUMER_CB1_PAGE_SIZE + L1_ALIGNMENT;
+static constexpr uint32_t CQ_CONSUMER_CB1_READ_PTR = CQ_CONSUMER_CB1_TOTAL_SIZE + L1_ALIGNMENT;
+static constexpr uint32_t CQ_CONSUMER_CB1_WRITE_PTR = CQ_CONSUMER_CB1_READ_PTR + L1_ALIGNMENT;
 
 // DRAM write barrier
 // Host writes (4B value) to and reads from this address across all L1s to ensure previous writes have been committed

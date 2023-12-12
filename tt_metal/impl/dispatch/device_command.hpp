@@ -98,8 +98,9 @@ class DeviceCommand {
         const uint32_t num_pages,
         const uint32_t padded_page_size,
         const uint32_t src_buf_type,
-        const uint32_t dst_buf_type
-        );
+        const uint32_t dst_buf_type,
+        const uint32_t src_page_index
+    );
 
     void add_buffer_transfer_instruction_sharded(
         const uint32_t src,
@@ -108,6 +109,7 @@ class DeviceCommand {
         const uint32_t padded_page_size,
         const uint32_t src_buf_type,
         const uint32_t dst_buf_type,
+        const uint32_t src_page_index,
         const std::vector<uint32_t> num_pages_in_shard,
         const std::vector<uint32_t> core_id_x,
         const std::vector<uint32_t> core_id_y
