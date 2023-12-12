@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 from loguru import logger
 import tt_lib as ttl
@@ -10,14 +14,15 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 
 
+@pytest.mark.parametrize("batch", [16, 96])
 @pytest.mark.parametrize("in0_sharded", [False], ids=["in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [False], ids=["out_unsharded"])
-@pytest.mark.parametrize("M", [32])
+@pytest.mark.parametrize("M", [32, 128])
 @pytest.mark.parametrize("N", [1024])
 @pytest.mark.parametrize("activations_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 @pytest.mark.parametrize("weights_dtype", [ttl.tensor.DataType.BFLOAT16, ttl.tensor.DataType.BFLOAT8_B])
 def test_matmul_1d_in0_batched(
-    device, in0_sharded, out_sharded, M, N, activations_dtype, weights_dtype, function_level_defaults
+    device, batch, in0_sharded, out_sharded, M, N, activations_dtype, weights_dtype, function_level_defaults
 ):
     grid_size = (12, 8)
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -26,8 +31,8 @@ def test_matmul_1d_in0_batched(
     if activations_dtype != weights_dtype and is_wormhole_b0():
         pytest.skip("WH does not work with mixed precision")
     num_cores = grid_size[0] * grid_size[1]
-    K = 32
-    in0_shape = [10, 1, M, K]
+    K = 128
+    in0_shape = [batch, 1, M, K]
     in1_shape = [1, 1, K, N]
     bias_shape = [1, 1, 1, N]
 
@@ -59,12 +64,14 @@ def test_matmul_1d_in0_batched(
             ttl.tensor.ShardOrientation.ROW_MAJOR,
         )
 
+    per_core_M = M // 32
+
     program_config = ttl.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=1,
-        per_core_M=1,
+        per_core_M=per_core_M,
         per_core_N=1,
         fuse_batch=False,
         fused_activation=None,
