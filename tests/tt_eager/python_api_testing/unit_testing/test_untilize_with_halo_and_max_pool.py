@@ -23,6 +23,9 @@ def volume(shape):
     return vol
 
 
+@pytest.mark.skip(
+    "This version of untilize_with_halo_and_max_pool is deprecated. Please see untilize_with_halo_and_max_pool_v2, which replaces this."
+)
 ## max-pool params:
 ## kernel_h, kernel_w
 ## stride_h, stride_w
@@ -70,11 +73,6 @@ def test_run_max_pool(
     device,
     dtype,
 ):
-    logger.info(
-        "This version of untilize_with_halo_and_max_pool is deprecated. Please see untilize_with_halo_and_max_pool_v2, which replaces this."
-    )
-    pytest.skip()
-
     # ttl.device.EnableMemoryReports()
     if act_shape[0] >= 16 and dtype == ttl.tensor.DataType.BFLOAT16:
         pytest.skip("Configuration does not fit in L1")

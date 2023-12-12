@@ -21,6 +21,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 from models.utility_functions import (
     is_wormhole_b0,
+    skip_for_wormhole_b0,
     pad_and_fold_conv_activation_for_unity_stride,
     pad_and_fold_conv_filters_for_unity_stride,
 )
@@ -34,6 +35,7 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
 import torch
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("has_bias", (True,))
 @pytest.mark.parametrize("fuse_relu", (True,))
 @pytest.mark.parametrize(

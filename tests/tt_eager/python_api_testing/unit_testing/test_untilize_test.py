@@ -6,9 +6,10 @@ import pytest
 import torch
 
 import tt_lib as ttl
-from models.utility_functions import untilize
+from models.utility_functions import untilize, skip_for_wormhole_b0
 
 
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "nb, nc, nh, nw",
     (

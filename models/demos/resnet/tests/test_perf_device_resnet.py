@@ -10,11 +10,10 @@ from models.perf.device_perf_utils import run_device_perf, check_device_perf, pr
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [8, "HiFi4-activations_BFLOAT16-weights_BFLOAT16-batch_8", 2150],
-        # [8, "HiFi2-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_8", 2575],
-        [16, "HiFi2-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_16", 3410],
-        [8, "LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_8", 2890],
-        [16, "LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_16", 3680],
+        [8, "HiFi4-activations_BFLOAT16-weights_BFLOAT16-batch_8", 2600],
+        [16, "HiFi2-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_16", 5010],
+        [8, "LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_8", 3930],
+        [16, "LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_16", 5660],
     ],
 )
 def test_perf_device_bare_metal(batch_size, test, expected_perf):

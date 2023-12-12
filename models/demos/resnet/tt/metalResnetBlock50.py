@@ -1256,34 +1256,33 @@ class ResNet(nn.Module):
             [batch_size, self.conv_input_face_shape_hw[0], self.conv_input_face_shape_hw[1], self.inplanes],
         )
         self.relu = tt_lib.tensor.relu_without_autoformat
-        # self.maxpool = fallback_ops.MaxPool2d(kernel_size=3, stride=2, padding=1, channels_last=True, reshape_2d=True)
-        # self.maxpool = TtMaxPool(self.device, kernel_size=3, stride=2, padding=1, output_mem_config=self.memory_config, nblocks=8, channels_last=True, reshape_2d=True)
-        # self.maxpool_config_params = {"kernel_size": 3, "stride": 2, "pad": 1, "dilation": 1}
-        # self.maxpool = TtMaxPool(
-        #     self.device,
-        #     self.conv1_output_shape[0],  ## in_n
-        #     self.conv1_output_shape[1],  ## in_h
-        #     self.conv1_output_shape[2],  ## in_w
-        #     kernel_size=self.maxpool_config_params["kernel_size"],
-        #     stride=self.maxpool_config_params["stride"],
-        #     padding=self.maxpool_config_params["pad"],
-        #     output_mem_config=self.height_sharded_memory_config,
-        #     nblocks=1,
-        #     channels_last=True,
-        #     reshape_2d=True,
-        # )
 
         self.maxpool_config_params = {"kernel_size": 3, "stride": 2, "pad": 1, "dilation": 1}
-        max_pool_op_params = [
-            (self.maxpool_config_params["stride"], self.maxpool_config_params["stride"]),
-            (self.maxpool_config_params["pad"], self.maxpool_config_params["pad"]),
-            (self.maxpool_config_params["kernel_size"], self.maxpool_config_params["kernel_size"]),
-            (batch_size, self.conv1_output_shape[1], self.conv1_output_shape[2]),
-            grid_size,
-            self.first_conv_num_cores_nhw,
-        ]
-        self.maxpool_untilize_with_halo = TTPyUntilizeWithHalo(self.device, max_pool_op_params, pad_val=0xF7FF)
-        self.maxpool = TTPyMaxPool(max_pool_op_params, self.device, grid_size)
+        if sharded:
+            max_pool_op_params = [
+                (self.maxpool_config_params["stride"], self.maxpool_config_params["stride"]),
+                (self.maxpool_config_params["pad"], self.maxpool_config_params["pad"]),
+                (self.maxpool_config_params["kernel_size"], self.maxpool_config_params["kernel_size"]),
+                (batch_size, self.conv1_output_shape[1], self.conv1_output_shape[2]),
+                grid_size,
+                self.first_conv_num_cores_nhw,
+            ]
+            self.maxpool_untilize_with_halo = TTPyUntilizeWithHalo(self.device, max_pool_op_params, pad_val=0xF7FF)
+            self.maxpool = TTPyMaxPool(max_pool_op_params, self.device, grid_size)
+        else:
+            self.maxpool = TtMaxPool(
+                self.device,
+                self.conv1_output_shape[0],  ## in_n
+                self.conv1_output_shape[1],  ## in_h
+                self.conv1_output_shape[2],  ## in_w
+                kernel_size=self.maxpool_config_params["kernel_size"],
+                stride=self.maxpool_config_params["stride"],
+                padding=self.maxpool_config_params["pad"],
+                output_mem_config=self.height_sharded_memory_config,
+                nblocks=1,
+                channels_last=True,
+                reshape_2d=True,
+            )
 
         self.maxpool_output_shape = compute_max_pool_shape(3, 2, 1, self.conv1_output_shape)
         self.layer1, self.layer1_output_shape = self._make_layer(
@@ -1398,6 +1397,12 @@ class ResNet(nn.Module):
             batch_size=batch_size,
         )  # num_classes = 1000
         # self.fc = nn.Linear(512 * block.expansion, num_classes)
+
+    def __del__(self):
+        # Need to clear global static configs for each Resnet run
+        TTPyConv.static_kernel_configs_cache_map = {}
+        TTPyMaxPool.static_kernel_configs_cache_map = {}
+        TTPyUntilizeWithHalo.static_kernel_configs_cache_map = {}
 
     def _make_layer(
         self,
@@ -1704,19 +1709,9 @@ class ResNet(nn.Module):
             )
         x = self.conv1(x)
         # Relu is fused with conv1
-        # print("first conv done")
 
         if self.sharded:
             x = self.maxpool_untilize_with_halo(x)
-            # x = tt_lib.tensor.untilize_with_halo(
-            #     x,
-            #     0xF7FF,  ## pad_val
-            #     self.conv1_output_shape[0],  ## in_n
-            #     self.conv1_output_shape[1],  ## in_h
-            #     self.conv1_output_shape[2],  ## in_w
-            #     2,  ## stride case
-            #     self.height_sharded_memory_config,
-            # )
         else:
             x = format_tensor(x, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
             x = x.reshape(
@@ -1726,7 +1721,6 @@ class ResNet(nn.Module):
                 self.conv1_output_shape[3],
             )
         x = self.maxpool(x)
-        # print("maxpool done")
 
         x = x.reshape(
             1,

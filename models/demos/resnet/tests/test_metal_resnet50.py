@@ -15,9 +15,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     get_atol_rtol_pcc,
     comp_pcc,
 )
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_conv import TTPyConv
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_max_pool import TTPyMaxPool
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
 
 # golden pcc is ordered fidelity, weight dtype, activation dtype
 golden_pcc = {
@@ -202,7 +199,3 @@ def test_run_resnet50_inference(
         passing_pcc, _ = comp_pcc(torch_output, tt_output, pcc=valid_pcc)
         assert passing_pcc
         # assert passing # fails because of torch.allclose
-
-        TTPyConv.static_kernel_configs_cache_map = {}
-        TTPyMaxPool.static_kernel_configs_cache_map = {}
-        TTPyUntilizeWithHalo.static_kernel_configs_cache_map = {}

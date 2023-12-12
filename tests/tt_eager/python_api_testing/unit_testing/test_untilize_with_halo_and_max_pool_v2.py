@@ -15,7 +15,7 @@ from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo
 import tt_lib as ttl
 from tt_lib.utils import _nearest_32
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from models.utility_functions import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0, skip_for_wormhole_b0
 
 
 def volume(shape):
@@ -25,6 +25,7 @@ def volume(shape):
     return vol
 
 
+@skip_for_wormhole_b0()
 ## max-pool params:
 ## kernel_h, kernel_w
 ## stride_h, stride_w

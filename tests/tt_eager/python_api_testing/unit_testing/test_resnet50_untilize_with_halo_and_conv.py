@@ -13,12 +13,8 @@ from models.demos.resnet.tt.metalResnetBlock50 import (
     resnet50_1x1_conv_as_matmul,
     resnet50_optimized_conv,
     _nearest_32,
-    _nearest_y,
     format_tensor,
 )
-
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_conv import TTPyConv
-from tt_eager.tt_dnn.op_library.sliding_window_op_infra.tt_py_untilize_with_halo import TTPyUntilizeWithHalo
 
 # hardcoding matmul config for 1x1 convs
 # key: mm act height, mm act width, mm weight width
@@ -385,49 +381,40 @@ hardcoded_matmul_config_conv = {
 
 hardcoded_conv_blocking_and_parallelization_config = {
     8: {
-        (100352, 64): [16 * 4, 1024, 1, 64, 128, 64, 1024, (12, 9), 1024, 64, 98],
-        (25088, 64): [64 * 3, 256, 1, 64, 128, 64, 256, (12, 9), 256, 64, 98],
-        (6272, 128): [128 * 3, 64, 1, 128, 64, 128, 64, (12, 9), 64, 128, 98],
-        (1568, 256): [256, 160, 8, 32, 160, 32, 160, (10, 8), 160, 32, 10],
-        (416, 512): [512, 64, 8, 64, 64, 64, 64, (7, 8), 64, 64, 7],
+        (25088, 64): [64 * 3, 256, 1, 64, 128, 64, 256, (12, 9), 256, 64],
+        (6272, 128): [128 * 3, 64, 1, 128, 64, 128, 64, (12, 9), 64, 128],
+        (1568, 256): [256, 160, 8, 32, 160, 32, 160, (10, 8), 160, 32],
+        (416, 512): [512, 64, 8, 64, 64, 64, 64, (7, 8), 64, 64],
     },
     16: {
-        (200704, 64): [16 * 4, 1024, 1, 64, 128, 64, 2048, (12, 9), 2048, 64, 98],
-        (50176, 64): [64 * 3, 256, 1, 64, 128, 64, 512, (12, 9), 512, 64, 98],
-        (12544, 128): [128 * 3, 128, 1, 128, 64, 128, 128, (12, 9), 128, 128, 98],
-        (3136, 256): [256, 288, 8, 32, 96, 32, 288, (11, 8), 288, 32, 11],
-        (800, 512): [512, 96, 8, 64, 96, 64, 96, (9, 8), 96, 64, 9],
-    },
-    20: {
-        (250880, 64): [16 * 4, 1280, 1, 64, 128, 64, 2560, (12, 9), 2560, 64, 98],  # Won't fit for bfloat16 activations
-        (62720, 64): [64 * 3, 640, 1, 64, 128, 64, 640, (12, 9), 640, 64, 98],
-        # (62720, 64): [64 * 3, 320, 1, 64, 64, 64, 640, (12, 9), 640, 64, 98], # TODO: This fits for BFLOAT16, but do we need?
-        (15680, 128): [128 * 3, 160, 1, 128, 32, 128, 160, (12, 9), 160, 128, 98],
-        (3936, 256): [256, 352, 8, 32, 32, 32, 352, (12, 8), 352, 32, 12],
-        (992, 512): [512, 96, 8, 64, 96, 64, 96, (11, 8), 96, 64, 11],
+        (50176, 64): [64 * 3, 256, 1, 64, 128, 64, 512, (12, 9), 512, 64],
+        (12544, 128): [128 * 3, 128, 1, 128, 64, 128, 128, (12, 9), 128, 128],
+        (3136, 256): [256, 288, 8, 32, 96, 32, 288, (11, 8), 288, 32],
+        (800, 512): [512, 96, 8, 64, 96, 64, 96, (9, 8), 96, 64],
     },
 }
 
 
-@pytest.mark.parametrize("N", (8, 16, 20), ids=["batch_8", "batch_16", "batch_20"])
+@pytest.mark.skip(
+    "This version of optimized_conv is deprecated. Please see untilize_with_halo_and_conv_v2, which replaces this."
+)
+@pytest.mark.parametrize("N", (8, 16), ids=["batch_8", "batch_16"])
 @pytest.mark.parametrize(
     "K, C, H, W, R, S, stride_h, stride_w, pad_h, pad_w",
     (
         # unique convs in rn50 (complete list)
-        # first conv post folding and C padding to tile width
-        (64, 16, 115, 115, 4, 4, 1, 1, 0, 0),
         # layer1
         (64, 64, 56, 56, 3, 3, 1, 1, 1, 1),
         # layer2
         # (512, 256, 56, 56, 1, 1, 2, 2, 0, 0), # not supported yet
-        (128, 128, 56, 56, 3, 3, 2, 2, 1, 1),
+        # (128, 128, 56, 56, 3, 3, 2, 2, 1, 1), # not supported yet
         (128, 128, 28, 28, 3, 3, 1, 1, 1, 1),
         # layer3
-        (256, 256, 28, 28, 3, 3, 2, 2, 1, 1),  # not supported yet
+        # (256, 256, 28, 28, 3, 3, 2, 2, 1, 1), # not supported yet
         # (1024, 512, 28, 28, 1, 1, 2, 2, 0, 0), # not supported yet
         (256, 256, 14, 14, 3, 3, 1, 1, 1, 1),
         # layer4
-        (512, 512, 14, 14, 3, 3, 2, 2, 1, 1),  # not supported yet
+        # (512, 512, 14, 14, 3, 3, 2, 2, 1, 1), # not supported yet
         # (2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0), # not supported yet
         (512, 512, 7, 7, 3, 3, 1, 1, 1, 1),
     ),
@@ -463,21 +450,12 @@ def test_resnet50_conv(
     pad_h,
     pad_w,
 ):
-    if (
-        activations_dtype == tt_lib.tensor.DataType.BFLOAT16
-        and N == 20
-        and (
-            K == 64 or (stride_h == 2 and (K == 256 or (K == 128 and weights_dtype == tt_lib.tensor.DataType.BFLOAT16)))
-        )
-    ):
-        pytest.skip("Skipping test because it won't fit in L1!")
-
     interleaved_mem_config = tt_lib.tensor.MemoryConfig(
-        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.DRAM
+        tt_lib.tensor.TensorMemoryLayout.INTERLEAVED, tt_lib.tensor.BufferType.L1
     )
 
     for i in range(1):  # increase num of iterations to test op caching
-        # assert C % 32 == 0
+        assert C % 32 == 0
         assert K % 32 == 0
         torch.manual_seed(0)
         conv_input_shape = [N, C, H, W]
@@ -507,7 +485,7 @@ def test_resnet50_conv(
         conv_blocking_and_parallelization_config = hardcoded_conv_blocking_and_parallelization_config[N][
             (conv_as_mm_padded_act_height, K)
         ]
-        assert len(conv_blocking_and_parallelization_config) == 11
+        assert len(conv_blocking_and_parallelization_config) == 10
 
         [
             act_block_w_datums,
@@ -520,7 +498,6 @@ def test_resnet50_conv(
             grid_size,
             per_core_out_matrix_h,
             per_core_weight_matrix_w,
-            num_cores_nhw,
         ] = conv_blocking_and_parallelization_config
         if R == 1 and S == 1:
             assert C % act_block_w_datums == 0
@@ -605,16 +582,7 @@ def test_resnet50_conv(
                 tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
             )
 
-        sliding_window_op_params = [
-            (stride_h, stride_w),
-            (pad_h, pad_w),
-            (R, S),
-            (N, H, W),
-            grid_size,
-            num_cores_nhw,
-        ]
-        conv = TTPyConv(
-            sliding_window_op_params,
+        conv = resnet50_optimized_conv(
             conv_weight_pyt.reshape(-1).tolist(),
             conv_params,
             device,
@@ -634,37 +602,32 @@ def test_resnet50_conv(
             act_c_num_blocks=act_c_num_blocks,
         )
 
-        conv_input = tt_lib.tensor.Tensor(
+        conv_input_on_device = tt_lib.tensor.Tensor(
             conv_input_pyt_nhwc.reshape(-1).tolist(),
             conv_input_pyt_nhwc.shape,
             tt_lib.tensor.DataType.BFLOAT16,
             tt_lib.tensor.Layout.ROW_MAJOR,
-        )
+        ).to(device, interleaved_mem_config)
 
         # Convert activation RM to tile layout
-        conv_input_on_device = conv_input.reshape(
+        conv_input_on_device = conv_input_on_device.reshape(
             1,
             1,
             conv_input_shape_nhwc[0] * conv_input_shape_nhwc[1] * conv_input_shape_nhwc[2],
             conv_input_shape_nhwc[3],
-        ).to(device, interleaved_mem_config)
-        if C >= 32:
-            conv_input_on_device = format_tensor(
-                conv_input_on_device, tt_lib.tensor.Layout.TILE, device, interleaved_mem_config
-            )
-
-        input_size_to_shard_evenly = _nearest_y(
-            conv_input_shape_nhwc[0] * conv_input_shape_nhwc[1] * conv_input_shape_nhwc[2], num_cores_nhw * 32
         )
-        untilize_with_halo_input_shard_height = (int)(input_size_to_shard_evenly / num_cores_nhw)
+        conv_input_on_device = format_tensor(
+            conv_input_on_device, tt_lib.tensor.Layout.TILE, device, interleaved_mem_config
+        )
+
         # Convert interleaved to sharded
         if act_c_num_blocks > 1:  # 2D conv
             conv_input_on_device = tt_lib.tensor.interleaved_to_sharded(
                 conv_input_on_device,
                 grid_size,
                 [
-                    untilize_with_halo_input_shard_height,
-                    (int)(C / act_c_num_blocks),
+                    act_block_h_datums,
+                    weight_block_w_datums,
                 ],  # act_block_w_datums may include reads of multiple pixels in window
                 tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 tt_lib.tensor.ShardOrientation.COL_MAJOR,
@@ -674,16 +637,15 @@ def test_resnet50_conv(
                 conv_input_on_device,
                 grid_size,
                 [
-                    untilize_with_halo_input_shard_height,
-                    C,
+                    per_core_out_matrix_h,
+                    weight_block_w_datums,
                 ],  # act_block_w_datums may include reads of multiple pixels in window
                 tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED,
                 tt_lib.tensor.ShardOrientation.ROW_MAJOR,
             )
 
         # Untilize with halo concat
-        tt_py_untilize_with_halo_op = TTPyUntilizeWithHalo(device, sliding_window_op_params)
-        conv_input_on_device = tt_py_untilize_with_halo_op(conv_input_on_device)
+        conv_input_on_device = tt_lib.tensor.untilize_with_halo(conv_input_on_device, 0x0, N, H, W, 1, in_mem_config)
 
         # Conv with new reader for sharded untilized with halo inputs
         output_on_device = conv(conv_input_on_device)
@@ -711,9 +673,6 @@ def test_resnet50_conv(
         # NHWC to NCHW
         out_result = torch.transpose(out_result, 2, 3)
         out_result = torch.transpose(out_result, 1, 2)
-
-        TTPyConv.static_kernel_configs_cache_map = {}
-        TTPyUntilizeWithHalo.static_kernel_configs_cache_map = {}
 
         # Compare baseline against golden
         assert out_result_baseline.shape == out_golden.shape

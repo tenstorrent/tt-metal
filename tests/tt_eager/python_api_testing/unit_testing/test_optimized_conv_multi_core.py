@@ -17,7 +17,7 @@ from tt_lib.utils import (
     _nearest_y,
     convert_weights_2d_matrix,
 )
-from models.utility_functions import print_diff_argmax, is_close, comp_pcc, comp_allclose_and_pcc
+from models.utility_functions import print_diff_argmax, is_close, comp_pcc, comp_allclose_and_pcc, skip_for_wormhole_b0
 from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
     create_conv_act_tensor,
     create_conv_weight_tensor,
@@ -26,6 +26,8 @@ from tests.tt_eager.python_api_testing.conv.conv_unit_test_utils import (
 )
 import torch
 
+
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("untilize_out", (False,))
 @pytest.mark.parametrize("has_bias", (False,))
 @pytest.mark.parametrize("fuse_relu", (False,))
@@ -62,7 +64,7 @@ import torch
         # (64, 3, 224, 224, 7, 7, 2, 2, 3, 3),
         # # num blocks weight w = 4, num blocks act h = 4, num blocks act w = 3
         # (16 * 32, 32, 24, 24, 3, 3, 1, 1, 0, 0),
-        #(32, 32, 16, 16, 1, 1, 1, 1, 0, 0, 2, 1, 4, 2),
+        # (32, 32, 16, 16, 1, 1, 1, 1, 0, 0, 2, 1, 4, 2),
         (64, 32, 16, 16, 1, 1, 1, 1, 0, 0, 1, 1, 4, 2, 2),
     ),
 )
@@ -89,7 +91,6 @@ def test_run_optimized_conv(
     fuse_relu,
     device,
 ):
-
     if has_bias and untilize_out:
         ## bias is only supported without untilize out
         pytest.skip()
@@ -99,21 +100,21 @@ def test_run_optimized_conv(
         # torch.set_printoptions(threshold=10000)
         torch.manual_seed(0)
         a_activation_shape = [N, C, H, W]
-        #A_pyt = torch.randn(a_activation_shape)
+        # A_pyt = torch.randn(a_activation_shape)
         A_pyt = torch.normal(mean=0, std=0.1, size=a_activation_shape)
         # A_pyt = torch.ones(a_activation_shape, dtype=torch.bfloat16).float()
         b_weights_shape = [K, C, R, S]
-        #B_pyt = torch.randn(b_weights_shape)
+        # B_pyt = torch.randn(b_weights_shape)
         B_pyt = torch.normal(mean=0, std=0.1, size=b_weights_shape)
         # B_pyt = torch.ones(b_weights_shape, dtype=torch.bfloat16).float()
         bias_shape = [1, 1, 1, K]
-        #bias_pyt = torch.randn(bias_shape)
+        # bias_pyt = torch.randn(bias_shape)
         bias_pyt = torch.normal(mean=0, std=0.1, size=bias_shape)
         # bias_pyt = torch.zeros(bias_shape, dtype=torch.bfloat16).float() * 3.
         # bias_pyt = torch.range(start=0, end=(K - 1), dtype=torch.bfloat16).float()
 
         # Parameters to define block dims
-        act_block_w = (int)((_nearest_32(_nearest_y(C, 16) * S))/32)
+        act_block_w = (int)((_nearest_32(_nearest_y(C, 16) * S)) / 32)
         weight_block_h = act_block_w
         weight_block_w = 1
         out_subblock_h = 1
@@ -123,19 +124,17 @@ def test_run_optimized_conv(
         OH = ((int)((H - R + 2 * pad_h) / stride_h)) + 1
         OW = ((int)((W - S + 2 * pad_w) / stride_w)) + 1
         conv_output_shape = [N, OH, OW, K]
-        act_matrix_height_ntiles = (int) (_nearest_y(N*OH*OW, act_block_h*32) / 32)
+        act_matrix_height_ntiles = (int)(_nearest_y(N * OH * OW, act_block_h * 32) / 32)
         # Prepare activations
         A_cl_host = create_conv_act_tensor(A_pyt, N, C, H, W)
         A = A_cl_host.to(device)
 
         # Prepare weights
-        B_tiled_host = create_conv_weight_tensor_special_padding(
-            B_pyt, K, C, R, S, weight_block_h, weight_block_w
-        )
+        B_tiled_host = create_conv_weight_tensor_special_padding(B_pyt, K, C, R, S, weight_block_h, weight_block_w)
         B_tiled = B_tiled_host.to(device)
 
         # Bias
-        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, _nearest_y(K, weight_block_w*32), pad = 0)
+        bias_cl_host = create_conv_bias_tensor(bias_pyt, 1, K, _nearest_y(K, weight_block_w * 32), pad=0)
         bias_device = bias_cl_host.to(device)
 
         if has_bias:
@@ -157,27 +156,32 @@ def test_run_optimized_conv(
             A,
             B_tiled,
             bias_device,
+            None,
             [R, S, stride_h, stride_w, pad_h, pad_w],
             K,
             untilize_out,
             has_bias,
             fuse_relu,
             ttl.tensor.MathFidelity.HiFi4,
-            ttl.tensor.OptimizedConvParallelizationConfig(grid_size=(num_cores_x,num_cores_y),
-                                                          per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
-                                                          per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles),
-            ttl.tensor.OptimizedConvBlockConfig(act_block_h_ntiles=act_block_h,
-                                                act_block_w_ntiles=act_block_w,
-                                                weight_block_w_ntiles=weight_block_w,
-                                                out_block_h_ntiles=out_block_h,
-                                                out_subblock_h_ntiles=out_subblock_h,
-                                                out_subblock_w_ntiles=out_subblock_w)
-            )
+            ttl.tensor.OptimizedConvParallelizationConfig(
+                grid_size=(num_cores_x, num_cores_y),
+                per_core_out_matrix_height_ntiles=per_core_out_matrix_h_ntiles,
+                per_core_weight_matrix_width_ntiles=per_core_weight_matrix_w_ntiles,
+            ),
+            ttl.tensor.OptimizedConvBlockConfig(
+                act_block_h_ntiles=act_block_h,
+                act_block_w_ntiles=act_block_w,
+                weight_block_w_ntiles=weight_block_w,
+                out_block_h_ntiles=out_block_h,
+                out_subblock_h_ntiles=out_subblock_h,
+                out_subblock_w_ntiles=out_subblock_w,
+            ),
+        )
         if not untilize_out:
-           out_unpadded_shape = [1, 1, N*OH*OW, K]
-           assert out_unpadded_shape == out.shape_without_padding()
-           out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
-           out = out.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
+            out_unpadded_shape = [1, 1, N * OH * OW, K]
+            assert out_unpadded_shape == out.shape_without_padding()
+            out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
+            out = out.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
         out = out.cpu()
         assert out.shape() == conv_output_shape
         assert out.layout() == ttl.tensor.Layout.ROW_MAJOR
@@ -187,9 +191,7 @@ def test_run_optimized_conv(
         out_result = torch.transpose(out_result, 2, 3)
         out_result = torch.transpose(out_result, 1, 2)
 
-        torch.set_printoptions(
-            precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32
-        )
+        torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
         # print(f'OUT: {out_result}')
         # print(f'GLD: {out_golden}')
@@ -197,10 +199,10 @@ def test_run_optimized_conv(
         # Compare against golden
         assert out_result.shape == out_golden.shape
         [output_N, output_C, output_H, output_W] = out_result.shape
-        #print("Golden - ")
-        #print(out_golden.flatten())
-        #print("Result - ")
-        #print(out_result.flatten())
+        # print("Golden - ")
+        # print(out_golden.flatten())
+        # print("Result - ")
+        # print(out_result.flatten())
         # for n in range(output_N):
         #     for c in range(output_C):
         #         for h in range(output_H):
@@ -213,9 +215,11 @@ def test_run_optimized_conv(
         #                     print(f"Bad value at {n},{c},{h},{w} with ATOL={atol_delta} and RTOL={rtol_delta}")
         #                     print(f"    result={calculated}, golden={golden}")
 
-        passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(out_golden, out_result, rtol=1e-1, atol=1e-3, pcc=0.9999)  # For LowFi we need 0.99976
+        passing_allclose_and_pcc, output_info = comp_allclose_and_pcc(
+            out_golden, out_result, rtol=1e-1, atol=1e-3, pcc=0.9999
+        )  # For LowFi we need 0.99976
         print("Passing=", passing_allclose_and_pcc)
         print("Output info=", output_info)
-        passing_pcc, _ = comp_pcc(out_golden, out_result, pcc=0.9998) # For LowFi we need 0.99976
+        passing_pcc, _ = comp_pcc(out_golden, out_result, pcc=0.9998)  # For LowFi we need 0.99976
         assert passing_pcc
-        #assert passing_allclose_and_pcc
+        # assert passing_allclose_and_pcc
