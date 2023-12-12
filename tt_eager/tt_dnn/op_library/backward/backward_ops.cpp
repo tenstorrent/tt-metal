@@ -299,6 +299,21 @@ std::vector<Tensor> embedding_bw(const Tensor& grad, const Tensor& input, const 
     return operation::decorate_as_composite(__func__, _embedding_bw)(grad, input, weight, output_mem_config);
 }
 
+// - name: sub.Tensor(Tensor self, Tensor other, *, Scalar alpha=1) -> Tensor
+//   self: grad
+//   other: -grad * alpha
+std::vector<Tensor> _sub_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    grad_tensor.push_back(grad);
+    Tensor grad_b = neg(grad);
+    grad_tensor.push_back(grad_b);
+    return grad_tensor;
+}
+std::vector<Tensor> sub_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _sub_bw)(grad, input, other, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
