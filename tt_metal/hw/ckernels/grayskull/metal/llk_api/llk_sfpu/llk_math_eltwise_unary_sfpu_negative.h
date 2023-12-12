@@ -21,9 +21,8 @@ inline void llk_math_eltwise_unary_sfpu_negative_init() {
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_negative(uint dst_index, int vector_mode = Dim::RC) {
-    constexpr int first_iterations = 1;
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
-                            (ckernel::sfpu::calculate_negative<APPROXIMATE, first_iterations>,
+                            (ckernel::sfpu::calculate_negative<APPROXIMATE>,
                             ckernel::sfpu::calculate_negative<APPROXIMATE>,
                             dst_index, vector_mode);
 }

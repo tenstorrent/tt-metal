@@ -20,6 +20,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS=4>
 inline void calculate_mask()
 {
     bool exponent_size_8 = true;
+    #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat mask = dst_reg[16];
