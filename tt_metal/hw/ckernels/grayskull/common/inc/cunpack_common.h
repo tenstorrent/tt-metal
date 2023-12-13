@@ -6,20 +6,14 @@
 
 #include "ckernel.h"
 #include "ckernel_globals.h"
-#include "debug/fw_debug.h"
-#include "debug/status.h"
+#include "fw_debug.h"
 
 #ifdef PERF_DUMP
 #include "perf_res_decouple.h"
-#else
-#define SKIP_UNP0 0
-#define SKIP_UNP1 0
 #endif
 
 namespace ckernel::unpacker
 {
-   constexpr uint32_t OPERAND_BASE_ID = 0;
-   constexpr uint32_t INTERMEDIATE_BASE_ID = 24;
    constexpr uint32_t TILE_DESC_SIZE = 2; //Unpacker descriptor size in dwords
    constexpr uint32_t CONFIG_SIZE = 2; //Unpacker configuration size in dwords
 
@@ -46,6 +40,7 @@ namespace ckernel::unpacker
 
    // Unpack config
    typedef struct {
+      //word 0
      uint32_t out_data_format : 4;
      uint32_t throttle_mode: 2;
      uint32_t context_count  : 2;
@@ -56,10 +51,12 @@ namespace ckernel::unpacker
      uint32_t upsample_rate  : 3;
      uint32_t upsamle_and_interlave  : 1;
      uint32_t shift_amount : 16;
+     //word 1
      uint32_t uncompress_cntx0_3 : 4;
      uint32_t reserved_1  : 12;
      uint32_t uncompress_cntx4_7 : 4;
      uint32_t reserved_2  : 12;
+     //word 2
      uint32_t limit_addr : 16;
      uint32_t fifo_size : 16;
    } unpack_config_t;
@@ -70,15 +67,15 @@ namespace ckernel::unpacker
    } unpack_config_u;
 
    typedef struct {
-      uint32_t x: 12;
-      uint32_t y: 12;
-      uint32_t reserved : 8;
-   } unpack_xy_stride_t;
+     uint32_t z: 12;
+     uint32_t w: 12;
+     uint32_t reserved : 8;
+   } unpack_zw_stride_t;
 
    typedef union {
-      uint32_t val;
-      unpack_xy_stride_t f;
-   } unpack_xy_stride_u;
+     uint32_t val;
+     unpack_zw_stride_t f;
+   } unpack_zw_stride_u;
 
    // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
    inline void unpacker_addr_counter_init()
@@ -126,9 +123,7 @@ namespace ckernel::unpacker
    // Wait for threshold of busy contexts to fall below total available contexts
    inline void wait_for_next_context(const uint num_contexts)
    {
-       DEBUG_STATUS('W', 'N', 'C', 'W');
        while (semaphore_read(semaphore::UNPACK_SYNC) >= num_contexts) {}
-       DEBUG_STATUS('W', 'N', 'C', 'D');
    }
 
    inline void switch_config_context(uint &unp_cfg_context)
@@ -153,25 +148,23 @@ namespace ckernel::unpacker
    // Sync on unpacker idle via waiting busy contexts counter 0
    inline void wait_for_idle()
    {
-       DEBUG_STATUS('W', 'I', 'W');
        while (semaphore_read(semaphore::UNPACK_SYNC) > 0) {}
-       DEBUG_STATUS('W', 'I', 'D');
    }
 
    inline void wait_for_pack_config_done()
    {
-       DEBUG_STATUS('W', 'P', 'C', 'W');
        while (semaphore_read(semaphore::UNPACK_PACK_CONFIG_SYNC) > 0) {}
-       DEBUG_STATUS('W', 'P', 'C', 'D');
    }
 
    inline void configure_unpack_AB(
-     uint unpA_operand,
-     uint unpB_operand,
-     uint srca_face_height=16,
-     uint srcb_face_height=16,
-     bool row_pool=false,
-     bool skip_alu_format_set=false)
+     const uint unpA_src_format,
+     const uint unpB_src_format,
+     const uint unpA_dst_format,
+     const uint unpB_dst_format,
+     const uint srca_face_height=16,
+     const uint srcb_face_height=16,
+     const bool row_pool=false,
+     const bool skip_alu_format_set=false)
    {
       // Check that unpacker is done (all contexts freed up) before starting hw configuration
       wait_for_idle();
@@ -180,44 +173,37 @@ namespace ckernel::unpacker
       unpacker_addr_counter_init();
 
       // Get pointer to registers for current state ID
-      volatile uint *cfg = get_cfg_pointer();
+      volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
-    uint unpA_ch1_x_stride = (uint)(unpack_dst_format[unpA_operand] & 0x3) == (uint)DataFormat::Float32   ? 4
-                             : (uint)(unpack_dst_format[unpA_operand] & 0x3) == (uint)DataFormat::Float16 ? 2
-                                                                                                          : 1;
-    uint unpB_ch1_x_stride = (uint)(unpack_dst_format[unpB_operand] & 0x3) == (uint)DataFormat::Float32   ? 4
-                             : (uint)(unpack_dst_format[unpB_operand] & 0x3) == (uint)DataFormat::Float16 ? 2
-                                                                                                          : 1;
-      uint unpA_ch1_y_stride = 16*srca_face_height*unpA_ch1_x_stride;
-      uint unpB_ch1_y_stride = 16*srcb_face_height*unpB_ch1_x_stride;
-      uint exp_width = ((uint)unpack_dst_format[unpA_operand]>>2)&0x1; //0=5-bit, 1=8-bit
+      uint unpA_ch1_x_stride = (uint) (unpA_dst_format&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpA_dst_format&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
+      uint unpB_ch1_x_stride = (uint) (unpB_dst_format&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpB_dst_format&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
+      uint unpA_ch1_z_stride = 16*srca_face_height*unpA_ch1_x_stride;
+      uint unpB_ch1_z_stride = 16*srcb_face_height*unpB_ch1_x_stride;
+      uint exp_width = ((uint)unpA_dst_format>>2)&0x1; //0=5-bit, 1=8-bit
 
       // Math ALU_FORMAT_REG
       // MT: Ensure thread safety between unpacker and math threads by using semaphore
       if (!skip_alu_format_set) {
          uint alu_src_format =
-            ((row_pool ? ((uint)DataFormat::Float16 | (exp_width << 2)) : unpack_dst_format[unpB_operand])
-             << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT)  // Row polling dest format is always 16-bit float
-            | (unpack_dst_format[unpA_operand] << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) |
-            (0x0 << ALU_FORMAT_SPEC_REG_SrcA_val_SHAMT);
+            ((row_pool ? ((uint) DataFormat::Float16 | (exp_width<<2)) : unpB_dst_format) << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) // Row polling dest format is always 16-bit float
+         | (unpA_dst_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT)
+         | (0x0 << ALU_FORMAT_SPEC_REG_SrcA_val_SHAMT);
          cfg[ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32] = alu_src_format;
          semaphore_post(semaphore::UNPACK_PACK_CONFIG_SYNC);
       }
 
       // Strides
-      cfg[UNP0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32] = (unpA_ch1_y_stride << UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT) |
-                                                    (            0 << UNP0_ADDR_CTRL_XY_REG_0_Xstride_SHAMT);  // X and Y stride for dest address (ch1)
-      //cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =  // Z and W stride for dest address (ch1)
-      cfg[UNP1_ADDR_CTRL_XY_REG_1_Xstride_ADDR32] = (unpB_ch1_y_stride << UNP1_ADDR_CTRL_XY_REG_0_Ystride_SHAMT) |
-                                                    (            0 << UNP1_ADDR_CTRL_XY_REG_0_Xstride_SHAMT);  // X and Y stride for dest address (ch1)
-      //cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =  // Z and W stride for dest address (ch1)
+      cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] = (unpA_ch1_z_stride << UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT) |
+                                                    (                0 << UNP0_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT);  // Z and W stride for dest address (ch1)
+      cfg[UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] = (unpB_ch1_z_stride << UNP1_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT) |
+                                                    (                0 << UNP1_ADDR_CTRL_ZW_REG_1_Wstride_SHAMT);  // Z and W stride for dest address (ch1)
 
       // Set tile descriptor
       unpack_tile_descriptor_u tile_descriptor;
       for (uint i=0; i<TILE_DESC_SIZE; i++) {
          tile_descriptor.val[i] = 0;
       }
-      tile_descriptor.f.in_data_format  = (uint) unpack_src_format[unpA_operand];
+      tile_descriptor.f.in_data_format  = unpA_src_format;
       tile_descriptor.f.uncompressed = 1; // Input tile is uncompressed
       tile_descriptor.f.x_dim        = 256;
       tile_descriptor.f.y_dim        = 1;
@@ -225,7 +211,7 @@ namespace ckernel::unpacker
       //tile_descriptor.f.blobs_per_xy_plane = 0;
       //tile_descriptor.f.blobs_y_start = 0;
       for (uint i=0; i<TILE_DESC_SIZE; i++) cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32+i]=tile_descriptor.val[i];
-      tile_descriptor.f.in_data_format = row_pool ? (uint)DataFormat::Float32 : unpack_src_format[unpB_operand];
+      tile_descriptor.f.in_data_format  = row_pool ? (uint) DataFormat::Float32 : unpB_src_format;
       for (uint i=0; i<TILE_DESC_SIZE; i++) cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32+i]=tile_descriptor.val[i];
 
       // Set unpacker config
@@ -233,7 +219,7 @@ namespace ckernel::unpacker
       for (uint i=0; i<CONFIG_SIZE; i++) {
          config.val[i] = 0;
       }
-      config.f.out_data_format = unpack_dst_format[unpA_operand];
+      config.f.out_data_format = unpA_dst_format;
       config.f.throttle_mode   = 2;
       //config.f.upsample_rate   = 0;
       //config.f.upsamle_and_interlave  = 0;
@@ -244,13 +230,13 @@ namespace ckernel::unpacker
       //config.f.fifo_size = 0; // Set dynamically
       for (uint i=0; i<CONFIG_SIZE; i++) cfg[THCON_SEC0_REG2_Out_data_format_ADDR32+i]=config.val[i];
 
-      config.f.out_data_format =
-          row_pool ? ((uint)DataFormat::Float16 | (exp_width << 2)) : unpack_dst_format[unpB_operand];
+      config.f.out_data_format = row_pool ? ((uint) DataFormat::Float16 | (exp_width<<2)) : unpB_dst_format;
       for (uint i=0; i<CONFIG_SIZE; i++) cfg[THCON_SEC1_REG2_Out_data_format_ADDR32+i]=config.val[i];
 
       uint unp0_x_end = (srca_face_height == 0) ? 1 : (srca_face_height << 4) - 1;
       TTI_SETADCXX(p_setadc::UNP0, unp0_x_end, 0x0);
       TTI_SETADCXX(p_setadc::UNP1, (srcb_face_height << 4)-1, 0x0);
+
       // Program base address for all 2 sections (each section address is loaded to corresponding context)
       // Load dummy data to unused location if face height is 0
       const uint Dest_cntx0_address = srca_face_height == 0 ? 22*16 : 4 * 16;
@@ -263,7 +249,6 @@ namespace ckernel::unpacker
 
       // Store config used by tilizer
       regfile[p_gpr_unpack::FACE_DIM_1x16] = (Tile_x_dim/16) | ((Tile_x_dim/16)<<16);
-      regfile[p_gpr_unpack::FACE_DIM_16x16] = Tile_x_dim | (Tile_x_dim << 16);;
       sync_regfile_write(p_gpr_unpack::FACE_DIM_1x16);
 
       if (!skip_alu_format_set) {
@@ -293,44 +278,45 @@ namespace ckernel::unpacker
       return rmw_val;
    }
 
-   inline void reconfig_unpacker_data_format(const uint src_operand_id, const uint32_t tile_addr, const uint32_t out_df_addr, const uint32_t out_df_stride) {
+   inline void reconfig_unpacker_data_format(const uint src_format, const uint dst_format, const uint32_t tile_addr, const uint32_t out_df_addr, const uint32_t out_df_stride) {
 
       //volatile uint *cfg = get_cfg_pointer();
       // Set first 32 bites of tile descriptor, only need data format change
       unpack_tile_descriptor_u tile_descriptor = {0};
 
-      tile_descriptor.f.in_data_format  = (uint) unpack_src_format[src_operand_id];
+      tile_descriptor.f.in_data_format  = src_format;
       tile_descriptor.f.uncompressed = 1; // Input tile is uncompressed
       tile_descriptor.f.x_dim        = 256;
 
+      //cfg[tile_addr]=tile_descriptor.val[0];
       TT_SETDMAREG(0, LOWER_HALFWORD(tile_descriptor.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
       TT_SETDMAREG(0, UPPER_HALFWORD(tile_descriptor.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
-      TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, tile_addr);
-      TTI_NOP;
-      TTI_NOP;
+      TT_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, tile_addr);
+      TTI_NOP;TTI_NOP;
 
       // Set first 32 bites of tile unpacker config, only need data format change
       unpack_config_u config = {0};
 
-      config.f.out_data_format = unpack_dst_format[src_operand_id];
+      config.f.out_data_format = dst_format;
       config.f.throttle_mode = 2;
 
       //cfg[out_df_addr]=config.val[0];
       TT_SETDMAREG(0, LOWER_HALFWORD(config.val[0]), 0, LO_16(p_gpr_unpack::TMP0));
       TT_SETDMAREG(0, UPPER_HALFWORD(config.val[0]), 0, HI_16(p_gpr_unpack::TMP0));
+      TT_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, out_df_addr);
+      TTI_NOP;TTI_NOP;
 
-      // Set ch1/dst address stride
-      uint x_stride = (uint) (unpack_dst_format[src_operand_id]&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format[src_operand_id]&0x3) == (uint)DataFormat::Float16 ? 2 : 1;
-      uint y_stride = 16*16*x_stride;
-      unpack_xy_stride_u xy_stride = {0};
-      xy_stride.f.y = y_stride;
-      TT_SETDMAREG(0, LOWER_HALFWORD(xy_stride.val), 0, LO_16(p_gpr_unpack::TMP1));
-      TT_SETDMAREG(0, UPPER_HALFWORD(xy_stride.val), 0, HI_16(p_gpr_unpack::TMP1));
+      // Set ch1/dst address stride (needed for matmul)
+      uint x_stride = (uint) (dst_format&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (dst_format&0x3) == (uint)DataFormat::Float16 ? 2 : 1;
+      uint z_stride = 16*16*x_stride;
+      unpack_zw_stride_u zw_stride = {0};
+      zw_stride.f.z = z_stride;
+      TT_SETDMAREG(0, LOWER_HALFWORD(zw_stride.val), 0, LO_16(p_gpr_unpack::TMP1));
+      TT_SETDMAREG(0, UPPER_HALFWORD(zw_stride.val), 0, HI_16(p_gpr_unpack::TMP1));
 
-      TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, out_df_addr);
-      TTI_WRCFG(p_gpr_unpack::TMP1, p_cfg::WRCFG_32b, out_df_stride);
-      TTI_NOP;
-      TTI_NOP;
+      TT_WRCFG(p_gpr_unpack::TMP1, p_cfg::WRCFG_32b, out_df_stride);
+      TTI_NOP;TTI_NOP;
+
 
       // Clear context ID
       //reset_config_context();

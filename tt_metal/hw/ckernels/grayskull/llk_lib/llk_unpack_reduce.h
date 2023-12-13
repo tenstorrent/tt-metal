@@ -3,9 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "llk_io_unpack.h"
-#include "llk_param_structs.h"
-
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_template.h"
@@ -16,15 +13,15 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 template <PoolType type, ReduceDim dim>
-inline void llk_unpack_reduce_mop_config() {
-#if SKIP_UNP0 == 1
+inline void _llk_unpack_reduce_mop_config_() {
+#if SKIP_UNP == 1
     static constexpr uint unpack_srca = TT_OP_NOP;
 #else
     static constexpr uint unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 #endif
     static constexpr uint unpack_zerosrca = TT_OP_UNPACR_NOP(SrcA, p_unpacr::UNP_ZEROSRC);
-#if SKIP_UNP1 == 1
+#if SKIP_UNP == 1
     static constexpr uint unpack_srcb = TT_OP_NOP;
 #else
     static constexpr uint unpack_srcb =
@@ -44,78 +41,31 @@ inline void llk_unpack_reduce_mop_config() {
 }
 
 template <PoolType type, ReduceDim dim>
-inline void llk_unpack_reduce_hw_configure(
-    const llk_unpack_reduce_params_t *unpack_reduce_params, const float const_mult) {
+inline void _llk_unpack_reduce_hw_configure_(
+    const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format) {
     configure_unpack_AB(
-        get_operand_id(unpack_reduce_params->unpA_operand),
-        get_operand_id(unpack_reduce_params->unpA_operand),
-        16,
-        16,
-        true);
-
-    if constexpr (type != PoolType::MAX) {
-        union {
-            float f;
-            uint32_t u;
-        } f2u = {.f = const_mult};
-
-        for (uint i = 0; i < 16; i++) l1_buffer[i] = f2u.u;  // Load const into L1 buffer
-    }
+        unpack_src_format,
+        unpack_src_format,
+        unpack_dst_format,
+        unpack_dst_format,
+        16,16,true
+    );
 }
 
 template <PoolType type, ReduceDim dim>
-inline void llk_unpack_reduce_hw_configure_disaggregated(const std::uint32_t unpA_operand, const float mult) {
-    const llk_unpack_reduce_params_t unpack_reduce_params = {.unpA_operand = unpA_operand};
-    llk_unpack_reduce_hw_configure<type, dim>(&unpack_reduce_params, mult);
+// within_face_16x16_transpose is used on WH but not used for GS, this transpose is done in math on GS
+inline void _llk_unpack_reduce_init_(const std::uint32_t within_face_16x16_transpose=0) {
+    _llk_unpack_reduce_mop_config_<type, dim>();
 }
 
 template <PoolType type, ReduceDim dim>
-inline void llk_unpack_reduce_init() {
-    llk_unpack_reduce_mop_config<type, dim>();
-
-    volatile uint *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
-
-    // Set first 32 bites of tile descriptor, only need data format change
-    unpack_tile_descriptor_u tile_descriptor = {0};
-
-    tile_descriptor.f.in_data_format  = (uint) DataFormat::Float32;
-    tile_descriptor.f.uncompressed = 1; // Input tile is uncompressed
-    tile_descriptor.f.x_dim        = 256;
-
-    unpack_config_u config = {0};
-
-    config.f.out_data_format = (((uint)unpack_dst_format[0]>>2)&0x1) ? (uint) DataFormat::Float16_b : (uint) DataFormat::Float16;
-    config.f.throttle_mode = 2;
-
-    wait_for_idle();
-
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK1);
-
-    uint32_t alu_config_data = gl_alu_format_spec_reg;
-
-    gl_alu_format_spec_reg = cfg_rmw_mmio_rd_tensix_wr(ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, ALU_FORMAT_SPEC_REG1_SrcB_SHAMT, ALU_FORMAT_SPEC_REG1_SrcB_MASK,
-            config.f.out_data_format,
-            alu_config_data);
-
-    cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32] = tile_descriptor.val[0];
-    cfg[THCON_SEC1_REG2_Out_data_format_ADDR32] = config.val[0];
-
-    cfg[THCON_SEC1_REG3_Base_address_ADDR32] = (((uint)l1_buffer) >> 4) - 1;        // Set l1 buffer address
-    cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = (((uint)l1_buffer) >> 4) - 1;  // Set l1 buffer address
-}
-
-template <PoolType type, ReduceDim dim>
-inline void llk_unpack_reduce(std::uint32_t operand, std::uint32_t tile_index) {
-    std::uint32_t input = get_operand_id(operand);
-    std::uint32_t base_address = cb_interface[input].fifo_rd_ptr;
-    std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[input], tile_index);
-    std::uint32_t address = base_address + offset_address - 1;
+inline void _llk_unpack_reduce_(const std::uint32_t address) {
 
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
     // Program srcA and srcB base addresses
-    volatile uint *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
+    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
     // Wait for free context
     wait_for_next_context(2);
@@ -126,24 +76,12 @@ inline void llk_unpack_reduce(std::uint32_t operand, std::uint32_t tile_index) {
     // Trisc::SEMPOST for context acquire
     semaphore_post(semaphore::UNPACK_SYNC);
 
-#ifdef PERF_DUMP
-    if (record_perf_events && !first_unpack_recorded) {
-        uint32_t event_id_first_unpack = perf::get_event_id(
-            0, 0, perf::EventType::UNPACK_FIRST_INSTRUCTION, current_outer_loop_iter);
-        record_timestamp_64b(event_id_first_unpack);
-        first_unpack_recorded = true;
-    }
-#endif
-
     // Get tile address
     if (0 == unp_cfg_context) {
         cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
     } else {
         cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
     }
-
-    // Stall unpacker until pending CFG writes from Trisc have completed
-    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     // Run MOP
     mop_run(0, 4);
@@ -156,4 +94,8 @@ inline void llk_unpack_reduce(std::uint32_t operand, std::uint32_t tile_index) {
 
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);
+
+#ifdef PERF_DUMP
+    first_unpack_recorded = true;
+#endif
 }
