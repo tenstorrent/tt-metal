@@ -6,8 +6,8 @@ Performance
 Prerequisites
 -------------
 
-Ensure that you have the base TT-Metal source and environment configuration, and all the requirements for the models are installed. Follow
-:ref:`these instructions <TT-Metal Models Get Started>`.
+Ensure that you have the base TT-Metalium source and environment configuration, and all the requirements for the models are installed. Follow
+:ref:`these instructions <TT-Metalium Models Get Started>`.
 
 Running a perf file
 -------------------
