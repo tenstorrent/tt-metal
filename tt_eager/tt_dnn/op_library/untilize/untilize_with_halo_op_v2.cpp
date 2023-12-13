@@ -166,6 +166,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     uint32_t src_cb_id = CB::c_in0;
     uint32_t pad_cb_id = CB::c_in1;
+    uint32_t untilize_out_cb_id = CB::c_out0;
     uint32_t out_cb_id = CB::c_out1;
 
     // input CB (sharded)
@@ -177,7 +178,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     uint32_t input_to_writer_cb_id = src_cb_id;
     if (!skip_untilize) {
-        uint32_t untilize_out_cb_id = CB::c_out0;
         input_to_writer_cb_id = untilize_out_cb_id;
 
         // output of untilize from compute kernel goes into this CB
@@ -313,18 +313,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     // //
 
     // reader kernel
-    std::vector<uint32_t> reader_ct_args = { src_cb_id };
-    KernelHandle reader_kernel_id = CreateKernel(
-        program,
-        "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
-        all_cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = reader_ct_args});
-
-    // writer kernel
-    std::vector<uint32_t> writer_ct_args = {
+    std::vector<uint32_t> reader_ct_args = {
         input_to_writer_cb_id,
         out_cb_id,
         pad_cb_id,
@@ -336,7 +325,21 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         rr_data_ss_cb_id,
         pad_val,
         shard_shape[1],         // pad stick length == output stick size in nelems
-        out_stick_nbytes };     // output stick size in bytes
+        out_stick_nbytes,
+        (uint32_t) std::log2(out_stick_nbytes),
+        src_cb_id };     // output stick size in bytes
+    KernelHandle reader_kernel_id = CreateKernel(
+        program,
+        // "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
+        "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/reader_unary_sharded_with_halo_v2.cpp",
+        all_cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_ct_args});
+
+    // writer kernel
+    std::vector<uint32_t> writer_ct_args = reader_ct_args;
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/writer_unary_sharded_with_halo_v2.cpp",
@@ -367,7 +370,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     // runtime args for reader
     // std::vector<uint32_t> reader_rt_args = { ntiles_per_block * nblocks_per_core };
     std::vector<uint32_t> reader_rt_args = { input_npages };
-    SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
+    // SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
 
     // runtime args for writer
     std::vector<uint32_t> writer_rt_args = {
@@ -474,6 +477,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
                 writer_rt_args[10] = 0;
             }
 
+            SetRuntimeArgs(program, reader_kernel_id, core_coord, writer_rt_args);
             SetRuntimeArgs(program, writer_kernel_id, core_coord, writer_rt_args);
         }
 
