@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "command_queue_fixture.hpp"
+#include "dprint_fixture.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "gtest/gtest.h"
 #include "test_utils.hpp"
@@ -216,7 +216,7 @@ TestConstCharStrNC{4,4}
 ----------
 TestStrBR{4,4}
 +++++++++++++++)";
-TEST_F(CommandQueueWithDPrintFixture, TestPrintRaiseWait) {
+TEST_F(DPrintFixture, TestPrintRaiseWait) {
     // Device already set up by gtest fixture.
     Device *device = this->device_;
 
@@ -291,7 +291,7 @@ TEST_F(CommandQueueWithDPrintFixture, TestPrintRaiseWait) {
     // Check the print log against golden output.
     EXPECT_TRUE(
         FilesMatchesString(
-            CommandQueueWithDPrintFixture::dprint_file_name,
+            DPrintFixture::dprint_file_name,
             golden_output
         )
     );

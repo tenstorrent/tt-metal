@@ -21,7 +21,7 @@ TT_METAL_UNIT_TESTS_DEPS = $(addprefix $(OBJDIR)/, $(TT_METAL_UNIT_TESTS_SRCS:.c
 tests/tt_metal/unit_tests: $(TESTDIR)/tt_metal/unit_tests
 
 .PRECIOUS: $(TESTDIR)/tt_metal/unit_tests
-$(TESTDIR)/tt_metal/unit_tests: $(TT_METAL_UNIT_TESTS_OBJS) $(TT_METAL_LIB) $(TT_DNN_LIB)
+$(TESTDIR)/tt_metal/unit_tests: $(TT_METAL_UNIT_TESTS_OBJS) $(TT_METAL_UNIT_TESTS_COMMON_OBJS) $(TT_METAL_LIB) $(TT_DNN_LIB)
 	@mkdir -p $(@D)
 	$(CXX) $(CFLAGS) $(CXXFLAGS) $(TT_METAL_UNIT_TESTS_INCLUDES) -o $@ $^ $(LDFLAGS) $(TT_METAL_UNIT_TESTS_LDFLAGS)
 
