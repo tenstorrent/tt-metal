@@ -4,7 +4,6 @@
 
 #include "dprint_fixture.hpp"
 #include "common/bfloat16.hpp"
-#include "impl/debug/dprint_server.hpp"
 #include "gtest/gtest.h"
 #include "test_utils.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -21,11 +20,16 @@ R"(DPRINT server timed out on core (1,1) riscv 4, waiting on a RAISE signal: 1
 )";
 
 TEST_F(DPrintFixture, TestPrintHanging) {
+    // Skip this test for slow dipatch for now. Due to how llrt currently sits below device, it's
+    // tricky to check print server status from the finish loop for slow dispatch. Once issue #4363
+    // is resolved, we should add a check for print server handing in slow dispatch as well.
+    if (this->slow_dispatch_)
+        GTEST_SKIP();
+
     // Device already set up by gtest fixture.
     Device *device = this->device_;
 
-    // Set up program and command queue
-    CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
+    // Set up program
     Program program = Program();
 
     // Run a kernel that just waits on a signal that never comes (BRISC only).
@@ -38,10 +42,8 @@ TEST_F(DPrintFixture, TestPrintHanging) {
     );
 
     // Run the program, we expect it to throw on waiting for CQ to finish
-    EnqueueProgram(cq, program, false);
 try {
-    Finish(cq);
-    tt_await_debug_print_server();
+    RunProgram(program);
 } catch (std::runtime_error& e) {
     const string expected = "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.";
     const string error = string(e.what());

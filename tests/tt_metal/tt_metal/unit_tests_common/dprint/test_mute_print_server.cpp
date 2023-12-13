@@ -22,8 +22,7 @@ TEST_F(DPrintFixture, TestPrintMuting) {
     // Device already set up by gtest fixture.
     Device *device = this->device_;
 
-    // Set up program and command queue
-    CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
+    // Set up program
     Program program = Program();
 
     // This tests prints only on a single core
@@ -43,9 +42,7 @@ TEST_F(DPrintFixture, TestPrintMuting) {
             core,
             {test_number}
         );
-        EnqueueProgram(cq, program, false);
-        Finish(cq);
-        tt_await_debug_print_server();
+        RunProgram(program);
     };
 
     // Run the program, prints should be enabled.
