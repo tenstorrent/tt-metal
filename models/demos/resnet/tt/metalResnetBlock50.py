@@ -55,6 +55,17 @@ hardcoded_matmul_config_linear = {
         fused_activation=None,
         mcast_in0=True,
     ),
+    20: tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 4),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    ),
 }
 
 
@@ -702,6 +713,175 @@ hardcoded_matmul_config_conv = {
             fused_activation=None,
         ),
     },
+    20: {
+        (62720, 64, 64): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(12, 9),
+            in0_block_w=2,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            per_core_M=20,
+            per_core_N=2,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        ),
+        (62720, 64, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(12, 9),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=20,
+            per_core_N=8,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        ),
+        (62720, 256, 64): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(12, 9),
+            in0_block_w=8,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            per_core_M=20,
+            per_core_N=2,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        ),
+        (62720, 256, 128): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(12, 9),
+            in0_block_w=8,
+            out_subblock_h=2,
+            out_subblock_w=4,
+            per_core_M=20,
+            per_core_N=4,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        ),
+        (15680, 128, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(12, 9),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=5,
+            per_core_N=16,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        ),
+        (15680, 256, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(12, 9),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=5,
+            per_core_N=16,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        ),
+        (15680, 512, 128): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(12, 9),
+            in0_block_w=16,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=5,
+            per_core_N=4,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        ),
+        (15680, 512, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(12, 8),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=41,
+            per_core_N=1,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        (3936, 256, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(12, 8),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=11,
+            per_core_N=4,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        (3936, 1024, 256): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(12, 8),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=11,
+            per_core_N=1,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        (3936, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(12, 8),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            per_core_M=11,
+            per_core_N=2,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        (3936, 512, 1024): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(12, 8),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=11,
+            per_core_N=4,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        (3936, 1024, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(12, 8),
+            in0_block_w=4,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            per_core_M=12,
+            per_core_N=2,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        (992, 512, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(11, 8),
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=3,
+            per_core_N=8,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        (992, 1024, 2048): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(11, 8),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=3,
+            per_core_N=8,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+        (992, 2048, 512): tt_lib.operations.primary.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(11, 8),
+            in0_block_w=8,
+            out_subblock_h=3,
+            out_subblock_w=2,
+            per_core_M=3,
+            per_core_N=2,
+            transpose_mcast=True,
+            fused_activation=None,
+        ),
+    },
 }
 
 hardcoded_conv_blocking_and_parallelization_config = {
@@ -740,6 +920,13 @@ hardcoded_conv_blocking_and_parallelization_config = {
         (12544, 128): [128 * 3, 128, 128, 64, 128, 128, (12, 9), 128, 128, 98],
         (3136, 256): [256, 288, 32, 96, 32, 288, (11, 8), 288, 32, 11],
         (800, 512): [512, 96, 64, 96, 64, 96, (9, 8), 96, 64, 9],
+    },
+    20: {
+        (250880, 64): [16 * 4, 1280, 64, 128, 64, 2560, (12, 9), 2560, 64, 98],
+        (62720, 64): [64 * 3, 320, 64, 64, 64, 640, (12, 9), 640, 64, 98],  # try actblock h = 320, subblock h = 64
+        (15680, 128): [128 * 3, 160, 128, 32, 128, 160, (12, 9), 160, 128, 98],
+        (3936, 256): [256, 352, 32, 32, 32, 352, (12, 8), 352, 32, 12],
+        (992, 512): [512, 96, 64, 96, 64, 96, (11, 8), 96, 64, 11],
     },
 }
 
@@ -1017,16 +1204,20 @@ class Bottleneck:
         # conv1 is 1x1 conv
         # logger.info("Running conv1")
         out = self.conv1(x)
-        # logger.info("conv1 output shape - ", self.conv1_output_shape)
-        # logger.info("Running ds or nop")
-        ds_out = self.downsample_or_noop(x)
-        if self.deallocate:
-            x.deallocate()
-        # Relu after conv1 is fused with the 1x1 conv (matmul)
-        # out = self.relu(out, self.memory_config)
-        # logger.info("Running untilize op")
+
+        if not (self.module_input_shape[1] == 56 and self.module_input_shape[3] == 64):
+            ds_out = self.downsample_or_noop(x)
+            if self.deallocate:
+                x.deallocate()
+
         if self.conv_halo:
             out = self.tt_py_untilize_with_halo_op(out)
+            if self.deallocate and (
+                self.module_input_shape[0] == 20
+                and self.module_input_shape[1] == 56
+                and self.module_input_shape[3] == 256
+            ):
+                out = tt_lib.tensor.move_sharded(out)
         else:
             out = format_tensor(out, tt_lib.tensor.Layout.ROW_MAJOR, self.device, self.memory_config)
             out = out.reshape(
@@ -1038,12 +1229,17 @@ class Bottleneck:
 
         # logger.info("Running conv2")
         out = self.conv2(out)
-        # out = self.relu(out, self.memory_config)  ## fused with conv2
         # conv3 is 1x1 conv
         # logger.info("Running conv3")
         out = self.conv3(out)
 
+        if self.module_input_shape[1] == 56 and self.module_input_shape[3] == 64:
+            ds_out = self.downsample_or_noop(x)
+            if self.deallocate:
+                x.deallocate()
+
         fused_activations = [tt_lib.tensor.FusibleActivation.RELU]
+
         # logger.info("Running eltwise add")
         out = tt_lib.tensor.add_without_autoformat(
             out,
@@ -1053,7 +1249,9 @@ class Bottleneck:
             self.model_config["ACTIVATIONS_DTYPE"],
             self.out_in_place,
         )
-        # out = self.relu(out, self.memory_config)
+        if self.module_input_shape[0] == 20 and self.module_input_shape[1] == 56 and self.module_input_shape[3] == 64:
+            out = tt_lib.tensor.move_sharded(out)
+
         return out
 
 
@@ -1173,12 +1371,18 @@ class ResNet(nn.Module):
             per_core_act_h_ntiles = 64
             self.layer_3_grid_size = (11, 8)
             self.layer_4_grid_size = (9, 8)
+        elif batch_size == 20:
+            act_block_h_datums = 2560
+            grid_size = (12, 9)
+            per_core_act_h_ntiles = 80
+            self.layer_3_grid_size = (12, 8)
+            self.layer_4_grid_size = (11, 8)
+
+        self.first_conv_num_cores_nhw = 98
         if sharded:
             self.folded_conv1_params = [self.inplanes, 16, 4, 4, 1, 1, 0, 0, 1, groups]
             first_conv_output_padded_nhw_size = _nearest_y(112 * 112 * batch_size, 98 * 32)
             first_conv_output_channels = 64
-            self.first_conv_num_cores_nhw = 98
-            self.first_conv_grid_size = (12, 9)
             assert (
                 first_conv_output_padded_nhw_size,
                 first_conv_output_channels,
@@ -1232,6 +1436,7 @@ class ResNet(nn.Module):
             self.tt_py_untilize_with_halo_op_before_first_conv = TTPyUntilizeWithHalo(
                 self.device, sliding_window_op_params
             )
+            self.first_conv_op_params = sliding_window_op_params
         else:
             self.conv1 = resnet50_first_conv(
                 conv1_weight.reshape(-1).tolist(),
@@ -1660,11 +1865,6 @@ class ResNet(nn.Module):
         return x
 
     def forward(self, x: tt_lib.tensor) -> tt_lib.tensor:
-        # extra_padding_for_32B_alignment = 25
-        # x = torch.nn.functional.pad(x, (3, 4 + extra_padding_for_32B_alignment, 3, 3, 0, 1))
-        # x = torch.permute(x, (0, 2, 3, 1))
-
-        # x = tt_lib.tensor.Tensor(x, tt_lib.tensor.DataType.BFLOAT16)
         if self.sharded:
             untilize_with_halo_input_shard_height = (int)(x.shape()[2] / self.first_conv_num_cores_nhw)
 
@@ -1692,9 +1892,9 @@ class ResNet(nn.Module):
             mem_config = tt_lib.tensor.MemoryConfig(
                 tt_lib.tensor.TensorMemoryLayout.HEIGHT_SHARDED, tt_lib.tensor.BufferType.L1
             )
-
             x = x.to(self.device, mem_config, shard_spec)
             x = self.tt_py_untilize_with_halo_op_before_first_conv(x)
+
         else:
             original_A_cl_host_shape = x.shape()
             x = x.reshape(x.shape()[0], x.shape()[1], 1, x.shape()[2] * x.shape()[3])
@@ -1707,8 +1907,12 @@ class ResNet(nn.Module):
                 original_A_cl_host_shape[2],
                 original_A_cl_host_shape[3],
             )
+
         x = self.conv1(x)
         # Relu is fused with conv1
+
+        if self.batch_size == 20:
+            x = tt_lib.tensor.move_sharded(x)
 
         if self.sharded:
             x = self.maxpool_untilize_with_halo(x)
@@ -1734,6 +1938,8 @@ class ResNet(nn.Module):
             output_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             use_multicore=True,
         )
+        if self.batch_size == 20:
+            x = tt_lib.tensor.move_sharded(x)
 
         x = self.layer1_module1(x)
         x = self.layer1_module2(x)
@@ -1772,7 +1978,6 @@ class ResNet(nn.Module):
                 tt_lib.tensor.TensorMemoryLayout.BLOCK_SHARDED,
                 tt_lib.tensor.ShardOrientation.COL_MAJOR,
             )
-
         x = self.layer4_module1(x)
         x = self.layer4_module2(x)
         x = self.layer4_module3(x)
