@@ -15,7 +15,7 @@ using namespace tt::tt_metal;
 TEST(DPrintErrorChecking, TestPrintInvalidCore) {
     auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (slow_dispatch) {
-        TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+        //TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
         GTEST_SKIP();
     }
 

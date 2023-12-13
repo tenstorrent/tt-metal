@@ -1,3 +1,4 @@
+include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests_common/module.mk
 include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests/module.mk
 include $(TT_METAL_HOME)/tests/tt_metal/tt_metal/unit_tests_fast_dispatch/module.mk
 # Programming examples for external users
