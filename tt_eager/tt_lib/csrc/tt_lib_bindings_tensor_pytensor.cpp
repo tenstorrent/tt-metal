@@ -1028,12 +1028,9 @@ Tensor convert_torch_tensor_to_tt_tensor(
             )doc")
             .def(
                 "shape",
-                [](const Tensor &self) {
-                    const auto &shape = self.shape();
-                    return std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
-                },
+                [](const Tensor &self) { return self.shape(); },
                 R"doc(
-                Get the shape of the tensor as list of integers.
+                Get the shape of the tensor as Shape class.
 
                 .. code-block:: python
 
@@ -1145,14 +1142,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
             )doc")
             .def(
                 "shape_without_padding",
-                [](const Tensor &self) {
-                    Shape shape_without_padding = self.shape().without_padding();
-                    std::vector<uint32_t> unpadded_shape;
-                    for (auto value : shape_without_padding) {
-                        unpadded_shape.push_back(value);
-                    }
-                    return unpadded_shape;
-                },
+                [](const Tensor &self) { return Shape{self.shape().without_padding()}; },
                 R"doc(
                 Get shape without padding of TT Tensor.
 
@@ -1161,7 +1151,9 @@ Tensor convert_torch_tensor_to_tt_tensor(
                     dtype = tt_tensor.shape_without_padding()
             )doc")
             .def(
-                "reshape", [](Tensor &self, int N, int C, int H, int W) { return self.reshape(N, C, H, W); }, R"doc(
+                "reshape",
+                [](Tensor &self, int N, int C, int H, int W) { return self.reshape(N, C, H, W); },
+                R"doc(
                     Reshapes TT tensor
 
                     .. code-block:: python
@@ -1169,7 +1161,9 @@ Tensor convert_torch_tensor_to_tt_tensor(
                         reshaped_tensor = tt_tensor.reshape(N, C, H, W)
                 )doc")
             .def(
-                "reshape", [](Tensor &self, const std::vector<uint32_t> &shape) { return self.reshape(shape); }, R"doc(
+                "reshape",
+                [](Tensor &self, const Shape &shape) -> Tensor { return self.reshape(shape); },
+                R"doc(
                     Reshapes TT tensor
 
                     .. code-block:: python

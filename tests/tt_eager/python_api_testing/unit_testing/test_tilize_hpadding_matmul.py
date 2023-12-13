@@ -53,7 +53,7 @@ def run_tilize_matmul_test(M, K, N, device):
     )
     print("Shape of B_t - " + str(b_t.shape()))
     t2 = ttl.tensor.bmm(a_t, b_t)
-    assert t2.shape() == output_shape
+    assert list(t2.shape()) == output_shape
     tt_host_rm = t2.cpu().to_torch()
     pyt_got_back = tt_host_rm.reshape(output_shape)
     # TODO: add support to remove padding in untilize

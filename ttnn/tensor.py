@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import io
 import pathlib
-from typing import Optional, Union
+from typing import Optional, Union, Tuple
 
 import tt_lib as ttl
 
@@ -33,13 +34,68 @@ TILE_LAYOUT = Layout.TILE
 TILE_SIZE = 32
 
 
+class Shape:
+    def __init__(self: "Shape", value: ttl.tensor.Shape):
+        if not isinstance(value, ttl.tensor.Shape):
+            raise TypeError(f"Expected ttl.tensor.Shape, got {type(value)}")
+        self._value = value
+
+    @classmethod
+    def from_tuple(self: "Shape", shape: Tuple[int], full_shape: Optional[Tuple[int]] = None):
+        value = ttl.tensor.Shape(shape, full_shape)
+        return Shape(value)
+
+    @property
+    def rank(self: "Shape") -> int:
+        return len(self._value)
+
+    def __iter__(self: "Shape"):
+        for axis in range(self.rank):
+            yield self._value.without_padding()[axis]
+
+    def __getitem__(self: "Shape", index: int):
+        shape = self._value.without_padding()
+        return shape[index]
+
+    def padded(self: "Shape") -> "Shape":
+        return Shape.from_tuple(tuple(self._value))
+
+    def __len__(self: "Shape") -> int:
+        return self.rank
+
+    def __repr__(self: "Shape") -> str:
+        file = io.StringIO()
+        file.write("ttnn.Shape([")
+        for dim in range(self.rank - 1):
+            padding = self.padded()[dim] - self[dim]
+            if padding == 0:
+                file.write(f"{self[dim]}, ")
+            else:
+                file.write(f"{self[dim]} + {padding}, ")
+
+        padding = self.padded()[self.rank - 1] - self[self.rank - 1]
+        if padding == 0:
+            file.write(f"{self[self.rank - 1]}")
+        else:
+            file.write(f"{self[self.rank - 1]} + {padding}")
+        file.write("])")
+        return file.getvalue()
+
+    def __eq__(self: "Shape", other: "Shape") -> bool:
+        if isinstance(other, Shape):
+            return self._value == other._value
+        elif isinstance(other, (tuple, list)):
+            return tuple(self) == tuple(other)
+        raise RuntimeError(f"Cannot compare Shape with {type(other)}")
+
+
 class Tensor:
     def __init__(self: "Tensor", ttl_tensor: ttl.tensor.Tensor):
         self._tensor: ttl.tensor.Tensor = ttl_tensor
 
     @property
     def shape(self: "Tensor") -> tuple:
-        return self._tensor.shape_without_padding()
+        return Shape(self._tensor.shape())
 
     @property
     def dtype(self: "Tensor") -> DataType:
@@ -51,21 +107,17 @@ class Tensor:
 
     @property
     def device(self: "Tensor") -> DataType:
-        if self.is_on_device:
+        if has_storage_type_of(self, ttl.tensor.StorageType.DEVICE):
             return self._tensor.device()
         else:
             raise RuntimeError("Tensor is not on device!")
-
-    @property
-    def is_on_device(self: "Tensor") -> DataType:
-        return self._tensor.storage_type() == ttl.tensor.StorageType.DEVICE
 
     def __getitem__(self: "Tensor", slices) -> "Tensor":
         if self.layout != ROW_MAJOR_LAYOUT:
             raise RuntimeError("Tensor must be in ROW_MAJOR layout to use slicing!")
 
         def torch_getitem(tensor, slices):
-            return tensor[slices]
+            return tensor[slices].clone()
 
         if self._tensor.storage_type() == ttl.tensor.StorageType.DEVICE:
             tensor = self
@@ -86,6 +138,16 @@ class Tensor:
 
     def __repr__(self: "Tensor") -> str:
         return str(self._tensor)
+
+    def is_contiguous(self: "Shape") -> bool:
+        if self.layout == ROW_MAJOR_LAYOUT:
+            return self._tensor.shape() == self._tensor.shape_without_padding()
+        else:
+            return False
+
+
+def has_storage_type_of(tensor: Tensor, storage_type) -> bool:
+    return tensor._tensor.storage_type() == storage_type
 
 
 def from_torch(
@@ -116,35 +178,15 @@ def from_torch(
 
 
 def to_torch(tensor: Tensor) -> "torch.Tensor":
-    """
-    to_torch(tensor: ttnn.Tensor) -> torch.Tensor
-
-    Converts the `ttnn.Tensor` :attr:`tensor` into a `torch.Tensor`.
-
-    Args:
-        * :attr:`tensor`: the ttnn.Tensor
-
-    Example::
-        >>> ttnn_tensor = ttnn.from_torch(torch.randn((2,3)), dtype=ttnn.bfloat16)
-        >>> torch_tensor = ttnn.to_torch(ttnn_tensor)
-        >>> print(torch_tensor)
-        tensor([[-0.3008, -0.8438,  0.3242],
-                [ 0.9023, -0.5820,  0.5312]], dtype=torch.bfloat16)
-    """
-
     def impl(tensor):
         ttl_tensor = tensor._tensor
-
-        if ttl_tensor.layout() != ROW_MAJOR_LAYOUT:
-            raise RuntimeError("ttnn.Tensor has to be in ROW_MAJOR Layout to be convered to torch.Tensor")
 
         if ttl_tensor.storage_type() == ttl.tensor.StorageType.DEVICE:
             raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch!")
 
-        if ttl_tensor.shape_without_padding() != ttl_tensor.shape():
-            raise RuntimeError("ttnn.Tensor cannot have padding when converting to torch!")
+        return ttl_tensor.to_torch().clone()  # TODO(arakhmati): remove clone
 
-        return ttl_tensor.to_torch()
+    tensor._tensor = tensor._tensor.reshape(tensor.shape.padded()._value)
 
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_torch")(tensor)
 
@@ -225,7 +267,7 @@ def to_layout(tensor, layout: Layout):
     ttl_tensor = tensor._tensor
     if ttl_tensor.layout() == layout:
         return tensor
-    elif tensor.is_on_device:
+    elif has_storage_type_of(tensor, ttl.tensor.StorageType.DEVICE):
         if layout == ROW_MAJOR_LAYOUT:
             ttl_tensor = ttl.tensor.untilize(ttl_tensor)
         elif layout == TILE_LAYOUT:

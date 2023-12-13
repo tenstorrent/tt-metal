@@ -2069,7 +2069,7 @@ class ResNet(nn.Module):
             )
 
         x = self.fc(x)
-        desired_shape = x.shape_without_padding()
+        desired_shape = list(x.shape_without_padding())
         desired_shape[-1] = 1000
         x = tt_lib.tensor.untilize_with_unpadding(
             x,

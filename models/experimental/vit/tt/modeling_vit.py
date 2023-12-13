@@ -159,7 +159,7 @@ class TtViTSelfAttention(nn.Module):
         context_layer = tt_lib.tensor.bmm(attention_probs, value_layer)
 
         context_layer = tt_lib.tensor.permute(context_layer, (0, 2, 1, 3))
-        new_context_layer_shape = (1,) + tuple(context_layer.shape()[:-2]) + (self.all_head_size,)
+        new_context_layer_shape = (1,) + tuple(context_layer.shape())[:-2] + (self.all_head_size,)
         context_layer = fallback_ops.reshape(context_layer, *new_context_layer_shape)
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)

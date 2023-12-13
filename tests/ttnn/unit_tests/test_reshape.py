@@ -14,11 +14,11 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [2 * 32])
 def test_reshape(h, w):
-    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
-    torch_output_tensor = torch_input_tensor.reshape(1, 1, w, h)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor.reshape(w, h)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
-    output_tensor = ttnn.reshape(input_tensor, (1, 1, w, h))
+    output_tensor = ttnn.reshape(input_tensor, (w, h))
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
@@ -28,7 +28,7 @@ def test_reshape(h, w):
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [2 * 32])
 def test_reshape_negative_1(h, w):
-    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.reshape(-1)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
@@ -55,16 +55,18 @@ def test_reshape_in_4D(n, c, h, w):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize("n", [32, 32])
-@pytest.mark.parametrize("c", [2 * 32, 2 * 32])
-@pytest.mark.parametrize("h", [1, 4])
-@pytest.mark.parametrize("w", [1, 4])
-def test_reshape_in_4D_on_device(n, c, h, w):
+@pytest.mark.parametrize("n", [32, 64])
+@pytest.mark.parametrize("c", [32, 64])
+@pytest.mark.parametrize("h", [32, 64])
+@pytest.mark.parametrize("w", [32, 64])
+def test_reshape_in_4D_on_device(device, n, c, h, w):
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.reshape(h, w, n, c)
 
     input_tensor = ttnn.from_torch(torch_input_tensor)
+    input_tensor = ttnn.to_device(input_tensor, device)
     output_tensor = ttnn.reshape(input_tensor, (h, w, n, c))
+    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)

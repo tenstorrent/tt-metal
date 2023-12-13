@@ -68,6 +68,12 @@ struct Padding {
     std::array<PadDimension, MAX_NUM_DIMENSIONS> pad_dimensions_;
     PadValue pad_value_;
 
+    Padding(const Padding&) = default;
+    Padding& operator=(const Padding&) = default;
+    Padding(Padding&&) = default;
+    Padding& operator=(Padding&&) = default;
+    ~Padding() = default;
+
     Padding(const std::size_t rank);
     Padding(const std::initializer_list<PadDimension> pad_dimensions, PadValue pad_value);
     Padding(const std::vector<PadDimension>& pad_dimensions, PadValue pad_value);
@@ -83,19 +89,28 @@ struct Padding {
     }
 };
 
+bool operator==(const Padding&, const Padding&);
+bool operator!=(const Padding&, const Padding&);
+
 class Shape {
     std::size_t rank_;
     std::array<uint32_t, MAX_NUM_DIMENSIONS> dimensions_;
     Padding padding_;
 
    public:
+    Shape(const Shape&) = default;
+    Shape& operator=(const Shape&) = default;
+    Shape(Shape&&) = default;
+    Shape& operator=(Shape&&) = default;
+    ~Shape() = default;
+
     Shape(const std::initializer_list<uint32_t>);
     Shape(const std::array<uint32_t, 4>&);
     Shape(const std::vector<uint32_t>&);
 
     Shape(const std::initializer_list<uint32_t>, const Padding&);
     Shape(const std::vector<uint32_t>&, const Padding&);
-    Shape(const Shape&, const Padding&);
+    explicit Shape(const Shape&, const Padding&);
 
     std::size_t rank() const;
 
@@ -116,8 +131,8 @@ class Shape {
     }
 };
 
-bool operator==(const Shape& shape_a, const Shape& shape_b);
-bool operator!=(const Shape& shape_a, const Shape& shape_b);
+bool operator==(const Shape&, const Shape&);
+bool operator!=(const Shape&, const Shape&);
 
 struct MemoryConfig {
     TensorMemoryLayout memory_layout = TensorMemoryLayout::INTERLEAVED;    // Interleave the data across multiple banks

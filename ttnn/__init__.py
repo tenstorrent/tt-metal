@@ -15,6 +15,7 @@ from ttnn.tensor import (
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
+    Shape,
     Tensor,
     from_torch,
     to_torch,
@@ -49,6 +50,8 @@ from ttnn.core import (
     # fused operations
     softmax,
     layer_norm,
+    # reduction operations
+    mean,
 )
 
 from ttnn.unary import *

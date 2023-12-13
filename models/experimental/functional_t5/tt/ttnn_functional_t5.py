@@ -32,24 +32,21 @@ def t5_layer_norm(hidden_states, *, weight, eps=1e-6):
 
     # return hidden_states
 
-    import tt_lib as ttl
-
     original_shape = tuple(hidden_states.shape)
     hidden_states = ttnn.core._reshape_to_4D(hidden_states)
 
-    ttl_hidden_states = hidden_states._tensor
-
-    ttl_squared_hidden_states = ttl.tensor.power(ttl_hidden_states, 2)
-    ttl_averaged_squared_hidden_states = ttl.tensor.reduce(
-        ttl_squared_hidden_states, ttl.tensor.ReduceOpMath.SUM, ttl.tensor.ReduceOpDim.W, 1 / original_shape[-1]
+    squared_hidden_states = ttnn.pow(hidden_states, 2)
+    averaged_squared_hidden_states = ttnn.mean(
+        squared_hidden_states,
+        dim=-1,
+        keepdim=True,
     )
 
-    variance = ttnn.Tensor(ttl_averaged_squared_hidden_states) + eps
-    std = ttnn.Tensor(ttl.tensor.rsqrt(variance._tensor))
+    variance = averaged_squared_hidden_states + eps
+    std = ttnn.rsqrt(variance)
+
     hidden_states = hidden_states * std
-
     hidden_states = hidden_states * weight
-
     hidden_states = ttnn.reshape(hidden_states, original_shape)
 
     return hidden_states

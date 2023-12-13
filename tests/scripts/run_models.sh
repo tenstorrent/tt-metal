@@ -129,3 +129,5 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
   env pytest models/demos/resnet/tests/test_demo.py::test_demo_imagenet[8-400]
 fi
 fi
+
+env pytest tests/ttnn/integration_tests

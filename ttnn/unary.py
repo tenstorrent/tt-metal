@@ -8,6 +8,7 @@ import tt_lib as ttl
 
 from ttnn.tensor import (
     Tensor,
+    has_storage_type_of,
     MemoryConfig,
     DRAM_MEMORY_CONFIG,
 )
@@ -19,9 +20,7 @@ THIS_MODULE = sys.modules[__name__]
 __all__ = []
 
 
-def register_ttl_unary_function(name):
-    ttl_unary_function = getattr(ttl.tensor, name)
-
+def register_ttl_unary_function(name, ttl_unary_function):
     def unary_function(input_tensor: Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
         f"""{name}(input_tensor: Tensor) -> Tensor
 
@@ -42,18 +41,18 @@ def register_ttl_unary_function(name):
 
         """
 
-        original_shape = tuple(input_tensor.shape)
+        original_shape = input_tensor.shape
         input_tensor = _reshape_to_4D(input_tensor)
         ttl_input_tensor = input_tensor._tensor
 
         if not isinstance(input_tensor, Tensor):
             raise TypeError("Expected first argument to be a ttnn.Tensor")
 
-        if not input_tensor.is_on_device:
+        if not has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
             raise RuntimeError("input_tensor must be on device!")
         ttl_input_tensor = input_tensor._tensor
 
-        ttl_output_tensor = ttl_unary_function(ttl_input_tensor)
+        ttl_output_tensor = ttl_unary_function(ttl_input_tensor, output_mem_config=memory_config)
 
         output_tensor = Tensor(ttl_output_tensor)
         output_tensor = reshape(output_tensor, original_shape)
@@ -64,11 +63,65 @@ def register_ttl_unary_function(name):
 
 
 TTL_UNARY_FUNCTIONS = [
-    "exp",
-    "tanh",
-    "gelu",
+    ("exp", ttl.tensor.exp),
+    ("tanh", ttl.tensor.tanh),
+    ("gelu", ttl.tensor.gelu),
+    ("rsqrt", ttl.tensor.rsqrt),
 ]
 
 
-for unary_function_name in TTL_UNARY_FUNCTIONS:
-    register_ttl_unary_function(unary_function_name)
+for unary_function_name, ttl_unary_function in TTL_UNARY_FUNCTIONS:
+    register_ttl_unary_function(unary_function_name, ttl_unary_function)
+
+
+def register_ttl_unary_function_with_float_parameter(name, ttl_unary_function):
+    def unary_function(
+        input_tensor: Tensor, parameter: float, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG
+    ) -> Tensor:
+        f"""{name}(input_tensor: Tensor) -> Tensor
+
+        Applies {name} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            {name}(\mathrm{{input\_tensor}}_i)
+
+        Args:
+            * :attr:`input_tensor`
+
+        Example::
+
+            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
+            >>> output = ttnn.{name}(tensor, 2)
+            >>> print(output)
+            Tensor([ 0, 2], dtype=bfloat16 )
+
+        """
+
+        original_shape = input_tensor.shape
+        input_tensor = _reshape_to_4D(input_tensor)
+        ttl_input_tensor = input_tensor._tensor
+
+        if not isinstance(input_tensor, Tensor):
+            raise TypeError("Expected first argument to be a ttnn.Tensor")
+
+        if not has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
+            raise RuntimeError("input_tensor must be on device!")
+        ttl_input_tensor = input_tensor._tensor
+
+        ttl_output_tensor = ttl_unary_function(ttl_input_tensor, parameter, output_mem_config=memory_config)
+
+        output_tensor = Tensor(ttl_output_tensor)
+        output_tensor = reshape(output_tensor, original_shape)
+        return output_tensor
+
+    setattr(THIS_MODULE, name, unary_function)
+    __all__.append(name)
+
+
+TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER = [
+    ("pow", ttl.tensor.power),
+]
+
+
+for unary_function_name, ttl_unary_function in TTL_UNARY_FUNCTIONS_WITH_FLOAT_PARAMETER:
+    register_ttl_unary_function_with_float_parameter(unary_function_name, ttl_unary_function)

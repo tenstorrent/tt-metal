@@ -19,7 +19,7 @@ TILE_WIDTH = 32
 
 def pad_tensor(tensor, height_multiple=TILE_HEIGHT, width_multiple=TILE_WIDTH):
     if len(tensor.shape) > 1:
-        *_, height, width = tensor.shape
+        *original_batch_sizes, height, width = tensor.shape
         if height % height_multiple == 0 and width % width_multiple == 0:
             return tensor
 
@@ -28,7 +28,12 @@ def pad_tensor(tensor, height_multiple=TILE_HEIGHT, width_multiple=TILE_WIDTH):
         tensor = ttnn.core._reshape_to_4D(tensor)
         *batch_sizes, _, _ = tensor.shape
         tensor = ttnn.Tensor(tensor._tensor.pad(batch_sizes + [padded_height, padded_width], [0, 0, 0, 0], 0.0))
-        # tensor = ttnn.reshape(tensor, tuple(original_batch_sizes + [padded_height, padded_width])) # TODO: re-enable this line once the correct `shape_without_padding` is being returned
+        tensor = ttnn.reshape(
+            tensor,
+            ttnn.Shape.from_tuple(
+                original_batch_sizes + [height, width], original_batch_sizes + [padded_height, padded_width]
+            ),
+        )
     else:
         (width,) = tensor.shape
         if width % width_multiple == 0:
@@ -38,7 +43,7 @@ def pad_tensor(tensor, height_multiple=TILE_HEIGHT, width_multiple=TILE_WIDTH):
         tensor = ttnn.core._reshape_to_4D(tensor)
         *batch_sizes, height, _ = tensor.shape
         tensor = ttnn.Tensor(tensor._tensor.pad(batch_sizes + [height, padded_width], [0, 0, 0, 0], 0.0))
-        # tensor = ttnn.reshape(tensor, (padded_width,)) # TODO: re-enable this line once the correct `shape_without_padding` is being returned
+        tensor = ttnn.reshape(tensor, ttnn.Shape.from_tuple([width], [padded_width]))
     return tensor
 
 
@@ -67,7 +72,6 @@ def preprocess_layernorm_parameter(parameter, *, dtype):
 
 
 def preprocess_embedding_weight(weight, *, dtype):
-    weight = weight[None, None, :, :]
     weight = ttnn.from_torch(weight, dtype=dtype)
     return weight
 

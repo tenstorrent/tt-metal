@@ -217,7 +217,11 @@ Tensor Tensor::reshape(int N, int C, int H, int W) const {
 }
 
 Tensor Tensor::reshape(const Shape& new_shape) const {
-    TT_ASSERT(this->volume() == tt::tt_metal::compute_volume(new_shape));
+    TT_ASSERT(
+        this->volume() == tt::tt_metal::compute_volume(new_shape),
+        "{} != {}",
+        this->volume(),
+        tt::tt_metal::compute_volume(new_shape));
     if (this->layout() == Layout::TILE) {
         TT_ASSERT(new_shape[-2] % TILE_HEIGHT == 0 && new_shape[-1] % TILE_WIDTH == 0 && "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
     }

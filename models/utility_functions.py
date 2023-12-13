@@ -918,7 +918,7 @@ def run_conv_on_device_wrapper(conv_weight, conv_params, device, conv_bias=None,
         if x.layout() != tt_lib.tensor.Layout.ROW_MAJOR:
             x = tt_lib.tensor.untilize(x)
         else:
-            x_padded_shape = x.shape()
+            x_padded_shape = list(x.shape())
             x_padded_shape[-1] = roundup(x.shape()[-1], 16)
             x = tt_lib.tensor.pad(x, x_padded_shape, [0, 0, 0, 0], 0)
         x = conv_on_device(x)
