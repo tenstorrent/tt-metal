@@ -19,11 +19,12 @@ namespace sfpu {
 template <bool APPROXIMATION_MODE, int ITERATIONS=4>
 inline void calculate_mask()
 {
-    bool exponent_size_8 = true;
+    const bool exponent_size_8 = true;
+    const int mask_val_idx = 16;
     #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d++)
     {
-        vFloat mask = dst_reg[16];
+        vFloat mask = dst_reg[mask_val_idx];
         v_if(sfpu_is_fp16_zero(mask, exponent_size_8)) {
             dst_reg[0] = 0;
         }

@@ -9,8 +9,7 @@
 // Metal specific overrides -- No support for partial tiles so hard-code to fixed 32x32 sizes
 inline uint32_t get_output_id(uint32_t output)
 {
-   const uint32_t OUTPUT_BASE    = 0;
-   return ((output) - OUTPUT_BASE);
+   return (output);
 }
 
 inline const uint32_t get_output_base_id()

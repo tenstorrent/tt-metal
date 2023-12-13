@@ -19,7 +19,8 @@ namespace sfpu {
 template <bool APPROXIMATION_MODE, int ITERATIONS=8>
 inline void calculate_mask()
 {
-    bool exponent_size_8 = true;
+    const bool exponent_size_8 = true;
+    const int mask_val_idx = 16;
     #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
