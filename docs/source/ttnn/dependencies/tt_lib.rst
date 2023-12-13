@@ -641,9 +641,7 @@ Complex Operations (Type 2)
 ---------------------------
 Type 2 Complex representation allows for more flexible storage than earlier one while providing same set of
 operations; specifically this storage allows for compute without the cost of split-concat implict in
-the Type 1 contiguous representations. One additional function is following,
-
-.. autofunction:: tt_lib.tensor.polar
+the Type 1 contiguous representations.
 
 Other Operations
 ----------------

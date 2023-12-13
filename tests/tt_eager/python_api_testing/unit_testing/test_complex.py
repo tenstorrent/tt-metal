@@ -13,7 +13,10 @@ from models.utility_functions import print_diff_argmax
 import pytest
 from loguru import logger
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal, comp_allclose
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_pcc,
+    comp_equal,
+)
 from models.utility_functions import is_wormhole_b0
 from functools import partial
 
@@ -118,7 +121,7 @@ def test_level1_is_real(memcfg, dtype, device, function_level_defaults):
 @pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.BFLOAT16,)))
 def test_level1_is_imag(memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([1, 1, 32, 64])
-    # check imag
+    # check real
     x = Complex(input_shape)
     x = x.sub(x.conj())
     xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
@@ -141,7 +144,7 @@ def test_level1_is_imag(memcfg, dtype, device, function_level_defaults):
 @pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.BFLOAT16,)))
 def test_level1_angle(memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([1, 1, 32, 64])
-    # check angle
+    # check real
     x = Complex(input_shape)
     xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
     tt_dev = ttl.tensor.angle(xtt, memcfg)
@@ -234,7 +237,7 @@ def test_level1_abs(bs, memcfg, dtype, device, function_level_defaults, layout):
 @pytest.mark.parametrize("bs", ((1, 1), (1, 2)))
 def test_level1_conj(bs, memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([bs[0], bs[1], 32, 64])
-    # check conj
+    # check abs
     x = Complex(input_shape)
     xtt = ttl.tensor.Tensor(x.metal, dtype).to(ttl.tensor.Layout.ROW_MAJOR).to(device, memcfg)
     tt_dev = ttl.tensor.conj(xtt, memcfg)
@@ -260,7 +263,7 @@ def test_level1_conj(bs, memcfg, dtype, device, function_level_defaults):
 @pytest.mark.parametrize("bs", ((1, 1), (1, 2)))
 def test_level1_add(bs, memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([bs[0], bs[1], 32, 64])
-    # check add
+    # check abs
     x = Complex(input_shape)
     y = Complex(input_shape) * -0.5
 
@@ -289,7 +292,7 @@ def test_level1_add(bs, memcfg, dtype, device, function_level_defaults):
 @pytest.mark.parametrize("bs", ((1, 1), (2, 1), (2, 2)))
 def test_level1_sub(bs, memcfg, dtype, device, function_level_defaults):
     input_shape = torch.Size([1, 1, 32, 64])
-    # check sub
+    # check abs
     x = Complex(input_shape)
     y = Complex(input_shape) * 0.5
 
@@ -796,39 +799,3 @@ def test_level2_is_imag(bs, memcfg, dtype, device, function_level_defaults):
         passing, output = comp_pcc(tt_cpu, tt_dev)
     logger.info(output)
     assert passing
-
-
-@pytest.mark.parametrize(
-    "memcfg",
-    (
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
-        ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.L1),
-    ),
-    ids=["out_DRAM", "out_L1"],
-)
-@pytest.mark.parametrize("dtype", ((ttl.tensor.DataType.BFLOAT16,)))
-@pytest.mark.parametrize("bs", ((1, 1), (1, 2), (2, 2)))
-def test_level2_polar(bs, memcfg, dtype, device, function_level_defaults):
-    input_shape = torch.Size([bs[0], bs[1], 32, 32])
-    # check polar function
-
-    # we set real = abs = 1 on unit circle
-    # we set imag = angle theta
-    x = Complex(None, re=torch.ones(input_shape), im=torch.rand(input_shape))
-
-    xtt = ttl.tensor.complex_tensor(
-        ttl.tensor.Tensor(x.real, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-        ttl.tensor.Tensor(x.imag, dtype).to(ttl.tensor.Layout.TILE).to(device, memcfg),
-    )
-    tt_dev = ttl.tensor.polar(xtt.real, xtt.imag, memcfg)
-    tt_dev_real = tt_dev.real.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    tt_dev_imag = tt_dev.imag.cpu().to(ttl.tensor.Layout.ROW_MAJOR).to_torch()
-    tt_cpu = torch.polar(x.real, x.imag)
-    tt_cpu_real = tt_cpu.real.to(torch.bfloat16).to(float)
-    tt_cpu_imag = tt_cpu.imag.to(torch.bfloat16).to(float)
-
-    real_passing, real_output = comp_allclose(tt_cpu_real, tt_dev_real, 0.0125, 1)
-    logger.info(real_output)
-    imag_passing, imag_output = comp_allclose(tt_cpu_imag, tt_dev_imag, 0.0125, 1)
-    logger.info(imag_output)
-    assert real_passing and imag_passing
