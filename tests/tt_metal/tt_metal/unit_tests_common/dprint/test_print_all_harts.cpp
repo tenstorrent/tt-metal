@@ -4,7 +4,6 @@
 
 #include "dprint_fixture.hpp"
 #include "common/bfloat16.hpp"
-#include "impl/debug/dprint_server.hpp"
 #include "gtest/gtest.h"
 #include "test_utils.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -151,7 +150,6 @@ TEST_F(DPrintFixture, TestPrintFromAllHarts) {
 
     // Set up program and command queue
     constexpr CoreCoord core = {0, 0}; // Print on first core only
-    CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
     Program program = Program();
 
     // Create a CB for testing TSLICE, dimensions are 32x32 bfloat16s
@@ -185,11 +183,7 @@ TEST_F(DPrintFixture, TestPrintFromAllHarts) {
     );
 
     // Run the program
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
-
-    // Wait for the print server to catch up
-    tt_await_debug_print_server();
+    RunProgram(program);
 
     // Check that the expected print messages are in the log file
     EXPECT_TRUE(

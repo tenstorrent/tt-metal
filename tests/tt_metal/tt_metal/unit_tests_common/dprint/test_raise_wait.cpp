@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dprint_fixture.hpp"
-#include "impl/debug/dprint_server.hpp"
 #include "gtest/gtest.h"
 #include "test_utils.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -221,7 +220,6 @@ TEST_F(DPrintFixture, TestPrintRaiseWait) {
     Device *device = this->device_;
 
     // Set up program and command queue
-    CommandQueue& cq = *tt::tt_metal::detail::GLOBAL_CQ;
     Program program = Program();
 
     // Test runs on a 5x5 grid
@@ -282,11 +280,7 @@ TEST_F(DPrintFixture, TestPrintRaiseWait) {
 
 
     // Run the program
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
-
-    // Wait for the print server to catch up
-    tt_await_debug_print_server();
+    RunProgram(program);
 
     // Check the print log against golden output.
     EXPECT_TRUE(
