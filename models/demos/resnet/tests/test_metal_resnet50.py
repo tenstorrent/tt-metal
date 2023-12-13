@@ -100,10 +100,27 @@ golden_pcc = {
             tt_lib.tensor.DataType.BFLOAT8_B,
         ): 0.884609,  # Max ATOL Delta: 6.455164909362793, Max RTOL Delta: inf, PCC: 0.8846098380419435
     },
+    20: {
+        (
+            tt_lib.tensor.MathFidelity.HiFi4,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+        ): 0.976795,  # Max ATOL Delta: 2.705164909362793, Max RTOL Delta: inf, PCC: 0.9767951799869171
+        (
+            tt_lib.tensor.MathFidelity.HiFi2,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+        ): 0.947387,  # Max ATOL Delta: 4.705164909362793, Max RTOL Delta: inf, PCC: 0.9473877801237898
+        (
+            tt_lib.tensor.MathFidelity.LoFi,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+            tt_lib.tensor.DataType.BFLOAT8_B,
+        ): 0.884609,  # Max ATOL Delta: 6.455164909362793, Max RTOL Delta: inf, PCC: 0.8846098380419435
+    },
 }
 
 
-@pytest.mark.parametrize("batch_size", [1, 2, 8, 16], ids=["batch_1", "batch_2", "batch_8", "batch_16"])
+@pytest.mark.parametrize("batch_size", [1, 2, 8, 16, 20], ids=["batch_1", "batch_2", "batch_8", "batch_16", "batch_20"])
 @pytest.mark.parametrize(
     "weights_dtype",
     [tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.DataType.BFLOAT8_B],
