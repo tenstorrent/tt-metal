@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include "llk_defs.h"
@@ -69,30 +67,4 @@ inline void _llk_pack_untilize_(const std::uint32_t address, const std::uint32_t
     }
 
     TTI_PACR(ADDR_MOD_2, 0, 0xf, 0, 0, 1, 1); // close block
-}
-
-template <std::uint32_t block_ct_dim = 8>
-inline void llk_pack_untilize_init() {
-    // not available in TT-Metal
-    // TT_LLK_DUMP("llk_pack_untilize_init<{}>()", block_ct_dim);
-
-    _llk_pack_untilize_init_<block_ct_dim>();
-}
-
-template <std::uint32_t block_ct_dim = 8>
-inline void llk_pack_untilize(std::uint32_t num_blocks, std::uint32_t output) {
-    // TT_LLK_DUMP("llk_pack_untilize<{}>({}, {})", block_ct_dim, num_blocks, output);
-
-    const std::uint32_t output_id = get_output_id(output);
-    std::uint32_t pack_tile_addr = cb_interface[output_id].fifo_wr_ptr - 1;
-
-    for (std::uint32_t block=0; block<num_blocks; block++) {
-
-        _llk_pack_untilize_<block_ct_dim>(
-            pack_tile_addr,
-            pack_dst_format[output_id]
-        );
-
-        pack_tile_addr += block_ct_dim*(std::uint32_t)(GET_L1_HEADERLESS_TILE_SIZE(pack_dst_format[output_id]));
-    }
 }

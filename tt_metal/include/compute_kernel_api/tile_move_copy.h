@@ -46,25 +46,23 @@ namespace ckernel {
  * | icb_tile       | The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                | True     |
  */
 ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t cbid) {
-    #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, false>() ));
-    UNPACK(( llk_unpack_reconfig_data_format_srca(1, cbid) ));
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
-    #else
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
     UNPACK(( llk_unpack_reconfig_data_format_srca(1, cbid) ));
+
+    #ifdef ARCH_GRAYSKULL
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0) ));
+    #else
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, cbid) ));
     #endif
 }
 
 ALWI void copy_tile_matmul_partials_init_short_with_dt(uint32_t cbid) {
-    #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_A_init_cm<BroadcastType::NONE, false, 1>(0, 255) ));
-    UNPACK(( llk_unpack_reconfig_data_format_srca(1, cbid) ));
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
-    #else
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
     UNPACK(( llk_unpack_reconfig_data_format_srca(1, cbid) ));
+
+    #ifdef ARCH_GRAYSKULL
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0) ));
+    #else
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, cbid) ));
     #endif
 }
@@ -74,11 +72,11 @@ ALWI void copy_tile_matmul_partials_init_short_with_dt(uint32_t cbid) {
  */
 ALWI void copy_tile_to_dst_init_short()
 {
-    #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, false>()  ));
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>()  ));
-    #else
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
+
+    #ifdef ARCH_GRAYSKULL
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0)  ));
+    #else
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>()  ));
     #endif
 }
@@ -120,8 +118,9 @@ ALWI void copy_tile(uint32_t icb, uint32_t itile, uint32_t idst)
 ALWI void copy_block_matmul_partials(uint32_t icb, uint32_t start_itile, uint32_t start_idst, uint32_t ntiles)
 {
     #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_A_cm<BroadcastType::NONE, false, 1>(icb, start_itile, ntiles)  ));
-    MATH(( llk_math_eltwise_unary_datacopy_cm<A2D, BroadcastType::NONE, SyncHalf>(start_idst, ntiles)  ));
+    //TODO: Double check the template param, 1 was being set for transpose
+    UNPACK(( llk_unpack_A_block<BroadcastType::NONE, false>(icb, start_itile, ntiles, 1)  ));
+    MATH(( llk_math_eltwise_unary_datacopy_block<A2D, BroadcastType::NONE, SyncHalf>(start_idst, ntiles)  ));
     #endif
 }
 

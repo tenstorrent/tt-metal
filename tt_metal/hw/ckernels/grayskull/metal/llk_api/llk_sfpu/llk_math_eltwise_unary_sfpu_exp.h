@@ -20,9 +20,9 @@ inline void llk_math_eltwise_unary_sfpu_exponential(uint dst_index, int vector_m
 	constexpr bool zero_negative = true;
     constexpr int first_iterations = 1;
     llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst, int16_t>
-                                (ckernel::sfpu::calculate_exponential<APPROXIMATE, zero_negative, false, first_iterations>,
-                                ckernel::sfpu::calculate_exponential<APPROXIMATE, zero_negative>,
-                                dst_index, vector_mode, param0);
+        (ckernel::sfpu::calculate_exponential<APPROXIMATE, zero_negative, false, first_iterations>,
+        ckernel::sfpu::calculate_exponential<APPROXIMATE, zero_negative>,
+        dst_index, vector_mode, param0);
 }
 
 

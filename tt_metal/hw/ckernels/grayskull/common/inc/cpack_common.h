@@ -7,8 +7,8 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
-#include "debug/fw_debug.h"
-#include "debug/status.h"
+#include "fw_debug.h"
+#include "llk_defs.h"
 
 #define TT_OP_SETDMAREG_SHFT(Payload_SigSelSize, Payload_SigSelShft, SetSignalsMode, RegIndex16b) \
   TT_OP(0x45, (((Payload_SigSelSize) << 22) + ((Payload_SigSelShft)) + ((SetSignalsMode) << 7) + ((RegIndex16b) << 0)))
@@ -17,17 +17,9 @@
 
 namespace ckernel::packer
 {
-   // budabackend
-   //constexpr uint32_t OUTPUT_BASE    = 16;
-   //constexpr uint32_t OUTPUT_BASE_ID = 0;
+   constexpr uint32_t PACK_CNT = 4;
 
-   // lo-buda
-   constexpr uint32_t OUTPUT_BASE    = 0;
-   constexpr uint32_t OUTPUT_BASE_ID = 16;
-
-   constexpr uint32_t PACK_CNT       = 4;
-
-   // Pack src format, save src format to make reconfig writes only
+   //Pack src format, save src format to make reconfig writes only
    uint32_t tile_desc_pack_src_format;
 
    constexpr uint PACK_SEL(const uint pack_count)
@@ -71,44 +63,147 @@ namespace ckernel::packer
        TTI_SETADCZW(0b100, 0, 0, 0, 0, 0b1111);
    }
 
-   // Get pointer to registers for current state ID
-   inline void set_packer_config(const int operand_id) {
-      volatile uint *cfg = get_cfg_pointer();
+   inline void set_packer_config(const uint pack_dst_format){
+      // Get pointer to registers for current state ID
+      volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
+      // Set packer config
       pack_config_u config;
       for (uint i=0; i<4; i++) {
          config.val[i] = 0;
       }
-      config.f.exp_section_size = ((uint)(pack_dst_format[operand_id]&0x2) == 0) ? 0 : 4 ;
+      config.f.exp_section_size = ((uint)(pack_dst_format&0x2) == 0) ? 0 : 4 ;
       config.f.uncompress   = 1;
-      config.f.out_data_format   = (uint)pack_dst_format[operand_id];
+      config.f.out_data_format   = (uint)pack_dst_format;
       config.f.in_data_format    = (uint)tile_desc_pack_src_format;
       config.f.pack_per_xy_plane = 1;
 
-      // Program:
-      // THCON_SEC0_REG1_Row_start_section_size = cfg_reg_array[1][0 +: 16];
-      // THCON_SEC0_REG1_Exp_section_size = cfg_reg_array[1][16 +: 16];
-      // This is filled with garbage, and will be set up on every pack:
-      //           THCON_SEC0_REG1_L1_Dest_addr = cfg_reg_array[1][32 +: 32];
-      // THCON_SEC0_REG1_Disable_zero_compress = cfg_reg_array[1][64 +: 1];
-      // THCON_SEC0_REG1_Add_l1_dest_addr_offset = cfg_reg_array[1][65 +: 1];
-      // THCON_SEC0_REG1_Unused0 = cfg_reg_array[1][66 +: 2];
-      // THCON_SEC0_REG1_Out_data_format = cfg_reg_array[1][68 +: 4];
-      // THCON_SEC0_REG1_In_data_format = cfg_reg_array[1][72 +: 4];
-      // THCON_SEC0_REG1_Unused00 = cfg_reg_array[1][76 +: 4];
-      // THCON_SEC0_REG1_Source_interface_selection = cfg_reg_array[1][80 +: 1];
-      // THCON_SEC0_REG1_Packs_per_xy_plane = cfg_reg_array[1][81 +: 7];
-      // THCON_SEC0_REG1_L1_source_addr = cfg_reg_array[1][88 +: 8];
-      // THCON_SEC0_REG1_Downsample_mask = cfg_reg_array[1][96 +: 16];
-      // THCON_SEC0_REG1_Downsample_shift_count = cfg_reg_array[1][112 +: 3];
-      // THCON_SEC0_REG1_Read_mode = cfg_reg_array[1][115 +: 1];
-      // THCON_SEC0_REG1_Exp_threshold_en = cfg_reg_array[1][116 +: 1];
-      // THCON_SEC0_REG1_Unused1 = cfg_reg_array[1][117 +: 3];
-      // THCON_SEC0_REG1_Exp_threshold = cfg_reg_array[1][120 +: 8];
-      // for (uint i=0; i<4; i++) cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32+i]=config.val[i];
-      // for (uint i=0; i<4; i++) cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+i]=config.val[i];
-      // for (uint i=0; i<4; i++) cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+i]=config.val[i];
-      // for (uint i=0; i<4; i++) cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+i]=config.val[i];
+      // cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
+      // cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
+      // cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
+      // cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
+      // cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32+2]=config.val[2];
+      // cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+2]=config.val[2];
+      // cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+2]=config.val[2];
+      // cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+2]=config.val[2];
+
+      // if ((uint)(pack_dst_format&0x2) != 0) {
+      //    // Override exp section size for packers 1,2,3
+      //    // Tile header + exp size + datum size
+      //    if ((uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp8 || (uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp8_b) {
+      //       config.f.exp_section_size = 1 + 2 + 16;
+      //       cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
+      //       config.f.exp_section_size = 1 + 1 + 32;
+      //       cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
+      //       config.f.exp_section_size = 1 + 0 + 48;
+      //       cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
+      //    } else if ((uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp4 || (uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp4_b) {
+      //       config.f.exp_section_size = 1 + 2 + 8;
+      //       cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
+      //       config.f.exp_section_size = 1 + 1 + 16;
+      //       cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
+      //       config.f.exp_section_size = 1 + 0 + 24;
+      //       cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
+      //    } else if ((uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp2 || (uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp2_b) {
+      //       config.f.exp_section_size = 1 + 2 + 4;
+      //       cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
+      //       config.f.exp_section_size = 1 + 1 + 8;
+      //       cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
+      //       config.f.exp_section_size = 1 + 0 + 12;
+      //       cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
+      //    } else {
+      //       FWASSERT("Other data formats not supported", false);
+      //    }
+      // }
+
+      TT_SETDMAREG(0, (config.val[2] & 0xffff), 0, LO_16(p_gpr_pack::TMP0));
+      TT_SETDMAREG(0, ((config.val[2]>>16) & 0xffff), 0, HI_16(p_gpr_pack::TMP0));
+      TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32+2);
+      TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG8_Row_start_section_size_ADDR32+2);
+      TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC1_REG1_Row_start_section_size_ADDR32+2);
+      TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, THCON_SEC1_REG8_Row_start_section_size_ADDR32+2);
+
+      // Fix for https://yyz-gitlab.local.tenstorrent.com/tenstorrent/budabackend/-/issues/1392
+      // Break dependancy between data format update and exception section size update below by inserting nop cycles
+      TTI_DMANOP; TTI_DMANOP;
+
+      if ((uint)(pack_dst_format&0x2) != 0) {
+         // Override exp section size for packers 1,2,3
+         // Tile header + exp size + datum size
+         if ((uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp8 || (uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp8_b) {
+            TTI_WRCFG(p_gpr_pack::BFP8_EXP_SEC_SIZE+0, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP8_EXP_SEC_SIZE+1, p_cfg::WRCFG_32b, THCON_SEC0_REG8_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP8_EXP_SEC_SIZE+2, p_cfg::WRCFG_32b, THCON_SEC1_REG1_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP8_EXP_SEC_SIZE+3, p_cfg::WRCFG_32b, THCON_SEC1_REG8_Row_start_section_size_ADDR32);
+         } else if ((uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp4 || (uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp4_b) {
+            TTI_WRCFG(p_gpr_pack::BFP4_EXP_SEC_SIZE+0, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP4_EXP_SEC_SIZE+1, p_cfg::WRCFG_32b, THCON_SEC0_REG8_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP4_EXP_SEC_SIZE+2, p_cfg::WRCFG_32b, THCON_SEC1_REG1_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP4_EXP_SEC_SIZE+3, p_cfg::WRCFG_32b, THCON_SEC1_REG8_Row_start_section_size_ADDR32);
+         } else if ((uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp2 || (uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp2_b) {
+            TTI_WRCFG(p_gpr_pack::BFP2_EXP_SEC_SIZE+0, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP2_EXP_SEC_SIZE+1, p_cfg::WRCFG_32b, THCON_SEC0_REG8_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP2_EXP_SEC_SIZE+2, p_cfg::WRCFG_32b, THCON_SEC1_REG1_Row_start_section_size_ADDR32);
+            TTI_WRCFG(p_gpr_pack::BFP2_EXP_SEC_SIZE+3, p_cfg::WRCFG_32b, THCON_SEC1_REG8_Row_start_section_size_ADDR32);
+         } else {
+            FWASSERT("Other data formats not supported", false);
+         }
+      }
+      TTI_DMANOP; TTI_DMANOP;
+   }
+
+   //reconfig the packer dst format
+   inline void reconfig_packer_data_format(const uint pack_dst_format, const uint tile_size)
+   {
+      set_packer_config(pack_dst_format);
+
+      uint tile_header_0 = tile_size;
+      TT_SETDMAREG(0, (tile_header_0 & 0xffff), 0, LO_16(p_gpr_pack::TILE_HEADER));
+      TT_SETDMAREG(0, ((tile_header_0 >> 16) & 0xffff), 0, HI_16(p_gpr_pack::TILE_HEADER));
+
+   }
+
+   inline void wait_for_unpack_config_done()
+   {
+       while (semaphore_read(semaphore::UNPACK_PACK_CONFIG_SYNC) == 0) {}
+   }
+
+   template <bool untilize = false>
+   inline void configure_pack(const uint pack_src_format, const uint pack_dst_format, const uint tile_size, uint relu_config = 0, bool skip_alu_format_set=false)
+   {
+      // Get pointer to registers for current state ID
+      volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+
+      if (pack_src_format != pack_dst_format) {
+         TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
+         tensix_sync();
+      }
+
+      const uint pack_per_xy_plane = 16;
+
+      uint x_stride = (uint)(pack_src_format&0x3) == (uint)DataFormat::Float32 ? 4 :
+                      (uint)(pack_src_format&0x3) == (uint)DataFormat::Float16 ? 2 : 1;
+      uint y_stride = 16*x_stride;
+      uint z_stride = PACK_CNT*16*y_stride;
+
+      // Strides (not needed)
+      cfg[PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32] = (y_stride<<PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT) |
+                                                    (       0<<PCK0_ADDR_CTRL_XY_REG_0_Xstride_SHAMT);  // X and Y stride for src address (ch0)
+      cfg[PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32] = (z_stride<<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT);  // Z stride for src address (ch0)
+
+      tile_desc_pack_src_format = pack_src_format;
+
+      // Set packer config
+      pack_config_u config;
+      for (uint i=0; i<4; i++) {
+         config.val[i] = 0;
+      }
+      config.f.exp_section_size = ((uint)(pack_dst_format&0x2) == 0) ? 0 : 4 ;
+      config.f.uncompress   = 1;
+      config.f.out_data_format   = (uint)pack_dst_format;
+      config.f.in_data_format    = (uint)tile_desc_pack_src_format;
+      config.f.pack_per_xy_plane = 1;
+
       cfg[THCON_SEC0_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
       cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
       cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
@@ -118,24 +213,24 @@ namespace ckernel::packer
       cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+2]=config.val[2];
       cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+2]=config.val[2];
 
-      if ((uint)(pack_dst_format[operand_id]&0x2) != 0) {
+      if ((uint)(pack_dst_format&0x2) != 0) {
          // Override exp section size for packers 1,2,3
          // Tile header + exp size + datum size
-         if ((uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp8 || (uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp8_b) {
+         if ((uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp8 || (uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp8_b) {
             config.f.exp_section_size = 1 + 2 + 16;
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
             config.f.exp_section_size = 1 + 1 + 32;
             cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
             config.f.exp_section_size = 1 + 0 + 48;
             cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
-         } else if ((uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp4 || (uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp4_b) {
+         } else if ((uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp4 || (uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp4_b) {
             config.f.exp_section_size = 1 + 2 + 8;
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
             config.f.exp_section_size = 1 + 1 + 16;
             cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32+0]=config.val[0];
             config.f.exp_section_size = 1 + 0 + 24;
             cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
-         } else if ((uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp2 || (uint)(pack_dst_format[operand_id]&0x1F) == (uint)DataFormat::Bfp2_b) {
+         } else if ((uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp2 || (uint)(pack_dst_format&0x1F) == (uint)DataFormat::Bfp2_b) {
             config.f.exp_section_size = 1 + 2 + 4;
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32+0]=config.val[0];
             config.f.exp_section_size = 1 + 1 + 8;
@@ -146,55 +241,22 @@ namespace ckernel::packer
             FWASSERT("Other data formats not supported", false);
          }
       }
-   }
 
-   // reconfig the packer dst format
-   inline void reconfig_packer_data_format(const uint operand_id)
-   {
-      TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
-      tensix_sync();
+      // Preload exp section size for fast format reconfig
+      regfile[p_gpr_pack::BFP8_EXP_SEC_SIZE]   = 4 << THCON_SEC0_REG1_Exp_section_size_SHAMT;
+      regfile[p_gpr_pack::BFP8_EXP_SEC_SIZE+1] = 19 << THCON_SEC1_REG1_Exp_section_size_SHAMT;
+      regfile[p_gpr_pack::BFP8_EXP_SEC_SIZE+2] = 34 << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+      regfile[p_gpr_pack::BFP8_EXP_SEC_SIZE+3] = 49 << THCON_SEC1_REG8_Exp_section_size_SHAMT;
 
-      set_packer_config(operand_id);
+      regfile[p_gpr_pack::BFP4_EXP_SEC_SIZE]   = 4 << THCON_SEC0_REG1_Exp_section_size_SHAMT;
+      regfile[p_gpr_pack::BFP4_EXP_SEC_SIZE+1] = 11 << THCON_SEC1_REG1_Exp_section_size_SHAMT;
+      regfile[p_gpr_pack::BFP4_EXP_SEC_SIZE+2] = 18 << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+      regfile[p_gpr_pack::BFP4_EXP_SEC_SIZE+3] = 25 << THCON_SEC1_REG8_Exp_section_size_SHAMT;
 
-      // no need to do this because we don't use headers
-      // regfile[p_gpr_pack::TILE_HEADER]   = GET_L1_TILE_SIZE((uint)pack_dst_format[operand_id]);
-      regfile[p_gpr_pack::ONE_MSG_RECEIVED] = ((1*GET_L1_TILE_SIZE((uint)pack_dst_format[operand_id]))<<12)|1; /*SOURCE_ENDPOINT_NEW_MSGS_TOTAL_SIZE=12*/;
-      sync_regfile_write(p_gpr_pack::ONE_MSG_RECEIVED);
-   }
-
-   inline void wait_for_unpack_config_done()
-   {
-      DEBUG_STATUS('W', 'U', 'C', 'W');
-      while (semaphore_read(semaphore::UNPACK_PACK_CONFIG_SYNC) == 0) {}
-      DEBUG_STATUS('W', 'U', 'C', 'D');
-   }
-
-   template <bool untilize = false>
-   inline void configure_pack(uint pack_output, uint relu_config = 0, bool skip_alu_format_set=false)
-   {
-      // Get pointer to registers for current state ID
-      volatile uint *cfg = get_cfg_pointer();
-
-      if (pack_src_format[pack_output] != pack_dst_format[pack_output]) {
-         TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
-         tensix_sync();
-      }
-
-      const uint pack_per_xy_plane = 16;
-
-      uint x_stride = (uint)(pack_src_format[pack_output]&0x3) == (uint)DataFormat::Float32 ? 4 :
-                      (uint)(pack_src_format[pack_output]&0x3) == (uint)DataFormat::Float16 ? 2 : 1;
-      uint y_stride = 16*x_stride;
-      uint z_stride = PACK_CNT*16*y_stride;
-
-      // Strides (not needed)
-      cfg[PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32] = (y_stride<<PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT) |
-                                                    (       0<<PCK0_ADDR_CTRL_XY_REG_0_Xstride_SHAMT);  // X and Y stride for src address (ch0)
-      cfg[PCK0_ADDR_CTRL_ZW_REG_0_Zstride_ADDR32] = (z_stride<<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_SHAMT);  // Z stride for src address (ch0)
-
-      // Set packer config
-      tile_desc_pack_src_format = pack_src_format[pack_output];
-      set_packer_config(pack_output);
+      regfile[p_gpr_pack::BFP2_EXP_SEC_SIZE]   = 4 << THCON_SEC0_REG1_Exp_section_size_SHAMT;
+      regfile[p_gpr_pack::BFP2_EXP_SEC_SIZE+1] = 7 << THCON_SEC1_REG1_Exp_section_size_SHAMT;
+      regfile[p_gpr_pack::BFP2_EXP_SEC_SIZE+2] = 10 << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+      regfile[p_gpr_pack::BFP2_EXP_SEC_SIZE+3] = 13 << THCON_SEC1_REG8_Exp_section_size_SHAMT;
 
       // PACK_COUNTERS_SEC0_pack_per_xy_plane = cfg_reg_array[3][0 +: 8];
       // PACK_COUNTERS_SEC0_pack_reads_per_xy_plane = cfg_reg_array[3][8 +: 8];
@@ -202,20 +264,20 @@ namespace ckernel::packer
       // PACK_COUNTERS_SEC0_pack_yz_transposed = cfg_reg_array[3][23 +: 1];
       for (uint i=0; i<4; i++) cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32+i]=pack_per_xy_plane | (pack_per_xy_plane<<8) | ((untilize?1:0)<<16); // Auto last generation is disabled
 
+      cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]=0xffff;
       for (uint i=0; i<4; i++) {
-	 cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32+i]=0xffffffff;
          cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32+i] = 0x0;
       }
 
-      regfile[p_gpr_pack::TILE_HEADER]   = GET_L1_TILE_SIZE((uint)pack_dst_format[pack_output]);
+      regfile[p_gpr_pack::TILE_HEADER]   = tile_size;
       regfile[p_gpr_pack::TILE_HEADER+1] = 0;
       regfile[p_gpr_pack::TILE_HEADER+2] = 0;
       regfile[p_gpr_pack::TILE_HEADER+3] = 0;
       sync_regfile_write(p_gpr_pack::TILE_HEADER+3);
 
       // Config RELU
-      uint apply_relu = reg_read((uint)&cfg[STACC_RELU_ApplyRelu_ADDR32]);
-      uint relu_threshold  = reg_read((uint)&cfg[STACC_RELU_ReluThreshold_ADDR32]);
+      uint apply_relu = reg_read_barrier((uint)&cfg[STACC_RELU_ApplyRelu_ADDR32]);
+      uint relu_threshold  = reg_read_barrier((uint)&cfg[STACC_RELU_ReluThreshold_ADDR32]);
       apply_relu      &= (~STACC_RELU_ApplyRelu_MASK);
       relu_threshold  &= (~STACC_RELU_ReluThreshold_MASK);
       struct {
@@ -232,87 +294,29 @@ namespace ckernel::packer
 
       // Store value for num_msg_received register when tile count is 1
       //regfile[p_gpr_pack::PACK_STREAM_SYNC] = 0;
-      regfile[p_gpr_pack::ONE_MSG_RECEIVED] = ((1*GET_L1_TILE_SIZE((uint)pack_dst_format[pack_output]))<<12)|1; /*SOURCE_ENDPOINT_NEW_MSGS_TOTAL_SIZE=12*/;
-      sync_regfile_write(p_gpr_pack::ONE_MSG_RECEIVED);
 
       // MT: Ensure thread safety between unpacker and packer threads by using semaphore
       if (!skip_alu_format_set) {
          wait_for_unpack_config_done();
-         uint alu_dst_format = pack_src_format[pack_output];
+         uint alu_dst_format = pack_src_format;
          cfg_rmw(ALU_FORMAT_SPEC_REG2_Dstacc_RMW, alu_dst_format);
          semaphore_get(semaphore::UNPACK_PACK_CONFIG_SYNC);
       }
-
-   }
-
-   template <DstTileFaceLayout FaceLayout, bool untilize = false>
-   inline void init_packer_dest_offset_registers()
-   {
-      if constexpr (untilize) {
-         if constexpr (FaceLayout == ColMajor) {
-            // Packer0 :  0,32,  1,33 ...  7, 39
-	    // Packer1 :  8,40,  9,41 ... 15, 47
-	    // Packer2 : 16,48, 17,49 ... 23, 55
-	    // Packer3 : 23,56, 24,57 ... 31, 63
-            regfile[p_gpr_pack::DEST_OFFSET_LO]   = 0x0;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+1] = 0x0 + 0x8;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+2] = 0x0 + 0x10;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+3] = 0x0 + 0x18;
-            regfile[p_gpr_pack::DEST_OFFSET_HI]   = 0x200;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+1] = 0x200 + 0x8;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+2] = 0x200 + 0x10;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+3] = 0x200 + 0x18;
-         } else {
-            // Packer0 :  0,16,  1,17 ...  7, 23
-	    // Packer1 :  8,24,  9,25 ... 15, 31
-	    // Packer2 : 32,48, 33,49 ... 39, 55
-	    // Packer3 : 40,56, 41,57 ... 47, 63
-            regfile[p_gpr_pack::DEST_OFFSET_LO]   = 0x0;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+1] = 0x0 + 0x8;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+2] = 0x0 + 0x20;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+3] = 0x0 + 0x28;
-            regfile[p_gpr_pack::DEST_OFFSET_HI]   = 0x200;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+1] = 0x200 + 0x8;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+2] = 0x200 + 0x20;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+3] = 0x200 + 0x28;
-	 }
-      } else {
-         if constexpr (FaceLayout == ColMajor) {
-            regfile[p_gpr_pack::DEST_OFFSET_LO]   = 0x0;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+1] = 0x0 + 0x20;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+2] = 0x0 + 0x10;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+3] = 0x0 + 0x30;
-            regfile[p_gpr_pack::DEST_OFFSET_HI]   = 0x200;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+1] = 0x200 + 0x20;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+2] = 0x200 + 0x10;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+3] = 0x200 + 0x30;
-         } else { // Default to row major layout
-            regfile[p_gpr_pack::DEST_OFFSET_LO]   = 0x0;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+1] = 0x0 + 0x10;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+2] = 0x0 + 0x20;
-            regfile[p_gpr_pack::DEST_OFFSET_LO+3] = 0x0 + 0x30;
-            regfile[p_gpr_pack::DEST_OFFSET_HI]   = 0x200;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+1] = 0x200 + 0x10;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+2] = 0x200 + 0x20;
-            regfile[p_gpr_pack::DEST_OFFSET_HI+3] = 0x200 + 0x30;
-         }
-      }
-      sync_regfile_write(p_gpr_pack::DEST_OFFSET_HI+3);
    }
 
    inline uint8_t get_packer_dest_offset_index()
    {
-           return (dest_offset_id ? p_gpr_pack::DEST_OFFSET_HI : p_gpr_pack::DEST_OFFSET_LO);
+      return (dest_offset_id ? p_gpr_pack::DEST_OFFSET_HI : p_gpr_pack::DEST_OFFSET_LO);
    }
 
    inline uint32_t get_packer_dest_offset()
    {
-           return (dest_offset_id ? 0x200 : 0x0);
+      return (dest_offset_id ? 0x200 : 0x0);
    }
 
    inline void flip_packer_dest_offset_id()
    {
-           dest_offset_id = 1 - dest_offset_id;
+      dest_offset_id = 1 - dest_offset_id;
    }
 
    // Flip packer dest register offset to 0 or 0x200
@@ -320,20 +324,20 @@ namespace ckernel::packer
    template <DstSync Dst>
    inline void select_packer_dest_registers()
    {
-           if constexpr (Dst == DstSync::SyncFull)
-           {
-                   TTI_WRCFG(p_gpr_pack::DEST_OFFSET_LO,     p_cfg::WRCFG_128b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
-           } else {
-                   TT_WRCFG(get_packer_dest_offset_index(),     p_cfg::WRCFG_128b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
-           }
+      if constexpr (Dst == DstSync::SyncFull)
+      {
+         TTI_WRCFG(p_gpr_pack::DEST_OFFSET_LO,     p_cfg::WRCFG_128b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+      } else {
+         TT_WRCFG(get_packer_dest_offset_index(),     p_cfg::WRCFG_128b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+      }
    }
 
    // Program packer destination addresses from GPRs
    // Note: DMAREG_SHFT takes a pre-shifted SigSel to generate cleaner asm
    template <PackSelMask PackSel=PACK_ALL>
-   inline void program_mm_packer_destination(uint32_t addr, uint8_t pack_output)
+   inline void program_packer_destination(uint32_t addr, uint8_t pack_dst_format)
    {
-      const uint8_t fmt = (uint8_t)(pack_dst_format[pack_output] & 0x3);
+      const uint8_t fmt = (uint8_t)(pack_dst_format & 0x3);
       if constexpr (PackSel == PACK_ALL) {
          const uint32_t offset1 = fmt == (uint8_t)DataFormat::Float32 ? (0x40 << 8) : fmt == (uint8_t)DataFormat::Float16 ? (0x20 << 8) : (0x1 << 8);
          const uint32_t offset2 = fmt == (uint8_t)DataFormat::Float32 ? (0x80 << 8) : fmt == (uint8_t)DataFormat::Float16 ? (0x40 << 8) : (0x2 << 8);
@@ -344,7 +348,7 @@ namespace ckernel::packer
          TT_SETDMAREG_SHFT(0, addr+offset1, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+1));
          TT_SETDMAREG_SHFT(0, addr+offset2, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+2));
          TT_SETDMAREG_SHFT(0, addr+offset3, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+3));
-	 TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK0 | p_stall::PACK1);
+	      TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK0 | p_stall::PACK1);
          TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR,     p_cfg::WRCFG_32b, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
          TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+1,   p_cfg::WRCFG_32b, THCON_SEC0_REG8_L1_Dest_addr_ADDR32);
          TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK2 | p_stall::PACK3);
@@ -366,46 +370,7 @@ namespace ckernel::packer
      } else {
         FWASSERT("Unsupported pack select mask!", false);
      }
-   }
-
-   // Program packer destination addresses from GPRs
-   template <PackSelMask PackSel=PACK_ALL>
-   inline void program_packer_destination(uint32_t addr, uint8_t pack_output)
-   {
-      const uint8_t fmt = (uint8_t)(pack_dst_format[pack_output] & 0x3);
-      if constexpr (PackSel == PACK_ALL) {
-         const uint32_t offset1 = fmt == (uint8_t)DataFormat::Float32 ? (0x40 << 8) : fmt == (uint8_t)DataFormat::Float16 ? (0x20 << 8) : (0x1 << 8);
-         const uint32_t offset2 = fmt == (uint8_t)DataFormat::Float32 ? (0x80 << 8) : fmt == (uint8_t)DataFormat::Float16 ? (0x40 << 8) : (0x2 << 8);
-         const uint32_t offset3 = fmt == (uint8_t)DataFormat::Float32 ? (0xC0 << 8) : fmt == (uint8_t)DataFormat::Float16 ? (0x60 << 8) : (0x3 << 8);
-         addr <<= 8;
-
-         TT_SETDMAREG_SHFT(0, addr, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+0));
-         TT_SETDMAREG_SHFT(0, addr+offset1, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+1));
-         TT_SETDMAREG_SHFT(0, addr+offset2, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+2));
-         TT_SETDMAREG_SHFT(0, addr+offset3, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+3));
-	 TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK0 | p_stall::PACK1);
-         TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR,     p_cfg::WRCFG_32b, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
-         TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+1,   p_cfg::WRCFG_32b, THCON_SEC0_REG8_L1_Dest_addr_ADDR32);
-         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK2 | p_stall::PACK3);
-         TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+2,   p_cfg::WRCFG_32b, THCON_SEC1_REG1_L1_Dest_addr_ADDR32);
-         TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR+3,   p_cfg::WRCFG_32b, THCON_SEC1_REG8_L1_Dest_addr_ADDR32);
-     } else if constexpr (PackSel == PACK_01) {
-         const uint32_t offset1 = fmt == (uint8_t)DataFormat::Float32 ? (0x40 << 8) : fmt == (uint8_t)DataFormat::Float16 ? (0x20 << 8) : (0x1 << 8);
-         addr <<= 8;
-
-         TT_SETDMAREG_SHFT(0, addr, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+0));
-         TT_SETDMAREG_SHFT(0, addr+offset1, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+1));
-         TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK0|p_stall::PACK1);
-         TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_L1_Dest_addr_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR);
-         TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG8_L1_Dest_addr_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR+1);
-     } else if constexpr (PackSel == PACK_0) {
-         TT_SETDMAREG(0, addr, 0, LO_16(p_gpr_pack::OUTPUT_ADDR+0));
-         TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK0);
-         TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG1_L1_Dest_addr_ADDR32-THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR);
-     } else {
-        FWASSERT("Unsupported pack select mask!", false);
-     }
-   }
+    }
 
    template <uint32_t block_ct_dim>
    inline void program_packer_untilized_destination(const uint32_t addr, const uint32_t pack_dst_format)
@@ -432,10 +397,5 @@ namespace ckernel::packer
    inline void write_tile_header()
    {
       TTI_STOREIND (1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR);
-   }
-
-   inline void reset_dest_offset_id()
-   {
-       dest_offset_id = 0;
    }
 }

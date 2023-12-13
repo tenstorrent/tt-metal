@@ -20,7 +20,6 @@ extern uint32_t __ldm_data_start[];
 extern uint32_t __ldm_data_end[];
 extern void (* __init_array_start[])();
 extern void (* __init_array_end[])();
-extern uint32_t __firmware_start[];
 
 extern void kernel_init();
 extern void kernel_launch();

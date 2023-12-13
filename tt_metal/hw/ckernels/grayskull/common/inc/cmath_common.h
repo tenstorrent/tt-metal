@@ -7,10 +7,10 @@
 //#include "kernel_types.h"
 #include "ckernel.h"
 #include "ckernel_template.h"
+#include "ckernel_sfpu.h"
 #include "ckernel_globals.h"
-
-#include "debug/fw_debug.h"
-#include "debug/status.h"
+#include "fw_debug.h"
+#include "llk_defs.h"
 
 #ifndef SFPU_OP_PARAM
 #define SFPU_OP_PARAM 0
@@ -19,8 +19,6 @@
 #ifndef FUSE_SQRT_RECIP
 #define FUSE_SQRT_RECIP 0
 #endif
-
-#define EPS 0.001953125 //std::numeric_limits::epsilon() - BF19 aka TF32
 
 using namespace ckernel;
 
@@ -56,7 +54,7 @@ inline void incr_counters(const uint incr_a, const uint incr_b, const uint incr_
 
 inline void move_d2a_fixed_face(const uint8_t addrmod)
 {
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD); // wait for unpacker to set data valid
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD); // MOVD2A for a whole face assumes unpacker will set a dummy data_valid, so we want to wait on that
     TTI_MOVD2A(p_movd2a::MOV_4_ROWS, addrmod, MATH_HALO_ROWS + 0, 0);
     TTI_MOVD2A(p_movd2a::MOV_4_ROWS, addrmod, MATH_HALO_ROWS + 4, 4);
     TTI_MOVD2A(p_movd2a::MOV_4_ROWS, addrmod, MATH_HALO_ROWS + 8, 8);
@@ -125,11 +123,6 @@ inline void update_dest_offset_id()
     dest_offset_id = 1 - dest_offset_id;
 }
 
-inline void reset_dest_offset_id()
-{
-    dest_offset_id = 0;
-}
-
 inline uint32_t get_dest_buffer_base()
 {
     return (0 != dest_offset_id) ? DEST_REGISTER_HALF_SIZE : 0x0;
@@ -138,9 +131,7 @@ inline uint32_t get_dest_buffer_base()
 inline void wait_math_semaphores()
 {
     // wait while math semaphore is on max, no room to write math results
-    DEBUG_STATUS('W', 'M', 'S', 'W');
     TTI_SEMWAIT(p_stall::STALL_MATH, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_MAX);
-    DEBUG_STATUS('W', 'M', 'S', 'D');
 }
 
 inline void set_math_semaphores()
@@ -169,11 +160,17 @@ inline void clear_dst_reg_addr()
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
+template <uint num_rows=8>
+inline void inc_dst_addr()
+{
+    static_assert(num_rows <= 15, "num_rows must be <= 15");
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, num_rows, 0, 0, p_setrwc::SET_D);
+}
+
 inline void math_dest_wait()
 {
-    DEBUG_STATUS('W', 'D', 'S', 'W');
+    FWLOG0("XX math_full_dest_sync()->wait for whole dest available");
     TTI_SEMWAIT(p_stall::STALL_MATH, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_MAX);
-    DEBUG_STATUS('W', 'D', 'S', 'D');
 }
 
 inline void dest_section_flip()
@@ -193,6 +190,16 @@ inline void set_dest_section_base()
         base_addr = DEST_REGISTER_HALF_SIZE;
     }
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
+}
+
+inline constexpr int get_math_num_fidelity_phases(const int math_fidelity_desc)
+{
+    return (math_fidelity_desc & 0x7);
+}
+
+inline constexpr int get_math_fidelity_increment(const int math_fidelity_desc)
+{
+    return ((math_fidelity_desc >> 3) & 0x1) + 1;
 }
 
 
