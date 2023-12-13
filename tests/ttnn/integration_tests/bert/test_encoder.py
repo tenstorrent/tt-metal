@@ -40,7 +40,7 @@ def ttnn_model(
     ff_layer_norm_weight,
     ff_layer_norm_bias,
     *,
-    head_size,
+    num_heads,
 ):
     multi_head_attention_output = ttnn_multi_head_attention(
         hidden_states,
@@ -53,7 +53,7 @@ def ttnn_model(
         value_bias,
         output_weight,
         output_bias,
-        head_size=head_size,
+        num_heads=num_heads,
     )
     hidden_states = ttnn.layer_norm(
         hidden_states + multi_head_attention_output, weight=attention_layer_norm_weight, bias=attention_layer_norm_bias
@@ -92,7 +92,7 @@ def torch_model(
     ff_layer_norm_weight,
     ff_layer_norm_bias,
     *,
-    head_size,
+    num_heads,
 ):
     *_, hidden_size = hidden_states.shape
     multi_head_attention_output = torch_multi_head_attention(
@@ -106,7 +106,7 @@ def torch_model(
         value_bias,
         output_weight,
         output_bias,
-        head_size=head_size,
+        num_heads=num_heads,
     )
     hidden_states = F.layer_norm(
         hidden_states + multi_head_attention_output,
@@ -185,7 +185,7 @@ def test_encoder(device, use_program_cache, batch_size, sequence_size, num_heads
         torch_ff2_bias,
         torch_ff_layer_norm_weight,
         torch_ff_layer_norm_bias,
-        head_size=head_size,
+        num_heads=num_heads,
     )
 
     assert torch_output.shape == (
@@ -252,7 +252,7 @@ def test_encoder(device, use_program_cache, batch_size, sequence_size, num_heads
         ff2_bias,
         ff_layer_norm_weight,
         ff_layer_norm_bias,
-        head_size=head_size,
+        num_heads=num_heads,
     )
 
     assert tt_output.shape == [

@@ -64,20 +64,24 @@ def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torc
 
 # Based on transformers/models/bloom/modeling_bloom.py
 def split_query_key_value_and_split_heads(
-    fused_qkv: torch.Tensor, head_size
+    query_key_value: torch.Tensor, num_heads
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    device = fused_qkv._tensor.device()
+    device = query_key_value._tensor.device()
 
-    batch_size, seq_length, three_times_hidden_size = fused_qkv.shape
+    batch_size, seq_length, three_times_hidden_size = query_key_value.shape
     hidden_size = three_times_hidden_size // 3
-    num_heads = hidden_size // head_size
+    head_size = hidden_size // num_heads
 
-    fused_qkv = ttnn.to_layout(fused_qkv, ttnn.ROW_MAJOR_LAYOUT)
-    fused_qkv = ttnn.from_device(fused_qkv)
-    fused_qkv = ttnn.to_torch(fused_qkv)
+    query_key_value = ttnn.to_layout(query_key_value, ttnn.ROW_MAJOR_LAYOUT)
+    query_key_value = ttnn.from_device(query_key_value)
+    query_key_value = ttnn.to_torch(query_key_value)
 
-    fused_qkv = fused_qkv.view(batch_size, seq_length, 3, num_heads, head_size)
-    query_layer, key_layer, value_layer = fused_qkv[..., 0, :, :], fused_qkv[..., 1, :, :], fused_qkv[..., 2, :, :]
+    query_key_value = query_key_value.view(batch_size, seq_length, 3, num_heads, head_size)
+    query_layer, key_layer, value_layer = (
+        query_key_value[..., 0, :, :],
+        query_key_value[..., 1, :, :],
+        query_key_value[..., 2, :, :],
+    )
 
     query_layer = torch.reshape(query_layer, (batch_size, seq_length, num_heads, head_size))
     query_layer = torch.permute(query_layer, (0, 2, 1, 3)).contiguous()
@@ -104,16 +108,17 @@ def split_query_key_value_and_split_heads(
 
 
 # TODO: issue 4172
-def create_query_key_value(hidden_states, weight, bias, head_size, use_core_grid=True):
+def create_query_key_value(hidden_states, weight, bias, num_heads, use_core_grid=True):
     if use_core_grid:
-        fused_qkv = ttnn.matmul(hidden_states, weight, core_grid=(9, 12))
+        query_key_value = ttnn.matmul(hidden_states, weight, core_grid=(9, 12))
     else:
-        fused_qkv = hidden_states @ weight
-    fused_qkv = fused_qkv + bias
-    return split_query_key_value_and_split_heads(fused_qkv, head_size)
+        query_key_value = hidden_states @ weight
+    query_key_value = query_key_value + bias
+    return split_query_key_value_and_split_heads(query_key_value, num_heads)
 
 
-def compute_attention_scores(query_layer, key_layer, alibi, head_size):
+def compute_attention_scores(query_layer, key_layer, alibi):
+    *_, head_size = query_layer.shape
     beta = 1.0
     inv_norm_factor = 1.0 / math.sqrt(head_size)
     matmul_result = beta * alibi + inv_norm_factor * (query_layer @ key_layer)
@@ -159,17 +164,17 @@ def multi_head_attention(
     output_weight,
     output_bias,
     *,
-    head_size,
+    num_heads,
     use_core_grid=True,  # TODO: issue 4172
 ):
     query_layer, key_layer, value_layer = create_query_key_value(
         hidden_states,
         query_key_value_weight,
         query_key_value_bias,
-        head_size,
+        num_heads,
         use_core_grid=use_core_grid,
     )
-    attention_scores = compute_attention_scores(query_layer, key_layer, alibi, head_size)
+    attention_scores = compute_attention_scores(query_layer, key_layer, alibi)
     attention_probs = compute_attention_probs(attention_scores, causal_mask)
     context_layer = compute_context_layer(attention_probs, value_layer)
     output_tensor = finalize_output(context_layer, output_weight, output_bias)
@@ -204,8 +209,6 @@ def bloom(
         parameters.transformer.word_embeddings.weight,
         layout=ttnn.TILE_LAYOUT,
     )
-    hidden_size = inputs_embeds.shape[-1]
-    head_size = hidden_size // num_heads
 
     hidden_states = ttnn.layer_norm(
         inputs_embeds,
@@ -228,7 +231,7 @@ def bloom(
             layer_parameters.self_attention.query_key_value.bias,
             layer_parameters.self_attention.dense.weight,
             layer_parameters.self_attention.dense.bias,
-            head_size=head_size,
+            num_heads=num_heads,
         )
         attention_output = attention_output + hidden_states
 

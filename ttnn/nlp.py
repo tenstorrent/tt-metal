@@ -15,7 +15,7 @@ from ttnn.tensor import (
     DEVICE_STORAGE_TYPE,
 )
 from ttnn.core import reshape
-from ttnn.decorators import debug_decorator
+from ttnn.decorators import decorate_operation
 
 
 def _torch_split_heads(input_tensor: Tensor, *, num_heads, order):
@@ -34,7 +34,7 @@ def _torch_split_heads(input_tensor: Tensor, *, num_heads, order):
     return output_tensor
 
 
-@debug_decorator(_torch_split_heads)
+@decorate_operation(torch_function=_torch_split_heads)
 def split_heads(input_tensor: Tensor, *, num_heads: int, order: Tuple[int]) -> Tensor:
     if len(input_tensor.shape) != 3:
         raise RuntimeError("Input Tensor must have strictly 3 dimensions!")
@@ -105,13 +105,13 @@ def _torch_split_query_key_value_and_split_heads(input_tensor: Tensor, *, num_he
     return query_layer, key_layer, value_layer
 
 
-@debug_decorator(_torch_split_query_key_value_and_split_heads)
+@decorate_operation(torch_function=_torch_split_query_key_value_and_split_heads)
 def split_query_key_value_and_split_heads(
     input_tensor: Tensor,
     *,
+    num_heads: int,
     core_grid: Tuple[int, int],
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
-    num_heads: int = 16,
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """
     split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, *, core_grid: Tuple[int, int], memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tuple[Tensor, Tensor, Tensor]
@@ -120,6 +120,7 @@ def split_query_key_value_and_split_heads(
 
     Args:
         * :attr:`input_tensor`: Input Tensor
+        * :attr:`num_heads`: num heads to split into
         * :attr:`core_grid`: Compute and Storage Core Grid to use for the operation
         * :attr:`memory_config`: Memory Config of the output tensor
 
@@ -132,9 +133,6 @@ def split_query_key_value_and_split_heads(
 
     if not has_storage_type_of(input_tensor, DEVICE_STORAGE_TYPE):
         raise RuntimeError("input_tensor must be on device!")
-
-    if num_heads != 16:
-        raise RuntimeError("num_heads must be 16!")
 
     batch_size, sequence_size, three_times_hidden_size = input_tensor.shape
     if input_tensor.shape == (batch_size, 384, 1024 * 3):
@@ -162,7 +160,7 @@ def split_query_key_value_and_split_heads(
             hidden_size = three_times_hidden_size // 3
             head_size = hidden_size // num_heads
 
-            tensor = tensor.view(batch_size, sequence_size, 3, num_heads, head_size)
+            tensor = torch.reshape(tensor, (batch_size, sequence_size, 3, num_heads, head_size))
             query_layer, key_layer, value_layer = (
                 tensor[..., 0, :, :],
                 tensor[..., 1, :, :],
@@ -232,7 +230,7 @@ def _torch_split_key_value_and_split_heads(input_tensor: Tensor, *, num_heads, *
     return key_layer, value_layer
 
 
-@debug_decorator(_torch_split_key_value_and_split_heads)
+@decorate_operation(torch_function=_torch_split_key_value_and_split_heads)
 def split_key_value_and_split_heads(
     input_tensor: Tensor,
     *,
@@ -268,7 +266,7 @@ def split_key_value_and_split_heads(
         hidden_size = two_times_hidden_size // 2
         head_size = hidden_size // num_heads
 
-        tensor = tensor.view(batch_size, sequence_size, 2, num_heads, head_size)
+        tensor = torch.reshape(tensor, (batch_size, sequence_size, 2, num_heads, head_size))
         key_layer, value_layer = (
             tensor[..., 0, :, :],
             tensor[..., 1, :, :],
@@ -327,7 +325,7 @@ def _torch_attention_softmax(input_tensor: Tensor, *, head_size: int, attention_
     return torch.softmax(input_tensor, -1)
 
 
-@debug_decorator(_torch_attention_softmax)
+@decorate_operation(torch_function=_torch_attention_softmax)
 def attention_softmax(
     input_tensor: Tensor,
     *,
@@ -366,7 +364,7 @@ def attention_softmax(
         return Tensor(ttl_output_tensor)
 
 
-@debug_decorator(_torch_attention_softmax)
+@decorate_operation(torch_function=_torch_attention_softmax)
 def attention_softmax_(
     input_tensor: Tensor,
     *,
@@ -421,7 +419,7 @@ def _torch_concatenate_heads(input_tensor: Tensor, **_):
     return output_tensor
 
 
-@debug_decorator(_torch_concatenate_heads)
+@decorate_operation(torch_function=_torch_concatenate_heads)
 def concatenate_heads(
     input_tensor: Tensor,
     *,

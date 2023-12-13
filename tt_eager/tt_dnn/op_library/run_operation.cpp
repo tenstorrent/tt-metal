@@ -19,6 +19,16 @@
 
 namespace tt::tt_metal::operation {
 
+bool is_logging_enabled() {
+    bool enabled = false;
+    if (std::getenv("TT_METAL_LOGGER_TYPES") != nullptr and std::getenv("TT_METAL_LOGGER_LEVEL") != nullptr) {
+        enabled |= std::string{std::getenv("TT_METAL_LOGGER_TYPES")} == "Op" and
+                   std::string{std::getenv("TT_METAL_LOGGER_LEVEL")} == "DEBUG";
+    }
+    enabled |= std::getenv("OPERATION_HISTORY_CSV") != nullptr;
+    return enabled;
+}
+
 namespace detail {
 
 static Device* get_device(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors = {}) {
@@ -36,10 +46,6 @@ static Device* get_device(const std::vector<Tensor>& input_tensors, const std::v
     TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to operation are on device");
     return device;
 }
-
-}  // namespace detail
-
-namespace detail {
 
 void override_addresses(
     const OverrideAddressesCallback& override_addresses_callback,
@@ -102,12 +108,15 @@ constexpr op_profiler::OpType get_profiler_operation_type() {
 template <typename Function>
 constexpr auto decorate_operation(const Function& function) {
     return [function]<typename Operation, typename... Args>(const Operation& operation, Args&&... args) {
+#ifndef TTNN_ENABLE_LOGGING
+        if (not is_logging_enabled()) {
+            return function(operation, args...);
+        }
+#endif
+
         const auto start{std::chrono::steady_clock::now()};
-
         log_operation(operation, args...);
-
         auto output_tensors = function(operation, args...);
-
         const auto end{std::chrono::steady_clock::now()};
 
 #ifdef TTNN_ENABLE_LOGGING

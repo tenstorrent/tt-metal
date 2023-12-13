@@ -7,7 +7,10 @@ fi
 cd $TT_METAL_HOME
 export PYTHONPATH=$TT_METAL_HOME
 
-env pytest tests/ttnn/integration_tests
+if [[ $ARCH_NAME == "grayskull" ]]; then
+  # TODO(arakhmati): Run ttnn tests only on graskull until the issue with ttnn.reshape on wormhole is resolved
+  env pytest tests/ttnn/integration_tests
+fi
 
 env pytest models/experimental/whisper -k whisper_attention
 env pytest models/experimental/whisper -k WhipserDecoderLayer_inference

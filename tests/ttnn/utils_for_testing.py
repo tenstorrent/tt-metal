@@ -2,10 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.utility_functions import comp_pcc
 import os
 import json
+
 import torch
+
+from models.utility_functions import comp_pcc
 
 
 def torch_random(shape, low, high, dtype):

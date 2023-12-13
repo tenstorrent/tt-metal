@@ -11,9 +11,10 @@ from ttnn.tensor import (
     has_storage_type_of,
     MemoryConfig,
     DRAM_MEMORY_CONFIG,
+    DEVICE_STORAGE_TYPE,
 )
 from ttnn.core import reshape, _reshape_to_4D
-from ttnn.decorators import debug_decorator
+from ttnn.decorators import decorate_operation
 
 
 THIS_MODULE = sys.modules[__name__]
@@ -31,6 +32,7 @@ def register_ttl_unary_function(name, ttl_unary_function):
             "tanh": torch.tanh,
             "gelu": torch.nn.functional.gelu,
             "rsqrt": torch.rsqrt,
+            "relu": torch.relu,
         }
         torch_function = name_to_torch_function[name]
 
@@ -40,14 +42,14 @@ def register_ttl_unary_function(name, ttl_unary_function):
 
         return torch_function(input_tensor)
 
-    @debug_decorator(_torch_unary, name=name)
+    @decorate_operation(torch_function=_torch_unary, name=name)
     def unary_function(input_tensor: Tensor, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
         f"""{name}(input_tensor: Tensor) -> Tensor
 
         Applies {name} to :attr:`input_tensor` element-wise.
 
         .. math::
-            {name}(\mathrm{{input\_tensor}}_i)
+            {name}(\\mathrm{{input\\_tensor}}_i)
 
         Args:
             * :attr:`input_tensor`
@@ -68,7 +70,7 @@ def register_ttl_unary_function(name, ttl_unary_function):
         if not isinstance(input_tensor, Tensor):
             raise TypeError("Expected first argument to be a ttnn.Tensor")
 
-        if not has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
+        if not has_storage_type_of(input_tensor, DEVICE_STORAGE_TYPE):
             raise RuntimeError("input_tensor must be on device!")
         ttl_input_tensor = input_tensor._tensor
 
@@ -86,6 +88,7 @@ TTL_UNARY_FUNCTIONS = [
     ("exp", ttl.tensor.exp),
     ("tanh", ttl.tensor.tanh),
     ("gelu", ttl.tensor.gelu),
+    ("relu", ttl.tensor.relu),
     ("rsqrt", ttl.tensor.rsqrt),
 ]
 
@@ -108,7 +111,7 @@ def register_ttl_unary_function_with_float_parameter(name, ttl_unary_function):
 
         return torch_function(input_tensor, parameter)
 
-    @debug_decorator(_torch_unary, name=name)
+    @decorate_operation(torch_function=_torch_unary, name=name)
     def unary_function(
         input_tensor: Tensor, parameter: float, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG
     ) -> Tensor:
@@ -117,7 +120,7 @@ def register_ttl_unary_function_with_float_parameter(name, ttl_unary_function):
         Applies {name} to :attr:`input_tensor` element-wise.
 
         .. math::
-            {name}(\mathrm{{input\_tensor}}_i)
+            {name}(\\mathrm{{input\\_tensor}}_i)
 
         Args:
             * :attr:`input_tensor`
@@ -127,7 +130,7 @@ def register_ttl_unary_function_with_float_parameter(name, ttl_unary_function):
             >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
             >>> output = ttnn.{name}(tensor, 2)
             >>> print(output)
-            Tensor([ 0, 2], dtype=bfloat16 )
+            Tensor([ 1, 4], dtype=bfloat16 )
 
         """
 
@@ -138,7 +141,7 @@ def register_ttl_unary_function_with_float_parameter(name, ttl_unary_function):
         if not isinstance(input_tensor, Tensor):
             raise TypeError("Expected first argument to be a ttnn.Tensor")
 
-        if not has_storage_type_of(input_tensor, ttl.tensor.StorageType.DEVICE):
+        if not has_storage_type_of(input_tensor, DEVICE_STORAGE_TYPE):
             raise RuntimeError("input_tensor must be on device!")
         ttl_input_tensor = input_tensor._tensor
 

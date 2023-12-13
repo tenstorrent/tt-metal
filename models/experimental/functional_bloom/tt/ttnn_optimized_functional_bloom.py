@@ -67,26 +67,28 @@ def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torc
 
 
 def split_query_key_value_and_split_heads(
-    fused_qkv: torch.Tensor,
+    query_key_value: torch.Tensor, num_heads: int
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    batch_size, *_ = fused_qkv.shape
+    batch_size, *_ = query_key_value.shape
     output = ttnn.nlp.split_query_key_value_and_split_heads(
-        fused_qkv, core_grid=(batch_size, 12), memory_config=BLOOM_MEMORY_CONFIG
+        query_key_value, core_grid=(batch_size, 12), memory_config=BLOOM_MEMORY_CONFIG, num_heads=num_heads
     )
     return output
 
 
-def create_query_key_value(hidden_states, weight, bias):
-    fused_qkv = ttnn.linear(
+def create_query_key_value(hidden_states, weight, bias, num_heads):
+    query_key_value = ttnn.linear(
         hidden_states, weight, bias=bias, core_grid=(9, 12), memory_config=BLOOM_MEMORY_CONFIG, dtype=BLOOM_DTYPE
     )
-    query, key, value = split_query_key_value_and_split_heads(fused_qkv)
-    ttnn.deallocate(fused_qkv)
+    query, key, value = split_query_key_value_and_split_heads(query_key_value, num_heads=num_heads)
+    ttnn.deallocate(query_key_value)
 
     return query, key, value
 
 
-def compute_attention_scores(query_layer, key_layer, alibi, head_size):
+def compute_attention_scores(query_layer, key_layer, alibi):
+    *_, head_size = query_layer.shape
+
     attention_scores = ttnn.matmul(
         query_layer, key_layer, core_grid=(9, 12), memory_config=BLOOM_MEMORY_CONFIG, dtype=ttnn.bfloat16
     )
@@ -161,13 +163,13 @@ def multi_head_attention(
     output_weight,
     output_bias,
     *,
-    head_size,
+    num_heads,
 ):
     query_layer, key_layer, value_layer = create_query_key_value(
-        hidden_states, query_key_value_weight, query_key_value_bias
+        hidden_states, query_key_value_weight, query_key_value_bias, num_heads=num_heads
     )
 
-    attention_scores = compute_attention_scores(query_layer, key_layer, alibi, head_size)
+    attention_scores = compute_attention_scores(query_layer, key_layer, alibi)
     attention_probs = compute_attention_probs(attention_scores, causal_mask)
     context_layer = compute_context_layer(attention_probs, value_layer)
     output_tensor = finalize_output(context_layer, output_weight, output_bias)
@@ -215,9 +217,6 @@ def bloom(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    hidden_size = inputs_embeds.shape[-1]
-    head_size = hidden_size // num_heads
-
     hidden_states = ttnn.layer_norm(
         inputs_embeds,
         weight=parameters.transformer.word_embeddings_layernorm.weight,
@@ -244,7 +243,7 @@ def bloom(
             layer_parameters.self_attention.query_key_value.bias,
             layer_parameters.self_attention.dense.weight,
             layer_parameters.self_attention.dense.bias,
-            head_size=head_size,
+            num_heads=num_heads,
         )
         ttnn.deallocate(normalized_hidden_states)
 

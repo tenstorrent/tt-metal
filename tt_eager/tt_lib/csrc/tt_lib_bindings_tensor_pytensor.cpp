@@ -321,6 +321,11 @@ Tensor convert_torch_tensor_to_tt_tensor(
             [](const py::function &function, std::optional<std::string> function_name) -> py::function {
                 return py::cpp_function(std::function([function, function_name](
                                                           const py::args &args, const py::kwargs &kwargs) {
+#ifndef TTNN_ENABLE_LOGGING
+                    if (not operation::is_logging_enabled()) {
+                        return function(*args, **kwargs);
+                    }
+#endif
                     const auto start{std::chrono::steady_clock::now()};
 
                     auto [op, input_tensors] = detail::parse_external_operation(function, args, kwargs, function_name);

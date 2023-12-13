@@ -18,10 +18,10 @@ def torch_multi_head_attention(
     output_weight,
     output_bias,
     *,
-    head_size,
+    num_heads,
 ):
     batch_size, sequence_size, hidden_size = hidden_states.shape
-    num_heads = hidden_size // head_size
+    head_size = hidden_size // num_heads
 
     query = hidden_states @ query_weight
     query = query + query_bias
@@ -70,7 +70,7 @@ def torch_bert_encoder(
     attention_mask,
     parameters,
     *,
-    head_size,
+    num_heads,
 ):
     *_, hidden_size = hidden_states.shape
     multi_head_attention_output = torch_multi_head_attention(
@@ -84,7 +84,7 @@ def torch_bert_encoder(
         parameters.attention.self.value.bias,
         parameters.attention.output.dense.weight,
         parameters.attention.output.dense.bias,
-        head_size=head_size,
+        num_heads=num_heads,
     )
 
     multi_head_attention_add_and_layer_norm_output = F.layer_norm(
@@ -118,7 +118,7 @@ def torch_bert(
     attention_mask,
     parameters,
     *,
-    head_size,
+    num_heads,
 ):
     word_embeddings = F.embedding(input_ids, parameters.bert.embeddings.word_embeddings.weight)
     token_type_embeddings = F.embedding(token_type_ids, parameters.bert.embeddings.token_type_embeddings.weight)
@@ -138,7 +138,7 @@ def torch_bert(
             encoder_input,
             attention_mask,
             encoder_parameters,
-            head_size=head_size,
+            num_heads=num_heads,
         )
         encoder_input = encoder_output
     return encoder_output
@@ -150,14 +150,14 @@ def torch_bert_for_question_answering(
     attention_mask,
     parameters,
     *,
-    head_size,
+    num_heads,
 ):
     bert_output = torch_bert(
         input_ids,
         token_type_ids,
         attention_mask,
         parameters,
-        head_size=head_size,
+        num_heads=num_heads,
     )
 
     qa_outputs = bert_output

@@ -8,20 +8,21 @@ import ttnn
 def ttnn_optimized_multi_head_attention(
     hidden_states,
     attention_mask,
-    fused_qkv_weight,
-    fused_qkv_bias,
+    query_key_value_weight,
+    query_key_value_bias,
     self_output_weight,
     self_output_bias,
     *,
-    head_size,
+    num_heads,
     num_cores_x=12,
 ):
-    batch_size, *_ = hidden_states.shape
+    batch_size, _, hidden_size = hidden_states.shape
+    head_size = hidden_size // num_heads
 
-    fused_qkv_output = ttnn.linear(
+    query_key_value_output = ttnn.linear(
         hidden_states,
-        fused_qkv_weight,
-        bias=fused_qkv_bias,
+        query_key_value_weight,
+        bias=query_key_value_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
         core_grid=(batch_size, num_cores_x),
@@ -32,11 +33,12 @@ def ttnn_optimized_multi_head_attention(
         key,
         value,
     ) = ttnn.nlp.split_query_key_value_and_split_heads(
-        fused_qkv_output,
+        query_key_value_output,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         core_grid=(batch_size, num_cores_x),
+        num_heads=num_heads,
     )
-    ttnn.deallocate(fused_qkv_output)
+    ttnn.deallocate(query_key_value_output)
 
     attention_scores = ttnn.matmul(
         query,
@@ -110,16 +112,16 @@ def ttnn_optimized_bert_encoder(
     attention_mask,
     parameters,
     *,
-    head_size,
+    num_heads,
 ):
     multi_head_attention_output = ttnn_optimized_multi_head_attention(
         hidden_states,
         attention_mask,
-        parameters.attention.self.fused_qkv.weight,
-        parameters.attention.self.fused_qkv.bias,
+        parameters.attention.self.query_key_value.weight,
+        parameters.attention.self.query_key_value.bias,
         parameters.attention.output.dense.weight,
         parameters.attention.output.dense.bias,
-        head_size=head_size,
+        num_heads=num_heads,
     )
 
     multi_head_attention_add_and_layer_norm_output = ttnn.layer_norm(
@@ -159,7 +161,7 @@ def ttnn_optimized_bert(
     attention_mask,
     parameters,
     *,
-    head_size,
+    num_heads,
 ):
     word_embeddings = ttnn.embedding(
         input_ids,
@@ -193,7 +195,7 @@ def ttnn_optimized_bert(
             encoder_input,
             attention_mask,
             encoder_parameters,
-            head_size=head_size,
+            num_heads=num_heads,
         )
         encoder_output = ttnn.reallocate(encoder_output)
         encoder_input = encoder_output
@@ -207,14 +209,14 @@ def ttnn_optimized_bert_for_question_answering(
     attention_mask,
     parameters,
     *,
-    head_size,
+    num_heads,
 ):
     bert_output = ttnn_optimized_bert(
         input_ids,
         token_type_ids,
         attention_mask,
         parameters,
-        head_size=head_size,
+        num_heads=num_heads,
     )
 
     qa_outputs = ttnn.linear(

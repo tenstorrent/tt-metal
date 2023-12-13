@@ -154,7 +154,7 @@ def _preprocess_model_parameters(
     *,
     convert_to_ttnn,
     custom_preprocessor=None,
-    name="",
+    name,
 ) -> ParameterDict:
     if isinstance(model, torch.nn.modules.container.ModuleList):
         return ParameterList(
@@ -279,6 +279,7 @@ def preprocess_model_parameters(
     convert_to_ttnn=None,
     custom_preprocessor=None,
     device: Optional[ttnn.Device] = None,
+    prefix: Optional[str] = None,
 ) -> ParameterDict:
     if convert_to_ttnn is None:
 
@@ -291,10 +292,11 @@ def preprocess_model_parameters(
             model,
             convert_to_ttnn=convert_to_ttnn,
             custom_preprocessor=custom_preprocessor,
+            name=prefix if prefix is not None else "",
         )
 
     else:
-        model_cache_path = ttnn.MODEL_CACHE_PATH / model_name
+        model_cache_path = ttnn.MODEL_CACHE_PATH / model_name.replace("/", "_")
         version_file_path = model_cache_path / "version.txt"
 
         if version is None:
@@ -327,6 +329,7 @@ def preprocess_model_parameters(
                 model,
                 convert_to_ttnn=convert_to_ttnn,
                 custom_preprocessor=custom_preprocessor,
+                name=prefix if prefix is not None else "",
             )
 
             # TODO: use temporary directory

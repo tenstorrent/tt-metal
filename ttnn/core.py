@@ -26,7 +26,7 @@ from ttnn.tensor import (
     TILE_SIZE,
     has_storage_type_of,
 )
-from ttnn.decorators import debug_decorator
+from ttnn.decorators import decorate_operation
 
 MODEL_CACHE_PATH = pathlib.Path().home() / ".cache" / "tenstorrent"
 
@@ -109,7 +109,7 @@ def _torch_matmul(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
     return input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
 
-@debug_decorator(_torch_matmul)
+@decorate_operation(torch_function=_torch_matmul)
 def matmul(
     input_tensor_a: Tensor,
     input_tensor_b: Tensor,
@@ -401,7 +401,9 @@ def matmul(
     return output_tensor
 
 
-def _torch_linear(input_tensor_a: Tensor, input_tensor_b: Tensor, *, bias=None, **_):
+def _torch_linear(input_tensor_a: Tensor, input_tensor_b: Tensor, *, bias=None, activation=None, **_):
+    import torch
+
     input_tensor_a = from_device(input_tensor_a)
     input_tensor_a = to_layout(input_tensor_a, ROW_MAJOR_LAYOUT)
     input_tensor_a = to_torch(input_tensor_a)
@@ -420,10 +422,17 @@ def _torch_linear(input_tensor_a: Tensor, input_tensor_b: Tensor, *, bias=None, 
             bias = bias[0]
         output_tensor += bias
 
+    if activation == "gelu":
+        output_tensor = torch.nn.functional.gelu(output_tensor)
+    elif activation == "relu":
+        output_tensor = torch.nn.functional.relu(output_tensor)
+    elif activation is not None:
+        raise RuntimeError(f"{activation} is not supported as activation function")
+
     return output_tensor
 
 
-@debug_decorator(_torch_linear)
+@decorate_operation(torch_function=_torch_linear)
 def linear(
     input_tensor_a: Tensor,
     input_tensor_b: Tensor,
@@ -608,6 +617,8 @@ def linear(
             ttl_bias = bias._tensor if bias is not None else None
             if activation == "gelu":
                 fused_activation = (ttl.tensor.FusibleActivation.GELU, True)
+            elif activation == "relu":
+                fused_activation = ttl.tensor.FusibleActivation.RELU
             elif activation is None:
                 fused_activation = None
             else:
@@ -654,14 +665,16 @@ def linear(
 
 
 def _torch_add(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
+    input_shape_a = input_tensor_a.shape
+    slices = [slice(0, dim) for dim in input_shape_a]
     input_tensor_a = from_device(input_tensor_a)
     input_tensor_a = to_layout(input_tensor_a, ROW_MAJOR_LAYOUT)
     input_tensor_a = to_torch(input_tensor_a)
+    input_tensor_a = input_tensor_a[slices]
 
     if not _is_scalar(input_tensor_b):
         input_shape_b = input_tensor_b.shape
         slices = [slice(0, dim) for dim in input_shape_b]
-
         input_tensor_b = from_device(input_tensor_b)
         input_tensor_b = to_layout(input_tensor_b, ROW_MAJOR_LAYOUT)
         input_tensor_b = to_torch(input_tensor_b)
@@ -670,7 +683,7 @@ def _torch_add(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
     return input_tensor_a + input_tensor_b
 
 
-@debug_decorator(_torch_add)
+@decorate_operation(torch_function=_torch_add)
 def add(
     input_tensor_a: Tensor,
     input_tensor_b: Union[Tensor, int, float],
@@ -678,7 +691,7 @@ def add(
     alpha: Union[int, float] = 1,
     memory_config: MemoryConfig = DRAM_MEMORY_CONFIG,
 ) -> Tensor:
-    """
+    r"""
     add(input_tensor_a: Tensor, input_tensor_b: Union[Tensor, int, float], *, alpha: Union[int, float]=1) -> Tensor
 
     Adds :attr:`input_tensor_b`, scaled by :attr:`alpha`, to :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`
@@ -800,14 +813,16 @@ def add(
 
 
 def _torch_sub(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
+    input_shape_a = input_tensor_a.shape
+    slices = [slice(0, dim) for dim in input_shape_a]
     input_tensor_a = from_device(input_tensor_a)
     input_tensor_a = to_layout(input_tensor_a, ROW_MAJOR_LAYOUT)
     input_tensor_a = to_torch(input_tensor_a)
+    input_tensor_a = input_tensor_a[slices]
 
     if not _is_scalar(input_tensor_b):
         input_shape_b = input_tensor_b.shape
         slices = [slice(0, dim) for dim in input_shape_b]
-
         input_tensor_b = from_device(input_tensor_b)
         input_tensor_b = to_layout(input_tensor_b, ROW_MAJOR_LAYOUT)
         input_tensor_b = to_torch(input_tensor_b)
@@ -816,7 +831,7 @@ def _torch_sub(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
     return input_tensor_a - input_tensor_b
 
 
-@debug_decorator(_torch_sub)
+@decorate_operation(torch_function=_torch_sub)
 def sub(
     input_tensor_a: Tensor,
     input_tensor_b: Union[Tensor, int, float],
@@ -937,14 +952,16 @@ def sub(
 
 
 def _torch_mul(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
+    input_shape_a = input_tensor_a.shape
+    slices = [slice(0, dim) for dim in input_shape_a]
     input_tensor_a = from_device(input_tensor_a)
     input_tensor_a = to_layout(input_tensor_a, ROW_MAJOR_LAYOUT)
     input_tensor_a = to_torch(input_tensor_a)
+    input_tensor_a = input_tensor_a[slices]
 
     if not _is_scalar(input_tensor_b):
         input_shape_b = input_tensor_b.shape
         slices = [slice(0, dim) for dim in input_shape_b]
-
         input_tensor_b = from_device(input_tensor_b)
         input_tensor_b = to_layout(input_tensor_b, ROW_MAJOR_LAYOUT)
         input_tensor_b = to_torch(input_tensor_b)
@@ -953,7 +970,7 @@ def _torch_mul(input_tensor_a: Tensor, input_tensor_b: Tensor, **_):
     return input_tensor_a * input_tensor_b
 
 
-@debug_decorator(_torch_mul)
+@decorate_operation(torch_function=_torch_mul)
 def mul(input_tensor_a: Tensor, input_tensor_b: Tensor, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
     r"""
     mul(input_tensor_a: Tensor, input_tensor_b: Tensor) -> Tensor
@@ -1089,7 +1106,7 @@ def _torch_reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]], *
     return torch.reshape(input_tensor, shape).contiguous().clone()
 
 
-@debug_decorator(_torch_reshape)
+@decorate_operation(torch_function=_torch_reshape)
 def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tensor:
     r"""
     reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tensor
@@ -1134,11 +1151,10 @@ def reshape(input_tensor: Tensor, shape: Union[Shape, Tuple[int, ...]]) -> Tenso
 
     ttnn_reshape = ttl.tensor.decorate_external_operation(ttnn_reshape, function_name="ttnn.reshape")
 
-    # TODO(arakhmati): figure out how to early return when layout is ROW_MAJOR using ttnn_reshape #Issue 4007
-    """
     if input_tensor.is_contiguous():
-        return ttnn_reshape(input_tensor, shape)
-    """
+        # Page size depends on the width, so only modify the shape if the width is the same
+        if input_tensor.shape[-1] == shape[-1]:
+            return ttnn_reshape(input_tensor, shape)
 
     if input_tensor.layout == TILE_LAYOUT:
         *_, new_height, new_width = tuple(shape.padded())
@@ -1192,7 +1208,7 @@ def _torch_permute(input_tensor: Tensor, order: Tuple[int, ...], **_):
     return torch.permute(input_tensor, order).contiguous().clone()
 
 
-@debug_decorator(_torch_permute)
+@decorate_operation(torch_function=_torch_permute)
 def permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor:
     r"""
     permute(input_tensor: Tensor, order: Tuple[int, ...]) -> Tensor
@@ -1251,7 +1267,7 @@ def _torch_embedding(input_tensor: Tensor, weight: Tensor, **_):
     return output_tensor
 
 
-@debug_decorator(_torch_embedding)
+@decorate_operation(torch_function=_torch_embedding)
 def embedding(
     input_tensor: Tensor,
     weight: Tensor,
@@ -1316,7 +1332,7 @@ def _torch_softmax(input_tensor: Tensor, dim: int, **_):
     return torch.softmax(input_tensor, dim)
 
 
-@debug_decorator(_torch_softmax, pcc=0.75)
+@decorate_operation(torch_function=_torch_softmax)
 def softmax(input_tensor: Tensor, dim: int, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> Tensor:
     r"""
     softmax(input_tensor: Tensor, dim: int) -> Tensor
@@ -1386,7 +1402,7 @@ def _torch_layer_norm(input_tensor: Tensor, *, epsilon=1e-12, residual_input_ten
     return torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)
 
 
-@debug_decorator(_torch_layer_norm)
+@decorate_operation(torch_function=_torch_layer_norm)
 def layer_norm(
     input_tensor: Tensor,
     *,
@@ -1441,7 +1457,7 @@ def _torch_mean(input_tensor: Tensor, dim: int, keepdim=False, **_):
     return torch.mean(input_tensor, dim=dim, keepdim=keepdim)
 
 
-@debug_decorator()
+@decorate_operation(torch_function=_torch_mean)
 def mean(input_tensor: Tensor, dim: Union[int, Tuple[int]], keepdim: bool = False) -> Tensor:
     input_shape = tuple(input_tensor.shape)
     rank = len(input_shape)

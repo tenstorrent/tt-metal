@@ -49,12 +49,18 @@ def test_optimized_merge_heads(device):
 
 @skip_for_wormhole_b0()
 def test_create_query_key_value(device):
+    batch_size = 1
+    sequence_size = 64
+    num_heads = 16
+    head_size = 64
+    hidden_size = num_heads * head_size
+
     torch.manual_seed(0)
-    torch_hidden = torch_random((1, 64, 1024), -0.1, 0.1, dtype=torch.bfloat16)
-    torch_weight = torch_random((1024, 3072), -0.1, 0.1, dtype=torch.bfloat16)
-    torch_bias = torch_random((3072), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_hidden = torch_random((batch_size, sequence_size, hidden_size), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_weight = torch_random((hidden_size, hidden_size * 3), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_bias = torch_random((hidden_size * 3), -0.1, 0.1, dtype=torch.bfloat16)
     (torch_query_layer, torch_key_layer, torch_value_layer) = torch_functional_bloom.create_query_key_value(
-        torch_hidden, torch_weight, torch_bias, 64
+        torch_hidden, torch_weight, torch_bias, num_heads
     )
     tt_hidden = ttnn.from_torch(torch_hidden)
     tt_hidden = ttnn.to_device(tt_hidden, device)
@@ -63,7 +69,7 @@ def test_create_query_key_value(device):
     tt_bias = ttnn.from_torch(torch_bias)
     tt_bias = ttnn.to_device(tt_bias, device)
     (tt_query_layer, tt_key_layer, tt_value_layer) = ttnn_functional_bloom.create_query_key_value(
-        tt_hidden, tt_weight, tt_bias, 64, use_core_grid=False
+        tt_hidden, tt_weight, tt_bias, num_heads, use_core_grid=False
     )
     tt_query_layer = ttnn.from_device(tt_query_layer)
     tt_query_layer = ttnn.to_layout(tt_query_layer, ttnn.ROW_MAJOR_LAYOUT)
@@ -81,12 +87,18 @@ def test_create_query_key_value(device):
 
 @skip_for_wormhole_b0()
 def test_optimized_create_query_key_value(device):
+    batch_size = 8
+    sequence_size = 384
+    num_heads = 16
+    head_size = 64
+    hidden_size = num_heads * head_size
+
     torch.manual_seed(0)
-    torch_hidden = torch_random((8, 384, 1024), -0.1, 0.1, dtype=torch.bfloat16)
-    torch_weight = torch_random((1024, 3072), -0.1, 0.1, dtype=torch.bfloat16)
-    torch_bias = torch_random((3072), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_hidden = torch_random((batch_size, sequence_size, hidden_size), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_weight = torch_random((hidden_size, hidden_size * 3), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_bias = torch_random((hidden_size * 3), -0.1, 0.1, dtype=torch.bfloat16)
     (torch_query_layer, torch_key_layer, torch_value_layer) = torch_functional_bloom.create_query_key_value(
-        torch_hidden, torch_weight, torch_bias, 64
+        torch_hidden, torch_weight, torch_bias, num_heads
     )
     tt_hidden = ttnn.from_torch(torch_hidden)
     tt_hidden = ttnn.to_device(tt_hidden, device)
@@ -96,7 +108,7 @@ def test_optimized_create_query_key_value(device):
     tt_bias = preprocess_linear_bias(torch_bias, dtype=ttnn.bfloat16)
     tt_bias = ttnn.to_device(tt_bias, device)
     (tt_query_layer, tt_key_layer, tt_value_layer) = ttnn_optimized_functional_bloom.create_query_key_value(
-        tt_hidden, tt_weight, tt_bias
+        tt_hidden, tt_weight, tt_bias, num_heads=num_heads
     )
 
     tt_query_layer = ttnn.from_device(tt_query_layer)
@@ -121,14 +133,14 @@ def test_compute_attention_scores(device):
     torch_query = torch_random((16, 1, 64, 64), -0.1, 0.1, dtype=torch.bfloat16)
     torch_key = torch_random((16, 1, 64, 64), -0.1, 0.1, dtype=torch.bfloat16)
     torch_alibi = torch_random((16, 1, 64, 64), -0.1, 0.1, dtype=torch.bfloat16)
-    torch_attention_scores = torch_functional_bloom.compute_attention_scores(torch_query, torch_key, torch_alibi, 64)
+    torch_attention_scores = torch_functional_bloom.compute_attention_scores(torch_query, torch_key, torch_alibi)
     tt_query = ttnn.from_torch(torch_query)
     tt_query = ttnn.to_device(tt_query, device)
     tt_key = ttnn.from_torch(torch_key)
     tt_key = ttnn.to_device(tt_key, device)
     tt_alibi = ttnn.from_torch(torch_alibi)
     tt_alibi = ttnn.to_device(tt_alibi, device)
-    tt_attention_scores = ttnn_functional_bloom.compute_attention_scores(tt_query, tt_key, tt_alibi, 64)
+    tt_attention_scores = ttnn_functional_bloom.compute_attention_scores(tt_query, tt_key, tt_alibi)
     tt_attention_scores = ttnn.from_device(tt_attention_scores)
     tt_attention_scores = ttnn.to_layout(tt_attention_scores, ttnn.ROW_MAJOR_LAYOUT)
     tt_attention_scores = ttnn.to_torch(tt_attention_scores)
@@ -141,7 +153,7 @@ def test_optimized_compute_attention_scores(device):
     torch_query = torch_random((16, 1, 64, 64), -0.1, 0.1, dtype=torch.bfloat16)
     torch_key = torch_random((16, 1, 64, 64), -0.1, 0.1, dtype=torch.bfloat16)
     torch_alibi = torch_random((16, 1, 64, 64), -0.1, 0.1, dtype=torch.bfloat16)
-    torch_attention_scores = torch_functional_bloom.compute_attention_scores(torch_query, torch_key, torch_alibi, 64)
+    torch_attention_scores = torch_functional_bloom.compute_attention_scores(torch_query, torch_key, torch_alibi)
     tt_query = ttnn.from_torch(torch_query)
     tt_query = ttnn.to_device(tt_query, device)
     tt_query = ttnn.to_layout(tt_query, ttnn.TILE_LAYOUT)
@@ -150,7 +162,7 @@ def test_optimized_compute_attention_scores(device):
     tt_key = ttnn.to_layout(tt_key, ttnn.TILE_LAYOUT)
     tt_alibi = ttnn.from_torch(torch_alibi)
     tt_alibi = ttnn.to_device(tt_alibi, device)
-    tt_attention_scores = ttnn_optimized_functional_bloom.compute_attention_scores(tt_query, tt_key, tt_alibi, 64)
+    tt_attention_scores = ttnn_optimized_functional_bloom.compute_attention_scores(tt_query, tt_key, tt_alibi)
     tt_attention_scores = ttnn.from_device(tt_attention_scores)
     tt_attention_scores = ttnn.to_layout(tt_attention_scores, ttnn.ROW_MAJOR_LAYOUT)
     tt_attention_scores = ttnn.to_torch(tt_attention_scores)
@@ -321,16 +333,20 @@ def test_optimized_mlp(device):
 def test_multi_head_attention(device):
     torch.manual_seed(0)
 
+    batch_size = 1
+    sequence_size = 64
+    num_heads = 16
     head_size = 64
+    hidden_size = num_heads * head_size
 
-    hidden_states = torch_random((1, 64, 1024), -0.1, 0.1, dtype=torch.bfloat16)
-    hidden_states = torch_random((1, 64, 1024), -0.1, 0.1, dtype=torch.bfloat16)
-    causal_mask = torch_random((1, 16, 64, head_size), -0.1, 0.1, dtype=torch.bfloat16)
-    query_key_value_weight = torch_random((1024, 3072), -0.1, 0.1, dtype=torch.bfloat16)
-    query_key_value_bias = torch_random((3072), -0.1, 0.1, dtype=torch.bfloat16)
-    output_weight = torch_random((1024, 1024), -0.1, 0.1, dtype=torch.bfloat16)
-    output_bias = torch_random((1, 64, 1024), -0.1, 0.1, dtype=torch.bfloat16)
-    alibi = torch_random((1, 16, 1, head_size), -0.1, 0.1, dtype=torch.bfloat16)
+    hidden_states = torch_random((batch_size, sequence_size, hidden_size), -0.1, 0.1, dtype=torch.bfloat16)
+    hidden_states = torch_random((batch_size, sequence_size, hidden_size), -0.1, 0.1, dtype=torch.bfloat16)
+    causal_mask = torch_random((batch_size, num_heads, sequence_size, head_size), -0.1, 0.1, dtype=torch.bfloat16)
+    query_key_value_weight = torch_random((hidden_size, hidden_size * 3), -0.1, 0.1, dtype=torch.bfloat16)
+    query_key_value_bias = torch_random((hidden_size * 3), -0.1, 0.1, dtype=torch.bfloat16)
+    output_weight = torch_random((hidden_size, hidden_size), -0.1, 0.1, dtype=torch.bfloat16)
+    output_bias = torch_random((hidden_size,), -0.1, 0.1, dtype=torch.bfloat16)
+    alibi = torch_random((batch_size, num_heads, 1, head_size), -0.1, 0.1, dtype=torch.bfloat16)
     torch_attention_output = torch_functional_bloom.multi_head_attention(
         hidden_states,
         alibi,
@@ -339,7 +355,7 @@ def test_multi_head_attention(device):
         query_key_value_bias,
         output_weight,
         output_bias,
-        head_size=head_size,
+        num_heads=num_heads,
     )
 
     hidden_states = ttnn.from_torch(hidden_states)
@@ -366,7 +382,7 @@ def test_multi_head_attention(device):
         query_key_value_bias,
         output_weight,
         output_bias,
-        head_size=head_size,
+        num_heads=num_heads,
         use_core_grid=False,
     )
 
@@ -402,7 +418,7 @@ def test_optimized_multi_head_attention(device):
         query_key_value_bias,
         output_weight,
         output_bias,
-        head_size=head_size,
+        num_heads=num_heads,
     )
 
     hidden_states = ttnn.from_torch(hidden_states)
@@ -433,7 +449,7 @@ def test_optimized_multi_head_attention(device):
         query_key_value_bias,
         output_weight,
         output_bias,
-        head_size=head_size,
+        num_heads=num_heads,
     )
 
     tt_attention_output = ttnn.from_device(tt_attention_output)

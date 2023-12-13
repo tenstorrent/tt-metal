@@ -10,6 +10,12 @@ fi
 run_perf_models() {
     local pipeline_type=$1
 
+    env pytest "tests/ttnn/integration_tests/bert/test_performance.py" -m $pipeline_type
+
+    env pytest "tests/ttnn/integration_tests/bloom/test_performance.py" -m $pipeline_type
+
+    env pytest "tests/ttnn/integration_tests/t5/test_performance.py" -m $pipeline_type
+
     env pytest models/demos/falcon7b/tests -m $pipeline_type
 
     env pytest models/experimental/vgg/tests -m $pipeline_type
