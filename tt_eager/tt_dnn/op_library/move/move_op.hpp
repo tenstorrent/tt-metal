@@ -26,7 +26,7 @@ namespace tt {
 namespace tt_metal {
 
 enum class MoveOpParallelizationStrategy {
-    MULTI_CORE = 0, SINGLE_CORE = 1, MULTI_CORE_OVERLAP = 2
+    MULTI_CORE = 0, SINGLE_CORE = 1, MULTI_CORE_OVERLAP = 2, MULTI_CORE_SHARDED = 3
 };
 
 struct Move {
@@ -43,6 +43,7 @@ struct Move {
 
 operation::ProgramWithCallbacks move_multi_core(const Tensor &input, Tensor &output);
 operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input, Tensor &output);
+operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor &input, Tensor &output);
 operation::ProgramWithCallbacks move_single_core(const Tensor &input, Tensor &output);
 
 inline Tensor move(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config) {
@@ -100,6 +101,37 @@ inline Tensor move(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config
         move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_OVERLAP;
     }
 
+    auto output = operation::run(Move{output_mem_config, move_op_parallelization_strategy}, {input_tensor, output_tensor}).at(0);
+    input_tensor.deallocate();
+    return output;
+}
+
+inline Tensor move_sharded(Tensor& input_tensor, std::optional<MemoryConfig>& mem_config) {
+    TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
+    auto input_mem_config = input_tensor.memory_config();
+    TT_FATAL(input_mem_config.is_sharded(), "Expected input tensor to be sharded");
+    auto input_address = input_tensor.buffer()->address();
+    auto output_mem_config = mem_config.value_or(input_mem_config);
+    TT_FATAL(output_mem_config.is_sharded(), "Expected output tensor memory config to be sharded");
+    if (not move_op_utils::can_deallocate(input_tensor)) {
+        TT_FATAL(false, "Expect input tensor to be deallocated after move op. Cannot deallocate before there is probably another consumer.");
+        // TODO: Should this throw error?
+        return input_tensor;
+    }
+    auto shard_spec = input_tensor.shard_spec().value();
+    auto shard_shape = shard_spec.shard_shape;
+    auto shard_grid = shard_spec.shard_grid;
+    auto input_shape = input_tensor.shape();
+    auto input_dtype = input_tensor.dtype();
+    auto input_layout = input_tensor.layout();
+
+    DeallocateBuffer(*input_tensor.buffer());
+    // log_debug(LogOp, "OUTPUT SHARD SPEC: {}", out_shard_spec);
+    auto output_tensor = create_sharded_device_tensor(input_shape, input_dtype, input_layout, input_tensor.device(), output_mem_config, shard_spec);
+    if (input_tensor.buffer()->address() == output_tensor.buffer()->address()) {
+        TT_FATAL(false, "No space to move the tensor. Move op's input address == output address. No-op move unsupported.");
+    }
+    MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_SHARDED;
     auto output = operation::run(Move{output_mem_config, move_op_parallelization_strategy}, {input_tensor, output_tensor}).at(0);
     input_tensor.deallocate();
     return output;
