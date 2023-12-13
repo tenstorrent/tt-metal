@@ -234,7 +234,9 @@ std::vector<Tensor> where_bw(const Tensor& grad, const Tensor& condition, const 
     return operation::decorate_as_composite(__func__, _where_bw)(grad, condition, input, other, output_mem_config);
 }
 
-std::vector<Tensor> _max_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+//template parameter min_or_max = TRUE for MAX, FALSE for MIN
+template<bool min_or_max>
+std::vector<Tensor> _min_or_max_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     Tensor zeros_t = zeros_like(input, output_mem_config);
     std::vector<Tensor> grad_tensor;
     Tensor t_scale_grad = mul_unary(grad, 0.5, output_mem_config);
@@ -244,30 +246,26 @@ std::vector<Tensor> _max_bw(const Tensor& grad, const Tensor& input, const Tenso
     Tensor t_sub_ltz = ltz(t_sub,output_mem_config);
     Tensor grad_other = add(mul(t_sub_ltz, grad,{},output_mem_config),mul(t_sub_eqz, t_scale_grad,{},output_mem_config), std::nullopt, output_mem_config);
     Tensor grad_input = add(mul(t_sub_gtz, grad,{},output_mem_config),mul(t_sub_eqz, t_scale_grad,{},output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_other);
-    grad_tensor.emplace_back(grad_input);
+
+    if (min_or_max) {
+        //MAX
+        grad_tensor.emplace_back(grad_other);
+        grad_tensor.emplace_back(grad_input);
+    } else {
+        //MIN
+        grad_tensor.emplace_back(grad_input);
+        grad_tensor.emplace_back(grad_other);
+    }
     return grad_tensor;
 }
+auto _max_bw = _min_or_max_bw<true>;
+auto _min_bw = _min_or_max_bw<false>;
+
 std::vector<Tensor> max_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _max_bw)(grad, input, other, output_mem_config);
 }
 
-
-std::vector<Tensor> _min_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
-    Tensor zeros_t = zeros_like(input, output_mem_config);
-    std::vector<Tensor> grad_tensor;
-    Tensor t_scale_grad = mul_unary(grad, 0.5, output_mem_config);
-    Tensor t_sub = sub(other, input, std::nullopt, output_mem_config);
-    Tensor t_sub_gtz = gtz(t_sub,output_mem_config);
-    Tensor t_sub_eqz = eqz(t_sub,output_mem_config);
-    Tensor t_sub_ltz = ltz(t_sub,output_mem_config);
-    Tensor grad_other = add(mul(t_sub_ltz, grad,{},output_mem_config),mul(t_sub_eqz, t_scale_grad,{},output_mem_config), std::nullopt, output_mem_config);
-    Tensor grad_input = add(mul(t_sub_gtz, grad,{},output_mem_config),mul(t_sub_eqz, t_scale_grad,{},output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_input);
-    grad_tensor.emplace_back(grad_other);
-    return grad_tensor;
-}
 std::vector<Tensor> min_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
 {
     return operation::decorate_as_composite(__func__, _min_bw)(grad, input, other, output_mem_config);
