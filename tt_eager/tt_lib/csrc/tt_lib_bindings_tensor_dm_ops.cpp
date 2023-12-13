@@ -449,6 +449,20 @@ namespace tt::tt_metal::detail{
             +----------+----------------------------+----------------------------+---------------------------------+----------+
         )doc");
 
+        m_tensor.def("move_sharded", &move_sharded,
+            py::arg().noconvert(), py::arg("output_mem_config").noconvert() = std::nullopt, R"doc(
+            Moves the elements of the sharded input tensor ``arg0`` to a location in local L1.
+
+            +----------+----------------------------+----------------------------+---------------------------------+----------+
+            | Argument | Description                | Data type                  | Valid range                     | Required |
+            +==========+============================+============================+=================================+==========+
+            | arg0     | Tensor to move             | Tensor                     | Tensor of shape [W, Z, Y, X]    | Yes      |
+            +----------+----------------------------+----------------------------+---------------------------------+----------+
+            | arg1     | MemoryConfig of tensor of  | tt_lib.tensor.MemoryConfig | Default is same as input tensor | No       |
+            |          | TT accelerator device      |                            |                                 |          |
+            +----------+----------------------------+----------------------------+---------------------------------+----------+
+        )doc");
+
         m_tensor.def("transpose", &transpose,
         py::arg("input").noconvert(), py::arg("dim0"), py::arg("dim1"), py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG, R"doc(
         Returns a tensor that is a transposed version of input tensor with shape ``[W, Z, Y, X]``, where dimensions ``arg1`` and ``arg2`` are swapped.
