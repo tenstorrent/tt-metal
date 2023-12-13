@@ -178,19 +178,6 @@ ComplexTensor complex_sub(const ComplexTensor& input_a, const ComplexTensor& inp
              sub(input_a[1],input_b[1],{},output_mem_config) });
 }
 
-ComplexTensor polar(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config) {
-
-    Tensor c = cos(input_b,output_mem_config);
-    Tensor r = mul(input_a,c,{},output_mem_config);
-    c.deallocate();
-
-    Tensor s = sin(input_b,output_mem_config);
-    Tensor i = mul(input_a,s,{},output_mem_config);
-    s.deallocate();
-
-    return ComplexTensor({r,i});
-}
-
 }//namespace tt_metal
 
 }//namespace tt

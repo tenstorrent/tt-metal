@@ -88,9 +88,6 @@ ComplexTensor complex_mul(const ComplexTensor& input_a, const ComplexTensor& inp
 ComplexTensor complex_div(const ComplexTensor& input_a, const ComplexTensor& input_b,  const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 ComplexTensor complex_recip(const ComplexTensor& input, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-//polar operator: return a complex value tensor
-ComplexTensor polar(const Tensor& input_a, const Tensor& input_b, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 } //namespace tt_metal
 
 } //namespace tt

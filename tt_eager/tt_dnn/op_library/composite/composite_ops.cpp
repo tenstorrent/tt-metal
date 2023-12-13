@@ -74,14 +74,7 @@ Tensor bias_gelu_unary(const Tensor& a, float bias, const MemoryConfig& output_m
 // Function: softsign
 // Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softsign.html
 Tensor _softsign(const Tensor& a, const MemoryConfig& output_mem_config) {
-    Tensor recip_a = unary_chain(a,{
-        UnaryWithParam{.op_type = UnaryOpType::ABS},
-        UnaryWithParam{.op_type = UnaryOpType::ADD_UNARY,
-                        .param = 1.0f},
-        UnaryWithParam{.op_type = UnaryOpType::RECIP}
-    },output_mem_config);
-
-    return mul(a, recip_a, std::nullopt, output_mem_config);
+    return mul(a, recip(add1(abs(a, output_mem_config), output_mem_config), output_mem_config), std::nullopt, output_mem_config);
 }
 Tensor softsign(const Tensor& a, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _softsign)(a, output_mem_config);
@@ -378,8 +371,9 @@ Tensor mac(const Tensor& a, const Tensor& b, const Tensor& c, const MemoryConfig
 }
 
 Tensor _mac_overload(const Tensor& a, float b, float c, const MemoryConfig& output_mem_config) {
-  const Tensor ab = tt::tt_metal::mul_unary(b,a,output_mem_config);
-  return tt::tt_metal::add_unary(ab,c,output_mem_config);
+    Tensor t_b = mk_scalar(b);
+    Tensor t_c = mk_scalar(c);
+    return  mac(a, t_b, t_c, output_mem_config);
 }
 Tensor mac(const Tensor& input_a, float b, float c, const MemoryConfig& output_mem_config )
 {

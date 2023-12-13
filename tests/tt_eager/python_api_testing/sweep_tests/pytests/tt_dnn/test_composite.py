@@ -26,7 +26,6 @@ reference_pcc = defaultdict(lambda: 0.999)
 reference_pcc["silu"] = 0.9714
 reference_pcc["swish"] = reference_pcc["silu"]
 reference_pcc["softplus"] = 0.9984
-reference_pcc["softsign"] = reference_pcc["softplus"]
 
 
 def custom_compare(*args, **kwargs):
