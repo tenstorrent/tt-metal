@@ -120,6 +120,10 @@ std::vector<Tensor> unary_assign_bw(const Tensor& grad, const Tensor& input, con
 {
     return operation::decorate_as_composite(__func__, _unary_assign_bw)(grad, input, output_mem_config);
 }
+std::vector<Tensor> binary_assign_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _unary_assign_bw)(grad, input, output_mem_config);
+}
 
 std::vector<Tensor> _sqrt_bw(const Tensor& grad, const Tensor& sqrt_result, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
