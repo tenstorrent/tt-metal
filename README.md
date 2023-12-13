@@ -302,15 +302,11 @@ standards.
 
 Announcements from the Tenstorrent team regarding this project will be in the
 [discussions
-page](https://github.com/orgs/tenstorrent-metal/discussions/categories/announcements).
+page](https://github.com/tenstorrent-metal/tt-metal/discussions/categories/general-announcements).
 
 We also have a Discord channel that you can join. You may discuss with other
 members of the community and developers there. You may use this invite
 [link](https://discord.gg/tvhGzHQwaj).
-
-If you have ideas you would like to bounce off others in the community before
-formally proposing it, you can make a post in the [ideas discussions
-page](https://github.com/orgs/tenstorrent-metal/discussions/categories/ideas).
 
 If you would like to formally propose a new feature, report a bug, or have
 issues with permissions, please file through [GitHub
