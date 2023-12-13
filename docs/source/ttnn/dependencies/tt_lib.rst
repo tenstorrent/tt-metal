@@ -747,6 +747,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.unary_assign_bw
 
+.. autofunction:: tt_lib.tensor.binary_assign_bw
+
 .. autofunction:: tt_lib.tensor.unary_div_bw
 
 .. autofunction:: tt_lib.tensor.div_bw
