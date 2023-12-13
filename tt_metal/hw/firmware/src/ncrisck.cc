@@ -9,7 +9,7 @@
 #ifdef PERF_DUMP
 #include "risc_perf.h"
 #endif
-#include "metal_ckernel_globals.h"
+#include "firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dataflow_api.h"
 #include "tensix_functions.h"

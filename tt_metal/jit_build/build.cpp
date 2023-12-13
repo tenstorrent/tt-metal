@@ -165,7 +165,7 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, int which, bo
     this->includes_ = env_.includes_ +
         "-I " + env_.root_ + "tt_metal/hw/firmware/src " +
         "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
-        "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
+        "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
 
     this->defines_ = env_.defines_;
 
@@ -315,7 +315,7 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
     this->includes_ = env_.includes_ +
         "-I " + env_.root_ + "tt_metal/hw/inc/ethernet " +
         "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
-        "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
+        "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
 
     this->srcs_.push_back("tt_metal/hw/toolchain/substitutes.cpp");
     if (this->is_fw_) {

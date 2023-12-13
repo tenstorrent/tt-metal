@@ -17,7 +17,7 @@
 #include "c_tensix_core.h"
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
-#include "metal_ckernel_globals.h"
+#include "firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dev_msgs.h"
 #include "risc_attribs.h"
