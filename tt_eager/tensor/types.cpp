@@ -47,6 +47,24 @@ const Padding::PadDimension& Padding::operator[](const std::int64_t index) const
 
 Padding::PadValue Padding::pad_value() const { return this->pad_value_; }
 
+bool operator==(const Padding& padding_a, const Padding& padding_b) {
+    if (padding_a.rank_ != padding_b.rank_) {
+        return false;
+    }
+    for (auto index = 0; index < padding_a.rank_; index++) {
+        if (padding_a[index].front != padding_b[index].front) {
+            return false;
+        }
+
+        if (padding_a[index].back != padding_b[index].back) {
+            return false;
+        }
+    }
+    return padding_a.pad_value_ == padding_b.pad_value_;
+}
+
+bool operator!=(const Padding& padding_a, const Padding& padding_b) { return not(padding_a == padding_b); }
+
 Shape::Shape(const std::initializer_list<uint32_t> dimensions) :
     rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
@@ -126,7 +144,7 @@ bool operator==(const Shape& shape_a, const Shape& shape_b) {
             return false;
         }
     }
-    return true;
+    return true;  // Ignore the padding when comparing shapes
 }
 
 bool operator!=(const Shape& shape_a, const Shape& shape_b) { return not(shape_a == shape_b); }
@@ -148,9 +166,7 @@ bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) { re
 
 
 
-bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b) {
-    return !(spec_a == spec_b);
-}
+bool operator!=(const ShardSpec& spec_a, const ShardSpec& spec_b) { return !(spec_a == spec_b); }
 
 }  // namespace tt_metal
 

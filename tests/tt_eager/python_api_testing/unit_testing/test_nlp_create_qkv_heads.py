@@ -31,9 +31,9 @@ def run_nlp_create_qkv_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem
     logger.debug(f"k: {k.memory_config().buffer_type} and {k.dtype()}")
     logger.debug(f"v: {v.memory_config().buffer_type} and {v.dtype()}")
 
-    assert q.shape() == [batch, 71, seq_len, 64]
-    assert k.shape() == [batch, 1, seq_len, 64]
-    assert v.shape() == [batch, 1, seq_len, 64]
+    assert list(q.shape()) == [batch, 71, seq_len, 64]
+    assert list(k.shape()) == [batch, 1, seq_len, 64]
+    assert list(v.shape()) == [batch, 1, seq_len, 64]
 
     pyt_got_back_rm_q = tt2torch_tensor(q)
     pyt_got_back_rm_k = tt2torch_tensor(k)

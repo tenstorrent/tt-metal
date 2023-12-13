@@ -78,7 +78,7 @@ class TtRobertaSelfAttention(nn.Module):
         # x must be 4d originaly
         # 1 is appended to the beggining
         # so create tensor shape by ommiting the first dimension
-        new_x_shape = list(x.shape()[1:-1]) + [
+        new_x_shape = list(x.shape())[1:-1] + [
             self.num_attention_heads,
             self.attention_head_size,
         ]
@@ -231,7 +231,7 @@ class TtRobertaSelfAttention(nn.Module):
             [
                 1,
             ]
-            + context_layer.shape()[:-2]
+            + list(context_layer.shape())[:-2]
             + [
                 self.all_head_size,
             ]

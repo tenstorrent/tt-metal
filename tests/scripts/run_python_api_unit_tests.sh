@@ -12,13 +12,12 @@ if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
   env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -name 'test_*.py' -a ! -name 'test_sweep_conv_with_address_map.py') -vvv
 else
   # Need to remove move for time being since failing
-  env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -name 'test_*.py' -a ! -name 'test_move.py') -vvv
-  env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/test_move.py -k in0_L1 -vvv
+  env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/unit_testing/ -vvv
   env pytest $(find $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/ -name 'test_*.py' -a ! -name 'test_sweep_conv_with_address_map.py' -a ! -name 'test_move.py') -vvv
   env pytest $TT_METAL_HOME/tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_move.py -k input_L1 -vvv
 fi
 
-env pytest $TT_METAL_HOME/tests/ttnn/
+env pytest $TT_METAL_HOME/tests/ttnn/unit_tests
 
 # This must run in slow dispatch mode
 # pytest -svv $TT_METAL_HOME/tests/python_api_testing/sweep_tests/pytests/test_sweep_conv_with_address_map.py

@@ -172,11 +172,11 @@ def test_run_optimized_conv(
         )
         if not untilize_out:
             out_unpadded_shape = [1, 1, N * OH * OW, K]
-            assert out_unpadded_shape == out.shape_without_padding()
+            assert out_unpadded_shape == list(out.shape_without_padding())
             out = ttl.tensor.format_output_tensor(out, out.shape_without_padding(), device, ttl.tensor.Layout.ROW_MAJOR)
             out = out.reshape(conv_output_shape[0], conv_output_shape[1], conv_output_shape[2], conv_output_shape[3])
         out = out.cpu()
-        assert out.shape() == conv_output_shape
+        assert list(out.shape()) == conv_output_shape
         assert out.layout() == ttl.tensor.Layout.ROW_MAJOR
 
         # Copy output to host and convert tt tensor to pytorch tensor

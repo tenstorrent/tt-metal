@@ -85,6 +85,8 @@ if is_wormhole_b0():
 @pytest.mark.parametrize("shape", shapes)
 @pytest.mark.parametrize("test_id", (0, 1), ids=["overlap", "non_overlap"])
 def test_move_op(test_id, shape, layout, dtype, in0_mem_config, output_mem_config, device):
+    if in0_mem_config.buffer_type != ttl.tensor.BufferType.L1:
+        pytest.skip("Skipping test for non-L1 buffer type")
     run_move_op(test_id, shape, layout, dtype, in0_mem_config, output_mem_config, device)
 
 

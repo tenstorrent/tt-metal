@@ -150,8 +150,55 @@ void TensorModule(py::module &m_tensor) {
         Class defining tensor shape
     )doc");
 
-    py_shape
-        .def(py::init<std::array<uint32_t, 4> >());
+    py_shape.def(py::init<std::array<uint32_t, 4>>())
+        .def(
+            py::init(
+                [](const std::vector<uint32_t>& shape,
+                   const std::optional<std::vector<uint32_t>>& padded_shape_arg) -> Shape {
+                    auto rank = shape.size();
+                    std::vector<Padding::PadDimension> padding;
+                    auto padded_shape = Shape{shape};
+                    if (padded_shape_arg.has_value()) {
+                        padded_shape = padded_shape_arg.value();
+                        TT_ASSERT(shape.size() == padded_shape.rank());
+                        for (auto index = 0; index < rank; index++) {
+                            padding.push_back({.front = 0, .back = padded_shape[index] - shape[index]});
+                        }
+                    } else {
+                        padding = std::vector<Padding::PadDimension>(rank, {.front = 0, .back = 0});
+                    }
+                    auto output = Shape{padded_shape, Padding{padding, Padding::PadValue::Any}};
+                    return output;
+                }),
+            py::arg("shape"),
+            py::arg("padded_shape") = std::nullopt)
+        .def("__len__", [](const Shape& self) { return self.rank(); })
+        .def("__eq__", [](const Shape& self, const Shape& other) { return self == other; })
+        .def("__eq__", [](const Shape& self, const std::vector<uint32_t>& other) { return self == Shape{other}; })
+        .def("__eq__", [](const Shape& self, const std::array<uint32_t, 4>& other) { return self == Shape{other}; })
+        .def("__eq__", [](const Shape& self, const py::none) { return false; })
+        .def("__getitem__", [](const Shape& self, const std::int64_t index) { return self[index]; })
+        .def(
+            "__getitem__",
+            [](const Shape& self, const py::slice slice) {
+                size_t start = 0, stop = 0, step = 0, slicelength = 0;
+                if (!slice.compute(self.rank(), &start, &stop, &step, &slicelength)) {
+                    throw std::runtime_error("Invalid slice");
+                }
+
+                std::vector<uint32_t> output;
+                for (auto index = start; index < stop; index += step) {
+                    output.push_back(self[index]);
+                }
+                return Shape{output};
+            })
+        .def(
+            "__iter__",
+            [](const Shape& self) { return py::make_iterator(self.begin(), self.end()); },
+            py::keep_alive<0, 1>())
+        .def("__repr__", [](const Shape& self) { return fmt::format("{}", self); })
+        .def("without_padding", [](const Shape& self) -> Shape { return self.without_padding(); });
+
     py::implicitly_convertible<std::vector<uint32_t>, Shape>();
 
     auto pyMemoryConfig = py::class_<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
@@ -615,15 +662,16 @@ void TensorModule(py::module &m_tensor) {
     );
     m_tensor.def(
         "pad_to_tile_shape",
-        [] (const std::array<uint32_t, 4>& unpadded_shape, bool pad_c=false, bool pad_n=false, bool pad_h=true, bool pad_w=true) {
-            Shape padded_shape_object = AutoFormat::pad_to_tile_shape(unpadded_shape, pad_c, pad_n, pad_h, pad_w);
-            std::array<uint32_t, 4> padded_shape;
-            std::copy(std::begin(padded_shape_object), std::end(padded_shape_object), std::begin(padded_shape));
-            return padded_shape;
-        }, R"doc(
+        [](const std::array<uint32_t, 4>& unpadded_shape,
+           bool pad_c = false,
+           bool pad_n = false,
+           bool pad_h = true,
+           bool pad_w = true) -> Shape {
+            return AutoFormat::pad_to_tile_shape(unpadded_shape, pad_c, pad_n, pad_h, pad_w);
+        },
+        R"doc(
             Returns shape padded to tile shape
-        )doc"
-    );
+        )doc");
 
     m_tensor.def(
         "dump_tensor",

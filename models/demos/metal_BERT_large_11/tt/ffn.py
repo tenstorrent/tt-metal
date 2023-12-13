@@ -177,7 +177,7 @@ class TtFeedForwardModel:
             )
 
         self.ffn = feed_forward(
-            *encoder0_ff1_weight_shape[-2:],
+            *tuple(encoder0_ff1_weight_shape)[-2:],
             encoder0_ff1_weight,
             encoder0_ff1_bias,
             encoder0_ff2_weight,
