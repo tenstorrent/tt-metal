@@ -1,4 +1,4 @@
-.. _TT-Metal Models Get Started:
+.. _TT-Metalium Models Get Started:
 
 Getting Started
 ===============
@@ -6,7 +6,7 @@ Getting Started
 Prerequisites
 -------------
 
-Ensure that you have the base TT-Metal source and environment configuration
+Ensure that you have the base TT-Metalium source and environment configuration
 :ref:`built and ready<Getting Started>`.
 
 Now, from the project root, get the Python virtual environment in which you'll
@@ -40,6 +40,6 @@ You can run these tests using ``pytest``.
 Next steps
 ----------
 
-We write the models using TTNN which is a user-friendly Python Library that we developed on top of TT-Metal. Refer to
+We write the models using TTNN which is a user-friendly Python Library that we developed on top of TT-Metalium. Refer to
 the docs under *Libraries* for documentation, such as the :ref:`Tensor
 API<Tensor>` or the :ref:`TT-LIB Dependencies<TT-LIB>`.
