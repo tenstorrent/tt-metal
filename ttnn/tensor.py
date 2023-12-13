@@ -8,7 +8,7 @@ from typing import Optional, Union, Tuple
 
 import tt_lib as ttl
 
-from ttnn.decorators import debug_decorator
+from ttnn.decorators import decorate_operation
 
 
 Device = ttl.device.Device
@@ -32,6 +32,8 @@ Layout = ttl.tensor.Layout
 ROW_MAJOR_LAYOUT = Layout.ROW_MAJOR
 TILE_LAYOUT = Layout.TILE
 
+StorageType = ttl.tensor.StorageType
+DEVICE_STORAGE_TYPE = StorageType.DEVICE
 
 StorageType = ttl.tensor.StorageType
 DEVICE_STORAGE_TYPE = StorageType.DEVICE
@@ -41,6 +43,8 @@ TILE_SIZE = 32
 
 
 class Shape:
+    __slots__ = ["_value"]
+
     def __init__(self: "Shape", value: ttl.tensor.Shape):
         if not isinstance(value, ttl.tensor.Shape):
             raise TypeError(f"Expected ttl.tensor.Shape, got {type(value)}")
@@ -56,10 +60,9 @@ class Shape:
         return len(self._value)
 
     def __iter__(self: "Shape"):
-        for axis in range(self.rank):
-            yield self._value.without_padding()[axis]
+        return iter(self._value.without_padding())
 
-    def __getitem__(self: "Shape", index: int):
+    def __getitem__(self: "Shape", index):
         shape = self._value.without_padding()
         return shape[index]
 
@@ -113,12 +116,12 @@ class Tensor:
 
     @property
     def device(self: "Tensor") -> DataType:
-        if has_storage_type_of(self, ttl.tensor.StorageType.DEVICE):
+        if has_storage_type_of(self, DEVICE_STORAGE_TYPE):
             return self._tensor.device()
         else:
             raise RuntimeError("Tensor is not on device!")
 
-    @debug_decorator()
+    @decorate_operation()
     def __getitem__(self: "Tensor", slices) -> "Tensor":
         if self.layout != ROW_MAJOR_LAYOUT:
             raise RuntimeError("Tensor must be in ROW_MAJOR layout to use slicing!")
@@ -126,7 +129,7 @@ class Tensor:
         def torch_getitem(tensor, slices):
             return tensor[slices].clone()
 
-        if self._tensor.storage_type() == ttl.tensor.StorageType.DEVICE:
+        if has_storage_type_of(self, DEVICE_STORAGE_TYPE):
             tensor = self
             tensor = from_device(tensor)
             tensor = to_torch(tensor)
@@ -157,7 +160,7 @@ def has_storage_type_of(tensor: Tensor, storage_type) -> bool:
     return tensor._tensor.storage_type() == storage_type
 
 
-@debug_decorator()
+@decorate_operation()
 def from_torch(
     tensor: "torch.Tensor",
     dtype: Optional[DataType] = None,
@@ -185,12 +188,12 @@ def from_torch(
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.from_torch")(tensor, dtype)
 
 
-@debug_decorator()
+@decorate_operation()
 def to_torch(tensor: Tensor) -> "torch.Tensor":
     def impl(tensor):
         ttl_tensor = tensor._tensor
 
-        if ttl_tensor.storage_type() == ttl.tensor.StorageType.DEVICE:
+        if ttl_tensor.storage_type() == DEVICE_STORAGE_TYPE:
             raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch!")
 
         return ttl_tensor.to_torch().clone()  # TODO(arakhmati): remove clone
@@ -200,7 +203,7 @@ def to_torch(tensor: Tensor) -> "torch.Tensor":
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.to_torch")(tensor)
 
 
-@debug_decorator()
+@decorate_operation()
 def to_device(tensor, device, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG):
     """
     to_device(tensor: ttnn.Tensor, device: tt_lib.device.Device, dtype: Optional[DataType] = None) -> Tensor
@@ -231,7 +234,7 @@ def to_device(tensor, device, *, memory_config: MemoryConfig = DRAM_MEMORY_CONFI
     )
 
 
-@debug_decorator()
+@decorate_operation()
 def from_device(tensor):
     """
     from_device(tensor: ttnn.Tensor) -> Tensor
@@ -257,7 +260,7 @@ def from_device(tensor):
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.from_device")(tensor)
 
 
-@debug_decorator()
+@decorate_operation()
 def to_layout(tensor, layout: Layout):
     """
     to_layout(tensor: ttnn.Tensor, layout: Layout) -> Tensor
@@ -279,7 +282,7 @@ def to_layout(tensor, layout: Layout):
     ttl_tensor = tensor._tensor
     if ttl_tensor.layout() == layout:
         return tensor
-    elif has_storage_type_of(tensor, ttl.tensor.StorageType.DEVICE):
+    elif has_storage_type_of(tensor, DEVICE_STORAGE_TYPE):
         if layout == ROW_MAJOR_LAYOUT:
             ttl_tensor = ttl.tensor.untilize(ttl_tensor)
         elif layout == TILE_LAYOUT:
@@ -295,7 +298,7 @@ def to_layout(tensor, layout: Layout):
     return Tensor(ttl_tensor)
 
 
-@debug_decorator()
+@decorate_operation()
 def deallocate(tensor: Tensor) -> None:
     """
     deallocate(tensor: ttnn.Tensor) -> None
@@ -319,14 +322,23 @@ def deallocate(tensor: Tensor) -> None:
     ttl.tensor.decorate_external_operation(impl, function_name="ttnn.deallocate")(tensor)
 
 
-@debug_decorator()
+def _torch_identity(input_tensor):
+    import ttnn
+
+    input_tensor = ttnn.from_device(input_tensor)
+    input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    input_tensor = ttnn.to_torch(input_tensor)
+    return input_tensor.clone()
+
+
+@decorate_operation(torch_function=_torch_identity)
 def reallocate(input_tensor: Tensor) -> Tensor:
     ttl_input_tensor = input_tensor._tensor
     ttl_output_tensor = ttl.tensor.move(ttl_input_tensor)
     return Tensor(ttl_output_tensor)
 
 
-@debug_decorator()
+@decorate_operation()
 def load_tensor(file_name: Union[str, pathlib.Path]) -> Tensor:
     def impl(file_name):
         return Tensor(ttl.tensor.load_tensor(str(file_name)))
@@ -334,7 +346,7 @@ def load_tensor(file_name: Union[str, pathlib.Path]) -> Tensor:
     return ttl.tensor.decorate_external_operation(impl, function_name="ttnn.load_tensor")(file_name)
 
 
-@debug_decorator()
+@decorate_operation()
 def dump_tensor(file_name: Union[str, pathlib.Path], tensor: Tensor) -> None:
     def impl(file_name, tensor):
         ttl_tensor = tensor._tensor

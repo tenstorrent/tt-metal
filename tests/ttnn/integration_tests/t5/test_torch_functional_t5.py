@@ -14,10 +14,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-MODEL_NAME = "google/flan-t5-small"
-
-
-@pytest.mark.parametrize("model_name", [MODEL_NAME])
+@pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
 def test_t5_layer_norm(model_name, batch_size, sequence_size):
@@ -35,12 +32,35 @@ def test_t5_layer_norm(model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
     )
 
-    tt_output = functional_t5.t5_layer_norm(torch_hidden_states, weight=parameters.weight)
+    output = functional_t5.t5_layer_norm(config, torch_hidden_states, weight=parameters.weight)
 
-    assert_with_pcc(torch_output, tt_output)
+    assert_with_pcc(torch_output, output)
 
 
-@pytest.mark.parametrize("model_name", [MODEL_NAME])
+@pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("sequence_size", [128])
+def test_t5_dense_act_dense(model_name, batch_size, sequence_size):
+    torch.manual_seed(0)
+
+    config = transformers.T5Config.from_pretrained(model_name)
+    model = transformers.models.t5.modeling_t5.T5DenseActDense(config).eval()
+    model = model.to(torch.bfloat16)
+
+    torch_hidden_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.bfloat16)
+    torch_output = model(torch_hidden_states)
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: model,
+        convert_to_ttnn=lambda *_: False,
+    )
+
+    output = functional_t5.t5_dense_act_dense(config, torch_hidden_states, parameters)
+
+    assert_with_pcc(torch_output, output)
+
+
+@pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
 def test_t5_dense_gated_act_dense(model_name, batch_size, sequence_size):
@@ -58,12 +78,12 @@ def test_t5_dense_gated_act_dense(model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
     )
 
-    tt_output = functional_t5.t5_dense_gated_act_dense(torch_hidden_states, parameters)
+    output = functional_t5.t5_dense_gated_act_dense(config, torch_hidden_states, parameters)
 
-    assert_with_pcc(torch_output, tt_output)
+    assert_with_pcc(torch_output, output)
 
 
-@pytest.mark.parametrize("model_name", [MODEL_NAME])
+@pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
 def test_t5_layer_ff(model_name, batch_size, sequence_size):
@@ -81,12 +101,12 @@ def test_t5_layer_ff(model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
     )
 
-    tt_output = functional_t5.t5_layer_ff(torch_hidden_states, parameters)
+    output = functional_t5.t5_layer_ff(config, torch_hidden_states, parameters)
 
-    assert_with_pcc(torch_output, tt_output)
+    assert_with_pcc(torch_output, output)
 
 
-@pytest.mark.parametrize("model_name", [MODEL_NAME])
+@pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
 def test_t5_attention(model_name, batch_size, sequence_size):
@@ -104,12 +124,12 @@ def test_t5_attention(model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
     )
 
-    tt_output = functional_t5.t5_attention(torch_hidden_states, parameters=parameters, num_heads=config.num_heads)
+    output = functional_t5.t5_attention(config, torch_hidden_states, parameters=parameters)
 
-    assert_with_pcc(torch_output, tt_output)
+    assert_with_pcc(torch_output, output)
 
 
-@pytest.mark.parametrize("model_name", [MODEL_NAME])
+@pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
 def test_t5_layer_self_attention(model_name, batch_size, sequence_size):
@@ -127,14 +147,12 @@ def test_t5_layer_self_attention(model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
     )
 
-    tt_output = functional_t5.t5_layer_self_attention(
-        torch_hidden_states, parameters=parameters, num_heads=config.num_heads
-    )
+    output = functional_t5.t5_layer_self_attention(config, torch_hidden_states, parameters=parameters)
 
-    assert_with_pcc(torch_output, tt_output)
+    assert_with_pcc(torch_output, output)
 
 
-@pytest.mark.parametrize("model_name", [MODEL_NAME])
+@pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
 def test_t5_layer_cross_attention(model_name, batch_size, sequence_size):
@@ -153,14 +171,14 @@ def test_t5_layer_cross_attention(model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
     )
 
-    tt_output = functional_t5.t5_layer_cross_attention(
-        torch_hidden_states, torch_key_value_states, parameters=parameters, num_heads=config.num_heads
+    output = functional_t5.t5_layer_cross_attention(
+        config, torch_hidden_states, torch_key_value_states, parameters=parameters
     )
 
-    assert_with_pcc(torch_output, tt_output)
+    assert_with_pcc(torch_output, output)
 
 
-@pytest.mark.parametrize("model_name", [MODEL_NAME])
+@pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
 def test_t5_block_encoder(model_name, batch_size, sequence_size):
@@ -178,12 +196,12 @@ def test_t5_block_encoder(model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
     )
 
-    tt_output = functional_t5.t5_block(torch_hidden_states, parameters=parameters, num_heads=config.num_heads)
+    output = functional_t5.t5_block(config, torch_hidden_states, parameters=parameters)
 
-    assert_with_pcc(torch_output, tt_output)
+    assert_with_pcc(torch_output, output)
 
 
-@pytest.mark.parametrize("model_name", [MODEL_NAME])
+@pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
 def test_t5_block_decoder(model_name, batch_size, sequence_size):
@@ -205,17 +223,14 @@ def test_t5_block_decoder(model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
     )
 
-    tt_output = functional_t5.t5_block(
-        torch_hidden_states,
-        encoder_hidden_states=torch_encoder_hidden_states,
-        parameters=parameters,
-        num_heads=config.num_heads,
+    output = functional_t5.t5_block(
+        config, torch_hidden_states, encoder_hidden_states=torch_encoder_hidden_states, parameters=parameters
     )
 
-    assert_with_pcc(torch_output, tt_output)
+    assert_with_pcc(torch_output, output)
 
 
-@pytest.mark.parametrize("model_name", [MODEL_NAME])
+@pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
 def test_t5_stack_encoder(model_name, batch_size, sequence_size):
@@ -235,17 +250,17 @@ def test_t5_stack_encoder(model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
     )
 
-    tt_output = functional_t5.t5_stack(
+    output = functional_t5.t5_stack(
+        config,
         torch_input_ids,
         shared_embedding_weight=shared_embedding.weight,
         parameters=parameters,
-        num_heads=config.num_heads,
     )
 
-    assert_with_pcc(torch_output, tt_output)
+    assert_with_pcc(torch_output, output)
 
 
-@pytest.mark.parametrize("model_name", [MODEL_NAME])
+@pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
 def test_t5_stack_decoder(model_name, batch_size, sequence_size):
@@ -268,18 +283,18 @@ def test_t5_stack_decoder(model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
     )
 
-    tt_output = functional_t5.t5_stack(
+    output = functional_t5.t5_stack(
+        config,
         torch_input_ids,
         encoder_hidden_states=torch_encoder_hidden_states,
         shared_embedding_weight=shared_embedding.weight,
         parameters=parameters,
-        num_heads=config.num_heads,
     )
 
-    assert_with_pcc(torch_output, tt_output)
+    assert_with_pcc(torch_output, output)
 
 
-@pytest.mark.parametrize("model_name", [MODEL_NAME])
+@pytest.mark.parametrize("model_name", ["t5-small", "google/flan-t5-small"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [128])
 def test_t5_for_conditional_generation(model_name, batch_size, sequence_size):
@@ -291,16 +306,16 @@ def test_t5_for_conditional_generation(model_name, batch_size, sequence_size):
     torch_output = model(torch_input_ids, decoder_input_ids=torch_decoder_input_ids).logits
 
     parameters = preprocess_model_parameters(
-        f"torch_functional_t5",
+        f"torch_{model_name}",
         initialize_model=lambda: model,
         convert_to_ttnn=lambda *_: False,
     )
 
-    tt_output = functional_t5.t5_for_conditional_generation(
+    output, *_ = functional_t5.t5_for_conditional_generation(
+        config,
         torch_input_ids,
         torch_decoder_input_ids,
         parameters=parameters,
-        num_heads=config.num_heads,
     )
 
-    assert_with_pcc(torch_output, tt_output)
+    assert_with_pcc(torch_output, output)

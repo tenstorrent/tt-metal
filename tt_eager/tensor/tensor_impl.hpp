@@ -386,7 +386,7 @@ std::string to_string_row_major(const BufferType& buffer, const Shape& shape, Da
         return to_string_row_major_4D(buffer, shape, dtype);
     }
     else {
-        TT_THROW("Cannot print tensor of rank ", shape.rank());
+        TT_THROW("Cannot print tensor of rank {}", shape.rank());
     }
 }
 

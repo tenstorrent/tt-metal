@@ -55,7 +55,7 @@ def test_multi_head_attention(device, use_program_cache, batch_size, sequence_si
         torch_value_bias,
         torch_output_weight,
         torch_output_bias,
-        head_size=head_size,
+        num_heads=num_heads,
     )
 
     assert torch_output.shape == (
@@ -98,7 +98,7 @@ def test_multi_head_attention(device, use_program_cache, batch_size, sequence_si
         value_bias,
         output_weight,
         output_bias,
-        head_size=head_size,
+        num_heads=num_heads,
     )
 
     assert tt_output.shape == [

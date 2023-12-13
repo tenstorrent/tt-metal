@@ -12,7 +12,6 @@ from models.experimental.functional_bloom.reference import torch_functional_bloo
 from models.experimental.functional_bloom.tt import ttnn_optimized_functional_bloom
 from models.utility_functions import skip_for_wormhole_b0
 
-import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 

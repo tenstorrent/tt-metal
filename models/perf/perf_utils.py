@@ -128,5 +128,6 @@ def prep_perf_report(
         "Throughput CPU (batch*inf/sec)": cpu_throughput,
     }
 
+    model_name = model_name.replace("/", "_")
     csv_file = f"perf_{model_name}_{comments}_{today}.csv"
     write_dict_to_file(csv_file, dict_res)

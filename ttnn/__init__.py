@@ -15,6 +15,8 @@ from ttnn.tensor import (
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
+    StorageType,
+    DEVICE_STORAGE_TYPE,
     Shape,
     Tensor,
     from_torch,
@@ -26,6 +28,7 @@ from ttnn.tensor import (
     reallocate,
     load_tensor,
     dump_tensor,
+    has_storage_type_of,
 )
 
 from ttnn.core import (

@@ -2,8 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import pytest
 
+from loguru import logger
 import torch
 import torch.nn.functional as F
 import transformers
@@ -18,17 +21,19 @@ from models.experimental.functional_bert.tt.ttnn_functional_bert import (
 from models.experimental.functional_bert.tt.ttnn_optimized_functional_bert import (
     ttnn_optimized_bert_for_question_answering,
 )
-from models.experimental.functional_bert.reference.torch_functional_bert import (
-    torch_bert_for_question_answering,
-)
+
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
     preprocess_linear_bias,
     preprocess_linear_weight,
 )
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import (
+    skip_for_wormhole_b0,
+    enable_persistent_kernel_cache,
+    disable_persistent_kernel_cache,
+)
+from models.perf.perf_utils import prep_perf_report
 
 
 def ttnn_bert_preprocess_inputs(
@@ -79,41 +84,38 @@ def custom_preprocessor(torch_model, name):
     return parameters
 
 
+def get_expected_times(use_optimized_version):
+    if use_optimized_version:
+        expected_compile_time = 12
+        expected_inference_time = 0.12
+    else:
+        expected_compile_time = 10
+        expected_inference_time = 17
+    return expected_compile_time, expected_inference_time
+
+
 @skip_for_wormhole_b0()
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["phiyodr/bert-large-finetuned-squad2"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [384])
 @pytest.mark.parametrize("use_optimized_version", [True, False])
-def test_bert(device, use_program_cache, model_name, batch_size, sequence_size, use_optimized_version):
-    torch.manual_seed(1234)
+def test_performance(device, use_program_cache, model_name, batch_size, sequence_size, use_optimized_version):
+    disable_persistent_kernel_cache()
 
     config = transformers.BertConfig.from_pretrained(model_name)
 
     # TODO(arakhmati): re-enable the line below once the issue with ttnn.embedding is fixed
-    # torch_bert_input = torch.randint(0, config.config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
+    # torch_bert_input = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
     torch_bert_input = torch.randint(0, 1, (batch_size, sequence_size)).to(torch.int32)
     torch_token_type_ids = torch.zeros((batch_size, sequence_size), dtype=torch.int32)
     torch_attention_mask = torch.zeros(1, sequence_size) if use_optimized_version else None
 
-    torch_parameters = preprocess_model_parameters(
-        f"torch-{model_name}",
-        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
-            model_name, torchscript=False
-        ).eval(),
-        convert_to_ttnn=lambda *_: False,
-    )
-
-    torch_output = torch_bert_for_question_answering(
-        torch_bert_input,
-        torch_token_type_ids,
-        torch_attention_mask,
-        parameters=torch_parameters,
-        num_heads=config.num_attention_heads,
-    )
-
     # Run TT Model
+    tt_model_name = "ttnn_" + ("optimized_" if use_optimized_version else "") + model_name
     parameters = preprocess_model_parameters(
-        "ttnn_" + ("optimized_" if use_optimized_version else "") + model_name,
+        tt_model_name,
         initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
             model_name, torchscript=False
         ).eval(),
@@ -126,23 +128,41 @@ def test_bert(device, use_program_cache, model_name, batch_size, sequence_size, 
         ttnn_optimized_bert_for_question_answering if use_optimized_version else ttnn_bert_for_question_answering
     )
 
-    ttnn_bert_inputs = ttnn_bert_preprocess_inputs(
-        torch_bert_input,
-        torch_token_type_ids,
-        torch_attention_mask,
-        device=device,
+    durations = []
+    for _ in range(2):
+        ttnn_bert_inputs = ttnn_bert_preprocess_inputs(
+            torch_bert_input,
+            torch_token_type_ids,
+            torch_attention_mask,
+            device=device,
+            batch_size=batch_size,
+        )
+
+        start = time.time()
+        tt_output = bert_for_question_answering(
+            *ttnn_bert_inputs,
+            parameters=parameters,
+            num_heads=config.num_attention_heads,
+        )
+        tt_output = ttnn.from_device(tt_output)
+        end = time.time()
+        durations.append(end - start)
+        enable_persistent_kernel_cache()
+
+    inference_and_compile_time, inference_time, *_ = durations
+
+    expected_compile_time, expected_inference_time = get_expected_times(use_optimized_version)
+    prep_perf_report(
+        model_name=tt_model_name,
         batch_size=batch_size,
+        inference_and_compile_time=inference_and_compile_time,
+        inference_time=inference_time,
+        expected_compile_time=expected_compile_time,
+        expected_inference_time=expected_inference_time,
+        comments="",
+        inference_time_cpu=0.0,
     )
 
-    tt_output = bert_for_question_answering(
-        *ttnn_bert_inputs,
-        parameters=parameters,
-        num_heads=config.num_attention_heads,
-    )
-    tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
-    tt_output = ttnn.from_device(tt_output)
-
-    tt_output = ttnn.to_torch(tt_output)
-    tt_output = tt_output[..., :2]
-
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
+    logger.info(f"Inference time: {inference_time}")
+    logger.info(f"Samples per second: {1 / inference_time * batch_size}")

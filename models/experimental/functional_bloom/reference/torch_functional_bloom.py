@@ -59,24 +59,24 @@ def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torc
 
 
 # From transformers/models/bloom/modeling_bloom.py
-def split_heads(fused_qkv: torch.Tensor, head_size) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def split_heads(query_key_value: torch.Tensor, num_heads) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Split the last dimension into (num_heads, head_dim) without making any copies, results share same memory
-    storage as `fused_qkv`
+    storage as `query_key_value`
 
     Args:
-        fused_qkv (`torch.tensor`, *required*): [batch_size, seq_length, num_heads * 3 * head_dim]
+        query_key_value (`torch.tensor`, *required*): [batch_size, seq_length, num_heads * 3 * head_dim]
 
     Returns:
         query: [batch_size, seq_length, num_heads, head_dim] key: [batch_size, seq_length, num_heads, head_dim]
         value: [batch_size, seq_length, num_heads, head_dim]
     """
-    batch_size, sequence_size, three_times_hidden_size = fused_qkv.shape
+    batch_size, sequence_size, three_times_hidden_size = query_key_value.shape
     hidden_size = three_times_hidden_size // 3
-    num_heads = hidden_size // head_size
+    head_size = hidden_size // num_heads
 
-    fused_qkv = fused_qkv.view(batch_size, sequence_size, 3, num_heads, head_size)
-    return fused_qkv[..., 0, :, :], fused_qkv[..., 1, :, :], fused_qkv[..., 2, :, :]
+    query_key_value = query_key_value.view(batch_size, sequence_size, 3, num_heads, head_size)
+    return query_key_value[..., 0, :, :], query_key_value[..., 1, :, :], query_key_value[..., 2, :, :]
 
 
 # From transformers/models/bloom/modeling_bloom.py
@@ -92,17 +92,18 @@ def bloom_gelu_forward(x: torch.Tensor) -> torch.Tensor:
     return x * 0.5 * (1.0 + torch.tanh(0.79788456 * x * (1 + 0.044715 * x * x)))
 
 
-def create_query_key_value(hidden_states, weight, bias, head_size):
-    fused_qkv = hidden_states @ weight
-    fused_qkv += bias
-    query_layer, key_layer, value_layer = split_heads(fused_qkv, head_size)
+def create_query_key_value(hidden_states, weight, bias, num_heads):
+    query_key_value = hidden_states @ weight
+    query_key_value += bias
+    query_layer, key_layer, value_layer = split_heads(query_key_value, num_heads)
     query_layer = torch.permute(query_layer, (0, 2, 1, 3))
     key_layer = torch.permute(key_layer, (0, 2, 3, 1))
     value_layer = torch.permute(value_layer, (0, 2, 1, 3))
     return query_layer, key_layer, value_layer
 
 
-def compute_attention_scores(query_layer, key_layer, alibi, head_size):
+def compute_attention_scores(query_layer, key_layer, alibi):
+    *_, head_size = query_layer.shape
     beta = 1.0
     inv_norm_factor = 1.0 / math.sqrt(head_size)
     matmul_result = beta * alibi + inv_norm_factor * (query_layer @ key_layer)
@@ -159,12 +160,12 @@ def multi_head_attention(
     output_weight,
     output_bias,
     *,
-    head_size,
+    num_heads,
 ):
     query_layer, key_layer, value_layer = create_query_key_value(
-        hidden_states, query_key_value_weight, query_key_value_bias, head_size
+        hidden_states, query_key_value_weight, query_key_value_bias, num_heads
     )
-    attention_scores = compute_attention_scores(query_layer, key_layer, alibi, head_size)
+    attention_scores = compute_attention_scores(query_layer, key_layer, alibi)
     attention_probs = compute_attention_probs(attention_scores, causal_mask)
     context_layer = compute_context_layer(attention_probs, value_layer)
     output_tensor = finalize_output(context_layer, output_weight, output_bias)
@@ -190,7 +191,6 @@ def mlp(
 def bloom(input_ids, alibi, causal_mask, parameters, num_heads):
     inputs_embeds = F.embedding(input_ids, parameters.transformer.word_embeddings.weight)
     hidden_size = inputs_embeds.shape[2]
-    head_size = hidden_size // num_heads
 
     hidden_states = F.layer_norm(
         inputs_embeds,
@@ -215,7 +215,7 @@ def bloom(input_ids, alibi, causal_mask, parameters, num_heads):
             layer_parameters.self_attention.query_key_value.bias,
             layer_parameters.self_attention.dense.weight,
             layer_parameters.self_attention.dense.bias,
-            head_size=head_size,
+            num_heads=num_heads,
         )
         attention_output += hidden_states
 
