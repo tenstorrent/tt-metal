@@ -101,8 +101,6 @@ void TensorModule(py::module &m_tensor) {
 
     detail::export_enum<ShardOrientation>(m_tensor);
 
-    detail::export_enum<LossFunction>(m_tensor);
-
     detail::export_enum<LossReductionMode>(m_tensor);
 
     py::enum_<BufferType>(m_tensor, "BufferType")
