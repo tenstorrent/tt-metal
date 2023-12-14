@@ -62,14 +62,9 @@ def test_bw_addcmul(input_shapes, value, device):
     golden_output_tensor_b = tensor1_data.grad
     golden_output_tensor_c = tensor2_data.grad
 
-    comp_pass_a, _ = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a, 0.99)
-    _, comp_out_a = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_a, tt_output_tensor_a)
-
-    comp_pass_b, _ = comparison_funcs.comp_pcc(golden_output_tensor_b, tt_output_tensor_b, 0.99)
-    _, comp_out_b = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_b, tt_output_tensor_b)
-
-    comp_pass_c, _ = comparison_funcs.comp_pcc(golden_output_tensor_c, tt_output_tensor_c, 0.99)
-    _, comp_out_c = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_c, tt_output_tensor_c)
+    comp_pass_a, comp_out_a = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a)
+    comp_pass_b, comp_out_b = comparison_funcs.comp_pcc(golden_output_tensor_b, tt_output_tensor_b)
+    comp_pass_c, comp_out_c = comparison_funcs.comp_pcc(golden_output_tensor_c, tt_output_tensor_c)
 
     logger.info(comp_out_a)
     logger.info(comp_out_b)
