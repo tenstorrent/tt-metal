@@ -372,6 +372,21 @@ std::vector<Tensor> abs_bw(const Tensor& grad, const Tensor& input, const Memory
 {
     return operation::decorate_as_composite(__func__, _abs_bw)(grad, input, output_mem_config);
 }
+std::vector<Tensor> _rsqrt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor rsqrt_result = power(rsqrt(input, true, output_mem_config), 3, output_mem_config);
+    Tensor result = mul_unary(mul(grad, rsqrt_result, std::nullopt, output_mem_config) , -0.5, output_mem_config);
+    Tensor t_inf = full_like(input, std::numeric_limits<float>::infinity(), output_mem_config);
+    result = where(eqz(input, output_mem_config), t_inf, result, output_mem_config);
+    Tensor t_nan  = full_like(input, std::nanf(""), output_mem_config);
+    result = where(ltz(input, output_mem_config), t_nan, result, output_mem_config);
+    grad_tensor.emplace_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> rsqrt_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _rsqrt_bw)(grad, input, output_mem_config);
+}
 }//namespace tt_metal
 
 }//namespace tt
