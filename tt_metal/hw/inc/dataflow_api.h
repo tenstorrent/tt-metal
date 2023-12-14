@@ -1381,10 +1381,10 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  *
  * Return value: None
  *
- * | Argument  | Description                                                    | Type     | Valid Range | Required |
- * |-----------|----------------------------------------------------------------|----------|-----------------------------------------------------------|----------|
+ * | Argument  | Description                                                    | Type     | Valid Range                                                   | Required |
+ * |-----------|----------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
  * | addr      | Encoding of the destination location (x,y)+address             | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | incr      | The value to increment by | uint32_t | Any uint32_t value                                        | True     |
+ * | incr      | The value to increment by                                      | uint32_t | Any uint32_t value                                            | True     |
  */
 FORCE_INLINE
 void noc_semaphore_inc(uint64_t addr, uint32_t incr) {
