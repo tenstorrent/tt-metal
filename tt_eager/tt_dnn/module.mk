@@ -99,6 +99,7 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/permute/permute_op.cpp \
 	tt_eager/tt_dnn/op_library/composite/composite_ops.cpp\
 	tt_eager/tt_dnn/op_library/backward/backward_ops.cpp\
+	tt_eager/tt_dnn/op_library/optimizer/optimizer_ops.cpp\
 	tt_eager/tt_dnn/op_library/complex/complex_ops.cpp\
 	tt_eager/tt_dnn/op_library/loss/loss_op.cpp\
 	tt_eager/tt_dnn/op_library/transformer_tms/transformer_tms.cpp \
