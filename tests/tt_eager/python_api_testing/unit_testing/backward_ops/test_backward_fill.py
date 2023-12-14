@@ -44,6 +44,6 @@ def test_bw_fill(input_shapes, device):
     tt_output_tensor = tt_output_tensor / tt_output_tensor.numel()
     golden_output_tensor = pyt_y / pyt_y.numel()
 
-    comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.99)
-    _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+    comp_pass, comp_out = comparison_funcs.comp_allclose(golden_output_tensor, tt_output_tensor, atol=4, rtol=1e-1)
     logger.info(comp_out)
+    assert comp_pass
