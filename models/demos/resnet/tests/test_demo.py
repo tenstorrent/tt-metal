@@ -44,6 +44,7 @@ def test_demo_sample(
     (
         (8, 400),
         (16, 200),
+        (20, 250),
     ),
 )
 def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_location_generator, device):
