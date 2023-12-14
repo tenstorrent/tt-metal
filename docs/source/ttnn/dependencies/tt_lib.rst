@@ -791,6 +791,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.abs_bw
 
+.. autofunction:: tt_lib.tensor.rsqrt_bw
+
 Loss Functions
 --------------
 
