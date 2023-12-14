@@ -400,7 +400,7 @@ TEST_F(CommandQueueFixture, ShardedBufferReadWrites) {
     config.num_iterations = 100;
 
     EXPECT_TRUE(
-        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
+        local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(this->device_, tt::tt_metal::detail::GetCommandQueue(this->device_), config));
 }
 
 TEST_F(CommandQueueFixture, StressWrapTest) {
