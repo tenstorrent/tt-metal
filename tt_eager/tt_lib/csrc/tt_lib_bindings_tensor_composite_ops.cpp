@@ -7,6 +7,7 @@
 #include "tt_dnn/op_library/composite/composite_ops.hpp"
 #include "tt_dnn/op_library/complex/complex_ops.hpp"
 #include "tt_eager/tt_dnn/op_library/loss/loss_op.hpp"
+#include "tt_eager/tt_dnn/op_library/optimizer/optimizer_ops.hpp"
 
 namespace tt::tt_metal::detail{
     void TensorModuleCompositeOPs( py::module & m_tensor){
