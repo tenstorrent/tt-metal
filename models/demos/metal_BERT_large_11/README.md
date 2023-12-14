@@ -8,6 +8,16 @@ If you wish to run the demo with a different input use `pytest --disable-warning
 
 Our second demo is designed to run SQuADV2 dataset, run this with `pytest --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py::test_demo_squadv2`.
 
+Expected device perf: `~410 Inferences/Second`
+
+To get the device performance, run `./tt_metal/tools/profiler/profile_this.py -c "pytest --disable-warnings models/demos/metal_BERT_large_11/tests/test_bert.py::test_bert[BERT_LARGE-batch_12-BFLOAT8_B-SHARDED_BATCH12]"`.
+This will generate a CSV report under `<this repo dir>/generated/profiler/reports/ops/<report name>`. The report name will be shown at the end of the run.
+<!-- csv_example = "images/BERT-Large-device-profile.png" -->
+
+Expected end-to-end perf: `Ranges from 337 to 364 Inferences/Second, depending on the machine`
+
+To get the end-to-end performance, run `pytest --disable-warnings models/demos/metal_BERT_large_11/tests/test_perf_bert11.py::test_perf_bare_metal`.
+
 ## Inputs
 
 Inputs by default are provided from `input_data.json`. If you wish you to change the inputs or provide a different path to `test_demo`.
