@@ -344,6 +344,17 @@ std::vector<Tensor> unary_sub_bw(const Tensor& grad, const Tensor& input, const 
     return operation::decorate_as_composite(__func__, _unary_sub_bw)(grad, input, output_mem_config);
 }
 
+std::vector<Tensor> _neg_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor result = neg(grad, output_mem_config);
+    grad_tensor.push_back(result);
+    return grad_tensor;
+}
+std::vector<Tensor> neg_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _neg_bw)(grad, input, output_mem_config);
+}
+
 std::vector<Tensor> _rsub_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor = _sub_bw(grad,input,other,output_mem_config);
     std::swap(grad_tensor[0],grad_tensor[1]);
