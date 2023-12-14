@@ -343,6 +343,25 @@ std::vector<Tensor> unary_sub_bw(const Tensor& grad, const Tensor& input, const 
 {
     return operation::decorate_as_composite(__func__, _unary_sub_bw)(grad, input, output_mem_config);
 }
+
+std::vector<Tensor> _rsub_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor = _sub_bw(grad,input,other,output_mem_config);
+    std::swap(grad_tensor[0],grad_tensor[1]);
+    return grad_tensor;
+}
+std::vector<Tensor> rsub_bw(const Tensor& grad, const Tensor& input, const Tensor& other, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _rsub_bw)(grad, input, other, output_mem_config);
+}
+
+std::vector<Tensor> _log_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
+    return {mul(grad,recip(input,output_mem_config),std::nullopt,output_mem_config)};
+}
+std::vector<Tensor> log_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _log_bw)(grad, input, output_mem_config);
+}
+
 }//namespace tt_metal
 
 }//namespace tt
