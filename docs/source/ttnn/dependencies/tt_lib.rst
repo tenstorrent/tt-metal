@@ -795,6 +795,12 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.neg_bw
 
+.. autofunction:: tt_lib.tensor.lt_bw
+
+.. autofunction:: tt_lib.tensor.gt_bw
+
+.. autofunction:: tt_lib.tensor.ne_bw
+
 Loss Functions
 --------------
 
