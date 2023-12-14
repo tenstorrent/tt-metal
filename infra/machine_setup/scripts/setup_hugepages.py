@@ -225,8 +225,8 @@ def patch_etc_default_grub(is_cloud_vm):
                 )
 
             # Add hugepages to GRUB_CMDLINE_LINUX_DEFAULT
-            num_tt_devices = get_num_tt_devices()
-            GRUB_args.extend(["hugepagesz=1G", f"hugepages={num_tt_devices}", "iommu=pt"])
+            num_required_hugepages = get_num_required_hugepages()
+            GRUB_args.extend(["hugepagesz=1G", f"hugepages={num_required_hugepages}", "iommu=pt"])
             line = line.split("=")[0] + '="' + " ".join(GRUB_args).strip() + '"\n'
         etc_default_grub_txt += line
 
@@ -249,7 +249,7 @@ def patch_etc_default_grub(is_cloud_vm):
 
 
 # Get the number of TT devices. Number of hugepages will need to match this now.
-def get_num_tt_devices(assert_devs_exist=True):
+def get_num_required_hugepages(assert_devs_exist=True):
     tt_devices = []
     for device_path in sorted(glob.glob("/dev/tenstorrent/*")):
         # Filter out and make sure they are integers only
@@ -260,11 +260,14 @@ def get_num_tt_devices(assert_devs_exist=True):
     num_tt_devices = len(tt_devices)
     if assert_devs_exist:
         assert num_tt_devices > 0, "Did not find any tt devices."
-    return num_tt_devices
+
+    num_required_hugepages = num_tt_devices * 4
+
+    return num_required_hugepages
 
 
 def is_proc_cmdline_set():
-    num_tt_devices = get_num_tt_devices()
+    num_required_hugepages = get_num_required_hugepages()
     seen_hugepagesz = False
     seen_hugepages = False
     seen_iommu = False
@@ -273,7 +276,7 @@ def is_proc_cmdline_set():
             size = parse_scaled_value(v)
             seen_hugepagesz = size == HUGEPAGE_SIZE
         elif k == "hugepages":
-            seen_hugepages = int(v) >= num_tt_devices
+            seen_hugepages = int(v) >= num_required_hugepages
         elif k == "iommu":
             seen_iommu = v == "pt"
 
@@ -283,7 +286,7 @@ def is_proc_cmdline_set():
     if not seen_hugepagesz:
         print("hugepagesz not in /proc/cmdline")
     if not seen_hugepages:
-        print(f"hugepages={num_tt_devices} not in /proc/cmdline")
+        print(f"hugepages={num_required_hugepages} not in /proc/cmdline")
     if not seen_iommu:
         print("iommu=pt not in /proc/cmdline")
     if not correct_nr_hugepages:
@@ -376,7 +379,7 @@ def main() -> int:
             return 0
 
     if args.operation == "check":
-        if get_num_tt_devices(assert_devs_exist=False) == 0:
+        if get_num_required_hugepages(assert_devs_exist=False) == 0:
             print("WARNING: No tt devices detected. Cannot run check for huge page being enabled")
             return 0
 
