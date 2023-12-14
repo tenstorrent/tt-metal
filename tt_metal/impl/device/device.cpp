@@ -211,11 +211,8 @@ void Device::initialize_and_launch_firmware() {
     tt::Cluster::instance().l1_barrier(this->id());
 
     // Deassert worker cores
-    for(const auto& itr : not_done_cores) {
-        CoreCoord worker_core = itr;
-        this->initialize_firmware(worker_core, &launch_msg);
+    for(const auto& worker_core : not_done_cores)
         tt::Cluster::instance().deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
-    }
 
     // Wait until fw init is done, ensures the next launch msg doesn't get
     // written while fw is still in init
