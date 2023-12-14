@@ -14,11 +14,11 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          {arch: grayskull, runs-on: ["grayskull"]},
+          {arch: grayskull, runs-on: ["grayskull", "issue-hugepages-upgrade"]},
           # N150
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1"]},
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-1", "issue-hugepages-upgrade"]},
           # N300
-          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2"]},
+          {arch: wormhole_b0, runs-on: ["wormhole_b0", "multi-chip-num-pcie-1", "multi-chip-num-chips-2", "issue-hugepages-upgrade"]},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
