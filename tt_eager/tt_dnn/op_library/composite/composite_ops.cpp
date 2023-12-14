@@ -9,6 +9,7 @@
 #include "tt_dnn/op_library/concat/concat_op.hpp"
 #include "tt_dnn/op_library/permute/permute_op.hpp"
 #include "tt_dnn/op_library/split/split_last_dim_two_chunks_tiled.hpp"
+#include "tt_dnn/op_library/optimizer/optimizer_ops.hpp"
 #include "tt_numpy/functions.hpp"
 #include "tt_eager/tensor/tensor_utils.hpp"
 #include "tt_dnn/op_library/math.hpp"
@@ -1267,56 +1268,6 @@ Tensor _repeat(const Tensor& input_a, const Shape& shape,const MemoryConfig& out
 }
 Tensor repeat(const Tensor& input_a, const Shape& shape_b, const MemoryConfig& output_mem_config /* = operation::DEFAULT_OUTPUT_MEMORY_CONFIG */) {
     return operation::decorate_as_composite(__func__, _repeat)(input_a, shape_b, output_mem_config);
-}
-
-// lamb_optimizer
-// exp_avg = exp_avg * beta1 + (1 - beta1) * grad
-// exp_avg_sq = exp_avg_sq * beta2 + (1 - beta2) * (grad * grad)
-// adam_step = exp_avg / (exp_avg_sq.sqrt() + eps)
-// adam_step = adam_step + weight_decay * param
-// weight_norm = param.norm(p=2).clamp(0, 10)
-// adam_norm = adam_step.norm(p=2)
-// trust_ratio = 1.0 if weight_norm == 0 or adam_norm == 0 else weight_norm / (adam_norm + eps)
-// trust_ratio = where(greater(w_norm, 0), where(tf.greater(g_norm, 0), (w_norm / g_norm), 1.0),1.0)
-// param = param - step_size * trust_ratio * adam_step
-std::vector<Tensor> _lamb_optimizer(const Tensor& data, const Tensor& grad, const Tensor& exp_avg, const Tensor& exp_avg_sq, float beta1, float beta2, float step_size, float eps, float weight_decay, const MemoryConfig& output_mem_config) {
-    float beta1_out = 1.0f - beta1;
-    float beta2_out = 1.0f - beta2;
-
-    std::vector<Tensor> output_tensor;
-    Tensor exp_avg_out = add(mul_unary(exp_avg, beta1, output_mem_config), mul_unary(beta1_out, grad, output_mem_config), std::nullopt, output_mem_config);
-
-    Tensor exp_avg_sq_out = add(mul_unary(exp_avg_sq, beta2, output_mem_config),  mul_unary(beta2_out, square(grad, output_mem_config), output_mem_config), std::nullopt, output_mem_config);
-
-    Tensor adam_step_mid = mul(exp_avg_out, recip(add_unary(sqrt(exp_avg_sq_out, output_mem_config), eps, output_mem_config),output_mem_config),  std::nullopt, output_mem_config);
-    Tensor adam_step = add(adam_step_mid, mul_unary(weight_decay, data, output_mem_config), std::nullopt, output_mem_config);
-
-    Tensor data_val = square(data, output_mem_config);
-    for(int rank = data_val.shape().rank()-1; rank >=0; rank--)
-        data_val = sum(data_val, rank, output_mem_config);
-    Tensor zeros = zeros_like(data, output_mem_config);
-    Tensor weight_norm = clamp(sqrt(bcast(zeros, data_val,  BcastOpMath::ADD, BcastOpDim::HW, output_mem_config), output_mem_config), 0.0f, 10.0f, output_mem_config);
-
-    Tensor adam_step_val = square(adam_step, output_mem_config);
-    for(int rank = adam_step_val.shape().rank()-1; rank >=0; rank--)
-        adam_step_val = sum(adam_step_val, rank, output_mem_config);
-    Tensor adam_norm = sqrt(bcast(zeros, adam_step_val,  BcastOpMath::ADD, BcastOpDim::HW, output_mem_config), output_mem_config);
-
-    Tensor ones = ones_like(weight_norm, output_mem_config);
-
-    Tensor trust_ratio_mid = mul(weight_norm, recip(add_unary(adam_norm, eps, output_mem_config),output_mem_config), std::nullopt, output_mem_config);
-    Tensor trust_ratio = where(gtz(weight_norm, output_mem_config), where(gtz(adam_norm, output_mem_config), trust_ratio_mid, ones, output_mem_config), ones);
-
-    Tensor param = sub(data, mul(adam_step, mul_unary(trust_ratio_mid, step_size, output_mem_config), std::nullopt, output_mem_config), std::nullopt, output_mem_config);
-    output_tensor.emplace_back(param);
-    output_tensor.emplace_back(exp_avg_out);
-    output_tensor.emplace_back(exp_avg_sq_out);
-
-    return output_tensor;
-}
-std::vector<Tensor> lamb_optimizer(const Tensor& data, const Tensor& grad, const Tensor& exp_avg, const Tensor& exp_avg_sq, float beta1, float beta2, float step_size, float eps, float weight_decay, const MemoryConfig& output_mem_config)
-{
-    return operation::decorate_as_composite(__func__, _lamb_optimizer)(data, grad, exp_avg, exp_avg_sq, beta1, beta2, step_size, eps, weight_decay, output_mem_config);
 }
 
 }//namespace tt_metal

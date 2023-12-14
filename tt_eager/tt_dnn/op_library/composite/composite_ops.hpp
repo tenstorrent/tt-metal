@@ -299,9 +299,6 @@ Tensor power_fp(const Tensor& input_a, float exponent, const MemoryConfig& outpu
 //repeat a input tensor @input_a as specified by the number of dimensions
 Tensor repeat(const Tensor& input_a, const Shape& shape,const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
-// vector returns param, exp_avg, exp_avg_sq
-std::vector<Tensor> lamb_optimizer(const Tensor& data, const Tensor& grad, const Tensor& exp_avg, const Tensor& exp_avg_sq, float beta1, float beta2, float step_size, float eps, float weight_decay, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
-
 } //namespace tt_metal
 
 } //namespace tt
