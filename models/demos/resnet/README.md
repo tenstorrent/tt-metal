@@ -22,3 +22,11 @@ To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-to
 Our ImageProcessor on other hand is based on `microsoft/resnet-50` from huggingface.
 
 + For the second demo (ImageNet), the demo will load the images from ImageNet batch by batch. When executed, the first iteration (batch) will always be slower since the iteration includes the compilation as well. Afterwards, each iterations take only miliseconds. For exact performance measurements please check out the first demo.
+
+## Performance
+
++ To obtain device performance, run `./tt_metal/tools/profiler/profile_this.py -c "pytest models/demos/resnet/tests/test_metal_resnet50.py::test_run_resnet50_inference[LoFi-activations_BFLOAT8_B-weights_BFLOAT8_B-batch_16]"`
+This will generate a CSV report under `<this repo dir>/generated/profiler/reports/ops/<report name>`. The report file name is logged in the run output.
+
++ For end-to-end performance, run `pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal[16-0.02-28]`. This will generate a CSV with the timings and throughputs.
+Expected end-to-end perf: For batch = 16, it is about `2200 fps` currently. This may vary machine to machine.
