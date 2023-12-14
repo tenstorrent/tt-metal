@@ -272,7 +272,7 @@ void TensorModule(py::module &m_tensor) {
     detail::bind_unary_op_with_param(
         m_tensor, "sum", &sum,
         py::arg("dim"),
-        R"doc(Returns a tensor that is a sum  of input tensor with shape ``[W, Z, Y, X]`` along dimensions ``{1}``.)doc",
+        R"doc(Returns a tensor that is a sum  of input tensor with shape ``[W, Z, Y, X]`` along dimensions ``{1}``; input tensor in TILE LAYOUT.)doc",
         R"doc("dimension to sum along", "int", "0, 1, 2, or 3")doc"
     );
 

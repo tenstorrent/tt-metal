@@ -24,7 +24,7 @@ def run_sum_3_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, d
     if in_mem_config[0] == "SYSTEM_MEMORY":
         in_mem_config[0] = None
 
-    x = torch.Tensor(size=input_shape).uniform_(-100, 100)
+    x = torch.Tensor(size=input_shape).uniform_(-100, 100).to(torch.bfloat16)
     x_ref = x.detach().clone()
 
     # compute ref value
@@ -51,19 +51,19 @@ def run_sum_3_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, d
 
 test_sweep_args = [
     (
-        (4, 4, 92, 30),
+        (4, 4, 96, 32),
         [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR],
-        ["SYSTEM_MEMORY"],
+        [ttl.tensor.Layout.TILE],
+        [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         17643447,
         "",
     ),
     (
-        (1, 7, 4, 26),
+        (4, 4, 32, 32),
         [ttl.tensor.DataType.BFLOAT16],
-        [ttl.tensor.Layout.ROW_MAJOR],
-        ["SYSTEM_MEMORY"],
+        [ttl.tensor.Layout.TILE],
+        [ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         17414875,
         "",

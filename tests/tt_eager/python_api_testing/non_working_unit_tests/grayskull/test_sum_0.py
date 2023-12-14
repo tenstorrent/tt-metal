@@ -16,9 +16,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispat
 
 def run_sum_0_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
-    prev_dispatch_mode = set_slow_dispatch_mode("1")
+    prev_dispatch_mode = set_slow_dispatch_mode("")
 
-    x = torch.Tensor(size=input_shape).uniform_(0, 100)
+    x = torch.Tensor(size=input_shape).uniform_(0, 100).to(torch.bfloat16)
     ref_value = pytorch_ops.sum(x, dim=0)
 
     tt_result = tt_lib_ops.sum(
