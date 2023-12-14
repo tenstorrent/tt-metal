@@ -43,7 +43,6 @@ def test_bw_sigmoid(input_shapes, device):
 
     golden_output_tensor = in_data.grad
 
-    comp_pass, _ = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.90)
-    _, comp_out = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor, tt_output_tensor)
+    comp_pass, comp_out = comparison_funcs.comp_pcc(golden_output_tensor, tt_output_tensor, 0.90)
     logger.info(comp_out)
     assert comp_pass

@@ -57,8 +57,7 @@ def test_embedding_bw(input_shapes, device):
 
     golden_output_tensor_a = weights.grad
 
-    comp_pass_a, _ = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a, 0.99)
-    _, comp_out_a = comparison_funcs.comp_allclose_and_pcc(golden_output_tensor_a, tt_output_tensor_a)
+    comp_pass_a, comp_out_a = comparison_funcs.comp_pcc(golden_output_tensor_a, tt_output_tensor_a)
 
     logger.info(comp_out_a)
     assert comp_pass_a
