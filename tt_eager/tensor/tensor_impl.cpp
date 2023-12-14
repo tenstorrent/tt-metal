@@ -95,29 +95,8 @@ std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, const Shape& shape
     //Physical limitation in FD for now
     switch (layout) {
         case Layout::ROW_MAJOR: {
-            if( valid_page_shape({shard_shape[0], shard_shape[1]}, size_of_element)
-                && enough_work_for_sharding(shape, shard_shape, {H,W}, num_shards)
-                ){
-                page_shape ={ shard_shape[0], shard_shape[1]};
-            }
-            //else if(valid_page_shape({H,W/num_shards}, size_of_element)
-            //    && enough_work_for_sharding(shape, shard_shape, {H,W/num_shards}, num_shards)
-            //    && (W % num_shards == 0)
-            //){
-            //    page_shape = {H, W/num_shards};
-            //}
-            //else if(valid_page_shape({H/num_shards,W/num_shards}, size_of_element)
-            //    && enough_work_for_sharding(shape, shard_shape, {H/num_shards,W}, num_shards)
-            //    && (H % num_shards == 0)
-            //){
-            //    page_shape ={ H/num_shards, W};
-            //}
-            else if( valid_page_shape({1, shard_shape[1]}, size_of_element)){
-                page_shape = {1, shard_shape[1]};
-            }
-            else {
-                TT_ASSERT(false && "Unsupported  row major size");
-            }
+            //TODO: Explore valid page shapes other than 1,W
+            page_shape = {1, shard_shape[1]};
         }
         break;
         case Layout::TILE: {;}
