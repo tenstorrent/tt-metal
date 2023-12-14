@@ -195,12 +195,12 @@ void Device::initialize_and_launch_firmware() {
     log_debug("Initializing firmware");
     CoreCoord grid_size = this->logical_grid_size();
     std::unordered_set<CoreCoord> not_done_cores;
-
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
             CoreCoord logical_core(x, y);
-            if (!this->storage_only_cores_.count(logical_core)) {
-                CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
+            CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
+
+            if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
                 this->initialize_firmware(worker_core, &launch_msg);
                 not_done_cores.insert(worker_core);
             }
@@ -211,10 +211,15 @@ void Device::initialize_and_launch_firmware() {
     tt::Cluster::instance().l1_barrier(this->id());
 
     // Deassert worker cores
-    for(const auto& itr : not_done_cores) {
-        CoreCoord worker_core = itr;
-        this->initialize_firmware(worker_core, &launch_msg);
-        tt::Cluster::instance().deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
+    for (uint32_t y = 0; y < grid_size.y; y++) {
+        for (uint32_t x = 0; x < grid_size.x; x++) {
+            CoreCoord logical_core(x, y);
+            CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
+
+            if (this->storage_only_cores_.find(logical_core) == this->storage_only_cores_.end()) {
+                tt::Cluster::instance().deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
+            }
+        }
     }
 
     // Wait until fw init is done, ensures the next launch msg doesn't get
@@ -366,10 +371,10 @@ CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) c
 }
 
 std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
-    std::vector<CoreCoord> worker_cores(logical_cores.size());
-    for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
-        worker_cores[idx] = worker_core_from_logical_core(logical_cores[idx]);
-
+    std::vector<CoreCoord> worker_cores;
+    for (auto logical_core : logical_cores) {
+        worker_cores.push_back(worker_core_from_logical_core(logical_core));
+    }
     return worker_cores;
 }
 
@@ -384,10 +389,10 @@ CoreCoord Device::ethernet_core_from_logical_core(const CoreCoord &logical_core)
 }
 
 std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
-    std::vector<CoreCoord> ethernet_cores(logical_cores.size());
-
-    for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
-        ethernet_cores[idx] = ethernet_core_from_logical_core(logical_cores[idx]);
+    std::vector<CoreCoord> ethernet_cores;
+    for (auto logical_core : logical_cores) {
+        ethernet_cores.emplace_back(ethernet_core_from_logical_core(logical_core));
+    }
     return ethernet_cores;
 }
 

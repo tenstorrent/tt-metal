@@ -313,10 +313,10 @@ void Program::update_kernel_groups() {
 
 std::vector<std::string> Program::cores_to_ops() const {
     std::vector<std::string> ops;
+
     for (const auto &[core_type, cores_of_type] : this->logical_cores()) {
         for (const auto &core : cores_of_type) {
             for (Kernel * kernel : kernels_) {
-                if ( kernel->get_kernel_core_type() !=  core_type ) continue;
                 auto cores = kernel->logical_cores();
                 if (std::find(cores.begin(), cores.end(), core) != cores.end()) {
                     ops.push_back(kernel->name());
