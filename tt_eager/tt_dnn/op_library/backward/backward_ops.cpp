@@ -364,6 +364,39 @@ std::vector<Tensor> rsub_bw(const Tensor& grad, const Tensor& input, const Tenso
     return operation::decorate_as_composite(__func__, _rsub_bw)(grad, input, other, output_mem_config);
 }
 
+std::vector<Tensor> _lt_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_zero = zeros_like(grad, output_mem_config);
+    grad_tensor.push_back(t_zero);
+    return grad_tensor;
+}
+std::vector<Tensor> lt_bw(const Tensor& grad, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _lt_bw)(grad, output_mem_config);
+}
+
+std::vector<Tensor> _gt_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_zero = zeros_like(grad, output_mem_config);
+    grad_tensor.push_back(t_zero);
+    return grad_tensor;
+}
+std::vector<Tensor> gt_bw(const Tensor& grad, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _gt_bw)(grad, output_mem_config);
+}
+
+std::vector<Tensor> _ne_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
+    std::vector<Tensor> grad_tensor;
+    Tensor t_zero = zeros_like(grad, output_mem_config);
+    grad_tensor.push_back(t_zero);
+    return grad_tensor;
+}
+std::vector<Tensor> ne_bw(const Tensor& grad, const MemoryConfig& output_mem_config)
+{
+    return operation::decorate_as_composite(__func__, _ne_bw)(grad, output_mem_config);
+}
+
 std::vector<Tensor> _log_bw(const Tensor& grad, const Tensor& input, const MemoryConfig& output_mem_config) {
     return {mul(grad,recip(input,output_mem_config),std::nullopt,output_mem_config)};
 }
