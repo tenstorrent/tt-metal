@@ -278,9 +278,8 @@ def test_generate_all_configs_and_references(
     ]
 
     if (
-        (input_channels == 128 and stride_h == 2 and batch_size == 20)  # Hangs
-        # These ones weren't hanging on bliu/issue-4319 but are now after rebase
-        or (input_channels == 16 and skip_untilize == True)
+        # These ones weren't hanging on bliu/issue-4386 but are now after rebase
+        (input_channels == 16 and skip_untilize == True)
         or (input_channels == 256 and skip_untilize == True)
         or (input_channels == 512 and skip_untilize == True and not ((stride_h == 2) and batch_size == 8))
     ):
@@ -388,7 +387,7 @@ def test_generate_all_configs_and_references(
 
     if input_c < 32 and not skip_untilize:
         ## for input_c < 32, always need to pad when not skipping untilize, so skip
-        pytest.skip()
+        pytest.skip("Skipping first conv tests when untilize is skipped.")
 
     memory_config = ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM)
 
