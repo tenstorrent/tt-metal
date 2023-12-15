@@ -1092,7 +1092,7 @@ def gen_bias_gelu_unary_args(
     high=100,
     dtype=torch.bfloat16,
 ):
-    for input_info in (
+    for input_info in gen_scalar_args(
         input_shapes,
         supported_dtypes,
         supported_layouts,
