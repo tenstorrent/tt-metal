@@ -17,6 +17,9 @@ from models.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     Profiler,
+    comp_pcc,
+    unpad_from_zero,
+    torch_to_tt_tensor,
 )
 from models.perf.perf_utils import prep_perf_report
 
@@ -34,14 +37,10 @@ def run_perf_vgg(imagenet_sample_input, expected_inference_time, expected_compil
 
     image = imagenet_sample_input
 
-    tt_image = tt_lib.tensor.Tensor(
-        image.reshape(-1).tolist(),
-        get_shape(image.shape),
-        tt_lib.tensor.DataType.BFLOAT16,
-        tt_lib.tensor.Layout.ROW_MAJOR,
-    )
+    tt_image = torch_to_tt_tensor(image, device)
 
-    tt_vgg = vgg16(device, disable_conv_on_tt_device=True)
+    cache_path = "/mnt/MLPerf/tt_dnn-models/tt/VGG/vgg16/"
+    tt_vgg = vgg16(device, disable_conv_on_tt_device=True, tt_cache_path=cache_path)
 
     torch_vgg = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
     torch_vgg.eval()

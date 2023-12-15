@@ -4,25 +4,27 @@
 
 import torch
 import pytest
+import tt_lib
 
 from torchvision import models
 from loguru import logger
-
-import tt_lib
+from models.utility_functions import comp_allclose
 
 from models.experimental.vgg.tt.vgg import vgg16
-from models.experimental.vgg.vgg_utils import get_shape
-from models.utility_functions import comp_pcc
-
+from models.utility_functions import comp_pcc, unpad_from_zero, torch_to_tt_tensor
 
 _batch_size = 1
 
 
 @pytest.mark.parametrize(
+    "dtype",
+    ((tt_lib.tensor.DataType.BFLOAT16),),
+)
+@pytest.mark.parametrize(
     "pcc",
     ((0.99),),
 )
-def test_vgg16_inference(device, pcc, imagenet_sample_input):
+def test_vgg16_inference(device, pcc, imagenet_sample_input, model_location_generator, dtype):
     image = imagenet_sample_input
 
     batch_size = _batch_size
@@ -32,20 +34,16 @@ def test_vgg16_inference(device, pcc, imagenet_sample_input):
         torch_output = torch_vgg(image).unsqueeze(1).unsqueeze(1)
 
         # TODO: enable conv on tt device after adding fast dtx transform
-        tt_vgg = vgg16(device, disable_conv_on_tt_device=True)
+        cache_path = "/mnt/MLPerf/tt_dnn-models/tt/VGG/vgg16/"
+        tt_vgg = vgg16(device, disable_conv_on_tt_device=True, tt_cache_path=cache_path)
 
-        tt_image = tt_lib.tensor.Tensor(
-            image.reshape(-1).tolist(),
-            get_shape(image.shape),
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-        )
+        tt_image = torch_to_tt_tensor(image, device)
 
         tt_output = tt_vgg(tt_image)
-
+        tt_output = unpad_from_zero(tt_output, torch_output.shape)
         tt_output = tt_output.cpu()
-        tt_output = torch.Tensor(tt_output.to_torch())
 
+        logger.info(comp_allclose(torch_output, tt_output))
         pcc_passing, pcc_output = comp_pcc(torch_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
         assert pcc_passing, f"Model output does not meet PCC requirement {pcc}."
