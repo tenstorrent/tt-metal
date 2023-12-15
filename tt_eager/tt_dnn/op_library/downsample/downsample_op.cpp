@@ -4,7 +4,7 @@
 
 #include <math.h>
 
-
+#include "tt_dnn/op_library/untilize/untilize_op.hpp"
 #include "tt_dnn/op_library/downsample/downsample_op.hpp"
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/math.hpp"
@@ -532,10 +532,13 @@ operation::ProgramWithCallbacks downsample_single_core(const Tensor &a, std::arr
         num_rows_of_output_tiles,
         num_output_tiles_in_row,
     };
-
+    string compute_kernel = "tt_eager/tt_dnn/op_library/downsample/kernels/downsample_compute_kernel.cpp";
+    if (num_input_tiles_in_row <= MAX_PACK_UNTILIZE_WIDTH) {
+        compute_kernel = "tt_eager/tt_dnn/op_library/downsample/kernels/downsample_fast_pack_untilize_compute_kernel.cpp";
+    }
     auto downsample_compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_eager/tt_dnn/op_library/downsample/kernels/downsample_compute_kernel.cpp",
+        compute_kernel,
         core_range,
         tt_metal::ComputeConfig{.compile_args = compute_args}
     );
