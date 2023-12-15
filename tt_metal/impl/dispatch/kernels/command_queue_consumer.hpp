@@ -140,6 +140,7 @@ FORCE_INLINE void write_buffers(
         const uint32_t num_pages = command_ptr[2];
         const uint32_t page_size = command_ptr[3];
         const uint32_t dst_buf_type = command_ptr[5];
+        const uint32_t dst_page_index = command_ptr[7];
 
         uint32_t num_to_write;
         uint32_t src_addr = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_db_cb_rd_ptr_addr(db_buf_switch)) << 4;
@@ -158,11 +159,13 @@ FORCE_INLINE void write_buffers(
         if (buffer_type == BufferType::SYSTEM_MEMORY) {
             cq_reserve_back(num_pages * page_size);
         }
-        for (uint32_t id = 0; id < num_pages;) {
-            num_to_write = min(num_pages - id, producer_consumer_transfer_num_pages);
+        uint32_t page_id = dst_page_index;
+        uint32_t end_page_id = page_id + num_pages;
+        while (page_id < end_page_id) {
+            num_to_write = min(end_page_id - page_id, producer_consumer_transfer_num_pages);
             multicore_cb_wait_front(db_buf_switch, num_to_write);
             uint32_t src_addr = get_read_ptr(db_buf_switch);
-            buffer.noc_async_write_buffer(src_addr, id, num_to_write);
+            buffer.noc_async_write_buffer(src_addr, page_id, num_to_write);
             noc_async_writes_flushed();
             multicore_cb_pop_front(
                 producer_noc_encoding,
@@ -171,7 +174,7 @@ FORCE_INLINE void write_buffers(
                 consumer_cb_size,
                 num_to_write,
                 page_size);
-            id += num_to_write;
+            page_id += num_to_write;
         }
         if (buffer_type == BufferType::SYSTEM_MEMORY) {
             cq_push_back(num_pages * page_size);

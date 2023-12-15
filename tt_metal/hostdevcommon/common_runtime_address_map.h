@@ -90,7 +90,7 @@ constexpr static std::uint32_t OP_INFO_SIZE      = 280; // So far, holds up to 1
 constexpr static std::uint32_t DISPATCH_MESSAGE_ADDR = 110816;
 constexpr static std::uint64_t DISPATCH_MESSAGE_REMOTE_SENDER_ADDR = 110848;
 
-constexpr static std::uint32_t COMMAND_PTR_SHARD_IDX = 7;
+constexpr static std::uint32_t COMMAND_PTR_SHARD_IDX = 8;
 
 // Command queue pointers
 constexpr static uint32_t CQ_ISSUE_READ_PTR = 110944;

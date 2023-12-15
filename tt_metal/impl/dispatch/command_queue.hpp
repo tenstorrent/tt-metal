@@ -104,9 +104,17 @@ class EnqueueWriteBufferCommand : public Command {
 
     SystemMemoryManager& manager;
     const void* src;
+    uint32_t dst_page_index;
+    uint32_t pages_to_write;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::ENQUEUE_WRITE_BUFFER;
    public:
-    EnqueueWriteBufferCommand(Device* device, Buffer& buffer, const void* src, SystemMemoryManager& manager);
+    EnqueueWriteBufferCommand(
+        Device* device,
+        Buffer& buffer,
+        const void* src,
+        SystemMemoryManager& manager,
+        uint32_t dst_page_index = 0,
+        std::optional<uint32_t> pages_to_write = std::nullopt);
 
     const DeviceCommand assemble_device_command(uint32_t src_address);
 
