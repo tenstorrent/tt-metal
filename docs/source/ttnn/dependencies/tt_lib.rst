@@ -803,6 +803,12 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.ne_bw
 
+.. autofunction:: tt_lib.tensor.clamp_bw
+
+.. autofunction:: tt_lib.tensor.clamp_min_bw
+
+.. autofunction:: tt_lib.tensor.clamp_max_bw
+
 Loss Functions
 --------------
 
