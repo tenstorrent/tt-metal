@@ -41,14 +41,12 @@ void kernel_main() {
     if constexpr(is_all_to_all_worker) {
         // wait for local data ready
         cb_wait_front(cb_ex_partial, block_h);
-        // inc semaphore of other cores
-        for(uint32_t block = 1; block < num_blocks; block++) {
-            const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, noc_diff_coord[block], reduce_receiver_semaphore_addr);
-            noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-        }
-        // wait for semaphore
-        noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks-1);
-        noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
+
+        // inc top core
+        noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
+        const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, 1, reduce_receiver_semaphore_addr);
+        noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
 
         // read data from other cores
         uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial);
@@ -73,19 +71,9 @@ void kernel_main() {
 
         // sync with other workers
         noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
-        // inc semaphore of other cores
-        for(uint32_t block = 1; block < num_blocks; block++) {
-            const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, noc_diff_coord[block], reduce_receiver_semaphore_addr);
-            noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-        }
-        // wait for semaphore
-        noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks-1);
-        noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
-
-        // wait for result
-        // cb_reserve_back(cb_ex_global, block_h);
-        // noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-        // cb_push_back(cb_ex_global, block_h);
+        noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+        noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
 
         for (uint32_t block = 0; block < num_all_to_all_workers; block++) {
             cb_reserve_back(cb_ex_global, num_tiles_per_worker);
@@ -96,31 +84,18 @@ void kernel_main() {
     } else {
         // wait for local data ready
         cb_wait_front(cb_ex_partial, block_h);
-        // inc semaphore of other cores
-        for(uint32_t block = 1; block < num_blocks; block++) {
-            const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, noc_diff_coord[block], reduce_receiver_semaphore_addr);
-            noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-        }
-        // wait for semaphore
-        noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks-1);
-        noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
 
+        // inc top core
+        noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
+        const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, 1, reduce_receiver_semaphore_addr);
+        noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
 
         // sync with other workers
         noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
-        // inc semaphore of other cores
-        for(uint32_t block = 1; block < num_blocks; block++) {
-            const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, noc_diff_coord[block], reduce_receiver_semaphore_addr);
-            noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-        }
-        // wait for semaphore
-        noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks-1);
-        noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
-
-        // wait result
-        // cb_reserve_back(cb_ex_global, block_h);
-        // noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-        // cb_push_back(cb_ex_global, block_h);
+        noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+        noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
 
         for (uint32_t block = 0; block < num_all_to_all_workers; block++) {
             cb_reserve_back(cb_ex_global, num_tiles_per_worker);
@@ -135,13 +110,10 @@ void kernel_main() {
         // wait for local data ready
         cb_wait_front(cb_ex_partial2, block_h);
         // inc semaphore of other cores
-        for(uint32_t block = 1; block < num_blocks; block++) {
-            const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, noc_diff_coord[block], reduce_receiver_semaphore_addr);
-            noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-        }
-        // wait for semaphore
-        noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks-1);
-        noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
+        noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
+        const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, 1, reduce_receiver_semaphore_addr);
+        noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
 
         // read data from other cores
         uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial2);
@@ -166,19 +138,9 @@ void kernel_main() {
 
         // sync with other workers
         noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
-        // inc semaphore of other cores
-        for(uint32_t block = 1; block < num_blocks; block++) {
-            const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, noc_diff_coord[block], reduce_receiver_semaphore_addr);
-            noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-        }
-        // wait for semaphore
-        noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks-1);
-        noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
-
-        // wait for result
-        // cb_reserve_back(cb_ex_global, block_h);
-        // noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-        // cb_push_back(cb_ex_global, block_h);
+        noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+        noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
 
         for (uint32_t block = 0; block < num_all_to_all_workers; block++) {
             cb_reserve_back(cb_ex_global, num_tiles_per_worker);
@@ -190,30 +152,16 @@ void kernel_main() {
         // wait for local data ready
         cb_wait_front(cb_ex_partial2, block_h);
         // inc semaphore of other cores
-        for(uint32_t block = 1; block < num_blocks; block++) {
-            const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, noc_diff_coord[block], reduce_receiver_semaphore_addr);
-            noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-        }
-        // wait for semaphore
-        noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks-1);
-        noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
-
-
-        // sync with other workers
         noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
-        // inc semaphore of other cores
-        for(uint32_t block = 1; block < num_blocks; block++) {
-            const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, noc_diff_coord[block], reduce_receiver_semaphore_addr);
-            noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-        }
-        // wait for semaphore
-        noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks-1);
-        noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
+        const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, 1, reduce_receiver_semaphore_addr);
+        noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
 
-        // wait result
-        // cb_reserve_back(cb_ex_global, block_h);
-        // noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-        // cb_push_back(cb_ex_global, block_h);
+        // // sync with other workers
+        noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
+        noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+        noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
 
         for (uint32_t block = 0; block < num_all_to_all_workers; block++) {
             cb_reserve_back(cb_ex_global, num_tiles_per_worker);
