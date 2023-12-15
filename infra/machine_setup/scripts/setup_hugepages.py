@@ -248,6 +248,12 @@ def patch_etc_default_grub(is_cloud_vm):
         raise RuntimeError("failed to run update grub cmd", e)
 
 
+def get_host_has_grayskull():
+    lspci_output = subprocess.check_output("lspci -vv -n", shell=True, stderr=subprocess.STDOUT).decode("utf-8")
+
+    return "1e52:faca" in lspci_output
+
+
 # Get the number of TT devices. Number of hugepages will need to match this now.
 def get_num_required_hugepages(assert_devs_exist=True):
     tt_devices = []
@@ -261,7 +267,9 @@ def get_num_required_hugepages(assert_devs_exist=True):
     if assert_devs_exist:
         assert num_tt_devices > 0, "Did not find any tt devices."
 
-    num_required_hugepages = num_tt_devices * 4
+    host_has_grayskull = get_host_has_grayskull()
+
+    num_required_hugepages = num_tt_devices if host_has_grayskull else num_tt_devices * 4
 
     return num_required_hugepages
 
