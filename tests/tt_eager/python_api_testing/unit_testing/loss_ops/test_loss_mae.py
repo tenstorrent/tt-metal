@@ -47,8 +47,7 @@ class TestMAELoss:
 
         loss = torch.nn.L1Loss(reduction="none")
         pt_mae_output = loss(ref_data.to(torch.float32), pred_data.to(torch.float32))
-        comp_pass_a, _ = comparison_funcs.comp_pcc(pt_mae_output, tt_mae_output)
-        _, comp_out_a = comparison_funcs.comp_allclose_and_pcc(pt_mae_output, tt_mae_output)
+        comp_pass_a, comp_out_a = comparison_funcs.comp_pcc(pt_mae_output, tt_mae_output)
 
         logger.info(comp_out_a)
         assert comp_pass_a
