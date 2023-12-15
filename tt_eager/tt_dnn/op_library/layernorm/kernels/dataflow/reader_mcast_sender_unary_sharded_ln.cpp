@@ -61,14 +61,10 @@ void kernel_main() {
 
         // wait for local data ready
         cb_wait_front(cb_ex_partial, block_h);
-        // inc semaphore of other cores
-        for(uint32_t block = 1; block < num_blocks; block++) {
-            const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, noc_diff_coord[block], reduce_receiver_semaphore_addr);
-            noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-        }
-        // wait for semaphore
+        //
         noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks-1);
         noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
+        noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1);
 
         // read data from other cores
         uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial);
@@ -90,14 +86,9 @@ void kernel_main() {
         cb_wait_front(cb_ex, num_tiles_per_worker);
 
         // sync with other workers
-        // inc semaphore of other cores
-        for(uint32_t block = 1; block < num_blocks; block++) {
-            const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, noc_diff_coord[block], reduce_receiver_semaphore_addr);
-            noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-        }
-        // wait for semaphore
         noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks-1);
         noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
+        noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1);
 
         // gather data to top row
         cb_reserve_back(cb_ex_global, block_h);
@@ -109,13 +100,7 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_ex_global, block_h);
 
-        // // mcast to other cores
-        // uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
-        // uint64_t multicast_data_addr3 = multicast_data_noc | l1_read_addr_ex_global;
-        // noc_async_write_multicast(l1_read_addr_ex_global, multicast_data_addr3, block_h_size_bytes, num_blocks-1);
-        // noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1);
-
-        // gather data to top row
+        // mcast
         uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
 
         for (uint32_t block = 0; block < num_all_to_all_workers; block++) {
@@ -139,13 +124,10 @@ void kernel_main() {
         // wait for local data ready
         cb_wait_front(cb_ex_partial2, block_h);
         // inc semaphore of other cores
-        for(uint32_t block = 1; block < num_blocks; block++) {
-            const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, noc_diff_coord[block], reduce_receiver_semaphore_addr);
-            noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-        }
-        // wait for semaphore
+        *reduce_sender_semaphore_addr_ptr = VALID;
         noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks-1);
         noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
+        noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1);
 
         // read data from other cores
         uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial2);
@@ -167,14 +149,9 @@ void kernel_main() {
         cb_wait_front(cb_ex2pe, num_tiles_per_worker);
 
         // sync with other workers
-        // inc semaphore of other cores
-        for(uint32_t block = 1; block < num_blocks; block++) {
-            const uint64_t reduce_receiver_semaphore_noc_addr = get_noc_addr(noc_same_coord, noc_diff_coord[block], reduce_receiver_semaphore_addr);
-            noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-        }
-        // wait for semaphore
         noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_blocks-1);
         noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
+        noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1);
 
         // gather data to top row
         cb_reserve_back(cb_ex_global, block_h);
@@ -186,13 +163,7 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_ex_global, block_h);
 
-        // // mcast to other cores
-        // *reduce_sender_semaphore_addr_ptr = 1;
-        // uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
-        // uint64_t multicast_data_addr3 = multicast_data_noc | l1_read_addr_ex_global;
-        // noc_async_write_multicast(l1_read_addr_ex_global, multicast_data_addr3, block_h_size_bytes, num_blocks-1);
-        // noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1);
-
+        // mcast to other cores
         uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
 
         for (uint32_t block = 0; block < num_all_to_all_workers; block++) {
