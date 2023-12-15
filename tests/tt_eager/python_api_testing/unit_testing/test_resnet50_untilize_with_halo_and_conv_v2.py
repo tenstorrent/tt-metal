@@ -468,6 +468,11 @@ def test_resnet50_conv(
     if C == 16:
         pytest.skip("These tests are hanging in interleaved_to_sharded after rebase. Issue: #4336")
 
+    if math_fidelity != tt_lib.tensor.MathFidelity.LoFi:
+        pytest.skip(
+            "By default, only run tests with LoFi math for pipelines. For local unit testing, enable the other variants by uncommenting the skip here!"
+        )
+
     if (
         activations_dtype == tt_lib.tensor.DataType.BFLOAT16
         and N == 20
