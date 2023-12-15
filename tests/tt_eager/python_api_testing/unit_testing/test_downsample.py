@@ -32,10 +32,10 @@ import torch
         # (10, 64, 64, 16, 16, 2, 2, 20, (10,2), False),
         # (10, 64, 64, 16, 16, 1, 1, 20, (10,2), False),
         # (8, 64, 64, 56, 56, 1, 1, 98, (12,9), True),
-        (8, 64, 64, 56, 56, 2, 2, 98, (12, 9), True),
+        (8, 256, 256, 56, 56, 2, 2, 98, (12, 9), True),
         (8, 512, 512, 28, 28, 2, 2, 80, (10, 8), False),
         (8, 1024, 1024, 14, 14, 2, 2, 56, (7, 8), False),
-        (16, 64, 64, 56, 56, 2, 2, 98, (12, 9), True),
+        (16, 256, 256, 56, 56, 2, 2, 98, (12, 9), True),
         (16, 512, 512, 28, 28, 2, 2, 80, (11, 8), False),
         (16, 1024, 1024, 14, 14, 2, 2, 56, (9, 8), False),
     ),
@@ -57,6 +57,8 @@ def test_run_downsample(
     dtype,
     device,
 ):
+    if batch_size > 8 and dtype != ttl.tensor.DataType.BFLOAT8_B:
+        pytest.skip("Batch > 8 must be run fully bfp8")
     assert input_channels % 32 == 0
     assert output_channels % 32 == 0
     assert stride_h == stride_w
