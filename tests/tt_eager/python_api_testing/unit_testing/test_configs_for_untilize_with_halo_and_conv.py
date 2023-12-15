@@ -5,6 +5,8 @@
 import pytest
 import torch
 import numpy
+from loguru import logger
+
 from tt_eager.tt_dnn.op_library.sliding_window_op_infra.untilize_with_halo_config_generation_and_validation import (
     trace_conv_to_generate_data_top_left_indices_and_pad_metadata,
     construct_input_padded_tensor,
@@ -96,8 +98,8 @@ def test_generate_all_configs_and_references(
     output_size_to_shard_evenly = _nearest_y(conv_output_nhw_size, num_cores * 32)
     conv_output_shard_height = (int)(output_size_to_shard_evenly / num_cores)
 
-    print("untilize with halo input shard height=", untilize_with_halo_input_shard_height)
-    print("conv_output_shard_height=", conv_output_shard_height)
+    logger.info(f"untilize with halo input shard height={untilize_with_halo_input_shard_height}")
+    logger.info(f"conv_output_shard_height={conv_output_shard_height}")
 
     # Initialize tensor with data
     # Inserting sequential integer data
@@ -117,13 +119,13 @@ def test_generate_all_configs_and_references(
     input_padded_width = input_w + 2 * pad_w
     input_padded_height = input_h + 2 * pad_h
     # Generate following configs by tracing conv -
-    print("Trace conv and generate follwing configs - pad_metadata and data_top_left_indices.")
+    logger.info("Trace conv and generate following configs - pad_metadata and data_top_left_indices.")
     pad_metadata, data_top_left_indices = trace_conv_to_generate_data_top_left_indices_and_pad_metadata(
         conv_params, input_nchw_shape
     )
 
     # run trace conv reference to validate pad_metadata and data_top_left_indices
-    print("Validate pad_metadata and data_top_left_indices.")
+    logger.info("Validate pad_metadata and data_top_left_indices.")
     input_padded_tensor = construct_input_padded_tensor(input_pyt_tensor, pad_metadata)
     validate_input_padded_tensor_and_data_top_left_indices_and_pad_metadata(
         input_padded_tensor,
@@ -137,7 +139,7 @@ def test_generate_all_configs_and_references(
     )
 
     # Generate more configs -
-    print(
+    logger.info(
         "Decompose conv into shards and generate the required conv input shard start/end stick indices and tensor metadata."
     )
     req_conv_input_shard_start_end, tensor_metadata = decompose_conv_into_shards_and_generate_tensor_metadata(
@@ -150,9 +152,7 @@ def test_generate_all_configs_and_references(
         filter_h,
         filter_w,
     )
-    # print("req_conv_input_shard_start_end-", req_conv_input_shard_start_end)
-    # print("tensor_metadata-", tensor_metadata)
-    print("Validate required conv input shard start/end stick indices")
+    logger.info("Validate required conv input shard start/end stick indices")
     input_nchw_padded_shape = [batch_size, input_c, input_padded_height, input_padded_width]
     golden_untilize_with_halo_output_shards = construct_utwh_output_shards(
         input_padded_tensor, input_nchw_padded_shape, req_conv_input_shard_start_end
@@ -167,7 +167,7 @@ def test_generate_all_configs_and_references(
         req_conv_input_shard_start_end,
     )
 
-    print("Validate tensor metadata")
+    logger.info("Validate tensor metadata")
     untilize_with_halo_input_shards = validate_tensor_metadata(
         input_tensor,
         input_nchw_shape,
@@ -178,9 +178,7 @@ def test_generate_all_configs_and_references(
     )
 
     # Generate and validate the final untilize with halo configs here
-    print(f"Generate untilize with halo kernel configs")
-    # print(f'tensor metadata: {tensor_metadata}')
-    # print(f"req shards start and end: {req_conv_input_shard_start_end}")
+    logger.info("Generate untilize with halo kernel configs")
     (
         local_data,
         local_pad,
@@ -197,15 +195,8 @@ def test_generate_all_configs_and_references(
         rr_data_nsegments_per_core,
         max_out_nsticks_per_core,
     ) = generate_untilize_with_halo_kernel_configs(tensor_metadata, req_conv_input_shard_start_end)
-    # print(f"local data:     {local_data}")
-    # print(f"local pad:      {local_pad}")
-    # print(f"ll data:        {ll_data}")
-    # print(f"l data:         {l_data}")
-    # print(f"r data:         {r_data}")
-    # print(f"rr data:        {rr_data}")
-    # print(f"src start idx:  {src_start_idx}")
-    print("Validate reshards")
 
+    logger.info("Validate reshards")
     validate_untilize_with_halo_kernel_configs(
         golden_untilize_with_halo_output_shards,
         untilize_with_halo_input_shards,
@@ -227,13 +218,13 @@ def test_generate_all_configs_and_references(
     )
 
     # Generate sliding window op config -
-    print("Generate sliding window op configs - top left positioned indices for input shards")
+    logger.info("Generate sliding window op configs - top left positioned indices for input shards")
     sliding_window_op_sharded_input_top_left_indices = generate_sliding_window_op_sharded_input_top_left_indices(
         data_top_left_indices, req_conv_input_shard_start_end
     )
 
     if not test_max_pool:
-        print("Validate conv_sharded_input_top_left_indices")
+        logger.info("Validate conv_sharded_input_top_left_indices")
         validate_conv_sharded_input_top_left_indices(
             golden_untilize_with_halo_output_shards,
             input_padded_width,
@@ -242,7 +233,7 @@ def test_generate_all_configs_and_references(
             sliding_window_op_sharded_input_top_left_indices,
         )
     else:
-        print("Validate pool_sharded_input_top_left_indices")
+        logger.info("Validate pool_sharded_input_top_left_indices")
         # run max pool pytorch to get golden output
         assert filter_h == filter_w and stride_h == stride_w and pad_h == pad_w
         pool_out_golden_pyt_tensor = torch.nn.MaxPool2d(
