@@ -290,8 +290,7 @@ std::vector<Tensor> fill_zero_bw(const Tensor& grad, const MemoryConfig& output_
 std::vector<Tensor> _fill_bw(const Tensor& grad, const MemoryConfig& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     Tensor val = grad;
-    for(int rank = val.shape().rank()-1; rank >=0; rank--)
-        val = sum(val, rank, output_mem_config);
+    val = global_sum(val, output_mem_config);
     Tensor result = zeros_like(grad, output_mem_config);
     result = bcast(result, val,  BcastOpMath::ADD, BcastOpDim::HW, output_mem_config);
     grad_tensor.emplace_back(result);

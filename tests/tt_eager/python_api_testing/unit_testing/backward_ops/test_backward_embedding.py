@@ -29,9 +29,9 @@ def test_embedding_bw(input_shapes, device):
     input_shape = [batch_size, 1, 1, no_of_embeddings]
     input_index = torch.reshape(torch.arange(0, batch_size * no_of_embeddings), shape=input_shape)
     weights_shape = [batch_size, 1, no_of_embeddings, embedding_dim]
-    weights = torch.tensor(torch.randn(weights_shape), requires_grad=True)
+    weights = torch.randn(weights_shape, requires_grad=True)
     grad_shape = [1, 1, batch_size * no_of_embeddings, embedding_dim]
-    grad_data = torch.tensor(torch.randn(grad_shape), requires_grad=True)
+    grad_data = torch.randn(grad_shape, requires_grad=True)
 
     grad_tensor = (
         tt_lib.tensor.Tensor(grad_data, tt_lib.tensor.DataType.BFLOAT16).to(tt_lib.tensor.Layout.ROW_MAJOR).to(device)
