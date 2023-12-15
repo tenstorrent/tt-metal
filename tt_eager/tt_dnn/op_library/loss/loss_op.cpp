@@ -40,11 +40,7 @@ Tensor lossfunction(
     }
     switch( reduce_mode ) {
         case LossReductionMode::SUM:
-            {
-                for(int rank = result.shape().rank()-1; rank >=0; rank--)
-                    result = sum(result, rank, mem_config);
-                return result;
-            }
+            return tt::tt_metal::global_sum(result, mem_config);
         case LossReductionMode::MEAN:
             return tt::tt_metal::global_mean(result, mem_config);
         case LossReductionMode::NONE:

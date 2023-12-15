@@ -272,6 +272,12 @@ Tensor sum(const Tensor &input_tensor, uint dim, const MemoryConfig& output_mem_
     }
 }
 
+Tensor global_sum(Tensor& val, const MemoryConfig& output_mem_config) {
+    for(int rank = val.shape().rank()-1; rank >=0; rank--)
+        val = sum(val, rank, output_mem_config);
+    return val;
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt
