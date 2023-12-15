@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "debug/dprint.h"
 
 // split REDUCE across cores
 void kernel_main() {
@@ -108,11 +109,28 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_ex_global, block_h);
 
-        // mcast to other cores
+        // // mcast to other cores
+        // uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
+        // uint64_t multicast_data_addr3 = multicast_data_noc | l1_read_addr_ex_global;
+        // noc_async_write_multicast(l1_read_addr_ex_global, multicast_data_addr3, block_h_size_bytes, num_blocks-1);
+        // noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1);
+
+        // gather data to top row
         uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
-        uint64_t multicast_data_addr3 = multicast_data_noc | l1_read_addr_ex_global;
-        noc_async_write_multicast(l1_read_addr_ex_global, multicast_data_addr3, block_h_size_bytes, num_blocks-1);
-        noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1);
+
+        for (uint32_t block = 0; block < num_all_to_all_workers; block++) {
+            *reduce_sender_semaphore_addr_ptr = block + 1;
+
+            noc_async_write_multicast(l1_read_addr_ex_global, multicast_data_noc | l1_read_addr_ex_global, num_tiles_per_worker_bytes, num_blocks-1, true);
+
+            if (block == num_all_to_all_workers-1)
+                noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1, false);
+            else
+                noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1, true);
+
+            l1_read_addr_ex_global += num_tiles_per_worker_bytes;
+            noc_async_write_barrier();
+        }
     }
 
     {
@@ -168,10 +186,27 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_ex_global, block_h);
 
-        // mcast to other cores
+        // // mcast to other cores
+        // *reduce_sender_semaphore_addr_ptr = 1;
+        // uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
+        // uint64_t multicast_data_addr3 = multicast_data_noc | l1_read_addr_ex_global;
+        // noc_async_write_multicast(l1_read_addr_ex_global, multicast_data_addr3, block_h_size_bytes, num_blocks-1);
+        // noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1);
+
         uint32_t l1_read_addr_ex_global = get_read_ptr(cb_ex_global);
-        uint64_t multicast_data_addr3 = multicast_data_noc | l1_read_addr_ex_global;
-        noc_async_write_multicast(l1_read_addr_ex_global, multicast_data_addr3, block_h_size_bytes, num_blocks-1);
-        noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1);
+
+        for (uint32_t block = 0; block < num_all_to_all_workers; block++) {
+            *reduce_sender_semaphore_addr_ptr = block + 1;
+
+            noc_async_write_multicast(l1_read_addr_ex_global, multicast_data_noc | l1_read_addr_ex_global, num_tiles_per_worker_bytes, num_blocks-1, true);
+
+            if (block == num_all_to_all_workers-1)
+                noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1, false);
+            else
+                noc_semaphore_set_multicast(reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_blocks-1, true);
+
+            l1_read_addr_ex_global += num_tiles_per_worker_bytes;
+            noc_async_write_barrier();
+        }
     }
 }

@@ -1251,7 +1251,7 @@ void noc_async_write_multicast(
  */
 FORCE_INLINE
 void noc_semaphore_set_multicast(
-    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t num_dests) {
+    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr_multicast, std::uint32_t num_dests, bool linked = false) {
     DEBUG_STATUS('N', 'S', 'M', 'W');
     DEBUG_SANITIZE_NOC_MULTI_ADDR(dst_noc_addr_multicast, 4);
     DEBUG_SANITIZE_WORKER_ADDR(src_local_l1_addr, 4);
@@ -1263,7 +1263,7 @@ void noc_semaphore_set_multicast(
         4 /*size in bytes*/,
         NOC_MULTICAST_WRITE_VC,
         true,
-        false,
+        linked,
         num_dests);
     DEBUG_STATUS('N', 'S', 'M', 'D');
 }
