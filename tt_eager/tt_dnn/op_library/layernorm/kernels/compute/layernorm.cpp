@@ -15,6 +15,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "debug/dprint.h"
 
 
 // SPLIT REDUCE across Cores
@@ -144,13 +145,14 @@ void MAIN {
         cb_push_back(cb_ex, num_tiles_per_allgather_worker);
         cb_wait_front(cb_ex, num_tiles_per_allgather_worker);
     }
-    cb_wait_front(cb_ex_global, block_h);
+    // cb_wait_front(cb_ex_global, block_h);
 
     // x - E[x]
     index_h_offset = 0;
     sub_bcast_cols_init_short();
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
+        cb_wait_front(cb_ex_global, 1);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
@@ -263,7 +265,7 @@ void MAIN {
         }
 
     }
-    cb_wait_front(cb_ex_global, block_h);
+    // cb_wait_front(cb_ex_global, block_h);
 
 
     if constexpr(do_gamma == 0 && do_beta == 0) {
@@ -274,11 +276,12 @@ void MAIN {
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
+        cb_wait_front(cb_ex_global, 1);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset + index_h_offset;
-                mul_tiles_bcast_cols(cb_xmm, cb_ex_global, index, i, w);
+                mul_tiles_bcast_cols(cb_xmm, cb_ex_global, index, 0, w);
             }
             tile_regs_commit();
             cb_reserve_back(cb_im, subblock_w);
@@ -290,10 +293,10 @@ void MAIN {
             cb_push_back(cb_im, subblock_w);
             index_subblock_w_offset += subblock_w;
         }
-
         index_h_offset += block_w;
+        cb_pop_front(cb_ex_global, 1);
     }
-    cb_pop_front(cb_ex_global, block_h);
+
     cb_pop_front(cb_xmm, num_tiles_per_block);
     cb_wait_front(cb_im, num_tiles_per_block);
 

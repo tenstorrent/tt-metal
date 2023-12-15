@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "debug/dprint.h"
 
 // split REDUCE across cores
 void kernel_main() {
@@ -82,9 +83,15 @@ void kernel_main() {
         noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
 
         // wait for result
-        cb_reserve_back(cb_ex_global, block_h);
-        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-        cb_push_back(cb_ex_global, block_h);
+        // cb_reserve_back(cb_ex_global, block_h);
+        // noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+        // cb_push_back(cb_ex_global, block_h);
+
+        for (uint32_t block = 0; block < num_all_to_all_workers; block++) {
+            cb_reserve_back(cb_ex_global, num_tiles_per_worker);
+            noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, block+1);
+            cb_push_back(cb_ex_global, num_tiles_per_worker);
+        }
 
     } else {
         // wait for local data ready
@@ -111,9 +118,15 @@ void kernel_main() {
         noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
 
         // wait result
-        cb_reserve_back(cb_ex_global, block_h);
-        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-        cb_push_back(cb_ex_global, block_h);
+        // cb_reserve_back(cb_ex_global, block_h);
+        // noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+        // cb_push_back(cb_ex_global, block_h);
+
+        for (uint32_t block = 0; block < num_all_to_all_workers; block++) {
+            cb_reserve_back(cb_ex_global, num_tiles_per_worker);
+            noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, block+1);
+            cb_push_back(cb_ex_global, num_tiles_per_worker);
+        }
 
     };
 
@@ -163,9 +176,15 @@ void kernel_main() {
         noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
 
         // wait for result
-        cb_reserve_back(cb_ex_global, block_h);
-        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-        cb_push_back(cb_ex_global, block_h);
+        // cb_reserve_back(cb_ex_global, block_h);
+        // noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+        // cb_push_back(cb_ex_global, block_h);
+
+        for (uint32_t block = 0; block < num_all_to_all_workers; block++) {
+            cb_reserve_back(cb_ex_global, num_tiles_per_worker);
+            noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, block+1);
+            cb_push_back(cb_ex_global, num_tiles_per_worker);
+        }
 
     } else {
         // wait for local data ready
@@ -192,9 +211,17 @@ void kernel_main() {
         noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
 
         // wait result
-        cb_reserve_back(cb_ex_global, block_h);
-        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-        cb_push_back(cb_ex_global, block_h);
+        // cb_reserve_back(cb_ex_global, block_h);
+        // noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+        // cb_push_back(cb_ex_global, block_h);
+
+        for (uint32_t block = 0; block < num_all_to_all_workers; block++) {
+            cb_reserve_back(cb_ex_global, num_tiles_per_worker);
+            noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, block+1);
+            cb_push_back(cb_ex_global, num_tiles_per_worker);
+        }
 
     };
+
+
 }
