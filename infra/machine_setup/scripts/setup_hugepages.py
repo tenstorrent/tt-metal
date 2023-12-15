@@ -273,7 +273,7 @@ def is_proc_cmdline_set():
             size = parse_scaled_value(v)
             seen_hugepagesz = size == HUGEPAGE_SIZE
         elif k == "hugepages":
-            seen_hugepages = int(v) == num_tt_devices
+            seen_hugepages = int(v) >= num_tt_devices
         elif k == "iommu":
             seen_iommu = v == "pt"
 
