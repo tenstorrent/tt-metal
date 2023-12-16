@@ -104,11 +104,11 @@ void cq_reserve_back(uint32_t data_size_B) {
 }
 
 FORCE_INLINE
-void cq_push_back(uint32_t push_size_B) {
+void cq_push_back(const uint32_t command_issue_region_size, uint32_t push_size_B) {
     uint32_t push_size_16B = align(push_size_B, 32) >> 4;
     cq_write_interface.completion_fifo_wr_ptr += push_size_16B;
     if (cq_write_interface.completion_fifo_wr_ptr >= cq_write_interface.completion_fifo_limit) {
-        cq_write_interface.completion_fifo_wr_ptr = DeviceCommand::COMMAND_ISSUE_REGION_SIZE >> 4;
+        cq_write_interface.completion_fifo_wr_ptr = command_issue_region_size >> 4;
 
         // Flip the toggle
         cq_write_interface.completion_fifo_wr_toggle = not cq_write_interface.completion_fifo_wr_toggle;
@@ -125,6 +125,7 @@ void cq_push_back(uint32_t push_size_B) {
 
 FORCE_INLINE void write_buffers(
     volatile tt_l1_ptr uint32_t* command_ptr,
+    const uint32_t command_issue_region_size,
     uint32_t num_destinations,
     uint32_t sharded_buffer_num_cores,
     uint32_t consumer_cb_size,
@@ -177,7 +178,7 @@ FORCE_INLINE void write_buffers(
             page_id += num_to_write;
         }
         if (buffer_type == BufferType::SYSTEM_MEMORY) {
-            cq_push_back(num_pages * page_size);
+            cq_push_back(command_issue_region_size, num_pages * page_size);
         }
     }
     noc_async_write_barrier();

@@ -52,9 +52,9 @@ void program_consumer_cb(bool db_buf_switch, uint64_t consumer_noc_encoding, uin
 
 // Only the read interface is set up on the device... the write interface
 // belongs to host
-void setup_cq_read_interface() {
+void setup_cq_read_interface(const uint32_t command_issue_region_size) {
     uint issue_fifo_addr = CQ_START >> 4;  // The fifo starts after the pointer addresses
-    uint issue_fifo_size = ((DeviceCommand::COMMAND_ISSUE_REGION_SIZE) >> 4) - issue_fifo_addr;
+    uint issue_fifo_size = (command_issue_region_size >> 4) - issue_fifo_addr;
 
     cq_read_interface.issue_fifo_limit = issue_fifo_addr + issue_fifo_size;
     cq_read_interface.issue_fifo_rd_ptr = issue_fifo_addr;
@@ -63,8 +63,9 @@ void setup_cq_read_interface() {
 }
 
 void kernel_main() {
+    constexpr uint32_t command_issue_region_size = get_compile_time_arg_val(0);
 
-    setup_cq_read_interface();
+    setup_cq_read_interface(command_issue_region_size);
 
     // Initialize the producer/consumer DB semaphore
     // This represents how many buffers the producer can write to.
@@ -84,7 +85,7 @@ void kernel_main() {
         // Read in command
         uint32_t rd_ptr = (cq_read_interface.issue_fifo_rd_ptr << 4);
         uint64_t src_noc_addr = pcie_core_noc_encoding | rd_ptr;
-        noc_async_read(src_noc_addr, COMMAND_START_ADDR, min(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, DeviceCommand::COMMAND_ISSUE_REGION_SIZE - rd_ptr));
+        noc_async_read(src_noc_addr, COMMAND_START_ADDR, min(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, command_issue_region_size - rd_ptr));
         noc_async_read_barrier();
 
         // Producer information
