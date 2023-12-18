@@ -2,38 +2,54 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
-
-from torchvision import models
-from loguru import logger
-
+import pytest
 import tt_lib
 
+from loguru import logger
+from pathlib import Path
+
 from models.experimental.vgg.tt.vgg import *
+from models.utility_functions import torch_to_tt_tensor, unpad_from_zero
+from models.experimental.vgg.vgg_utils import store_weights, get_tt_cache_path
 
 
-_batch_size = 1
-
-
-def test_gs_demo(device, imagenet_sample_input, imagenet_label_dict):
-    image = imagenet_sample_input
+@pytest.mark.parametrize(
+    "dtype",
+    (tt_lib.tensor.DataType.BFLOAT16,),
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    (
+        (1),
+        (2),
+        (8),
+    ),
+)
+def test_gs_demo(device, imagenet_sample_input, imagenet_label_dict, batch_size, dtype):
+    images = batch_size * [imagenet_sample_input]
     class_labels = imagenet_label_dict
 
-    batch_size = _batch_size
+    model_version = "vgg16"
+    tt_cache_path = get_tt_cache_path(model_version)
+    base_addresses = [f"features", "classifier"]
+
+    if (
+        tt_cache_path == (str(Path(f"models/experimental/vgg/datasets/{model_version}")) + "/")
+        and len(os.listdir(f"models/experimental/vgg/datasets/{model_version}")) < 32
+    ):
+        store_weights(model_version=model_version, file_name=tt_cache_path, dtype=dtype, base_addresses=base_addresses)
+
     with torch.no_grad():
         # TODO: enable conv on tt device after adding fast dtx transform
-        tt_vgg = vgg16(device, disable_conv_on_tt_device=True)
+        tt_vgg = vgg16(device, disable_conv_on_tt_device=True, tt_cache_path=tt_cache_path)
 
-        tt_image = tt_lib.tensor.Tensor(
-            image.reshape(-1).tolist(),
-            get_shape(image.shape),
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-        )
+        tt_images = [torch_to_tt_tensor(image, device=device) for image in images]
+        tt_images = tt_lib.tensor.concat(tt_images)
 
-        tt_output = tt_vgg(tt_image)
-
+        tt_output = tt_vgg(tt_images)
+        tt_output = unpad_from_zero(tt_output, tt_output.shape())
         tt_output = tt_output.cpu()
-        tt_output = torch.Tensor(tt_output.to_torch())
 
         logger.info(f"GS's predicted Output: {class_labels[torch.argmax(tt_output).item()]}\n")

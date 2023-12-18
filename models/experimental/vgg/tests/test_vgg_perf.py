@@ -8,18 +8,15 @@ import pytest
 from torchvision import models
 from loguru import logger
 
-import tt_lib
-
 from models.experimental.vgg.tt.vgg import *
 from models.utility_functions import (
     profiler,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
     comp_pcc,
+    unpad_from_zero,
+    torch_to_tt_tensor,
 )
-
-
-_batch_size = 1
 
 
 @pytest.mark.parametrize(
@@ -30,15 +27,14 @@ def test_vgg_inference(device, pcc, PERF_CNT, imagenet_sample_input, imagenet_la
     disable_persistent_kernel_cache()
     image = imagenet_sample_input
     class_labels = imagenet_label_dict
-    batch_size = _batch_size
     with torch.no_grad():
         torch_vgg = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
-
         torch_vgg.eval()
 
-        state_dict = torch_vgg.state_dict()
+        cache_path = "/mnt/MLPerf/tt_dnn-models/tt/VGG/vgg16/"
+
         # TODO: enable conv on tt device after adding fast dtx transform
-        tt_vgg = vgg16(device=device, disable_conv_on_tt_device=True)
+        tt_vgg = vgg16(device=device, disable_conv_on_tt_device=True, tt_cache_path=cache_path)
 
         profiler.enable()
 
@@ -46,12 +42,7 @@ def test_vgg_inference(device, pcc, PERF_CNT, imagenet_sample_input, imagenet_la
         torch_output = torch_vgg(image).unsqueeze(1).unsqueeze(1)
         profiler.end("\nExec time of reference model")
 
-        tt_image = tt_lib.tensor.Tensor(
-            image.reshape(-1).tolist(),
-            get_shape(image.shape),
-            tt_lib.tensor.DataType.BFLOAT16,
-            tt_lib.tensor.Layout.ROW_MAJOR,
-        )
+        tt_image = torch_to_tt_tensor(image, device=device)
 
         profiler.start("\nExecution time of tt_vgg first run")
         tt_output = tt_vgg(tt_image)
@@ -65,8 +56,8 @@ def test_vgg_inference(device, pcc, PERF_CNT, imagenet_sample_input, imagenet_la
             tt_output = tt_vgg(tt_image)
             profiler.end("\nAverage execution time of tt_vgg model")
 
+        tt_output = unpad_from_zero(tt_output, torch_output.shape)
         tt_output = tt_output.cpu()
-        tt_output = torch.Tensor(tt_output.to_torch())
 
         logger.info(f"Correct Output: {class_labels[torch.argmax(torch_output).item()]}")
         logger.info(f"Predicted Output: {class_labels[torch.argmax(tt_output).item()]}\n")
