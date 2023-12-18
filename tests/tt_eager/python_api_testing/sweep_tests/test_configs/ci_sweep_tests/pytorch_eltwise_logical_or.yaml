@@ -1,6 +1,6 @@
 ---
 test-list:
-  - eltwise-logical_ori:
+  - eltwise-logical_or:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -26,20 +26,20 @@ test-list:
             high: 10
       comparison:
         function: comp_pcc
-      args-gen: gen_logical_immediate_args
+      args-gen: gen_dtype_layout_device
       args:
         inputs:
           - input-1:
             data-layout: ["TILE"]
-            data-type: ["BFLOAT16"]
+            data-type: ["BFLOAT16", "BFLOAT8_B"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
           - input-2:
             data-layout: ["TILE"]
-            data-type: ["BFLOAT16"]
+            data-type: ["BFLOAT16","BFLOAT8_B"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: eltwise_logical_ori_sweep.csv
-  - eltwise-logical_ori:
+      output-file: eltwise_logical_or_sweep.csv
+  - eltwise-logical_or:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [6, 12, 256, 256]
@@ -65,7 +65,7 @@ test-list:
             high: 10
       comparison:
         function: comp_pcc
-      args-gen: gen_logical_immediate_args
+      args-gen: gen_dtype_layout_device
       args:
         inputs:
           - input-1:
@@ -77,4 +77,4 @@ test-list:
             data-type: ["BFLOAT16"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: eltwise_logical_ori_sweep.csv
+      output-file: eltwise_logical_or_sweep.csv
