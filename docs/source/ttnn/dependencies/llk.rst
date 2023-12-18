@@ -120,7 +120,7 @@ User Visible Constants
 ^^^^^^^^^^^^^^^^^^^^^^
 
 Constant registers are implemented as objects which can be referenced
-whereever a vector can be used.
+wherever a vector can be used.
 
   * Grayskull:
 
@@ -227,7 +227,7 @@ Below ``Vec`` means any vector type.
 
 Below is a list of library calls, further documentation is below.
 
-Grayskulll and Wormhole
+Grayskull and Wormhole
 ^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: c++
@@ -249,7 +249,7 @@ Extracts and returns the mantissa of v.  ''exman8'' adds the hidden bit and pads
     vFloat setexp(const vFloat v, const uint32_t exp)
     vFloat setexp(const vFloat v, const Vec[U]Short exp)
 
-Replaces the exponent of ''v'' with the exponent in bits 7:0 of ''exp'' and returns the result (preserving the sign and mansissa of ''v'').
+Replaces the exponent of ''v'' with the exponent in bits 7:0 of ''exp'' and returns the result (preserving the sign and mantissa of ''v'').
 
 .. code-block:: c++
 
@@ -264,7 +264,7 @@ Replaces the mantissa of  ''v'' with the mantissa in the low bits of ''man'' and
     vFloat setsgn(const vFloat v, const vFloat sgn)
     vFloat setsgn(const vFloat v, const vInt sgn)
 
-Replacs the sign bit of ''v'' with the sign in ''sgn'' and returns the result (preserving the exponent and mantissa of ''v'').  Note that the ''int32_t'' version takes the sign from bit 0 while the ''vFloat'' and ''vInt'' versions take the sign from the sign bit location (bit 19 on GS and bit 32 on WH).
+Replaces the sign bit of ''v'' with the sign in ''sgn'' and returns the result (preserving the exponent and mantissa of ''v'').  Note that the ''int32_t'' version takes the sign from bit 0 while the ''vFloat'' and ''vInt'' versions take the sign from the sign bit location (bit 19 on GS and bit 32 on WH).
 
 .. code-block:: c++
 
@@ -283,7 +283,7 @@ Adds the 8-bit value in ''exp'' to the exponent of ''v'' and returns the result 
 Floating point representations of ''A'' and ''B'' (19-bit on GS and 32-bit on WH) are constructed by:
   * Using the sign bit
   * Generating an 8-bit exponent as (127 – exponent_extender)
-  * Genering a mantissa by padding the right of the specified 4 bit mantissa with 0s
+  * Generating a mantissa by padding the right of the specified 4 bit mantissa with 0s
 
 ''A'' and ''B'' are selected from one of ''l0'', ''l1'' or ''l2'' based on the value in ''v'' as follows:
   * ''l0'' when ''v'' < 0
@@ -291,7 +291,7 @@ Floating point representations of ''A'' and ''B'' (19-bit on GS and 32-bit on WH
   * ''l2'' when ''v'' > 0
 
 XXXX is this backwards?
-Returns the result of the computation ''A * ABS(v) + B''.  The ''lut_sgn'' variation discards the calculated sign bit and insteads uses the sign of ''v''.
+Returns the result of the computation ''A * ABS(v) + B''.  The ''lut_sgn'' variation discards the calculated sign bit and instead uses the sign of ''v''.
 
 .. code-block:: c++
 
@@ -310,7 +310,7 @@ Returns the absolute value of ''v''.
 
     vUInt shft(const vUInt v, const vInt amt)
 
-Performs a left shift (when ''amt'' is postive) or right shift (when ''amt'' is negative) of ''v'' by ''amt'' bits.
+Performs a left shift (when ''amt'' is positive) or right shift (when ''amt'' is negative) of ''v'' by ''amt'' bits.
 
 Wormhole only
 ^^^^^^^^^^^^^
@@ -338,7 +338,7 @@ Compares and swaps each element of the two vectors such that on return ''min'' c
 
 .. code-block:: c++
 
-    vInt lz_nosgn(consrt Vec v)
+    vInt lz_nosgn(const Vec v)
 
 Returns the count of leading (left-most) zeros of ''v'' ignoring the sign bit.
 
@@ -464,7 +464,7 @@ For example:
     l_reg[LRegs::LReg1] = x;         // this is necessary at the end of the function
                                      // to preserve the value in LReg1 (if desired)
 
-Miscelaneous
+Miscellaneous
 ============
 
 Register Pressure Management
@@ -516,7 +516,7 @@ The ``SFPREPLAY`` instruction available on Wormhole allows the RISCV processor
 to submit up to 32 SFP instructions at once.  The compiler looks for sequences
 of instructions that repeat, stores these and then "replays" them later.
 
-The current implemention of this is very much first cut: it does not handle
+The current implementation of this is very much first cut: it does not handle
 kernels with rolled up loops very well.  Best performance is typically attained by
 unrolling the top level loop and then letting the compiler find the repetitions
 and replace them with ``SFPREPLAY``.  This works well when the main loop
@@ -577,7 +577,7 @@ vector to memory will result in an error similar to the following:
 Function Calls
 --------------
 
-There is no abi and none of the vector types can be passed on the stack.
+There is no ABI and none of the vector types can be passed on the stack.
 Therefore, all function calls must be inlined.  To ensure this use
 ``sfpi_inline``, which is defined to ``__attribute__((always_inline))`` on GCC.
 
@@ -585,7 +585,7 @@ Register Spilling
 -----------------
 
 The compiler does not implement register spilling.  Since Grayskull only has 4
-LRegs, running out of registers is a common occurence.  If you see the
+LRegs, running out of registers is a common occurrence.  If you see the
 following: ``error: cannot store SFPU register (reigster spill?) - exiting!``
 you have most likely run out of registers.
 
@@ -593,7 +593,7 @@ Error Messages
 --------------
 
 Unfortunately, many errors are attributed to the code in the wrapper rather than in the code
-being written.  For example, using an unitialized variable would show an error at a macro
+being written.  For example, using an uninitialized variable would show an error at a macro
 called by a wrapper function before showing the line number in the user's code.
 
 Limitations
