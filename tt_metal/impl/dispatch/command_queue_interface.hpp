@@ -177,11 +177,13 @@ class SystemMemoryManager {
         tt_driver_atomics::sfence();
     }
 
-    void cq_pop_front(uint32_t data_read_B) {
+    void cq_pop_front(uint32_t data_read_B, uint32_t min_space_required_B) {
         uint32_t data_read_16B =
             (((data_read_B - 1) | 31) + 1) >> 4;  // Terse way to find next multiple of 32 in 16B words
+        uint32_t min_space_required_16B = (((min_space_required_B - 1) | 31) + 1) >> 4;
         cq_interface.completion_fifo_rd_ptr += data_read_16B;
-        if (cq_interface.completion_fifo_rd_ptr >= cq_interface.completion_fifo_limit) {
+        if (cq_interface.completion_fifo_rd_ptr >= cq_interface.completion_fifo_limit or
+            cq_interface.completion_fifo_limit - cq_interface.completion_fifo_rd_ptr < min_space_required_16B) {
             cq_interface.completion_fifo_rd_ptr = DeviceCommand::COMMAND_ISSUE_REGION_SIZE >> 4;
             cq_interface.completion_fifo_rd_toggle = not cq_interface.completion_fifo_rd_toggle;
         }

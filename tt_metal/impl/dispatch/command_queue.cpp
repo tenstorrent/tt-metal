@@ -716,7 +716,7 @@ void FinishCommand::process() {
 EnqueueCommandType FinishCommand::type() { return this->type_; }
 
 // EnqueueWrapCommand section
-EnqueueWrapCommand::EnqueueWrapCommand(Device* device, SystemMemoryManager& manager) : manager(manager) {
+EnqueueWrapCommand::EnqueueWrapCommand(Device* device, SystemMemoryManager& manager, DeviceCommand::WrapRegion wrap_region) : manager(manager), wrap_region(wrap_region) {
     this->device = device;
 }
 
@@ -727,16 +727,20 @@ const DeviceCommand EnqueueWrapCommand::assemble_device_command(uint32_t) {
 
 void EnqueueWrapCommand::process() {
     uint32_t write_ptr = this->manager.get_issue_queue_write_ptr();
-    uint32_t space_left = DeviceCommand::COMMAND_ISSUE_REGION_SIZE - write_ptr;
+    uint32_t space_left_in_bytes = DeviceCommand::COMMAND_ISSUE_REGION_SIZE - write_ptr;
+    // There may not be enough space in the issue queue to submit another command
+    // In that case we write as big of a vector as we can with the wrap index (0) set to wrap type
+    // To ensure that the issue queue write pointer does wrap, we need the wrap packet to be the full size of the issue queue
+    uint32_t wrap_packet_size_bytes = this->wrap_region == DeviceCommand::WrapRegion::ISSUE ? space_left_in_bytes : DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
     // Since all of the values will be 0, this will be equivalent to
     // a bunch of NOPs
-    vector<uint32_t> command_vector(space_left / sizeof(uint32_t), 0);
-    command_vector[0] = 1;  // wrap
+    vector<uint32_t> command_vector(wrap_packet_size_bytes / sizeof(uint32_t), 0);
+    command_vector[DeviceCommand::wrap_idx] = (uint32_t)this->wrap_region;  // wrap
 
-    this->manager.cq_reserve_back(space_left);
+    this->manager.cq_reserve_back(wrap_packet_size_bytes);
     this->manager.cq_write(command_vector.data(), command_vector.size() * sizeof(uint32_t), write_ptr);
-    this->manager.cq_push_back(space_left);
+    this->manager.cq_push_back(wrap_packet_size_bytes);
 }
 
 EnqueueCommandType EnqueueWrapCommand::type() { return this->type_; }
@@ -815,6 +819,12 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking)
         tt::log_debug(tt::LogDispatch, "EnqueueReadBuffer");
 
         uint32_t available_space_bytes = DeviceCommand::HUGE_PAGE_SIZE - (get_cq_completion_wr_ptr(this->device->id()) << 4);
+        if (available_space_bytes < padded_page_size) {
+            // wrap the completion region because a single page won't fit in available space
+            this->wrap(DeviceCommand::WrapRegion::COMPLETION);
+            available_space_bytes = DeviceCommand::HUGE_PAGE_SIZE - (get_cq_completion_wr_ptr(this->device->id()) << 4);
+        }
+
         uint32_t pages_to_read;
         if (available_space_bytes >= (total_pages_to_read * padded_page_size)) {
             pages_to_read = total_pages_to_read;
@@ -1011,10 +1021,10 @@ void CommandQueue::finish() {
     tt::Cluster::instance().write_sysmem(&finish, 4, HOST_CQ_FINISH_PTR, mmio_device_id, channel);
 }
 
-void CommandQueue::wrap() {
+void CommandQueue::wrap(DeviceCommand::WrapRegion wrap_region) {
     ZoneScopedN("CommandQueue_wrap");
     tt::log_debug(tt::LogDispatch, "EnqueueWrap");
-    EnqueueWrapCommand command(this->device, *this->device->sysmem_manager);
+    EnqueueWrapCommand command(this->device, *this->device->sysmem_manager, wrap_region);
     this->enqueue_command(command, false);
 }
 

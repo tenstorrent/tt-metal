@@ -18,7 +18,7 @@ DeviceCommand::DeviceCommand() {
     this->desc[this->sharded_buffer_num_cores_idx] = 1;
 }
 
-void DeviceCommand::wrap() { this->desc[this->wrap_idx] = 1; }
+void DeviceCommand::wrap(WrapRegion wrap_region) { this->desc[this->wrap_idx] = (uint32_t)wrap_region; }
 
 void DeviceCommand::finish() { this->desc[this->finish_idx] = 1; }
 

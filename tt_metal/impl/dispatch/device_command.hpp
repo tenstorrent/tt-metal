@@ -60,7 +60,14 @@ class DeviceCommand {
     static constexpr uint32_t producer_consumer_transfer_num_pages_idx = 17;
     static constexpr uint32_t sharded_buffer_num_cores_idx = 18;
 
-    void wrap();
+    // Denotes which portion of the command queue needs to be wrapped
+    enum class WrapRegion : uint8_t {
+        NONE = 0,
+        ISSUE = 1,
+        COMPLETION = 2
+    };
+
+    void wrap(WrapRegion wrap_region);
 
     void finish();
 

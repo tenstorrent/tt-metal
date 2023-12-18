@@ -166,10 +166,11 @@ class EnqueueWrapCommand : public Command {
    private:
     Device* device;
     SystemMemoryManager& manager;
+    DeviceCommand::WrapRegion wrap_region;
     static constexpr EnqueueCommandType type_ = EnqueueCommandType::WRAP;
 
    public:
-    EnqueueWrapCommand(Device* device, SystemMemoryManager& manager);
+    EnqueueWrapCommand(Device* device, SystemMemoryManager& manager, DeviceCommand::WrapRegion wrap_region);
 
     const DeviceCommand assemble_device_command(uint32_t);
 
@@ -207,7 +208,7 @@ class CommandQueue {
 
     void finish();
 
-    void wrap();
+    void wrap(DeviceCommand::WrapRegion wrap_region = DeviceCommand::WrapRegion::ISSUE);
 
     friend void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& dst, bool blocking);
     friend void EnqueueWriteBuffer(CommandQueue& cq, Buffer& buffer, vector<uint32_t>& src, bool blocking);

@@ -338,6 +338,66 @@ TEST_F(CommandQueueFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
     EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(this->device_, *tt::tt_metal::detail::GLOBAL_CQ, config));
 }
 
+// Test that command queue wraps when buffer available space in completion region is less than a page
+TEST_F(CommandQueueFixture, TestWrapCompletionQOnInsufficientSpace) {
+    uint32_t large_page_size = 8192; // page size for first and third read
+    uint32_t small_page_size = 2048; // page size for second read
+
+    uint32_t first_buffer_size = tt::round_up(DeviceCommand::COMMAND_COMPLETION_REGION_SIZE * 0.95, large_page_size);
+
+    uint32_t space_after_first_buffer = DeviceCommand::COMMAND_COMPLETION_REGION_SIZE - first_buffer_size;
+    // leave only small_page_size * 2 B of space in the completion queue
+    uint32_t num_pages_second_buffer = (space_after_first_buffer / small_page_size) - 2;
+
+    Buffer buff_1(this->device_, first_buffer_size, large_page_size, BufferType::DRAM);
+    auto src_1 = local_test_functions::generate_arange_vector(buff_1.size());
+    EnqueueWriteBuffer(*tt::tt_metal::detail::GLOBAL_CQ, buff_1, src_1, false);
+    vector<uint32_t> result_1;
+    EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, buff_1, result_1, true);
+    EXPECT_EQ(src_1, result_1);
+
+    Buffer buff_2(this->device_, num_pages_second_buffer * small_page_size, small_page_size, BufferType::DRAM);
+    auto src_2 = local_test_functions::generate_arange_vector(buff_2.size());
+    EnqueueWriteBuffer(*tt::tt_metal::detail::GLOBAL_CQ, buff_2, src_2, false);
+    vector<uint32_t> result_2;
+    EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, buff_2, result_2, true);
+    EXPECT_EQ(src_2, result_2);
+
+    Buffer buff_3(this->device_, 32 * large_page_size, large_page_size, BufferType::DRAM);
+    auto src_3 = local_test_functions::generate_arange_vector(buff_3.size());
+    EnqueueWriteBuffer(*tt::tt_metal::detail::GLOBAL_CQ, buff_3, src_3, false);
+    vector<uint32_t> result_3;
+    EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, buff_3, result_3, true);
+    EXPECT_EQ(src_3, result_3);
+}
+
+// Test that command queue wraps when buffer read needs to be split into multiple enqueue_read_buffer commands and available space in completion region is less than a page
+TEST_F(CommandQueueFixture, TestWrapCompletionQOnInsufficientSpace2) {
+    uint32_t num_pages_buff_1 = 9;
+    uint32_t page_size_buff_1 = 2048;
+    Buffer buff_1(this->device_, num_pages_buff_1 * page_size_buff_1, page_size_buff_1, BufferType::DRAM);
+    uint32_t space_after_buff_1 = DeviceCommand::COMMAND_COMPLETION_REGION_SIZE - buff_1.size();
+
+    uint32_t page_size = 8192;
+    uint32_t desired_remaining_space_before_wrap = 6144;
+    uint32_t avail_space_for_wrapping_buffer = space_after_buff_1 - desired_remaining_space_before_wrap;
+    uint32_t num_pages_for_wrapping_buffer = (avail_space_for_wrapping_buffer / page_size) + 4;
+
+    auto src_1 = local_test_functions::generate_arange_vector(buff_1.size());
+    EnqueueWriteBuffer(*tt::tt_metal::detail::GLOBAL_CQ, buff_1, src_1, false);
+    vector<uint32_t> result_1;
+    EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, buff_1, result_1, true);
+    EXPECT_EQ(src_1, result_1);
+
+    Buffer wrap_buff(this->device_, num_pages_for_wrapping_buffer * page_size, page_size, BufferType::DRAM);
+    auto src_2 = local_test_functions::generate_arange_vector(wrap_buff.size());
+    EnqueueWriteBuffer(*tt::tt_metal::detail::GLOBAL_CQ, wrap_buff, src_2, false);
+    vector<uint32_t> result_2;
+    EnqueueReadBuffer(*tt::tt_metal::detail::GLOBAL_CQ, wrap_buff, result_2, true);
+    EXPECT_EQ(src_2, result_2);
+}
+
+
 }  // end namespace dram_tests
 
 namespace l1_tests {

@@ -31,7 +31,7 @@ void cq_wait_front() {
 }
 
 FORCE_INLINE
-void notify_host_of_cq_read_pointer() {
+void notify_host_of_cq_issue_read_pointer() {
     // These are the PCIE core coordinates
     constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | HOST_CQ_ISSUE_READ_PTR;  // For now, we are writing to host hugepages at offset
     uint32_t issue_rd_ptr_and_toggle = cq_read_interface.issue_fifo_rd_ptr | (cq_read_interface.issue_fifo_rd_toggle << 31);;
@@ -49,7 +49,7 @@ void cq_pop_front(uint32_t cmd_size_B) {
     uint32_t cmd_size_16B = align(cmd_size_B, 32) >> 4;
     cq_read_interface.issue_fifo_rd_ptr += cmd_size_16B;
 
-    notify_host_of_cq_read_pointer();
+    notify_host_of_cq_issue_read_pointer();
 }
 
 FORCE_INLINE

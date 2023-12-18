@@ -50,8 +50,13 @@ void kernel_main() {
         uint32_t num_pages = command_ptr[DeviceCommand::num_pages_idx];
         uint32_t producer_consumer_transfer_num_pages = command_ptr[DeviceCommand::producer_consumer_transfer_num_pages_idx];
         uint32_t sharded_buffer_num_cores = command_ptr[DeviceCommand::sharded_buffer_num_cores_idx];
+        uint32_t wrap = command_ptr[DeviceCommand::wrap_idx];
 
-        if (is_program) {
+        if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::COMPLETION) {
+            cq_write_interface.completion_fifo_wr_ptr = command_issue_region_size >> 4;     // Head to the beginning of the completion region
+            cq_write_interface.completion_fifo_wr_toggle = not cq_write_interface.completion_fifo_wr_toggle;
+            notify_host_of_cq_completion_write_pointer();
+        } else if (is_program) {
             write_and_launch_program(program_transfer_start_addr, num_pages, command_ptr, producer_noc_encoding, consumer_cb_size, consumer_cb_num_pages, producer_consumer_transfer_num_pages, db_buf_switch);
             wait_for_program_completion(num_workers, tensix_soft_reset_addr);
         } else {
