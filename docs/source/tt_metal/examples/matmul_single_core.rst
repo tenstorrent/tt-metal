@@ -50,19 +50,15 @@ The initial level of host-side code can broken up into sections:
     uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B
 
     /* input vectors */
-    std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
-        dram_buffer_A_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
-    std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(
-        dram_buffer_B_size, 1, std::chrono::system_clock::now().time_since_epoch().count());
-
+    std::vector<bfloat16> src0_vec = create_random_vector_of_bfloat16_native(dram_buffer_A_size, 1, 123);
+    std::vector<bfloat16> src1_vec = create_random_vector_of_bfloat16_native(dram_buffer_B_size, 1, 12522);
+    /* Input vector tilizing */
+    tilize(src0_vec, M, K);
+    tilize(src1_vec, K, N);
     /* Calling the MatMul host program. Read in result into a host vector */
-    std::vector<uint32_t> tilized_src0_vec = pack_bfloat16_vec_into_uint32_vec(tilize(unpack_uint32_vec_into_bfloat16_vec(src0_vec), M, K));
-    std::vector<uint32_t> tilized_src1_vec = pack_bfloat16_vec_into_uint32_vec(tilize(unpack_uint32_vec_into_bfloat16_vec(src1_vec), K, N));
-
-    /* Calling the MatMul host program. Read in result into a host vector */
-    vector<uint32_t> result_vec;
-    matmul_single_core(tilized_src0_vec, tilized_src1_vec, result_vec, false, M, N, K, B, device);
-    vector<uint32_t> result_vec_untilized = pack_bfloat16_vec_into_uint32_vec(untilize(unpack_uint32_vec_into_bfloat16_vec(result_vec), M, N));
+    vector<bfloat16> result_vec(dram_buffer_C_size/sizeof(bfloat16));
+    matmul_single_core(src0_vec, src1_vec, result_vec, false, M, N, K, B, device);
+    untilize(result_vec, M, N);
 
     CloseDevice(device);
 
@@ -244,10 +240,10 @@ Launch program, enqueue & read in output buffer result into the host vector.
 
 .. code-block:: cpp
 
-    EnqueueWriteBuffer(cq, src0_dram_buffer, a, false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, b, false);
+    EnqueueWriteBuffer(cq, src0_dram_buffer, a.data(), false);
+    EnqueueWriteBuffer(cq, src1_dram_buffer, b.data(), false);
     EnqueueProgram(cq, program, false);
-    EnqueueReadBuffer(cq, dst_dram_buffer, output, true);
+    EnqueueReadBuffer(cq, dst_dram_buffer, output.data(), true);
 
 Conclusion
 ----------

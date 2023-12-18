@@ -10,6 +10,7 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/programming_examples/matmul_common/bmm_op.hpp"
+#include "tt_metal/common/tilize_untilize.hpp"
 
 using namespace tt::constants;
 using namespace std;
@@ -17,62 +18,12 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 
-template <typename T>
-std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
-    TT_ASSERT(rows % 32 == 0);
-    TT_ASSERT(cols % 32 == 0);
-    int num_tiles_r = rows / 32;
-    int num_tiles_c = cols / 32;
-    std::vector<T> result;
-    for(auto r = 0; r < num_tiles_r; r++) {
-        for(auto c = 0; c < num_tiles_c; c++) {
-            for(auto j = 0; j < 32; j++) { // tile rows
-                for(auto i = 0; i < 32; i++) { // tile cols
-                    // each row of tiles is 32x32 * num_tiles_c
-                    // each row within the row of tiles is cols
-                    // each col of tiles is 32
-                    // pick row of tiles, pick the row within the tile, pick col tile
-                    int index = r * 32 * 32 * num_tiles_c + j * cols + c * 32 + i;
-                    result.push_back(data.at(index));
-                }
-            }
-        }
-    }
-    return convert_to_tile_layout(result);
-}
-
-
-template <typename T>
-std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
-    int TileWidth = 32;
-    int TileHeight = 32;
-    TT_ASSERT(rows % TileHeight == 0);
-    TT_ASSERT(cols % TileWidth == 0);
-    int elements_in_tile = TileHeight*TileWidth;
-    int num_tiles_r = rows / TileHeight;
-    int num_tiles_c = cols / TileWidth;
-    std::vector<T> result;
-    for(auto r = 0; r < num_tiles_r; r++) {
-        for(auto i = 0; i < TileHeight; i++) {
-            for(auto c = 0; c < num_tiles_c; c++) {
-                int offset = r * elements_in_tile * num_tiles_c + c * elements_in_tile + i * TileWidth;
-                for(auto j = 0; j < TileWidth; j++) {
-                    result.push_back(data.at(offset + j));
-                }
-            }
-        }
-    }
-    return convert_to_flat_layout(result);
-}
-
-
-void golden_matmul(vector<bfloat16> a, vector<bfloat16> b, vector<uint32_t>& output,
+void golden_matmul(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& output,
                         uint32_t M, uint32_t N, uint32_t K, uint32_t B) {
     std::uint32_t idx_c = 0;
     std::uint32_t idx_a = 0;
     std::uint32_t idx_b = 0;
 
-    //vector<float> c_f(M * N, 0);
     float c_f;
     float float_tmp;
     vector<bfloat16> c_bf(M * N, 0);
@@ -80,30 +31,21 @@ void golden_matmul(vector<bfloat16> a, vector<bfloat16> b, vector<uint32_t>& out
     for (int i = 0; i < M; i++) {
         for (int j = 0; j < N; j++) {
             idx_c = j+ (i * N);
-            //c_f.at(idx_c) = 0;
             idx_a = i * K;
             idx_b = j;
             c_f = 0;
             for (int k_m = 0; k_m < K; k_m++) {
-                //c_f.at(idx_c) += a[idx_a].to_float() * b[idx_b].to_float();
                 float_tmp = a[idx_a].to_float() * b[idx_b].to_float();
-                // uint32_t* int_tmp = (uint32_t*) &float_tmp;
-                // *int_tmp &= 0xffff0000 ;
                 c_f += float_tmp;
                 idx_a += 1;
                 idx_b += K;
             }
-            c_bf.at(idx_c) = bfloat16(c_f);
-            //if (idx_c < 128) {
-            //    cout << "GG " << c_f << " .. " << c_bf.at(idx_c) << endl;
-            //}
-            //output[idx_c] = (uint32_t)c_bf.to_uint16() | ((uint32_t)c_bf.to_uint16() << 16);
+            output.at(idx_c) = bfloat16(c_f);
         }
     }
-    output = pack_bfloat16_vec_into_uint32_vec(c_bf);
 }
 
-void matmul_multicore_reuse(vector<uint32_t>& a, vector<uint32_t>& b, vector<uint32_t>& output, bool bcast_batch,
+void matmul_multicore_reuse(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& output, bool bcast_batch,
                         uint32_t M, uint32_t N, uint32_t K, uint32_t B, Device* device) {
 
     /*
@@ -149,7 +91,8 @@ void matmul_multicore_reuse(vector<uint32_t>& a, vector<uint32_t>& b, vector<uin
     uint32_t out_subblock_h = std::get<2>(matmul_params);
     uint32_t out_subblock_w = std::get<3>(matmul_params);
 
-    cout << "========= " << per_core_M << " == " << per_core_N << " == " <<  out_subblock_h << " == " << out_subblock_w << endl;
+    log_info(tt::LogVerif, " -- Metalium Core Sizing --");
+    log_info(tt::LogVerif, " -- per_core_M= {} -- per_core_N= {} -- out_subblock_h= {} -- out_subblock_w= {} --", per_core_M, per_core_N, out_subblock_h, out_subblock_w);
 
     TT_ASSERT(Mt % per_core_M == 0);
     TT_ASSERT(Nt % per_core_N == 0);
@@ -379,10 +322,10 @@ void matmul_multicore_reuse(vector<uint32_t>& a, vector<uint32_t>& b, vector<uin
     //ReadFromBuffer(dst_dram_buffer, output);
     //ReadFromBuffer(src0_dram_buffer, output);
 
-    EnqueueWriteBuffer(cq, src0_dram_buffer, a, false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, b, false);
+    EnqueueWriteBuffer(cq, src0_dram_buffer, a.data(), false);
+    EnqueueWriteBuffer(cq, src1_dram_buffer, b.data(), false);
     EnqueueProgram(cq, program, false);
-    EnqueueReadBuffer(cq, dst_dram_buffer, output, true);
+    EnqueueReadBuffer(cq, dst_dram_buffer, output.data(), true);
 }
 
 
@@ -424,118 +367,27 @@ int main(int argc, char **argv) {
         uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt; // num_tiles of FP16_B
 
         /* input vectors */
-        std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_A_size, 1, 123, -0.4);
-        std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(dram_buffer_B_size, 1, 12522, -0.3);
-
-        //std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(dram_buffer_A_size, false);
-        //std::vector<uint32_t> src1_vec = pack_bfloat16_vec_into_uint32_vec(create_identity_matrix(K, N, K));
-
-        //constexpr float val_to_add = 2.0f;
-        //std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(dram_buffer_A_size, val_to_add);
-        //std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(dram_buffer_B_size, val_to_add);
-
-        /* Input vector tilizing */
-        std::vector<uint32_t> tilized_src0_vec = pack_bfloat16_vec_into_uint32_vec(tilize(unpack_uint32_vec_into_bfloat16_vec(src0_vec), M, K));
-        std::vector<uint32_t> tilized_src1_vec = pack_bfloat16_vec_into_uint32_vec(tilize(unpack_uint32_vec_into_bfloat16_vec(src1_vec), K, N));
-
-        cout << "-input size- " << src0_vec.size() << " -- " << src1_vec.size() << endl;
-
-
-        cout << "----orig input 0--" << endl;
-        for (int i = 0; i < src0_vec.size(); i++) {
-            std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(src0_vec.at(i));
-            float a1 = as.first.to_float();
-            float a2 = as.second.to_float();
-
-            if (i % 1280 == 0){
-                cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << src0_vec.at(i) << endl;
-            }
-        }
-        /*
-        cout << "----orig input 1--" << endl;
-        for (int i = 0; i < 512; i++) {
-            std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(src1_vec.at(i));
-            float a1 = as.first.to_float();
-            float a2 = as.second.to_float();
-            cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << src1_vec.at(i) << endl;
-        }
-        */
-
-        /*
-        cout << "----tiled input--" << endl;
-        for (int i = 0; i < src0_vec.size(); i++) {
-            std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(tilized_src0_vec.at(i));
-            float a1 = as.first.to_float();
-            float a2 = as.second.to_float();
-            if (i % 1280 == 0){
-                cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << tilized_src0_vec.at(i) << endl;
-            }
-        }
-        */
-
-        /* Calling the MatMul host program. Read in result into a host vector */
-        vector<uint32_t> result_vec;
-        matmul_multicore_reuse(tilized_src0_vec, tilized_src1_vec, result_vec, false, M, N, K, B, device);
-
-        /*
-        cout << "----metal--" << endl;
-        cout << result_vec.size() << endl;
-        for (int i = 0; i < result_vec.size(); i++) {
-            std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(result_vec.at(i));
-            float a1 = as.first.to_float();
-            float a2 = as.second.to_float();
-            if (i % 1280 == 0){
-                cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << result_vec.at(i) << endl;
-            }
-        }
-        */
-
-
-        vector<uint32_t> result_vec_untilized = pack_bfloat16_vec_into_uint32_vec(untilize(unpack_uint32_vec_into_bfloat16_vec(result_vec), M, N));
-        cout << "----metal_untilized--" << endl;
-        cout << result_vec.size() << endl;
-        for (int i = 0; i < result_vec.size(); i++) {
-            std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(result_vec_untilized.at(i));
-            float a1 = as.first.to_float();
-            float a2 = as.second.to_float();
-            if (i % 1280 == 0){
-                cout << "-- " << i << " -- " << a1<< "  " << a2  << "---" << result_vec_untilized.at(i) << endl;
-            }
-        }
+        std::vector<bfloat16> src0_vec = create_random_vector_of_bfloat16_native(dram_buffer_A_size, 1, 123, -0.4);
+        std::vector<bfloat16> src1_vec = create_random_vector_of_bfloat16_native(dram_buffer_B_size, 1, 12522, -0.3);
 
         /* Golden Matmul running on CPU (Float)*/
-        vector<uint32_t> golden_vec;
-        golden_matmul(unpack_uint32_vec_into_bfloat16_vec(src0_vec), unpack_uint32_vec_into_bfloat16_vec(src1_vec), golden_vec, M, N, K, B);
-        vector<uint32_t>  golden_vec_tilized = pack_bfloat16_vec_into_uint32_vec(tilize(unpack_uint32_vec_into_bfloat16_vec(golden_vec), M, N));
+        vector<bfloat16> golden_vec(M * N, 0);
+        golden_matmul(src0_vec, src1_vec, golden_vec, M, N, K, B);
 
-        cout << "----golden--" << endl;
-        cout << golden_vec.size() << endl;
-        for (int i = 0; i < golden_vec.size(); i++) {
-            std::pair<bfloat16, bfloat16> as = unpack_two_bfloat16_from_uint32(golden_vec.at(i));
-            float a1 = as.first.to_float();
-            float a2 = as.second.to_float();
-            if (i % 1280 == 0){
-                cout << "-- " << i << " -- " << a1 << "  " << a2 << "---" << golden_vec.at(i) << endl;
-            }
-        }
+        /* Input vector tilizing */
+        tilize(src0_vec, M, K);
+        tilize(src1_vec, K, N);
 
-        /* Comparison: Golden vs. METAL Matmul*/
-        constexpr float abs_tolerance = 0.01f;
-        constexpr float rel_tolerance = 0.001f;
-        std::function<bool(const float, const float)> comparison_function = [](const float a, const float b) {
-            return is_close(a, b, rel_tolerance, abs_tolerance);
-        };
+        /* Calling the MatMul host program. Read in result into a host vector */
+        vector<bfloat16> result_vec(dram_buffer_C_size/sizeof(bfloat16));
+        matmul_multicore_reuse(src0_vec, src1_vec, result_vec, false, M, N, K, B, device);
+        untilize(result_vec, M, N);
 
-        // float calc_pcc = packed_uint32_t_vector_pcc(golden_vec_tilized, result_vec);
-        // cout << "PCC= " << calc_pcc << endl;
+        log_info(tt::LogVerif, "Output vector of size {}", result_vec.size());
 
-        float pearson = packed_uint32_t_vector_pcc_v2(golden_vec_tilized, result_vec);
-        cout << "PCC_v2= " << pearson << endl;
-
-        TT_FATAL(pearson > 0.99, "PCC not high");
-
-        //pass &= packed_uint32_t_vector_comparison(golden_vec, result_vec_untilized, comparison_function);
-        // pass &= packed_uint32_t_vector_comparison(golden_vec_tilized, result_vec, comparison_function);
+        float pearson = check_bfloat16_vector_pcc(golden_vec, result_vec);
+        log_info(tt::LogVerif, "Metalium vs Golden -- PCC = {}", pearson);
+        TT_FATAL(pearson > 0.99, "PCC not high enough. Result PCC: {}, Expected PCC: 0.99", pearson);
 
         pass &= CloseDevice(device);
 
