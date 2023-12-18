@@ -123,6 +123,30 @@ inline std::vector<std::uint32_t> create_arange_vector_of_bfloat16(uint32_t num_
     return vec;
 }
 
+inline std::vector<bfloat16> create_random_vector_of_bfloat16_native(uint32_t num_bytes, float rand_max_float, int seed, float offset = 0.0f) {
+    auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
+
+    std::vector<bfloat16> vec(num_bytes/sizeof(bfloat16), 0);
+    for (int i = 0; i < vec.size(); i++) {
+        float num_1_float = rand_float() + offset;
+        vec[i] = bfloat16(num_1_float);
+    }
+    log_info(tt::LogVerif, "Created a random vector of size {}", vec.size());
+    return vec;
+}
+
+inline void print_golden_metalium_vectors(vector<bfloat16>& golden_vec, vector<bfloat16>& result_vec) {
+    cout << "-- index -- golden -- metalium --" << endl;
+    for (int i = 0; i < result_vec.size(); i++) {
+        float a1 = golden_vec[i].to_float();
+        float a2 = result_vec[i].to_float();
+        if (i % 128 == 0){
+            cout << "-- " << i << " -- " << a1 << " <--> " << a2 << endl;
+        }
+    }
+}
+
+
 inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(uint32_t num_bytes, int rand_max_float, int seed, float offset = 0.0f) {
     auto rand_float = std::bind(std::uniform_real_distribution<float>(0, rand_max_float), std::mt19937(seed));
 
@@ -153,6 +177,7 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16_1_1(uint32_t 
 inline std::vector<std::uint32_t> create_random_vector_of_bfloat16_0_2(uint32_t num_bytes, int seed) {
     return create_random_vector_of_bfloat16(num_bytes, 2.0f, seed); // 0.0f..2.0f
 }
+
 
 /*
  * rk: Still won't handle the case where the number of elements is odd, except

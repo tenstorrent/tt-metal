@@ -86,42 +86,39 @@ inline const std::vector<float> unpack_uint32_vec_into_float_vec(
     return result;
 }
 
-inline float packed_uint32_t_vector_pcc_v2(const vector<uint32_t> &vec_a, const vector<uint32_t> &vec_b)
+inline float check_bfloat16_vector_pcc(const vector<bfloat16> &vec_a, const vector<bfloat16> &vec_b)
 {
-    vector<float> x_values_ = unpack_uint32_vec_into_float_vec(vec_a);
-    vector<float> y_values_ = unpack_uint32_vec_into_float_vec(vec_b);
-
     // Calculate the mean of x and y values
     float x_mean = 0.0f;
     float y_mean = 0.0f;
 
-    for (size_t i = 0; i < x_values_.size(); i++)
+    for (size_t i = 0; i < vec_a.size(); i++)
     {
-        x_mean += x_values_[i];
-        y_mean += y_values_[i];
+        x_mean += vec_a[i].to_float();
+        y_mean += vec_b[i].to_float();
     }
 
-    x_mean /= x_values_.size();
-    y_mean /= y_values_.size();
+    x_mean /= vec_a.size();
+    y_mean /= vec_b.size();
 
     // Calculate the covariance and standard deviation of x and y values
     float covariance = 0.0f;
     float x_stddev = 0.0f;
     float y_stddev = 0.0f;
 
-    for (size_t i = 0; i < x_values_.size(); i++)
+    for (size_t i = 0; i < vec_a.size(); i++)
     {
-        float x_diff = x_values_[i] - x_mean;
-        float y_diff = y_values_[i] - y_mean;
+        float x_diff = vec_a[i].to_float() - x_mean;
+        float y_diff = vec_b[i].to_float() - y_mean;
 
         covariance += x_diff * y_diff;
         x_stddev += x_diff * x_diff;
         y_stddev += y_diff * y_diff;
     }
 
-    covariance /= x_values_.size();
-    x_stddev /= x_values_.size();
-    y_stddev /= y_values_.size();
+    covariance /= vec_a.size();
+    x_stddev /= vec_a.size();
+    y_stddev /= vec_b.size();
 
     // Calculate the correlation coefficient
     float correlation_coefficient_ = covariance / (sqrt(x_stddev) * sqrt(y_stddev));
