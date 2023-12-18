@@ -115,7 +115,7 @@ inline void llk_math_calculate_sfpu(
 template <SfpuType sfpu_op, bool APPROXIMATE, DstSync Dst = DstSync::SyncFull, bool IS_INT_SFPU_EN=false>
 inline void llk_math_eltwise_unary_sfpu(
     uint dst_index,
-    int vector_mode = (int)Dim::RC,
+    int vector_mode = (int)VectorMode::RC,
     uint param0 = 0,
     uint param1 = 0,
     uint param2 = 0,
@@ -124,7 +124,7 @@ inline void llk_math_eltwise_unary_sfpu(
     uint param5 = 0) {
 
     _llk_math_eltwise_unary_sfpu_start_<Dst>(dst_index);
-    if (vector_mode == (int)Dim::R) {
+    if (vector_mode == (int)VectorMode::R) {
         // Do a row vector, Face0 + Face1 -- first iteration
         const int ITERATIONS = 1;
 #pragma GCC unroll 0
@@ -136,7 +136,7 @@ inline void llk_math_eltwise_unary_sfpu(
         // Skip the next 2 faces
         _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
         _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_();
-    } else if (vector_mode == (int)Dim::C) {
+    } else if (vector_mode == (int)VectorMode::C) {
         // Do a column vector, Face0 + Face2 -- full face
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++) {

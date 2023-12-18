@@ -21,7 +21,7 @@ inline void llk_math_eltwise_unary_sfpu_isinf_init() {
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_isinf(uint dst_index, int vector_mode = Dim::RC) {
+inline void llk_math_eltwise_unary_sfpu_isinf(uint dst_index, int vector_mode = VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isinf, APPROXIMATE, 1>,
                                 ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isinf, APPROXIMATE>,
@@ -36,7 +36,7 @@ inline void llk_math_eltwise_unary_sfpu_isposinf_init() {
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_isposinf(uint dst_index, int vector_mode = Dim::RC) {
+inline void llk_math_eltwise_unary_sfpu_isposinf(uint dst_index, int vector_mode = VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isposinf, APPROXIMATE, 1>,
                                 ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isposinf, APPROXIMATE>,
@@ -51,7 +51,7 @@ inline void llk_math_eltwise_unary_sfpu_isneginf_init() {
     llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::isneginf_init<APPROXIMATE>);
 }
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_isneginf(uint dst_index, int vector_mode = Dim::RC) {
+inline void llk_math_eltwise_unary_sfpu_isneginf(uint dst_index, int vector_mode = VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isneginf, APPROXIMATE, 1>,
                                 ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isneginf, APPROXIMATE>,
@@ -65,7 +65,7 @@ inline void llk_math_eltwise_unary_sfpu_isnan_init() {
     llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::isnan_init<APPROXIMATE>);
 }
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_isnan(uint dst_index, int vector_mode = Dim::RC) {
+inline void llk_math_eltwise_unary_sfpu_isnan(uint dst_index, int vector_mode = VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isnan, APPROXIMATE, 1>,
                                 ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isnan, APPROXIMATE>,
@@ -79,7 +79,7 @@ inline void llk_math_eltwise_unary_sfpu_isfinite_init() {
     llk_math_eltwise_unary_sfpu_init<APPROXIMATE>(sfpu::isfinite_init<APPROXIMATE>);
 }
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_isfinite(uint dst_index, int vector_mode = Dim::RC) {
+inline void llk_math_eltwise_unary_sfpu_isfinite(uint dst_index, int vector_mode = VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isfinite, APPROXIMATE, 1>,
                                 ckernel::sfpu::calculate_sfpu_isinf_isnan<SfpuType::isfinite, APPROXIMATE>,

@@ -5,20 +5,19 @@
 #pragma once
 
 namespace ckernel {
+
+enum VectorMode {
+  None      = 0,
+  R         = 1,
+  C         = 2,
+  RC        = 4,
+  Invalid   = 0xFF,
+};
+
 enum ReduceDim {
     REDUCE_ROW,
     REDUCE_COL,
     REDUCE_SCALAR,
-};
-
-enum Dim {
-  None      = 0,
-  R         = 1,
-  C         = 2,
-  Z         = 3,
-  RC        = 4,
-  ZR        = 5,
-  Invalid   = 0xFF,
 };
 
 enum PoolType {

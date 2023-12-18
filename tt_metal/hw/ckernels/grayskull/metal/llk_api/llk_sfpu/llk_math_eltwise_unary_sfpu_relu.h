@@ -24,7 +24,7 @@ inline void llk_math_eltwise_unary_sfpu_relu_max(uint dst_index, uint param0) {
     llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::relu_max<APPROXIMATE,4>,
                                 ckernel::sfpu::relu_max<APPROXIMATE,4>,
-                                dst_index, Dim::RC, param0);
+                                dst_index, VectorMode::RC, param0);
 }
 
 // RELU MIN
@@ -38,7 +38,7 @@ inline void llk_math_eltwise_unary_sfpu_relu_min(uint dst_index, uint param0 = 0
     llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::relu_min<APPROXIMATE,4>,
                                 ckernel::sfpu::relu_min<APPROXIMATE,4>,
-                                dst_index, Dim::RC, param0);
+                                dst_index, VectorMode::RC, param0);
 }
 
 // RELU
@@ -49,7 +49,7 @@ inline void llk_math_eltwise_unary_sfpu_relu(uint dst_index) {
     llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::relu_min<APPROXIMATE,4>,
                                 ckernel::sfpu::relu_min<APPROXIMATE,4>,
-                                dst_index, Dim::RC, 0);
+                                dst_index, VectorMode::RC, 0);
 
 }
 
@@ -70,7 +70,7 @@ inline void llk_math_eltwise_unary_sfpu_lrelu(uint dst_index, int param0 = 0) {
     llk_math_eltwise_unary_sfpu_1_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_lrelu<APPROXIMATE,4>,
 				 ckernel::sfpu::calculate_lrelu<APPROXIMATE,4>,
-				 dst_index, Dim::RC, param0);
+				 dst_index, VectorMode::RC, param0);
 }
 
 }

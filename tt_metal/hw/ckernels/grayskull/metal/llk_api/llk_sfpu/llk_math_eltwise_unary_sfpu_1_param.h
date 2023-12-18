@@ -11,14 +11,14 @@ inline void llk_math_eltwise_unary_sfpu_1_param(
     void (*first_func)(PARAMTYPE),
     void (*func)(PARAMTYPE),
     uint dst_index,
-    int vector_mode = Dim::RC,
+    int vector_mode = VectorMode::RC,
     int param0 = 0) {
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
     } else {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
     }
-    if (vector_mode == Dim::R) {
+    if (vector_mode == VectorMode::R) {
         // Do a row vector, Face0 + Face1 -- first iteration
         const int ITERATIONS = 1;
 #pragma GCC unroll 0
@@ -32,7 +32,7 @@ inline void llk_math_eltwise_unary_sfpu_1_param(
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-    } else if (vector_mode == Dim::C) {
+    } else if (vector_mode == VectorMode::C) {
         // Do a column vector, Face0 + Face2 -- full face
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++) {
