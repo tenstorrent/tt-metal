@@ -21,7 +21,7 @@ inline void llk_math_eltwise_unary_sfpu_sine_init() {
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_sine_op(uint dst_index, int vector_mode = Dim::RC) {
+inline void llk_math_eltwise_unary_sfpu_sine_op(uint dst_index, int vector_mode = VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_trig<SfpuType::sine, APPROXIMATE, 1>,
                                 ckernel::sfpu::calculate_sfpu_trig<SfpuType::sine, APPROXIMATE>,
@@ -36,7 +36,7 @@ inline void llk_math_eltwise_unary_sfpu_cosine_init() {
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_cosine_op(uint dst_index, int vector_mode = Dim::RC) {
+inline void llk_math_eltwise_unary_sfpu_cosine_op(uint dst_index, int vector_mode = VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_trig<SfpuType::cosine, APPROXIMATE, 1>,
                                 ckernel::sfpu::calculate_sfpu_trig<SfpuType::cosine, APPROXIMATE>,
@@ -51,7 +51,7 @@ inline void llk_math_eltwise_unary_sfpu_tan_init() {
 }
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_tan_op(uint dst_index, int vector_mode = Dim::RC) {
+inline void llk_math_eltwise_unary_sfpu_tan_op(uint dst_index, int vector_mode = VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_sfpu_trig<SfpuType::tan, APPROXIMATE, 1>,
                                 ckernel::sfpu::calculate_sfpu_trig<SfpuType::tan, APPROXIMATE>,

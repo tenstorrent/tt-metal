@@ -25,7 +25,7 @@ inline void llk_math_eltwise_unary_sfpu_erfinv_op(uint dst_index) {
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_erfinv<APPROXIMATE,4>,
                                 ckernel::sfpu::calculate_erfinv<APPROXIMATE,4>,
-                                dst_index, Dim::RC);
+                                dst_index, VectorMode::RC);
 }
 
 }

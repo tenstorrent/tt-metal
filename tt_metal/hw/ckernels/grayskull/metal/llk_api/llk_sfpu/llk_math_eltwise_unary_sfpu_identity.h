@@ -14,7 +14,7 @@ namespace ckernel {
 // New LLK SFPU APIs
 
 template <bool APPROXIMATE, DstSync Dst = DstSync::SyncFull>
-inline void llk_math_eltwise_unary_sfpu_identity(uint dst_index, int vector_mode = Dim::RC) {
+inline void llk_math_eltwise_unary_sfpu_identity(uint dst_index, int vector_mode = VectorMode::RC) {
     constexpr int first_iterations = 1;
     llk_math_eltwise_unary_sfpu_0_param<APPROXIMATE, Dst>
                                 (ckernel::sfpu::calculate_identity<APPROXIMATE, first_iterations>,
