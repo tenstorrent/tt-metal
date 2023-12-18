@@ -54,7 +54,7 @@ below:
     }
 
 Waypoints have no overhead when the watcher is disabled and can be used inside user written kernels.  They indicate
-the last code block executed before a hang condition (eg, waiting for data that never arrives).  This mechanism is
+the last code block executed before a hang condition (e.g., waiting for data that never arrives).  This mechanism is
 separate from the fault detection mechanism.
 
 The characters in a waypoint name are a mnemonic unique to each waypoint.  By convention, the last character is one of:
@@ -96,5 +96,5 @@ The log file will contain lines such as the following:
   using NOC ``0`` (NCRISC is using the other NOC, NOC 1), the host run state is Go ``G`` and each of BRISC, NCRISC and
   TRISC kernels are running (capital ``BNT``; lowercase would signify no kernel running)
 - The slave message ``smsg`` sent from BRISC to the other RISC Vs are all Go ``G``; ``D`` would indicate Done
-- The kernel IDs ``k_ids`` running are ``4`` on BRISC, ``3`` on NCRISC and ``5`` on TRISC; look futher down the log file
+- The kernel IDs ``k_ids`` running are ``4`` on BRISC, ``3`` on NCRISC and ``5`` on TRISC; look further down the log file
   to see the names and paths to those kernels
