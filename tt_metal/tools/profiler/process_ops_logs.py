@@ -455,7 +455,7 @@ def print_ops_csv(ops, opsFolder, outputFolder, date, nameAppend):
     outFolder = os.path.join(outFolder, testName)
 
     if date:
-        dateStr = f"{datetime.now().strftime('%Y_%d_%m_%H_%M_%S')}"
+        dateStr = f"{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}"
         name += f"_{dateStr}"
         outFolder = os.path.join(outFolder, dateStr)
 
