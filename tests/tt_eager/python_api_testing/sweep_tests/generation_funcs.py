@@ -58,6 +58,14 @@ def gen_rand(size, low=0, high=100):
     return torch.Tensor(size=size).uniform_(low, high)
 
 
+def gen_rand_infinite(size, low=-100, high=100):
+    x = torch.rand(size=size)
+    x[x <= 0.33] = float("inf")
+    x[(x > 0.33) & (x <= 0.66)] = float("-inf")
+    x[x > 0.66] = x[x > 0.66] * (high - low) + low
+    return x
+
+
 def gen_rand_complex(size, low=0, high=100):
     real = torch.Tensor(size=size).uniform_(low, high).to(torch.bfloat16).to(torch.float)
     imag = torch.Tensor(size=size).uniform_(low, high).to(torch.bfloat16).to(torch.float)
