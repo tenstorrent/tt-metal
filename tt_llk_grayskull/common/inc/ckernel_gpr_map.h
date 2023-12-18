@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -39,19 +37,19 @@ struct p_gpr_unpack
     constexpr static uint PERF_UNPACK_NUM_TILES_2 = 36;   // num tiles for input operands 4-5
     constexpr static uint PERF_UNPACK_NUM_TILES_3 = 37;   // num tiles for input operands 6-7
     constexpr static uint FACE_DIM_1x16     = 44;   // Holds face dimension (1x16)
-    constexpr static uint SR_UNPACK_TILIZER_STATE_0 = 54;  // Save unpack state before tilizer is enabled for quick restore 
-    constexpr static uint SR_UNPACK_TILIZER_STATE_1 = 55;  
-    constexpr static uint SR_UNPACK_UNTILIZER_STATE_0 = 56;  // Save unpack state before tilizer is enabled for quick restore 
-    constexpr static uint SR_UNPACK_UNTILIZER_STATE_1 = 57;  
-    constexpr static uint SR_UNPACK_UNTILIZER_STATE_2 = 58;  
-    constexpr static uint SR_UNPACK_UNTILIZER_STATE_3 = 59;  
+    constexpr static uint SR_UNPACK_TILIZER_STATE_0 = 54;  // Save unpack state before tilizer is enabled for quick restore
+    constexpr static uint SR_UNPACK_TILIZER_STATE_1 = 55;
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_0 = 56;  // Save unpack state before tilizer is enabled for quick restore
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_1 = 57;
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_2 = 58;
+    constexpr static uint SR_UNPACK_UNTILIZER_STATE_3 = 59;
 };
 
 // Math GPR thread
 struct p_gpr_math
 {
-    constexpr static uint PERF_DBUS_CNTL    = 4;   // Control debug bus perf counter selection 
-    constexpr static uint PERF_MEM_DUMP_CNTL_CLEAR= 5;   // Clear write to memory flag 
+    constexpr static uint PERF_DBUS_CNTL    = 4;   // Control debug bus perf counter selection
+    constexpr static uint PERF_MEM_DUMP_CNTL_CLEAR= 5;   // Clear write to memory flag
     constexpr static uint PERF_MEM_DUMP_CNTL_SET= 6;   // Set write to memory flag
     constexpr static uint PERF_CNT_START    = 7;   // Start perf counter
     constexpr static uint PERF_CNT_STOP     = 8;   // Stop perf counter

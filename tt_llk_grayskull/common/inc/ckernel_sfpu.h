@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -19,7 +17,7 @@ namespace ckernel
 {
 namespace sfpu
 {
-    
+
 sfpi_inline vInt _sfpu_is_fp16_zero_(const vFloat& v, uint exponent_size_8)
 {
     if (exponent_size_8) {
@@ -95,7 +93,7 @@ sfpi_inline vFloat _sfpu_reciprocal_(const vFloat in)
         orig_exp = exexp(dst_reg[0]);
     }
 
-    // "Subtract" exponents, and re-bias.  
+    // "Subtract" exponents, and re-bias.
     // Execute: -1 - exp, then exp += 127
     new_exp -= orig_exp;
     new_exp += 126;
@@ -115,7 +113,7 @@ sfpi_inline vFloat _sfpu_reciprocal_(const vFloat in)
 inline void _init_dropout_seed_(uint16_t p2)
 {
     FWLOG1("calculate_dropout() -- input seed:%x", p2);
-    
+
     uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID);
 
     uint16_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
@@ -124,7 +122,7 @@ inline void _init_dropout_seed_(uint16_t p2)
     uint16_t per_tensix_input_seed = p2 ^ (my_x << my_y);
 
     FWLOG1("calculate_dropout() -- calculated seed:%x", per_tensix_input_seed);
-    
+
     vInt result = l_reg[LRegs::LReg3];
 
     vInt tmp = vConstTileId << 13;
@@ -141,10 +139,10 @@ inline void _init_exponential_()
         TTI_SFPLOADI(p_sfpu::LREG0, 0, p_exp::C23_73);
         TTI_SFPLOADI(p_sfpu::LREG2, 0, p_exp::ADJ_EXP);
     }
-} 
+}
 
 template <bool APPROXIMATION_MODE>
-inline void _init_sqrt_() 
+inline void _init_sqrt_()
 {
     if (APPROXIMATION_MODE) {
         TTI_SFPLOADI(2, 0, 127 << 7);
@@ -152,7 +150,7 @@ inline void _init_sqrt_()
 }
 
 template <bool APPROXIMATION_MODE>
-inline void _init_tanh_() 
+inline void _init_tanh_()
 {
     uint imm0;
     uint imm1;
@@ -166,7 +164,7 @@ inline void _init_tanh_()
 }
 
 template <bool APPROXIMATION_MODE>
-inline void _init_sigmoid_() 
+inline void _init_sigmoid_()
 {
     uint imm0;
     uint imm1;
@@ -180,7 +178,7 @@ inline void _init_sigmoid_()
 }
 
 template <bool APPROXIMATION_MODE>
-inline void _init_gelu_() 
+inline void _init_gelu_()
 {
     uint imm0;
     uint imm1;
@@ -193,7 +191,7 @@ inline void _init_gelu_()
     TTI_SFPLOADI(2, 2, imm2);
 }
 
-inline void _init_dropout_(const uint seed) 
+inline void _init_dropout_(const uint seed)
 {
     _init_dropout_seed_(seed);
 }
@@ -209,7 +207,7 @@ sfpi_inline vFloat _calculate_exponential_body_(vFloat in)
         vFloat val = in * vConst1p4424 + p_exp::C23_73;
 
         // Remove Exponent of 7 and bias the Mantissa to 127.
-        // LREG2 already holds 2's complement value so we simply do REG2 + REG3 
+        // LREG2 already holds 2's complement value so we simply do REG2 + REG3
         vInt val_short = p_exp::ADJ_EXP + reinterpret<vInt>(val);
 
         // SHL to move integer bits to exponent
@@ -278,7 +276,7 @@ inline void _calculate_exponential_(int16_t exp_base_scale_factor = 0)
                 val = val * vConst1p4424 + c23_73;
 
                 // Remove Exponent of 7 and bias the Mantissa to 127.
-                // LREG2 already holds 2's complement value so we simply do REG2 + REG3 
+                // LREG2 already holds 2's complement value so we simply do REG2 + REG3
                 vInt val_short = adj_exp + reinterpret<vInt>(val);
 
                 // SHL to move integer bits to exponent
@@ -319,8 +317,8 @@ sfpi_inline vFloat _calculate_gelu_core_(vFloat in)
     constexpr uint imm1 = (APPROXIMATION_MODE)? 0x212C : 0x2010;
     constexpr uint imm2 = 0xFF00;
 
-    // SFPU microcode: 
-    // result = (APPROX_MODE == 1) 
+    // SFPU microcode:
+    // result = (APPROX_MODE == 1)
     //   ? (1 + erf(x/sqrt(2)))
     //   : (1 + tanh( sqrt(2/pi) * (x + 0.044715*x^3) )
     vFloat result;
@@ -503,13 +501,13 @@ inline void _calculate_tanh_derivative_()
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_gelu_derivative_()
 {
-    // SFPU microcode: 
+    // SFPU microcode:
     #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat val = dst_reg[0];
         vFloat result = val * val * vConstNeg0p5;
-        
+
         // exp = e^(val) * 1/sqrt(2*pi)
         if constexpr(APPROXIMATION_MODE) {
             vFloat exp = _calculate_exponential_body_<APPROXIMATION_MODE, APPROXIMATION_MODE>(result);
@@ -758,7 +756,7 @@ sfpi_inline void _calculate_log_body_(const int log_base_scale_factor)
     if constexpr (HAS_BASE_SCALING) {
         result *= s2vFloat16a(log_base_scale_factor);
     }
-    
+
     ////////////////////////////
     // Base case when input is 0. ln(0) = -inf
     ////////////////////////////
@@ -796,7 +794,7 @@ inline void _calculate_comp_(uint exponent_size_8)
     // False = 0.0 = kCONST_0 (5/8-bit exponent format)
     // True  = 1.0 = kCONST_1_FP16B (8-bit exponent format)
     // SFPU uses 8-bit exponent in operations so loading these constants in 8-bit exponent format.
-    // Although a command flag can tell SFPU to re-bias a 5-bit exponent to 8-bit, we are loading 8-bit 
+    // Although a command flag can tell SFPU to re-bias a 5-bit exponent to 8-bit, we are loading 8-bit
     // exponent and telling SFPU to not add any bias to these constants.
     constexpr float output_0 = invert_output ? 0.0f : 1.0f;
     constexpr float output_1 = invert_output ? 1.0f : 0.0f;
@@ -842,7 +840,7 @@ inline void _calculate_comp_(uint exponent_size_8)
                 // flag1 = 0x3F80(1.0) if DST >= 0 else 0
                 // flag2 = 0x3F80(1.0) if DST != 0 else 0
                 // Do a bitwise And (flag1 & flag2) to get > condition.
-                // flag2 >= 0 AND flag1 != 0 => DST is Greater than zero 
+                // flag2 >= 0 AND flag1 != 0 => DST is Greater than zero
                 // Result will be either 0x0000(0.0) or 0x3F80(1.0)
                 result = reinterpret<vFloat>(reinterpret<vUInt>(flag1) & reinterpret<vUInt>(flag2));
             }
@@ -930,8 +928,8 @@ inline void _calculate_max_()
     {
         vFloat a = dst_reg[0];
         vFloat b = dst_reg[16];
-        v_if(a < b) { 
-            dst_reg[0] = b; 
+        v_if(a < b) {
+            dst_reg[0] = b;
         }
         v_endif;
 
@@ -958,7 +956,7 @@ sfpi_inline vFloat _sfpu_sine_maclaurin_series_(vFloat val)
     if constexpr (not APPROXIMATION_MODE) {
         // x^9/9!
         tmp = tmp*val*val;
-        output +=  0.0000027557*tmp; 
+        output +=  0.0000027557*tmp;
         // x^11/11!
         tmp = tmp*val*val;
         output += -0.00000002505*tmp;
@@ -1004,7 +1002,7 @@ inline void _calculate_sine_()
         vFloat v = dst_reg[0];
 
         // Assume v is bound [0:2pi]
-        // phase shift [0:2pi] to [-pi:pi] and multiply result by -1 
+        // phase shift [0:2pi] to [-pi:pi] and multiply result by -1
         v = v - 3.14159264f;
         v = _sfpu_sine_maclaurin_series_<APPROXIMATION_MODE>(v);
 
@@ -1025,7 +1023,7 @@ inline void _calculate_cosine_()
         vFloat v = dst_reg[0];
 
         // Assume v is bound [0:2pi]
-        // phase shift [0:2pi] to [-pi:pi] and multiply result by -1 
+        // phase shift [0:2pi] to [-pi:pi] and multiply result by -1
         v = v - 3.14159264f;
         v = _sfpu_cosine_maclaurin_series_<APPROXIMATION_MODE>(v);
 
@@ -1045,15 +1043,15 @@ inline void _relu_max_(uint uint_threshold)
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat a = dst_reg[0];
-        v_if(a > threshold) { 
-            a = threshold; 
+        v_if(a > threshold) {
+            a = threshold;
         }
         v_endif;
-        v_if(a < 0.0f) { 
-            a = 0.0f; 
+        v_if(a < 0.0f) {
+            a = 0.0f;
         }
         v_endif;
-        dst_reg[0] = a; 
+        dst_reg[0] = a;
         dst_reg++;
     }
 }
@@ -1064,11 +1062,11 @@ inline void _relu_min_(uint uint_threshold)
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat a = dst_reg[0];
-        v_if(a < threshold) { 
+        v_if(a < threshold) {
             a = 0.0f;
         }
         v_endif;
-        dst_reg[0] = a; 
+        dst_reg[0] = a;
         dst_reg++;
     }
 }

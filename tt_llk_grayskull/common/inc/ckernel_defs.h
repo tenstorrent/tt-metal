@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -89,6 +87,6 @@ constexpr std::uint32_t TILE_C_DIM = TILE_WIDTH ;
 #define SCALE_DATUM_SIZE(format,datum_count) (((format&0x3) == (uint8_t)DataFormat::Float32) ? (datum_count<<2) : (datum_count<<1))
 
 #define LOWER_HALFWORD(x) ((x) & 0xFFFF)
-#define UPPER_HALFWORD(x) ((x) >> 16) 
+#define UPPER_HALFWORD(x) ((x) >> 16)
 
 } // namespace ckernel

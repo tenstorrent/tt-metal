@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include "ckernel.h"
@@ -113,6 +111,4 @@ inline void _llk_unpack_AB_matmul_(const std::uint32_t address_a, const std::uin
     #ifdef PERF_DUMP
         first_unpack_recorded = true;
     #endif
-      
-    
 }

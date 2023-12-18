@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include "ckernel.h"
@@ -98,7 +96,7 @@ inline void _llk_unpack_AB_init_(const std::uint32_t transpose=0 /* unused */, c
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_(
     const std::uint32_t address_a, const std::uint32_t address_b, const bool transpose_of_faces = 0 /*not used*/) {
-    
+
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 

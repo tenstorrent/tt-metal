@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include "ckernel_include.h"
@@ -21,57 +19,69 @@ using namespace ckernel;
 inline void matmul_configure_addrmod();
 inline void matmul_configure_mop();
 
+template <int MATH_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
+inline void _llk_math_matmul_(uint dst_index, bool transpose = false) {
+
+    math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
+    if constexpr (FaceLayout == DstTileFaceLayout::ColMajor) {
+        if constexpr (MATH_FIDELITY_PHASES > 0) {
+            ckernel_template::run(instrn_buffer);
+            ckernel_template::run(instrn_buffer);
+            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
+            ckernel_template::run(instrn_buffer);
+            ckernel_template::run(instrn_buffer);  // Run 4 times
+            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
+        } else {
+            ckernel_template::run(instrn_buffer);
+            ckernel_template::run(instrn_buffer);  // Run mop twice
+        }
+    } else {
+        if constexpr (MATH_FIDELITY_PHASES > 0) {
+            for (int j=0; j<2; j++) {
+                if (transpose) TTI_TRNSPSRCA;
+                for (int i=0; i<MATH_FIDELITY_PHASES; i++) {
+                    ckernel_template::run(instrn_buffer);
+                }
+                TTI_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);          // DEST = 8, DEST_CR = 8
+                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D_F);     // DEST = 16, DEST_CR = 16, FIDELITY_PHASE = 0
+                if (transpose) TTI_TRNSPSRCA;
+                for (int i=0; i<MATH_FIDELITY_PHASES; i++) {
+                    ckernel_template::run(instrn_buffer);
+                }
+                TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_D_F);                      // DEST = 0, DEST_CR = 0, FIDELITY_PHASE = 0
+            }
+        } else {
+            if (transpose) TTI_TRNSPSRCA;
+            ckernel_template::run(instrn_buffer);
+            if (transpose) TTI_TRNSPSRCA;
+            ckernel_template::run(instrn_buffer);
+            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
+            if (transpose) TTI_TRNSPSRCA;
+            ckernel_template::run(instrn_buffer);
+            if (transpose) TTI_TRNSPSRCA;
+            ckernel_template::run(instrn_buffer);
+            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
+        }
+    }
+}
+
 template <int MATH_FIDELITY_DESC, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
-inline void _llk_math_matmul_(uint dst_index, bool transpose = false, const std::uint32_t ct_dim=1, const std::uint32_t rt_dim=1, const std::uint32_t kt_dim=1) {
-    
+inline void _llk_math_matmul_block_(
+    uint dst_index,
+    bool transpose = false,
+    const std::uint32_t ct_dim=1,
+    const std::uint32_t rt_dim=1,
+    const std::uint32_t kt_dim=1) {
+
     constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
-    
+
     for (std::uint32_t rt=0; rt<rt_dim; rt++) {
         for (std::uint32_t ct=0; ct<ct_dim; ct++) {
-            math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index+rt*ct_dim+ct);
-            if constexpr (FaceLayout == DstTileFaceLayout::ColMajor) {
-                if constexpr (MATH_FIDELITY_PHASES > 0) {
-                    ckernel_template::run(instrn_buffer);
-                    ckernel_template::run(instrn_buffer);
-                    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
-                    ckernel_template::run(instrn_buffer);
-                    ckernel_template::run(instrn_buffer);  // Run 4 times
-                    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
-                } else {
-                    ckernel_template::run(instrn_buffer);
-                    ckernel_template::run(instrn_buffer);  // Run mop twice
-                }
-            } else {
-                if constexpr (MATH_FIDELITY_PHASES > 0) {
-                    for (int j=0; j<2; j++) {
-                        if (transpose) TTI_TRNSPSRCA;
-                        for (int i=0; i<MATH_FIDELITY_PHASES; i++) {
-                            ckernel_template::run(instrn_buffer);
-                        }
-                        TTI_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);          // DEST = 8, DEST_CR = 8
-                        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D_F);     // DEST = 16, DEST_CR = 16, FIDELITY_PHASE = 0
-                        if (transpose) TTI_TRNSPSRCA;
-                        for (int i=0; i<MATH_FIDELITY_PHASES; i++) {
-                            ckernel_template::run(instrn_buffer);
-                        }
-                        TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_D_F);                      // DEST = 0, DEST_CR = 0, FIDELITY_PHASE = 0
-                    }
-                } else {
-                    if (transpose) TTI_TRNSPSRCA;
-                    ckernel_template::run(instrn_buffer);
-                    if (transpose) TTI_TRNSPSRCA;
-                    ckernel_template::run(instrn_buffer);
-                    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
-                    if (transpose) TTI_TRNSPSRCA;
-                    ckernel_template::run(instrn_buffer);
-                    if (transpose) TTI_TRNSPSRCA;
-                    ckernel_template::run(instrn_buffer);
-                    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_D);
-                }
-            }
-        }    
-    }    
+            _llk_math_matmul_<MATH_FIDELITY_PHASES, FaceLayout>(dst_index+rt*ct_dim+ct, transpose);
+        }
+    }
 }
+
 
 template <int MATH_FIDELITY_DESC, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
 inline void matmul_configure_addrmod() {
@@ -94,7 +104,7 @@ inline void matmul_configure_addrmod() {
     .set(ADDR_MOD_0);
 
     if constexpr (FaceLayout == DstTileFaceLayout::ColMajor) {
-    
+
         if constexpr (MATH_FIDELITY_PHASES > 0) {
             // Fidelity Loop
             // DEST -- CR on dest for next fidelity phase
@@ -184,19 +194,17 @@ inline void matmul_configure_addrmod() {
 
 
         }
-
-        
     }
 }
 
 template <int NUM_FIDELITY_PHASES, DstTileFaceLayout FaceLayout=DstTileFaceLayout::ColMajor>
 inline void matmul_configure_mop(bool transpose) {
-    if constexpr (FaceLayout == DstTileFaceLayout::ColMajor) {    
+    if constexpr (FaceLayout == DstTileFaceLayout::ColMajor) {
         if constexpr (NUM_FIDELITY_PHASES > 0) {
             ckernel_template tmp(NUM_FIDELITY_PHASES, 8, TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0));
             if (transpose) {
                 tmp.set_start_op(TT_OP_TRNSPSRCA);
-            } 
+            }
             tmp.set_last_inner_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0));
             tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0));
             tmp.program(instrn_buffer);
@@ -206,7 +214,7 @@ inline void matmul_configure_mop(bool transpose) {
             ckernel_template tmp(2, 8, TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0));
             if (transpose) {
                 tmp.set_start_op(TT_OP_TRNSPSRCA);
-            } 
+            }
             tmp.set_last_inner_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0));
             tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0));
             tmp.program(instrn_buffer);
@@ -231,7 +239,7 @@ inline void _llk_math_matmul_init_(const std::uint32_t transpose=0, const std::u
 
     constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
 
-    matmul_configure_addrmod<MATH_FIDELITY_DESC, FaceLayout>();    
+    matmul_configure_addrmod<MATH_FIDELITY_DESC, FaceLayout>();
     matmul_configure_mop<MATH_FIDELITY_PHASES, FaceLayout>(transpose>0);
     math::reset_counters(p_setrwc::SET_ABD_F);
 }

@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -110,7 +108,6 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(const std::uint32_t unpa
 inline void _llk_unpack_reconfig_data_format_impl_(
     const std::uint32_t unpA_src_format, const std::uint32_t unpB_src_format,
     const std::uint32_t unpA_dst_format, const std::uint32_t unpB_dst_format) {
-    
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
 
     uint alu_src_format = (unpB_dst_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |

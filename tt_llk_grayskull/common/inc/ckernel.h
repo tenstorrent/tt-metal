@@ -1,8 +1,7 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 
 #pragma once
 #include "risc_attribs.h"
@@ -36,7 +35,7 @@
 #define OVERLAY_DECOUPLE 0
 #endif
 
-#ifndef LLK_TB_TEST
+#if defined(EN_KERNEL_SLOWDOWN)
 #include "kernel_slowdown_config.h"
 #endif
 
@@ -54,7 +53,7 @@
 
 #define DELAY_EN (INSERT_UNPACK_DELAY || INSERT_PACK_DELAY || INSERT_MATH_DELAY)
 
-#define TT_ALWAYS_INLINE inline __attribute__ ((always_inline)) 
+#define TT_ALWAYS_INLINE inline __attribute__ ((always_inline))
 
 #include <cstdint>
 
@@ -282,12 +281,12 @@ inline void wait(uint32_t cycles) {
     do {
        wall_clock = clock_lo[0] | ((uint64_t)clock_hi[0]<<32);
     }
-    while (wall_clock < (wall_clock_timestamp+cycles));     
+    while (wall_clock < (wall_clock_timestamp+cycles));
 }
 
 // Clear dest
 inline void zeroacc() {
-    // Clear dest	
+    // Clear dest
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},

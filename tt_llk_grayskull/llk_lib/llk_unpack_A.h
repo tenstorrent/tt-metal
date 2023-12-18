@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include "ckernel.h"
@@ -53,7 +51,7 @@ inline void _llk_unpack_A_mop_config_(const bool transpose_of_faces) {
                 0,
                 0);
             tmp.program(instrn_buffer);
-        }    
+        }
     } else if constexpr (BType == BroadcastType::ROW) {
 #if SKIP_UNP == 1
         static constexpr uint unpack_srca = TT_OP_NOP;
@@ -90,8 +88,8 @@ inline void _llk_unpack_A_mop_config_(const bool transpose_of_faces) {
                 0,
                 0);
             tmp.program(instrn_buffer);
-        }    
-    } 
+        }
+    }
     else if constexpr (BType == BroadcastType::SCALAR) {
         static_assert((!acc_to_dest) && "accumulate into dest with broadcast scaler is not supported!");
 #if SKIP_UNP == 1
@@ -172,13 +170,12 @@ inline void _llk_unpack_A_hw_configure_(const std::uint32_t unpack_src_format, c
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 // within_face_16x16_transpose is used on WH but not used for GS, this transpose is done in math on GS
 inline void _llk_unpack_A_init_(const std::uint32_t transpose_of_faces=0, const std::uint32_t within_face_16x16_transpose=0) {
-    // Todo: figure out tile dims.
     _llk_unpack_A_mop_config_<BType, acc_to_dest>(transpose_of_faces);
 }
 
 template <BroadcastType BType = BroadcastType::NONE, bool acc_to_dest = false, EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_unpack_A_(const std::uint32_t address, const int transpose_of_faces = 0) {
-    
+
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
@@ -234,7 +231,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const int transpose_of_f
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);
 
-#ifdef PERF_DUMP
-    first_unpack_recorded = true;
-#endif
+    #ifdef PERF_DUMP
+        first_unpack_recorded = true;
+    #endif
 }

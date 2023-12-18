@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include "ckernel.h"
@@ -44,7 +42,7 @@ inline void _llk_unpack_reduce_mop_config_() {
 
 template <PoolType type, ReduceDim dim>
 inline void _llk_unpack_reduce_hw_configure_(
-    const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const float const_mult) {
+    const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format) {
     configure_unpack_AB(
         unpack_src_format,
         unpack_src_format,

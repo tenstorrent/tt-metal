@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include "llk_param_structs.h"
@@ -20,7 +18,7 @@ using namespace ckernel;
 inline void eltwise_unary_configure_addrmod();
 
 template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, DstSync Dst = DstSync::SyncFull, bool is_fp32_dest_acc_en = false /* unused */>
-inline void _llk_math_eltwise_unary_datacopy_(uint dst_index, uint stream = 0) {
+inline void _llk_math_eltwise_unary_datacopy_(uint dst_index) {
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
     } else {
@@ -174,7 +172,7 @@ template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NON
 inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t transpose_of_faces=0 /* unused */, const std::uint32_t within_face_16x16_transpose=0) {
 
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>();
-    
+
     if constexpr (type == A2D) {
         eltwise_unary_configure_mop<type, src_b_bcast_type>(p_mova2d::MOV_8_ROWS, 16, within_face_16x16_transpose);
     } else if constexpr (type == B2D) {

@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include "ckernel.h"
@@ -54,7 +52,6 @@ inline void _llk_unpack_untilize_hw_configure_(const std::uint32_t unpack_src_fo
 }
 
 inline void _llk_unpack_untilize_init_(const std::uint32_t face_r_dim, std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t tile_size) {
-    
     std::uint32_t unpA_ch1_x_stride = (uint) (unpack_dst_format&0x3) == (uint) DataFormat::Float32 ? 4 : (uint) (unpack_dst_format&0x3) == (uint) DataFormat::Float16 ? 2 : 1;
     std::uint32_t unpA_ch1_y_stride = FACE_R_DIM*unpA_ch1_x_stride;
 
@@ -64,12 +61,12 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t face_r_dim, std::uint
     tile_descriptor.val[0] = 0;
     tile_descriptor.val[1] = 0;
 
-    // Set descriptor 0 
+    // Set descriptor 0
     tile_descriptor.f.in_data_format = unpack_src_format;
     tile_descriptor.f.uncompressed = 1;
     tile_descriptor.f.x_dim = FACE_C_DIM;
 
-    // Set descriptor 1 
+    // Set descriptor 1
     tile_descriptor.f.y_dim = FACE_R_DIM;
     tile_descriptor.f.z_dim = 4;
 
@@ -82,7 +79,7 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t face_r_dim, std::uint
     TTI_REG2FLOP(1,0,0,0,THCON_SEC0_REG0_TileDescriptor_ADDR32+1-THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
 
     std::uint32_t unpA_base_addr = (((unpack_dst_format & 0x3) == 1) ? 0x80 : 0x40)
-        << UNP0_ADDR_BASE_REG_1_Base_SHAMT;  // base address skips halo rows in srcA (ch1) 
+        << UNP0_ADDR_BASE_REG_1_Base_SHAMT;  // base address skips halo rows in srcA (ch1)
     TT_SETDMAREG(0, LOWER_HALFWORD(unpA_base_addr), 0, LO_16(p_gpr_unpack::TMP0));
     TT_SETDMAREG(0, UPPER_HALFWORD(unpA_base_addr), 0, HI_16(p_gpr_unpack::TMP0));
 
@@ -99,11 +96,11 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t face_r_dim, std::uint
     // Clear context state
     TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
     unp_cfg_context = 0;
-       
+
     const std::uint32_t tile_size_words = tile_size;
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size_words), 0, LO_16(p_gpr_unpack::TILE_SIZE));
     TT_SETDMAREG(0, UPPER_HALFWORD(tile_size_words), 0, HI_16(p_gpr_unpack::TILE_SIZE));
-    _llk_unpack_untilize_mop_config_(); 
+    _llk_unpack_untilize_mop_config_();
 }
 
 template <bool first_pass = true>

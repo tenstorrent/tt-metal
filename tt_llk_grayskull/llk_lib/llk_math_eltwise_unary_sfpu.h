@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include "ckernel_include.h"
@@ -26,7 +24,7 @@ inline void _llk_math_eltwise_unary_sfpu_start_(const uint dst_index) {
 }
 
 inline void _llk_math_eltwise_unary_sfpu_done_() {
-    math::clear_dst_reg_addr(); 
+    math::clear_dst_reg_addr();
 }
 
 inline void _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_() {

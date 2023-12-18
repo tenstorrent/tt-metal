@@ -1,9 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
-
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 #pragma once
 
 #include "ckernel.h"
@@ -77,8 +74,8 @@ inline void _llk_init_packer_dest_offset_registers_() {
        if constexpr (FaceLayout == ColMajor) {
           // Packer0 :  0,32,  1,33 ...  7, 39
           // Packer1 :  8,40,  9,41 ... 15, 47
-          // Packer2 : 16,48, 17,49 ... 23, 55		  
-          // Packer3 : 23,56, 24,57 ... 31, 63		  
+          // Packer2 : 16,48, 17,49 ... 23, 55
+          // Packer3 : 23,56, 24,57 ... 31, 63
           TT_SETDMAREG(0, 0x000 + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
           TT_SETDMAREG(0, 0x000 + 0x08, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
           TT_SETDMAREG(0, 0x000 + 0x10, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
@@ -87,11 +84,11 @@ inline void _llk_init_packer_dest_offset_registers_() {
           TT_SETDMAREG(0, 0x200 + 0x08, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
           TT_SETDMAREG(0, 0x200 + 0x10, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
           TT_SETDMAREG(0, 0x200 + 0x18, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
-       } else {		 
+       } else {
           // Packer0 :  0,16,  1,17 ...  7, 23
           // Packer1 :  8,24,  9,25 ... 15, 31
-          // Packer2 : 32,48, 33,49 ... 39, 55		  
-          // Packer3 : 40,56, 41,57 ... 47, 63		  
+          // Packer2 : 32,48, 33,49 ... 39, 55
+          // Packer3 : 40,56, 41,57 ... 47, 63
           TT_SETDMAREG(0, 0x000 + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
           TT_SETDMAREG(0, 0x000 + 0x08, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
           TT_SETDMAREG(0, 0x000 + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 2));
@@ -100,8 +97,8 @@ inline void _llk_init_packer_dest_offset_registers_() {
           TT_SETDMAREG(0, 0x200 + 0x08, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 1));
           TT_SETDMAREG(0, 0x200 + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
           TT_SETDMAREG(0, 0x200 + 0x28, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
-       }    
-    } else { 
+       }
+    } else {
        if constexpr (FaceLayout == ColMajor) {
            TT_SETDMAREG(0, 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
            TT_SETDMAREG(0, 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 1));
@@ -121,7 +118,7 @@ inline void _llk_init_packer_dest_offset_registers_() {
            TT_SETDMAREG(0, 0x200 + 0x20, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 2));
            TT_SETDMAREG(0, 0x200 + 0x30, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 3));
        }
-    }   
+    }
     select_packer_dest_registers<Dst>();
 }
 
@@ -147,7 +144,7 @@ template <bool mail2math=true, bool mail2pack=true>
 inline void _llk_pack_release_tile_() {
     if constexpr (mail2pack) {
        semaphore_get(semaphore::UNPACK_OPERAND_SYNC);
-    }   
+    }
 }
 
 inline void _llk_pack_debug_dump_(std::uint8_t *data, std::uint32_t byte_size) {
@@ -168,7 +165,7 @@ inline void _llk_pack_reconfig_data_format_(const std::uint32_t pack_dst_format,
 template<bool is_fp32_dest_acc_en = false /* unused */, bool is_tile_dim_reconfig_en = false /* unused */, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor /* unused */>
 inline void _llk_pack_reconfig_data_format_(const std::uint32_t old_pack_dst_format, const std::uint32_t new_pack_dst_format, const std::uint32_t new_tile_size) {
     if((old_pack_dst_format != new_pack_dst_format)
-       && (old_pack_dst_format != (uint)DataFormat::Invalid) 
+       && (old_pack_dst_format != (uint)DataFormat::Invalid)
        && (new_pack_dst_format != (uint)DataFormat::Invalid)) {
         reconfig_packer_data_format(new_pack_dst_format, new_tile_size);
     }
@@ -194,8 +191,8 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable) {
 template <bool untilize = false, ReduceDim dim>
 inline void _llk_pack_reduce_mask_config_() {
     // More information about the configuration can be read in B0 llk_pack_common.h
-    // The only difference is that on GS we cannot configure which packer uses which 
-    // TILE_ROW_SET_MAPPING[0:3] register; the mapping is 1:1  
+    // The only difference is that on GS we cannot configure which packer uses which
+    // TILE_ROW_SET_MAPPING[0:3] register; the mapping is 1:1
     uint32_t edge_offset_sec1_mask = 0xffff;
 
     // Wait for packer to finish to avoid breaking its current configuration

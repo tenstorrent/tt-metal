@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -152,7 +150,7 @@ inline void set_dst_write_addr(uint32_t tile_index)
     } else {
         // FIXME MT: add this mapping for other layout
     }
-    
+
 }
 
 // Programming a dst write addr offset that gets added to base
@@ -194,12 +192,12 @@ inline void set_dest_section_base()
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
 }
 
-inline constexpr int get_math_num_fidelity_phases(const int math_fidelity_desc) 
+inline constexpr int get_math_num_fidelity_phases(const int math_fidelity_desc)
 {
     return (math_fidelity_desc & 0x7);
 }
 
-inline constexpr int get_math_fidelity_increment(const int math_fidelity_desc) 
+inline constexpr int get_math_fidelity_increment(const int math_fidelity_desc)
 {
     return ((math_fidelity_desc >> 3) & 0x1) + 1;
 }

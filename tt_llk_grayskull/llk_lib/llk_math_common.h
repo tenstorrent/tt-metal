@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
@@ -85,14 +83,13 @@ inline void _llk_math_get_tile_(std::uint32_t tile_index, std::uint32_t *p_tile)
     } else {
        *p_tile = 0;
     }
-
 }
 
 template <bool mail2math=true, bool mail2pack=true>
 inline void _llk_math_release_tile_() {
     if constexpr (mail2math) {
        semaphore_get(semaphore::UNPACK_OPERAND_SYNC);
-    }   
+    }
 }
 
 inline void _llk_math_debug_dump_(std::uint8_t *data, std::uint32_t byte_size) {

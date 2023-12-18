@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include "llk_defs.h"
@@ -39,7 +37,7 @@ inline void _llk_pack_configure_addrmod_() {
     }
 }
 
-template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
+template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor, bool write_tile_header = true>
 inline void _llk_pack_mop_config_() {
 
     constexpr uint MOP_INNER_LOOP = 16;
@@ -57,9 +55,12 @@ inline void _llk_pack_mop_config_() {
     if constexpr (!untilize) {
         tmp.set_last_inner_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 0));
         tmp.set_last_outer_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 1));
-        // Write header to l1
-        tmp.set_end_op(TT_OP_STOREIND(
-            1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
+
+        if constexpr (write_tile_header) {
+            // Write header to l1
+            tmp.set_end_op(TT_OP_STOREIND(
+                1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
+        }
     } else {
         tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
         tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 4, 0));
@@ -79,9 +80,9 @@ inline void _llk_pack_hw_configure_(const uint pack_src_format, const uint pack_
 // FIXME: Remove once edge mask spec is defined
 template <bool untilize = false, PoolType type, ReduceDim dim>
 inline void _llk_pack_reduce_hw_configure_(const uint pack_src_format, const uint pack_dst_format, const uint tile_size, const uint relu_config) {
-    
+
     configure_pack<untilize>(pack_src_format, pack_dst_format, tile_size, relu_config);
-    
+
     volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
 
     if constexpr (dim == ReduceDim::REDUCE_ROW) {
@@ -102,15 +103,15 @@ inline void _llk_pack_reduce_hw_configure_(const uint pack_src_format, const uin
     }
 }
 
-template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor>
+template <bool untilize = false, bool zero_output = false, DstTileFaceLayout FaceLayout = DstTileFaceLayout::RowMajor, bool write_tile_header = true>
 inline void _llk_pack_init_() {
     _llk_pack_configure_addrmod_<untilize>();
-    _llk_pack_mop_config_<untilize, zero_output, FaceLayout>();
+    _llk_pack_mop_config_<untilize, zero_output, FaceLayout, write_tile_header>();
 }
 
 template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false /* unused*/>
 inline void _llk_pack_(std::uint32_t tile_index, std::uint32_t pack_dst_format, std::uint16_t pack_tile_addr) {
-    
+
     if constexpr (Dst == DstSync::SyncTile16) {
         // Z-counter points to the next tile in dest
     } else if constexpr (Dst == DstSync::SyncTile2) {

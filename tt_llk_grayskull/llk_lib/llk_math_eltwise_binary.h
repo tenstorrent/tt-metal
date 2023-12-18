@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include "ckernel_include.h"
@@ -22,7 +20,7 @@ inline void eltwise_binary_reuse_dest_as_src() {
     if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) {
         move_d2a_fixed_face(ADDR_MOD_1);
     }
-    static_assert((binary_reuse_dest != EltwiseBinaryReuseDestType::DEST_TO_SRCB), "Reusing dest to src_b is not supported in grayskull"); 
+    static_assert((binary_reuse_dest != EltwiseBinaryReuseDestType::DEST_TO_SRCB), "Reusing dest to src_b is not supported in grayskull");
 }
 
 template <
@@ -33,7 +31,7 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool is_fp32_dest_acc_en = false>
 inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces_A, const std::uint32_t num_faces_B, uint dst_index, const bool clear_fp32_dst_acc/*not used*/) {
-    
+
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);
         if constexpr (eltwise_binary_type == ELWMUL) {
@@ -296,7 +294,7 @@ inline void _llk_math_eltwise_binary_init_(const std::uint32_t transpose=0, cons
     constexpr int MATH_FIDELITY_INCREMENT = get_math_fidelity_increment(MATH_FIDELITY_DESC);
 
     eltwise_binary_configure_addrmod<eltwise_binary_type, src_b_bcast_type, MATH_FIDELITY_INCREMENT>();
-    
+
     if constexpr (
         (eltwise_binary_type == ELWADD) || (eltwise_binary_type == ELWSUB) || (eltwise_binary_type == ELWMUL)) {
         eltwise_binary_configure_mop<eltwise_binary_type, src_b_bcast_type, MATH_FIDELITY_PHASES, binary_reuse_dest>();

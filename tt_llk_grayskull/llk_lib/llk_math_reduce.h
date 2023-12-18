@@ -1,8 +1,6 @@
-/*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
- *
- * SPDX-License-Identifier: Apache-2.0
-*/
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 #include "ckernel_include.h"
@@ -22,7 +20,7 @@ inline void reduce_configure_mop();
 
 template <PoolType type, ReduceDim dim, int MATH_FIDELITY_DESC = 0, bool is_fp32_dest_acc_en = false /* unused */, bool is_int_fpu_en = false /* unused */>
 inline void _llk_math_reduce_(uint dst_index) {
-    
+
     constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
     constexpr bool HIGH_FIDELITY = MATH_FIDELITY_PHASES > 0;
 
@@ -94,7 +92,7 @@ inline void _llk_math_reduce_(uint dst_index) {
                 ckernel_template::run(instrn_buffer);
                 TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
             } else {
-                TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, 0);                
+                TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
             }
         }
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
@@ -143,7 +141,7 @@ inline void _llk_math_reduce_(uint dst_index) {
                 if constexpr (HIGH_FIDELITY) {
                     ckernel_template::run(instrn_buffer);
                 } else {
-                    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);                    
+                    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, 0);
                 }
             }
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
@@ -230,7 +228,7 @@ inline void reduce_configure_addrmod() {
         .srcb = {.incr = 0},
         .dest = {.incr = 1},
     }.set(ADDR_MOD_2);
-    
+
     if constexpr (HIGH_FIDELITY) {
         addr_mod_t{
             .srca = {.incr = 0},
@@ -268,12 +266,11 @@ inline void _llk_math_reduce_init_(const std::uint32_t within_face_16x16_transpo
 
     constexpr int MATH_FIDELITY_PHASES = get_math_num_fidelity_phases(MATH_FIDELITY_DESC);
     constexpr bool HIGH_FIDELITY = MATH_FIDELITY_PHASES > 0;
-    
-    
+
     reduce_configure_addrmod<type, MATH_FIDELITY_DESC>();
     if constexpr (HIGH_FIDELITY) {
         reduce_configure_mop<dim, MATH_FIDELITY_PHASES>();
     }
-    
+
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
