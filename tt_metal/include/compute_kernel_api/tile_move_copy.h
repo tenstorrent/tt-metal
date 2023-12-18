@@ -48,23 +48,18 @@ namespace ckernel {
 ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t cbid) {
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
     UNPACK(( llk_unpack_reconfig_data_format_srca(1, cbid) ));
-
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0) ));
-    #else
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, cbid) ));
-    #endif
 }
 
 ALWI void copy_tile_matmul_partials_init_short_with_dt(uint32_t cbid) {
-    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
-    UNPACK(( llk_unpack_reconfig_data_format_srca(1, cbid) ));
-
     #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0) ));
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(1, 0, 255) ));
     #else
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, cbid) ));
+    UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
     #endif
+
+    UNPACK(( llk_unpack_reconfig_data_format_srca(1, cbid) ));
+    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, cbid) ));
 }
 
 /**
@@ -73,12 +68,7 @@ ALWI void copy_tile_matmul_partials_init_short_with_dt(uint32_t cbid) {
 ALWI void copy_tile_to_dst_init_short()
 {
     UNPACK(( llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>()  ));
-
-    #ifdef ARCH_GRAYSKULL
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0)  ));
-    #else
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>()  ));
-    #endif
 }
 
 /**

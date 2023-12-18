@@ -111,32 +111,31 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
     );
 }
 
-// template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false /* unused*/>
-// inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
-//     std::uint8_t output_id = get_output_id(output);
+/*************************************************************************
+* LLK PACK UNTILIZE
+*************************************************************************/
 
-//     static_assert((!(untilize && out_of_order_output)) && "untilize out of order packing is not supported!");
+template <std::uint32_t block_ct_dim = 8>
+inline void llk_pack_untilize_init() {
+    _llk_pack_untilize_init_<block_ct_dim>();
+}
 
-//     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
+template <std::uint32_t block_ct_dim = 8>
+inline void llk_pack_untilize(std::uint32_t num_blocks, std::uint32_t output) {
 
-//     if constexpr (Dst == DstSync::SyncTile16) {
-//         // Z-counter points to the next tile in dest
-//     } else if constexpr (Dst == DstSync::SyncTile2) {
-//         TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Z, pack_sync_tile_dst_ptr);
-//         pack_sync_tile_dst_ptr = pack_sync_tile_dst_ptr + 8;
-//     } else {
-//         TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Z, tile_index);
-//     }
+    const std::uint32_t output_id = get_output_id(output);
+    std::uint32_t pack_tile_addr = cb_interface[output_id].fifo_wr_ptr - 1;
 
-//     program_packer_untilized_destination(pack_tile_addr, pack_dst_format);
+    for (std::uint32_t block=0; block<num_blocks; block++) {
 
-//     mop_run(1, 1);
+        _llk_pack_untilize_<block_ct_dim>(
+            pack_tile_addr,
+            pack_dst_format[output_id]
+        );
 
-//     if constexpr (untilize) {
-//         TTI_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_Y, 0);
-//         TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1);
-//     }
-// }
+        pack_tile_addr += block_ct_dim*(std::uint32_t)(GET_L1_TILE_SIZE<true>(pack_dst_format[output_id]));
+    }
+}
 
 /*************************************************************************
 * LLK PACK COMMON

@@ -276,8 +276,8 @@ namespace ckernel::packer
       sync_regfile_write(p_gpr_pack::TILE_HEADER+3);
 
       // Config RELU
-      uint apply_relu = reg_read_barrier((uint)&cfg[STACC_RELU_ApplyRelu_ADDR32]);
-      uint relu_threshold  = reg_read_barrier((uint)&cfg[STACC_RELU_ReluThreshold_ADDR32]);
+      uint apply_relu = reg_read((uint)&cfg[STACC_RELU_ApplyRelu_ADDR32]);
+      uint relu_threshold  = reg_read((uint)&cfg[STACC_RELU_ReluThreshold_ADDR32]);
       apply_relu      &= (~STACC_RELU_ApplyRelu_MASK);
       relu_threshold  &= (~STACC_RELU_ReluThreshold_MASK);
       struct {

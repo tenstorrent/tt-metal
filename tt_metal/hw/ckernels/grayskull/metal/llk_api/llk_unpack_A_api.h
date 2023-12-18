@@ -35,7 +35,7 @@ template <
     bool unpack_to_dest = false /*not used*/>
 inline void llk_unpack_A_mop_config(
     const bool transpose_of_faces,
-    const std::uint32_t operand_id,
+    const std::uint32_t operand_id /*not used*/,
     const std::uint32_t unpack_src_format = 0 /*not used*/ ,
     std::uint32_t unpack_dst_format = 0 /*not used*/) {
 

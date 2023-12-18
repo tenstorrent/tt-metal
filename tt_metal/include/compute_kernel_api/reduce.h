@@ -28,11 +28,7 @@ template<bool at_start>
 ALWI void reduce_init(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16)
 {
     UNPACK(( llk_setup_operands() ));
-    #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_AB_init<>() ));
-    #else
     UNPACK(( llk_unpack_AB_init<>(icb, icb_scaler) ));
-    #endif
     UNPACK(( llk_unpack_AB_hw_configure_disaggregated(icb, icb_scaler) ));
 
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
@@ -46,11 +42,7 @@ ALWI void reduce_init(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t 
 
 ALWI void reduce_init_short(PoolType reduce_op, ReduceDim dim, uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16) {
 
-    #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_AB_init<>() ));
-    #else
     UNPACK(( llk_unpack_AB_init<>(icb, icb_scaler) ));
-    #endif
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
     PACK(( llk_pack_reduce_config_v2<REDUCE_DIM, false>(ocb) ));
 }
@@ -59,12 +51,8 @@ ALWI void reduce_init_short(PoolType reduce_op, ReduceDim dim, uint32_t icb, uin
 template<bool at_start>
 ALWI void reduce_init_delta(PoolType reduce_op, ReduceDim dim, uint32_t ocb = 16)
 {
-    #ifdef ARCH_GRAYSKULL
-    UNPACK(( llk_unpack_AB_init<>() ));
-    #else
     // FIXME: API Update needed in compute kernel?
     UNPACK(( llk_unpack_AB_init<>(0, 1) ));
-    #endif
 
     MATH(( llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, MATH_FIDELITY>() ));
 

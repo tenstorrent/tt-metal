@@ -23,11 +23,7 @@ namespace ckernel {
  */
 ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
 {
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
-    #else
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, icb) ));
-    #endif
 
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
 
@@ -46,11 +42,7 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb = 16)
  */
 ALWI void tilize_init_short(uint32_t icb, uint32_t block)
 {
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
-    #else
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, icb) ));
-    #endif
     UNPACK(( llk_unpack_tilize_init(icb, block) ));
 }
 
@@ -58,11 +50,8 @@ ALWI void tilize_init_short(uint32_t icb, uint32_t block)
  * Re-initialize for the tilize operation. This also reconfigure the unpacker with CB data type.
  */
 ALWI void tilize_init_short_with_dt(uint32_t icb, uint32_t block) {
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
-    #else
+
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, icb) ));
-    #endif
     UNPACK(( llk_unpack_reconfig_data_format_srca(1, 0) ));
     UNPACK(( llk_unpack_tilize_init(icb, block) ));
 }
