@@ -1,6 +1,6 @@
 ---
 test-list:
-  - eltwise-logical_xori:
+  - eltwise-logical_and:
       shape:
         start-shape: [1, 1, 32, 32]
         end-shape: [6, 12, 256, 256]
@@ -31,15 +31,15 @@ test-list:
         inputs:
           - input-1:
             data-layout: ["TILE"]
-            data-type: ["BFLOAT16"]
+            data-type: ["BFLOAT16","BFLOAT8_B"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
           - input-2:
             data-layout: ["TILE"]
-            data-type: ["BFLOAT16"]
+            data-type: ["BFLOAT16","BFLOAT8_B"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: eltwise_logical_xori_sweep.csv
-  - eltwise-logical_xori:
+      output-file: eltwise_logical_and_sweep.csv
+  - eltwise-logical_and:
       shape:
         start-shape: [1, 1, 2, 2]
         end-shape: [6, 12, 256, 256]
@@ -77,4 +77,4 @@ test-list:
             data-type: ["BFLOAT16"]
             buffer-type: ["DRAM", "L1", "SYSTEM_MEMORY"]
         out-buffer-type: ["DRAM", "L1"]
-      output-file: eltwise_logical_xori_sweep.csv
+      output-file: eltwise_logical_and_sweep.csv
