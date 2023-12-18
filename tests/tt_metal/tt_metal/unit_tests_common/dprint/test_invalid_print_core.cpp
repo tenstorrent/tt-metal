@@ -13,17 +13,6 @@
 using namespace tt::tt_metal;
 
 TEST(DPrintErrorChecking, TestPrintInvalidCore) {
-    // Skip for N300 for now (issue #3934).
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    auto num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
-    if (arch == tt::ARCH::WORMHOLE_B0 and
-        num_devices == 2 and
-        num_pci_devices == 1) {
-        tt::log_info(tt::LogTest, "DPrint tests skipped on N300 for now.");
-        GTEST_SKIP();
-    }
-
     // Set DPRINT enabled on a mix of invalid and valid cores. Previously this would hang during
     // device setup, but not the print server should simply ignore the invalid cores.
     tt::llrt::OptionsG.set_dprint_cores({{0, 0}, {1, 1}, {100, 100}}); // Only (1,1) is valid.

@@ -97,11 +97,6 @@ class Cluster {
 
     int get_device_aiclk(const chip_id_t &chip_id) const;
 
-    // will write a value for each core+hart's debug buffer, indicating that by default
-    // any prints will be ignored unless specifically enabled for that core+hart
-    // (using tt_start_debug_print_server)
-    void reset_debug_print_server_buffers(const chip_id_t& device_id) const;
-
     void dram_barrier(chip_id_t chip_id) const;
     void l1_barrier(chip_id_t chip_id) const;
 
