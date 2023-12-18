@@ -171,8 +171,8 @@ def test_run_downsample(
     end_i = start_i + output_shard_height
     for i in range(start_i, end_i):
         for j in range(input_shard_width):
-            calculated = torch.tensor(out_golden_2d_nhwc[0][0][i][j])
-            golden = torch.tensor(out_debug[0][0][i][j])
+            calculated = out_golden_2d_nhwc[0][0][i][j]
+            golden = out_debug[0][0][i][j]
             atol_delta = torch.abs(golden - calculated).item()
             rtol_delta = torch.abs(golden - calculated) / torch.abs(calculated)
             if dtype == ttl.tensor.DataType.BFLOAT8_B:

@@ -277,14 +277,6 @@ def test_generate_all_configs_and_references(
         conv_params[i] for i in range(10)
     ]
 
-    if (
-        # These ones weren't hanging on bliu/issue-4386 but are now after rebase
-        (input_channels == 16 and skip_untilize == True)
-        or (input_channels == 256 and skip_untilize == True)
-        or (input_channels == 512 and skip_untilize == True and not ((stride_h == 2) and batch_size == 8))
-    ):
-        pytest.skip("This config hangs when converting from sharded to host with .cpu(). Issue: #4319")
-
     if test_max_pool and batch_size > 8:
         pytest.skip(f"Skipping maxpool config with batch_size = {batch_size} due to mem limitations")
 
