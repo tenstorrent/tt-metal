@@ -40,21 +40,6 @@ protected:
         // Send output to a file so the test can check after program is run.
         tt::llrt::OptionsG.set_dprint_file_name(dprint_file_name);
 
-        // DPrint currently not supported for N300, so skip these tests for
-        // now. Seeing some hanging in device setup with DPrint enabled on N300
-        // so skip before creating the device.
-        // TODO: remove this once N300 DPrint is working.
-        auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
-        auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-        auto num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
-        if (arch == tt::ARCH::WORMHOLE_B0 and
-            num_devices == 2 and
-            num_pci_devices == 1) {
-            tt::log_info(tt::LogTest, "DPrint tests skipped on N300 for now.");
-            test_skipped = true;
-            GTEST_SKIP();
-        }
-
         // Parent call, sets up the device
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
 

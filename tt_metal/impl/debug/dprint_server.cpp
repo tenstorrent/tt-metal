@@ -50,19 +50,6 @@ public:
 NullBuffer null_buffer;
 std::ostream null_stream(&null_buffer);
 
-// Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
-// Used for debug print server startup sequence.
-void write_init_magic(int chip_id, const CoreCoord& core, int hart_id, bool starting = true) {
-    // compute the buffer address for the requested hart
-    uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
-
-    // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
-    // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
-    vector<uint32_t> initbuf = { uint32_t(starting ? DEBUG_PRINT_SERVER_STARTING_MAGIC : DEBUG_PRINT_SERVER_DISABLED_MAGIC) };
-    tt::llrt::write_hex_vec_to_core(chip_id, core, initbuf, base_addr);
-} // write_init_magic
-
-
 struct DebugPrintServerContext {
 
     // only one instance is allowed at the moment
@@ -187,6 +174,18 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
     stream << endl << "  ptr=" << ts->ptr_ << ")" << endl;
 } // PrintTileSlice
 
+// Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
+// Used for debug print server startup sequence.
+void WriteInitMagic(int chip_id, const CoreCoord& core, int hart_id, bool enabled) {
+    // compute the buffer address for the requested hart
+    uint32_t base_addr = PRINT_BUFFER_NC + hart_id*PRINT_BUFFER_SIZE;
+
+    // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
+    // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
+    vector<uint32_t> initbuf = { uint32_t(enabled ? DEBUG_PRINT_SERVER_STARTING_MAGIC : DEBUG_PRINT_SERVER_DISABLED_MAGIC) };
+    tt::llrt::write_hex_vec_to_core(chip_id, core, initbuf, base_addr);
+} // WriteInitMagic
+
 // Checks if our magic value was cleared by the device code
 // The assumption is that if our magic number was cleared,
 // it means there is a write in the queue and wpos/rpos are now valid
@@ -259,7 +258,6 @@ void DebugPrintServerContext::WaitForPrintsFinished() {
 
 void DebugPrintServerContext::AttachDevice(Device* device) {
     chip_id_t device_id = device->id();
-    tt::Cluster::instance().reset_debug_print_server_buffers(device_id);
 
     // A set of all valid worker cores, used for checking the user input. Note that the core coords
     // here are physical, which matches the user input for configuring the print server.
@@ -297,12 +295,22 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
         }
     }
 
-    // Go through all cores on this new device and write init magic to set up DPRINT.
+    // Initialize all print buffers on all cores on the device to have print disabled magic. We
+    // will then write print enabled magic for only the cores the user has specified to monitor.
+    // This way in the kernel code (dprint.h) we can detect whether the magic value is present and
+    // skip prints entirely to prevent kernel code from hanging waiting for the print buffer to be
+    // flushed from the host.
+    for (auto core : all_worker_cores) {
+        for (int hart_index = 0; hart_index < DPRINT_NRISCVS; hart_index++) {
+            WriteInitMagic(device_id, core, hart_index, false);
+        }
+    }
+    // Write print enable magic for the cores the user specified.
     uint32_t hart_mask = tt::llrt::OptionsG.get_dprint_riscv_mask();
     for (auto core : print_cores_sanitized) {
         for (int hart_index = 0; hart_index < DPRINT_NRISCVS; hart_index++) {
             if (hart_mask & (1<<hart_index)) {
-                write_init_magic(device_id, core, hart_index);
+                WriteInitMagic(device_id, core, hart_index, true);
             }
         }
     }
