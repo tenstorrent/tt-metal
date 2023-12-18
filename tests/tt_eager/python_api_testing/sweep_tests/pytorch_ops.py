@@ -30,6 +30,10 @@ def copy(x, y, *args, **kwargs):
     return y.copy_(x)
 
 
+def typecast(x, *args, **kwargs):
+    return x.to(torch.uint8)
+
+
 def clone(x, *args, **kwargs):
     return torch.clone(x)
 

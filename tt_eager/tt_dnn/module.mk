@@ -7,6 +7,9 @@ TT_DNN_SRCS = \
 	tt_eager/tt_dnn/op_library/copy/copy_op.cpp \
 	tt_eager/tt_dnn/op_library/copy/single_core/copy_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/copy/multi_core/copy_op_multi_core.cpp \
+	tt_eager/tt_dnn/op_library/typecast/typecast_op.cpp \
+	tt_eager/tt_dnn/op_library/typecast/single_core/typecast_op_single_core.cpp \
+	tt_eager/tt_dnn/op_library/typecast/multi_core/typecast_op_multi_core.cpp \
 	tt_eager/tt_dnn/op_library/move/move_op.cpp \
 	tt_eager/tt_dnn/op_library/move/single_core/move_op_single_core.cpp \
 	tt_eager/tt_dnn/op_library/move/multi_core/move_op_multi_core.cpp \

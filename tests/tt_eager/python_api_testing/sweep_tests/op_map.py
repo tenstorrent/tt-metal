@@ -36,6 +36,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.arange,
         "pytorch_op": pytorch_ops.arange,
     },
+    "typecast": {
+        "tt_lib_op": tt_lib_ops.typecast,
+        "pytorch_op": pytorch_ops.typecast,
+    },
     # stats
     "stats-var_hw": {
         "tt_lib_op": tt_lib_ops.var_hw,

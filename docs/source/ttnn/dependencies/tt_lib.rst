@@ -813,6 +813,8 @@ Backward Operations
 
 .. autofunction:: tt_lib.tensor.binary_le_bw
 
+.. autofunction:: tt_lib.tensor.typecast
+
 Loss Functions
 --------------
 
