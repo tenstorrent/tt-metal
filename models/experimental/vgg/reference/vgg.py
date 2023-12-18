@@ -123,25 +123,13 @@ def make_layers(
                 conv_ind = len(layers) - 3
                 bn_ind = len(layers) - 2
 
-                conv2d.weight = nn.Parameter(
-                    state_dict[f"{base_address}.{conv_ind}.weight"]
-                )
-                conv2d.bias = nn.Parameter(
-                    state_dict[f"{base_address}.{conv_ind}.bias"]
-                )
+                conv2d.weight = nn.Parameter(state_dict[f"{base_address}.{conv_ind}.weight"])
+                conv2d.bias = nn.Parameter(state_dict[f"{base_address}.{conv_ind}.bias"])
 
-                layers[bn_ind].weight = nn.Parameter(
-                    state_dict[f"{base_address}.{bn_ind}.weight"]
-                )
-                layers[bn_ind].bias = nn.Parameter(
-                    state_dict[f"{base_address}.{bn_ind}.bias"]
-                )
-                layers[bn_ind].running_mean = nn.Parameter(
-                    state_dict[f"{base_address}.{bn_ind}.running_mean"]
-                )
-                layers[bn_ind].running_var = nn.Parameter(
-                    state_dict[f"{base_address}.{bn_ind}.running_var"]
-                )
+                layers[bn_ind].weight = nn.Parameter(state_dict[f"{base_address}.{bn_ind}.weight"])
+                layers[bn_ind].bias = nn.Parameter(state_dict[f"{base_address}.{bn_ind}.bias"])
+                layers[bn_ind].running_mean = nn.Parameter(state_dict[f"{base_address}.{bn_ind}.running_mean"])
+                layers[bn_ind].running_var = nn.Parameter(state_dict[f"{base_address}.{bn_ind}.running_var"])
                 layers[bn_ind].num_batches_tracked = nn.Parameter(
                     state_dict[f"{base_address}.{bn_ind}.num_batches_tracked"],
                     requires_grad=False,
