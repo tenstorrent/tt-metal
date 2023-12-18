@@ -31,6 +31,7 @@ const uint32_t sharded_act_cb                         = CB::c_in3;
 const uint32_t cb_for_reader_indices                  = CB::c_in4;
 const uint32_t cb_for_reader_offsets                  = CB::c_in5;
 const uint32_t act_cb_row_major_bfloat16              = CB::c_in6;
+const uint32_t act_cb_second_reader                   = CB::c_in7;
 const uint32_t matmul_partials_cb                     = CB::c_intermed0;
 const uint32_t tilize_mode_tilized_act_cb             = CB::c_intermed1;
 const uint32_t untilize_mode_reblock_cb               = CB::c_intermed2;
@@ -56,8 +57,9 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     DataFormat bias_df,
     bool weight_width_sliced,
     const Tensor& output,
-    uint32_t bias_ntiles = 0,
-    bool with_bias = false
+    uint32_t bias_ntiles,
+    bool with_bias,
+    bool split_reader
 ) {
 
     uint32_t act_tile_size = tt_metal::detail::TileSize(act_df);
@@ -94,6 +96,17 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
         } else {
             // For 1D convs, locally create act matrix in act_cb, which is always ROW_MAJOR BFLOAT16
             // Then, tilize input in compute
+
+            // Extra cb for second reader if we split act reads across two RISCs
+            // In this case, the regular reader only does first half of reads along output block h
+            if (split_reader) {
+                num_cb0_tiles /= 2;
+
+                CircularBufferConfig cb_act_config = CircularBufferConfig(num_cb0_tiles * act_tile_size, {{act_cb_second_reader, act_df}})
+                .set_page_size(act_cb_second_reader, act_tile_size);
+                auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
+            }
+
             CircularBufferConfig cb_act_config = CircularBufferConfig(num_cb0_tiles * act_tile_size, {{act_cb, act_df}})
             .set_page_size(act_cb, act_tile_size);
             auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
@@ -101,7 +114,6 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     } else {
         TT_ASSERT(false, "Input must be sharded!");
     }
-
 
     CircularBufferConfig cb_weight_config = CircularBufferConfig(num_cb1_tiles * weight_tile_size, {{weight_cb, weight_df}})
 		.set_page_size(weight_cb, weight_tile_size);
@@ -159,7 +171,7 @@ tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     return {cb_sharded_act, cb_output};
 }
 
-operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output) {
+operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tensor& a, const Tensor &b, const Shape& ashape, std::optional<const Tensor> bias, const std::optional<const Tensor> conv_reader_indices, vector<int> conv_params, uint32_t output_channels, bool untilize_out, bool has_bias, bool fuse_relu, const MathFidelity math_fidelity, const OptimizedConvParallelizationConfig& parallelization_config, const OptimizedConvBlockConfig& block_config, uint32_t extra_padding_for_32B_alignment, Tensor &output, bool split_reader) {
     bool pass = true;
     tt_metal::Device *device = a.device();
     TT_ASSERT(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
@@ -190,9 +202,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     uint32_t pad_h = (uint32_t) conv_params[4];
     uint32_t pad_w = (uint32_t) conv_params[5];
 
-    bool rn50_first_conv = (conv_act_size_h == 230 && conv_act_size_w == (231 + extra_padding_for_32B_alignment) &&
-                        weight_size_h == 7 && weight_size_w == 8 &&
-                        stride_h == 2 && stride_w == 2);
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(ashape, conv_params, out_block_h_ntiles, extra_padding_for_32B_alignment);
     assert(act_matrix_shape.size() == 3);
@@ -255,15 +264,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     uint32_t num_blocks_act_w = act_matrix_width_ntiles / act_block_w_ntiles;
     uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
 
-    if (rn50_first_conv) {
-        assert(num_blocks_weight_w == 1);
-    }
-
     // act block info
     uint32_t act_block_w_datums = act_matrix_width / num_blocks_act_w;
     uint32_t act_block_h_datums = act_matrix_height / num_blocks_act_h;
     TT_ASSERT((act_block_w_datums == conv_act_size_c * weight_size_w) || ((act_block_w_datums <= conv_act_size_c) && (conv_act_size_c % act_block_w_datums == 0)));
-
 
     // weight block info
     uint32_t weight_block_w_datums = weight_matrix_width / num_blocks_weight_w;
@@ -413,12 +417,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     assert(num_cores_y < 10);
     uint32_t per_core_out_matrix_height_ntiles = p_config.per_core_out_matrix_height_ntiles;
     uint32_t per_core_weight_matrix_width_ntiles = p_config.per_core_weight_matrix_width_ntiles;
-    //cout << "per_core_weight_matrix_width_ntiles=" << per_core_weight_matrix_width_ntiles << endl;
-    // cout << "total_num_cores=" << total_num_cores << endl;
-    // cout << "per_core_out_matrix_height_ntiles=" << per_core_out_matrix_height_ntiles << endl;
-    // cout << "act_matrix_height_ntiles=" << act_matrix_height_ntiles << endl;
-    // cout << "act_block_h_datums=" << act_block_h_datums << endl;
-    // cout << "num_blocks_act_h=" << num_blocks_act_h << endl;
 
     // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
     bool weight_width_sliced = per_core_weight_matrix_width_ntiles < weight_matrix_width_ntiles;
@@ -460,7 +458,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         assert(num_blocks_out_h_per_core == num_blocks_out_h);
         assert(num_cores_x == 1);
     }
-    // cout << "num_blocks_act_h_per_core=" << num_blocks_act_h_per_core << endl;
+
     assert(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0);
     uint32_t total_active_num_cores_per_weight_slice = act_matrix_height_ntiles / per_core_out_matrix_height_ntiles;
     assert(total_active_num_cores_per_weight_slice <= total_num_cores_per_weight_slice);
@@ -470,29 +468,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         assert(total_noop_cores == 0);
         assert(total_active_num_cores == total_num_cores);
     }
-    // cout << "act_matrix_height_ntiles=" << act_matrix_height_ntiles << endl;
-    // cout << "per_core_out_matrix_height_ntiles=" << per_core_out_matrix_height_ntiles << endl;
-    // cout << "total_active_num_cores_per_weight_slice="<< total_active_num_cores_per_weight_slice <<  endl;
-    // cout << "num weight slices = " <<  num_weight_slices_width << endl;
-    // cout << "total num active cores" << total_active_num_cores << endl;
+
     if (has_bias) {
     assert(bias_ntiles % num_weight_slices_width == 0);
     assert(bias_ntiles == weight_matrix_width_ntiles);
     }
     uint32_t bias_ntiles_per_core = bias_ntiles / num_weight_slices_width;
-
-    bool act_block_w_equals_input_channels_x_filter_width = (act_block_w_datums == (conv_act_size_c * weight_size_w));
-    if (rn50_first_conv) {
-        assert(not weight_width_sliced); // weight width slicing not supported for rn50 first conv
-        assert(act_block_w_equals_input_channels_x_filter_width);
-    }
-
-    vector<CoreCoord> debug_cores;
-    for(uint32_t core_i = 0; core_i < total_num_cores; core_i++) {
-        uint32_t core_x_i = core_i % num_cores_x;
-        uint32_t core_y_i = core_i / num_cores_x;
-        debug_cores.push_back({core_x_i+1, core_y_i+1});
-    }
 
     CoreRange all_cores = {.start = CoreCoord(0, 0), .end = CoreCoord(num_cores_x - 1, num_cores_y - 1)};
     assert(total_active_num_cores >= num_cores_x);
@@ -501,21 +482,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     uint32_t num_active_cores_x_last_y =  total_active_num_cores % num_cores_x;
     assert((num_active_cores_x * num_active_cores_y_with_full_x) + num_active_cores_x_last_y == total_active_num_cores);
 
-    // cout << "All active cores. Core Ranges:" << endl;
-    // cout << "Core range 1 - (0,0) to (" << num_active_cores_x - 1 << "," << num_active_cores_y_with_full_x - 1 << ")" << endl;
-
     std::set<CoreRange> all_active_cores_set;
     all_active_cores_set.insert((CoreRange) {.start = CoreCoord(0, 0), .end = CoreCoord(num_active_cores_x - 1, num_active_cores_y_with_full_x - 1)});
     if (num_active_cores_x_last_y > 0) {
         all_active_cores_set.insert((CoreRange) {.start = CoreCoord(0, num_active_cores_y_with_full_x), .end = CoreCoord(num_active_cores_x_last_y - 1, num_active_cores_y_with_full_x)});
-        // cout << "Core range 2 - (0," << num_active_cores_y_with_full_x << ") to (" << num_active_cores_x_last_y - 1 << "," << num_active_cores_y_with_full_x << ")" << endl;
     }
     CoreRangeSet all_active_cores(all_active_cores_set);
     std::set<CoreRange> noop_cores_set;
     if (total_noop_cores > 0) {
         assert(total_noop_cores == (num_cores_x - num_active_cores_x_last_y));
         noop_cores_set.insert((CoreRange) {.start = CoreCoord(num_active_cores_x_last_y, num_active_cores_y_with_full_x), .end = CoreCoord(num_cores_x - 1, num_active_cores_y_with_full_x)});
-        // cout << "Noop core range - (" << num_active_cores_x_last_y << "," << num_active_cores_y_with_full_x << ") to (" << num_cores_x - 1 << "," << num_active_cores_y_with_full_x << ")" << endl;
 
     }
     CoreRangeSet noop_cores(noop_cores_set);
@@ -578,19 +554,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     } else if (per_core_weight_matrix_width_ntiles < 8) {
         num_weight_cb_tiles = num_weight_cb_tiles * 2;
     }
-    if (rn50_first_conv) {
-        num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles * num_blocks_weight_w * num_blocks_act_w;
-    }
-    // std::cout << "num_act_cb_tiles = " << num_act_cb_tiles << std::endl;
     if (conv_act_size_c / conv_act_c_blocks < 256) {
         num_act_cb_tiles = num_act_cb_tiles * 2; // double buffered
-        // std::cout << "num_act_cb_tiles (post DB) = " << num_act_cb_tiles << std::endl;
     }
-    uint32_t writer_output_block_num_tiles = out_block_h_ntiles * weight_block_w_ntiles;
 
-    // if (!(conv_output_size_w == 14 || conv_output_size_w == 7)) {
-    //     writer_output_block_num_tiles = writer_output_block_num_tiles * 2;
-    // }
+    uint32_t writer_output_block_num_tiles = out_block_h_ntiles * weight_block_w_ntiles;
 
     // TODO: Moving this function call to after kernel logic causes pcc fails
     // There are additional CBs and semaphores created in 2D conv in kernel logic,
@@ -614,63 +582,64 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
             weight_width_sliced,
             output,
             bias_ntiles_per_core,
-            has_bias);
+            has_bias,
+            split_reader
+    );
 
     string reader_kernel;
     string compute_kernel;
     string writer_mcast_sender_kernel;
     string writer_mcast_receiver_kernel;
     bool tilize_in0 = true;
-    bool reader_with_indices = false;
-    if (rn50_first_conv) {
-        // TODO: Add support for sharded rn50_first_conv
-        TT_ASSERT(false, "Sharded input is not supported for resnet-50 first conv yet!");
-    } else {
-        compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
-        // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
-        if (weight_size_h == weight_size_w and weight_size_w > 1 and (stride_h == 1 or stride_h == 2)) {
-            reader_with_indices = true;
-            // 2D conv
-            if (weight_width_sliced) {
-                assert(read_3x3_window_in_inner_loop == true);
-                reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
-                writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
-                writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
 
-                act_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-                act_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    compute_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
+    // Input should always be sharded in this conv; always use reader kernel for input shard with halo and padding
+    if (weight_size_h == weight_size_w and weight_size_w > 1 and (stride_h == 1 or stride_h == 2)) {
+        // 2D conv
+        if (weight_width_sliced) {
+            assert(read_3x3_window_in_inner_loop == true);
+            reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
+            writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
+            writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
+            act_mcast_sender_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+            act_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
-                act_mcast_noc_y.reserve(num_cores_y);
-                for(uint32_t core_idx_y = 0; core_idx_y < num_cores_y; ++core_idx_y) {
-                    act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
-                }
-
-                // For 2D convs, pre-tilize input and round robin self-mcast tilized act matrix to other cores
-                tilize_in0 = false;
+            act_mcast_noc_y.reserve(num_cores_y);
+            for(uint32_t core_idx_y = 0; core_idx_y < num_cores_y; ++core_idx_y) {
+                act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
             }
-            // 1D conv
-            else {
-                reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp";
+
+            // For 2D convs, pre-tilize input and round robin self-mcast tilized act matrix to other cores
+            tilize_in0 = false;
+        }
+        // 1D conv
+        else {
+            reader_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp";
+            if (split_reader) {
+                writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
+                writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
+            } else {
                 writer_mcast_sender_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
                 writer_mcast_receiver_kernel = "tt_eager/tt_dnn/op_library/conv/kernels/writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
             }
-
-            // Local L1 to store array for reader indices
-            // All convs use packed uint16 indices, so each entry can be 2B (not 4)
-            CircularBufferConfig cb_for_reader_indices_config = CircularBufferConfig(out_block_h_datums * 2, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
-		        .set_page_size(cb_for_reader_indices, out_block_h_datums * 2);
-            cb_for_reader_indices_config.set_globally_allocated_address(*conv_reader_indices.value().buffer());
-            auto cb_for_reader_indices_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_indices_config);
-
-            // Local L1 to store array for reader offsets
-            // TODO: this is not used in 2D-sys-conv, remove also from 1D-sys-conv
-            CircularBufferConfig cb_for_reader_offsets_config = CircularBufferConfig(weight_size_h * weight_size_w * 4, {{cb_for_reader_offsets, tt::DataFormat::Float16_b}})
-		        .set_page_size(cb_for_reader_offsets, 4);
-            auto cb_for_reader_offsets_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_offsets_config);
-        } else {
-            TT_ASSERT(false, "Sharded input not supported for this conv yet!");
         }
+
+        // Local L1 to store array for reader indices
+        // All convs use packed uint16 indices, so each entry can be 2B (not 4)
+        CircularBufferConfig cb_for_reader_indices_config = CircularBufferConfig(out_block_h_datums * 2, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
+		    .set_page_size(cb_for_reader_indices, out_block_h_datums * 2);
+        cb_for_reader_indices_config.set_globally_allocated_address(*conv_reader_indices.value().buffer());
+        auto cb_for_reader_indices_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_indices_config);
+
+        // Local L1 to store array for reader offsets
+        // TODO: this is not used in 2D-sys-conv, remove also from 1D-sys-conv
+        CircularBufferConfig cb_for_reader_offsets_config = CircularBufferConfig(weight_size_h * weight_size_w * 4, {{cb_for_reader_offsets, tt::DataFormat::Float16_b}})
+		    .set_page_size(cb_for_reader_offsets, 4);
+        auto cb_for_reader_offsets_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_offsets_config);
+    } else {
+        TT_ASSERT(false, "Sharded input not supported for this conv yet!");
     }
+
     TT_ASSERT(!(conv_act_size_c & (conv_act_size_c - 1))); // channel depth power of 2 is supported only
 
     std::vector<uint32_t> reader_rt_args;
@@ -682,7 +651,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
     // For new reader_with_indices, this is used to calculate offset so use actual read_bytes along c
     // For old readers, this is used for bank page size for interleaved; offset is from conv_act_c_read_bytes
-    uint32_t log_base_2_of_conv_act_size_c_bytes = reader_with_indices ? std::log2(conv_act_c_read_bytes) : std::log2(conv_act_size_c * a.element_size());
+    uint32_t log_base_2_of_conv_act_size_c_bytes = std::log2(conv_act_c_read_bytes);
     reader_compile_time_args = {(uint32_t)
         (src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         (uint32_t) stride_h,
@@ -700,6 +669,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         (uint32_t) window_outer,
         (uint32_t) window_inner,
         (uint32_t) act_block_h_datums,
+        (uint32_t) act_block_num_tiles / conv_act_c_blocks,
         (uint32_t) weight_size_w,
         (uint32_t) conv_act_size_w + (2 * pad_w)};
 
@@ -728,12 +698,29 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         compute_defines["PRE_TILIZE"] = "1";
     }
 
+    if (split_reader) {
+        reader_defines["SPLIT_READER"] = "1";
+        compute_defines["SPLIT_READER"] = "1";
+    }
+
     writer_compile_time_args = {
         (uint32_t) (dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         out0_cb,
         weight_cb,
         bias_cb,
-        (uint32_t) (bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0))};
+        (uint32_t) (bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0)),
+    };
+    if (split_reader) {
+        std::vector<uint32_t> split_reader_args = {
+            (uint32_t) act_block_h_datums,
+            (uint32_t) act_block_num_tiles / conv_act_c_blocks,
+            (uint32_t) log_base_2_of_conv_act_size_c_bytes,
+            (uint32_t) weight_size_w << log_base_2_of_conv_act_size_c_bytes, // coalesced_read_bytes
+            (uint32_t) (conv_act_size_w + 2 * pad_w) << log_base_2_of_conv_act_size_c_bytes, // window_outer_offset
+        };
+        writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
+    }
+
 
     uint32_t in0_block_w = act_block_w_ntiles / conv_act_c_blocks;
     uint32_t in0_block_num_tiles = act_block_num_tiles / conv_act_c_blocks;
@@ -829,17 +816,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
 
     vector<KernelHandle> reader_ids;
     vector<KernelHandle> writer_ids;
-    //tt_start_debug_print_server();
     for(uint32_t core_i = 0; core_i < total_num_cores; core_i++) {
         uint32_t core_x_i = core_i % num_cores_x;
         uint32_t core_y_i = core_i / num_cores_x;
-        // cout << "core_x_i=" << core_x_i << ", core_y_i=" << core_y_i << endl;
         CoreRange core = {.start = CoreCoord(core_x_i, core_y_i), .end = CoreCoord(core_x_i, core_y_i)};
         bool noop_core = false;
         for (const auto & noop_core_range : noop_cores.ranges()) {
             if (noop_core_range.contains(core)) {
-                // cout << "No op core" << endl;
-                // cout << "core_x_i=" << core_x_i << ", core_y_i=" << core_y_i << endl;
                 noop_core = true;
                 break;
             }
@@ -861,134 +844,110 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_(const Tens
         if (has_bias) {
             assert(bias_tile_offset < bias_ntiles);
         }
-        // cout << "act_slice_i=" << act_slice_i << endl;
-        // cout << "weight_slice_i=" << weight_slice_i << endl;
-        // cout << "core_i=" << core_i << endl;
-        // cout << "num_blocks_act_h_per_core=" << num_blocks_act_h_per_core << endl;
-        // cout << "num_blocks_weight_w_per_core=" << num_blocks_weight_w_per_core << endl;
-        // cout << "bias_tile_offset=" << bias_tile_offset << endl;
-        // cout << "out_start_tile_id=" << out_start_tile_id << endl;
-        // cout << "out_start_tile_id_w=" << out_start_tile_id_w << endl;
-        // cout << "per_core_out_matrix_height_ntiles=" << per_core_out_matrix_height_ntiles << endl;
-        // cout << "weight_matrix_width_ntiles=" << weight_matrix_width_ntiles <<  endl;
-        // cout << "out_start_tile_id_h=" << out_start_tile_id_h << endl;
-        // cout << endl;
-        // cout << "total_h_start=" << total_h_start << endl;
-        // cout << "in_h_start=" << in_h_start << endl;
-        // cout << "out_h_start=" << out_h_start << endl;
-        // cout << "out_w_start=" << out_w_start << endl;
-        // cout << "matrix_h_start=" << matrix_h_start << endl;
-        // cout << "n_start=" << n_start << endl;
 
-        if (rn50_first_conv) {
-            // TODO: Add support for sharded rn50_first_conv
-            TT_ASSERT(false, "Sharded input is not supported for resnet-50 first conv yet!");
+        /* Logic to compute:
+         * NOTE: This logic is wrong if stride !=1
+         * first_partial_right_aligned_row_width
+         * skip_after_partial_right_aligned_row
+         * first_partial_image_num_rows
+         * skip_after_first_partial_image_row
+         * num_full_images
+         * skip_after_full_image
+         * last_partial_image_num_rows
+         * last_partial_left_aligned_row_width
+         */
+
+        // If 2D, same image specs across a row
+        uint32_t start_stick = weight_width_sliced ? core_x_i * out_block_h_datums : core_i * out_block_h_datums;
+        uint32_t end_stick = start_stick + out_block_h_datums;
+
+        ShardingConfig sharding_config = get_specs_for_sharding_partition(start_stick, end_stick, conv_act_size_h, conv_act_size_w, weight_size_w, pad_h, pad_w);
+        uint32_t first_partial_right_aligned_row_width = sharding_config.first_partial_right_aligned_row_width;
+        uint32_t skip_after_partial_right_aligned_row = sharding_config.skip_after_partial_right_aligned_row;
+        uint32_t first_partial_image_num_rows = sharding_config.first_partial_image_num_rows;
+        uint32_t skip_after_first_partial_image_row = sharding_config.skip_after_first_partial_image_row;
+        uint32_t num_full_images = sharding_config.num_full_images;
+        uint32_t skip_after_full_image = sharding_config.skip_after_full_image;
+        uint32_t last_partial_image_num_rows = sharding_config.last_partial_image_num_rows;
+        uint32_t last_partial_left_aligned_row_width = sharding_config.last_partial_left_aligned_row_width;
+
+        if (weight_width_sliced) {
+            auto shard_shape = a.shard_spec().value().shard_shape;
+            uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
+            CoreCoord bottom_core = {(std::size_t) core_x_i, (std::size_t) num_cores_y - 1};
+            auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+
+            bool reader_is_noc_0 = reader_noc == NOC::NOC_0;
+            uint32_t act_mcast_dest_noc_start_x = bottom_core_physical.x;
+            uint32_t act_mcast_dest_noc_start_y = reader_is_noc_0 ? top_left_core_physical.y : bottom_core_physical.y;
+            uint32_t act_mcast_dest_noc_end_x = bottom_core_physical.x;
+            uint32_t act_mcast_dest_noc_end_y = reader_is_noc_0 ? bottom_core_physical.y : top_left_core_physical.y;
+            reader_rt_args = {
+                conv_act_size_w,
+                conv_act_size_h,
+                weight_size_h,
+                weight_size_w,
+
+                act_block_h_datums,
+                in0_block_num_tiles,
+                conv_act_c_blocks,
+
+                // Specs for reader indices
+                first_partial_right_aligned_row_width,
+                skip_after_partial_right_aligned_row,
+                first_partial_image_num_rows,
+                skip_after_first_partial_image_row,
+                num_full_images,
+                skip_after_full_image,
+                last_partial_image_num_rows,
+                last_partial_left_aligned_row_width,
+
+                // Specs for reader offsets
+                window_outer, // window_outer
+                window_inner, // window_inner = 9 / 3, ie. read 3 width coalesced
+
+                (uint32_t) noop_core,
+
+                // mcast args
+                act_mcast_dest_noc_start_x,
+                act_mcast_dest_noc_start_y,
+                act_mcast_dest_noc_end_x,
+                act_mcast_dest_noc_end_y,
+                num_cores_y - 1,
+                num_cores_y - 1,
+                act_mcast_sender_semaphore,
+                act_mcast_receiver_semaphore,
+                in0_block_num_tiles * tilized_act_tile_size, // act_mcast_sender_size_bytes
+                core_y_i, // act_mcast_sender_id (goes down the column)
+                (uint32_t) bottom_core_physical.x, // act_mcast_sender_noc_x
+            };
+            reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end()); // act_mcast_sender_noc_y
         } else {
-            TT_ASSERT(reader_with_indices, "Input must be sharded for this conv!");
-            /* Logic to compute:
-             * NOTE: This logic is wrong if stride !=1
-             * first_partial_right_aligned_row_width
-             * skip_after_partial_right_aligned_row
-             * first_partial_image_num_rows
-             * skip_after_first_partial_image_row
-             * num_full_images
-             * skip_after_full_image
-             * last_partial_image_num_rows
-             * last_partial_left_aligned_row_width
-             */
+            reader_rt_args = {
+                conv_act_size_w,
+                conv_act_size_h,
+                weight_size_h,
+                weight_size_w,
+                num_blocks_act_h_per_core,
+                // act_block_h_datums,
+                // act_block_num_tiles / conv_act_c_blocks,
 
-            // If 2D, same image specs across a row
-            uint32_t start_stick = weight_width_sliced ? core_x_i * out_block_h_datums : core_i * out_block_h_datums;
-            uint32_t end_stick = start_stick + out_block_h_datums;
+                // Specs for reader indices
+                first_partial_right_aligned_row_width,
+                skip_after_partial_right_aligned_row,
+                first_partial_image_num_rows,
+                skip_after_first_partial_image_row,
+                num_full_images,
+                skip_after_full_image,
+                last_partial_image_num_rows,
+                last_partial_left_aligned_row_width,
 
-            ShardingConfig sharding_config = get_specs_for_sharding_partition(start_stick, end_stick, conv_act_size_h, conv_act_size_w, weight_size_w, pad_h, pad_w);
-            uint32_t first_partial_right_aligned_row_width = sharding_config.first_partial_right_aligned_row_width;
-            uint32_t skip_after_partial_right_aligned_row = sharding_config.skip_after_partial_right_aligned_row;
-            uint32_t first_partial_image_num_rows = sharding_config.first_partial_image_num_rows;
-            uint32_t skip_after_first_partial_image_row = sharding_config.skip_after_first_partial_image_row;
-            uint32_t num_full_images = sharding_config.num_full_images;
-            uint32_t skip_after_full_image = sharding_config.skip_after_full_image;
-            uint32_t last_partial_image_num_rows = sharding_config.last_partial_image_num_rows;
-            uint32_t last_partial_left_aligned_row_width = sharding_config.last_partial_left_aligned_row_width;
+                // Specs for reader offsets
+                window_outer, // window_outer
+                window_inner, // window_inner
 
-            if (weight_width_sliced) {
-                auto shard_shape = a.shard_spec().value().shard_shape;
-                uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
-                CoreCoord bottom_core = {(std::size_t) core_x_i, (std::size_t) num_cores_y - 1};
-                auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
-
-                bool reader_is_noc_0 = reader_noc == NOC::NOC_0;
-                uint32_t act_mcast_dest_noc_start_x = bottom_core_physical.x;
-                uint32_t act_mcast_dest_noc_start_y = reader_is_noc_0 ? top_left_core_physical.y : bottom_core_physical.y;
-                uint32_t act_mcast_dest_noc_end_x = bottom_core_physical.x;
-                uint32_t act_mcast_dest_noc_end_y = reader_is_noc_0 ? bottom_core_physical.y : top_left_core_physical.y;
-                reader_rt_args = {
-                    conv_act_size_w,
-                    conv_act_size_h,
-                    weight_size_h,
-                    weight_size_w,
-
-                    act_block_h_datums,
-                    in0_block_num_tiles,
-                    conv_act_c_blocks,
-
-                    // Specs for reader indices
-                    first_partial_right_aligned_row_width,
-                    skip_after_partial_right_aligned_row,
-                    first_partial_image_num_rows,
-                    skip_after_first_partial_image_row,
-                    num_full_images,
-                    skip_after_full_image,
-                    last_partial_image_num_rows,
-                    last_partial_left_aligned_row_width,
-
-                    // Specs for reader offsets
-                    window_outer, // window_outer
-                    window_inner, // window_inner = 9 / 3, ie. read 3 width coalesced
-
-                    (uint32_t) noop_core,
-
-                    // mcast args
-                    act_mcast_dest_noc_start_x,
-                    act_mcast_dest_noc_start_y,
-                    act_mcast_dest_noc_end_x,
-                    act_mcast_dest_noc_end_y,
-                    num_cores_y - 1,
-                    num_cores_y - 1,
-                    act_mcast_sender_semaphore,
-                    act_mcast_receiver_semaphore,
-                    in0_block_num_tiles * tilized_act_tile_size, // act_mcast_sender_size_bytes
-                    core_y_i, // act_mcast_sender_id (goes down the column)
-                    (uint32_t) bottom_core_physical.x, // act_mcast_sender_noc_x
-                };
-                reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end()); // act_mcast_sender_noc_y
-            } else {
-                reader_rt_args = {
-                    conv_act_size_w,
-                    conv_act_size_h,
-                    weight_size_h,
-                    weight_size_w,
-                    num_blocks_act_h_per_core,
-                    // act_block_h_datums,
-                    act_block_num_tiles / conv_act_c_blocks,
-
-                    // Specs for reader indices
-                    first_partial_right_aligned_row_width,
-                    skip_after_partial_right_aligned_row,
-                    first_partial_image_num_rows,
-                    skip_after_first_partial_image_row,
-                    num_full_images,
-                    skip_after_full_image,
-                    last_partial_image_num_rows,
-                    last_partial_left_aligned_row_width,
-
-                    // Specs for reader offsets
-                    window_outer, // window_outer
-                    window_inner, // window_inner
-
-                    (uint32_t) noop_core
-                };
-            }
+                (uint32_t) noop_core
+            };
         }
 
         SetRuntimeArgs(

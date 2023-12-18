@@ -194,7 +194,17 @@ operation::ProgramWithCallbacks OptimizedConv::create_program(const std::vector<
     if (input_tensor_a.memory_config().is_sharded()) {
         // If conv_reader_indices is passed in, use v2 where we don't generate indices locally
         if (conv_reader_indices.has_value()) {
-            return multi_core_optimized_conv_sharded_v2_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_reader_indices, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_tensor);
+            // Always use split reader for first conv in resnet which has output channel 16
+            // TODO: Expose option to split readers for 1D convs to python?
+            bool split_reader = false;
+            if (input_tensor_a.shape()[3] == 16) {
+                split_reader = true;
+            }
+            if (split_reader) {
+                TT_FATAL(block_config.act_block_h_ntiles % block_config.out_subblock_h_ntiles == 0, "Out_block_h must be divisible by out_subblock_h!");
+                TT_FATAL((block_config.act_block_h_ntiles / block_config.out_subblock_h_ntiles) % 2 == 0, "Number of out_subblock_h must be divisible by 2 for split reader!");
+            }
+            return multi_core_optimized_conv_sharded_v2_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_reader_indices, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_tensor, split_reader);
         } else {
             return multi_core_optimized_conv_sharded_(input_tensor_a, input_tensor_b, this->input_tensor_shape, input_tensor_bias, conv_params, output_channels, untilize_out, has_bias, fuse_relu, math_fidelity, parallelization_config, block_config, extra_padding_for_32B_alignment, output_tensor);
         }
