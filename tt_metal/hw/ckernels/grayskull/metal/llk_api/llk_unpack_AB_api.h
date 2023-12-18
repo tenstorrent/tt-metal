@@ -27,7 +27,7 @@ inline void llk_unpack_AB_hw_configure(
 
 template <bool is_fp32_dest_acc_en = false /*not used*/, StochRndType stoch_rnd_mode = StochRndType::None /*not used*/>
 inline void llk_unpack_AB_hw_configure_disaggregated(
-    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const int within_face_16x16_transpose = 0) {
+    const std::uint32_t unpA_operand, const std::uint32_t unpB_operand, const int within_face_16x16_transpose = 0 /*not used*/) {
     const llk_unpack_AB_params_t unpack_AB_params = {.unpA_operand = unpA_operand, .unpB_operand = unpB_operand};
 
     llk_unpack_AB_hw_configure<is_fp32_dest_acc_en, stoch_rnd_mode>(&unpack_AB_params, within_face_16x16_transpose);
@@ -35,10 +35,7 @@ inline void llk_unpack_AB_hw_configure_disaggregated(
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_mop_config(const bool transpose_of_faces = false, const std::uint32_t operand_id = 0) {
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-    const bool narrow_tile = get_operand_narrow_tile(operand_id);  // if narrow tile read face 0 twice for row broadcast
-                                                                   // or read face 0 and 1 for col broadcast
-    _llk_unpack_AB_mop_config_<BType>(transpose_of_faces, num_faces, narrow_tile);
+    _llk_unpack_AB_mop_config_<BType>();
 }
 
 //Params only used for WHB0

@@ -15,6 +15,24 @@ using namespace ckernel;
 
 // "llk_setup_operands" is the old function name that HLKC emits
 inline void llk_setup_operands() {
+    volatile tt_l1_ptr std::uint32_t* circular_buffer_config_addr = (volatile uint32_t*)(CIRCULAR_BUFFER_CONFIG_BASE);
+
+    for (uint32_t cb_id = 0; cb_id < NUM_CIRCULAR_BUFFERS; cb_id++) {
+
+        // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
+        uint32_t fifo_addr = circular_buffer_config_addr[0];
+        uint32_t fifo_size = circular_buffer_config_addr[1];
+        uint32_t fifo_num_pages = circular_buffer_config_addr[2]; // not used atm
+        uint32_t fifo_page_size = circular_buffer_config_addr[3];
+
+        cb_interface[cb_id].fifo_rd_ptr = fifo_addr;
+        cb_interface[cb_id].fifo_size = fifo_size;
+        cb_interface[cb_id].fifo_limit = fifo_addr + fifo_size;  // Check if there is overflow
+        cb_interface[cb_id].tiles_acked = 0;
+        cb_interface[cb_id].fifo_page_size = fifo_page_size;
+
+        circular_buffer_config_addr += UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG; // move by 3 uint32's
+    }
 }
 
 // Wait for N tiles available in the incoming stream
@@ -28,7 +46,7 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
 
     uint16_t num_tiles_recv;
     do {
-        tiles_received = (std::uint16_t) reg_read_barrier((std::uint32_t)tiles_received_ptr);
+        tiles_received = (std::uint16_t) reg_read((std::uint32_t)tiles_received_ptr);
         num_tiles_recv = tiles_received - cb_interface[input].tiles_acked;
     } while (num_tiles_recv < num_tiles_u);
 

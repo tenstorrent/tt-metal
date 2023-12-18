@@ -44,8 +44,8 @@ inline void llk_unpack_AB_matmul_mop_config(
 }
 
 inline void llk_unpack_AB_matmul_init(
-    const std::uint32_t operandA,
-    const std::uint32_t operandB,
+    const std::uint32_t operandA /*not used*/,
+    const std::uint32_t operandB /*not used*/,
     const std::uint32_t transpose = 0,
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1,

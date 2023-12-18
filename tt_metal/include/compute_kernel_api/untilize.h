@@ -20,11 +20,7 @@ namespace ckernel {
  */
 ALWI void untilize_init(uint32_t icb, uint32_t ocb = 16)
 {
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
-    #else
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, icb) ));
-    #endif
     MATH(( llk_math_pack_sync_init<SyncHalf>() ));
 
     PACK(( llk_pack_init() ));
@@ -42,11 +38,7 @@ ALWI void untilize_init(uint32_t icb, uint32_t ocb = 16)
  */
 ALWI void untilize_init_short(uint32_t icb)
 {
-    #ifdef ARCH_GRAYSKULL
-    MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, false>() ));
-    #else
     MATH(( llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE>(0, 0, icb) ));
-    #endif
     UNPACK(( llk_unpack_untilize_init(icb) ));
 }
 
