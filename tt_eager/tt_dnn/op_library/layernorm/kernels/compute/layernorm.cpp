@@ -126,17 +126,17 @@ void MAIN {
         cb_reserve_back(cb_ex, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
-            cb_wait_front(cb_ex_external, num_blocks);
             cb_wait_front(cb_scaler_global, 1);
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks; w++) {
-                reduce_tile(REDUCE_OP, REDUCE_DIM, cb_ex_external, cb_scaler_global, w, scaler0, dst0);
+                cb_wait_front(cb_ex_external, 1);
+                reduce_tile(REDUCE_OP, REDUCE_DIM, cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
+                cb_pop_front(cb_ex_external, 1);
             }
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_ex);
             tile_regs_release();
-            cb_pop_front(cb_ex_external, num_blocks);
         }
         reduce_revert_delta();
         cb_push_back(cb_ex, num_tiles_per_allgather_worker);
@@ -220,18 +220,18 @@ void MAIN {
         cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
-            cb_wait_front(cb_ex_external2, num_blocks);
             cb_wait_front(cb_scaler_global, 1);
 
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks; w++) {
-                reduce_tile(REDUCE_OP, REDUCE_DIM, cb_ex_external2, cb_scaler_global, w, scaler0, dst0);
+                cb_wait_front(cb_ex_external2, 1);
+                reduce_tile(REDUCE_OP, REDUCE_DIM, cb_ex_external2, cb_scaler_global, 0, scaler0, dst0);
+                cb_pop_front(cb_ex_external2, 1);
             }
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_ex2);
             tile_regs_release();
-            cb_pop_front(cb_ex_external2, num_blocks);
         }
         reduce_revert_delta();
         cb_push_back(cb_ex2, num_tiles_per_allgather_worker);
