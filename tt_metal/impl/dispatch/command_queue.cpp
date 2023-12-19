@@ -741,6 +741,12 @@ void EnqueueWrapCommand::process() {
     this->manager.cq_reserve_back(wrap_packet_size_bytes);
     this->manager.cq_write(command_vector.data(), command_vector.size() * sizeof(uint32_t), write_ptr);
     this->manager.cq_push_back(wrap_packet_size_bytes);
+    if (this->wrap_region == DeviceCommand::WrapRegion::COMPLETION) {
+        // Wrap the read pointers for completion queue because device will start writing data at head of completion queue and there are no more reads to be done at current completion queue write pointer
+        // If we don't wrap the read then the subsequent read buffer command may attempt to read past the total command queue size
+        //  because the read buffer command will see updated write pointer to compute num pages to read but the local read pointer is pointing to tail of completion queue
+        this->manager.wrap_completion_queue_locally();
+    }
 }
 
 EnqueueCommandType EnqueueWrapCommand::type() { return this->type_; }
@@ -821,8 +827,9 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking)
         const uint32_t command_queue_size = this->sysmem_manager.cq_interface.command_queue_size;
         uint32_t available_space_bytes = command_queue_size - (get_cq_completion_wr_ptr(this->device->id()) << 4);
         if (available_space_bytes < padded_page_size) {
-            // wrap the completion region because a single page won't fit in available space
-            this->wrap(DeviceCommand::WrapRegion::COMPLETION);
+            // Wrap the completion region because a single page won't fit in available space
+            // Wrap needs to be blocking because host needs updated write pointer to compute how many pages can be read
+            this->wrap(DeviceCommand::WrapRegion::COMPLETION, true);
             available_space_bytes = command_queue_size - (get_cq_completion_wr_ptr(this->device->id()) << 4);
         }
 
@@ -1023,11 +1030,11 @@ void CommandQueue::finish() {
     tt::Cluster::instance().write_sysmem(&finish, 4, HOST_CQ_FINISH_PTR, mmio_device_id, channel);
 }
 
-void CommandQueue::wrap(DeviceCommand::WrapRegion wrap_region) {
+void CommandQueue::wrap(DeviceCommand::WrapRegion wrap_region, bool blocking) {
     ZoneScopedN("CommandQueue_wrap");
     tt::log_debug(tt::LogDispatch, "EnqueueWrap");
     EnqueueWrapCommand command(this->device, *this->device->sysmem_manager, wrap_region);
-    this->enqueue_command(command, false);
+    this->enqueue_command(command, blocking);
 }
 
 // OpenCL-like APIs

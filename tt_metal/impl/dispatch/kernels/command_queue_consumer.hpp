@@ -107,6 +107,7 @@ FORCE_INLINE
 void notify_host_of_cq_completion_write_pointer() {
     constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | HOST_CQ_COMPLETION_WRITE_PTR;  // For now, we are writing to host hugepages at offset
     uint32_t completion_wr_ptr_and_toggle = cq_write_interface.completion_fifo_wr_ptr | (cq_write_interface.completion_fifo_wr_toggle << 31);
+    // DPRINT << "device completion wr ptr " << cq_write_interface.completion_fifo_wr_ptr << ENDL();
     volatile tt_l1_ptr uint32_t* completion_wr_ptr_addr = get_cq_completion_write_ptr();
     completion_wr_ptr_addr[0] = completion_wr_ptr_and_toggle;
     noc_async_write(CQ_COMPLETION_WRITE_PTR, pcie_address, 4);
@@ -114,14 +115,11 @@ void notify_host_of_cq_completion_write_pointer() {
 }
 
 FORCE_INLINE
-void cq_push_back(const uint32_t command_issue_region_size, uint32_t push_size_B, uint32_t min_space_required_B) {
+void cq_push_back(const uint32_t command_issue_region_size, uint32_t push_size_B) {
     uint32_t push_size_16B = align(push_size_B, 32) >> 4;
-    uint32_t min_space_required_16B = align(min_space_required_B, 32) >> 4;
     cq_write_interface.completion_fifo_wr_ptr += push_size_16B;
-    if (cq_write_interface.completion_fifo_wr_ptr >= cq_write_interface.completion_fifo_limit or
-        cq_write_interface.completion_fifo_limit - cq_write_interface.completion_fifo_wr_ptr < min_space_required_16B) {
+    if (cq_write_interface.completion_fifo_wr_ptr >= cq_write_interface.completion_fifo_limit) {
         cq_write_interface.completion_fifo_wr_ptr = command_issue_region_size >> 4;
-
         // Flip the toggle
         cq_write_interface.completion_fifo_wr_toggle = not cq_write_interface.completion_fifo_wr_toggle;
     }
@@ -185,7 +183,7 @@ FORCE_INLINE void write_buffers(
             page_id += num_to_write;
         }
         if (buffer_type == BufferType::SYSTEM_MEMORY) {
-            cq_push_back(command_issue_region_size, num_pages * page_size, page_size);
+            cq_push_back(command_issue_region_size, num_pages * page_size);
         }
     }
     noc_async_write_barrier();
