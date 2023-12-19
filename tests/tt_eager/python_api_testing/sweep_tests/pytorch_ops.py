@@ -1050,15 +1050,16 @@ def embeddings(x, y, *args, **kwargs):
     x_shape = x.shape
     y_shape = y.shape
 
+    batch_size = x_shape[0]
+    num_rows = x_shape[3]
+
+    num_embeddings = y_shape[2]
+    embedding_dim = y_shape[3]
+
     x_ref = x.detach().clone()
     y_ref = y.detach().clone()
 
-    x_ref = torch.clamp(x_ref, min=0, max=y.shape[-2] - 1)
-
-    batch_size = x_shape[0]
-    num_rows = x_shape[2]
-    num_embeddings = y_shape[2]
-    embedding_dim = y_shape[3]
+    x_ref = torch.clamp(x_ref, min=0, max=y.shape[-3] - 1)
 
     z = torch.nn.functional.embedding(
         x_ref.reshape((batch_size, num_rows)),
