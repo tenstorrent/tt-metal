@@ -695,6 +695,26 @@ inline void _calculate_square_()
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_tiled_prod()
+{
+    #pragma GCC unroll 4
+    do {
+        vFloat result = 1.0f;
+        #pragma GCC unroll 0
+        for (int d = 0; d < ITERATIONS; d++) {
+            vFloat v = dst_reg[0];
+            result *= v;
+            dst_reg[0] = result;
+            dst_reg++;
+        }
+        vFloat v = dst_reg[0];
+        result *= v;
+        dst_reg[0] = result;
+        dst_reg++;
+    } while ( false );
+}
+
 template <bool HAS_BASE_SCALING>
 sfpi_inline void _calculate_log_body_(const int log_base_scale_factor)
 {

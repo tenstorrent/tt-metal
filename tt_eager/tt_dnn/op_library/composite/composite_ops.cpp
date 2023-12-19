@@ -195,6 +195,22 @@ Tensor multigammaln(const Tensor& a, const MemoryConfig& output_mem_config) {
     return operation::decorate_as_composite(__func__, _multigammaln)(a, output_mem_config);
 }
 
+Tensor _prod(const Tensor& x, const MemoryConfig& output_mem_config) {
+    const Shape s_x = x.shape();
+    Tensor reshape_input_to_tile_size = x;
+    if(s_x[2]%32!=0 && s_x[3]%32!=0){ //padding for 32 as tile size of pad is 32
+        const Shape start_index = {0, 0, 0, 0};
+        const Shape required_shape = {s_x[0], s_x[1], s_x[2] + (32 - (s_x[2]%32)), s_x[3] + (32 - (s_x[3]%32))};
+        reshape_input_to_tile_size = pad( x, required_shape, start_index, 1);
+    }
+    Tensor tiled_prod_result = tiled_prod( reshape_input_to_tile_size, output_mem_config);
+    return tiled_prod_result;
+}
+
+Tensor prod(const Tensor& a, const MemoryConfig& output_mem_config) {
+    return operation::decorate_as_composite(__func__, _prod)(a, output_mem_config);
+}
+
 //mish[x] = x*tanh[softplus[x]]
 //use transformation y = x*tanh[softplus[x]] by broadcast
 //Ref: https://krutikabapat.github.io/Swish-Vs-Mish-Latest-Activation-Functions/

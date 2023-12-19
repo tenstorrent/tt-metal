@@ -103,6 +103,8 @@ inline void llk_math_calculate_sfpu(
         calculate_signbit<APPROXIMATION_MODE, ITERATIONS>();
     } else if constexpr (operation == SfpuType::silu) {
         calculate_silu<APPROXIMATION_MODE, ITERATIONS>();
+    } else if constexpr (operation == SfpuType::tiled_prod) {
+        calculate_tiled_prod<APPROXIMATION_MODE, ITERATIONS>();
     }
     //erf, erfc are dispatched directly.
 

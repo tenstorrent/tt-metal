@@ -167,6 +167,8 @@ Tensor scatter(const Tensor &input_a, const Tensor &input_b, const MemoryConfig&
 //threshold(a,t,v) = (a < t)*v + (a > t)*a
 Tensor threshold(const Tensor &input_a,float threshold, float value, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+Tensor prod(const Tensor& a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+
 //cbrt(a) = pow(a,1/3) or (cbrt(a))**3 = a.
 Tensor cbrt(const Tensor &input_a, const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 

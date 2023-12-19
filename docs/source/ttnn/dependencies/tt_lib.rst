@@ -401,6 +401,10 @@ Tensor elementwise operations
 
 .. autofunction:: tt_lib.tensor.polygamma
 
+.. autofunction:: tt_lib.tensor.tiled_prod
+
+.. autofunction:: tt_lib.tensor.prod
+
 Tensor relational operations
 ----------------------------------
 .. autofunction:: tt_lib.tensor.gtz

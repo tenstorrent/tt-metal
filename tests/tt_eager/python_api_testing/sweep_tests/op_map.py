@@ -468,6 +468,10 @@ op_map = {
         "tt_lib_op": tt_lib_ops.eltwise_polygamma,
         "pytorch_op": pytorch_ops.polygamma,
     },
+    "eltwise-prod": {
+        "tt_lib_op": tt_lib_ops.eltwise_prod,
+        "pytorch_op": pytorch_ops.prod,
+    },
     "eltwise-logical_xori": {
         "tt_lib_op": tt_lib_ops.eltwise_logical_xori,
         "pytorch_op": pytorch_ops.logical_xori,

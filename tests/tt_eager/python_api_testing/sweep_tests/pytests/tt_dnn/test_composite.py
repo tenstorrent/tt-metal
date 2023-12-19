@@ -113,6 +113,7 @@ if is_wormhole_b0():
                 "nextafter",
                 "scatter",
                 "power_fp",
+                "prod",
             ),
             shapes,
         )
@@ -139,6 +140,7 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     options["lgamma"] = (0.1, 1e32)
     options["multigammaln"] = (1.6, 1e32)
     options["polygamma"] = (1, 10)
+    options["prod"] = (1, 2)
 
     options["sinh"] = (-9, 9)
     options["tanhshrink"] = (-100, 100)
@@ -154,13 +156,20 @@ def test_run_eltwise_composite_test(fn, input_shapes, device, function_level_def
     generator = generation_funcs.gen_rand
 
     if is_wormhole_b0():
-        if fn in ["logit"]:
+        if fn in ["logit", "prod"]:
             pytest.skip("does not work for Wormhole -skipping")
     if fn in ["logical_xor", "logical_xori", "logical_ori", "logical_andi"]:
         datagen_func = [
             generation_funcs.gen_func_with_cast(
                 partial(generator, low=options[fn][0], high=options[fn][1]),
                 torch.int32,
+            )
+        ]
+    elif fn in ["prod"]:  # "prod_cpu" not implemented for 'BFloat16'
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(
+                partial(generator, low=options[fn][0], high=options[fn][1]),
+                torch.float32,
             )
         ]
     else:

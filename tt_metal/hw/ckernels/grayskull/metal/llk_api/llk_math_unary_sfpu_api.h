@@ -132,6 +132,18 @@ inline void llk_math_eltwise_unary_sfpu_square_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::square, APPROXIMATE>();
 }
 
+
+template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
+inline void llk_math_eltwise_unary_sfpu_tiled_prod(uint dst_index, int vector_mode = VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu<SfpuType::tiled_prod, APPROXIMATE, dst_sync>(dst_index, vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_tiled_prod_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::tiled_prod, APPROXIMATE>();
+}
+
+
 // Power : y = x^(const param0)
 template <bool APPROXIMATE, DstSync dst_sync = DstSync::SyncFull>
 inline void llk_math_eltwise_unary_sfpu_power(uint dst_index, uint pow = 0, int vector_mode = VectorMode::RC) {

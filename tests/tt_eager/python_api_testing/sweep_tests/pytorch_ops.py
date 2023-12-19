@@ -229,6 +229,10 @@ def digamma(x, *args, **kwargs):
     return torch.digamma(x)
 
 
+def prod(x, *args, **kwargs):
+    return torch.prod(x)
+
+
 def isfinite(x, *args, **kwargs):
     return torch.isfinite(x)
 

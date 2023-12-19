@@ -122,6 +122,7 @@ namespace tt::tt_metal::detail{
         detail::bind_unary_op(m_tensor, "digamma", &digamma, R"doc(Computes the logarithmic derivative of the gamma function on input tensor ``{0}``.)doc");
         detail::bind_unary_op(m_tensor, "lgamma", &lgamma, R"doc(Computes the natural logarithm of the absolute value of the gamma function on the  ``{0}`` tensor for inputs greater than 0.)doc");
         detail::bind_unary_op(m_tensor, "multigammaln", &multigammaln, R"doc(Computes the multivariate log-gamma function with dimension 4 element-wise on the input tensor ``{0}`` for inputs greater than 1.5f.)doc");
+        detail::bind_unary_op(m_tensor, "prod", &prod, R"doc(Computes the prod function on the input tensor ``{0}``.)doc");
 
         detail::bind_unary_op_with_param(
             m_tensor, "softshrink", &softshrink,

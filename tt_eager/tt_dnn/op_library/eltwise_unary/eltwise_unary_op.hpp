@@ -65,7 +65,8 @@ enum class UnaryOpType {
     RDIV = 47,
     SILU = 48,
     IDENTITY = 49,
-    NEG = 50
+    NEG = 50,
+    TILED_PROD = 51
 };
 
 template <typename T>
@@ -190,6 +191,7 @@ constexpr auto isnan = make_eltwise_unary<UnaryOpType::ISNAN>{};
 constexpr auto sign = make_eltwise_unary<UnaryOpType::SIGN>{};
 constexpr auto signbit = make_eltwise_unary<UnaryOpType::SIGNBIT>{};
 constexpr auto square = make_eltwise_unary<UnaryOpType::SQUARE>{};
+constexpr auto tiled_prod = make_eltwise_unary<UnaryOpType::TILED_PROD>{};
 constexpr auto atan = make_eltwise_unary<UnaryOpType::ATAN>{};
 constexpr auto eqz = make_eltwise_unary<UnaryOpType::EQZ>{};
 constexpr auto nez = make_eltwise_unary<UnaryOpType::NEZ>{};
