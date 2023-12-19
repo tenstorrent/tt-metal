@@ -117,12 +117,12 @@ namespace tt::tt_metal{
          *
          * Return value: void
          *
-         * | Argument      | Description                                       | Type                      | Valid Range               | Required |
-         * |---------------|---------------------------------------------------|---------------------------|---------------------------|----------|
-         * | device        | The device holding the program being profiled.    | Device *                  |                           | True     |
-         * | core_coords   | The logical core coordinates being profiled.      | const vector<CoreCoord> & |                           | True     |
+         * | Argument      | Description                                       | Type                                                         | Valid Range               | Required |
+         * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
+         * | device        | The device holding the program being profiled.    | Device *                                                     |                           | True     |
+         * | core_coords   | The logical core coordinates being profiled.      | const std::unordered_map<CoreType, std::vector<CoreCoord>> & |                           | True     |
          * */
-        void DumpDeviceProfileResults(Device *device, const vector<CoreCoord>& logical_cores);
+        void DumpDeviceProfileResults(Device *device,const std::unordered_map<CoreType, std::vector<CoreCoord>> &logical_cores);
 
         /**
          * Set the directory for all CSV logs produced by the profiler instance in the tt-metal module

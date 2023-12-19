@@ -25,6 +25,7 @@ struct address_map {
   static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = 0;
   static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = 0;
   static constexpr std::uint32_t FW_VERSION_ADDR = 0;
+  static constexpr std::int32_t PRINT_BUFFER_ER = 0;
 
   static constexpr std::int32_t ERISC_BARRIER_BASE = 0;
   static constexpr std::int32_t MAX_L1_LOADING_SIZE = 1;

@@ -197,7 +197,8 @@ namespace detail {
 
     void WriteToDevice(const Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
         ZoneScoped;
-        detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("WriteToDevice");
+        detail::ProfileTTMetalScope profile_this =
+            detail::ProfileTTMetalScope(std::string("WriteToDevice ") + std::to_string(buffer.device()->id()));
         if(buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED || buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK){
             WriteToDeviceInterleavedContiguous(buffer, host_buffer);
         }
@@ -346,7 +347,8 @@ namespace detail {
 
     void ReadFromDevice(const Buffer &buffer, std::vector<uint32_t> &host_buffer,  bool shard_order) {
         ZoneScoped;
-        detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ReadFromDevice");
+        detail::ProfileTTMetalScope profile_this =
+            detail::ProfileTTMetalScope(std::string("ReadFromDevice ") + std::to_string(buffer.device()->id()));
 
         host_buffer.clear();  // overwrite the data
         if(buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED
@@ -421,7 +423,8 @@ namespace detail {
         {//Profiler scope start
         ZoneScoped;
         detail::DispatchStateCheck( false );
-        detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("LaunchProgram");
+        detail::ProfileTTMetalScope profile_this =
+            detail::ProfileTTMetalScope(std::string("LaunchProgram ") + std::to_string(device->id()));
         detail::CompileProgram(device, program);
         detail::WriteRuntimeArgsToDevice(device, program);
         detail::ConfigureDeviceWithProgram(device, program);
@@ -454,7 +457,8 @@ namespace detail {
         ZoneScoped;
         bool pass = true;
         detail::DispatchStateCheck( false );
-        detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("ConfigureDeviceWithProgram");
+        detail::ProfileTTMetalScope profile_this =
+            detail::ProfileTTMetalScope(std::string("ConfigureDeviceWithProgram ") + std::to_string(device->id()));
 
         auto device_id = device->id();
 
