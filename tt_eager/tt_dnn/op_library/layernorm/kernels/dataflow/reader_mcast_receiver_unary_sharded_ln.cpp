@@ -51,16 +51,17 @@ void kernel_main() {
         uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial);
         l1_read_addr_ex_par += all_to_all_tile_offset_bytes;
         for (uint32_t i = 0; i < num_tiles_per_worker; i++) {
-            cb_reserve_back(cb_ex_external, num_blocks);
             uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
             for(uint32_t block = 0; block < num_blocks; block++) {
+                cb_reserve_back(cb_ex_external, 1);
                 uint64_t noc_addr_ex_par = get_noc_addr(noc_same_coord, noc_diff_coord[block], l1_read_addr_ex_par);
-                noc_async_read(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
+                noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
                 l1_write_addr_external += single_tile_size_bytes;
+
+                noc_async_read_barrier();
+                cb_push_back(cb_ex_external, 1);
             }
             l1_read_addr_ex_par += single_tile_size_bytes;
-            noc_async_read_barrier();
-            cb_push_back(cb_ex_external, num_blocks);
         }
 
         // send result to other cores
@@ -118,16 +119,17 @@ void kernel_main() {
         uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial2);
         l1_read_addr_ex_par += all_to_all_tile_offset_bytes;
         for (uint32_t i = 0; i < num_tiles_per_worker; i++) {
-            cb_reserve_back(cb_ex_external2, num_blocks);
             uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external2);
             for(uint32_t block = 0; block < num_blocks; block++) {
+                cb_reserve_back(cb_ex_external2, 1);
                 uint64_t noc_addr_ex_par = get_noc_addr(noc_same_coord, noc_diff_coord[block], l1_read_addr_ex_par);
-                noc_async_read(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
+                noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
                 l1_write_addr_external += single_tile_size_bytes;
+
+                noc_async_read_barrier();
+                cb_push_back(cb_ex_external2, 1);
             }
             l1_read_addr_ex_par += single_tile_size_bytes;
-            noc_async_read_barrier();
-            cb_push_back(cb_ex_external2, num_blocks);
         }
 
         // send result to other cores
