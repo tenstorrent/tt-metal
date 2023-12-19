@@ -565,7 +565,8 @@ void Program::compile( Device * device )
         "dependent on information that is set during device initialization.",
         this->get_id());
 
-    detail::ProfileTTMetalScope profile_this = detail::ProfileTTMetalScope("CompileProgram");
+    detail::ProfileTTMetalScope profile_this =
+        detail::ProfileTTMetalScope(std::string("CompileProgram ") + std::to_string(device->id()));
     bool profile_kernel = getDeviceProfilerState();
     std::vector<std::future<void>> events;
     DprintServerSetProfilerState(profile_kernel);

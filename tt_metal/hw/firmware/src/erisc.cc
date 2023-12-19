@@ -9,6 +9,7 @@
 #include "noc_nonblocking_api.h"
 #include "noc_parameters.h"
 #include "risc_attribs.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "tt_eth_api.h"
 
 #ifdef __cplusplus
@@ -21,6 +22,9 @@ void ApplicationHandler(void) __attribute__((__section__(".init")));
 }
 #endif
 
+namespace kernel_profiler {
+uint32_t wIndex __attribute__((used));
+}
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
 
@@ -36,6 +40,8 @@ void __attribute__((section("code_l1"))) risc_init() {
     }
 }
 void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
+    kernel_profiler::init_profiler();
+    kernel_profiler::mark_time(CC_MAIN_START);
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     risc_init();
@@ -54,4 +60,5 @@ void __attribute__((section("erisc_l1_code"))) ApplicationHandler(void) {
         }
     }
     disable_erisc_app();
+    kernel_profiler::mark_time(CC_MAIN_END);
 }

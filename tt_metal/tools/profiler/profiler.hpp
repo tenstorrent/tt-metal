@@ -102,8 +102,11 @@ class Profiler {
         //Change the output dir of the profile logs
         void setOutputDir(const std::string& new_output_dir);
 
-        //Traverse all cores on the device and dump the device profile results
-        void dumpDeviceResults(int device_id, const vector<CoreCoord> &worker_cores);
+        // Traverse all tensix cores on the device and dump the device profile results
+        void dumpTensixDeviceResults(int device_id, const vector<CoreCoord>& worker_cores);
+
+        // Traverse all ethernet cores on the device and dump the device profile results
+        void dumpEthernetDeviceResults(int device_id, const vector<CoreCoord>& eth_cores);
 };
 
 }  // namespace tt_metal

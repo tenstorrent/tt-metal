@@ -47,6 +47,10 @@ namespace kernel_profiler{
         buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(PRINT_BUFFER_T2);
         buffer [BUFFER_END_INDEX] = wIndex;
         buffer [DROPPED_MARKER_COUNTER] = 0;
+#elif defined(COMPILE_FOR_ERISC)
+        buffer = reinterpret_cast<volatile tt_l1_ptr uint32_t *>(eth_l1_mem::address_map::PRINT_BUFFER_ER);
+        buffer[BUFFER_END_INDEX] = wIndex;
+        buffer[DROPPED_MARKER_COUNTER] = 0;
 #endif
 #endif //PROFILE_KERNEL
     }
@@ -54,7 +58,7 @@ namespace kernel_profiler{
     inline __attribute__((always_inline)) void mark_time(uint32_t timer_id)
     {
 #if defined(PROFILE_KERNEL)
-#if defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_BRISC) | defined(COMPILE_FOR_ERISC)
         uint32_t time_L = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
         uint32_t time_H = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
 #else

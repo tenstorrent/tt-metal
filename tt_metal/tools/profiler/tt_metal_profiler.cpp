@@ -15,10 +15,7 @@ namespace tt_metal {
 
 void DumpDeviceProfileResults(Device *device, const Program &program) {
     const auto &all_logical_cores = program.logical_cores();
-    if (all_logical_cores.find(CoreType::WORKER) != all_logical_cores.end()) {
-        detail::DumpDeviceProfileResults(device, program.logical_cores().at(CoreType::WORKER));
-    }
-    // TODO: add support for ethernet core device dumps
+    detail::DumpDeviceProfileResults(device, program.logical_cores());
 }
 
 
@@ -26,7 +23,8 @@ namespace detail {
 
 static Profiler tt_metal_profiler = Profiler();
 
-void DumpDeviceProfileResults(Device *device, const vector<CoreCoord> &logical_cores) {
+void DumpDeviceProfileResults(
+    Device *device, const std::unordered_map<CoreType, std::vector<CoreCoord>> &logical_cores) {
 #if defined(PROFILER)
     ZoneScoped;
     if (getDeviceProfilerState())
@@ -38,15 +36,21 @@ void DumpDeviceProfileResults(Device *device, const vector<CoreCoord> &logical_c
         }
 
         TT_FATAL(DprintServerIsRunning() == false, "Debug print server is running, cannot dump device profiler data");
-        auto worker_cores_used_in_program =\
-            device->worker_cores_from_logical_cores(logical_cores);
         auto device_id = device->id();
         tt_metal_profiler.setDeviceArchitecture(device->arch());
-        tt_metal_profiler.dumpDeviceResults(device_id, worker_cores_used_in_program);
+        if (logical_cores.find(CoreType::WORKER) != logical_cores.end()) {
+            auto worker_cores_used_in_program =
+                device->worker_cores_from_logical_cores(logical_cores.at(CoreType::WORKER));
+            tt_metal_profiler.dumpTensixDeviceResults(device_id, worker_cores_used_in_program);
+        }
+        if (logical_cores.find(CoreType::ETH) != logical_cores.end()) {
+            auto ethernet_cores_used_in_program =
+                device->ethernet_cores_from_logical_cores(logical_cores.at(CoreType::ETH));
+            tt_metal_profiler.dumpEthernetDeviceResults(device_id, ethernet_cores_used_in_program);
+        }
     }
 #endif
 }
-
 
 void SetProfilerDir(std::string output_dir){
 #if defined(PROFILER)
