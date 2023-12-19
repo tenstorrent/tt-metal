@@ -35,6 +35,7 @@ uint64_t alloc_at_addr_in_compute_and_storage(const AllocatorConfig &config, Ban
 // DRAM allocation is the same as BasicAllocator
 struct L1BankingAllocator : Allocator {
     L1BankingAllocator(const AllocatorConfig &alloc_config);
+    ~L1BankingAllocator();
 };
 
 }  // namespace tt_metal

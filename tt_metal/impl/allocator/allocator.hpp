@@ -30,7 +30,8 @@ class BankManager {
 
     BankManager(const BufferType &buffer_type, const std::vector<int64_t> &bank_descriptors, uint64_t size_bytes, uint64_t alloc_offset=0);
     BankManager(const BufferType &buffer_type, const std::unordered_map<uint32_t, int64_t> &bank_id_to_descriptor, uint64_t size_bytes, uint64_t interleaved_address_limit, uint64_t alloc_offset=0);
-
+    BankManager&& operator=(BankManager&& that);
+    ~BankManager();
     uint32_t num_banks() const;
 
     uint32_t bank_size() const;
@@ -120,6 +121,9 @@ struct Allocator {
     AllocatorConfig config;
     // Callbacks to invoke during initialization and allocation
     allocator::AllocDescriptor descriptor;
+
+    void reset();
+    ~Allocator();
 };
 
 }  // namespace tt_metal
