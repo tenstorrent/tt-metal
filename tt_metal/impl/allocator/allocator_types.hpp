@@ -43,6 +43,8 @@ struct AllocatorConfig {
     std::unordered_map<int, int> worker_log_to_physical_routing_x = {};
     std::unordered_map<int, int> worker_log_to_physical_routing_y = {};
     BankMapping l1_bank_remap = {}; // for remapping which l1 bank points to which bank if we assume normal row-major assignment
+    void reset();
+    ~AllocatorConfig() { reset(); }
 };
 
 enum class MemoryAllocator {
