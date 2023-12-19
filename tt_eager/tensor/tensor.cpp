@@ -34,8 +34,8 @@ Tensor::Tensor(const Storage& storage, const Shape& shape, DataType dtype, Layou
                 // do nothing
             }
             else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
-                TT_ASSERT(storage.device != nullptr);
-                tensor_impl::validate_on_device_dtype_and_layout(storage.device, dtype, layout);
+                TT_ASSERT(storage.buffer->device() != nullptr);
+                tensor_impl::validate_on_device_dtype_and_layout(storage.buffer->device(), dtype, layout);
             }
             else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 // do nothing
@@ -313,7 +313,7 @@ Tensor create_device_tensor(const Shape& shape, DataType data_type, Layout layou
     ZoneScoped;
     uint32_t packed_size_in_bytes = tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(shape, data_type));
     auto device_buffer = tensor_impl::allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config);
-    return Tensor(DeviceStorage{device_buffer, device, memory_config}, shape, data_type, layout);
+    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
 }
 
 Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layout layout, Device *device, const MemoryConfig& memory_config, ShardSpec shard_spec) {
@@ -364,7 +364,7 @@ Tensor create_sharded_device_tensor(const Shape& shape, DataType data_type, Layo
                                                             data_type, layout, memory_config,
                                                             std::make_optional<ShardSpecBuffer>(shard_spec_buffer)
                                                             );
-    return Tensor(DeviceStorage{device_buffer, device, memory_config}, shape, data_type, layout, shard_spec);
+    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout, shard_spec);
 }
 
 }  // namespace tt_metal

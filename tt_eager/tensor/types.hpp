@@ -148,11 +148,17 @@ struct OwnedStorage {
 using DeviceBuffer = std::shared_ptr<Buffer>;
 struct DeviceStorage {
     DeviceBuffer buffer;
-    Device* device;
-    MemoryConfig memory_config;
+
+    const MemoryConfig memory_config() const {
+        const auto& buffer = this->buffer;
+        return MemoryConfig{
+            .memory_layout = buffer->buffer_layout(),
+            .buffer_type = buffer->buffer_type(),
+        };
+    }
 
     static constexpr auto attribute_names = std::make_tuple("memory_config");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->memory_config)); }
+    const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
 };
 
 using BorrowedBuffer = std::variant<

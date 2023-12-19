@@ -91,8 +91,8 @@ class Tensor {
 
         // TODO(arakhmati): clean up the methods below
         Buffer* buffer() const { return std::get<DeviceStorage>(this->storage_).buffer.get(); }
-        Device* device() const { return std::get<DeviceStorage>(this->storage_).device; }
-        const MemoryConfig memory_config() const { return std::get<DeviceStorage>(this->storage_).memory_config; }
+        Device *device() const { return this->buffer()->device(); }
+        const MemoryConfig memory_config() const { return std::get<DeviceStorage>(this->storage_).memory_config(); }
 
         const bool is_sharded() const { return this->memory_config().is_sharded(); }
 
