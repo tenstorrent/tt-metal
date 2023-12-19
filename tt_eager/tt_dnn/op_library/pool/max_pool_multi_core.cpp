@@ -9,6 +9,7 @@
 #include "tt_dnn/op_library/reduce/reduce_op.hpp"   // for reduce_op_utils
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/sharding_utilities.hpp"
+#include "tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tensor/tensor_utils.hpp"
 #include "tensor/owned_buffer_functions.hpp"
@@ -18,74 +19,6 @@ namespace tt {
 namespace tt_metal {
 
 namespace max_pool_helpers {
-
-// reader noc coords for left and right neighbors
-std::map<CoreCoord, CoreCoord> left_neighbor_noc_xy, right_neighbor_noc_xy;
-void init_neighbor_noc_xy_mapping(CoreCoord grid_size, uint32_t noc = 0) {
-    TT_ASSERT(grid_size.x == 12 && grid_size.y == 9);
-    if (noc == 0) {
-        for (uint32_t y = 1; y <= grid_size.y; ++ y) {
-            for (uint32_t x = 1; x <= grid_size.x; ++ x) {
-                CoreCoord local_noc = {x, y > 5 ? y + 1 : y};
-                CoreCoord left_noc, right_noc;
-                // calculate left neighbor
-                left_noc.x = local_noc.x;
-                left_noc.y = local_noc.y;
-                if (left_noc.x > 1) {
-                    left_noc.x -= 1;
-                } else {
-                    left_noc.x = grid_size.x;
-                    left_noc.y -= 1;
-                }
-                if (left_noc.y < 1) {
-                    // there is no left neighbor
-                } else {
-                    if (left_noc.y == 6) {
-                        // y = 6 is to be skipped
-                        left_noc.y -= 1;
-                    }
-                    left_neighbor_noc_xy[local_noc] = {left_noc.x, left_noc.y};
-                }
-                // calculate right neighbor
-                right_noc.x = local_noc.x;
-                right_noc.y = local_noc.y;
-                if (right_noc.x < grid_size.x) {
-                    right_noc.x += 1;
-                } else {
-                    right_noc.y += 1;
-                    right_noc.x = 1;
-                }
-                // NOTE: y = 6 is to be skipped. Hence go till y + 1
-                if (right_noc.y > grid_size.y + 1) {
-                    // there is no right neighbor
-                } else {
-                    if (right_noc.y == 6) {
-                        // y = 6 is to be skipped
-                        right_noc.y += 1;
-                    }
-                    right_neighbor_noc_xy[local_noc] = {right_noc.x, right_noc.y};
-                }
-            }
-        }
-    } else {
-        // noc == 1
-        TT_ASSERT(noc == 0, "noc = 1 for reader is not yet handled in sharded input case.");
-    }
-}
-
-void print_neighbor_noc_xy_mapping() {
-    for (auto left : left_neighbor_noc_xy) {
-        auto local_noc = left.first;
-        auto left_noc = left.second;
-        log_debug("({},{}) --left--> ({},{})", local_noc.x, local_noc.y, left_noc.x, left_noc.y);
-    }
-    for (auto right : right_neighbor_noc_xy) {
-        auto local_noc = right.first;
-        auto right_noc = right.second;
-        log_debug("({},{}) --right--> ({},{})", local_noc.x, local_noc.y, right_noc.x, right_noc.y);
-    }
-
-}
 
 CoreCoord get_ncores_hw(uint32_t h, uint32_t w, uint32_t avail_cores_h, uint32_t avail_cores_w) {
     CoreCoord cores_shape(0, 0);
@@ -344,57 +277,57 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                                                      .buffer_type = BufferType::L1});
     auto minus_inf_const_tensor_addr = minus_inf_const_tensor.buffer()->address();
 
-    #if 1
+    #if 0
     {   // debug
-        log_debug("in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
-        log_debug("in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
-        log_debug("in_tiled_cb :: PS = {}, NP = {}", in_tiled_cb_pagesize, in_tiled_cb_npages);
-        log_debug("out_cb :: PS = {}, NP = {}", out_cb_pagesize, out_cb_npages);
-        log_debug("in_addr: {}", src_dram_buffer->address());
-        log_debug("out_addr: {}", dst_dram_buffer->address());
-        log_debug("nbatch: {}", nbatch);
-        log_debug("kernel_size_h: {}", kernel_size_h);
-        log_debug("kernel_size_w: {}", kernel_size_w);
-        log_debug("kernel_size_hw: {}", kernel_size_hw);
-        log_debug("kernel_size_hw_padded: {}", kernel_size_hw_padded);
-        log_debug("stride_h: {}", stride_h);
-        log_debug("stride_w: {}", stride_w);
-        log_debug("pad_h: {}", pad_h);
-        log_debug("pad_w: {}", pad_w);
-        log_debug("out_h: {}", out_h);
-        log_debug("out_w: {}", out_w);
-        log_debug("out_hw: {}", output_shape[2]);
-        log_debug("out_c: {}", output_shape[3]);
-        log_debug("in_nbytes_c: {}", in_nbytes_c);
-        log_debug("out_nbytes_c: {}", out_nbytes_c);
-        log_debug("in_h: {}", in_h);
-        log_debug("in_w: {}", in_w);
-        log_debug("in_hw: {}", input_shape[2]);
-        log_debug("in_hw_padded: {}", in_hw);
-        log_debug("in_c: {}", input_shape[3]);
-        log_debug("out_hw_padded: {}", out_hw);
-        log_debug("out_ntiles_hw: {}", out_ntiles_hw);
-        log_debug("out_ntiles_c: {}", out_ntiles_c);
-        log_debug("out_nelems: {}", out_nelems);
-        log_debug("out_w_loop_count: {}", out_w_loop_count);
-        log_debug("out_hw: {}", out_hw);
-        log_debug("minus_inf_const_tensor_addr: {}", minus_inf_const_tensor_addr);
-        log_debug("minus_inf_const_tensor_size: {}", minus_inf_const_buffer.size());
-        log_debug("ncores: {}", ncores);
-        log_debug("in_nhw_per_core: {}", in_nhw_per_core);
-        log_debug("out_nhw_per_core: {}", out_nhw_per_core);
-        log_debug("in_nhw_per_core_rem_mask: {}", in_nhw_per_core_rem_mask);
-        log_debug("is_in_sharded: {}", input.memory_config().is_sharded());
-        log_debug("is_out_sharded: {}", output.memory_config().is_sharded());
+        log_debug(LogOp, "in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
+        log_debug(LogOp, "in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
+        log_debug(LogOp, "in_tiled_cb :: PS = {}, NP = {}", in_tiled_cb_pagesize, in_tiled_cb_npages);
+        log_debug(LogOp, "out_cb :: PS = {}, NP = {}", out_cb_pagesize, out_cb_npages);
+        log_debug(LogOp, "in_addr: {}", src_dram_buffer->address());
+        log_debug(LogOp, "out_addr: {}", dst_dram_buffer->address());
+        log_debug(LogOp, "nbatch: {}", nbatch);
+        log_debug(LogOp, "kernel_size_h: {}", kernel_size_h);
+        log_debug(LogOp, "kernel_size_w: {}", kernel_size_w);
+        log_debug(LogOp, "kernel_size_hw: {}", kernel_size_hw);
+        log_debug(LogOp, "kernel_size_hw_padded: {}", kernel_size_hw_padded);
+        log_debug(LogOp, "stride_h: {}", stride_h);
+        log_debug(LogOp, "stride_w: {}", stride_w);
+        log_debug(LogOp, "pad_h: {}", pad_h);
+        log_debug(LogOp, "pad_w: {}", pad_w);
+        log_debug(LogOp, "out_h: {}", out_h);
+        log_debug(LogOp, "out_w: {}", out_w);
+        log_debug(LogOp, "out_hw: {}", output_shape[2]);
+        log_debug(LogOp, "out_c: {}", output_shape[3]);
+        log_debug(LogOp, "in_nbytes_c: {}", in_nbytes_c);
+        log_debug(LogOp, "out_nbytes_c: {}", out_nbytes_c);
+        log_debug(LogOp, "in_h: {}", in_h);
+        log_debug(LogOp, "in_w: {}", in_w);
+        log_debug(LogOp, "in_hw: {}", input_shape[2]);
+        log_debug(LogOp, "in_hw_padded: {}", in_hw);
+        log_debug(LogOp, "in_c: {}", input_shape[3]);
+        log_debug(LogOp, "out_hw_padded: {}", out_hw);
+        log_debug(LogOp, "out_ntiles_hw: {}", out_ntiles_hw);
+        log_debug(LogOp, "out_ntiles_c: {}", out_ntiles_c);
+        log_debug(LogOp, "out_nelems: {}", out_nelems);
+        log_debug(LogOp, "out_w_loop_count: {}", out_w_loop_count);
+        log_debug(LogOp, "out_hw: {}", out_hw);
+        log_debug(LogOp, "minus_inf_const_tensor_addr: {}", minus_inf_const_tensor_addr);
+        log_debug(LogOp, "minus_inf_const_tensor_size: {}", minus_inf_const_buffer.size());
+        log_debug(LogOp, "ncores: {}", ncores);
+        log_debug(LogOp, "in_nhw_per_core: {}", in_nhw_per_core);
+        log_debug(LogOp, "out_nhw_per_core: {}", out_nhw_per_core);
+        log_debug(LogOp, "in_nhw_per_core_rem_mask: {}", in_nhw_per_core_rem_mask);
+        log_debug(LogOp, "is_in_sharded: {}", input.memory_config().is_sharded());
+        log_debug(LogOp, "is_out_sharded: {}", output.memory_config().is_sharded());
     }
     #endif
 
     const uint32_t reader_noc = 0;
     const uint32_t writer_noc = 1;
 
+    std::map<CoreCoord, CoreCoord> left_neighbor_core, right_neighbor_core;
     if (input.memory_config().is_sharded()) {
-        max_pool_helpers::init_neighbor_noc_xy_mapping(grid_size, reader_noc);
-        // max_pool_helpers::print_neighbor_noc_xy_mapping();
+        utils::init_neighbor_core_xy_mapping(grid_size, left_neighbor_core, right_neighbor_core, input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     }
 
     /**
@@ -473,9 +406,9 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
         reader_kernel_fname = std::string("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core.cpp");
     }
     auto reader_kernel = CreateKernel(program,
-                                                  reader_kernel_fname,
-                                                  all_cores,
-                                                  reader_config);
+                                        reader_kernel_fname,
+                                        all_cores,
+                                        reader_config);
 
     /**
      * Writer Kernel: output cb -> output rows
@@ -488,9 +421,9 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
     auto writer_config = WriterDataMovementConfig{.compile_args = writer_ct_args, .defines = writer_defines};
     std::string writer_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_multi_core.cpp");
     auto writer_kernel = CreateKernel(program,
-                                                  writer_kernel_fname,
-                                                  all_cores,
-                                                  writer_config);
+                                        writer_kernel_fname,
+                                        all_cores,
+                                        writer_config);
 
     /**
      * Compute Kernel: input cb -> tilize_block -> input tiles -> reduce_h max -> output tiles -> untilize_block -> output cb
@@ -520,9 +453,9 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                         .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
     std::string compute_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/compute/max_pool_multi_core.cpp");
     auto compute_kernel = CreateKernel(program,
-                                              compute_kernel_fname,
-                                              core_range,
-                                              compute_config);
+                                        compute_kernel_fname,
+                                        core_range,
+                                        compute_config);
 
     if (out_nhw_per_core_cliff > 0) {
         TT_ASSERT(false, "The cliff core case is not yet handled"); // TODO
@@ -534,9 +467,9 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                                                     .compile_args = compute_ct_args_cliff,
                                                     .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
         auto compute_kernel_cliff = CreateKernel(program,
-                                                        compute_kernel_fname,
-                                                        core_range_cliff,
-                                                        compute_config);
+                                                    compute_kernel_fname,
+                                                    core_range_cliff,
+                                                    compute_config);
     }
 
     // calculate and set the start/end h_i for each core
@@ -545,7 +478,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
     uint32_t core_out_w_i = 0;
     int32_t curr_start_h = - pad_h;
     if (out_nhw_per_core_cliff > 0) {
-        // TODO: ... not yet handled
+        // TODO? ... not yet handled
         TT_ASSERT(false, "The cliff core case is not yet handled"); // TODO
     } else {
         uint32_t core_batch_offset = 0;
@@ -554,7 +487,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
         uint32_t core_out_w_i_start = 0;
         uint32_t core_out_h_i_start = 0;
         for (int32_t i = 0; i < ncores; ++ i) {
-            CoreCoord core(i % ncores_w, i / ncores_w); // logical
+            CoreCoord core_coord(i % ncores_w, i / ncores_w); // logical
             reader_rt_args[37] = (curr_in_stick_id / in_hw) * in_hw;
             core_out_w_i_start = curr_out_stick_id % out_w;
             core_out_h_i_start = (curr_out_stick_id / out_w) % out_h;
@@ -569,7 +502,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
 
                 reader_rt_args[64] = i; // my_core
 
-                CoreCoord noc_core = core;  // physical
+                CoreCoord noc_core = core_coord;  // physical
                 if (reader_noc == 0) {
                     noc_core.x += 1;
                     noc_core.y += 1;
@@ -579,16 +512,17 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                 } else {
                     TT_ASSERT(false, "reader noc == 1 not yet handled");
                 }
-                if (max_pool_helpers::left_neighbor_noc_xy.count(noc_core) > 0) {
-                    CoreCoord left_noc = max_pool_helpers::left_neighbor_noc_xy.at(noc_core);
+                if (left_neighbor_core.count(core_coord) > 0) {
+                    CoreCoord left_core = left_neighbor_core.at(core_coord);
+                    CoreCoord left_noc = device->worker_core_from_logical_core(left_core);
                     reader_rt_args[49] = 1;
                     reader_rt_args[50] = (uint32_t) left_noc.x;
                     reader_rt_args[51] = (uint32_t) left_noc.y;
-                    // log_debug("Local NOC: ({},{}), left: ({},{})", noc_core.x, noc_core.y, left_noc.x, left_noc.y);
 
                     // left-left
-                    if (max_pool_helpers::left_neighbor_noc_xy.count(left_noc) > 0) {
-                        CoreCoord left_left_noc = max_pool_helpers::left_neighbor_noc_xy.at(left_noc);
+                    if (left_neighbor_core.count(left_core) > 0) {
+                        CoreCoord left_left_core = left_neighbor_core.at(left_core);
+                        CoreCoord left_left_noc = device->worker_core_from_logical_core(left_left_core);
                         reader_rt_args[56] = 1;
                         reader_rt_args[57] = (uint32_t) left_left_noc.x;
                         reader_rt_args[58] = (uint32_t) left_left_noc.y;
@@ -599,16 +533,17 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                 } else {
                     reader_rt_args[49] = 0;
                 }
-                if (max_pool_helpers::right_neighbor_noc_xy.count(noc_core) > 0) {
-                    CoreCoord right_noc = max_pool_helpers::right_neighbor_noc_xy.at(noc_core);
+                if (right_neighbor_core.count(core_coord) > 0) {
+                    CoreCoord right_core = right_neighbor_core.at(core_coord);
+                    CoreCoord right_noc = device->worker_core_from_logical_core(right_core);
                     reader_rt_args[52] = 1;
                     reader_rt_args[53] = (uint32_t) right_noc.x;
                     reader_rt_args[54] = (uint32_t) right_noc.y;
-                    // log_debug("Local NOC: ({},{}), right: ({},{})", noc_core.x, noc_core.y, right_noc.x, right_noc.y);
 
                     // right-right
-                    if (max_pool_helpers::right_neighbor_noc_xy.count(right_noc) > 0) {
-                        CoreCoord right_right_noc = max_pool_helpers::right_neighbor_noc_xy.at(right_noc);
+                    if (right_neighbor_core.count(right_core) > 0) {
+                        CoreCoord right_right_core = right_neighbor_core.at(right_core);
+                        CoreCoord right_right_noc = device->worker_core_from_logical_core(right_right_core);
                         reader_rt_args[59] = 1;
                         reader_rt_args[60] = (uint32_t) right_right_noc.x;
                         reader_rt_args[61] = (uint32_t) right_right_noc.y;
@@ -621,10 +556,9 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_generic(const Tensor &inp
                 }
             }
 
-            // log_debug("CORE: {},{} :: 37 = {}, 38 = {}, 39 = {}, 41 = {}", core.x, core.y, reader_rt_args[37], reader_rt_args[38], reader_rt_args[39], reader_rt_args[41]);
-            SetRuntimeArgs(program, reader_kernel, core, reader_rt_args);
+            SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
             std::vector<uint32_t> writer_rt_args = reader_rt_args;
-            SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
+            SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
 
             curr_out_stick_id += out_nhw_per_core;
             curr_in_stick_id += in_nhw_per_core;
@@ -988,6 +922,420 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core(const Tensor &input, Tens
 }
 
 // this version uses distribution along height = N * H * W
+operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(const Tensor &input, const Tensor &reader_indices,
+                                                                        Tensor& output,
+                                                                        uint32_t in_n, uint32_t in_h, uint32_t in_w,
+                                                                        uint32_t out_h, uint32_t out_w,
+                                                                        uint32_t kernel_size_h, uint32_t kernel_size_w,
+                                                                        uint32_t stride_h, uint32_t stride_w,
+                                                                        uint32_t pad_h, uint32_t pad_w,
+                                                                        uint32_t dilation_h, uint32_t dilation_w,
+                                                                        const MemoryConfig& out_mem_config,
+                                                                        uint32_t nblocks) {
+    Program program = CreateProgram();
+
+    // This should allocate a DRAM buffer on the device
+    Device *device = input.device();
+    Buffer *src_dram_buffer = input.buffer();
+    Buffer *reader_indices_buffer = reader_indices.buffer();
+    Buffer *dst_dram_buffer = output.buffer();
+
+    Shape input_shape = input.shape();
+    Shape output_shape = output.shape();
+
+    // NOTE: input is assumed to be in {N, 1, H * W, C }
+
+    DataFormat in_df = datatype_to_dataformat_converter(input.dtype());
+    DataFormat out_df = datatype_to_dataformat_converter(output.dtype());
+    uint32_t in_nbytes = datum_size(in_df);
+    uint32_t out_nbytes = datum_size(out_df);
+    uint32_t in_nbytes_c = input_shape[3] * in_nbytes;      // row of input (channels)
+    uint32_t out_nbytes_c = output_shape[3] * out_nbytes;   // row of output (channels)
+    TT_ASSERT((in_nbytes_c & (in_nbytes_c - 1)) == 0, "in_nbytes_c should be power of 2");    // in_nbytes_c is power of 2
+    TT_ASSERT((out_nbytes_c & (out_nbytes_c - 1)) == 0, "out_nbytes_c should be power of 2"); // out_nbytes_c is power of 2
+
+    DataFormat indices_df = DataFormat::RawUInt16; //datatype_to_dataformat_converter(reader_indices.dtype());
+    uint32_t indices_nbytes = datum_size(indices_df);
+
+    uint32_t nbatch = in_n;
+    TT_ASSERT(nbatch == output_shape[0], "Mismatch in N for input and output!!");
+
+    uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;    // number of valid rows, to read
+    uint32_t kernel_size_hw_padded = ceil_multiple_of(kernel_size_hw, constants::TILE_HEIGHT);
+    uint32_t in_ntiles_hw = (uint32_t) ceil((float) kernel_size_hw_padded / constants::TILE_HEIGHT);
+    uint32_t in_ntiles_c = (uint32_t) ceil((float) input_shape[3] / constants::TILE_WIDTH);
+    uint32_t out_ntiles_hw = (uint32_t) ceil((float) output_shape[2] / constants::TILE_HEIGHT);
+    uint32_t out_ntiles_c = (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH);
+
+    TT_ASSERT(nblocks == 1, "Multiple blocks not yet supported");
+
+    uint32_t out_nelems = nblocks;  // TODO [AS]: Remove hard coding after identifying optimal param val
+                                    // Also ensure the calculated ncores is good
+    uint32_t out_w_loop_count = ceil((float) out_w / out_nelems);
+
+    uint32_t in_hw = in_h * in_w;
+    uint32_t in_nhw = in_hw * nbatch;
+    uint32_t out_hw = out_h * out_w;
+    uint32_t out_nhw = out_hw * nbatch;
+
+    // distributing out_hw across the grid
+    auto grid_size = device->compute_with_storage_grid_size();
+    auto all_cores = input.shard_spec().value().shard_grid;
+    uint32_t ncores = all_cores.num_cores();
+    auto core_range = all_cores;
+    auto core_range_cliff = CoreRangeSet({});
+    uint32_t shard_size_per_core = input.shard_spec().value().shard_shape[0];
+    uint32_t in_nhw_per_core = in_h * in_w / ncores;
+    uint32_t in_nhw_per_core_cliff = 0;
+    uint32_t out_nhw_per_core = out_nhw / ncores;
+
+    uint32_t ncores_w = grid_size.x;
+
+    // TODO: support generic nblocks
+    TT_ASSERT(out_nhw_per_core % nblocks == 0, "number of sticks per core ({}) should be divisible by nblocks ({})", out_nhw_per_core, nblocks);
+
+    uint32_t in_nhw_per_core_rem_mask = in_nhw_per_core - 1;    // NOTE: assuming in_nhw_per_core is power of 2
+
+    // CBs
+    uint32_t multi_buffering_factor = 2;
+
+    // scalar CB as coefficient of reduce
+    uint32_t in_scalar_cb_id = CB::c_in1;
+    uint32_t in_scalar_cb_pagesize = tile_size(in_df);
+    uint32_t in_scalar_cb_npages = 1;
+    CircularBufferConfig in_scalar_cb_config = CircularBufferConfig(
+                                                    in_scalar_cb_npages * in_scalar_cb_pagesize,
+                                                    {{in_scalar_cb_id, in_df}})
+		                                        .set_page_size(in_scalar_cb_id, in_scalar_cb_pagesize);
+    auto in_scalar_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config);
+
+    // incoming data is the input cb instead of raw l1/dram addr
+    // this input shard has halo and padding inserted.
+    auto raw_in_cb_id = CB::c_in2;
+    // uint32_t raw_in_cb_npages = in_nhw_per_core;
+    uint32_t raw_in_cb_npages = input.shard_spec().value().shard_shape[0];
+    uint32_t raw_in_cb_pagesize = in_nbytes_c;
+    CircularBufferConfig raw_in_cb_config = CircularBufferConfig(
+                                                raw_in_cb_npages * raw_in_cb_pagesize,
+                                                {{raw_in_cb_id, in_df}})
+                                            .set_page_size(raw_in_cb_id, raw_in_cb_pagesize)
+                                            .set_globally_allocated_address(*input.buffer());
+    auto raw_in_cb = CreateCircularBuffer(program, all_cores, raw_in_cb_config);
+
+    // reader indices
+    auto in_reader_indices_cb_id = CB::c_in3;
+    uint32_t in_reader_indices_cb_pagesize = out_nhw_per_core * indices_nbytes;
+    uint32_t in_reader_indices_cb_npages = 1;
+    CircularBufferConfig in_reader_indices_cb_config = CircularBufferConfig(
+                                                            in_reader_indices_cb_npages * in_reader_indices_cb_pagesize,
+                                                            {{in_reader_indices_cb_id, indices_df}})
+                                                        .set_page_size(in_reader_indices_cb_id, in_reader_indices_cb_pagesize)
+                                                        .set_globally_allocated_address(*reader_indices_buffer);
+    auto in_reader_indices_cb = CreateCircularBuffer(program, all_cores, in_reader_indices_cb_config);
+
+    // reader output == input to tilize
+    uint32_t in_cb_id = CB::c_in0;          // input rows for "multiple (out_nelems)" output pixels
+    uint32_t in_cb_page_nelems_padded = ceil_multiple_of(input_shape[3] * kernel_size_hw_padded, constants::TILE_HW);    // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
+    uint32_t in_cb_pagesize = in_nbytes * in_cb_page_nelems_padded;
+    uint32_t in_cb_npages = multi_buffering_factor * out_nelems;
+    CircularBufferConfig in_cb_config = CircularBufferConfig(in_cb_npages * in_cb_pagesize, {{in_cb_id, in_df}})
+		.set_page_size(in_cb_id, in_cb_pagesize);
+    auto in_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_cb_config);
+
+    // output of tilize == input to reduce
+    uint32_t in_tiled_cb_id = CB::c_intermed0;  // tiled input
+    uint32_t in_tiled_cb_pagesize = tile_size(in_df);
+    uint32_t in_tiled_cb_npages = in_ntiles_c * in_ntiles_hw * out_nelems;
+    CircularBufferConfig in_tiled_cb_config = CircularBufferConfig(in_tiled_cb_npages * in_tiled_cb_pagesize, {{in_tiled_cb_id, in_df}})
+		.set_page_size(in_tiled_cb_id, in_tiled_cb_pagesize);
+    auto in_tiled_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_tiled_cb_config);
+
+    // output of reduce == writer to write
+    uint32_t out_cb_id = CB::c_out0;            // output rows in RM
+    uint32_t out_cb_pagesize = tile_size(out_df);
+    uint32_t out_cb_npages = out_ntiles_c * out_nelems * multi_buffering_factor;    // there is just one row of channels after reduction
+    CircularBufferConfig cb_out_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
+		.set_page_size(out_cb_id, out_cb_pagesize);
+    auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+
+    CBHandle cb_sharded_out = 0;
+    TT_FATAL(output.memory_config().is_sharded());
+
+    uint32_t sharded_out_cb_id = CB::c_out1;            // output rows in RM
+
+    auto shard_shape = output.shard_spec().value().shard_shape;
+    uint32_t sharded_out_num_pages = output.shard_spec().value().shard_shape[0];
+
+    uint32_t sharded_out_cb_page_size = output.shard_spec().value().shard_shape[1] * out_nbytes;    // there is just one row of channels after reduction
+    CircularBufferConfig cb_sharded_out_config = CircularBufferConfig(sharded_out_num_pages * sharded_out_cb_page_size, {{sharded_out_cb_id, out_df}})
+        .set_page_size(sharded_out_cb_id, sharded_out_cb_page_size).set_globally_allocated_address(*output.buffer());
+    cb_sharded_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_out_config);
+
+    // Construct const buffer with -INF
+    // uint32_t const_buffer_size = 32;
+    uint32_t const_buffer_size = input_shape[3];    // set it equal to 1 row
+    auto minus_inf_const_buffer = owned_buffer::create(std::vector<bfloat16>(const_buffer_size, bfloat16(0xf7ff)));
+    const Tensor minus_inf_const_tensor = Tensor(OwnedStorage{minus_inf_const_buffer},
+                                                 Shape({1, 1, 1, const_buffer_size}),
+                                                 DataType::BFLOAT16,
+                                                 Layout::ROW_MAJOR)
+                                            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED,
+                                                                     .buffer_type = BufferType::L1});
+    auto minus_inf_const_tensor_addr = minus_inf_const_tensor.buffer()->address();
+
+    #if 0
+    {   // debug
+        log_debug(LogOp, "OUTPUT SHARD: {} {}", shard_shape[0], shard_shape[1]);
+        log_debug(LogOp, "OUTPUT CB: {} {}", sharded_out_cb_page_size, sharded_out_num_pages);
+        log_debug(LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
+        log_debug(LogOp, "in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
+        log_debug(LogOp, "in_reader_indices_cb :: PS = {}, NP = {}", in_reader_indices_cb_pagesize, in_reader_indices_cb_npages);
+        log_debug(LogOp, "in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
+        log_debug(LogOp, "in_tiled_cb :: PS = {}, NP = {}", in_tiled_cb_pagesize, in_tiled_cb_npages);
+        log_debug(LogOp, "out_cb :: PS = {}, NP = {}", out_cb_pagesize, out_cb_npages);
+        log_debug(LogOp, "in_addr: {}", src_dram_buffer->address());
+        log_debug(LogOp, "in_reader_indices_addr: {}", reader_indices_buffer->address());
+        log_debug(LogOp, "out_addr: {}", dst_dram_buffer->address());
+        log_debug(LogOp, "nbatch: {}", nbatch);
+        log_debug(LogOp, "kernel_size_h: {}", kernel_size_h);
+        log_debug(LogOp, "kernel_size_w: {}", kernel_size_w);
+        log_debug(LogOp, "kernel_size_hw: {}", kernel_size_hw);
+        log_debug(LogOp, "kernel_size_hw_padded: {}", kernel_size_hw_padded);
+        log_debug(LogOp, "stride_h: {}", stride_h);
+        log_debug(LogOp, "stride_w: {}", stride_w);
+        log_debug(LogOp, "pad_h: {}", pad_h);
+        log_debug(LogOp, "pad_w: {}", pad_w);
+        log_debug(LogOp, "out_h: {}", out_h);
+        log_debug(LogOp, "out_w: {}", out_w);
+        log_debug(LogOp, "out_hw: {}", output_shape[2]);
+        log_debug(LogOp, "out_c: {}", output_shape[3]);
+        log_debug(LogOp, "in_nbytes_c: {}", in_nbytes_c);
+        log_debug(LogOp, "out_nbytes_c: {}", out_nbytes_c);
+        log_debug(LogOp, "in_h: {}", in_h);
+        log_debug(LogOp, "in_w: {}", in_w);
+        log_debug(LogOp, "in_hw_padded: {}", in_hw);
+        log_debug(LogOp, "in_c: {}", input_shape[3]);
+        log_debug(LogOp, "out_hw_padded: {}", out_hw);
+        log_debug(LogOp, "out_ntiles_hw: {}", out_ntiles_hw);
+        log_debug(LogOp, "out_ntiles_c: {}", out_ntiles_c);
+        log_debug(LogOp, "out_nelems: {}", out_nelems);
+        log_debug(LogOp, "out_w_loop_count: {}", out_w_loop_count);
+        log_debug(LogOp, "out_hw: {}", out_hw);
+        log_debug(LogOp, "minus_inf_const_tensor_addr: {}", minus_inf_const_tensor_addr);
+        log_debug(LogOp, "minus_inf_const_tensor_size: {}", minus_inf_const_buffer.size());
+        log_debug(LogOp, "ncores: {}", ncores);
+        log_debug(LogOp, "in_nhw_per_core: {}", in_nhw_per_core);
+        log_debug(LogOp, "out_nhw_per_core: {}", out_nhw_per_core);
+        log_debug(LogOp, "in_nhw_per_core_rem_mask: {}", in_nhw_per_core_rem_mask);
+        log_debug(LogOp, "is_in_sharded: {}", input.memory_config().is_sharded());
+        log_debug(LogOp, "is_out_sharded: {}", output.memory_config().is_sharded());
+    }
+    #endif
+
+    /**
+     * Reader Kernel: input rows -> input cb
+     */
+    float one = 1.;
+    uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
+    std::vector<uint32_t> reader_ct_args = {input.memory_config().buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
+                                            out_mem_config.buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
+                                            bf16_one_u32,
+                                            nblocks};
+    uint32_t in_nbytes_c_log2 = (uint32_t) std::log2((float) in_nbytes_c);
+    std::vector<uint32_t> reader_rt_args = {
+                                            out_nhw_per_core,
+                                            kernel_size_h,
+                                            kernel_size_w,
+                                            pad_w,
+                                            in_nbytes_c,
+                                            in_nbytes_c_log2,
+                                            in_w,
+                                            (in_cb_page_nelems_padded * out_nelems * 2) >> 5,    // TODO: generalize num rows to fill in in_cb
+                                            };
+    auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_0,
+                                            .noc = NOC::RISCV_0_default,
+                                            .compile_args = reader_ct_args};
+    std::string reader_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_v2.cpp");
+    auto reader_kernel = CreateKernel(program,
+                                        reader_kernel_fname,
+                                        all_cores,
+                                        reader_config);
+
+    /**
+     * Writer Kernel: output cb -> output rows
+     */
+    std::map<string, string> writer_defines;
+    writer_defines["SHARDED_OUT"] = "1";
+    std::vector<uint32_t> writer_ct_args = reader_ct_args;
+    std::vector<uint32_t> writer_rt_args = {
+                                            dst_dram_buffer->address(),
+                                            out_nbytes_c,
+                                            out_ntiles_c,
+                                            out_nhw_per_core,
+                                            0,          // core_offset_out_row_id (set later)
+                                            out_nhw_per_core / nblocks,
+                                            };
+    auto writer_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
+                                            .noc = NOC::RISCV_1_default,
+                                            .compile_args = writer_ct_args,
+                                            .defines = writer_defines};
+    std::string writer_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_multi_core_v2.cpp");
+    auto writer_kernel = CreateKernel(program,
+                                        writer_kernel_fname,
+                                        all_cores,
+                                        writer_config);
+
+    /**
+     * Compute Kernel: input cb -> tilize_block -> input tiles -> reduce_h max -> output tiles -> untilize_block -> output cb
+     */
+    std::vector<uint32_t> compute_ct_args = {in_ntiles_hw,
+                                            in_ntiles_c,
+                                            in_ntiles_hw * in_ntiles_c,
+                                            kernel_size_hw_padded,
+                                            out_h,
+                                            out_w,
+                                            (uint32_t) ceil((float) output_shape[2] / constants::TILE_HEIGHT),
+                                            (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH),
+                                            out_nelems,
+                                            out_w_loop_count,
+                                            nbatch,
+                                            out_nhw_per_core,
+                                            out_nhw_per_core,
+                                            out_nhw_per_core / nblocks,     // loop count with blocks
+                                            };
+    auto compute_ct_args_cliff = compute_ct_args;
+    auto reduce_op = ReduceOpMath::MAX;
+    auto reduce_dim = ReduceOpDim::H;
+    auto compute_config = ComputeConfig{.math_fidelity = MathFidelity::HiFi4,
+                                        .fp32_dest_acc_en = false,
+                                        .math_approx_mode = false,
+                                        .compile_args = compute_ct_args,
+                                        .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
+    std::string compute_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/compute/max_pool_multi_core.cpp");
+    auto compute_kernel = CreateKernel(program,
+                                              compute_kernel_fname,
+                                              core_range,
+                                              compute_config);
+
+    /**
+     * Set runtime args
+     */
+
+    SetRuntimeArgs(program, reader_kernel, all_cores, reader_rt_args);
+
+    uint32_t curr_out_stick_id = 0; // track output sticks with batch folded in
+    for (int32_t i = 0; i < ncores; ++ i) {
+        CoreCoord core(i % ncores_w, i / ncores_w); // logical
+        writer_rt_args[4] = curr_out_stick_id;
+        SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
+        curr_out_stick_id += out_nhw_per_core;
+    }
+
+    auto override_runtime_arguments_callback = [
+            reader_kernel, writer_kernel, raw_in_cb, in_reader_indices_cb, cb_sharded_out, ncores, ncores_w
+        ]
+    (
+        const void* operation,
+        Program& program,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<Tensor>& output_tensors
+    ) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        bool input_sharded = input_tensors.at(0).is_sharded();
+        auto reader_indices_buffer = input_tensors.at(1).buffer();
+
+        auto dst_buffer = output_tensors.at(0).buffer();
+        bool out_sharded = output_tensors.at(0).is_sharded();
+
+        for (uint32_t i = 0; i < ncores; ++ i) {
+            CoreCoord core{i % ncores_w, i / ncores_w };
+            {
+                auto &runtime_args = GetRuntimeArgs(program, writer_kernel, core);
+                runtime_args[0] = dst_buffer->address();
+            }
+        }
+        if (input_sharded) {
+            UpdateDynamicCircularBufferAddress(program, raw_in_cb, *src_buffer);
+            UpdateDynamicCircularBufferAddress(program, in_reader_indices_cb, *reader_indices_buffer);
+        }
+        if (out_sharded) {
+            UpdateDynamicCircularBufferAddress(program, cb_sharded_out, *dst_buffer);
+        }
+    };
+    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
+}
+
+namespace deprecated {
+
+// reader noc coords for left and right neighbors
+std::map<CoreCoord, CoreCoord> left_neighbor_noc_xy, right_neighbor_noc_xy;
+void init_neighbor_noc_xy_mapping(CoreCoord grid_size, uint32_t noc = 0) {
+    TT_ASSERT(grid_size.x == 12 && grid_size.y == 9);
+    if (noc == 0) {
+        for (uint32_t y = 1; y <= grid_size.y; ++ y) {
+            for (uint32_t x = 1; x <= grid_size.x; ++ x) {
+                CoreCoord local_noc = {x, y > 5 ? y + 1 : y};
+                CoreCoord left_noc, right_noc;
+                // calculate left neighbor
+                left_noc.x = local_noc.x;
+                left_noc.y = local_noc.y;
+                if (left_noc.x > 1) {
+                    left_noc.x -= 1;
+                } else {
+                    left_noc.x = grid_size.x;
+                    left_noc.y -= 1;
+                }
+                if (left_noc.y < 1) {
+                    // there is no left neighbor
+                } else {
+                    if (left_noc.y == 6) {
+                        // y = 6 is to be skipped
+                        left_noc.y -= 1;
+                    }
+                    left_neighbor_noc_xy[local_noc] = {left_noc.x, left_noc.y};
+                }
+                // calculate right neighbor
+                right_noc.x = local_noc.x;
+                right_noc.y = local_noc.y;
+                if (right_noc.x < grid_size.x) {
+                    right_noc.x += 1;
+                } else {
+                    right_noc.y += 1;
+                    right_noc.x = 1;
+                }
+                // NOTE: y = 6 is to be skipped. Hence go till y + 1
+                if (right_noc.y > grid_size.y + 1) {
+                    // there is no right neighbor
+                } else {
+                    if (right_noc.y == 6) {
+                        // y = 6 is to be skipped
+                        right_noc.y += 1;
+                    }
+                    right_neighbor_noc_xy[local_noc] = {right_noc.x, right_noc.y};
+                }
+            }
+        }
+    } else {
+        // noc == 1
+        TT_ASSERT(noc == 0, "noc = 1 for reader is not yet handled in sharded input case.");
+    }
+}
+
+void print_neighbor_noc_xy_mapping() {
+    for (auto left : left_neighbor_noc_xy) {
+        auto local_noc = left.first;
+        auto left_noc = left.second;
+        log_debug("({},{}) --left--> ({},{})", local_noc.x, local_noc.y, left_noc.x, left_noc.y);
+    }
+    for (auto right : right_neighbor_noc_xy) {
+        auto local_noc = right.first;
+        auto right_noc = right.second;
+        log_debug("({},{}) --right--> ({},{})", local_noc.x, local_noc.y, right_noc.x, right_noc.y);
+    }
+}
+
+// this version uses distribution along height = N * H * W
 operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const Tensor &input, Tensor& output,
                                                                         uint32_t in_n, uint32_t in_h, uint32_t in_w,
                                                                         uint32_t out_h, uint32_t out_w,
@@ -1042,7 +1390,6 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
 
     // distributing out_hw across the grid
     auto grid_size = device->compute_with_storage_grid_size();
-    // auto [ncores, all_cores, core_range, core_range_cliff, in_nhw_per_core, in_nhw_per_core_cliff, out_nhw_per_core, out_nhw_per_core_cliff] = max_pool_helpers::get_decomposition_nhw(grid_size, in_nhw, out_nhw);
     auto all_cores = input.shard_spec().value().shard_grid;
     uint32_t ncores = all_cores.num_cores();
     auto core_range = all_cores;
@@ -1198,7 +1545,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
     const uint32_t reader_noc = 0;
     const uint32_t writer_noc = 1;
 
-    max_pool_helpers::init_neighbor_noc_xy_mapping(grid_size, reader_noc);
+    init_neighbor_noc_xy_mapping(grid_size, reader_noc);
 
     /**
      * Reader Kernel: input rows -> input cb
@@ -1427,16 +1774,16 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
             } else {
                 TT_ASSERT(false, "reader noc == 1 not yet handled");
             }
-            if (max_pool_helpers::left_neighbor_noc_xy.count(noc_core) > 0) {
-                CoreCoord left_noc = max_pool_helpers::left_neighbor_noc_xy.at(noc_core);
+            if (left_neighbor_noc_xy.count(noc_core) > 0) {
+                CoreCoord left_noc = left_neighbor_noc_xy.at(noc_core);
                 reader_rt_args[49] = 1;
                 reader_rt_args[50] = (uint32_t) left_noc.x;
                 reader_rt_args[51] = (uint32_t) left_noc.y;
                 // log_debug("Local NOC: ({},{}), left: ({},{})", noc_core.x, noc_core.y, left_noc.x, left_noc.y);
 
                 // left-left
-                if (max_pool_helpers::left_neighbor_noc_xy.count(left_noc) > 0) {
-                    CoreCoord left_left_noc = max_pool_helpers::left_neighbor_noc_xy.at(left_noc);
+                if (left_neighbor_noc_xy.count(left_noc) > 0) {
+                    CoreCoord left_left_noc = left_neighbor_noc_xy.at(left_noc);
                     reader_rt_args[56] = 1;
                     reader_rt_args[57] = (uint32_t) left_left_noc.x;
                     reader_rt_args[58] = (uint32_t) left_left_noc.y;
@@ -1447,16 +1794,16 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
             } else {
                 reader_rt_args[49] = 0;
             }
-            if (max_pool_helpers::right_neighbor_noc_xy.count(noc_core) > 0) {
-                CoreCoord right_noc = max_pool_helpers::right_neighbor_noc_xy.at(noc_core);
+            if (right_neighbor_noc_xy.count(noc_core) > 0) {
+                CoreCoord right_noc = right_neighbor_noc_xy.at(noc_core);
                 reader_rt_args[52] = 1;
                 reader_rt_args[53] = (uint32_t) right_noc.x;
                 reader_rt_args[54] = (uint32_t) right_noc.y;
                 // log_debug("Local NOC: ({},{}), right: ({},{})", noc_core.x, noc_core.y, right_noc.x, right_noc.y);
 
                 // right-right
-                if (max_pool_helpers::right_neighbor_noc_xy.count(right_noc) > 0) {
-                    CoreCoord right_right_noc = max_pool_helpers::right_neighbor_noc_xy.at(right_noc);
+                if (right_neighbor_noc_xy.count(right_noc) > 0) {
+                    CoreCoord right_right_noc = right_neighbor_noc_xy.at(right_noc);
                     reader_rt_args[59] = 1;
                     reader_rt_args[60] = (uint32_t) right_right_noc.x;
                     reader_rt_args[61] = (uint32_t) right_right_noc.y;
@@ -1590,359 +1937,7 @@ operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo(const T
     };
     return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
 }
-
-// this version uses distribution along height = N * H * W
-operation::ProgramWithCallbacks max_pool_2d_multi_core_sharded_with_halo_v2(const Tensor &input, const Tensor &reader_indices,
-                                                                        Tensor& output,
-                                                                        uint32_t in_n, uint32_t in_h, uint32_t in_w,
-                                                                        uint32_t out_h, uint32_t out_w,
-                                                                        uint32_t kernel_size_h, uint32_t kernel_size_w,
-                                                                        uint32_t stride_h, uint32_t stride_w,
-                                                                        uint32_t pad_h, uint32_t pad_w,
-                                                                        uint32_t dilation_h, uint32_t dilation_w,
-                                                                        const MemoryConfig& out_mem_config,
-                                                                        uint32_t nblocks) {
-    Program program = CreateProgram();
-
-    // This should allocate a DRAM buffer on the device
-    Device *device = input.device();
-    Buffer *src_dram_buffer = input.buffer();
-    Buffer *reader_indices_buffer = reader_indices.buffer();
-    Buffer *dst_dram_buffer = output.buffer();
-
-    Shape input_shape = input.shape();
-    Shape output_shape = output.shape();
-
-    // NOTE: input is assumed to be in {N, 1, H * W, C }
-
-    DataFormat in_df = datatype_to_dataformat_converter(input.dtype());
-    DataFormat out_df = datatype_to_dataformat_converter(output.dtype());
-    uint32_t in_nbytes = datum_size(in_df);
-    uint32_t out_nbytes = datum_size(out_df);
-    uint32_t in_nbytes_c = input_shape[3] * in_nbytes;      // row of input (channels)
-    uint32_t out_nbytes_c = output_shape[3] * out_nbytes;   // row of output (channels)
-    TT_ASSERT((in_nbytes_c & (in_nbytes_c - 1)) == 0, "in_nbytes_c should be power of 2");    // in_nbytes_c is power of 2
-    TT_ASSERT((out_nbytes_c & (out_nbytes_c - 1)) == 0, "out_nbytes_c should be power of 2"); // out_nbytes_c is power of 2
-
-    DataFormat indices_df = DataFormat::RawUInt16; //datatype_to_dataformat_converter(reader_indices.dtype());
-    uint32_t indices_nbytes = datum_size(indices_df);
-
-    uint32_t nbatch = in_n;
-    TT_ASSERT(nbatch == output_shape[0], "Mismatch in N for input and output!!");
-
-    uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;    // number of valid rows, to read
-    uint32_t kernel_size_hw_padded = ceil_multiple_of(kernel_size_hw, constants::TILE_HEIGHT);
-    uint32_t in_ntiles_hw = (uint32_t) ceil((float) kernel_size_hw_padded / constants::TILE_HEIGHT);
-    uint32_t in_ntiles_c = (uint32_t) ceil((float) input_shape[3] / constants::TILE_WIDTH);
-    uint32_t out_ntiles_hw = (uint32_t) ceil((float) output_shape[2] / constants::TILE_HEIGHT);
-    uint32_t out_ntiles_c = (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH);
-
-    TT_ASSERT(nblocks == 1, "Multiple blocks not yet supported");
-
-    uint32_t out_nelems = nblocks;  // TODO [AS]: Remove hard coding after identifying optimal param val
-                                    // Also ensure the calculated ncores is good
-    uint32_t out_w_loop_count = ceil((float) out_w / out_nelems);
-
-    uint32_t in_hw = in_h * in_w;
-    uint32_t in_nhw = in_hw * nbatch;
-    uint32_t out_hw = out_h * out_w;
-    uint32_t out_nhw = out_hw * nbatch;
-
-    // distributing out_hw across the grid
-    auto grid_size = device->compute_with_storage_grid_size();
-    auto all_cores = input.shard_spec().value().shard_grid;
-    uint32_t ncores = all_cores.num_cores();
-    auto core_range = all_cores;
-    auto core_range_cliff = CoreRangeSet({});
-    uint32_t shard_size_per_core = input.shard_spec().value().shard_shape[0];
-    uint32_t in_nhw_per_core = in_h * in_w / ncores;
-    uint32_t in_nhw_per_core_cliff = 0;
-    uint32_t out_nhw_per_core = out_nhw / ncores;
-
-    uint32_t ncores_w = grid_size.x;
-
-    // TODO: support generic nblocks
-    TT_ASSERT(out_nhw_per_core % nblocks == 0, "number of sticks per core ({}) should be divisible by nblocks ({})", out_nhw_per_core, nblocks);
-    // TODO: support generic values for in_nhw_per_core
-    // TT_ASSERT((in_nhw_per_core & (in_nhw_per_core - 1)) == 0, "in_nhw_per_core {} needs to be power of 2!", in_nhw_per_core);
-
-    uint32_t in_nhw_per_core_rem_mask = in_nhw_per_core - 1;    // NOTE: assuming in_nhw_per_core is power of 2
-
-    // CBs
-    uint32_t multi_buffering_factor = 2;
-
-    // scalar CB as coefficient of reduce
-    uint32_t in_scalar_cb_id = CB::c_in1;
-    uint32_t in_scalar_cb_pagesize = tile_size(in_df);
-    uint32_t in_scalar_cb_npages = 1;
-    CircularBufferConfig in_scalar_cb_config = CircularBufferConfig(
-                                                    in_scalar_cb_npages * in_scalar_cb_pagesize,
-                                                    {{in_scalar_cb_id, in_df}})
-		                                        .set_page_size(in_scalar_cb_id, in_scalar_cb_pagesize);
-    auto in_scalar_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config);
-
-    // incoming data is the input cb instead of raw l1/dram addr
-    // this input shard has halo and padding inserted.
-    auto raw_in_cb_id = CB::c_in2;
-    // uint32_t raw_in_cb_npages = in_nhw_per_core;
-    uint32_t raw_in_cb_npages = input.shard_spec().value().shard_shape[0];
-    uint32_t raw_in_cb_pagesize = in_nbytes_c;
-    CircularBufferConfig raw_in_cb_config = CircularBufferConfig(
-                                                raw_in_cb_npages * raw_in_cb_pagesize,
-                                                {{raw_in_cb_id, in_df}})
-                                            .set_page_size(raw_in_cb_id, raw_in_cb_pagesize)
-                                            .set_globally_allocated_address(*input.buffer());
-    auto raw_in_cb = CreateCircularBuffer(program, all_cores, raw_in_cb_config);
-
-    // reader indices
-    auto in_reader_indices_cb_id = CB::c_in3;
-    uint32_t in_reader_indices_cb_pagesize = out_nhw_per_core * indices_nbytes;
-    uint32_t in_reader_indices_cb_npages = 1;
-    CircularBufferConfig in_reader_indices_cb_config = CircularBufferConfig(
-                                                            in_reader_indices_cb_npages * in_reader_indices_cb_pagesize,
-                                                            {{in_reader_indices_cb_id, indices_df}})
-                                                        .set_page_size(in_reader_indices_cb_id, in_reader_indices_cb_pagesize)
-                                                        .set_globally_allocated_address(*reader_indices_buffer);
-    auto in_reader_indices_cb = CreateCircularBuffer(program, all_cores, in_reader_indices_cb_config);
-
-    // reader output == input to tilize
-    uint32_t in_cb_id = CB::c_in0;          // input rows for "multiple (out_nelems)" output pixels
-    uint32_t in_cb_page_nelems_padded = ceil_multiple_of(input_shape[3] * kernel_size_hw_padded, constants::TILE_HW);    // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
-    uint32_t in_cb_pagesize = in_nbytes * in_cb_page_nelems_padded;
-    uint32_t in_cb_npages = multi_buffering_factor * out_nelems;
-    CircularBufferConfig in_cb_config = CircularBufferConfig(in_cb_npages * in_cb_pagesize, {{in_cb_id, in_df}})
-		.set_page_size(in_cb_id, in_cb_pagesize);
-    auto in_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_cb_config);
-
-    // output of tilize == input to reduce
-    uint32_t in_tiled_cb_id = CB::c_intermed0;  // tiled input
-    uint32_t in_tiled_cb_pagesize = tile_size(in_df);
-    uint32_t in_tiled_cb_npages = in_ntiles_c * in_ntiles_hw * out_nelems;
-    CircularBufferConfig in_tiled_cb_config = CircularBufferConfig(in_tiled_cb_npages * in_tiled_cb_pagesize, {{in_tiled_cb_id, in_df}})
-		.set_page_size(in_tiled_cb_id, in_tiled_cb_pagesize);
-    auto in_tiled_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_tiled_cb_config);
-
-    // output of reduce == writer to write
-    uint32_t out_cb_id = CB::c_out0;            // output rows in RM
-    uint32_t out_cb_pagesize = tile_size(out_df);
-    uint32_t out_cb_npages = out_ntiles_c * out_nelems * multi_buffering_factor;    // there is just one row of channels after reduction
-    CircularBufferConfig cb_out_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
-		.set_page_size(out_cb_id, out_cb_pagesize);
-    auto cb_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
-
-    CBHandle cb_sharded_out = 0;
-    TT_FATAL(output.memory_config().is_sharded());
-
-    uint32_t sharded_out_cb_id = CB::c_out1;            // output rows in RM
-
-    auto shard_shape = output.shard_spec().value().shard_shape;
-    uint32_t sharded_out_num_pages = output.shard_spec().value().shard_shape[0];
-
-    uint32_t sharded_out_cb_page_size = output.shard_spec().value().shard_shape[1] * out_nbytes;    // there is just one row of channels after reduction
-    CircularBufferConfig cb_sharded_out_config = CircularBufferConfig(sharded_out_num_pages * sharded_out_cb_page_size, {{sharded_out_cb_id, out_df}})
-        .set_page_size(sharded_out_cb_id, sharded_out_cb_page_size).set_globally_allocated_address(*output.buffer());
-    cb_sharded_out = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_out_config);
-
-    log_debug(LogOp, "OUTPUT SHARD: {} {}", shard_shape[0], shard_shape[1]);
-    log_debug(LogOp, "OUTPUT CB: {} {}", sharded_out_cb_page_size, sharded_out_num_pages);
-
-    // Construct const buffer with -INF
-    // uint32_t const_buffer_size = 32;
-    uint32_t const_buffer_size = input_shape[3];    // set it equal to 1 row
-    auto minus_inf_const_buffer = owned_buffer::create(std::vector<bfloat16>(const_buffer_size, bfloat16(0xf7ff)));
-    const Tensor minus_inf_const_tensor = Tensor(OwnedStorage{minus_inf_const_buffer},
-                                                 Shape({1, 1, 1, const_buffer_size}),
-                                                 DataType::BFLOAT16,
-                                                 Layout::ROW_MAJOR)
-                                            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED,
-                                                                     .buffer_type = BufferType::L1});
-    auto minus_inf_const_tensor_addr = minus_inf_const_tensor.buffer()->address();
-
-    #if 1
-    {   // debug
-        log_debug("raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
-        log_debug("in_cb :: PS = {}, NP = {}", in_cb_pagesize, in_cb_npages);
-        log_debug("in_reader_indices_cb :: PS = {}, NP = {}", in_reader_indices_cb_pagesize, in_reader_indices_cb_npages);
-        log_debug("in_scalar_cb :: PS = {}, NP = {}", in_scalar_cb_pagesize, in_scalar_cb_npages);
-        log_debug("in_tiled_cb :: PS = {}, NP = {}", in_tiled_cb_pagesize, in_tiled_cb_npages);
-        log_debug("out_cb :: PS = {}, NP = {}", out_cb_pagesize, out_cb_npages);
-        log_debug("in_addr: {}", src_dram_buffer->address());
-        log_debug("in_reader_indices_addr: {}", reader_indices_buffer->address());
-        log_debug("out_addr: {}", dst_dram_buffer->address());
-        log_debug("nbatch: {}", nbatch);
-        log_debug("kernel_size_h: {}", kernel_size_h);
-        log_debug("kernel_size_w: {}", kernel_size_w);
-        log_debug("kernel_size_hw: {}", kernel_size_hw);
-        log_debug("kernel_size_hw_padded: {}", kernel_size_hw_padded);
-        log_debug("stride_h: {}", stride_h);
-        log_debug("stride_w: {}", stride_w);
-        log_debug("pad_h: {}", pad_h);
-        log_debug("pad_w: {}", pad_w);
-        log_debug("out_h: {}", out_h);
-        log_debug("out_w: {}", out_w);
-        log_debug("out_hw: {}", output_shape[2]);
-        log_debug("out_c: {}", output_shape[3]);
-        log_debug("in_nbytes_c: {}", in_nbytes_c);
-        log_debug("out_nbytes_c: {}", out_nbytes_c);
-        log_debug("in_h: {}", in_h);
-        log_debug("in_w: {}", in_w);
-        log_debug("in_hw_padded: {}", in_hw);
-        log_debug("in_c: {}", input_shape[3]);
-        log_debug("out_hw_padded: {}", out_hw);
-        log_debug("out_ntiles_hw: {}", out_ntiles_hw);
-        log_debug("out_ntiles_c: {}", out_ntiles_c);
-        log_debug("out_nelems: {}", out_nelems);
-        log_debug("out_w_loop_count: {}", out_w_loop_count);
-        log_debug("out_hw: {}", out_hw);
-        log_debug("minus_inf_const_tensor_addr: {}", minus_inf_const_tensor_addr);
-        log_debug("minus_inf_const_tensor_size: {}", minus_inf_const_buffer.size());
-        log_debug("ncores: {}", ncores);
-        log_debug("in_nhw_per_core: {}", in_nhw_per_core);
-        log_debug("out_nhw_per_core: {}", out_nhw_per_core);
-        log_debug("in_nhw_per_core_rem_mask: {}", in_nhw_per_core_rem_mask);
-        log_debug("is_in_sharded: {}", input.memory_config().is_sharded());
-        log_debug("is_out_sharded: {}", output.memory_config().is_sharded());
-    }
-    #endif
-
-    const uint32_t reader_noc = 0;
-    const uint32_t writer_noc = 1;
-
-    max_pool_helpers::init_neighbor_noc_xy_mapping(grid_size, reader_noc);
-
-    /**
-     * Reader Kernel: input rows -> input cb
-     */
-    float one = 1.;
-    uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
-    std::vector<uint32_t> reader_ct_args = {input.memory_config().buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
-                                            out_mem_config.buffer_type == BufferType::DRAM ? (uint) 1 : (uint) 0,
-                                            bf16_one_u32,
-                                            nblocks};
-    uint32_t in_nbytes_c_log2 = (uint32_t) std::log2((float) in_nbytes_c);
-    std::vector<uint32_t> reader_rt_args = {
-                                            out_nhw_per_core, // TODO: check ...
-                                            kernel_size_h,
-                                            kernel_size_w,
-                                            pad_w,
-                                            in_nbytes_c,
-                                            in_nbytes_c_log2,
-                                            in_w,
-                                            (in_cb_page_nelems_padded * out_nelems * 2) >> 5,    // TODO: generalize num rows to fill in in_cb
-                                            };
-    auto reader_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_0,
-                                            .noc = NOC::RISCV_0_default,
-                                            .compile_args = reader_ct_args};
-    std::string reader_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_v2.cpp");
-    auto reader_kernel = CreateKernel(program,
-                                        reader_kernel_fname,
-                                        all_cores,
-                                        reader_config);
-
-    /**
-     * Writer Kernel: output cb -> output rows
-     */
-    std::map<string, string> writer_defines;
-    writer_defines["SHARDED_OUT"] = "1";
-    std::vector<uint32_t> writer_ct_args = reader_ct_args;
-    std::vector<uint32_t> writer_rt_args = {
-                                            dst_dram_buffer->address(),
-                                            out_nbytes_c,                       // 15
-                                            out_ntiles_c,
-                                            out_nhw_per_core,    // nsticks_per_core    // 40
-                                            0,          // TODO: core_offset_out_row_id
-                                            out_nhw_per_core / nblocks,     // loop count with blocks
-                                            };
-    auto writer_config = DataMovementConfig{.processor = DataMovementProcessor::RISCV_1,
-                                            .noc = NOC::RISCV_1_default,
-                                            .compile_args = writer_ct_args,
-                                            .defines = writer_defines};
-    std::string writer_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/dataflow/writer_max_pool_2d_multi_core_v2.cpp");
-    auto writer_kernel = CreateKernel(program,
-                                        writer_kernel_fname,
-                                        all_cores,
-                                        writer_config);
-
-    /**
-     * Compute Kernel: input cb -> tilize_block -> input tiles -> reduce_h max -> output tiles -> untilize_block -> output cb
-     */
-    std::vector<uint32_t> compute_ct_args = {in_ntiles_hw,
-                                            in_ntiles_c,
-                                            in_ntiles_hw * in_ntiles_c,
-                                            kernel_size_hw_padded,
-                                            out_h,
-                                            out_w,
-                                            (uint32_t) ceil((float) output_shape[2] / constants::TILE_HEIGHT),
-                                            (uint32_t) ceil((float) output_shape[3] / constants::TILE_WIDTH),
-                                            out_nelems,
-                                            out_w_loop_count,
-                                            nbatch,
-                                            out_nhw_per_core,
-                                            out_nhw_per_core,
-                                            out_nhw_per_core / nblocks,     // loop count with blocks
-                                            };
-    auto compute_ct_args_cliff = compute_ct_args;
-    auto reduce_op = ReduceOpMath::MAX;
-    auto reduce_dim = ReduceOpDim::H;
-    auto compute_config = ComputeConfig{.math_fidelity = MathFidelity::HiFi4,
-                                        .fp32_dest_acc_en = false,
-                                        .math_approx_mode = false,
-                                        .compile_args = compute_ct_args,
-                                        .defines = reduce_op_utils::get_defines(reduce_op, reduce_dim)};
-    std::string compute_kernel_fname("tt_eager/tt_dnn/op_library/pool/kernels/compute/max_pool_multi_core.cpp");
-    auto compute_kernel = CreateKernel(program,
-                                              compute_kernel_fname,
-                                              core_range,
-                                              compute_config);
-
-    /**
-     * Set runtime args
-     */
-
-    SetRuntimeArgs(program, reader_kernel, all_cores, reader_rt_args);
-
-    uint32_t curr_out_stick_id = 0; // track output sticks with batch folded in
-    for (int32_t i = 0; i < ncores; ++ i) {
-        CoreCoord core(i % ncores_w, i / ncores_w); // logical
-        writer_rt_args[4] = curr_out_stick_id;
-        SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
-        curr_out_stick_id += out_nhw_per_core;
-    }
-
-    auto override_runtime_arguments_callback = [
-            reader_kernel, writer_kernel, raw_in_cb, in_reader_indices_cb, cb_sharded_out, ncores, ncores_w
-        ]
-    (
-        const void* operation,
-        Program& program,
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        const std::vector<Tensor>& output_tensors
-    ) {
-        auto src_buffer = input_tensors.at(0).buffer();
-        bool input_sharded = input_tensors.at(0).is_sharded();
-        auto reader_indices_buffer = input_tensors.at(1).buffer();
-
-        auto dst_buffer = output_tensors.at(0).buffer();
-        bool out_sharded = output_tensors.at(0).is_sharded();
-
-        for (uint32_t i = 0; i < ncores; ++ i) {
-            CoreCoord core{i % ncores_w, i / ncores_w };
-            {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel, core);
-                runtime_args[0] = dst_buffer->address();
-            }
-        }
-        if (input_sharded) {
-            UpdateDynamicCircularBufferAddress(program, raw_in_cb, *src_buffer);
-            UpdateDynamicCircularBufferAddress(program, in_reader_indices_cb, *reader_indices_buffer);
-        }
-        if (out_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_sharded_out, *dst_buffer);
-        }
-    };
-    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_arguments_callback};
-}
+} // namespace deprecated
 
 } // namespace tt_metal
 } // namespace tt
