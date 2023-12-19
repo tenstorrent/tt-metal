@@ -52,7 +52,7 @@ void program_consumer_cb(bool db_buf_switch, uint64_t consumer_noc_encoding, uin
 
 // Only the read interface is set up on the device... the write interface
 // belongs to host
-void setup_cq_read_interface(const uint32_t command_issue_region_size) {
+void setup_issue_queue_read_interface(const uint32_t command_issue_region_size) {
     uint issue_fifo_addr = CQ_START >> 4;  // The fifo starts after the pointer addresses
     uint issue_fifo_size = (command_issue_region_size >> 4) - issue_fifo_addr;
 
@@ -65,7 +65,7 @@ void setup_cq_read_interface(const uint32_t command_issue_region_size) {
 void kernel_main() {
     constexpr uint32_t command_issue_region_size = get_compile_time_arg_val(0);
 
-    setup_cq_read_interface(command_issue_region_size);
+    setup_issue_queue_read_interface(command_issue_region_size);
 
     // Initialize the producer/consumer DB semaphore
     // This represents how many buffers the producer can write to.
@@ -80,7 +80,7 @@ void kernel_main() {
     bool db_buf_switch = false;
 
     while (true) {
-        cq_wait_front();
+        issue_queue_wait_front();
 
         // Read in command
         uint32_t rd_ptr = (cq_read_interface.issue_fifo_rd_ptr << 4);
@@ -107,7 +107,7 @@ void kernel_main() {
             // Basically popfront without the extra conditional
             cq_read_interface.issue_fifo_rd_ptr = CQ_START >> 4;  // Head to beginning of command queue
             cq_read_interface.issue_fifo_rd_toggle = not cq_read_interface.issue_fifo_rd_toggle;
-            notify_host_of_cq_issue_read_pointer();
+            notify_host_of_issue_queue_read_pointer();
             continue;
         }
 
@@ -144,7 +144,7 @@ void kernel_main() {
             producer_consumer_transfer_num_pages,
             db_buf_switch);
 
-        cq_pop_front(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size);
+        issue_queue_pop_front(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size);
 
         db_buf_switch = not db_buf_switch;
     }

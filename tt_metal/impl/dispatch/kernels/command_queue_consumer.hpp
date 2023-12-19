@@ -85,7 +85,7 @@ inline __attribute__((always_inline)) volatile uint32_t* get_cq_completion_read_
 }
 
 FORCE_INLINE
-void cq_reserve_back(uint32_t data_size_B) {
+void completion_queue_reserve_back(uint32_t data_size_B) {
     DEBUG_STATUS('N', 'Q', 'R', 'B', 'W');
     uint32_t data_size_16B = align(data_size_B, 32) >> 4;
     uint32_t completion_rd_ptr_and_toggle;
@@ -104,18 +104,19 @@ void cq_reserve_back(uint32_t data_size_B) {
 }
 
 FORCE_INLINE
-void notify_host_of_cq_completion_write_pointer() {
+void notify_host_of_completion_queue_write_pointer() {
     constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | HOST_CQ_COMPLETION_WRITE_PTR;  // For now, we are writing to host hugepages at offset
     uint32_t completion_wr_ptr_and_toggle = cq_write_interface.completion_fifo_wr_ptr | (cq_write_interface.completion_fifo_wr_toggle << 31);
-    // DPRINT << "device completion wr ptr " << cq_write_interface.completion_fifo_wr_ptr << ENDL();
     volatile tt_l1_ptr uint32_t* completion_wr_ptr_addr = get_cq_completion_write_ptr();
     completion_wr_ptr_addr[0] = completion_wr_ptr_and_toggle;
     noc_async_write(CQ_COMPLETION_WRITE_PTR, pcie_address, 4);
+    // Consider changing this to be flush instead of barrier
+    // Barrier for now because host reads the completion queue write pointer to determine how many pages can be read
     noc_async_write_barrier();
 }
 
 FORCE_INLINE
-void cq_push_back(const uint32_t command_issue_region_size, uint32_t push_size_B) {
+void completion_queue_push_back(const uint32_t command_issue_region_size, uint32_t push_size_B) {
     uint32_t push_size_16B = align(push_size_B, 32) >> 4;
     cq_write_interface.completion_fifo_wr_ptr += push_size_16B;
     if (cq_write_interface.completion_fifo_wr_ptr >= cq_write_interface.completion_fifo_limit) {
@@ -125,7 +126,7 @@ void cq_push_back(const uint32_t command_issue_region_size, uint32_t push_size_B
     }
 
     // Notify host of updated completion wr ptr
-    notify_host_of_cq_completion_write_pointer();
+    notify_host_of_completion_queue_write_pointer();
 }
 
 FORCE_INLINE void write_buffers(
@@ -163,7 +164,7 @@ FORCE_INLINE void write_buffers(
         }
 
         if (buffer_type == BufferType::SYSTEM_MEMORY) {
-            cq_reserve_back(num_pages * page_size);
+            completion_queue_reserve_back(num_pages * page_size);
         }
         uint32_t page_id = dst_page_index;
         uint32_t end_page_id = page_id + num_pages;
@@ -183,7 +184,7 @@ FORCE_INLINE void write_buffers(
             page_id += num_to_write;
         }
         if (buffer_type == BufferType::SYSTEM_MEMORY) {
-            cq_push_back(command_issue_region_size, num_pages * page_size);
+            completion_queue_push_back(command_issue_region_size, num_pages * page_size);
         }
     }
     noc_async_write_barrier();

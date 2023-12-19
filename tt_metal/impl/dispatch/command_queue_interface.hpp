@@ -110,7 +110,7 @@ class SystemMemoryManager {
         return this->cq_interface.completion_fifo_rd_ptr << 4;
     }
 
-    void cq_reserve_back(uint32_t cmd_size_B) const {
+    void issue_queue_reserve_back(uint32_t cmd_size_B) const {
         uint32_t cmd_size_16B =
             (((cmd_size_B - 1) | 31) + 1) >> 4;  // Terse way to find next multiple of 32 in 16B words
 
@@ -142,7 +142,7 @@ class SystemMemoryManager {
         memcpy(user_scratchspace, data, size_in_bytes);
     }
 
-    void send_write_ptr() const {
+    void send_issue_queue_write_ptr() const {
         static CoreCoord dispatch_core =
             this->worker_from_logical_callable(*this->dispatch_cores.begin());
 
@@ -152,7 +152,7 @@ class SystemMemoryManager {
         tt_driver_atomics::sfence();
     }
 
-    void cq_push_back(uint32_t push_size_B) {
+    void issue_queue_push_back(uint32_t push_size_B) {
         // All data needs to be 32B aligned
         uint32_t push_size_16B =
             (((push_size_B - 1) | 31) + 1) >> 4;  // Terse way to find next multiple of 32 in 16B words
@@ -167,10 +167,10 @@ class SystemMemoryManager {
         }
 
         // Notify dispatch core
-        this->send_write_ptr();
+        this->send_issue_queue_write_ptr();
     }
 
-    void cq_wait_front() {
+    void completion_queue_wait_front() {
         uint32_t write_ptr_and_toggle;
         uint32_t write_ptr;
         uint32_t write_toggle;
@@ -181,7 +181,7 @@ class SystemMemoryManager {
         } while (this->cq_interface.completion_fifo_rd_ptr == write_ptr and this->cq_interface.completion_fifo_rd_toggle == write_toggle);
     }
 
-    void send_read_ptr() const {
+    void send_completion_queue_read_ptr() const {
         static CoreCoord dispatch_core =
             this->worker_from_logical_callable(*(++this->dispatch_cores.begin()));
 
@@ -196,7 +196,7 @@ class SystemMemoryManager {
         cq_interface.completion_fifo_rd_toggle = not cq_interface.completion_fifo_rd_toggle;
     }
 
-    void cq_pop_front(uint32_t data_read_B) {
+    void completion_queue_pop_front(uint32_t data_read_B) {
         uint32_t data_read_16B =
             (((data_read_B - 1) | 31) + 1) >> 4;  // Terse way to find next multiple of 32 in 16B words
         cq_interface.completion_fifo_rd_ptr += data_read_16B;
@@ -206,6 +206,6 @@ class SystemMemoryManager {
         }
 
         // Notify dispatch core
-        this->send_read_ptr();
+        this->send_completion_queue_read_ptr();
     }
 };

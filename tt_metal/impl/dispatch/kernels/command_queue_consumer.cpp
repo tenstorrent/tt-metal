@@ -6,7 +6,7 @@
 
 // The read interface for the issue region is set up on the device, the write interface belongs to host
 // Opposite for completion region where device sets up the write interface and host owns read interface
-void setup_cq_write_interface(const uint32_t command_issue_region_size, const uint32_t command_completion_region_size) {
+void setup_completion_queue_write_interface(const uint32_t command_issue_region_size, const uint32_t command_completion_region_size) {
     uint completion_fifo_addr = command_issue_region_size >> 4;
     uint completion_fifo_size = command_completion_region_size >> 4;
 
@@ -28,7 +28,7 @@ void kernel_main() {
     uint64_t producer_noc_encoding = uint64_t(NOC_XY_ENCODING(PRODUCER_NOC_X, PRODUCER_NOC_Y)) << 32;
     uint64_t consumer_noc_encoding = uint64_t(NOC_XY_ENCODING(my_x[0], my_y[0])) << 32;
 
-    setup_cq_write_interface(command_issue_region_size, command_completion_region_size);
+    setup_completion_queue_write_interface(command_issue_region_size, command_completion_region_size);
 
     while (true) {
         // Wait for producer to supply a command
@@ -55,7 +55,7 @@ void kernel_main() {
         if ((DeviceCommand::WrapRegion)wrap == DeviceCommand::WrapRegion::COMPLETION) {
             cq_write_interface.completion_fifo_wr_ptr = command_issue_region_size >> 4;     // Head to the beginning of the completion region
             cq_write_interface.completion_fifo_wr_toggle = not cq_write_interface.completion_fifo_wr_toggle;
-            notify_host_of_cq_completion_write_pointer();
+            notify_host_of_completion_queue_write_pointer();
         } else if (is_program) {
             write_and_launch_program(program_transfer_start_addr, num_pages, command_ptr, producer_noc_encoding, consumer_cb_size, consumer_cb_num_pages, producer_consumer_transfer_num_pages, db_buf_switch);
             wait_for_program_completion(num_workers, tensix_soft_reset_addr);

@@ -17,7 +17,7 @@ inline __attribute__((always_inline)) volatile uint32_t* get_cq_issue_write_ptr(
 }
 
 FORCE_INLINE
-void cq_wait_front() {
+void issue_queue_wait_front() {
     DEBUG_STATUS('N', 'Q', 'W');
     uint32_t issue_write_ptr_and_toggle;
     uint32_t issue_write_ptr;
@@ -31,7 +31,7 @@ void cq_wait_front() {
 }
 
 FORCE_INLINE
-void notify_host_of_cq_issue_read_pointer() {
+void notify_host_of_issue_queue_read_pointer() {
     // These are the PCIE core coordinates
     constexpr static uint64_t pcie_address = (uint64_t(NOC_XY_ENCODING(PCIE_NOC_X, PCIE_NOC_Y)) << 32) | HOST_CQ_ISSUE_READ_PTR;  // For now, we are writing to host hugepages at offset
     uint32_t issue_rd_ptr_and_toggle = cq_read_interface.issue_fifo_rd_ptr | (cq_read_interface.issue_fifo_rd_toggle << 31);;
@@ -42,14 +42,14 @@ void notify_host_of_cq_issue_read_pointer() {
 }
 
 FORCE_INLINE
-void cq_pop_front(uint32_t cmd_size_B) {
+void issue_queue_pop_front(uint32_t cmd_size_B) {
     // First part of equation aligns to nearest multiple of 32, and then we shift to make it a 16B addr. Both
     // host and device are consistent in updating their pointers in this way, so they won't get out of sync. The
     // alignment is necessary because we can only read/write from/to 32B aligned addrs in host<->dev communication.
     uint32_t cmd_size_16B = align(cmd_size_B, 32) >> 4;
     cq_read_interface.issue_fifo_rd_ptr += cmd_size_16B;
 
-    notify_host_of_cq_issue_read_pointer();
+    notify_host_of_issue_queue_read_pointer();
 }
 
 FORCE_INLINE

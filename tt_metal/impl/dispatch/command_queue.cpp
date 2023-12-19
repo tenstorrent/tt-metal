@@ -402,9 +402,9 @@ void EnqueueReadBufferCommand::process() {
 
     const auto cmd = this->assemble_device_command(this->read_buffer_addr);
 
-    this->manager.cq_reserve_back(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
+    this->manager.issue_queue_reserve_back(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
     this->manager.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
-    this->manager.cq_push_back(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
+    this->manager.issue_queue_push_back(DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
 }
 
 EnqueueCommandType EnqueueReadBufferCommand::type() { return this->type_; }
@@ -514,7 +514,7 @@ void EnqueueWriteBufferCommand::process() {
     uint32_t data_size_in_bytes = cmd.get_data_size();
 
     uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
-    this->manager.cq_reserve_back(cmd_size);
+    this->manager.issue_queue_reserve_back(cmd_size);
     this->manager.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
 
     uint32_t unpadded_src_offset = this->dst_page_index * this->buffer.page_size();
@@ -531,7 +531,7 @@ void EnqueueWriteBufferCommand::process() {
         this->manager.cq_write((char*)this->src + unpadded_src_offset, data_size_in_bytes, system_memory_temporary_storage_address);
     }
 
-    this->manager.cq_push_back(cmd_size);
+    this->manager.issue_queue_push_back(cmd_size);
 }
 
 EnqueueCommandType EnqueueWriteBufferCommand::type() { return this->type_; }
@@ -664,7 +664,7 @@ void EnqueueProgramCommand::process() {
 
     uint32_t data_size_in_bytes = cmd.get_data_size();
     const uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND + data_size_in_bytes;
-    this->manager.cq_reserve_back(cmd_size);
+    this->manager.issue_queue_reserve_back(cmd_size);
     this->manager.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
 
     uint32_t start_addr = system_memory_temporary_storage_address;
@@ -689,7 +689,7 @@ void EnqueueProgramCommand::process() {
         }
     }
 
-    this->manager.cq_push_back(cmd_size);
+    this->manager.issue_queue_push_back(cmd_size);
 }
 
 EnqueueCommandType EnqueueProgramCommand::type() { return this->type_; }
@@ -708,9 +708,9 @@ void FinishCommand::process() {
     const auto cmd = this->assemble_device_command(0);
     uint32_t cmd_size = DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND;
 
-    this->manager.cq_reserve_back(cmd_size);
+    this->manager.issue_queue_reserve_back(cmd_size);
     this->manager.cq_write(cmd.get_desc().data(), DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND, write_ptr);
-    this->manager.cq_push_back(cmd_size);
+    this->manager.issue_queue_push_back(cmd_size);
 }
 
 EnqueueCommandType FinishCommand::type() { return this->type_; }
@@ -738,9 +738,9 @@ void EnqueueWrapCommand::process() {
     vector<uint32_t> command_vector(wrap_packet_size_bytes / sizeof(uint32_t), 0);
     command_vector[DeviceCommand::wrap_idx] = (uint32_t)this->wrap_region;  // wrap
 
-    this->manager.cq_reserve_back(wrap_packet_size_bytes);
+    this->manager.issue_queue_reserve_back(wrap_packet_size_bytes);
     this->manager.cq_write(command_vector.data(), command_vector.size() * sizeof(uint32_t), write_ptr);
-    this->manager.cq_push_back(wrap_packet_size_bytes);
+    this->manager.issue_queue_push_back(wrap_packet_size_bytes);
     if (this->wrap_region == DeviceCommand::WrapRegion::COMPLETION) {
         // Wrap the read pointers for completion queue because device will start writing data at head of completion queue and there are no more reads to be done at current completion queue write pointer
         // If we don't wrap the read then the subsequent read buffer command may attempt to read past the total command queue size
@@ -828,7 +828,7 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking)
         uint32_t available_space_bytes = command_queue_size - (get_cq_completion_wr_ptr(this->device->id()) << 4);
         if (available_space_bytes < padded_page_size) {
             // Wrap the completion region because a single page won't fit in available space
-            // Wrap needs to be blocking because host needs updated write pointer to compute how many pages can be read
+            // Wrap needs to be blocking because host needs updated write ppointer to compute how many pages can be read
             this->wrap(DeviceCommand::WrapRegion::COMPLETION, true);
             available_space_bytes = command_queue_size - (get_cq_completion_wr_ptr(this->device->id()) << 4);
         }
@@ -851,7 +851,7 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking)
         // is easiest way to bring this up
         this->enqueue_command(command, blocking);
 
-        this->device->sysmem_manager->cq_wait_front(); // wait for device to write data
+        this->device->sysmem_manager->completion_queue_wait_front(); // wait for device to write data
 
         uint32_t bytes_read = pages_to_read * padded_page_size;
         uint32_t unpadded_bytes_read = pages_to_read * buffer.page_size();
@@ -867,7 +867,7 @@ void CommandQueue::enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking)
             tt::Cluster::instance().read_sysmem((char*)dst + unpadded_dst_offset, bytes_read, command.read_buffer_addr, 0);
         }
 
-        this->device->sysmem_manager->cq_pop_front(bytes_read); // signal to device that data has been read
+        this->device->sysmem_manager->completion_queue_pop_front(bytes_read); // signal to device that data has been read
 
         total_pages_to_read -= pages_to_read;
         src_offset += bytes_read;
