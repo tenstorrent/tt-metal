@@ -215,10 +215,8 @@ TestConstCharStrNC{4,4}
 ----------
 TestStrBR{4,4}
 +++++++++++++++)";
-TEST_F(DPrintFixture, TestPrintRaiseWait) {
-    // Device already set up by gtest fixture.
-    Device *device = this->device_;
 
+static void RunTest(DPrintFixture* fixture, Device* device) {
     // Set up program and command queue
     Program program = Program();
 
@@ -280,7 +278,7 @@ TEST_F(DPrintFixture, TestPrintRaiseWait) {
 
 
     // Run the program
-    RunProgram(program);
+    fixture->RunProgram(device, program);
 
     // Check the print log against golden output.
     EXPECT_TRUE(
@@ -289,4 +287,10 @@ TEST_F(DPrintFixture, TestPrintRaiseWait) {
             golden_output
         )
     );
+}
+
+TEST_F(DPrintFixture, TestPrintRaiseWait) {
+    for (Device* device : this->devices_) {
+        this->RunTestOnDevice(RunTest, device);
+    }
 }

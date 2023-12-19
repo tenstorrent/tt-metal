@@ -19,16 +19,7 @@ const std::string golden_output =
 R"(DPRINT server timed out on core (1,1) riscv 4, waiting on a RAISE signal: 1
 )";
 
-TEST_F(DPrintFixture, TestPrintHanging) {
-    // Skip this test for slow dipatch for now. Due to how llrt currently sits below device, it's
-    // tricky to check print server status from the finish loop for slow dispatch. Once issue #4363
-    // is resolved, we should add a check for print server handing in slow dispatch as well.
-    if (this->slow_dispatch_)
-        GTEST_SKIP();
-
-    // Device already set up by gtest fixture.
-    Device *device = this->device_;
-
+static void RunTest(DPrintFixture* fixture, Device* device) {
     // Set up program
     Program program = Program();
 
@@ -43,7 +34,7 @@ TEST_F(DPrintFixture, TestPrintHanging) {
 
     // Run the program, we expect it to throw on waiting for CQ to finish
 try {
-    RunProgram(program);
+    fixture->RunProgram(device, program);
 } catch (std::runtime_error& e) {
     const string expected = "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.";
     const string error = string(e.what());
@@ -58,4 +49,16 @@ try {
             golden_output
         )
     );
+}
+
+TEST_F(DPrintFixture, TestPrintHanging) {
+    // Skip this test for slow dipatch for now. Due to how llrt currently sits below device, it's
+    // tricky to check print server status from the finish loop for slow dispatch. Once issue #4363
+    // is resolved, we should add a check for print server handing in slow dispatch as well.
+    if (this->slow_dispatch_)
+        GTEST_SKIP();
+
+    for (Device* device : this->devices_) {
+        this->RunTestOnDevice(RunTest, device);
+    }
 }

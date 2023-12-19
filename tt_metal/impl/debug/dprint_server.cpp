@@ -75,9 +75,15 @@ struct DebugPrintServerContext {
     // This device must have been attached previously.
     void DetachDevice(Device* device);
 
+    // Clears the log file of a currently-running print server.
+    void ClearLogFile();
+
+    // Clears any raised signals (so they can be used again in a later run).
+    void ClearSignals();
+
     int GetNumAttachedDevices() { return device_to_core_range_.size(); }
 
-    bool print_hang_detected() { return server_killed_due_to_hang_; }
+    bool PrintHangDetected() { return server_killed_due_to_hang_; }
 
 private:
 
@@ -252,7 +258,7 @@ void DebugPrintServerContext::WaitForPrintsFinished() {
         // No need to await if the server was killed already due to a hang.
         if (server_killed_due_to_hang_)
             break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     } while (hart_waiting_on_signal_.size() > 0 || new_data_last_iter_);
 } // WaitForPrintsFinished
 
@@ -330,6 +336,22 @@ void DebugPrintServerContext::DetachDevice(Device* device) {
     device_to_core_range_lock_.unlock();
     log_info(tt::LogMetal, "DPRINT Server dettached device {}", device->id());
 } // DetachDevice
+
+void DebugPrintServerContext::ClearLogFile() {
+    if (outfile_) {
+        // Just close the file and re-open it (without append) to clear it.
+        outfile_->close();
+        delete outfile_;
+
+        string file_name = tt::llrt::OptionsG.get_dprint_file_name();
+        outfile_ = new std::ofstream(file_name);
+        stream_ = outfile_ ? outfile_ : &cout;
+    }
+} // ClearLogFile
+
+void DebugPrintServerContext::ClearSignals() {
+    raised_signals_.clear();
+} // ClearSignals
 
 bool DebugPrintServerContext::PeekOneHartNonBlocking(
     int chip_id,
@@ -615,8 +637,9 @@ void DprintServerAttach(Device* device) {
 
     // Skip if RTOptions doesn't enable DPRINT for this device
     vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_dprint_chip_ids();
-    if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
-        return;
+    if (!tt::llrt::OptionsG.get_dprint_all_chips())
+        if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
+            return;
 
     // If no server ir running, create one
     if (!DprintServerIsRunning())
@@ -666,7 +689,16 @@ void DprintServerAwait() {
 }
 
 bool DPrintServerHangDetected() {
-    return (DebugPrintServerContext::inst != nullptr)
-        && (DebugPrintServerContext::inst->print_hang_detected());
+    return DprintServerIsRunning() && DebugPrintServerContext::inst->PrintHangDetected();
+}
+
+void DPrintServerClearLogFile() {
+    if (DprintServerIsRunning())
+        DebugPrintServerContext::inst->ClearLogFile();
+}
+
+void DPrintServerClearSignals() {
+    if (DprintServerIsRunning())
+        DebugPrintServerContext::inst->ClearSignals();
 }
 } // namespace tt
