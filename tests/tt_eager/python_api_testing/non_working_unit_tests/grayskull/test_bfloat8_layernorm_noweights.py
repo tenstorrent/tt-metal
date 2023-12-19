@@ -15,10 +15,12 @@ import tt_lib as ttl
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import layernorm_noweights as tt_layernorm
+from tests.tt_eager.python_api_testing.sweep_tests.common import set_slow_dispatch_mode
 
 
-def run_layernorm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
+def run_layernorm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
     torch.manual_seed(data_seed)
+    prev_dispatch_mode = set_slow_dispatch_mode(dispatch_mode)
 
     if in_mem_config[0] == "SYSTEM_MEMORY":
         in_mem_config[0] = None
@@ -53,6 +55,8 @@ def run_layernorm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_conf
     # compare tt and golden outputs -------------
     success, pcc_value = comp_pcc(ref_value, tt_result)
     logger.debug(pcc_value)
+    set_slow_dispatch_mode(prev_dispatch_mode)
+
     assert success
 
 
@@ -68,6 +72,7 @@ test_sweep_args = [
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         2113401,
+        "1",
     ),
     (
         [(1, 18, 480, 32), (1, 1, 1, 32), (1, 1, 1, 32)],
@@ -80,6 +85,7 @@ test_sweep_args = [
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         11178160,
+        "",
     ),
     (
         [(1, 18, 480, 32), (1, 1, 1, 32), (1, 1, 1, 32)],
@@ -92,6 +98,7 @@ test_sweep_args = [
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         11178160,
+        "",
     ),
     (
         [(1, 18, 480, 32), (1, 1, 1, 32), (1, 1, 1, 32)],
@@ -104,13 +111,14 @@ test_sweep_args = [
         ],
         ttl.tensor.MemoryConfig(ttl.tensor.TensorMemoryLayout.INTERLEAVED, ttl.tensor.BufferType.DRAM),
         11178160,
+        "1",
     ),
 ]
 
 
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed",
+    "input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode",
     (test_sweep_args),
 )
-def test_layernorm_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device):
-    run_layernorm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
+def test_layernorm_test(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device):
+    run_layernorm_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, dispatch_mode, device)
