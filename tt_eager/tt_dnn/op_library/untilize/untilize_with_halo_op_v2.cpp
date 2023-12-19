@@ -9,6 +9,7 @@
 #include "tt_dnn/op_library/work_split.hpp"
 #include "tt_dnn/op_library/sharding_utilities.hpp"
 #include "tt_dnn/op_library/math.hpp"
+#include "tt_dnn/op_library/sliding_window_op_infra/utils.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
@@ -23,60 +24,6 @@ using range_t = std::array<int32_t, 2>;
 const int32_t NEIGHBORHOOD_DIST = 2;    // => ncores to left and ncores to right
 
 namespace untilize_with_halo_v2_helpers {
-
-std::map<CoreCoord, CoreCoord> left_neighbor_core, right_neighbor_core;
-void init_neighbor_core_xy_mapping(CoreCoord grid_size, bool is_twod = false) {
-    TT_ASSERT(grid_size.x == 12 && grid_size.y == 9);   // grayskull
-    if (is_twod) {
-        // 2d decomposition case (block sharded)
-        // left-right neighbors are calculated along the x dim
-        // first the left neighbors (x = 0 has no left neighbor)
-        for (int32_t x = 1; x < grid_size.x; ++ x) {
-            int32_t left_x = x - 1;
-            for (int32_t y = 0; y < grid_size.y; ++ y) {
-                CoreCoord core = {(uint32_t) x, (uint32_t) y};
-                left_neighbor_core[core] = {(uint32_t) left_x, (uint32_t) y};
-            }
-        }
-        // then the neighbors (x = grid_size.x - 1 has no left neighbor)
-        for (int32_t x = 0; x < grid_size.x - 1; ++ x) {
-            int32_t right_x = x + 1;
-            for (int32_t y = 0; y < grid_size.y; ++ y) {
-                CoreCoord core = {(uint32_t) x, (uint32_t) y};
-                right_neighbor_core[core] = {(uint32_t) right_x, (uint32_t) y};
-            }
-        }
-    } else {
-        // default 1d distribution case (height sharded)
-        for (int32_t y = 0; y < grid_size.y; ++ y) {
-            for (int32_t x = 0; x < grid_size.x; ++ x) {
-                CoreCoord core = {(uint32_t) x, (uint32_t) y};
-                // calculate left neighbor
-                int32_t left_x = x - 1, left_y = y;
-                if (left_x < 0) {
-                    left_x = grid_size.x - 1;
-                    left_y -= 1;
-                }
-                if (left_y < 0) {
-                    // there is no left neighbor
-                } else {
-                    left_neighbor_core[core] = {(uint32_t) left_x, (uint32_t) left_y};
-                }
-                // calculate right neighbor
-                int32_t right_x = x + 1, right_y = y;
-                if (right_x == grid_size.x) {
-                    right_x = 0;
-                    right_y += 1;
-                }
-                if (right_y == grid_size.y) {
-                    // there is no right neighbor
-                } else {
-                    right_neighbor_core[core] = {(uint32_t) right_x, (uint32_t) right_y};
-                }
-            }
-        }
-    }
-}
 
 int32_t my_max(const std::vector<int32_t>& in) {
     int32_t mmax = 0;
@@ -129,7 +76,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t out_nbytes = datum_size(out_df);
 
     auto grid_size = device->compute_with_storage_grid_size();
-    untilize_with_halo_v2_helpers::init_neighbor_core_xy_mapping(grid_size, input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
+    std::map<CoreCoord, CoreCoord> left_neighbor_core, right_neighbor_core;
+    utils::init_neighbor_core_xy_mapping(grid_size, left_neighbor_core, right_neighbor_core, input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
 
     uint32_t ncores_x = grid_size.x;
     uint32_t ncores_y = grid_size.y;
@@ -220,7 +168,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t pagesize = 0;
 
     // local_pad_start_and_size
-    // pagesize = *std::max(local_pad_nsegments_per_core.cbegin(), local_pad_nsegments_per_core.cend());
     pagesize = config_nbytes * untilize_with_halo_v2_helpers::my_max(local_pad_nsegments_per_core);
     bool local_pad_ss_exists = pagesize > 0;
     CBHandle local_pad_ss_cb = 0;
@@ -235,7 +182,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     }
 
     // ll_data_start_and_size
-    // pagesize = *std::max(ll_data_nsegments_per_core.cbegin(), ll_data_nsegments_per_core.cend());
     pagesize = config_nbytes * untilize_with_halo_v2_helpers::my_max(ll_data_nsegments_per_core);
     bool ll_data_ss_exists = pagesize > 0;
     CBHandle ll_data_ss_cb = 0;
@@ -250,7 +196,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     }
 
     // l_data_start_and_size
-    // pagesize = *std::max(l_data_nsegments_per_core.cbegin(), l_data_nsegments_per_core.cend());
     pagesize = config_nbytes * untilize_with_halo_v2_helpers::my_max(l_data_nsegments_per_core);
     bool l_data_ss_exists = pagesize > 0;
     CBHandle l_data_ss_cb = 0;
@@ -265,7 +210,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     }
 
     // local_data_start_and_size
-    // pagesize = *std::max(local_data_nsegments_per_core.cbegin(), local_data_nsegments_per_core.cend());
     pagesize = config_nbytes * untilize_with_halo_v2_helpers::my_max(local_data_nsegments_per_core);
     bool local_data_ss_exists = pagesize > 0;
     CBHandle local_data_ss_cb = 0;
@@ -280,7 +224,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     }
 
     // r_data_start_and_size
-    // pagesize = *std::max(r_data_nsegments_per_core.cbegin(), r_data_nsegments_per_core.cend());
     pagesize = config_nbytes * untilize_with_halo_v2_helpers::my_max(r_data_nsegments_per_core);
     bool r_data_ss_exists = pagesize > 0;
     CBHandle r_data_ss_cb = 0;
@@ -295,7 +238,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     }
 
     // rr_data_start_and_size
-    // pagesize = *std::max(rr_data_nsegments_per_core.cbegin(), rr_data_nsegments_per_core.cend());
     pagesize = config_nbytes * untilize_with_halo_v2_helpers::my_max(rr_data_nsegments_per_core);
     bool rr_data_ss_exists = pagesize > 0;
     CBHandle rr_data_ss_cb = 0;
@@ -330,7 +272,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         src_cb_id };     // output stick size in bytes
     KernelHandle reader_kernel_id = CreateKernel(
         program,
-        // "tt_eager/tt_dnn/op_library/sharded/kernels/dataflow/reader_unary_sharded.cpp",
         "tt_eager/tt_dnn/op_library/untilize/kernels/dataflow/reader_unary_sharded_with_halo_v2.cpp",
         all_cores,
         DataMovementConfig{
@@ -368,9 +309,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     }
 
     // runtime args for reader
-    // std::vector<uint32_t> reader_rt_args = { ntiles_per_block * nblocks_per_core };
     std::vector<uint32_t> reader_rt_args = { input_npages };
-    // SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
 
     // runtime args for writer
     std::vector<uint32_t> writer_rt_args = {
@@ -433,14 +372,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
                 core_coord = { core % ncores_x, core / ncores_x};
             }
             // left neighbor args
-            if (untilize_with_halo_v2_helpers::left_neighbor_core.count(core_coord) > 0) {
-                CoreCoord left_core = untilize_with_halo_v2_helpers::left_neighbor_core.at(core_coord);
+            if (left_neighbor_core.count(core_coord) > 0) {
+                CoreCoord left_core = left_neighbor_core.at(core_coord);
                 CoreCoord left_noc = device->worker_core_from_logical_core(left_core);
                 writer_rt_args[4] = 1;
                 writer_rt_args[5] = left_noc.x;
                 writer_rt_args[6] = left_noc.y;
-                if (untilize_with_halo_v2_helpers::left_neighbor_core.count(left_core) > 0) {
-                    CoreCoord left_left_core = untilize_with_halo_v2_helpers::left_neighbor_core.at(left_core);
+                if (left_neighbor_core.count(left_core) > 0) {
+                    CoreCoord left_left_core = left_neighbor_core.at(left_core);
                     CoreCoord left_left_noc = device->worker_core_from_logical_core(left_left_core);
                     writer_rt_args[1] = 1;
                     writer_rt_args[2] = left_left_noc.x;
@@ -455,14 +394,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
                 writer_rt_args[4] = 0;
             }
             // right neighbor args
-            if (untilize_with_halo_v2_helpers::right_neighbor_core.count(core_coord) > 0) {
-                CoreCoord right_core = untilize_with_halo_v2_helpers::right_neighbor_core.at(core_coord);
+            if (right_neighbor_core.count(core_coord) > 0) {
+                CoreCoord right_core = right_neighbor_core.at(core_coord);
                 CoreCoord right_noc = device->worker_core_from_logical_core(right_core);
                 writer_rt_args[7] = 1;
                 writer_rt_args[8] = right_noc.x;
                 writer_rt_args[9] = right_noc.y;
-                if (untilize_with_halo_v2_helpers::right_neighbor_core.count(right_core) > 0) {
-                    CoreCoord right_right_core = untilize_with_halo_v2_helpers::right_neighbor_core.at(right_core);
+                if (right_neighbor_core.count(right_core) > 0) {
+                    CoreCoord right_right_core = right_neighbor_core.at(right_core);
                     CoreCoord right_right_noc = device->worker_core_from_logical_core(right_right_core);
                     writer_rt_args[10] = 1;
                     writer_rt_args[11] = right_right_noc.x;
@@ -480,14 +419,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             SetRuntimeArgs(program, reader_kernel_id, core_coord, writer_rt_args);
             SetRuntimeArgs(program, writer_kernel_id, core_coord, writer_rt_args);
         }
-
-        // log_debug(LogOp, "Core {}: ", core);
-        // log_debug(LogOp, "local pad nsegments: {}", local_pad_nsegments_per_core[core]);
-        // log_debug(LogOp, "local data nsegments: {}", local_data_nsegments_per_core[core]);
-        // log_debug(LogOp, "ll data nsegments: {}", ll_data_nsegments_per_core[core]);
-        // log_debug(LogOp, "l data nsegments: {}", l_data_nsegments_per_core[core]);
-        // log_debug(LogOp, "r data nsegments: {}", r_data_nsegments_per_core[core]);
-        // log_debug(LogOp, "rr data nsegments: {}", rr_data_nsegments_per_core[core]);
     }
 
     auto override_runtime_arguments_callback = [
@@ -578,32 +509,26 @@ void UntilizeWithHaloV2::validate(const std::vector<Tensor> &input_tensors) cons
     TT_FATAL(input_tensor.shard_spec().has_value());
 
     // validate all other config tensors
-    // int32_t max_size = std::max(local_data_nsegments_per_core_.cbegin(), local_data_nsegments_per_core_.cend());
     int32_t max_size = untilize_with_halo_v2_helpers::my_max(local_data_nsegments_per_core_);
     log_debug(LogOp, "max local data nsegments: {}", max_size);
     if (max_size > 0) validate_untilize_with_halo_v2_config_tensor(local_data_start_and_size);
 
-    // max_size = *std::max(local_pad_nsegments_per_core_.cbegin(), local_pad_nsegments_per_core_.cend());
     max_size = untilize_with_halo_v2_helpers::my_max(local_pad_nsegments_per_core_);
     log_debug(LogOp, "max local pad nsegments: {}", max_size);
     if (max_size > 0) validate_untilize_with_halo_v2_config_tensor(local_pad_start_and_size);
 
-    // max_size = *std::max(ll_data_nsegments_per_core_.cbegin(), ll_data_nsegments_per_core_.cend());
     max_size = untilize_with_halo_v2_helpers::my_max(ll_data_nsegments_per_core_);
     log_debug(LogOp, "max ll data nsegments: {}", max_size);
     if (max_size > 0) validate_untilize_with_halo_v2_config_tensor(ll_data_start_and_size);
 
-    // max_size = *std::max(l_data_nsegments_per_core_.cbegin(), l_data_nsegments_per_core_.cend());
     max_size = untilize_with_halo_v2_helpers::my_max(l_data_nsegments_per_core_);
     log_debug(LogOp, "max l data nsegments: {}", max_size);
     if (max_size > 0) validate_untilize_with_halo_v2_config_tensor(l_data_start_and_size);
 
-    // max_size = *std::max(r_data_nsegments_per_core_.cbegin(), r_data_nsegments_per_core_.cend());
     max_size = untilize_with_halo_v2_helpers::my_max(r_data_nsegments_per_core_);
     log_debug(LogOp, "max r data nsegments: {}", max_size);
     if (max_size > 0) validate_untilize_with_halo_v2_config_tensor(r_data_start_and_size);
 
-    // max_size = *std::max(rr_data_nsegments_per_core_.cbegin(), rr_data_nsegments_per_core_.cend());
     max_size = untilize_with_halo_v2_helpers::my_max(rr_data_nsegments_per_core_);
     log_debug(LogOp, "max rr data nsegments: {}", max_size);
     if (max_size > 0) validate_untilize_with_halo_v2_config_tensor(rr_data_start_and_size);

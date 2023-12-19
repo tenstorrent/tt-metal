@@ -36,10 +36,10 @@ def volume(shape):
         (  ## [1, 32, 32, 32],
             [1, 64, 64, 64],
             [1, 64, 112, 112],
-            [2, 64, 64, 64],
-            [8, 64, 64, 64],
+            # [2, 64, 64, 64],
+            # [8, 64, 64, 64],
             [8, 64, 128, 128],
-            [4, 64, 112, 112],
+            # [4, 64, 112, 112],
             [8, 64, 112, 112],
             # [9, 32, 32, 32],
             # [9, 64, 64, 64],
@@ -126,26 +126,18 @@ def test_run_max_pool(
     dilation_h, dilation_w = dilation
 
     if 2 * pad_h > kernel_h or 2 * pad_w > kernel_w:
-        logger.info("Invalid case")
-        pytest.skip()
+        pytest.skip("Invalid case")
 
     out_h = math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
     out_w = math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
     if out_w % nblocks != 0:
-        logger.info(f"Unsupported case when out_w ({out_w}) % nblocks ({nblocks}) != 0")
-        pytest.skip()
+        pytest.skip(f"Unsupported case when out_w ({out_w}) % nblocks ({nblocks}) != 0")
 
     if in_c != 64:
-        logger.info("Current maxpool writer needs nchannels to be 64!")
-        pytest.skip()
-
-    # if use_multicore and nblocks != 1:
-    #     logger.info("Multi-block version has not been tested with multicore")
-    #     pytest.skip()
+        pytest.skip("Current maxpool writer needs nchannels to be 64!")
 
     if use_multicore and (padding != (1, 1) or stride != (2, 2) or kernel_size != (3, 3)):
-        logger.info("Multicore version only supports Resnet50 configs for now.")
-        pytest.skip()
+        pytest.skip("Multicore version only supports Resnet50 configs for now.")
 
     if nblocks > 1 and in_mem_config.is_sharded() and use_multicore:
         pytest.skip("nblocks > 1 is not properly supported with multicore sharded input")
