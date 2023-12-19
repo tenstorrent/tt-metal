@@ -390,8 +390,7 @@ std::string to_string_row_major(const BufferType& buffer, const Shape& shape, Da
     }
 }
 
-} // namespace detail
-
+}  // namespace detail
 
 // ======================================================================================
 //                                      Validators
@@ -574,7 +573,7 @@ inline Tensor to_device(const Tensor &tensor, Device *target_device, const Memor
         data_type, layout, memory_config,
         std::nullopt
     );
-    return Tensor(DeviceStorage{device_buffer, target_device, memory_config}, shape, data_type, layout);
+    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
 }
 
 
@@ -596,7 +595,7 @@ inline Tensor to_device_sharded(const Tensor &tensor, Device *target_device, con
         layout, memory_config,
         std::make_optional<ShardSpec>(shard_spec)
     );
-    return Tensor(DeviceStorage{device_buffer, target_device, memory_config}, shape, data_type, layout, shard_spec);
+    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout, shard_spec);
 }
 
 template <typename T>
