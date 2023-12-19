@@ -14,14 +14,27 @@
 class DPrintFixture: public ::testing::Test {
 public:
     inline static const string dprint_file_name = "gtest_dprint_log.txt";
+
+    // A function to run a program, according to which dispatch mode is set.
+    void RunProgram(Device* device, Program& program) {
+        if (this->slow_dispatch_) {
+            // Slow dispatch uses LaunchProgram
+            tt::tt_metal::detail::LaunchProgram(device, program);
+        } else {
+            // Fast Dispatch uses the command queue
+            CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(device);
+            EnqueueProgram(cq, program, false);
+            Finish(cq);
+        }
+
+        // Wait for the print server to catch up if needed.
+        tt::DprintServerAwait();
+    }
 protected:
     tt::ARCH arch_;
-    Device* device_;
+    vector<Device*> devices_;
     bool slow_dispatch_;
-
-    // A flag to mark if the test is skipped or not. Since we skip before
-    // device setup, we need to skip device teardown if the test is skipped.
-    bool test_skipped = false;
+    bool has_remote_devices_;
 
     void SetUp() override {
         // Skip for slow dispatch for now
@@ -34,26 +47,36 @@ protected:
             slow_dispatch_ = false;
         }
         // The core range (physical) needs to be set >= the set of all cores
-        // used by all tests using this fixture. TODO: update with a way to
-        // just set all physical cores to have printing enabled.
+        // used by all tests using this fixture, so set dprint enabled for
+        // all cores and all devices
         tt::llrt::OptionsG.set_dprint_all_cores(true);
+        tt::llrt::OptionsG.set_dprint_all_chips(true);
         // Send output to a file so the test can check after program is run.
         tt::llrt::OptionsG.set_dprint_file_name(dprint_file_name);
 
-        // Parent call, sets up the device
+        // Set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+        auto num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
+        for (unsigned int id = 0; id < num_devices; id++) {
+            if (SkipTest(id))
+                continue;
+            auto* device = tt::tt_metal::CreateDevice(id);
+            devices_.push_back(device);
+        }
 
-        const int device_id = 0;
-        this->device_ = tt::tt_metal::CreateDevice(device_id);
-
+        // An extra flag for if we have remote devices, as some tests are disabled for fast
+        // dispatch + remote devices.
+        this->has_remote_devices_ = num_devices > num_pci_devices;
     }
 
     void TearDown() override {
-        if (!test_skipped) {
-            tt::tt_metal::CloseDevice(this->device_);
-            // Remove the DPrint output file after the test is finished.
-            std::remove(dprint_file_name.c_str());
+        // Close all opened devices
+        for (unsigned int id = 0; id < devices_.size(); id++) {
+            tt::tt_metal::CloseDevice(devices_.at(id));
         }
+        // Remove the DPrint output file after the test is finished.
+        std::remove(dprint_file_name.c_str());
 
         // Reset DPrint settings
         tt::llrt::OptionsG.set_dprint_cores({});
@@ -61,19 +84,29 @@ protected:
         tt::llrt::OptionsG.set_dprint_file_name("");
     }
 
-    // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(Program& program) {
-        if (this->slow_dispatch_) {
-            // Slow dispatch uses LaunchProgram
-            tt::tt_metal::detail::LaunchProgram(this->device_, program);
-        } else {
-            // Fast Dispatch uses the command queue
-            CommandQueue& cq = tt::tt_metal::detail::GetCommandQueue(this->device_);
-            EnqueueProgram(cq, program, false);
-            Finish(cq);
+    bool SkipTest(unsigned int device_id) {
+        // Skip condition is fast dispatch for remote devices
+        if (this->has_remote_devices_ && !this->slow_dispatch_ && device_id != 0) {
+            log_info(
+                tt::LogTest,
+                "Skipping test on device {} due to fast dispatch unsupported on remote devices.",
+                device_id
+            );
+            return true;
         }
+        return false;
+    }
 
-        // Wait for the print server to catch up if needed.
-        tt::DprintServerAwait();
+    void RunTestOnDevice(
+        const std::function<void(DPrintFixture*, Device*)>& run_function,
+        Device* device
+    ) {
+        if (SkipTest(device->id()))
+            return;
+        log_info(tt::LogTest, "Running test on device {}.", device->id());
+        run_function(this, device);
+        log_info(tt::LogTest, "Finished running test on device {}.", device->id());
+        tt::DPrintServerClearLogFile();
+        tt::DPrintServerClearSignals();
     }
 };
