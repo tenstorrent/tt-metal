@@ -325,10 +325,19 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw
         this->srcs_.push_back("tt_metal/hw/toolchain/tmu-crt0k.S");
     }
 
+    string linker_str;
+    if (this->is_fw_) {
+        linker_str = "tt_metal/hw/toolchain/erisc-b0-app.ld ";
+    } else {
+        linker_str = "tt_metal/hw/toolchain/erisc-b0-kernel.ld ";
+    }
     this->lflags_ = env_.lflags_ +
-        "-Os "
-        "-L" + env_.root_ + "/tt_metal/hw/toolchain "
-        "-T" + env_.root_ + "tt_metal/hw/toolchain/erisc-b0-app.ld ";
+                    "-Os "
+                    "-L" +
+                    env_.root_ +
+                    "/tt_metal/hw/toolchain "
+                    "-T" +
+                    env_.root_ + linker_str;
 
     this->process_defines_at_compile = true;
 
