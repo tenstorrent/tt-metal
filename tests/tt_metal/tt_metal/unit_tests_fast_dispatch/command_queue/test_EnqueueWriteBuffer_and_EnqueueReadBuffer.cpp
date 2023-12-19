@@ -319,7 +319,10 @@ TEST_F(CommandQueueFixture, TestPageSizeTooLarge) {
 
 TEST_F(CommandQueueFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
     uint32_t page_size = 2048;
-    uint32_t max_command_size = DeviceCommand::COMMAND_ISSUE_REGION_SIZE - CQ_START;
+    uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(this->device_->id(), 0);
+    uint32_t command_issue_region_size = command_queue_size * 0.75;
+
+    uint32_t max_command_size = command_issue_region_size - CQ_START;
     uint32_t buffer = 14240;
     uint32_t buffer_size = max_command_size - (buffer + DeviceCommand::NUM_BYTES_IN_DEVICE_COMMAND);
     uint32_t num_pages = buffer_size / page_size;
@@ -331,7 +334,8 @@ TEST_F(CommandQueueFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
 
 TEST_F(CommandQueueFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
     uint32_t page_size = 2048;
-    uint32_t num_pages = DeviceCommand::HUGE_PAGE_SIZE / page_size;
+    uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(this->device_->id(), 0);
+    uint32_t num_pages = command_queue_size / page_size;
 
     TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
 
@@ -343,9 +347,13 @@ TEST_F(CommandQueueFixture, TestWrapCompletionQOnInsufficientSpace) {
     uint32_t large_page_size = 8192; // page size for first and third read
     uint32_t small_page_size = 2048; // page size for second read
 
-    uint32_t first_buffer_size = tt::round_up(DeviceCommand::COMMAND_COMPLETION_REGION_SIZE * 0.95, large_page_size);
+    // Using default 75-25 issue and completion queue split
+    uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(this->device_->id(), 0);
+    uint32_t command_completion_region_size = command_queue_size * 0.25;
 
-    uint32_t space_after_first_buffer = DeviceCommand::COMMAND_COMPLETION_REGION_SIZE - first_buffer_size;
+    uint32_t first_buffer_size = tt::round_up(command_completion_region_size * 0.95, large_page_size);
+
+    uint32_t space_after_first_buffer = command_completion_region_size - first_buffer_size;
     // leave only small_page_size * 2 B of space in the completion queue
     uint32_t num_pages_second_buffer = (space_after_first_buffer / small_page_size) - 2;
 
@@ -373,10 +381,14 @@ TEST_F(CommandQueueFixture, TestWrapCompletionQOnInsufficientSpace) {
 
 // Test that command queue wraps when buffer read needs to be split into multiple enqueue_read_buffer commands and available space in completion region is less than a page
 TEST_F(CommandQueueFixture, TestWrapCompletionQOnInsufficientSpace2) {
+    // Using default 75-25 issue and completion queue split
+    uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(this->device_->id(), 0);
+    uint32_t command_completion_region_size = command_queue_size * 0.25;
+
     uint32_t num_pages_buff_1 = 9;
     uint32_t page_size_buff_1 = 2048;
     Buffer buff_1(this->device_, num_pages_buff_1 * page_size_buff_1, page_size_buff_1, BufferType::DRAM);
-    uint32_t space_after_buff_1 = DeviceCommand::COMMAND_COMPLETION_REGION_SIZE - buff_1.size();
+    uint32_t space_after_buff_1 = command_completion_region_size - buff_1.size();
 
     uint32_t page_size = 8192;
     uint32_t desired_remaining_space_before_wrap = 6144;

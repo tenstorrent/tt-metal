@@ -15,14 +15,8 @@ class DeviceCommand {
     enum class TransferType : uint8_t { RUNTIME_ARGS, CB_CONFIGS, PROGRAM_PAGES, GO_SIGNALS, NUM_TRANSFER_TYPES };
 
     // Constants
-    static constexpr uint32_t HUGE_PAGE_SIZE = 1024 * 1024 * 1024;
     //TODO: investigate other num_cores
     static constexpr uint32_t NUM_MAX_CORES = 108; //12 x 9
-
-    // COMMAND_ISSUE_REGION_SIZE and COMMAND_COMPLETION_REGION_SIZE should be configurable with some default split
-    static constexpr uint32_t COMMAND_ISSUE_REGION_SIZE = 805306368;
-    static constexpr uint32_t COMMAND_COMPLETION_REGION_SIZE = HUGE_PAGE_SIZE - COMMAND_ISSUE_REGION_SIZE;
-
     static constexpr uint32_t NUM_ENTRIES_IN_COMMAND_HEADER = 20;
     static constexpr uint32_t NUM_ENTRIES_IN_DEVICE_COMMAND = 5632;
     static constexpr uint32_t NUM_BYTES_IN_DEVICE_COMMAND = NUM_ENTRIES_IN_DEVICE_COMMAND * sizeof(uint32_t);

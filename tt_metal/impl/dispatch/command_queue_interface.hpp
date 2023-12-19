@@ -5,6 +5,7 @@
 #include "tt_metal/common/base.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/llrt/llrt.hpp"
+#include "tt_metal/common/math.hpp"
 
 using namespace tt::tt_metal;
 
@@ -31,23 +32,36 @@ struct SystemMemoryCQInterface {
     // Equation for issue fifo size is
     // | issue_fifo_wr_ptr + command size B - issue_fifo_rd_ptr |
     // Space available would just be issue_fifo_limit - issue_fifo_size
-    SystemMemoryCQInterface() {
+    SystemMemoryCQInterface(uint32_t command_queue_size, std::optional<float> command_issue_queue_split) : command_queue_size(command_queue_size) {
+        float issue_queue_split = command_issue_queue_split.has_value() ? command_issue_queue_split.value() : default_issue_queue_split;
+
+        this->command_issue_region_size = tt::round_up(command_queue_size * issue_queue_split, 32);
+        this->command_completion_region_size = this->command_queue_size - this->command_issue_region_size;
+
+        this->issue_fifo_size = (this->command_issue_region_size - CQ_START) >> 4;
+        this->issue_fifo_limit = (this->command_issue_region_size >> 4) - 1;
         this->issue_fifo_wr_ptr = CQ_START >> 4;  // In 16B words
         this->issue_fifo_wr_toggle =
             0;  // This is used for the edge case where we wrap and our read pointer has not yet moved
-        this->completion_fifo_rd_ptr = DeviceCommand::COMMAND_ISSUE_REGION_SIZE >> 4; // completion region is below issue region
+
+        this->completion_fifo_size = this->command_completion_region_size >> 4;
+        this->completion_fifo_limit = (this->command_queue_size >> 4) - 1;
+        this->completion_fifo_rd_ptr = this->command_issue_region_size >> 4; // completion region is below issue region
         this->completion_fifo_rd_toggle = 0;
     }
 
-    const uint32_t issue_fifo_size = ((DeviceCommand::COMMAND_ISSUE_REGION_SIZE)-CQ_START) >> 4;
-    const uint32_t issue_fifo_limit = (DeviceCommand::COMMAND_ISSUE_REGION_SIZE >> 4) - 1;  // Last possible FIFO address
+    const uint32_t command_queue_size;
+    static constexpr float default_issue_queue_split = 0.75;
+    uint32_t command_issue_region_size;
+    uint32_t command_completion_region_size;
 
+    uint32_t issue_fifo_size;
+    uint32_t issue_fifo_limit;  // Last possible FIFO address
     uint32_t issue_fifo_wr_ptr;
     bool issue_fifo_wr_toggle;
 
-    const uint32_t completion_fifo_size = DeviceCommand::COMMAND_COMPLETION_REGION_SIZE >> 4;
-    const uint32_t completion_fifo_limit = ((DeviceCommand::HUGE_PAGE_SIZE) >> 4) - 1;  // Last possible FIFO address
-
+    uint32_t completion_fifo_size;
+    uint32_t completion_fifo_limit;  // Last possible FIFO address
     uint32_t completion_fifo_rd_ptr;
     bool completion_fifo_rd_toggle;
 };
@@ -184,7 +198,7 @@ class SystemMemoryManager {
         cq_interface.completion_fifo_rd_ptr += data_read_16B;
         if (cq_interface.completion_fifo_rd_ptr >= cq_interface.completion_fifo_limit or
             cq_interface.completion_fifo_limit - cq_interface.completion_fifo_rd_ptr < min_space_required_16B) {
-            cq_interface.completion_fifo_rd_ptr = DeviceCommand::COMMAND_ISSUE_REGION_SIZE >> 4;
+            cq_interface.completion_fifo_rd_ptr = cq_interface.command_issue_region_size >> 4;
             cq_interface.completion_fifo_rd_toggle = not cq_interface.completion_fifo_rd_toggle;
         }
 

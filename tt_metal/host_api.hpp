@@ -56,11 +56,12 @@ size_t GetNumPCIeDevices();
  *
  * Return value: Device *
  *
- * | Argument       | Description                                                      | Data type       | Valid range                                         | required |
- * |----------------|------------------------------------------------------------------|-----------------|-----------------------------------------------------|----------|
- * | device_id      | ID of device to target                                           | chip_id_t (int) | 0 to (GetNumAvailableDevices - 1)     | Yes      |
+ * | Argument                  | Description                                                                                                                                                                                                                                                                                                                                                                                                                       | Type                 | Valid Range                       | Required              |
+ * |---------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------|-----------------------------------|-----------------------|
+ * | device_id                 | ID of the device to target                                                                                                                                                                                                                                                                                                                                                                                                        | chip_id_t (int)      | 0 to (GetNumAvailableDevices - 1) | Yes                   |
+ * | command_issue_queue_split | Percentage of the command queue that is dedicated for issuing commands. Issue queue size is rounded to be 32B aligned.<br><br>Remaining space is dedicated for completion queue.<br><br>Commands and data being sent to device are pushed to issue queue, data requested from device is pushed to completion queue.<br><br>Smaller issue queues can lead to more stalls due to increased number of wraps to head to fit commands. | std::optional<float> | > 0                               | No, defaults to 0.75. |
  * */
-Device *CreateDevice(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap = {});
+Device *CreateDevice(chip_id_t device_id, std::optional<float> command_issue_queue_split = std::nullopt, const std::vector<uint32_t>& l1_bank_remap = {});
 
 /**
  * Resets device and closes device
