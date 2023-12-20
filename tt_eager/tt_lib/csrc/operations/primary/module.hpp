@@ -298,6 +298,15 @@ void py_module(py::module& m_primary) {
     py::class_<LayerNormDefaultProgramConfig>(m_primary, "LayerNormDefaultProgramConfig")
         .def(py::init<>());
 
+    py::class_<LayerNormInterleavedMultiCoreProgramConfig>(m_primary, "LayerNormInterleavedMultiCoreProgramConfig")
+        .def(
+            py::init<MathFidelity, DataType, DataType>(),
+            py::kw_only(),
+            py::arg("math_fidelity").noconvert() = MathFidelity::HiFi4,
+            py::arg("im_data_format").noconvert(),
+            py::arg("out_data_format").noconvert()
+        );
+
     py::class_<LayerNormShardedMultiCoreProgramConfig>(m_primary, "LayerNormShardedMultiCoreProgramConfig")
         .def(
             py::init<CoreCoord, std::size_t, std::size_t, std::size_t, MathFidelity, DataType, DataType, bool>(),
@@ -398,6 +407,8 @@ void py_module(py::module& m_primary) {
     m_primary.def(
         "softmax_in_place",
         &softmax_in_place,
+        py::arg("input_tensor").noconvert(),
+        py::arg("program_config").noconvert() = transformers::SoftmaxDefaultProgramConfig{},
         "Performs a softmax operation on the last tensor dimension. Returns a reference to the input tensor modified "
         "in place.");
 

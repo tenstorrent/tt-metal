@@ -33,7 +33,7 @@ model_config_str = "BFLOAT8_B-SHARDED_BATCH12"
 def run_perf_bert11(
     expected_inference_time, expected_compile_time, inference_iterations, model_location_generator, device
 ):
-    model_config = get_model_config(model_config_str)
+    model_config = get_model_config(BATCH_SIZE, model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
     model_name = str(model_location_generator(model_version, model_subdir="Bert"))
     tokenizer_name = str(model_location_generator(model_version, model_subdir="Bert"))

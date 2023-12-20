@@ -18,6 +18,12 @@ namespace transformers {
 struct SoftmaxDefaultProgramConfig{
     tt::stl::reflection::Attributes attributes() const { return {}; };
 };
+struct SoftmaxInterleavedMultiCoreProgramConfig {
+    MathFidelity math_fidelity;
+    DataType im_data_format;
+
+    tt::stl::reflection::Attributes attributes() const;
+};
 struct SoftmaxShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     std::size_t subblock_w;
@@ -29,9 +35,9 @@ struct SoftmaxShardedMultiCoreProgramConfig {
     tt::stl::reflection::Attributes attributes() const;
 };
 
-
 using SoftmaxProgramConfig = std::variant<
     SoftmaxDefaultProgramConfig,
+    SoftmaxInterleavedMultiCoreProgramConfig,
     SoftmaxShardedMultiCoreProgramConfig
 >;
 }  // namespace transformers
@@ -58,7 +64,7 @@ struct Softmax {
 };
 
 // const ref prevents in-place
-Tensor softmax_in_place(Tensor& input_tensor);
+Tensor softmax_in_place(Tensor& input_tensor, const transformers::SoftmaxProgramConfig& program_config = transformers::SoftmaxDefaultProgramConfig{});
 
 namespace transformers {
 // computes

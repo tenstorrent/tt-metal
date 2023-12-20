@@ -145,7 +145,7 @@ def test_mha_inference(
     model_location_generator,
     request,
 ):
-    model_config = get_model_config(model_config_str)
+    model_config = get_model_config(batch, model_config_str)
     tt_cache_path = get_tt_cache_path(model_version)
 
     tt_lib.profiler.set_profiler_location(f"BERT_large_mha_{request.node.callspec.id}")
