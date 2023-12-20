@@ -13,17 +13,13 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        runner-info: [
-          {arch: grayskull, runs-on: ["model-runner-grayskull"]},
-          # N150
-          {arch: wormhole_b0, runs-on: ["model-runner-wormhole_b0", "issue-hugepages-upgrade"]},
-        ]
+        arch: [grayskull, wormhole_b0]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
+      ARCH_NAME: ${{ matrix.arch }}
       TT_METAL_SLOW_DISPATCH_MODE: 1
     environment: dev
-    runs-on: ${{ matrix.runner-info.runs-on }}
+    runs-on: model-runner-${{ matrix.arch }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@main
         with:
@@ -34,5 +30,5 @@ jobs:
       - name: Build tt-metal and libs
         run: make build
       - name: Run frequent reg tests scripts
-        timeout-minutes: 300
-        run: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.runner-info.arch }} --pipeline-type frequent --dispatch-mode slow
+        timeout-minutes: 165
+        run: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.arch }} --pipeline-type frequent --dispatch-mode slow
