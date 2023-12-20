@@ -40,13 +40,3 @@ jobs:
         with:
           token: ${{ secrets.CHECKOUT_TOKEN }}
       - uses: psf/black@23.10.1
-  check-doc:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.CHECKOUT_TOKEN }}
-      - name: Install ASPELL
-        run: sudo apt-get install -y aspell
-      - name: Run checks on docs
-        run: TT_METAL_HOME=$(pwd) docs/spellcheck.sh

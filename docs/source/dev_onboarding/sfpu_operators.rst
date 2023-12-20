@@ -80,7 +80,7 @@ Code Organization
      - TT DNN implementation of composite ops based on SFPU
    * - tt_metal/hw/ckernels/grayskull/
      - tt_metal/hw/ckernels/grayskull/common/inc/ckernel_sfpu.h,
-     - Grayskull SFPU Kernel implementation programming registers of SFPU
+     - GraySkull SFPU Kernel implementation programming registers of SFPU
    * - tt_metal/hw/ckernels/wormhole_b0/
      - tt_metal/hw/ckernels/wormhole_b0/common/inc/ckernel_sfpu.h,
      - *Wormhole B0* SFPU Kernel implementation programming registers of SFPU
