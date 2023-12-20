@@ -145,9 +145,7 @@ class TtMnistModel(nn.Module):
         x_ = tilize_to_list(x)
 
         # x is a pytorch tensor,... need to convert to a buda tensor
-        inp = tt_lib.tensor.Tensor(
-            x_, x.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.TILE, device
-        )
+        inp = tt_lib.tensor.Tensor(x_, x.shape, tt_lib.tensor.DataType.BFLOAT16, tt_lib.tensor.Layout.TILE, device)
         breakpoint()
         lin1_out = self.lin1(inp)
         bn1_out = self.batchnorm1d_1(lin1_out)
@@ -166,9 +164,7 @@ class TtMnistModel(nn.Module):
 
         # Make pytorch tensor... since we had to pad the output, we need
         # to only retrieve the 10 values that represent actual classes
-        lin3_out_cpu_pytorch = torch.Tensor(lin3_out_cpu.to_torch()).reshape(
-            lin3_out_cpu.shape()
-        )[:, 0, 0, :10]
+        lin3_out_cpu_pytorch = torch.Tensor(lin3_out_cpu.to_torch())[:, 0, 0, :10]
         out = nn.functional.softmax(lin3_out_cpu_pytorch)
 
         return out
@@ -216,18 +212,14 @@ class PytorchMnistModel(nn.Module):
 def run_mnist_inference():
     # Data preprocessing/loading
     transform = transforms.Compose([transforms.ToTensor()])
-    test_dataset = datasets.MNIST(
-        root="data", train=False, transform=transform, download=True
-    )
+    test_dataset = datasets.MNIST(root="data", train=False, transform=transform, download=True)
     dataloader = DataLoader(test_dataset, batch_size=batch_size)
 
     # Trained to 63% accuracy
     state_dict = torch.load(f"{Path(__file__).parent}/lfs/synthetic_grads/bn1d_32.pt")
 
     tt_mnist_model = TtMnistModel(state_dict)
-    pytorch_mnist_model = PytorchMnistModel(
-        input_dim, hidden_dim, output_dim, state_dict
-    )
+    pytorch_mnist_model = PytorchMnistModel(input_dim, hidden_dim, output_dim, state_dict)
     pytorch_mnist_model.eval()
 
     first_input = next(iter(dataloader))

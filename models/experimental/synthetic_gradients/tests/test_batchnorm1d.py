@@ -43,16 +43,10 @@ def run_btchnorm_inference(bn_size, device):
     # torch
     bn_torch = PytorchBatchNorm1D(bn_size)
     bn_torch.eval()
-    weight_bn = torch.nn.Parameter(
-        torch.FloatTensor(bn_size).uniform_(-1.0, 1.0).requires_grad_(True)
-    )
-    bias_bn = torch.nn.Parameter(
-        torch.FloatTensor(bn_size).uniform_(-1.0, 1.0).requires_grad_(True)
-    )
+    weight_bn = torch.nn.Parameter(torch.FloatTensor(bn_size).uniform_(-1.0, 1.0).requires_grad_(True))
+    bias_bn = torch.nn.Parameter(torch.FloatTensor(bn_size).uniform_(-1.0, 1.0).requires_grad_(True))
     running_mean = torch.FloatTensor(bn_size).uniform_(-1.0, 1.0).requires_grad_(False)
-    running_var = (
-        torch.FloatTensor(bn_size).uniform_(0.0, 1.0).requires_grad_(False)
-    )  # must be positive
+    running_var = torch.FloatTensor(bn_size).uniform_(0.0, 1.0).requires_grad_(False)  # must be positive
 
     bn_torch.batchnorm1d_1.weight = weight_bn
     bn_torch.batchnorm1d_1.bias = bias_bn
@@ -138,17 +132,13 @@ def run_btchnorm_inference(bn_size, device):
     bn_tt = batchnorm1d_inference(gamma, beta, running_mean_tt, running_var_tt, eps_tt)
     output_bn_tt = bn_tt(X_tt)
 
-    output_bn_tt_untilized = untilize(
-        torch.Tensor(output_bn_tt.cpu().to_torch()).reshape(output_bn_tt.shape())
-    )
+    output_bn_tt_untilized = untilize(torch.Tensor(output_bn_tt.cpu().to_torch()))
     output_bn_tt_untilized = output_bn_tt_untilized[0, 0, 0, :]
 
     print("pytorch_out:", output_bn_torch[0][0:10])
     print("tt_out:", output_bn_tt_untilized[0:10])
 
-    test_results, output = comp_allclose_and_pcc(
-        output_bn_torch[0], output_bn_tt_untilized
-    )
+    test_results, output = comp_allclose_and_pcc(output_bn_torch[0], output_bn_tt_untilized)
 
     print("\n\n", "atol/rtol:", test_results, "| pcc:", output, "\n\n")
 

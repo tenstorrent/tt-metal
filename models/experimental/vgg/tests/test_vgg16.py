@@ -44,7 +44,7 @@ def test_vgg16_inference(device, pcc, imagenet_sample_input):
         tt_output = tt_vgg(tt_image)
 
         tt_output = tt_output.cpu()
-        tt_output = torch.Tensor(tt_output.to_torch()).reshape(tt_output.shape())
+        tt_output = torch.Tensor(tt_output.to_torch())
 
         pcc_passing, pcc_output = comp_pcc(torch_output, tt_output, pcc)
         logger.info(f"Output {pcc_output}")
