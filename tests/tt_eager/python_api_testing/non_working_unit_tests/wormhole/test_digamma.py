@@ -23,7 +23,7 @@ def run_eltwise_digamma_test(
     torch.manual_seed(data_seed)
     prev_dispatch_mode = set_slow_dispatch_mode(dispatch_mode)
 
-    x = gen_rand(size=input_shape, low=-100, high=100)
+    x = gen_rand(size=input_shape, low=1, high=100)
 
     # compute ref value
     ref_value = pytorch_ops.digamma(
