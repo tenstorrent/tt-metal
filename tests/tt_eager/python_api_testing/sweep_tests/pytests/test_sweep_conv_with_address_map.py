@@ -89,7 +89,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
     assert out.layout() == ttl.tensor.Layout.ROW_MAJOR
 
     # Copy output to host and convert tt tensor to pytorch tensor
-    out_result = torch.tensor(out.to_torch()).reshape(conv_output_shape)
+    out_result = torch.tensor(out.to_torch())
     out_result = torch.transpose(out_result, 2, 3)
     out_result = torch.transpose(out_result, 1, 2)
 
@@ -130,9 +130,7 @@ def test_sweep_conv_tt(device):
             assert conv_op_test_params.test_level == TestLevel.OP_FULL_COMPUTE
             full_op_compute_tests += 1
         try:
-            passing_ = run_conv_as_large_matmul(
-                conv_op_test_params, pytorch_inputs_and_golden, device
-            )
+            passing_ = run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, device)
             if passing_:
                 passing_tests.append(conv_op_test_params)
             else:

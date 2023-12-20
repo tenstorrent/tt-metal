@@ -105,9 +105,7 @@ def tt_batch_norm(
             device,
         )
 
-        running_mean_left = tt_lib.tensor.mul(
-            tt_lib.tensor.sub(ones_tt, momentum_tt), running_mean
-        )
+        running_mean_left = tt_lib.tensor.mul(tt_lib.tensor.sub(ones_tt, momentum_tt), running_mean)
         mean_reshaped = mean.view(1, 1, 32, 32)
         mean_tilized = tilize_to_list(mean_reshaped)
         mean_tt = tt_lib.tensor.Tensor(
@@ -120,9 +118,7 @@ def tt_batch_norm(
         running_mean_right = tt_lib.tensor.mul(momentum_tt, mean_tt)
         running_mean = tt_lib.tensor.add(running_mean_left, running_mean_right)
 
-        running_var_left = tt_lib.tensor.mul(
-            tt_lib.tensor.sub(ones_tt, momentum_tt), running_var
-        )
+        running_var_left = tt_lib.tensor.mul(tt_lib.tensor.sub(ones_tt, momentum_tt), running_var)
         running_var_right = tt_lib.tensor.mul(momentum_tt, var_tt)
         running_var = tt_lib.tensor.add(running_var_left, running_var_right)
 
@@ -162,12 +158,7 @@ class ttBatchNorm:
         momentum=0.1,
         device=None,
     ):
-        if (
-            (gamma == None)
-            | (beta == None)
-            | (running_mean == None)
-            | (running_var == None)
-        ):
+        if (gamma == None) | (beta == None) | (running_mean == None) | (running_var == None):
             # The scale parameter and the shift parameter (model parameters) are initialized to 1 and 0, respectively
             zeros_torch = torch.tensor([[[bn_size * [0.0]]]])
             zeros_padded = pad_activation(zeros_torch)
@@ -198,7 +189,6 @@ class ttBatchNorm:
             self.running_var = ones_tt
             self.mode = "train"
 
-
         else:
             self.gamma = gamma
             self.beta = beta
@@ -223,7 +213,7 @@ class ttBatchNorm:
             momentum=self.momentum,
             bn_size=self.bn_size,
             mode=self.mode,
-            device=self.device
+            device=self.device,
         )
         print(
             "Y:",
@@ -346,17 +336,13 @@ def run_batchnorm_forward(device, bn_size):
     bn_tt = ttBatchNorm(bn_size, device=device)
     output_bn_tt, _, _ = bn_tt.forward(inputs_tt)
 
-    output_bn_tt_untilized = untilize(
-        torch.Tensor(output_bn_tt.cpu().to_torch()).reshape(output_bn_tt.shape())
-    )
+    output_bn_tt_untilized = untilize(torch.Tensor(output_bn_tt.cpu().to_torch()))
     output_bn_tt_untilized = output_bn_tt_untilized[0, 0, 0, :]
 
     print("pytorch_out:", output_bn_torch[0][0:10])
     print("tt_out:", output_bn_tt_untilized[0:10])
 
-    test_results, output = comp_allclose_and_pcc(
-        output_bn_torch[0], output_bn_tt_untilized
-    )
+    test_results, output = comp_allclose_and_pcc(output_bn_torch[0], output_bn_tt_untilized)
 
     print("\n\n", "atol/rtol:", test_results, "| pcc:", output, "\n\n")
 
