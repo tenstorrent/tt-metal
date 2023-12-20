@@ -120,13 +120,10 @@ void kernel_main() {
         uint16_t top_left_local_index = reader_indices_ptr[counter];
         uint32_t h_multiples = 0;
         for (uint32_t h = 0; h < window_h; ++ h, h_multiples += in_w_padded) {
-            for (uint32_t w = 0; w < window_w; ++ w) {
-                uint32_t stick_offset = top_left_local_index + (w + h_multiples);
-                uint32_t read_offset = in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
-                noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c);
-                // noc_async_read(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c);
-                out_l1_write_addr += in_nbytes_c;
-            }
+            uint32_t stick_offset = top_left_local_index + h_multiples;
+            uint32_t read_offset = in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
+            noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
+            out_l1_write_addr += in_nbytes_c * window_w;
         }
         noc_async_read_barrier();
 
